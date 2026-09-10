@@ -5,26 +5,41 @@
  * `SqliteExecutionStore` on the SAME database handle — everything in-memory
  * is gone, everything durable survives.
  */
-import type { MarketDataService } from '../../providers/market-data-service/index.js';
-import type { Clock, Fill, Logger, OpenPosition } from '../../shared/index.js';
+import type {
+  MarketDataService,
+  TradingCalendar,
+} from '../../providers/market-data-service/index.js';
+import { AlwaysOpenCalendar } from '../../providers/market-data-service/index.js';
+import type { AssetClass, Clock, Fill, Logger, OpenPosition } from '../../shared/index.js';
 import { toBrokerFillId } from '../../shared/index.js';
 import { recordingLogger } from '../../shared/recording-logger.js';
 import type { CostModel } from '../../tools/backtest/index.js';
 import { ExecutionImpl } from './execute.js';
 import { FilledZeroSizeThrottle } from './filled-zero-size-throttle.js';
 import { ProtectiveRearmUnsupportedError } from './protective-rearm-unsupported.js';
+import { MAX_RESIDUAL_REFLATTEN_ATTEMPTS } from './residual-reflatten.js';
 import { openTestExecutionStore, TestExecutionStore } from './sqlite-store-harness.js';
 import type {
   BrokerAck,
   BrokerAdapter,
   ExecutionConfig,
   ExecutionInput,
+  FlattenSubmissionWriteAhead,
   NativeBracketRequest,
   NormalizedFill,
   NormalizedOrder,
   ResidualExposureAlert,
   ResidualExposureAlertChannel,
 } from './types.js';
+
+/**
+ * #1214: the default `ExecutionInput.sessionCalendars` — an open venue for
+ * both classes. A fresh pair per call so a test that swaps one in cannot
+ * disturb another's.
+ */
+function openSessionCalendars(): Record<AssetClass, TradingCalendar> {
+  return { crypto: new AlwaysOpenCalendar(), stocks: new AlwaysOpenCalendar() };
+}
 
 const NOW = new Date('2026-08-07T16:00:00Z');
 const OPENED_AT = new Date('2026-08-07T14:00:00Z');
@@ -87,11 +102,62 @@ async function seedPartiallyFlattenedFills(store: TestExecutionStore): Promise<v
   });
 }
 
+/**
+ * #867's shape: the lot's legs were cancelled and the flatten was then
+ * refused, so the entry fill is on record and NO exit fill is — the residual
+ * is the whole held quantity.
+ */
+async function seedEntryOnlyFills(store: TestExecutionStore): Promise<void> {
+  const entry: Fill = {
+    idempotency_key: LOT,
+    broker_fill_id: toBrokerFillId('e1'),
+    leg: 'entry',
+    price: 100,
+    qty: 10,
+    fee: 1,
+    timestamp: new Date('2026-08-07T15:00:00Z'),
+  };
+  await store.applyLotAdvance({
+    idempotency_key: LOT,
+    fills: [entry],
+    position_update: { filled_size: 10, avg_entry_price: 100, order_state: 'partially_filled' },
+  });
+}
+
+/** A flatten journal row on this lot's instrument, for the #1214 gates that read the journal. */
+function flattenWriteAhead(key: string): FlattenSubmissionWriteAhead {
+  return {
+    idempotency_key: key,
+    instrument: 'AAPL',
+    asset_class: 'stocks',
+    side: 'sell',
+    size: 6,
+    submitted_at: NOW,
+    lot_held_quantities: [{ idempotency_key: LOT, held: 6 }],
+    exit_reason: 'flatten',
+    decision_price: null,
+    quote_bid: null,
+    quote_ask: null,
+    quote_mid: null,
+    quote_observed_at: null,
+    modelled_cost_breakdown: null,
+  };
+}
+
 /** A broker for the sweep: only `rearmProtectiveLegs` (scriptable) and reconcile's reads matter. */
 class SweepBroker implements BrokerAdapter {
   readonly rearmCalls: Array<{ clientOrderId: string; qty: number }> = [];
+  /** #1214: every residual re-flatten this sweep submitted, in call order. */
+  readonly flattenCalls: Array<{
+    clientOrderId: string;
+    instrument: string;
+    side: 'buy' | 'sell';
+    size: number;
+  }> = [];
   /** When set, `rearmProtectiveLegs` rejects with this. */
   rearmFailure: Error | undefined;
+  /** When set, `submitFlatten` rejects with this. */
+  flattenFailure: Error | undefined;
 
   async submitBracket(order: NativeBracketRequest): Promise<BrokerAck> {
     return {
@@ -119,8 +185,24 @@ class SweepBroker implements BrokerAdapter {
   async resumeFlatten(): Promise<NormalizedOrder | null> {
     return null;
   }
-  async submitFlatten(): Promise<never> {
-    throw new Error('SweepBroker.submitFlatten: not part of these scenarios');
+  /**
+   * #1214: the residual re-flatten's own submit. Recorded rather than
+   * refused — closing the residual IS a sweep behaviour now, so a broker that
+   * cannot express it would make every scenario below untestable.
+   */
+  async submitFlatten(
+    instrument: string,
+    side: 'buy' | 'sell',
+    size: number,
+    clientOrderId: string,
+  ): Promise<BrokerAck> {
+    this.flattenCalls.push({ clientOrderId, instrument, side, size });
+    if (this.flattenFailure !== undefined) throw this.flattenFailure;
+    return {
+      client_order_id: clientOrderId,
+      broker_order_ids: [clientOrderId],
+      order_state: 'submitted',
+    };
   }
   async cancel(): Promise<void> {}
   /** Empty so `reconcile()`'s unrecorded-position pass reports nothing. */
@@ -146,6 +228,9 @@ function makeInput(
   store: TestExecutionStore,
   residualExposureAlerts: ResidualExposureAlertChannel = makeResidualExposureAlerts(),
   logger: Logger = recordingLogger(),
+  // #1214: overridable so a test can shut the venue and prove the residual
+  // re-flatten stands down rather than firing a market order into it.
+  sessionCalendars: Record<AssetClass, TradingCalendar> = openSessionCalendars(),
 ): ExecutionInput {
   const config: ExecutionConfig = {
     simulated: {
@@ -167,6 +252,7 @@ function makeInput(
     costModel: {} as CostModel,
     marketData: {} as MarketDataService,
     config,
+    sessionCalendars,
     residualExposureAlerts,
     flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
     flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
@@ -399,12 +485,12 @@ describe('residual-protection sweep (#549)', () => {
     });
   });
 
-  it('reports a venue that can NEVER re-arm as a permanent gap, not as a retry that failed (#1214)', async () => {
+  it('CLOSES the residual instead of paging when the venue can never re-arm (#1214)', async () => {
     // Saxo: every pool line reports `IsOcoOrderSupported: false`, so
-    // `rearmProtectiveLegs` refuses before it ever reaches the venue. The
-    // marker and the retry cadence are unchanged — the lot IS unprotected,
-    // and a venue's capabilities are re-read on every attempt — but what the
-    // operator is told must not read as "the venue had a bad minute".
+    // `rearmProtectiveLegs` refuses before it ever reaches the venue. David's
+    // 2026-09-08 decision (option 2) makes that refusal trigger a re-flatten
+    // rather than another page: this lot was already being closed, and
+    // finishing the job is the action that matches the intent.
     const { db, store } = openTestExecutionStore();
     await seedPosition(store);
     await seedPartiallyFlattenedFills(store);
@@ -422,25 +508,265 @@ describe('residual-protection sweep (#549)', () => {
 
     const result = await execution.sweepResidualProtection();
 
-    expect(result.divergences).toHaveLength(1);
-    expect(result.divergences[0]?.action).toBe('undetermined');
-    expect(result.divergences[0]?.reason).toMatch(/cannot arm protective legs at all/);
-    expect(alerts.alerts[0]).toMatchObject({
-      idempotency_key: LOT,
-      residual_qty: 6,
-      rearm_unsupported: true,
-    });
+    // A market order for exactly the residual, on the CLOSING side, under a
+    // key derived from the lot's own.
+    expect(broker.flattenCalls).toEqual([
+      { clientOrderId: `${LOT}:residual-reflatten-1`, instrument: 'AAPL', side: 'sell', size: 6 },
+    ]);
+    // Journalled BEFORE the submit — without that row `getFlattenAttribution`
+    // cannot route the fill back to this lot when it lands.
+    expect(await restartedStore.getFlattenAttribution(`${LOT}:residual-reflatten-1`)).toMatchObject(
+      { lot_idempotency_keys: [LOT], exit_reason: 'flatten' },
+    );
+    expect(await restartedStore.getUnresolvedFlattens()).toEqual([
+      expect.objectContaining({
+        idempotency_key: `${LOT}:residual-reflatten-1`,
+        status: 'submitted',
+      }),
+    ]);
+    // NOT paged: the residual is being closed, not abandoned.
+    expect(alerts.alerts).toEqual([]);
     expect(logger.entries).toContainEqual(
       expect.objectContaining({
-        level: 'error',
-        event: 'residual_rearm_unsupported',
+        event: 'residual_reflatten_submitted',
         payload: expect.objectContaining({ idempotency_key: LOT, residual_qty: 6 }),
       }),
     );
-    // Still marked: nothing about the diagnosis protects the position.
+    expect(result.divergences).toHaveLength(1);
+    expect(result.divergences[0]?.action).toBe('undetermined');
+    expect(result.divergences[0]?.reason).toMatch(/was CLOSED instead/);
+    // Still marked: the order is live, not filled. The marker clears when the
+    // fill lands and the lot reads flat.
     expect(
       (await restartedStore.getResidualProtectionMarker(LOT))?.unprotected_since,
     ).not.toBeNull();
+  });
+
+  it('never fires a market order into a shut venue — it pages instead (#1214)', async () => {
+    const { db, store } = openTestExecutionStore();
+    await seedPosition(store);
+    await seedPartiallyFlattenedFills(store);
+    await store.markResidualUnprotected(LOT, NOW);
+
+    const restartedStore = new TestExecutionStore(db);
+    const broker = new SweepBroker();
+    broker.rearmFailure = new ProtectiveRearmUnsupportedError('saxo', 'IsOcoOrderSupported false');
+    const alerts = makeResidualExposureAlerts();
+    const logger = recordingLogger();
+    // NOW is 16:00Z = 12:00 New York on a Friday, which IS inside the US
+    // session — so the shut venue has to come from the instrument's own
+    // calendar disagreeing, not from the clock. `AlwaysOpenCalendar` is what
+    // every other test here uses; this one asks a calendar that says no.
+    const shutCalendar: TradingCalendar = {
+      isOpen: () => false,
+      isTradingDay: () => true,
+      sessionStart: () => NOW,
+      sessionEnd: () => NOW,
+    };
+    const execution = new ExecutionImpl(
+      makeInput(broker, restartedStore, alerts, logger, {
+        crypto: new AlwaysOpenCalendar(),
+        stocks: shutCalendar,
+      }),
+    );
+
+    const result = await execution.sweepResidualProtection();
+
+    expect(broker.flattenCalls).toEqual([]);
+    expect(alerts.alerts[0]).toMatchObject({ idempotency_key: LOT, rearm_unsupported: true });
+    expect(logger.entries).toContainEqual(
+      expect.objectContaining({
+        event: 'residual_reflatten_skipped',
+        payload: expect.objectContaining({ reason: 'venue_shut' }),
+      }),
+    );
+    expect(result.divergences[0]?.reason).toMatch(/could not be closed either/);
+  });
+
+  it('stands down while a flatten on the same instrument is still unresolved (#1214)', async () => {
+    // The daily flat-by-close cadence and this path can name the same lot;
+    // the decision forbids both submitting. The journal is the referee.
+    const { db, store } = openTestExecutionStore();
+    await seedPosition(store);
+    await seedPartiallyFlattenedFills(store);
+    await store.markResidualUnprotected(LOT, NOW);
+    await store.writeAheadFlatten(flattenWriteAhead('daily-flatten-1'));
+
+    const restartedStore = new TestExecutionStore(db);
+    const broker = new SweepBroker();
+    broker.rearmFailure = new ProtectiveRearmUnsupportedError('saxo', 'IsOcoOrderSupported false');
+    const alerts = makeResidualExposureAlerts();
+    const logger = recordingLogger();
+    const execution = new ExecutionImpl(makeInput(broker, restartedStore, alerts, logger));
+
+    await execution.sweepResidualProtection();
+
+    expect(broker.flattenCalls).toEqual([]);
+    expect(alerts.alerts).toHaveLength(1);
+    expect(logger.entries).toContainEqual(
+      expect.objectContaining({
+        event: 'residual_reflatten_skipped',
+        payload: expect.objectContaining({ reason: 'flatten_in_flight' }),
+      }),
+    );
+  });
+
+  it('stops after MAX_RESIDUAL_REFLATTEN_ATTEMPTS and falls back to the page (#1214)', async () => {
+    // The bound is DURABLE, not an in-memory counter: three spent keys in the
+    // journal are what stop the fourth attempt, so a restart cannot reset it.
+    const { db, store } = openTestExecutionStore();
+    await seedPosition(store);
+    await seedPartiallyFlattenedFills(store);
+    await store.markResidualUnprotected(LOT, NOW);
+    for (let attempt = 1; attempt <= MAX_RESIDUAL_REFLATTEN_ATTEMPTS; attempt++) {
+      const key = `${LOT}:residual-reflatten-${attempt}`;
+      await store.writeAheadFlatten(flattenWriteAhead(key));
+      // Resolved, so the instrument has no unresolved flatten and the walk
+      // reaches the bound rather than standing down on the gate before it.
+      await store.resolveFlattenError(key, 'the venue rejected the residual', NOW);
+    }
+
+    const restartedStore = new TestExecutionStore(db);
+    const broker = new SweepBroker();
+    broker.rearmFailure = new ProtectiveRearmUnsupportedError('saxo', 'IsOcoOrderSupported false');
+    const alerts = makeResidualExposureAlerts();
+    const logger = recordingLogger();
+    const execution = new ExecutionImpl(makeInput(broker, restartedStore, alerts, logger));
+
+    await execution.sweepResidualProtection();
+
+    expect(broker.flattenCalls).toEqual([]);
+    expect(alerts.alerts).toHaveLength(1);
+    expect(logger.entries).toContainEqual(
+      expect.objectContaining({
+        event: 'residual_reflatten_skipped',
+        payload: expect.objectContaining({ reason: 'attempts_exhausted' }),
+      }),
+    );
+  });
+
+  it('leaves a #867 full-quantity lot to the exit path, which is still retrying it (#1214)', async () => {
+    // `markLotsUnprotected` (execute.ts) marks lots whose legs were cancelled
+    // before a flatten the cancel loop then refused — no exit fill landed, and
+    // `resolveExitRetryKey` re-fires the whole sequence on the next tick. A
+    // second submitter here is exactly the collision the decision forbids.
+    const { db, store } = openTestExecutionStore();
+    await seedPosition(store);
+    await seedEntryOnlyFills(store);
+    await store.markResidualUnprotected(LOT, NOW);
+
+    const restartedStore = new TestExecutionStore(db);
+    const broker = new SweepBroker();
+    broker.rearmFailure = new ProtectiveRearmUnsupportedError('saxo', 'IsOcoOrderSupported false');
+    const alerts = makeResidualExposureAlerts();
+    const logger = recordingLogger();
+    const execution = new ExecutionImpl(makeInput(broker, restartedStore, alerts, logger));
+
+    await execution.sweepResidualProtection();
+
+    expect(broker.flattenCalls).toEqual([]);
+    expect(alerts.alerts[0]).toMatchObject({ residual_qty: 10, rearm_unsupported: true });
+    expect(logger.entries).toContainEqual(
+      expect.objectContaining({
+        event: 'residual_reflatten_skipped',
+        payload: expect.objectContaining({ reason: 'exit_path_owns_lot' }),
+      }),
+    );
+  });
+
+  it("leaves a thrown submitFlatten at 'submitting' for reconcile, and pages (#1214)", async () => {
+    const { db, store } = openTestExecutionStore();
+    await seedPosition(store);
+    await seedPartiallyFlattenedFills(store);
+    await store.markResidualUnprotected(LOT, NOW);
+
+    const restartedStore = new TestExecutionStore(db);
+    const broker = new SweepBroker();
+    broker.rearmFailure = new ProtectiveRearmUnsupportedError('saxo', 'IsOcoOrderSupported false');
+    broker.flattenFailure = new Error('venue timed out');
+    const alerts = makeResidualExposureAlerts();
+    const logger = recordingLogger();
+    const execution = new ExecutionImpl(makeInput(broker, restartedStore, alerts, logger));
+
+    await execution.sweepResidualProtection();
+
+    // Ambiguous, so never resolved to 'error': the venue may have seen it.
+    expect(await restartedStore.getUnresolvedFlattens()).toEqual([
+      expect.objectContaining({
+        idempotency_key: `${LOT}:residual-reflatten-1`,
+        status: 'submitting',
+      }),
+    ]);
+    expect(alerts.alerts).toHaveLength(1);
+    expect(logger.entries).toContainEqual(
+      expect.objectContaining({ level: 'error', event: 'residual_reflatten_failed' }),
+    );
+  });
+
+  it('never submits unjournalled — a failed write-ahead ends the attempt (#1214)', async () => {
+    const { db, store } = openTestExecutionStore();
+    await seedPosition(store);
+    await seedPartiallyFlattenedFills(store);
+    await store.markResidualUnprotected(LOT, NOW);
+
+    const restartedStore = new TestExecutionStore(db);
+    restartedStore.writeAheadFlatten = async () => {
+      throw new Error('disk full');
+    };
+    const broker = new SweepBroker();
+    broker.rearmFailure = new ProtectiveRearmUnsupportedError('saxo', 'IsOcoOrderSupported false');
+    const alerts = makeResidualExposureAlerts();
+    const logger = recordingLogger();
+    const execution = new ExecutionImpl(makeInput(broker, restartedStore, alerts, logger));
+
+    await execution.sweepResidualProtection();
+
+    // A market order with no attribution row is the worst state this design
+    // can reach: nothing routes its fill, so the lot stays open in the store
+    // while flat at the venue.
+    expect(broker.flattenCalls).toEqual([]);
+    expect(alerts.alerts).toHaveLength(1);
+    expect(logger.entries).toContainEqual(
+      expect.objectContaining({ level: 'error', event: 'residual_reflatten_failed' }),
+    );
+  });
+
+  it('pages rather than guessing when the calendar cannot answer (#1214)', async () => {
+    const { db, store } = openTestExecutionStore();
+    await seedPosition(store);
+    await seedPartiallyFlattenedFills(store);
+    await store.markResidualUnprotected(LOT, NOW);
+
+    const restartedStore = new TestExecutionStore(db);
+    const broker = new SweepBroker();
+    broker.rearmFailure = new ProtectiveRearmUnsupportedError('saxo', 'IsOcoOrderSupported false');
+    const alerts = makeResidualExposureAlerts();
+    const logger = recordingLogger();
+    const throwingCalendar: TradingCalendar = {
+      isOpen() {
+        throw new Error('calendar coverage ends before this instant');
+      },
+      isTradingDay: () => true,
+      sessionStart: () => NOW,
+      sessionEnd: () => null,
+    };
+    const execution = new ExecutionImpl(
+      makeInput(broker, restartedStore, alerts, logger, {
+        crypto: new AlwaysOpenCalendar(),
+        stocks: throwingCalendar,
+      }),
+    );
+
+    await execution.sweepResidualProtection();
+
+    expect(broker.flattenCalls).toEqual([]);
+    expect(alerts.alerts).toHaveLength(1);
+    expect(logger.entries).toContainEqual(
+      expect.objectContaining({
+        event: 'residual_reflatten_skipped',
+        payload: expect.objectContaining({ reason: 'session_unknown' }),
+      }),
+    );
   });
 
   it('keeps an ordinary re-arm failure readable as retryable (#1214)', async () => {
@@ -459,6 +785,9 @@ describe('residual-protection sweep (#549)', () => {
 
     expect(result.divergences[0]?.reason).toMatch(/re-arm retry failed/);
     expect(alerts.alerts[0]).toMatchObject({ rearm_unsupported: false });
+    // #1214 is scoped to a PERMANENT gap. An ordinary failure is still a
+    // retry, and a market order must not be spent on one.
+    expect(broker.flattenCalls).toEqual([]);
   });
 
   it('re-pages on the next pass when the alert channel swallowed the first delivery — dedup records only accepted pages (#549 review)', async () => {

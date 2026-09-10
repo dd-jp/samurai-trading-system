@@ -20,12 +20,22 @@
 import type { Fill, OpenPosition } from '../../shared/index.js';
 import { heldQuantityFromFills, isFlat, logCaughtFailure, safeLog } from '../../shared/index.js';
 import { isProtectiveRearmUnsupported } from './protective-rearm-unsupported.js';
-import type { ExecutionInput, FillReader, ResidualMarkers } from './types.js';
+import { reflattenResidual } from './residual-reflatten.js';
+import type {
+  ExecutionInput,
+  FillReader,
+  ResidualMarkers,
+  ResidualReflattenInput,
+} from './types.js';
 
 type MarkerInput = Pick<ExecutionInput, 'logger' | 'trace_id'> & { store: ResidualMarkers };
 type AlertInput = Pick<ExecutionInput, 'residualExposureAlerts' | 'logger' | 'trace_id'>;
+// `ResidualReflattenInput` because the unsupported-re-arm branch below calls
+// `reflattenResidual` (#1214) — that is what puts `sessionCalendars` and the
+// flatten journal on this surface, not the re-arm itself.
 type RearmInput = MarkerInput &
   AlertInput &
+  ResidualReflattenInput &
   Pick<ExecutionInput, 'broker'> & { store: FillReader & ResidualMarkers };
 
 /**
@@ -66,7 +76,17 @@ export async function markResidualsUnprotected(
 /**
  * Re-arms a residual left by a partial flatten (#525's recorded decision —
  * option 1), or posts the fallback alert when the re-arm itself fails or
- * cannot be attempted safely. Never throws: every failure this function can
+ * cannot be attempted safely.
+ *
+ * On a venue that cannot arm entry-less legs AT ALL, the re-arm is not
+ * retried at a later date — it is replaced: #1214's recorded decision closes
+ * the residual instead (`reflattenResidual`, residual-reflatten.ts), and only
+ * when that stands down or fails does this fall through to the page. That is
+ * a change to what THIS caller does on that refusal, not to
+ * `BrokerAdapter.rearmProtectiveLegs`, which is unchanged for every adapter
+ * that supports it.
+ *
+ * Never throws: every failure this function can
  * observe — the store read on the `known === undefined` path, the broker
  * call rejecting, the alert channel itself failing — is swallowed here, the
  * same posture `shared/safe-log.ts`'s `safeLog()`/`logCaughtFailure()` take
@@ -234,11 +254,10 @@ export async function maybeRearmResidual(
     // original never reaches this catch either.
     //
     // #1214: a venue that cannot express an entry-less protective pair at
-    // all refuses this call permanently, and the #549 sweep will re-attempt
-    // it on every pass regardless — a venue's capabilities are re-read on
-    // every attempt, not cached here. What must differ is what the operator
-    // is told: "retry failed" trains them to wait for a sweep that will
-    // never succeed.
+    // all refuses this call permanently, so no retry of it can protect this
+    // residual. The recorded decision (David, 2026-09-08, option 2) is to
+    // CLOSE the residual instead — see residual-reflatten.ts, called below
+    // once the failure is traced.
     const unsupported = isProtectiveRearmUnsupported(error);
     logCaughtFailure(
       input.logger,
@@ -253,7 +272,7 @@ export async function maybeRearmResidual(
             level: 'error',
             message:
               'maybeRearmResidual: this venue cannot arm protective legs at all, so no retry ' +
-              'can protect this residual — alerting for manual action at the venue',
+              'can protect this residual — closing it instead (#1214)',
           }
         : {
             trace_id: input.trace_id,
@@ -265,6 +284,18 @@ export async function maybeRearmResidual(
       error,
       { idempotency_key: position.idempotency_key, residual_qty: residual },
     );
+    // #1214's recorded remedy, tried before the page: on a venue that cannot
+    // arm legs at all, the residual is closed rather than protected. Only a
+    // SUBMITTED order suppresses the page — every stand-down and every
+    // failure falls through to the existing #525 escalation below, so this
+    // change can only ever add an action, never remove an alert. The marker
+    // stays set either way: it clears when the lot reads flat, which is what
+    // a filled re-flatten makes true. Never throws (its own contract), so it
+    // cannot break this function's.
+    if (unsupported) {
+      const reflatten = await reflattenResidual(input, position, residual, exitQty, now);
+      if (reflatten.kind === 'submitted') return;
+    }
     // #549: the marker stays set (protection is NOT confirmed). The episode
     // is recorded as already-alerted ONLY when the channel accepted the
     // delivery (#549) — so the sweep retries the re-arm on cadence

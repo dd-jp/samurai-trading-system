@@ -1,5 +1,9 @@
-import type { MarketDataService } from '../../../providers/market-data-service/index.js';
-import type { OrderIntent } from '../../../shared/index.js';
+import type {
+  MarketDataService,
+  TradingCalendar,
+} from '../../../providers/market-data-service/index.js';
+import { AlwaysOpenCalendar } from '../../../providers/market-data-service/index.js';
+import type { AssetClass, OrderIntent } from '../../../shared/index.js';
 import { type Clock, TokenBucket } from '../../../shared/index.js';
 import { recordingLogger } from '../../../shared/recording-logger.js';
 import type { CostModel } from '../../../tools/backtest/index.js';
@@ -15,6 +19,17 @@ import type { UnpricedFillAlert, UnpricedFillAlertChannel } from '../unpriced-fi
 import { AlpacaBrokerAdapter, DEFAULT_UNPRICED_FILL_AGE_OUT_MS } from './alpaca-adapter.js';
 import type { AlpacaBrokerClient, AlpacaOrder } from './alpaca-client.js';
 import { AlpacaHttpBrokerClient } from './alpaca-http-client.js';
+
+/**
+ * #1214: `ExecutionInput.sessionCalendars`. An open venue for both classes —
+ * nothing in this file turns on the residual re-flatten's session gate, and a
+ * shut venue would stand that path down for a reason none of these tests are
+ * about.
+ */
+const OPEN_SESSION_CALENDARS: Record<AssetClass, TradingCalendar> = {
+  crypto: new AlwaysOpenCalendar(),
+  stocks: new AlwaysOpenCalendar(),
+};
 
 /**
  * These tests are about bracket submission and fill normalization, not
@@ -3038,6 +3053,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
       costModel: {} as CostModel,
       marketData: {} as MarketDataService,
       config: executionConfig(),
+      sessionCalendars: OPEN_SESSION_CALENDARS,
       residualExposureAlerts: { postResidualExposureAlert: async () => {} },
       filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
@@ -3169,6 +3185,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
       costModel: {} as CostModel,
       marketData: {} as MarketDataService,
       config: executionConfig(),
+      sessionCalendars: OPEN_SESSION_CALENDARS,
       residualExposureAlerts: { postResidualExposureAlert: async () => {} },
       filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
@@ -3252,6 +3269,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
       costModel: {} as CostModel,
       marketData: {} as MarketDataService,
       config: executionConfig(),
+      sessionCalendars: OPEN_SESSION_CALENDARS,
       residualExposureAlerts: { postResidualExposureAlert: async () => {} },
       filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },

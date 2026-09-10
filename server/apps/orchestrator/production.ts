@@ -1575,6 +1575,9 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   const executionDeps: ExecutionStepDeps = {
     clock,
     broker,
+    // #1214: the same pair the flatten window and the daily-PnL boundary
+    // resolve against, for the reason this object exists at all (above).
+    sessionCalendars,
     store: executionStore,
     costModel: new CostModelImpl(config.costConfig),
     marketData,

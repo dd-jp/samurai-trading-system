@@ -5,8 +5,12 @@
  * resize, and `ClosedTrade` emission are asserted in isolation from any real
  * venue's timing.
  */
-import type { MarketDataService } from '../../providers/market-data-service/index.js';
-import type { BrokerFillId, Clock, Logger, OpenPosition } from '../../shared/index.js';
+import type {
+  MarketDataService,
+  TradingCalendar,
+} from '../../providers/market-data-service/index.js';
+import { AlwaysOpenCalendar } from '../../providers/market-data-service/index.js';
+import type { AssetClass, BrokerFillId, Clock, Logger, OpenPosition } from '../../shared/index.js';
 import { toBrokerFillId } from '../../shared/index.js';
 import { recordingLogger } from '../../shared/recording-logger.js';
 import { openSharedStore } from '../../shared/store/index.js';
@@ -44,6 +48,15 @@ import type {
   ResidualExposureAlertChannel,
   SharedStore,
 } from './types.js';
+
+/**
+ * #1214: the default `ExecutionInput.sessionCalendars` — an open venue for
+ * both classes. A fresh pair per call so a test that swaps one in cannot
+ * disturb another's.
+ */
+function openSessionCalendars(): Record<AssetClass, TradingCalendar> {
+  return { crypto: new AlwaysOpenCalendar(), stocks: new AlwaysOpenCalendar() };
+}
 
 const NOW = new Date('2026-07-20T16:00:00Z');
 const OPENED_AT = new Date('2026-07-20T14:00:00Z');
@@ -94,6 +107,13 @@ class ScriptedBroker implements BrokerAdapter {
     qty: number;
     stop: number;
     target: number;
+  }> = [];
+  /** #1214: every residual re-flatten submitted through this broker, in call order. */
+  readonly flattenCalls: Array<{
+    clientOrderId: string;
+    instrument: string;
+    side: 'buy' | 'sell';
+    size: number;
   }> = [];
   /** When set, `rearmProtectiveLegs` rejects with this — the #525 failure path. */
   rearmFailure: Error | undefined;
@@ -148,9 +168,24 @@ class ScriptedBroker implements BrokerAdapter {
   async resumeFlatten(): Promise<never> {
     throw new Error('ScriptedBroker.resumeFlatten: ingestFills() does not reconcile');
   }
-  /** #429's intervention path — likewise untouched by the fill loop. */
-  async submitFlatten(): Promise<never> {
-    throw new Error('ScriptedBroker.submitFlatten: ingestFills() does not flatten');
+  /**
+   * #429's intervention path — and, since #1214, the residual re-flatten's
+   * own submit, which DOES run inside this loop when the venue cannot arm
+   * protective legs. Recorded rather than refused, so a test can tell "no
+   * order was sent" from "an order was sent and the broker refused it".
+   */
+  async submitFlatten(
+    instrument: string,
+    side: 'buy' | 'sell',
+    size: number,
+    clientOrderId: string,
+  ): Promise<BrokerAck> {
+    this.flattenCalls.push({ clientOrderId, instrument, side, size });
+    return {
+      client_order_id: clientOrderId,
+      broker_order_ids: [clientOrderId],
+      order_state: 'submitted',
+    };
   }
   async cancel(): Promise<never> {
     throw new Error('ScriptedBroker.cancel: ingestFills() does not cancel');
@@ -243,6 +278,10 @@ function makeInput(
   // non-sterling fee, and `ExecutionInput.nonSterlingFeeAlerts` is OPTIONAL
   // precisely so a caller (production or test) need not supply one.
   nonSterlingFeeAlerts?: NonSterlingFeeAlertChannel,
+  // #1214: overridable so a test can shut the venue and prove the residual
+  // re-flatten stands down. Open by default — every scenario that predates
+  // #1214 was written against a venue that never refuses on session grounds.
+  sessionCalendars: Record<AssetClass, TradingCalendar> = openSessionCalendars(),
 ): ExecutionInput {
   const config: ExecutionConfig = {
     simulated: {
@@ -263,6 +302,7 @@ function makeInput(
     costModel: {} as CostModel,
     marketData: {} as MarketDataService,
     config,
+    sessionCalendars,
     residualExposureAlerts,
     flattenOverfillAlerts,
     ...(nonSterlingFeeAlerts === undefined ? {} : { nonSterlingFeeAlerts }),
@@ -621,11 +661,6 @@ describe('ExecutionImpl.ingestFills', () => {
         makeInput(broker, store, residualExposureAlerts, undefined, logger),
       ).ingestFills();
 
-      expect(residualExposureAlerts.alerts[0]).toMatchObject({
-        idempotency_key: 'key-1',
-        residual_qty: 6,
-        rearm_unsupported: true,
-      });
       expect(logger.entries).toContainEqual(
         expect.objectContaining({
           level: 'error',
@@ -633,10 +668,82 @@ describe('ExecutionImpl.ingestFills', () => {
           message: expect.stringContaining('cannot arm protective legs at all'),
         }),
       );
-      // Unchanged by the diagnosis: the residual is real, the marker stays
-      // for the #549 sweep, and the fills still persisted.
+      // #1214's decision: the refusal triggers a re-flatten of the residual,
+      // journalled first and submitted under a key derived from the lot's.
+      expect(broker.flattenCalls).toEqual([
+        {
+          clientOrderId: 'key-1:residual-reflatten-1',
+          instrument: 'AAPL',
+          side: 'sell',
+          size: 6,
+        },
+      ]);
+      expect(await store.getFlattenAttribution('key-1:residual-reflatten-1')).toMatchObject({
+        lot_idempotency_keys: ['key-1'],
+      });
+      // Not paged, because the residual is being CLOSED rather than left
+      // naked — the page returns the moment an attempt stands down or fails
+      // (see the shut-venue case below and the sweep's own tests).
+      expect(residualExposureAlerts.alerts).toEqual([]);
+      // Unchanged by the remedy: the marker stays until the lot reads flat,
+      // and the fills still persisted.
       expect((await store.getResidualProtectionMarker('key-1'))?.unprotected_since).not.toBeNull();
       expect(await store.getFills('key-1')).toHaveLength(2);
+    });
+
+    it('pages, and sends no market order, when the venue that cannot re-arm is also shut (#1214)', async () => {
+      const { store } = openTestExecutionStore();
+      await seedPosition(store, { requested_size: 10, stop: 95, target: 110, side: 'buy' });
+      const broker = new ScriptedBroker([
+        fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 10, price: 100 }),
+        fill({
+          broker_fill_id: toBrokerFillId('x1'),
+          leg: 'exit',
+          qty: 4,
+          price: 98,
+          timestamp: new Date('2026-07-20T15:30:00Z'),
+        }),
+      ]);
+      broker.rearmFailure = new ProtectiveRearmUnsupportedError(
+        'saxo',
+        'IsOcoOrderSupported false on every pool line',
+      );
+      const residualExposureAlerts = makeResidualExposureAlerts();
+      const logger = recordingLogger();
+      const shutCalendar: TradingCalendar = {
+        isOpen: () => false,
+        isTradingDay: () => true,
+        sessionStart: () => NOW,
+        sessionEnd: () => NOW,
+      };
+
+      await new ExecutionImpl(
+        makeInput(
+          broker,
+          store,
+          residualExposureAlerts,
+          undefined,
+          logger,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          { crypto: new AlwaysOpenCalendar(), stocks: shutCalendar },
+        ),
+      ).ingestFills();
+
+      expect(broker.flattenCalls).toEqual([]);
+      expect(residualExposureAlerts.alerts[0]).toMatchObject({
+        idempotency_key: 'key-1',
+        residual_qty: 6,
+        rearm_unsupported: true,
+      });
+      expect(logger.entries).toContainEqual(
+        expect.objectContaining({
+          event: 'residual_reflatten_skipped',
+          payload: expect.objectContaining({ reason: 'venue_shut' }),
+        }),
+      );
     });
 
     it('survives a throwing logger on the re-arm-failure path — the alert is still posted and the fills still persist', async () => {

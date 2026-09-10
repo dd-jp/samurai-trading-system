@@ -1486,6 +1486,15 @@ export interface ExecutionStepDeps {
   logger: Logger;
   /** #1087's per-lot throttle — see `ExecutionInput.filledZeroSizeThrottle`. */
   filledZeroSizeThrottle: FilledZeroSizeThrottle;
+  /**
+   * #1214's session gate on the residual re-flatten — see
+   * `ExecutionInput.sessionCalendars`. The SAME pair `TraderStepDeps` takes
+   * (`sessionCalendars` above), threaded from the one instance the
+   * composition root builds: two calendar objects is two places for a future
+   * override to reach only one of them, and the two surfaces would then
+   * disagree about when the venue is open.
+   */
+  sessionCalendars: Record<AssetClass, TradingCalendar>;
   /** #1465's non-sterling-fee page — see `ExecutionInput.nonSterlingFeeAlerts`. Optional, same as there. */
   nonSterlingFeeAlerts?: NonSterlingFeeAlertChannel;
 }
@@ -1515,6 +1524,7 @@ export function buildExecutionStep(deps: ExecutionStepDeps): TickSteps['executio
       flattenReconcileAlerts: deps.flattenReconcileAlerts,
       logger: deps.logger,
       filledZeroSizeThrottle: deps.filledZeroSizeThrottle,
+      sessionCalendars: deps.sessionCalendars,
       ...(deps.nonSterlingFeeAlerts === undefined
         ? {}
         : { nonSterlingFeeAlerts: deps.nonSterlingFeeAlerts }),
@@ -1553,6 +1563,7 @@ export function buildExecutionSurface(deps: ExecutionStepDeps, traceId: string):
     flattenReconcileAlerts: deps.flattenReconcileAlerts,
     logger: deps.logger,
     filledZeroSizeThrottle: deps.filledZeroSizeThrottle,
+    sessionCalendars: deps.sessionCalendars,
     ...(deps.nonSterlingFeeAlerts === undefined
       ? {}
       : { nonSterlingFeeAlerts: deps.nonSterlingFeeAlerts }),

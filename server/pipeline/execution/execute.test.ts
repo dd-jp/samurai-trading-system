@@ -20,6 +20,9 @@ function hostileThrownValue(): Record<string, unknown> {
   return hostile;
 }
 
+import type { TradingCalendar } from '../../providers/market-data-service/index.js';
+import { AlwaysOpenCalendar } from '../../providers/market-data-service/index.js';
+import type { AssetClass } from '../../shared/index.js';
 import { ExecutionImpl } from './execute.js';
 import { FilledZeroSizeThrottle } from './filled-zero-size-throttle.js';
 import { SimulatedBrokerAdapter } from './simulated-adapter.js';
@@ -37,6 +40,16 @@ import type {
   ResidualExposureAlert,
   ResidualExposureAlertChannel,
 } from './types.js';
+
+/**
+ * #1214: `ExecutionInput.sessionCalendars`. An open venue for both classes —
+ * `execute()` never reads it (only the ingest/sweep paths do), so this is
+ * composition, not a knob any test here turns.
+ */
+const OPEN_SESSION_CALENDARS: Record<AssetClass, TradingCalendar> = {
+  crypto: new AlwaysOpenCalendar(),
+  stocks: new AlwaysOpenCalendar(),
+};
 
 const NOW = new Date('2026-07-15T14:00:00Z');
 const fixedClock: Clock = { now: () => NOW };
@@ -270,6 +283,7 @@ function makeInput(overrides: Partial<ExecutionInput> = {}): ExecutionInput {
     costModel: {} as CostModel,
     marketData: {} as MarketDataService,
     config,
+    sessionCalendars: OPEN_SESSION_CALENDARS,
     residualExposureAlerts: makeResidualExposureAlerts(),
     flattenOverfillAlerts: makeFlattenOverfillAlerts(),
     flattenReconcileAlerts: makeFlattenReconcileAlerts(),

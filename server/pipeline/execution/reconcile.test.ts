@@ -6,8 +6,12 @@
  * and does not crash with us). That is the whole shape of the scenario: the
  * process forgets, the store and the venue do not.
  */
-import type { MarketDataService } from '../../providers/market-data-service/index.js';
-import type { Clock, Logger, OpenPosition, OrderIntent } from '../../shared/index.js';
+import type {
+  MarketDataService,
+  TradingCalendar,
+} from '../../providers/market-data-service/index.js';
+import { AlwaysOpenCalendar } from '../../providers/market-data-service/index.js';
+import type { AssetClass, Clock, Logger, OpenPosition, OrderIntent } from '../../shared/index.js';
 import { recordingLogger } from '../../shared/recording-logger.js';
 import type { CostModel } from '../../tools/backtest/index.js';
 import type { VerdictDecision } from '../verdict/index.js';
@@ -27,6 +31,17 @@ import type {
   NormalizedPosition,
 } from './types.js';
 import { WEDGED_ZERO_FILL_ABANDON_AFTER_MS } from './wedged-zero-fill-sweep.js';
+
+/**
+ * #1214: `ExecutionInput.sessionCalendars`. An open venue for both classes —
+ * nothing in this file turns on the residual re-flatten's session gate, and a
+ * shut venue would stand that path down for a reason none of these tests are
+ * about.
+ */
+const OPEN_SESSION_CALENDARS: Record<AssetClass, TradingCalendar> = {
+  crypto: new AlwaysOpenCalendar(),
+  stocks: new AlwaysOpenCalendar(),
+};
 
 const NOW = new Date('2026-07-15T14:00:00Z');
 const fixedClock: Clock = { now: () => NOW };
@@ -217,6 +232,7 @@ function makeInput(
     costModel: {} as CostModel,
     marketData: {} as MarketDataService,
     config,
+    sessionCalendars: OPEN_SESSION_CALENDARS,
     residualExposureAlerts: { postResidualExposureAlert: async () => {} },
     flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
     flattenReconcileAlerts,
