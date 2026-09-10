@@ -89,6 +89,7 @@
 
 import type { OpenPosition, OrderState } from '../../shared/index.js';
 import { describeThrownSafely, safeLog } from '../../shared/index.js';
+import { TERMINAL_ORDER_STATES } from '../../shared/store/index.js';
 import { sweepResidualProtection } from './residual-protection-sweep.js';
 import type {
   ReconcileDivergence,
@@ -109,6 +110,107 @@ const IN_FLIGHT: readonly OrderState[] = ['pending', 'submitted'];
  * doc above for the idempotency-key-reuse-safety reasoning behind the value.
  */
 export const TERMINAL_SWEEP_AGE_MS = 24 * 60 * 60 * 1_000;
+
+/**
+ * #1214 review round 2: how long an ACKED (`'submitted'`) flatten row may sit
+ * blocking its instrument while the venue keeps answering that it has no such
+ * order, before `reconcileFlatten` forces it terminal.
+ *
+ * ## Why a bound has to exist at all
+ *
+ * An unresolved `flatten_submissions` row blocks BOTH flatten submitters —
+ * `writeAheadFlatten`'s atomic gate refuses `executeExit`'s mandatory
+ * flat-by-close and `reflattenResidual`'s walk alike, and since #1389 the
+ * Trader refuses to even build the intent (`flattenAlreadyInFlight`,
+ * trader/decide.ts). Before this constant, the `resumeFlatten`-returns-null
+ * branch below left such a row untouched on every pass forever: the
+ * instrument could never be flattened again, across restarts and trading
+ * days, with no operator path short of editing SQLite by hand. That is the
+ * exact outcome ADR-0014's flat-by-close horizon exists to prevent, so the
+ * block has to be time-limited in code rather than "documented, not coded".
+ *
+ * ## Why five minutes
+ *
+ * `DEFAULT_TRADER_CONFIG.flatten_before_close_ms` (trader/types.ts), which is
+ * how long the flatten window is open BEFORE the bell. Picking the same value
+ * buys the guarantee that matters: a row that was already blocking when the
+ * window opened is forced terminal by the bell at the latest, leaving the
+ * whole `flatten_after_close_ms` grace for the daily flatten to go out.
+ * `assertFlattenWindowCoversTickInterval` (#670, #1389) guarantees at least
+ * ONE tick lands in that grace; that it holds
+ * `MIN_TICKS_INSIDE_FLATTEN_WINDOW` follows only from the defaults being equal
+ * on both sides of the bell, which is a property of `DEFAULT_TRADER_CONFIG`
+ * and not an invariant the boot assertion enforces. Reconcile runs on every
+ * fill-sync poll (#921, 15s by default) and that loop has no calendar gate, so
+ * the forcing pass itself lands within a poll of the bound expiring, post-bell
+ * included. `production/flatten-tick-coupling.test.ts` asserts the equality
+ * against the trader default, and the grace relation with it, so neither can
+ * drift silently; the value is NOT imported, because execution does not depend
+ * on the trader.
+ *
+ * The residual carry this does NOT cover is stated rather than argued away: a
+ * row first submitted INSIDE that session's flatten window cannot be aged out
+ * before the window shuts, so its instrument carries overnight and the
+ * carried-lot alert (orchestrator/production/carried-lot-alert.ts) is what
+ * makes it audible — ADR-0014's 2026-09-10 amendment, unchanged.
+ *
+ * ## What evidence actually forces the row: one answer, against an aged row
+ *
+ * The bound is on the ROW'S AGE (`now - row.submitted_at`) and nothing on this
+ * path counts observations — no consecutive-negative tally is kept anywhere. So
+ * the forcing fires on the FIRST `resumeFlatten` null that lands once the age
+ * is past: one unanswered check against an old row, not a measured run of
+ * denials. A row that went unpolled for the whole bound (process down, poll
+ * failing) is forced on its very first answer. Every docblock, reason string
+ * and alert on this path has to say that much and no more; "the venue denied it
+ * on every pass" would describe observations that were never made.
+ *
+ * ## Why acting on evidence that thin is still the right trade
+ *
+ * `getFlattenAttribution` is keyed on `idempotency_key` alone with NO status
+ * filter, so a fill that turns up after the row was forced still routes to the
+ * lots the flatten named and still reduces held quantity. The residual risk is
+ * therefore narrow: a flatten still WORKING at the venue that the venue is
+ * simultaneously denying exists. Flattens are market orders under a DayOrder
+ * TIF, so one this old that the venue cannot name is far likelier dead than
+ * working. Against that residual risk sits an instrument that is otherwise
+ * un-flattenable forever, which is #1214's own DECISION applied unchanged:
+ * closing the account down imperfectly beats leaving it open.
+ *
+ * ## What forcing the row terminal RE-ARMS, and why that is accepted
+ *
+ * Unblocking the instrument is not the only consequence, and the second one is
+ * #516's reverse-position hazard by name. An `'error'` row is a spent attempt
+ * to both durable key walks: `resolveReflattenKey` (residual-reflatten.ts)
+ * sees the key as taken (`findByKey` is status-blind) and hands back the NEXT
+ * `:residual-reflatten-N`, and `resolveExitRetryKey` (execute.ts) reads it as
+ * retryable (`isRetryableFlattenError` is `status === 'error'`) and advances to
+ * the next `:retry-N`. So a second live market order can go out on the same
+ * held quantity while the first may — on the branch this bound exists for —
+ * still be working at the venue. That is exactly the double-sell #516 forbids,
+ * and it is accepted here for the same reason the resolution itself is: both
+ * orders are DayOrder market flattens in the same direction on a lot that must
+ * end the day flat, the row is old enough that the venue's inability to name
+ * the first is likelier death than work in progress, and both walks stay
+ * bounded (three attempts each, durable across restarts).
+ *
+ * The worst case is worse than "one extra fill", and is written down rather
+ * than rounded off. If the FIRST flatten did fill and was merely never
+ * confirmed, and the second one then fills too: the first fill attributes
+ * correctly and closes the lot in the store, and the second fill's
+ * `redistributeOneFlatten` resolves to a lot key `getOpenPositions()` no longer
+ * returns — so `ingestFills`'s per-position loop never reads it, the quantity
+ * is silently DROPPED, and `markFlattenFillsSwept` retires the row regardless.
+ * The store then shows flat while the venue holds a REVERSE position, with no
+ * `ClosedTrade` and no exit fill recorded; the only surface is
+ * `findUnrecordedVenuePositions` at `reconcileDivergenceLevel: 'info'` — not a
+ * warning, not a page. That silent-drop gap is #429/#1122 and pre-dates this
+ * bound; what the bound adds is REACHABILITY, and closing the gap is tracked as
+ * #1506, not here. Weighed against it is an instrument that can never be
+ * flattened again — an open position carried indefinitely against ADR-0014,
+ * with certainty rather than in a narrow race. The bound accepts the race.
+ */
+export const UNRESOLVABLE_FLATTEN_MAX_AGE_MS = 5 * 60 * 1_000;
 
 export async function reconcile(input: ReconcileInput): Promise<ReconcileReport> {
   const { clock, store } = input;
@@ -221,6 +323,17 @@ async function reconcileFlatten(
     // in genuine ambiguity about whether it is still held, which is
     // paging-worthy on its own (#519) — see `FlattenReconcileAlertChannel`'s
     // doc for why this is not treated as a background diagnostic.
+    //
+    // DELIBERATELY NOT age-bounded the way the null-on-`'submitted'` branch
+    // below now is (#1214 review round 2), and the asymmetry is the point of
+    // that bound. Below, the venue ANSWERS — repeatedly, negatively — and a
+    // decision can be forced on consistent evidence. Here the adapter could
+    // not answer at all, so forcing the row terminal would write into the
+    // journal a finding nothing observed, and it would buy nothing: an adapter
+    // that cannot reach the venue to ask about this flatten cannot submit a
+    // replacement one either. The resolution path is the next pass on which
+    // the adapter CAN answer, which routes into the branch below or into a
+    // real order state.
     const reason = describeThrownSafely(error);
     await postFlattenReconcileAlert(input, row, reason, now);
     return {
@@ -262,12 +375,48 @@ async function reconcileFlatten(
     // already told us about (aged out of a lookup window, for instance).
     // Treating this as `'rejected'` would write a false record — "the
     // write-ahead never landed" — about a flatten that may have filled and
-    // closed a lot. Left untouched and escalated, the same as a genuine
-    // `resumeFlatten` throw just above.
-    const reason =
+    // closed a lot. So the FIRST such answers leave the journal untouched and
+    // escalate, the same as a genuine `resumeFlatten` throw just above.
+    //
+    // But only up to `UNRESOLVABLE_FLATTEN_MAX_AGE_MS` (#1214 review round 2).
+    // "Left untouched and escalated" is a resolution path only if something
+    // else eventually resolves the row, and for this shape nothing did:
+    // `fills_swept_at` is the only other thing that ever retires a
+    // `'submitted'` row and only `ingestFills()` sets it, only for a flatten
+    // that produced fills — which this one, on the venue's current account,
+    // did not. The row therefore blocked its instrument's mandatory
+    // flat-by-close forever, across restarts and trading days. Past the bound
+    // the system decides rather than freezes: the reason string records the
+    // row's age and the single current answer it acted on — not a denial count,
+    // which nothing here keeps — and the alert is still posted every pass, so
+    // forcing the row terminal silences nothing an operator was being told
+    // before.
+    const age = now.getTime() - row.submitted_at.getTime();
+    const provenance =
       `flatten '${row.idempotency_key}' was previously acked by the broker (a durable ` +
-      "'submitted' journal row exists) but the venue now reports no such order — leaving the " +
-      'journal untouched; check the venue by hand';
+      "'submitted' journal row exists) but the venue now reports no such order";
+    if (age >= UNRESOLVABLE_FLATTEN_MAX_AGE_MS) {
+      const reason =
+        `${provenance}. The row has been unresolved for ${Math.round(age / 1_000)}s — past the ` +
+        `${UNRESOLVABLE_FLATTEN_MAX_AGE_MS / 1_000}s bound, so the journal row is resolved to ` +
+        'stop it blocking every later flatten on this instrument. This is a DECISION on one ' +
+        'unanswered check against a row that old, not proof the flatten is dead, and not a ' +
+        'record of repeated denial (nothing counts how often the venue was asked): check the ' +
+        'venue by hand, and note that a fill arriving later is still attributed to the lots ' +
+        'this flatten named (getFlattenAttribution does not filter on status)';
+      await postFlattenReconcileAlert(input, row, reason, now);
+      await store.resolveFlattenError(row.idempotency_key, reason, now);
+      return {
+        idempotency_key: row.idempotency_key,
+        instrument: row.instrument,
+        store_state: storeState,
+        broker_state: null,
+        action: 'rejected',
+        kind: 'flatten',
+        reason,
+      };
+    }
+    const reason = `${provenance} — leaving the journal untouched; check the venue by hand`;
     await postFlattenReconcileAlert(input, row, reason, now);
     return {
       idempotency_key: row.idempotency_key,
@@ -283,6 +432,40 @@ async function reconcileFlatten(
   // The venue named an order. `resumeFlatten`'s side effect already
   // re-populated the adapter's own flatten-sweep worklist; what is left is
   // updating the journal so this row eventually stops being "unresolved".
+
+  // #1214 review — the ONE venue answer that must resolve the row here rather
+  // than merely be recorded on it. `fills_swept_at` is the only thing that
+  // ever bounds a `'submitted'` row (`getUnresolvedFlattens`), and only
+  // `ingestFills()` sets it, only for a flatten that actually produced fills.
+  // A flatten the venue terminally refused therefore had NOTHING to resolve
+  // it: `recordFlattenOrderStateObserved` below leaves `status`/`resolved_at`
+  // untouched, so the row stayed unresolved forever — wedging every later
+  // flatten on the instrument, both this instrument's daily flatten
+  // (`executeExit`'s write-ahead guard) and the #1214 re-flatten walk, across
+  // restarts.
+  //
+  // `filled_qty === 0` is load-bearing, not belt-and-braces: a flatten that
+  // filled part of the lot and was then cancelled still has fills in flight
+  // for `ingestFills()` to sweep, and `resumeFlatten`'s worklist side effect
+  // above is what recovers them after a restart. Only a flatten that closed
+  // NOTHING is dead with nothing owing.
+  if (TERMINAL_ORDER_STATES.includes(order.order_state) && order.filled_qty === 0) {
+    const reason =
+      `reconcile: the venue reports this flatten '${order.order_state}' having filled nothing — ` +
+      'it closed no quantity and never will, so the journal row is resolved rather than left ' +
+      'standing as an in-flight flatten on the instrument';
+    await store.resolveFlattenError(row.idempotency_key, reason, now);
+    return {
+      idempotency_key: row.idempotency_key,
+      instrument: row.instrument,
+      store_state: storeState,
+      broker_state: order.order_state,
+      action: 'rejected',
+      kind: 'flatten',
+      reason,
+    };
+  }
+
   if (row.status === 'submitting') {
     // The genuine first resolution of this write-ahead's ambiguity —
     // `resolveFlattenSubmitted` is the right write here (sets `resolved_at`,

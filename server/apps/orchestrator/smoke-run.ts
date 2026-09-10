@@ -219,6 +219,7 @@ import type {
   Bar,
   LseMarkClient,
   MarketDataService,
+  TradingCalendar,
 } from '../../providers/market-data-service/index.js';
 import {
   AlwaysOpenCalendar,
@@ -977,6 +978,22 @@ const PRIOR_EXIT_FRACTION = 0.3;
 const EXIT_PATH_LOT_SIZE = 10;
 
 /**
+ * #1214: what Execution's residual re-flatten resolves its session gate
+ * against here. `AlwaysOpenCalendar` for both classes, matching the
+ * `tradingCalendar` override this run already injects — `SMOKE_RUN_INSTANT`
+ * sits outside real session hours, and a shut venue would stand that path
+ * down for a reason none of these scenarios is about. No scenario here
+ * scripts a `ProtectiveRearmUnsupportedError` (scenario 5's is a one-shot
+ * ORDINARY re-arm failure), so nothing in this harness reaches the
+ * re-flatten regardless; this keeps the composition honest rather than
+ * leaning on that.
+ */
+const EXIT_PATH_SESSION_CALENDARS: Record<AssetClass, TradingCalendar> = {
+  crypto: new AlwaysOpenCalendar(),
+  stocks: new AlwaysOpenCalendar(),
+};
+
+/**
  * Records every alert `ingestFills()`'s `maybeRearmResidual` posts
  * (ingest-fills.ts), on any of its three paths — a failed store read, a
  * non-finite/non-positive residual, or the broker rejecting the re-arm
@@ -1731,6 +1748,7 @@ async function runExitPathScenarios(input: {
       costModel,
       marketData,
       config: executionConfig,
+      sessionCalendars: EXIT_PATH_SESSION_CALENDARS,
       residualExposureAlerts: residualAlerts,
       // #527: not recorded/gated like `residualAlerts` above — no scenario
       // here is expected to over-fill a flatten, and wiring a gate check for
@@ -2567,6 +2585,7 @@ async function restartExecutionAndReconcile(ctx: PostSweepScenarioContext): Prom
       costModel: ctx.costModel,
       marketData: ctx.marketData,
       config: ctx.executionConfig,
+      sessionCalendars: EXIT_PATH_SESSION_CALENDARS,
       residualExposureAlerts: ctx.residualAlerts,
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
       flattenReconcileAlerts: ctx.flattenReconcileAlerts,
@@ -5359,6 +5378,7 @@ async function runFilledZeroSizeWedgeScenario(
         costModel: {} as unknown as CostModel,
         marketData: {} as unknown as MarketDataService,
         config: paperStartingProfile('paper').executionConfig,
+        sessionCalendars: EXIT_PATH_SESSION_CALENDARS,
         residualExposureAlerts: {
           postResidualExposureAlert: async () => {
             throw new Error('SmokeWedgedLotBroker: this scenario never partially flattens');

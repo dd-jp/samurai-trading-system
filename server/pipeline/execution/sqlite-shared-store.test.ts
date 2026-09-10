@@ -979,7 +979,12 @@ describe('SqliteExecutionStore', () => {
       const unresolved = await store.getUnresolvedFlattens();
 
       expect(unresolved).toEqual([
-        { idempotency_key: 'flatten-stuck', instrument: 'AAPL', status: 'submitting' },
+        {
+          idempotency_key: 'flatten-stuck',
+          instrument: 'AAPL',
+          status: 'submitting',
+          submitted_at: OPENED_AT,
+        },
       ]);
     });
 
@@ -995,7 +1000,12 @@ describe('SqliteExecutionStore', () => {
       const unresolved = await store.getUnresolvedFlattens();
 
       expect(unresolved).toEqual([
-        { idempotency_key: 'flatten-acked', instrument: 'AAPL', status: 'submitted' },
+        {
+          idempotency_key: 'flatten-acked',
+          instrument: 'AAPL',
+          status: 'submitted',
+          submitted_at: OPENED_AT,
+        },
       ]);
     });
 
@@ -1012,7 +1022,7 @@ describe('SqliteExecutionStore', () => {
       expect(await store.getUnresolvedFlattens()).toEqual([]);
     });
 
-    it('excludes a row resolved to "error" — it provably never reached the broker', async () => {
+    it('excludes a row resolved to "error" — terminal, so it blocks nothing', async () => {
       const { store } = makeStore();
       await store.writeAheadFlatten(makeFlattenWriteAhead({ idempotency_key: 'flatten-error' }));
       await store.resolveFlattenError('flatten-error', 'cancel failed', OPENED_AT);
@@ -1315,11 +1325,18 @@ describe('SqliteExecutionStore', () => {
         [live, 'live'],
         [control, 'control'],
       ] as const) {
+        // Two DIFFERENT instruments, because one instrument may only ever have
+        // one unresolved flatten (#1214 review — `writeAheadFlatten`'s own
+        // guard). The arm-scoping claim under test is unaffected: it is about
+        // which arm's rows a scan returns, not which instrument they name.
         await store.writeAheadFlatten(
-          makeFlattenWriteAhead({ idempotency_key: `${prefix}-submitting` }),
+          makeFlattenWriteAhead({ idempotency_key: `${prefix}-submitting`, instrument: 'AAPL' }),
         );
         await store.writeAheadFlatten(
-          makeFlattenWriteAhead({ idempotency_key: `${prefix}-submitted-unswept` }),
+          makeFlattenWriteAhead({
+            idempotency_key: `${prefix}-submitted-unswept`,
+            instrument: 'TSLA',
+          }),
         );
         await store.resolveFlattenSubmitted(
           `${prefix}-submitted-unswept`,

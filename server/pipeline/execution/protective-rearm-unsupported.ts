@@ -20,10 +20,13 @@
  * in every test double that implements it — if the attempt cost a venue round
  * trip.
  *
- * This does NOT decide what to do about a naked residual on such a venue.
- * The three options #1214 lists (hand-emulated OCO, re-flatten instead of
- * re-arm, alert-only) are the owner's decision; all three need the caller to
- * be able to tell a permanent gap from a transient failure first.
+ * This module does not decide what to do about a naked residual on such a
+ * venue; it only lets a caller tell a permanent gap from a transient failure.
+ * What is DONE about it was decided by the owner on 2026-09-08 (#1214, option
+ * 2 of the three the ticket listed): the residual is re-flattened, not
+ * re-armed and not merely alerted — see `reflattenResidual`
+ * (residual-reflatten.ts), which both consumers reach from their
+ * `isProtectiveRearmUnsupported` branch.
  */
 
 /**

@@ -6,13 +6,18 @@
  * and does not crash with us). That is the whole shape of the scenario: the
  * process forgets, the store and the venue do not.
  */
-import type { MarketDataService } from '../../providers/market-data-service/index.js';
-import type { Clock, Logger, OpenPosition, OrderIntent } from '../../shared/index.js';
+import type {
+  MarketDataService,
+  TradingCalendar,
+} from '../../providers/market-data-service/index.js';
+import { AlwaysOpenCalendar } from '../../providers/market-data-service/index.js';
+import type { AssetClass, Clock, Logger, OpenPosition, OrderIntent } from '../../shared/index.js';
 import { recordingLogger } from '../../shared/recording-logger.js';
 import type { CostModel } from '../../tools/backtest/index.js';
 import type { VerdictDecision } from '../verdict/index.js';
 import { ExecutionImpl } from './execute.js';
 import { FilledZeroSizeThrottle } from './filled-zero-size-throttle.js';
+import { UNRESOLVABLE_FLATTEN_MAX_AGE_MS } from './reconcile.js';
 import { openTestExecutionStore, type TestExecutionStore } from './sqlite-store-harness.js';
 import type {
   BrokerAck,
@@ -27,6 +32,17 @@ import type {
   NormalizedPosition,
 } from './types.js';
 import { WEDGED_ZERO_FILL_ABANDON_AFTER_MS } from './wedged-zero-fill-sweep.js';
+
+/**
+ * #1214: `ExecutionInput.sessionCalendars`. An open venue for both classes —
+ * nothing in this file turns on the residual re-flatten's session gate, and a
+ * shut venue would stand that path down for a reason none of these tests are
+ * about.
+ */
+const OPEN_SESSION_CALENDARS: Record<AssetClass, TradingCalendar> = {
+  crypto: new AlwaysOpenCalendar(),
+  stocks: new AlwaysOpenCalendar(),
+};
 
 const NOW = new Date('2026-07-15T14:00:00Z');
 const fixedClock: Clock = { now: () => NOW };
@@ -217,6 +233,7 @@ function makeInput(
     costModel: {} as CostModel,
     marketData: {} as MarketDataService,
     config,
+    sessionCalendars: OPEN_SESSION_CALENDARS,
     residualExposureAlerts: { postResidualExposureAlert: async () => {} },
     flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
     flattenReconcileAlerts,
@@ -787,7 +804,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     expect(row?.reason).toContain('write-ahead never landed');
   });
 
-  it('leaves an ALREADY-ACKED row untouched and alerts, rather than mis-resolving it to error, when the venue later answers null', async () => {
+  it('leaves an ALREADY-ACKED row untouched and alerts, rather than mis-resolving it to error, when the venue later answers null INSIDE the bound', async () => {
     const { store } = openTestExecutionStore();
     await writeAheadFlatten(store);
     // Acked once already — mirrors what `executeExit` itself does on a clean
@@ -860,6 +877,62 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     expect(alerts).toEqual([
       expect.objectContaining({ idempotency_key: FLATTEN_KEY, reason: 'venue unreachable' }),
     ]);
+  });
+
+  /**
+   * #1214 review round 2, finding 1 — the OTHER "left untouched and escalated"
+   * branch, and the case for NOT giving it the age bound the null-on-acked
+   * branch got.
+   *
+   * A `resumeFlatten` that throws is ignorance, not evidence: nothing observed
+   * the venue's answer, so forcing the row terminal would write a finding into
+   * the journal that nobody made. It also buys nothing operationally — an
+   * adapter that cannot reach the venue to ask about this flatten cannot submit
+   * a replacement one either. Its resolution path is the next pass on which the
+   * adapter CAN answer, and that path terminates, which is what this proves.
+   *
+   * THE MUTATION THIS KILLS: extend the age bound to cover the catch branch
+   * too. This test still passes (the row resolves either way), so it is paired
+   * with the assertion below that the row is still `'submitting'` after the
+   * unreachable pass however old it is — an age-bounded catch would have
+   * forced it to `'error'` there and the replacement flatten would then have
+   * gone out while the ORIGINAL was, for all anyone knows, still working.
+   */
+  it('resolves a row whose lookup kept throwing as soon as the adapter can answer again — ignorance is not age-bounded', async () => {
+    const { store } = openTestExecutionStore();
+    // Far older than `UNRESOLVABLE_FLATTEN_MAX_AGE_MS`: age alone must not
+    // settle a row nothing has observed.
+    await writeAheadFlatten(store, {
+      submitted_at: new Date(NOW.getTime() - 10 * UNRESOLVABLE_FLATTEN_MAX_AGE_MS),
+    });
+    await store.resolveFlattenSubmitted(
+      FLATTEN_KEY,
+      { order_state: 'submitted', broker_order_ids: [`${FLATTEN_KEY}:order`] },
+      NOW,
+    );
+    const broker = makeBroker();
+    broker.failFlattenLookup = 'venue unreachable';
+
+    const unreachable = await new ExecutionImpl(makeInput(store, broker)).reconcile();
+
+    expect(unreachable.divergences[0]).toMatchObject({ action: 'undetermined', kind: 'flatten' });
+    expect((await store.getFlattenSubmission(FLATTEN_KEY))?.status).toBe('submitted');
+
+    // The venue comes back and names the order, terminally and with no fill —
+    // the same answer the terminal-non-fill path already resolves on.
+    broker.failFlattenLookup = null;
+    broker.flattenBook.set(FLATTEN_KEY, {
+      client_order_id: FLATTEN_KEY,
+      broker_order_ids: [`${FLATTEN_KEY}:order`],
+      order_state: 'rejected',
+      filled_qty: 0,
+    });
+
+    const answered = await new ExecutionImpl(makeInput(store, broker)).reconcile();
+
+    expect(answered.divergences[0]).toMatchObject({ action: 'rejected', kind: 'flatten' });
+    expect((await store.getFlattenSubmission(FLATTEN_KEY))?.status).toBe('error');
+    expect(await store.getUnresolvedFlattens()).toEqual([]);
   });
 
   // #573: before this ticket, a failure of the fallback alert ITSELF (as
@@ -944,7 +1017,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     expect(report.checked).toBe(0);
   });
 
-  it('does not resolve an "error" row — it provably never reached the broker, nothing left to ask', async () => {
+  it('does not resolve an "error" row — already terminal, nothing left to ask', async () => {
     const { store } = openTestExecutionStore();
     await writeAheadFlatten(store);
     await store.resolveFlattenError(FLATTEN_KEY, 'cancel failed', NOW);

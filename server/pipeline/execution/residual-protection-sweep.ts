@@ -66,36 +66,37 @@
  * cannot: every LSE pool line reports `IsOcoOrderSupported: false` (doc 43),
  * so an entry-less stop+target pair is inexpressible and
  * `SaxoBrokerAdapter.rearmProtectiveLegs` refuses before it reaches the
- * venue (`ProtectiveRearmUnsupportedError`). This sweep still retries it on
+ * venue (`ProtectiveRearmUnsupportedError`). The attempt is still made on
  * every pass — deliberately: a venue capability is re-read on each attempt
- * rather than cached here, an operator who re-arms by hand is not helped by
- * this loop giving up, and the attempt costs no venue call. What changes is
- * the REPORT: the log line, the divergence reason and the page all say the
- * gap is permanent, because "retry failed" trains an operator to wait for a
- * pass that can never succeed.
+ * rather than cached here, and it costs no venue call.
  *
- * That leaves the alert as the only remedy on such a venue, which is a
- * position #1214 records rather than one this file chooses — the two
- * mechanical alternatives it lists (a hand-emulated OCO carrying #586's
- * double-fill race, or re-flattening the residual instead of protecting it)
- * both change what the system DOES with live money and are the owner's call.
+ * What the refusal now triggers is the recorded decision (David, 2026-09-08,
+ * option 2): the residual is CLOSED rather than protected —
+ * `reflattenResidual` (residual-reflatten.ts) submits a bounded, session-
+ * gated market order for it, and only when that stands down or fails does
+ * this pass page. The page is not weakened: every non-submitting outcome
+ * still reaches `alertResidualExposureOnce` exactly as before, and a residual
+ * the re-flatten cannot close within its attempt budget ends up alerted the
+ * same way it is today.
  *
- * The bound on the exposure meanwhile is ADR-0014's flat-by-close, and it is a
- * bound with a stated edge rather than a guarantee. A marked lot is still an
- * open position, so `buildExitIntent` (trader/decide.ts) targets it like any
- * other — but only on a TICK inside the flatten window, which runs from
- * `flatten_before_close_ms` before the close to `flatten_after_close_ms` after
- * it (#1389). Past that grace nothing targets the lot again until the next
- * session's window, and the residual is carried overnight unprotected; the
- * carried-lot alert (`orchestrator/production/carried-lot-alert.ts`) is what
- * makes that outcome audible.
+ * This sweep, rather than the observing poll, is where that decision does its
+ * work: a pass runs after `ingestFills` has swept the originating flatten's
+ * fills, so the journal can distinguish "the daily flatten is still in
+ * flight" from "it is finished and left this residual behind". `maybeRearm-
+ * Residual` calls the same helper, and on the observing poll it usually
+ * stands down on exactly that gate and defers to the next pass here.
  *
- * This paragraph previously said the flatten targeted such a lot "in the
- * flatten window like any other" with no edge stated, which read as an
- * unconditional bound. It was worse than incomplete before #1389: the window
- * was forward-only, so once the close had passed there was no instant at which
- * a flatten could be produced at all, and the sentence was describing a remedy
- * that could not run.
+ * The bound on the exposure meanwhile is still ADR-0014's flat-by-close, and
+ * it is a bound with a stated edge rather than a guarantee. A marked lot is
+ * still an open position, so `buildExitIntent` (trader/decide.ts) targets it
+ * like any other — but only on a TICK inside the flatten window, which runs
+ * from `flatten_before_close_ms` before the close to `flatten_after_close_ms`
+ * after it (#1389). Past that grace nothing targets the lot again until the
+ * next session's window, and the residual is carried overnight unprotected;
+ * the carried-lot alert (`orchestrator/production/carried-lot-alert.ts`) is
+ * what makes that outcome audible. This sweep's own re-flatten is not bound by
+ * that window at all — it fires on any pass while the venue is open, which is
+ * the point of closing the residual rather than waiting for the daily flatten.
  */
 
 import {
@@ -107,6 +108,7 @@ import {
 } from '../../shared/index.js';
 import { isProtectiveRearmUnsupported } from './protective-rearm-unsupported.js';
 import { alertResidualExposure, type ResidualExposureFlags } from './residual-protection.js';
+import { reflattenResidual } from './residual-reflatten.js';
 import type {
   ReconcileDivergence,
   ResidualProtectionSweepResult,
@@ -291,9 +293,9 @@ async function sweepOne(
       position.target,
     );
   } catch (error) {
-    // #1214: separated from an ordinary failure, and ONLY in what is
-    // reported. The retry itself is unchanged — see the file doc's
-    // permanent-gap section for why this pass does not stop attempting.
+    // #1214: a permanent gap is not a failed retry. Where an ordinary failure
+    // is retried on the next pass, this one is REPLACED — the residual is
+    // closed rather than protected, below, per the file doc's own section.
     const unsupported = isProtectiveRearmUnsupported(error);
     // Every attempt leaves a trace (#608); the PAGE is once per episode —
     // see the file doc's escalation section.
@@ -325,6 +327,52 @@ async function sweepOne(
       error,
       { idempotency_key: key, residual_qty: residual },
     );
+
+    // #1214's recorded remedy. This sweep is the cadence that owns it: by the
+    // time a pass reads a marked lot, `ingestFills` has already swept the
+    // originating flatten's fills, so the journal gate in `reflattenResidual`
+    // can tell "the daily flatten is still in flight" from "it is done and
+    // left this residual behind" — which the observing poll, running with its
+    // own flatten row still unswept, cannot.
+    if (unsupported) {
+      const reflatten = await reflattenResidual(input, position, residual, now);
+      // #1214 review, finding 4: a pass that finds THIS lot's own re-flatten
+      // still working is the same state as the pass that sent it — the
+      // residual is being closed — so it suppresses the page for the same
+      // reason. Paging here would say "could not be closed" of a lot with a
+      // live closing order, and its remedy (manual venue action) would be a
+      // third submitter. See `standDown` for why the exposure stays watched.
+      if (reflatten.kind === 'skipped' && reflatten.reason === 'own_reflatten_in_flight') {
+        return {
+          idempotency_key: key,
+          instrument: position.instrument,
+          store_state: position.order_state,
+          broker_state: null,
+          action: 'undetermined',
+          kind: 'sweep',
+          reason: reflatten.detail,
+        };
+      }
+      if (reflatten.kind === 'submitted') {
+        // No page: the residual is being CLOSED, and the marker stays until
+        // the fill lands and the lot reads flat (the `isFlat` branch above).
+        // If the order does not close it, the next pass lands here again and
+        // pages once the attempt budget is spent.
+        return {
+          idempotency_key: key,
+          instrument: position.instrument,
+          store_state: position.order_state,
+          broker_state: null,
+          action: 'undetermined',
+          kind: 'sweep',
+          reason:
+            `this venue cannot arm protective legs, so residual ${residual} was CLOSED instead ` +
+            `(#1214): market order '${reflatten.idempotency_key}' is live at the venue and the ` +
+            'marker clears when its fill lands',
+        };
+      }
+    }
+
     await alertResidualExposureOnce(input, row, residual, now, { rearmUnsupported: unsupported });
     return {
       idempotency_key: key,
@@ -334,8 +382,9 @@ async function sweepOne(
       action: 'undetermined',
       kind: 'sweep',
       reason: unsupported
-        ? `this venue cannot arm protective legs at all, so residual ${residual} stays naked ` +
-          `until an operator acts at the venue: ${describeThrownSafely(error)}`
+        ? `this venue cannot arm protective legs at all and the residual ${residual} could not ` +
+          `be closed either — see the residual_reflatten_* log line for which gate stood the ` +
+          `re-flatten down: ${describeThrownSafely(error)}`
         : `re-arm retry failed for residual ${residual}: ${describeThrownSafely(error)}`,
     };
   }

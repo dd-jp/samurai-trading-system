@@ -4,9 +4,13 @@
  * Every wire shape below is a recorded SIM-gateway response from 2026-09-05
  * (doc 43) with the account/client keys stripped — no credential appears here.
  */
-import type { MarketDataService } from '../../../providers/market-data-service/index.js';
+import type {
+  MarketDataService,
+  TradingCalendar,
+} from '../../../providers/market-data-service/index.js';
+import { AlwaysOpenCalendar } from '../../../providers/market-data-service/index.js';
 import { LSE_ETP_POOL } from '../../../providers/universe-pool/index.js';
-import type { OpenPosition } from '../../../shared/index.js';
+import type { AssetClass, OpenPosition } from '../../../shared/index.js';
 import { recordingLogger } from '../../../shared/recording-logger.js';
 import { type CostModel, SAXO_COMMISSION_RATE } from '../../../tools/backtest/index.js';
 import { BrokerError } from '../broker-error.js';
@@ -56,6 +60,17 @@ import { saxoCashPerShare } from './saxo-price-unit.js';
  * `apps/orchestrator` and this adapter's own tests live in `pipeline/`.
  */
 const FILL_POLL_INTERVAL_MS = 15_000;
+
+/**
+ * #1214: `ExecutionInput.sessionCalendars`. An open venue for both classes —
+ * nothing in this file turns on the residual re-flatten's session gate, and a
+ * shut venue would stand that path down for a reason none of these tests are
+ * about.
+ */
+const OPEN_SESSION_CALENDARS: Record<AssetClass, TradingCalendar> = {
+  crypto: new AlwaysOpenCalendar(),
+  stocks: new AlwaysOpenCalendar(),
+};
 
 const RESOLVER: SaxoInstrumentResolver = {
   resolve: (lseTicker) =>
@@ -1595,6 +1610,7 @@ describe('ExecutionImpl.ingestFills through SaxoBrokerAdapter', () => {
           adv_window: { timeframe: '1d', lookback: 20 },
         },
       },
+      sessionCalendars: OPEN_SESSION_CALENDARS,
       residualExposureAlerts: { postResidualExposureAlert: async () => {} },
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
       flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },

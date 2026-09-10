@@ -71,6 +71,7 @@ export type {
   ReconcileInput,
   ReconcileReport,
   ResidualProtectionSweepResult,
+  ResidualReflattenInput,
   ResidualSweepInput,
   SimulatedAdapterConfig,
   SubmitInput,

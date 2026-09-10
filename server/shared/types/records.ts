@@ -88,7 +88,17 @@ export interface OrderIntent {
  * values, same meaning, one table down from `trader_log.exit_reason`.
  */
 export type ExitReason =
-  /** #668/ADR-0014: the flat-by-close window opened. Time, not price or signal. */
+  /**
+   * #668/ADR-0014: the flat-by-close window opened. Time, not price or signal.
+   *
+   * One flatten submission carries this WITHOUT a Trader decision behind it:
+   * #1214's residual re-flatten (execution/residual-reflatten.ts) journals the
+   * remainder of an already-decided flatten under this same reason, from
+   * inside Execution and possibly outside the window. It is the completion of
+   * a flat-by-close exit rather than a fourth category, which is why it reuses
+   * this member — but a query counting `trader_log` rows against
+   * `flatten_submissions` rows on `exit_reason: 'flatten'` will not balance.
+   */
   | 'flatten'
   /** #748: the momentum axis no longer supports the held side. Signal, not price or time. */
   | 'signal_decay'

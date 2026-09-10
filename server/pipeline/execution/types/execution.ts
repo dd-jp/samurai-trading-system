@@ -7,8 +7,9 @@ import type {
   BarWindow,
   IndicatorSpec,
   MarketDataService,
+  TradingCalendar,
 } from '../../../providers/market-data-service/index.js';
-import type { Clock, Logger, OrderState } from '../../../shared/index.js';
+import type { AssetClass, Clock, Logger, OrderState } from '../../../shared/index.js';
 import type { CostModel, CostVenue } from '../../../tools/backtest/index.js';
 import type { VerdictDecision } from '../../verdict/index.js';
 import type { FilledZeroSizeThrottle } from '../filled-zero-size-throttle.js';
@@ -168,6 +169,22 @@ export interface ExecutionInput {
    */
   filledZeroSizeThrottle: FilledZeroSizeThrottle;
   /**
+   * #1214: the same calendar pair the Trader resolves its flatten window
+   * against (`TraderInput.sessionCalendars`), so the residual re-flatten
+   * (residual-reflatten.ts) cannot fire a market order into a shut venue —
+   * the decision's own second constraint, and the reason it is a calendar
+   * rather than a boolean: "is this venue open now" is a per-asset-class,
+   * per-holiday, half-day-aware question that already has exactly one owner.
+   *
+   * Required, not optional, for the reason `residualExposureAlerts` et al.
+   * above are — with one extra edge: an optional calendar dropped at a
+   * composition root would leave the re-flatten permanently stood down and
+   * the residual permanently naked, which looks IDENTICAL in the logs to a
+   * venue that is simply shut. Making it required turns that into a `tsc`
+   * error at every composition root instead.
+   */
+  sessionCalendars: Record<AssetClass, TradingCalendar>;
+  /**
    * #1465: where a fill fee reported outside book currency is escalated —
    * `warnOnNonSterlingFee` (ingest-fills.ts) posts here after writing its own
    * `error`-level `safeLog` line. OPTIONAL, unlike `residualExposureAlerts`
@@ -201,9 +218,29 @@ export type SubmitInput = Pick<
 };
 
 /**
+ * `reflattenResidual()` (residual-reflatten.ts): #1214's close-the-residual
+ * remedy for a venue that cannot arm entry-less legs. It is the ONLY surface
+ * that reads `sessionCalendars` — the calendar gate standing in front of the
+ * one venue call it makes, `broker.submitFlatten` — and it journals through
+ * `FlattenJournal` while walking its bounded key with `LotJournal.findByKey`.
+ *
+ * Not a top-level surface of its own: every caller reaches it through one of
+ * the surfaces below (`maybeRearmResidual` from `FillIngestInput` and
+ * `ReconcileInput`, the #549 sweep from `ResidualSweepInput`), which is why
+ * those three intersect this and `SubmitInput`/`WedgedSweepInput` do not.
+ */
+export type ResidualReflattenInput = Pick<
+  ExecutionInput,
+  'trace_id' | 'broker' | 'sessionCalendars' | 'logger'
+> & {
+  store: LotJournal & FlattenJournal;
+};
+
+/**
  * `ingestFills()` (ingest-fills.ts): the fill poll and everything it re-arms
  * through `maybeRearmResidual` (residual-protection.ts), which is where
- * `residualExposureAlerts` is read.
+ * `residualExposureAlerts` is read — and, on a venue that cannot re-arm at
+ * all, where `reflattenResidual` is reached (`ResidualReflattenInput`).
  */
 export type FillIngestInput = Pick<
   ExecutionInput,
@@ -215,9 +252,10 @@ export type FillIngestInput = Pick<
   | 'logger'
   | 'filledZeroSizeThrottle'
   | 'nonSterlingFeeAlerts'
-> & {
-  store: PositionReader & FillReader & FillJournal & ResidualMarkers;
-};
+> &
+  ResidualReflattenInput & {
+    store: PositionReader & FillReader & FillJournal & ResidualMarkers;
+  };
 
 /**
  * `reconcile()` (reconcile.ts): the startup/periodic settle, which also runs
@@ -229,22 +267,29 @@ export type FillIngestInput = Pick<
 export type ReconcileInput = Pick<
   ExecutionInput,
   'trace_id' | 'clock' | 'broker' | 'residualExposureAlerts' | 'flattenReconcileAlerts' | 'logger'
-> & {
-  store: PositionReader &
-    LotJournal &
-    FlattenJournal &
-    LotRetirement &
-    FillReader &
-    ResidualMarkers;
-};
+> &
+  ResidualReflattenInput & {
+    store: PositionReader &
+      LotJournal &
+      FlattenJournal &
+      LotRetirement &
+      FillReader &
+      ResidualMarkers;
+  };
 
-/** `sweepResidualProtection()` (residual-protection-sweep.ts): the #549 re-arm retry. */
+/**
+ * `sweepResidualProtection()` (residual-protection-sweep.ts): the #549 re-arm
+ * retry, and — when the venue cannot re-arm at all — #1214's re-flatten
+ * (`ResidualReflattenInput`, which is what puts `sessionCalendars` and the
+ * flatten journal on this surface).
+ */
 export type ResidualSweepInput = Pick<
   ExecutionInput,
   'trace_id' | 'clock' | 'broker' | 'residualExposureAlerts' | 'logger'
-> & {
-  store: FillReader & ResidualMarkers;
-};
+> &
+  ResidualReflattenInput & {
+    store: FillReader & ResidualMarkers;
+  };
 
 /**
  * `sweepWedgedZeroFillLots()` (wedged-zero-fill-sweep.ts): store evidence

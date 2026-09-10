@@ -33,7 +33,14 @@ import {
   UsEquityRegularHoursCalendar,
 } from '../../../providers/market-data-service/index.js';
 import type { TraderDecisionRecord } from '../../../shared/decision-records.js';
-import type { Clock, LogEntry, Logger, OpenPosition, OrderIntent } from '../../../shared/index.js';
+import type {
+  AssetClass,
+  Clock,
+  LogEntry,
+  Logger,
+  OpenPosition,
+  OrderIntent,
+} from '../../../shared/index.js';
 import { toBrokerFillId } from '../../../shared/index.js';
 import { openSharedStore } from '../../../shared/store/index.js';
 import { OrphanVerdictScanner } from '../orphan-verdict-scan.js';
@@ -55,6 +62,17 @@ import type {
   ExitValuationDegradedAlertChannel,
 } from './exit-valuation-alert.js';
 import type { TraderDiagnosticAlertChannel } from './trader-diagnostic-alert.js';
+
+/**
+ * #1214: `ExecutionInput.sessionCalendars`. An open venue for both classes —
+ * nothing in this file turns on the residual re-flatten's session gate, and a
+ * shut venue would stand that path down for a reason none of these tests are
+ * about.
+ */
+const OPEN_SESSION_CALENDARS: Record<AssetClass, TradingCalendar> = {
+  crypto: new AlwaysOpenCalendar(),
+  stocks: new AlwaysOpenCalendar(),
+};
 
 const NOW = new Date('2026-07-28T14:00:00Z');
 const CLOCK: Clock = { now: () => NOW };
@@ -3064,6 +3082,7 @@ describe('buildExecutionStep', () => {
       costModel: {} as never,
       marketData: FAKE_MARKET_DATA,
       config: EXECUTION_CONFIG,
+      sessionCalendars: OPEN_SESSION_CALENDARS,
       residualExposureAlerts: { postResidualExposureAlert: async () => {} },
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
       flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
