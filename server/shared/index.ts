@@ -20,8 +20,17 @@ export { nonEmpty, positiveIntegerFromEnv, requireIntegerAtLeast } from './env-i
 // stages that size an exit — Trader (`buildExitIntent`) and Execution
 // (`executeExit`). Cross-module, so it belongs on this barrel rather than in
 // either stage's own module.
-export type { LotHeldQuantity } from './held-quantity.js';
-export { heldQuantitiesFor, totalHeldQuantity } from './held-quantity.js';
+export type { ExitFill, LotHeldQuantity, RecordedHeldQuantity } from './held-quantity.js';
+export {
+  coversQty,
+  heldQuantitiesFor,
+  heldQuantityFromFills,
+  isExitFill,
+  isFlat,
+  QTY_EPSILON_RELATIVE,
+  totalHeldQuantity,
+  totalQty,
+} from './held-quantity.js';
 export { delay } from './http/delay.js';
 export { fetchWithTimeout } from './http/fetch-with-timeout.js';
 export {

@@ -1586,7 +1586,7 @@ export interface ExitPathEvidence {
  * `bestEffortMarkerWrite`. The two paths share no MARKER-WRITING path (#1285
  * N5, round-2 review corrects the earlier "share no code" framing here,
  * which was false: `residual-protection-sweep.ts` imports
- * `recordedExposure`/`coversQty` from `ingest-fills.ts`, so that arithmetic
+ * `heldQuantityFromFills`/`isFlat` from `shared/held-quantity.ts`, so that arithmetic
  * IS shared code) — what they share is only those two exported helpers,
  * which `sweepOne` deliberately calls fresh off the persisted fill record
  * rather than trusting any cached figure, "so the two surfaces cannot
@@ -1921,7 +1921,7 @@ async function runPartialFlattenScenario(
     'scenario 2 exit',
   );
   await ctx.execution.ingestFills();
-  // Matches ingest-fills.ts's own `filledSize - exitQty`, not an algebraic
+  // Matches `heldQuantityFromFills`'s own `filledSize - exitQty` (shared/held-quantity.ts), not an algebraic
   // rearrangement of it — the two are not guaranteed to be the same float64
   // bit pattern (ADR-0005), only the SAME expression is.
   const exitFillQty = EXIT_PATH_LOT_SIZE * PARTIAL_FLATTEN_FRACTION;
@@ -2078,7 +2078,7 @@ async function runResidualSweepScenario(
   // lot's residual is left naked with only the marker pointing at it.
   await ctx.execution.ingestFills();
   const exitFillQty = EXIT_PATH_LOT_SIZE * PARTIAL_FLATTEN_FRACTION;
-  // Same `filledSize - exitQty` expression as ingest-fills.ts — scenario 2's
+  // Same `filledSize - exitQty` expression as `heldQuantityFromFills` — scenario 2's
   // own float-identity reasoning, unchanged.
   const expectedResidual = EXIT_PATH_LOT_SIZE - exitFillQty;
 
@@ -5840,7 +5840,7 @@ export function evaluateSmokeGate(
   // marker is already set) and clears via `store.confirmResidualProtected`
   // directly. What makes the two indistinguishable to the other three checks
   // is not a shared code path but `sweepOne`'s own doc'd choice to recompute
-  // off the SAME `recordedExposure`/`coversQty` expressions
+  // off the SAME `heldQuantityFromFills`/`isFlat` expressions
   // `maybeRearmResidual` uses, so both leave an identical marker/qty/alert
   // footprint. The `scenario5Alerts` count check below, and the
   // `markerCleared`/`protectedQty` checks further below, all read a healed-

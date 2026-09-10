@@ -88,7 +88,7 @@ Absent all four, Option C carries into live money with the same invariant test a
 
 ## Consequences
 
-- **Accepted:** monetary values are approximations, exact to ~1e-10 USD per trade rather than exact by construction. Comparisons of money for equality are unsafe anywhere in this codebase, and the `coversQty` epsilon in `ingest-fills.ts` is the pattern for any future quantity comparison. Nothing here makes float64 *correct* — it makes it demonstrably below the noise floor of the thing being measured.
+- **Accepted:** monetary values are approximations, exact to ~1e-10 USD per trade rather than exact by construction. Comparisons of money for equality are unsafe anywhere in this codebase, and the `coversQty` epsilon in `server/shared/held-quantity.ts` (moved there from `ingest-fills.ts` 2026-09-10 so the Trader, Execution and the residual sweep share one tolerance) is the pattern for any future quantity comparison. Nothing here makes float64 *correct* — it makes it demonstrably below the noise floor of the thing being measured.
 - **Bought:** no dependency, no store migration, no serialization boundary between decimal objects and SQLite `REAL`, and no risk of a half-migrated codebase where some paths are decimal and others are not — which is the realistic failure mode of adopting Option A under time pressure before the soak has produced any evidence.
 - **`docs/specs/execution-spec.md`** gains the float-tolerant restatement of round-trip-to-flat (Module: Order State Machine & Partial Fills).
 - **`server/pipeline/execution/money-math-precision.test.ts`** is the executable half of this ADR. If it is deleted or its thresholds loosened, this decision loses its justification — the numbers in §2 are only true while that test runs green.

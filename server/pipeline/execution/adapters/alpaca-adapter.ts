@@ -515,7 +515,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * failure. That ordering is safe because a bracket and its lot's re-arm
    * are never BOTH live: `rearmProtectiveLegs` is only ever reached
    * downstream of a successful `cancel()` of that bracket
-   * (`maybeRearmResidual` in ingest-fills.ts, once a flatten fill lands,
+   * (`maybeRearmResidual` in residual-protection.ts, once a flatten fill lands,
    * and `sweepResidualProtection`'s retry of a lot that path already
    * marked) — so when a re-arm exists the original bracket is already
    * terminal, and the bracket cancel below is a venue no-op that

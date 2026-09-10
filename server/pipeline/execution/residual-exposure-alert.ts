@@ -50,7 +50,7 @@ export interface ResidualExposureAlert {
    *
    * Reaches `postResidualExposureAlert` from two producer paths, both
    * stamped with the raising surface's own fixed `ExecutionInput.trace_id`:
-   * `maybeRearmResidual` (ingest-fills.ts), reached through `advanceLot`
+   * `maybeRearmResidual` (residual-protection.ts), reached through `advanceLot`
    * inside `ingestFills()` itself when a partial flatten leaves a residual
    * mid-poll; and `sweepResidualProtection` (residual-protection-sweep.ts),
    * reached both unconditionally inside `reconcile()` (reconcile.ts) and,

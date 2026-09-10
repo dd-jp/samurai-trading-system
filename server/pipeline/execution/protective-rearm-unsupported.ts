@@ -5,7 +5,7 @@
  * adapter that cannot express an entry-less protective pair to THROW rather
  * than no-op. What the seam could not say is whether a given throw is a bad
  * minute at the venue or a settled capability gap — and both callers
- * (`maybeRearmResidual` in ingest-fills.ts, `sweepResidualProtection` in
+ * (`maybeRearmResidual` in residual-protection.ts, `sweepResidualProtection` in
  * residual-protection-sweep.ts) read every throw as the former: they log
  * "retry failed", keep the #549 marker, and re-attempt on the next poll,
  * forever. On Saxo, whose pool lines all report `IsOcoOrderSupported: false`

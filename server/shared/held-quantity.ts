@@ -25,7 +25,18 @@
  * keys through the same query — a promise made in prose does not hold a
  * bit-identical comparison up.
  */
-import type { OpenPosition } from './types.js';
+import type { Fill, OpenPosition } from './types.js';
+
+/** A fill on a closing leg — everything that is not the entry. */
+export type ExitFill = Fill & { leg: 'stop' | 'target' | 'exit' };
+
+export function isExitFill(fill: Fill): fill is ExitFill {
+  return fill.leg !== 'entry';
+}
+
+export function totalQty(fills: readonly Fill[]): number {
+  return fills.reduce((sum, fill) => sum + fill.qty, 0);
+}
 
 /** One lot's held quantity — see `heldQuantities`. */
 export interface LotHeldQuantity {
@@ -75,4 +86,68 @@ export async function heldQuantitiesFor(
  */
 export function totalHeldQuantity(held: readonly LotHeldQuantity[]): number {
   return held.reduce((sum, lot) => sum + lot.held, 0);
+}
+
+/**
+ * Relative tolerance on the quantity comparisons, because both sides are
+ * float64 sums of decimal `Fill.qty` rows and two sums of the SAME total
+ * differ unless the tranches happen to share a summation order: entry
+ * tranches of 0.3 + 0.3 + 0.4 total exactly 1, while exit tranches of
+ * 0.7 + 0.2 + 0.1 total 0.9999999999999999. A bare `>=` therefore reads a
+ * fully-exited lot as still open — forever, since no further fill is coming:
+ * no `ClosedTrade` for the Feedback Loop, and a phantom lot left in
+ * `getOpenPositions()` consuming Risk's exposure caps.
+ *
+ * The margin over float noise, measured against the same (n+2)·2^-53 bound
+ * ADR-0005 §1 derives (n products, an n-term naive summation, one division),
+ * is 88x at n = 100 fills (1.13e-14) and 36x at the 250-fills-per-leg worst
+ * case (2.80e-14) — comfortable, but tens of times, NOT orders of
+ * magnitude: a workload past ~9,000 fills on one leg would need this
+ * constant revisited. The margin in the other direction is the wide one: a
+ * residue of 1e-12 of a lot is orders below any venue's minimum quantity
+ * increment, so it does not exist at the broker either and a lot that reads
+ * flat here is flat there too. The tolerance has to carry that argument on
+ * its own — `reconcile()` (#86) only inspects `pending`/`submitted` lots, so
+ * it never revisits one this code has marked terminal.
+ * See [ADR-0005](../../docs/adr/0005-money-math-precision.md).
+ */
+export const QTY_EPSILON_RELATIVE = 1e-12;
+
+/**
+ * `actual >= target`, tolerant of float64 summation noise on either side.
+ * The ONE flatness judgement for every surface that asks it — the observing
+ * fill poll, the #549 sweep, `nextState`'s filled/partially_filled split —
+ * so no two of them can disagree by an algebraic rearrangement that is not
+ * guaranteed the same float64 answer (ADR-0005).
+ */
+export function coversQty(actual: number, target: number): boolean {
+  return actual >= target - Math.abs(target) * QTY_EPSILON_RELATIVE;
+}
+
+/**
+ * A lot's held quantity recomputed from its FULL persisted fill record, the
+ * shape the residual-protection path reasons over. Same `held` as
+ * `heldQuantitiesFor` derives from the persisted `filled_size` column; the
+ * two agree while `filled_size` is the sum of the entry fills, which is
+ * exactly what `ingestFills()` writes into it.
+ */
+export interface RecordedHeldQuantity extends LotHeldQuantity {
+  /** Σ entry-leg fill quantity. */
+  filledSize: number;
+  /** Σ closing-leg fill quantity. */
+  exitQty: number;
+}
+
+export function heldQuantityFromFills(
+  idempotency_key: string,
+  fills: readonly Fill[],
+): RecordedHeldQuantity {
+  const filledSize = totalQty(fills.filter((fill) => fill.leg === 'entry'));
+  const exitQty = totalQty(fills.filter(isExitFill));
+  return { idempotency_key, filledSize, exitQty, held: filledSize - exitQty };
+}
+
+/** Round-tripped to flat under the one tolerance — nothing left at the venue. */
+export function isFlat(recorded: Pick<RecordedHeldQuantity, 'filledSize' | 'exitQty'>): boolean {
+  return coversQty(recorded.exitQty, recorded.filledSize);
 }
