@@ -68,8 +68,9 @@ import {
   safeLog,
   toBrokerFillId,
   totalQty,
+  weightedAvgPrice,
 } from '../../shared/index.js';
-import { closedTrade, weightedAvgPrice } from './closed-trade.js';
+import { closedTrade } from './closed-trade.js';
 import {
   chargeTopUpTo,
   type ModelledEntryCost,

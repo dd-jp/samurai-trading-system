@@ -8,14 +8,7 @@
  */
 
 import type { ClosedTrade, ExitFill, Fill, OpenPosition } from '../../shared/index.js';
-import { totalQty } from '../../shared/index.js';
-
-/** Size-weighted, so two unequal partials give the true average. */
-export function weightedAvgPrice(fills: readonly Fill[]): number {
-  const qty = totalQty(fills);
-  if (qty === 0) return 0;
-  return fills.reduce((sum, fill) => sum + fill.price * fill.qty, 0) / qty;
-}
+import { weightedAvgPrice } from '../../shared/index.js';
 
 export function closedTrade(
   position: OpenPosition,

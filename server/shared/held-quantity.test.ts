@@ -4,6 +4,7 @@ import {
   heldQuantityFromFills,
   isFlat,
   totalHeldQuantity,
+  weightedAvgPrice,
 } from './held-quantity.js';
 import { toBrokerFillId } from './types/records.js';
 import type { Fill, OpenPosition } from './types.js';
@@ -35,6 +36,18 @@ describe('heldQuantityFromFills', () => {
   it('counts every non-entry leg as closing quantity', () => {
     const fills = [fill('entry', 1), fill('stop', 0.4), fill('target', 0.3), fill('exit', 0.3)];
     expect(heldQuantityFromFills('lot', fills).exitQty).toBeCloseTo(1, 12);
+  });
+});
+
+describe('weightedAvgPrice', () => {
+  it('weights by quantity and reads zero for no quantity', () => {
+    expect(weightedAvgPrice([])).toBe(0);
+    expect(
+      weightedAvgPrice([
+        { ...fill('entry', 1), price: 100 },
+        { ...fill('entry', 3), price: 104 },
+      ]),
+    ).toBe(103);
   });
 });
 

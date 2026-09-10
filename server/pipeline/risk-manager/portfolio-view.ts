@@ -225,7 +225,7 @@ function markFor(marks: Map<string, number>, instrument: string): number {
  * no PnL, and `avg_entry_price` is 0 until the first fill lands, which is why
  * the two fields must be read together.
  */
-function unrealizedFor(position: OpenPosition, mark: number): number {
+export function unrealizedFor(position: OpenPosition, mark: number): number {
   const direction = position.side === 'buy' ? 1 : -1;
   return (mark - position.avg_entry_price) * position.filled_size * direction;
 }

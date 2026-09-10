@@ -38,6 +38,13 @@ export function totalQty(fills: readonly Fill[]): number {
   return fills.reduce((sum, fill) => sum + fill.qty, 0);
 }
 
+/** Size-weighted average price of `fills`; 0 when they carry no quantity. */
+export function weightedAvgPrice(fills: readonly Fill[]): number {
+  const qty = totalQty(fills);
+  if (qty === 0) return 0;
+  return fills.reduce((sum, fill) => sum + fill.price * fill.qty, 0) / qty;
+}
+
 /** One lot's held quantity — see `heldQuantities`. */
 export interface LotHeldQuantity {
   idempotency_key: string;

@@ -14,12 +14,14 @@
 import { toProfitFactorWire } from '../../../contracts/index.js';
 import type { AnalystContribution, Direction } from '../../pipeline/debate-engine/index.js';
 import { OUTSIDE_BENCHMARKS } from '../../pipeline/outside-benchmark/index.js';
-import type {
-  EvaluatedCondition,
-  InvalidationObservable,
+import {
+  type EvaluatedCondition,
+  type InvalidationObservable,
+  unrealizedFor,
 } from '../../pipeline/risk-manager/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
-import type { ClosedTrade, Fill, OpenPosition } from '../../shared/index.js';
+import type { ClosedTrade, Fill } from '../../shared/index.js';
+import { isExitFill, totalQty, weightedAvgPrice } from '../../shared/index.js';
 import type { StoreMode } from '../../shared/store/index.js';
 import { buildPipelineView, PIPELINE_LOOKBACK_MS, PIPELINE_MAX_LANES } from './pipeline-query.js';
 import { NULL_PROVIDER_STATUS, type ProviderStatusReader } from './provider-status.js';
@@ -174,18 +176,6 @@ function riskCriticRow(record: RiskCriticRecord): RiskCriticRow {
 }
 
 /**
- * Unrealized PnL from the current mark. Buy: mark − entry; sell: entry − mark.
- * Times `filled_size`, never `requested_size`.
- */
-function unrealizedPnl(position: OpenPosition, markPrice: number): number {
-  const diff =
-    position.side === 'buy'
-      ? markPrice - position.avg_entry_price
-      : position.avg_entry_price - markPrice;
-  return diff * position.filled_size;
-}
-
-/**
  * A closed trade's realized exit price, preferring reality over arithmetic.
  *
  * `closed_trades` has no `exit_price` column (0001_init.sql), so this is
@@ -204,20 +194,13 @@ function unrealizedPnl(position: OpenPosition, markPrice: number): number {
  *    entry/stop/target fields on a no-reference-price close, not to this
  *    trade's recorded `entry`/`stop`.
  *
- * `weightedExitFillPrice` is tried first; the algebraic fallback only runs
- * when a trade has no exit fill on record.
+ * `weightedExitFillPrice` is tried first — the same `weightedAvgPrice` the
+ * execution stage used to write `ClosedTrade` — and the algebraic fallback
+ * only runs when a trade has no exit fill on record.
  */
 function weightedExitFillPrice(fills: readonly Fill[]): number | null {
-  const exitFills = fills.filter((fill) => fill.leg !== 'entry');
-  if (exitFills.length === 0) return null;
-  let totalQty = 0;
-  let totalNotional = 0;
-  for (const fill of exitFills) {
-    totalQty += fill.qty;
-    totalNotional += fill.price * fill.qty;
-  }
-  if (totalQty === 0) return null;
-  return totalNotional / totalQty;
+  const exitFills = fills.filter(isExitFill);
+  return totalQty(exitFills) === 0 ? null : weightedAvgPrice(exitFills);
 }
 
 function derivedExitPrice(trade: ClosedTrade): number {
@@ -274,7 +257,7 @@ export function buildSnapshot(
       target: position.target,
       order_state: position.order_state,
       mark_price: mark.price,
-      unrealized_pnl: unrealizedPnl(position, mark.price),
+      unrealized_pnl: unrealizedFor(position, mark.price),
       opened_at: position.opened_at.toISOString(),
     };
   });

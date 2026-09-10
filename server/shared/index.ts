@@ -30,6 +30,7 @@ export {
   QTY_EPSILON_RELATIVE,
   totalHeldQuantity,
   totalQty,
+  weightedAvgPrice,
 } from './held-quantity.js';
 export { delay } from './http/delay.js';
 export { fetchWithTimeout } from './http/fetch-with-timeout.js';

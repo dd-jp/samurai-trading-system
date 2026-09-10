@@ -1,6 +1,6 @@
 import type { ExitFill, Fill, OpenPosition } from '../../shared/index.js';
 import { toBrokerFillId } from '../../shared/index.js';
-import { closedTrade, modelledCostCharged, weightedAvgPrice } from './closed-trade.js';
+import { closedTrade, modelledCostCharged } from './closed-trade.js';
 
 const BREAKDOWN = { spread_cost: 1, commission: 1, slippage: 0, market_impact: 0 };
 
@@ -27,18 +27,6 @@ const position = {
   stop: 95,
   opened_at: new Date(1_000),
 } as OpenPosition;
-
-describe('weightedAvgPrice', () => {
-  it('weights by quantity and reads zero for no fills', () => {
-    expect(weightedAvgPrice([])).toBe(0);
-    expect(
-      weightedAvgPrice([
-        fill({ leg: 'entry', qty: 1, price: 100 }),
-        fill({ leg: 'entry', qty: 3, price: 104 }),
-      ]),
-    ).toBe(103);
-  });
-});
 
 describe('closedTrade', () => {
   const entryFills = [fill({ leg: 'entry', qty: 10, price: 100, fee: 1 })];
