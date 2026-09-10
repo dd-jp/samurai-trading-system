@@ -64,7 +64,8 @@ function isFiniteNumber(value: unknown): value is number {
  * position or fill (#1014 review, finding 4). `NaN`/`Infinity` are refused
  * with the wrong types — JSON cannot encode them, so their presence means the
  * column was not written by this codebase's `JSON.stringify`. The result is
- * rebuilt from four individually checked numbers so no `as` is needed (#509).
+ * rebuilt from four individually checked numbers, each read through an `in`
+ * narrowing, so no `as` is needed (#509).
  */
 export function parseModelledCostBreakdownColumn(raw: string | null): ModelledCostBreakdown | null {
   if (raw === null) return null;
@@ -77,12 +78,16 @@ export function parseModelledCostBreakdownColumn(raw: string | null): ModelledCo
   }
 
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
-  const candidate: Record<string, unknown> = parsed as Record<string, unknown>;
+  if (
+    !('spread_cost' in parsed) ||
+    !('commission' in parsed) ||
+    !('slippage' in parsed) ||
+    !('market_impact' in parsed)
+  ) {
+    return null;
+  }
 
-  const spread_cost = candidate['spread_cost'];
-  const commission = candidate['commission'];
-  const slippage = candidate['slippage'];
-  const market_impact = candidate['market_impact'];
+  const { spread_cost, commission, slippage, market_impact } = parsed;
   if (
     !isFiniteNumber(spread_cost) ||
     !isFiniteNumber(commission) ||

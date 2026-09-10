@@ -100,7 +100,6 @@ interface ExecutionInput {          // injected dependencies (constructor / DI)
   marketData: MarketDataService;    // consumed by the Simulated adapter to assemble MarketState
                                      // for CostModel.fill (same injection pattern as Trader/Risk/Verdict)
   config: ExecutionConfig;          // retry/backoff, throttle, poll/reconcile cadence
-  mode: 'live' | 'paper' | 'backtest';
 }
 
 interface ExecutionResult {
@@ -266,7 +265,7 @@ Consumers and the fields they bind:
 
 ### Prior Art
 
-- No implementation yet. Injected-clock / mode-flag / injected-dependency patterns mirror Verdict (injected `ApprovalChannel`), Risk, and the Trader. Deterministic-output assertions (no LLM mock) mirror Trader/Risk/Verdict. The Simulated `BrokerAdapter` is the execution analogue of Verdict's no-op `ApprovalChannel` and Risk's mocked `PortfolioView`.
+- No implementation yet. Injected-clock / injected-dependency patterns mirror Verdict (injected `ApprovalChannel`), Risk, and the Trader. Deterministic-output assertions (no LLM mock) mirror Trader/Risk/Verdict. The Simulated `BrokerAdapter` is the execution analogue of Verdict's no-op `ApprovalChannel` and Risk's mocked `PortfolioView`.
 
 ## Out of Scope
 

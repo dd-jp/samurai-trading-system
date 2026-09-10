@@ -536,9 +536,9 @@ export interface ProductionConfig extends AlertChannelSlots {
   alpacaDataClient?: AlpacaMarketDataClient;
   /**
    * Approval round-trip behind Verdict's HITL gate (6). No adapter for it
-   * exists in the repo — the Telegram approval half was retired with the
-   * human gate (ADR-0007, ADR-0013) — so the composition root falls back to
-   * `UnwiredApprovalChannel`, which throws if the gate is ever reached.
+   * exists in the repo (ADR-0007, ADR-0013: no human gate anywhere), so the
+   * composition root falls back to `UnwiredApprovalChannel`, which throws if
+   * the gate is ever reached.
    */
   approvals?: ApprovalChannel;
   /**

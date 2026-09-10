@@ -1048,8 +1048,8 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
       level: 'warn',
       message:
         `llm_failure rate ${(alert.rate * 100).toFixed(1)}% over the last ${Math.round(alert.window_ms / 3_600_000)}h ` +
-        `(${alert.llm_failure_count}/${alert.total_count} truncations) — SAMURAI_ALERTS=log-only ` +
-        'cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.',
+        `(${alert.llm_failure_count}/${alert.total_count} truncations) — ` +
+        LOG_ONLY_CANNOT_PAGE,
       payload: {
         rate: alert.rate,
         llm_failure_count: alert.llm_failure_count,

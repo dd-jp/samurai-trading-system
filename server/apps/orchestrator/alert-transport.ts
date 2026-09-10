@@ -73,8 +73,8 @@
  * ## Outbound only
  *
  * Nothing here receives anything from Telegram. `TelegramBotApiClient` is
- * outbound-only since the human approval half was retired (ADR-0007,
- * ADR-0013), and `ProductionConfig.approvals` still falls back to
+ * outbound-only (ADR-0007, ADR-0013: no human gate anywhere), and
+ * `ProductionConfig.approvals` still falls back to
  * `UnwiredApprovalChannel` (`production.ts`'s `resolveApprovalsChannel`),
  * which THROWS rather than fabricating consent if Verdict's HITL gate (6) is
  * ever reached — ADR-0007 makes that gate unreachable at the shipped `auto`
