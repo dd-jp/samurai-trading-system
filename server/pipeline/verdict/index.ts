@@ -511,26 +511,9 @@ export class VerdictImpl implements Verdict {
 }
 
 export { LoggingVerdict } from './logging-verdict.js';
-export type { ApprovalCallbackPayload } from './notifications/approval-callback-verifier.js';
-export {
-  signApprovalCallback,
-  verifyApprovalCallback,
-} from './notifications/approval-callback-verifier.js';
-export { formatApprovalRequest, formatDecisionMessage } from './notifications/format.js';
+export { formatDecisionMessage } from './notifications/format.js';
 export { isNotableVerdict } from './notifications/notable-verdict.js';
-export { parseAllowedUserIds } from './notifications/telegram/allowlist.js';
-export type {
-  CorrelationTarget,
-  CorrelationTokenPair,
-} from './notifications/telegram/correlation-tokens.js';
-export {
-  CorrelationTokenStore,
-  tokenLogPrefix,
-} from './notifications/telegram/correlation-tokens.js';
-export type {
-  CallbackAuditLog,
-  TelegramBotApiClientOptions,
-} from './notifications/telegram/telegram-bot-api-client.js';
+export type { TelegramBotApiClientOptions } from './notifications/telegram/telegram-bot-api-client.js';
 export { TelegramBotApiClient } from './notifications/telegram/telegram-bot-api-client.js';
 export type { TelegramError } from './notifications/telegram/telegram-errors.js';
 export {
@@ -540,14 +523,7 @@ export {
   TelegramTimeoutError,
 } from './notifications/telegram/telegram-errors.js';
 export { TelegramChannel } from './notifications/telegram-channel.js';
-export type {
-  ApprovalButtonTarget,
-  ApprovalCallback,
-  TelegramClient,
-  TradeChannelNotifier,
-} from './notifications/types.js';
-export type { ApprovalRequestSender } from './notifications/verified-approval-channel.js';
-export { SignedApprovalChannel } from './notifications/verified-approval-channel.js';
+export type { TelegramClient, TradeChannelNotifier } from './notifications/types.js';
 export { NotifyingVerdict } from './notifying-verdict.js';
 export { SqliteVerdictLogStore } from './sqlite-verdict-log-store.js';
 export type {

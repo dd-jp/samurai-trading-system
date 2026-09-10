@@ -5,10 +5,10 @@
  * Declared beside its caller (`buildTraderStep`, direct-bind.ts) the same way
  * `AnalystSkipAlertChannel` is declared beside `buildAnalystsStep` and
  * `FlattenReconcileAlertChannel` beside `reconcile()`. Implemented by
- * `TradeChannelTraderDiagnosticAlert` (trader-diagnostic-alert-channel.ts),
+ * the alert catalogue's `traderDiagnosticAlerts` entry (alert-catalogue.ts),
  * which `SAMURAI_ALERTS=telegram` selects at the composition root.
  *
- * There is deliberately NO `Logging…Channel` counterpart, which is where this
+ * There is deliberately NO log-only form (`UNLOGGED_ALERT_IDS`), which is where this
  * departs from the other ten. `buildTraderStep` writes every diagnostic to its
  * own logger at `error` BEFORE it reaches this port, so a log-only
  * implementation would emit each condition twice. An absent channel here means
@@ -38,7 +38,7 @@
  * it, so there is nothing here to sanitize a credential out of.
  */
 import type { TraderDiagnostic } from '../../../pipeline/trader/index.js';
-import type { TradingArm } from '../../../shared/index.js';
+import { escalatesAt, type TradingArm } from '../../../shared/index.js';
 
 /** One degraded-but-continuing condition, on one instrument, on one tick. */
 export interface TraderDiagnosticAlert {
@@ -138,10 +138,13 @@ export const ALERT_AFTER_CONSECUTIVE_DIAGNOSTICS = 1;
  */
 export const ALERT_REPEAT_EVERY_DIAGNOSTICS = 8;
 
-/** Fires at the threshold, then on a bounded repeat while the condition persists. */
+const DIAGNOSTIC_CADENCE = {
+  after: ALERT_AFTER_CONSECUTIVE_DIAGNOSTICS,
+  every: ALERT_REPEAT_EVERY_DIAGNOSTICS,
+};
+
 export function shouldAlertAtDiagnosticCount(consecutive: number): boolean {
-  if (consecutive < ALERT_AFTER_CONSECUTIVE_DIAGNOSTICS) return false;
-  return (consecutive - ALERT_AFTER_CONSECUTIVE_DIAGNOSTICS) % ALERT_REPEAT_EVERY_DIAGNOSTICS === 0;
+  return escalatesAt(consecutive, DIAGNOSTIC_CADENCE);
 }
 
 /**

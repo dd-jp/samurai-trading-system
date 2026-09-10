@@ -44,7 +44,7 @@
  * anything either, so it is strictly worse, not merely equal.
  *
  * ## Same shape as `TraderDiagnosticAlertChannel`, and the same absence of a
- * `Logging…Channel`
+ * log-only form
  *
  * Both catch sites already write an `error`-level log line before reaching
  * this port (`daily feedback cycle failed` in production.ts;

@@ -244,7 +244,6 @@ const MUTATED_ENV_VARS = [
   'SAMURAI_ALERTS',
   'TELEGRAM_BOT_TOKEN',
   'TELEGRAM_CHAT_ID',
-  'TELEGRAM_ALLOWED_USER_IDS',
   // #342: the heartbeat's own destination, separate from the escalation chat.
   'TELEGRAM_HEARTBEAT_CHAT_ID',
   // #511: the live profile's three variables. In this list for the same reason
@@ -266,7 +265,6 @@ beforeEach(() => {
   process.env.SAMURAI_ALERTS = 'log-only';
   delete process.env.TELEGRAM_BOT_TOKEN;
   delete process.env.TELEGRAM_CHAT_ID;
-  delete process.env.TELEGRAM_ALLOWED_USER_IDS;
   delete process.env.TELEGRAM_HEARTBEAT_CHAT_ID;
 });
 
@@ -670,7 +668,6 @@ describe('startFromEnvironment — the shipped paper profile', () => {
     }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
 
     expect(error.message).toContain('TELEGRAM_CHAT_ID');
-    expect(error.message).toContain('TELEGRAM_ALLOWED_USER_IDS');
     // #342: the heartbeat's separate destination is named in the same breath,
     // rather than discovered one variable later. Matched inside the
     // parenthesised MISSING list rather than anywhere in the message — the
@@ -686,12 +683,11 @@ describe('startFromEnvironment — the shipped paper profile', () => {
 
   it('boots with the real push transport under SAMURAI_ALERTS=telegram', async () => {
     // The other half of #322: the unattended posture actually assembles.
-    // Nothing here reaches Telegram — the client is constructed, no poll loop
-    // is started, and `stop()` runs long before the first 15-minute heartbeat.
+    // Nothing here reaches Telegram — the client is constructed, and `stop()`
+    // runs long before the first 15-minute heartbeat.
     process.env.SAMURAI_ALERTS = 'telegram';
     process.env.TELEGRAM_BOT_TOKEN = 'dummy-token-not-a-credential';
     process.env.TELEGRAM_CHAT_ID = '-1001234567890';
-    process.env.TELEGRAM_ALLOWED_USER_IDS = '42';
     process.env.TELEGRAM_HEARTBEAT_CHAT_ID = '-1009876543210';
 
     const entries: Parameters<Logger['log']>[0][] = [];
@@ -719,7 +715,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
       // The assertion that actually proves the wiring, rather than proving a
       // log line: drive the composed `Heartbeat` and watch the request leave.
       // A startup log claiming `telegram` while the orchestrator was still
-      // handed `LoggingHeartbeatChannel` would pass every check above and fail
+      // handed the log-only heartbeat would pass every check above and fail
       // this one. Transport stubbed — nothing reaches Telegram.
       const fetchStub = vi.fn().mockResolvedValue({
         ok: true,

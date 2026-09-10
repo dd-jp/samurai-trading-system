@@ -89,8 +89,9 @@ import { DEFAULT_NOUS_MODELS } from '../../shared/llm/index.js';
 import { guardedStore, openSharedStore, type StoreHandle } from '../../shared/store/index.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
 import { CostModelImpl, SqliteStage2SelectionStore } from '../../tools/backtest/index.js';
-import { LLM_SPEND_CAP_BREACH } from './breach-alert-channel.js';
-import { LoggingBreachAlertChannel, UnwiredApprovalChannel } from './console-channels.js';
+import { loggingAlertChannel } from './alert-catalogue.js';
+import { LLM_SPEND_CAP_BREACH } from './breach-text.js';
+import { UnwiredApprovalChannel } from './console-channels.js';
 import { DebateBarDecisionGate } from './decision-bar-gate.js';
 import { FILL_SYNC_TRACE_ID, RECONCILE_TRACE_ID } from './fill-sync.js';
 import { LIVE_BOOK_GBP, LIVE_BOOK_SIZING_USD, paperStartingProfile } from './paper-profile.js';
@@ -2500,7 +2501,7 @@ describe('tickSkipAlerts is wired by the composition root (#1084)', () => {
 
   /**
    * THE MUTATION THIS KILLS: drop `tickSkipAlerts: config.tickSkipAlerts ??
-   * new LoggingTickSkipAlertChannel(logger)` from the `startTickLoop({...})`
+   * loggingAlertChannel('tickSkipAlerts', logger)` from the `startTickLoop({...})`
    * call in `buildProductionOrchestrator` (production.ts). Every test in the
    * `startTickLoop`-level "tick-skip escalation (#1084)" suite still passes —
    * they call `startTickLoop` directly — while a real, injected channel
@@ -2538,8 +2539,8 @@ describe('tickSkipAlerts is wired by the composition root (#1084)', () => {
   });
 
   /**
-   * THE OTHER HALF of the same mutation: drop only the `?? new
-   * LoggingTickSkipAlertChannel(logger)` fallback and pass `config.tickSkipAlerts`
+   * THE OTHER HALF of the same mutation: drop only the
+   * `?? loggingAlertChannel('tickSkipAlerts', logger)` fallback and pass `config.tickSkipAlerts`
    * bare. An unconfigured run (nothing injected — `SAMURAI_ALERTS` unset in a
    * programmatic caller) would then silently regress to #1084's original bug:
    * a degraded pass with nowhere to escalate to, not even the log.
@@ -2577,9 +2578,9 @@ describe('tickSkipAlerts is wired by the composition root (#1084)', () => {
 
 /**
  * #1280 — the spend cap's `onBreach` payload, as the composition root actually
- * builds it, driven through the REAL `LoggingBreachAlertChannel`.
+ * builds it, driven through the REAL log-only `breachAlerts` channel.
  *
- * `breach-alert-channel.test.ts` and `console-channels.test.ts` pin
+ * `breach-text.test.ts` and `alert-catalogue.test.ts` pin
  * `breachStage`'s two arms against alerts they construct themselves, which
  * says nothing about what `production.ts` posts. Replacing the root's
  * `breaches: [LLM_SPEND_CAP_BREACH]` with any other string leaves both of
@@ -2592,7 +2593,7 @@ describe('tickSkipAlerts is wired by the composition root (#1084)', () => {
  * database), which is the cheapest reachable path to that closure — it needs
  * no tick, no timer and no LLM. That makes this a test about the payload, not
  * about provenance: at boot there is no ambient id, so `trace_id` reads
- * `'feedback-cycle'` (the mislabel `LoggingBreachAlertChannel`'s own comment
+ * `'feedback-cycle'` (the mislabel the catalogue's `breachAlerts` entry
  * records and #1343 fixes by widening the port). It is deliberately not
  * asserted here.
  */
@@ -2627,7 +2628,7 @@ describe("the spend cap's breach payload is wired by the composition root (#1280
     const config = stubConfig(db, {
       logger,
       llmBudgetUsd: 1,
-      breachAlerts: new LoggingBreachAlertChannel(logger),
+      breachAlerts: loggingAlertChannel('breachAlerts', logger),
     });
 
     buildProductionComponents(config);
@@ -7294,7 +7295,7 @@ describe('buildProductionOrchestrator', () => {
       await orchestrator.marketData.getBars('SPY', WINDOW, START);
 
       // The channel, not stderr — `SAMURAI_ALERTS=telegram` binds
-      // `TradeChannelDataFailoverAlert` into this exact slot
+      // `tradeChannelAlert('dataFailoverAlerts', …)` into this exact slot
       // (alert-transport.ts), so reaching the port is what makes the alert
       // reachable from a phone during an unattended soak.
       expect(posted).toHaveLength(1);

@@ -1595,7 +1595,6 @@ describe('ExecutionImpl.ingestFills through SaxoBrokerAdapter', () => {
           adv_window: { timeframe: '1d', lookback: 20 },
         },
       },
-      mode: 'paper',
       residualExposureAlerts: { postResidualExposureAlert: async () => {} },
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
       flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },

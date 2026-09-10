@@ -1,8 +1,9 @@
 /**
  * The operator-escalation port for a residual position that could not be
  * re-armed (#525) — the same shape `UnpricedFillAlertChannel` takes
- * (unpriced-fill-alert.ts): declared beside its callers, implemented by
- * `LoggingResidualExposureAlertChannel` and wired at the composition root.
+ * (unpriced-fill-alert.ts): declared beside its callers, implemented by the
+ * alert catalogue (orchestrator/alert-catalogue.ts) and wired at the
+ * composition root.
  * Two producer paths reach it — `maybeRearmResidual` inside `ingestFills()`
  * itself, and `sweepResidualProtection`'s own re-arm attempt — see
  * `trace_id`'s doc below for which ids each can carry.

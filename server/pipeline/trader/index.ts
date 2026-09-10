@@ -17,9 +17,7 @@ export {
   type ExitCheckInput,
   mostRecentOpenLot,
   type TraderDiagnostic,
-  type TraderDiagnosticKind,
   type TraderOutcome,
-  type TraderSkipReason,
 } from './decide.js';
 export {
   DEFAULT_EARLY_EXIT_CONFIG,
@@ -52,7 +50,9 @@ export type {
   AssetClass,
   Trader,
   TraderConfig,
+  TraderDiagnosticKind,
   TraderInput,
+  TraderSkipReason,
   UnpricedFlattenReport,
   UnresolvedFlatten,
 } from './types.js';

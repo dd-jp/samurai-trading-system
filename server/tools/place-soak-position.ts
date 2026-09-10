@@ -61,21 +61,17 @@
  * `submitted` while the venue fills, so the restart's reconcile adopts it.
  */
 import { randomUUID } from 'node:crypto';
-import {
-  LoggingOcoDoubleFillAlertChannel,
-  LoggingUnpricedFillAlertChannel,
-} from '../apps/orchestrator/console-channels.js';
-import { assertStorePathMatchesMode } from '../apps/orchestrator/index.js';
+import { assertStorePathMatchesMode, loggingAlertChannel } from '../apps/orchestrator/index.js';
 import { JsonLogger } from '../apps/orchestrator/logger.js';
 import { resolveUsEquitySessionCalendar } from '../apps/orchestrator/production/us-equity-session-source.js';
 import { buildDefaultAlpacaBrokerClient } from '../apps/orchestrator/production.js';
 import {
   ALPACA_CREDENTIAL_ENV_VARS,
   AlpacaBrokerAdapter,
-  ExecutionImpl,
-  FilledZeroSizeThrottle,
+  executeVerdict,
   SqliteBrokerStateStore,
   SqliteExecutionStore,
+  type SubmitInput,
 } from '../pipeline/execution/index.js';
 import type { VerdictDecision } from '../pipeline/verdict/index.js';
 import type { OrderIntent } from '../shared/index.js';
@@ -125,22 +121,25 @@ async function latestTradePrice(instrument: string): Promise<number> {
 }
 
 /**
- * A dependency the Alpaca ENTRY path provably never touches, supplied as a
- * throwing proxy rather than a cast.
+ * The submit-time snapshot's sources (#1001, `readSubmitSnapshot`,
+ * execute.ts), which this probe does not wire: it has no market-data feed and
+ * no cost model. Every read of these is inside that snapshot's own
+ * best-effort catch, so a throw here lands as null snapshot columns on the
+ * probe lot plus a `warn` line — the same degradation a dark feed produces —
+ * and never refuses the order. A throwing proxy rather than a cast, so a
+ * future read OUTSIDE that catch fails naming the field instead of somewhere
+ * unrelated.
  *
- * `costModel`/`marketData`/`config.simulated` are documented on
- * `ExecutionInput` as "consumed by the Simulated adapter only", and the three
- * alert channels are read by the flatten/fill-sync surfaces, none of which
- * this probe drives. Casting the object to satisfy `tsc` would make a wrong
- * assumption fail somewhere unrelated and much later; this fails loudly, here,
- * naming the field.
+ * Which fields the entry path can reach at all is `SubmitInput`'s to say:
+ * the alert channels and the fill throttle are not on it, so they are not
+ * stubbed here — `tsc` refuses the read.
  */
-function unreachable<T extends object>(field: string): T {
+function snapshotSourceAbsent<T extends object>(field: keyof SubmitInput): T {
   return new Proxy({} as T, {
     get(_target, property) {
       throw new Error(
-        `place-soak-position: ExecutionInput.${field} was read (property '${String(property)}') — ` +
-          'the probe assumed the entry path never touches it. Wire it properly rather than widening this stub.',
+        `place-soak-position: SubmitInput.${field} was read (property '${String(property)}') — ` +
+          'this probe wires no market-data feed or cost model, so the submit snapshot is left null.',
       );
     },
   });
@@ -243,36 +242,22 @@ async function main(): Promise<void> {
   const broker = new AlpacaBrokerAdapter({
     client,
     state: new SqliteBrokerStateStore(db),
-    unpricedFillAlerts: new LoggingUnpricedFillAlertChannel(logger),
-    ocoDoubleFillAlerts: new LoggingOcoDoubleFillAlertChannel(logger),
+    unpricedFillAlerts: loggingAlertChannel('unpricedFillAlerts', logger),
+    ocoDoubleFillAlerts: loggingAlertChannel('ocoDoubleFillAlerts', logger),
     logger,
   });
 
   const store = new SqliteExecutionStore(db);
-  const execution = new ExecutionImpl({
+  const input: SubmitInput = {
     trace_id: `soak-probe-${randomUUID()}`,
     clock,
     broker,
     store,
-    mode: PROBE_MODE,
     logger,
-    costModel: unreachable('costModel'),
-    marketData: unreachable('marketData'),
-    config: unreachable('config'),
-    residualExposureAlerts: unreachable('residualExposureAlerts'),
-    flattenOverfillAlerts: unreachable('flattenOverfillAlerts'),
-    flattenReconcileAlerts: unreachable('flattenReconcileAlerts'),
-    // #1087 review, pass 2: a real instance, not `unreachable()` like the
-    // alert channels above. Those are provably dead here (this probe never
-    // hits a flatten/reconcile path); this one is merely UNUSED today (the
-    // probe only calls `execute()`, never `ingestFills()`) — a distinction
-    // worth keeping separate, because this tool runs against the LIVE
-    // broker, and a future call added here for symmetry (or a copy-paste
-    // into a sibling tool that does poll) would throw against production
-    // instead of harmlessly counting nothing. A throttle is one Map, empty
-    // until observed — free to construct even when never read.
-    filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
-  });
+    costModel: snapshotSourceAbsent('costModel'),
+    marketData: snapshotSourceAbsent('marketData'),
+    config: snapshotSourceAbsent('config'),
+  };
 
   // One probe lot at a time. `executeExit` assumes every lot it finds for an
   // instrument is the same side ("v1 per-lot design", execute.ts), and splits
@@ -309,7 +294,7 @@ async function main(): Promise<void> {
     timestamp: now,
   };
 
-  const outcome = await execution.execute(verdict);
+  const outcome = await executeVerdict(input, verdict);
   console.log(JSON.stringify(outcome, null, 2));
 
   // An operator tool that prints a refusal and exits 0 is a tool whose failure

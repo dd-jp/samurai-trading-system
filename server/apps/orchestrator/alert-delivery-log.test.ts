@@ -182,8 +182,8 @@ describe('SqliteAlertDeliveryLog', () => {
     const { log, db } = makeStore();
     const entry: AlertDeliveryFailure = {
       chat_id: '-100999888',
-      method: 'sendApprovalButtons',
-      body: 'ROUND-TRIP-BODY-MARKER: approve TSLA entry?',
+      method: 'sendDocument',
+      body: 'ROUND-TRIP-BODY-MARKER: TSLA entry filled',
       error: 'ROUND-TRIP-ERROR-MARKER: fetch failed',
       timestamp: new Date('2026-09-04T13:30:00Z'),
     };

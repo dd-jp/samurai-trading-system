@@ -3,8 +3,8 @@
  *
  * Declared here, at the point of need, and implemented above — the same shape
  * `OrphanAlertChannel` takes in orchestrator/orphan-verdict-scan.ts (declared
- * beside its caller, implemented by `LoggingOrphanAlertChannel` and wired at
- * the composition root). Execution therefore gains no dependency on a
+ * beside its caller, implemented by the alert catalogue and wired at the
+ * composition root). Execution therefore gains no dependency on a
  * transport: the adapter knows only that something can be told, not what.
  *
  * Fire-and-forget, not a round trip: there is nothing to approve here, only

@@ -6,7 +6,7 @@
  * concurrency across instruments. Ticket #95: trace-ID propagation into
  * structured logs and the `audit_log` spine (`JsonLogger`, `digest`).
  * Ticket #96: the `current_tick` row and the dead-man's-switch heartbeat
- * (`Heartbeat`, `TradeChannelHeartbeat`). Ticket #201: `SqliteAuditLog`/
+ * (`Heartbeat`, the catalogue's `heartbeatChannel`). Ticket #201: `SqliteAuditLog`/
  * `SqliteCurrentTickStore`, the real stores behind `audit_log`/`current_tick`
  * (#193), wired into the tick runner in place of the earlier in-memory
  * doubles. Ticket #209: `OrphanVerdictScanner` — restart-time detection of a
@@ -60,6 +60,7 @@ import {
   openSharedStore,
   sharedStorePath,
 } from '../../shared/store/index.js';
+import { loggingAlertChannel } from './alert-catalogue.js';
 import {
   type AlertsMode,
   buildAlertChannels,
@@ -67,11 +68,6 @@ import {
   TELEGRAM_ALERT_ENV_VARS,
   TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR,
 } from './alert-transport.js';
-import {
-  LoggingDormantLegsUnresolvedAlertChannel,
-  LoggingLegResizeUnverifiedAlertChannel,
-  LoggingUnresolvedPriceUnitAlertChannel,
-} from './console-channels.js';
 import { type LiveStartingProfile, liveStartingProfile } from './live-profile.js';
 import {
   type LogRetentionResult,
@@ -99,6 +95,19 @@ import {
 import { type FileSinkConfig, fileSinkConfigFromEnvironment } from './rotating-file-sink.js';
 import type { Logger } from './types.js';
 
+export {
+  ALERT_CATALOGUE,
+  ALERT_IDS,
+  type AlertId,
+  type AlertOf,
+  type AlertPort,
+  type AlertSpec,
+  type LoggedAlertId,
+  loggingAlertChannel,
+  tradeChannelAlert,
+  UNLOGGED_ALERT_IDS,
+  type UnloggedAlertId,
+} from './alert-catalogue.js';
 export { type AlertDeliveryFailure, SqliteAlertDeliveryLog } from './alert-delivery-log.js';
 export {
   ALERT_CHANNEL_FIELDS,
@@ -110,15 +119,19 @@ export {
   TELEGRAM_ALERT_ENV_VARS,
   TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR,
 } from './alert-transport.js';
-export { TradeChannelAnalystSkipAlert } from './analyst-skip-alert-channel.js';
-export { TradeChannelBreachAlert } from './breach-alert-channel.js';
+export {
+  breachLogMessage,
+  breachStage,
+  classifyBreach,
+  formatBreachAlert,
+  LLM_SPEND_CAP_BREACH,
+} from './breach-text.js';
 export {
   DebateBarDecisionGate,
   type DecisionGate,
 } from './decision-bar-gate.js';
 export { digest } from './digest.js';
 export { Heartbeat, type HeartbeatChannel } from './heartbeat.js';
-export { TradeChannelHeartbeat } from './heartbeat-channel.js';
 export {
   LIVE_MONEY_GATE_SUMMARY,
   LIVE_MONEY_GATES,
@@ -139,8 +152,6 @@ export {
   type StdoutStream,
   watchStdoutErrors,
 } from './logger.js';
-export { TradeChannelLoosenNotice } from './loosen-notification-channel.js';
-export { TradeChannelOrphanAlert } from './orphan-alert-channel.js';
 export {
   type OrphanAlertChannel,
   type OrphanGoVerdict,
@@ -214,8 +225,6 @@ export type {
 } from './types.js';
 
 import { describeThrownSafely } from '../../shared/index.js';
-
-export { TradeChannelUnpricedFillAlert } from './unpriced-fill-channel.js';
 
 /**
  * The per-stage config objects the process cannot derive from the environment
@@ -553,9 +562,7 @@ function assertCredentialsPresent(
       (telegram.length > 0
         ? `SAMURAI_ALERTS=telegram is what makes ${telegram.join(', ')} required — re-run with ` +
           'SAMURAI_ALERTS=log-only to accept log-only alerting for an ATTENDED run instead ' +
-          '(not for an unattended soak). TELEGRAM_ALLOWED_USER_IDS is on that list because ' +
-          'TelegramBotApiClient validates the HITL approval allowlist at construction, not ' +
-          'because this process polls for approvals — see alert-transport.ts. ' +
+          '(not for an unattended soak). ' +
           `${TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR} must name a DIFFERENT chat from ` +
           'TELEGRAM_CHAT_ID (#342): the heartbeat posts forever on a fixed interval, and ' +
           'sharing the escalation chat is what drives an operator to mute the one channel ' +
@@ -786,15 +793,15 @@ export async function startFromEnvironment(
           legResizeAlerts:
             injected.legResizeAlerts ??
             alertChannels.legResizeAlerts ??
-            new LoggingLegResizeUnverifiedAlertChannel(logger),
+            loggingAlertChannel('legResizeAlerts', logger),
           dormantLegsAlerts:
             injected.dormantLegsAlerts ??
             alertChannels.dormantLegsAlerts ??
-            new LoggingDormantLegsUnresolvedAlertChannel(logger),
+            loggingAlertChannel('dormantLegsAlerts', logger),
           priceUnitAlerts:
             injected.priceUnitAlerts ??
             alertChannels.priceUnitAlerts ??
-            new LoggingUnresolvedPriceUnitAlertChannel(logger),
+            loggingAlertChannel('priceUnitAlerts', logger),
           ...(injected.saxoBrokerClient === undefined ? {} : { client: injected.saxoBrokerClient }),
         })
       : undefined;

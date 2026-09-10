@@ -1088,7 +1088,7 @@ export interface RiskStepDeps extends BreakerStateDeps {
    * #766: where the catch below escalates a clamp trip — `resolveRiskConfig`
    * throwing on an out-of-bound `risk_thresholds` row. Absent = log-only,
    * same optionality rationale as `traderDiagnosticAlerts` below (no
-   * `Logging…Channel`: this catch already logs at `error`).
+   * log-only form: this catch already logs at `error`).
    */
   thresholdClampAlerts?: ThresholdClampAlertChannel;
   /**
@@ -1476,7 +1476,6 @@ export interface ExecutionStepDeps {
   costModel: CostModel;
   marketData: MarketDataService;
   config: ExecutionConfig;
-  mode: 'live' | 'paper' | 'backtest';
   /** The #525 fallback alert — see `ExecutionInput.residualExposureAlerts`. */
   residualExposureAlerts: ResidualExposureAlertChannel;
   /** The #527 over-fill warning — see `ExecutionInput.flattenOverfillAlerts`. */
@@ -1511,7 +1510,6 @@ export function buildExecutionStep(deps: ExecutionStepDeps): TickSteps['executio
       costModel: deps.costModel,
       marketData: deps.marketData,
       config: deps.config,
-      mode: deps.mode,
       residualExposureAlerts: deps.residualExposureAlerts,
       flattenOverfillAlerts: deps.flattenOverfillAlerts,
       flattenReconcileAlerts: deps.flattenReconcileAlerts,
@@ -1550,7 +1548,6 @@ export function buildExecutionSurface(deps: ExecutionStepDeps, traceId: string):
     costModel: deps.costModel,
     marketData: deps.marketData,
     config: deps.config,
-    mode: deps.mode,
     residualExposureAlerts: deps.residualExposureAlerts,
     flattenOverfillAlerts: deps.flattenOverfillAlerts,
     flattenReconcileAlerts: deps.flattenReconcileAlerts,

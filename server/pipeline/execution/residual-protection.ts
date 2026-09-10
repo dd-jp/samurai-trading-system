@@ -20,7 +20,13 @@
 import type { Fill, OpenPosition } from '../../shared/index.js';
 import { heldQuantityFromFills, isFlat, logCaughtFailure, safeLog } from '../../shared/index.js';
 import { isProtectiveRearmUnsupported } from './protective-rearm-unsupported.js';
-import type { ExecutionInput } from './types.js';
+import type { ExecutionInput, FillReader, ResidualMarkers } from './types.js';
+
+type MarkerInput = Pick<ExecutionInput, 'logger' | 'trace_id'> & { store: ResidualMarkers };
+type AlertInput = Pick<ExecutionInput, 'residualExposureAlerts' | 'logger' | 'trace_id'>;
+type RearmInput = MarkerInput &
+  AlertInput &
+  Pick<ExecutionInput, 'broker'> & { store: FillReader & ResidualMarkers };
 
 /**
  * Durably marks several lots' residuals as observed-but-unprotected, one
@@ -32,7 +38,7 @@ import type { ExecutionInput } from './types.js';
  * needs to see.
  */
 export async function markResidualsUnprotected(
-  input: Pick<ExecutionInput, 'store' | 'logger' | 'trace_id'>,
+  input: MarkerInput,
   idempotency_keys: readonly string[],
   now: Date,
   onFailure: { level: 'warn' | 'error'; message: string; payload?: Record<string, unknown> },
@@ -75,7 +81,7 @@ export async function markResidualsUnprotected(
  * such record in hand and reads it fresh here instead.
  */
 export async function maybeRearmResidual(
-  input: ExecutionInput,
+  input: RearmInput,
   position: OpenPosition,
   now: Date,
   known?: { filledSize: number; exitQty: number },
@@ -121,8 +127,8 @@ export async function maybeRearmResidual(
       // possibly-wrong guess: it can only OVER-state what is genuinely at
       // risk, never under-state it, which is the conservative direction
       // for an operator deciding whether to go check the venue by hand.
-      // NOT `Number.NaN` — `LoggingResidualExposureAlertChannel` writes
-      // this alert through `JSON.stringify` (logger.ts), which silently
+      // NOT `Number.NaN` — the log-only form of this alert goes through
+      // `JSON.stringify` (logger.ts), which silently
       // turns `NaN` into `null`, and a `null` quantity is less legible
       // than an honest upper bound. Never rethrown: see this function's
       // "Never throws" doc above.
@@ -286,21 +292,21 @@ export async function maybeRearmResidual(
  */
 const MARKER_WRITES = {
   'mark-unprotected': {
-    write: (input: ExecutionInput, key: string, now: Date) =>
+    write: (input: MarkerInput, key: string, now: Date) =>
       input.store.markResidualUnprotected(key, now),
     failureMessage:
       'markResidualUnprotected failed — if this process dies before the re-arm is confirmed, ' +
       'the #549 sweep will not know to retry this lot',
   },
   'confirm-protected': {
-    write: (input: ExecutionInput, key: string, _now: Date) =>
+    write: (input: MarkerInput, key: string, _now: Date) =>
       input.store.confirmResidualProtected(key),
     failureMessage:
       'confirmResidualProtected failed — the lot stays marked and the #549 sweep will ' +
       're-verify a protection that is already in place (idempotent on every adapter path)',
   },
   'mark-alerted': {
-    write: (input: ExecutionInput, key: string, now: Date) =>
+    write: (input: MarkerInput, key: string, now: Date) =>
       input.store.markResidualAlerted(key, now),
     failureMessage:
       'markResidualAlerted failed — the #549 sweep may page a second time for an episode ' +
@@ -309,7 +315,7 @@ const MARKER_WRITES = {
 } as const;
 
 async function bestEffortMarkerWrite(
-  input: ExecutionInput,
+  input: MarkerInput,
   position: OpenPosition,
   now: Date,
   op: keyof typeof MARKER_WRITES,
@@ -377,7 +383,7 @@ export interface ResidualExposureFlags {
  * bookkeeping branches on the answer.
  */
 export async function alertResidualExposure(
-  input: ExecutionInput,
+  input: AlertInput,
   position: OpenPosition,
   residualQty: number,
   now: Date,

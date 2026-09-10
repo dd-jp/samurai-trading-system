@@ -270,7 +270,6 @@ function makeInput(overrides: Partial<ExecutionInput> = {}): ExecutionInput {
     costModel: {} as CostModel,
     marketData: {} as MarketDataService,
     config,
-    mode: 'backtest',
     residualExposureAlerts: makeResidualExposureAlerts(),
     flattenOverfillAlerts: makeFlattenOverfillAlerts(),
     flattenReconcileAlerts: makeFlattenReconcileAlerts(),

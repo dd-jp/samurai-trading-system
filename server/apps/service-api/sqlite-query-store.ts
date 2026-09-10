@@ -51,15 +51,18 @@ import type {
   DebateTerminationCause,
   Fill,
   OpenPosition,
-  OrderState,
 } from '../../shared/index.js';
-import { toBrokerFillId } from '../../shared/index.js';
 import {
   type ClosedTradeRow,
+  type FillRow,
   fromClosedTradeRow,
+  fromFillRow,
+  fromOpenPositionRow,
   fromStoredTimestamp,
+  type OpenPositionRow,
   SqliteLlmSpendCapStore,
   type StoreHandle,
+  TERMINAL_ORDER_STATES,
   toStoredTimestamp,
 } from '../../shared/store/index.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
@@ -77,42 +80,6 @@ import type {
   TickStatus,
   VerdictAuditEntry,
 } from './types.js';
-
-/**
- * Mirrors execution-spec.md / SqliteExecutionStore's terminal-state exclusion
- * (`TERMINAL_ORDER_STATES`, shared/store/key-scheme-guard.ts) — kept as its
- * own copy rather than imported because this module reads `open_positions`
- * read-only, outside Execution's own store port; the two lists must still
- * agree, or an 'abandoned' (#1186) row would keep showing as a live position
- * on the dashboard while every other reader already excludes it.
- */
-const TERMINAL_STATES: readonly OrderState[] = [
-  'closed',
-  'cancelled',
-  'rejected',
-  'expired',
-  'abandoned',
-];
-
-interface OpenPositionRow {
-  idempotency_key: string;
-  debate_id: string;
-  instrument: string;
-  asset_class: AssetClass;
-  side: 'buy' | 'sell';
-  intent_type: 'entry' | 'scale_in';
-  requested_size: number;
-  filled_size: number;
-  avg_entry_price: number;
-  stop: number;
-  target: number;
-  order_state: OrderState;
-  broker_order_ids: string;
-  opened_at: string;
-  decision_timestamp: string;
-  conviction: number;
-  converged: 0 | 1;
-}
 
 interface DebateLogRow {
   debate_id: string;
@@ -193,58 +160,6 @@ interface AuditStageRow {
 /** `closed_trades` joined with its `debate_log` row, for `getAttribution`'s single-query read. */
 interface AttributionRow extends ClosedTradeRow {
   debate_contributions_json: string;
-}
-
-/**
- * One `fills` row, the columns `getFillsForTrades` reads — deliberately
- * excludes `cost_breakdown_json`. Populated on Simulated-adapter fills and
- * (#1001) on real-broker `'entry'`/`'exit'` fills from a submit-time
- * modelled snapshot (0001_init.sql, 0037_submit_time_quote_and_decision_price.sql),
- * but still an internal modelling/validation artifact with no operator use
- * on this dashboard read — not the realised cost this table otherwise shows.
- */
-interface FillRowSql {
-  idempotency_key: string;
-  broker_fill_id: string;
-  leg: 'entry' | 'stop' | 'target' | 'exit';
-  price: number;
-  qty: number;
-  fee: number;
-  timestamp: string;
-}
-
-function fromFillRowSql(row: FillRowSql): Fill {
-  return {
-    idempotency_key: row.idempotency_key,
-    broker_fill_id: toBrokerFillId(row.broker_fill_id),
-    leg: row.leg,
-    price: row.price,
-    qty: row.qty,
-    fee: row.fee,
-    timestamp: fromStoredTimestamp(row.timestamp),
-  };
-}
-
-function fromOpenPositionRow(row: OpenPositionRow): OpenPosition {
-  return {
-    idempotency_key: row.idempotency_key,
-    debate_id: row.debate_id,
-    instrument: row.instrument,
-    asset_class: row.asset_class,
-    side: row.side,
-    intent_type: row.intent_type,
-    requested_size: row.requested_size,
-    filled_size: row.filled_size,
-    avg_entry_price: row.avg_entry_price,
-    stop: row.stop,
-    target: row.target,
-    order_state: row.order_state,
-    broker_order_ids: JSON.parse(row.broker_order_ids) as string[],
-    opened_at: fromStoredTimestamp(row.opened_at),
-    decision_timestamp: fromStoredTimestamp(row.decision_timestamp),
-    conviction: row.conviction,
-    converged: row.converged === 1,
-  };
 }
 
 function fromDebateLogRow(row: DebateLogRow): DebateLog {
@@ -339,14 +254,14 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * deliberately, through the arm comparison report, not incidentally here.
    */
   getOpenPositions(asOf: Date): OpenPosition[] {
-    const placeholders = TERMINAL_STATES.map(() => '?').join(', ');
+    const placeholders = TERMINAL_ORDER_STATES.map(() => '?').join(', ');
     const rows = this.db
       .prepare(
         `SELECT * FROM open_positions
           WHERE arm = 'live' AND order_state NOT IN (${placeholders}) AND opened_at <= ?
           ORDER BY opened_at`,
       )
-      .all(...TERMINAL_STATES, toStoredTimestamp(asOf)) as OpenPositionRow[];
+      .all(...TERMINAL_ORDER_STATES, toStoredTimestamp(asOf)) as OpenPositionRow[];
     return rows.map(fromOpenPositionRow);
   }
 
@@ -374,13 +289,12 @@ export class SqliteQueryStore implements DashboardQueryStore {
     const placeholders = idempotencyKeys.map(() => '?').join(', ');
     const rows = this.db
       .prepare(
-        `SELECT idempotency_key, broker_fill_id, leg, price, qty, fee, timestamp
-           FROM fills
+        `SELECT * FROM fills
           WHERE idempotency_key IN (${placeholders})
           ORDER BY idempotency_key, rowid`,
       )
-      .all(...idempotencyKeys) as FillRowSql[];
-    return rows.map(fromFillRowSql);
+      .all(...idempotencyKeys) as FillRow[];
+    return rows.map(fromFillRow);
   }
 
   getRecentDebates(limit: number, asOf: Date): DebateLog[] {
@@ -698,10 +612,10 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * `audit_log.instrument` / `.asset_class`, since migration 0013. Both are
    * written by tick-runner.ts's single `record` closure, so EVERY stage row of
    * every tick carries them; tick-loop.ts's `crashed` row carries them too.
-   * The remaining NULLs are rows predating 0013 and the HITL Telegram callback
-   * path, which records under an existing `trace_id` with no `Signal` in scope
-   * — both mean "not attributable", never "no instrument", and neither may be
-   * guessed into a lane.
+   * The remaining NULLs are rows predating 0013 and rows the retired HITL
+   * Telegram callback wrote under an existing `trace_id` with no `Signal` in
+   * scope — both mean "not attributable", never "no instrument", and neither
+   * may be guessed into a lane.
    *
    * `llm_spend.debate_id -> debate_log.instrument` is deliberately NOT used as
    * a second source: it misses `quorum_skip` (the tick never reaches an LLM
@@ -921,10 +835,10 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * result set the fold sees.
    *
    * The `stage IN (…)` filter is not defensive tidiness: `audit_log.stage` is
-   * unconstrained TEXT and the HITL Telegram callback writes
+   * unconstrained TEXT and the retired HITL Telegram callback wrote
    * `verdict.hitl.telegram_callback` rows under the pipeline's own `trace_id`
-   * (telegram-bot-api-client.ts:112). Without the filter those land in a lane
-   * as a seventh, unrenderable stage.
+   * — rows that persist in older stores. Without the filter those land in a
+   * lane as a seventh, unrenderable stage.
    *
    * `ORDER BY … timestamp, rowid` is `SqliteAuditLog.getByTraceId`'s ordering,
    * for its reason: `audit_log` has no primary key, SQLite's tie-break for

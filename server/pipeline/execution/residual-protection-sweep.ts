@@ -108,9 +108,9 @@ import {
 import { isProtectiveRearmUnsupported } from './protective-rearm-unsupported.js';
 import { alertResidualExposure, type ResidualExposureFlags } from './residual-protection.js';
 import type {
-  ExecutionInput,
   ReconcileDivergence,
   ResidualProtectionSweepResult,
+  ResidualSweepInput,
   UnprotectedResidualLot,
 } from './types.js';
 
@@ -125,7 +125,7 @@ import type {
  * treats `getUnresolvedFlattens()`.
  */
 export async function sweepResidualProtection(
-  input: ExecutionInput,
+  input: ResidualSweepInput,
 ): Promise<ResidualProtectionSweepResult> {
   const marked = await input.store.getUnprotectedResidualLots();
   const divergences: ReconcileDivergence[] = [];
@@ -185,7 +185,7 @@ export async function sweepResidualProtection(
  * shared/held-quantity.ts), so the two surfaces cannot disagree about flatness.
  */
 async function sweepOne(
-  input: ExecutionInput,
+  input: ResidualSweepInput,
   row: UnprotectedResidualLot,
 ): Promise<ReconcileDivergence | null> {
   const { broker, store, clock } = input;
@@ -389,7 +389,7 @@ async function sweepOne(
  * above closes); the RECORD never does.
  */
 async function alertResidualExposureOnce(
-  input: ExecutionInput,
+  input: ResidualSweepInput,
   row: UnprotectedResidualLot,
   residualQty: number,
   now: Date,

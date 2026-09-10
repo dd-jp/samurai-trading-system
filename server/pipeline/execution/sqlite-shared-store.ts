@@ -84,11 +84,15 @@ import type {
   OrderState,
   TradingArm,
 } from '../../shared/index.js';
-import { toBrokerFillId } from '../../shared/index.js';
 import {
+  type FillRow,
+  fromFillRow,
+  fromOpenPositionRow,
   fromStoredTimestamp,
   fromStoredTimestampOrNull,
   isUniqueConstraintError,
+  type OpenPositionRow,
+  parseModelledCostBreakdownColumn,
   type StoreHandle,
   TERMINAL_ORDER_STATES,
   toStoredTimestamp,
@@ -103,15 +107,7 @@ import type {
 } from './types.js';
 
 /**
- * Terminal `order_state`s — excluded from `getOpenPositions()`
- * (execution-spec.md). Defined in `shared/store/key-scheme-guard.ts`, which the
- * #686 rollout guard reads too; aliased here so the SQL below keeps its
- * original name.
- */
-const TERMINAL_STATES: readonly OrderState[] = TERMINAL_ORDER_STATES;
-
-/**
- * The subset of `TERMINAL_STATES` `sweepTerminalPositions` deletes —
+ * The subset of `TERMINAL_ORDER_STATES` `sweepTerminalPositions` deletes —
  * `TERMINAL_ORDER_STATES` minus `closed` and `abandoned` (#1088, amended
  * #1186). See that method's doc (types/store.ts) and this file's "row
  * lifecycle" section above for why `closed` is excluded.
@@ -142,57 +138,6 @@ const LEG_PREDICATES = Object.freeze({
   entry: "leg = 'entry'",
   exit: "leg != 'entry'",
 } as const);
-
-/** Exported for `sqlite-store-harness.ts`, which reads the same row shape for its terminal-inclusive lookups. */
-export interface OpenPositionRow {
-  idempotency_key: string;
-  debate_id: string;
-  instrument: string;
-  asset_class: 'crypto' | 'stocks';
-  side: 'buy' | 'sell';
-  intent_type: 'entry' | 'scale_in';
-  requested_size: number;
-  filled_size: number;
-  avg_entry_price: number;
-  stop: number;
-  target: number;
-  order_state: OrderState;
-  broker_order_ids: string;
-  opened_at: string;
-  decision_timestamp: string;
-  conviction: number;
-  converged: 0 | 1;
-  /** NULL unless a #549 unprotected-residual episode is open — migration 0024. */
-  residual_unprotected_since: string | null;
-  /** NULL until that episode's operator alert was posted — migration 0024. */
-  residual_rearm_alerted_at: string | null;
-  /** #1001, migration 0037 — see `OpenPosition.decision_price`. */
-  decision_price: number | null;
-  quote_bid: number | null;
-  quote_ask: number | null;
-  quote_mid: number | null;
-  quote_observed_at: string | null;
-  modelled_cost_breakdown_json: string | null;
-  /** #1186, migration 0056 — set only when `order_state = 'abandoned'`. */
-  abandon_reason: string | null;
-}
-
-interface FillRow {
-  idempotency_key: string;
-  broker_fill_id: string;
-  leg: 'entry' | 'stop' | 'target' | 'exit';
-  price: number;
-  qty: number;
-  fee: number;
-  timestamp: string;
-  cost_breakdown_json: string | null;
-  /** #793, migration 0031 — see `Fill.exit_reason`. */
-  exit_reason: ExitReason | null;
-  /** #1001, migration 0037 — see `Fill.flatten_idempotency_key`. */
-  flatten_idempotency_key: string | null;
-  /** #1220, migration 0054 — see `Fill.fee_currency`. */
-  fee_currency: string | null;
-}
 
 /**
  * Thrown when the write-ahead INSERT loses a race for an idempotency key.
@@ -408,7 +353,7 @@ export class SqliteExecutionStore implements SharedStore {
 
   /** Non-terminal lots only (execution-spec.md) — deterministic order for callers that iterate. */
   async getOpenPositions(): Promise<OpenPosition[]> {
-    const placeholders = TERMINAL_STATES.map(() => '?').join(', ');
+    const placeholders = TERMINAL_ORDER_STATES.map(() => '?').join(', ');
     const rows = this.db
       .prepare(
         // #753: arm-scoped. This is the read the Trader's position awareness,
@@ -420,8 +365,8 @@ export class SqliteExecutionStore implements SharedStore {
           WHERE arm = ? AND order_state NOT IN (${placeholders})
           ORDER BY opened_at`,
       )
-      .all(this.arm, ...TERMINAL_STATES) as OpenPositionRow[];
-    return rows.map(fromPositionRow);
+      .all(this.arm, ...TERMINAL_ORDER_STATES) as OpenPositionRow[];
+    return rows.map(fromOpenPositionRow);
   }
 
   /** See `SharedStore.sweepTerminalPositions` (types/store.ts) for the full contract. */
@@ -1085,7 +1030,7 @@ export class SqliteExecutionStore implements SharedStore {
    * its own iterating callers.
    */
   async getUnprotectedResidualLots(): Promise<UnprotectedResidualLot[]> {
-    const placeholders = TERMINAL_STATES.map(() => '?').join(', ');
+    const placeholders = TERMINAL_ORDER_STATES.map(() => '?').join(', ');
     const rows = this.db
       .prepare(
         // #753: arm-scoped, for the reason `getOpenPositions()` is — the #549
@@ -1097,7 +1042,7 @@ export class SqliteExecutionStore implements SharedStore {
             AND order_state NOT IN (${placeholders})
           ORDER BY opened_at`,
       )
-      .all(this.arm, ...TERMINAL_STATES) as OpenPositionRow[];
+      .all(this.arm, ...TERMINAL_ORDER_STATES) as OpenPositionRow[];
 
     return rows.map((row) => {
       // Non-null by the WHERE clause — a null here means the row (or the
@@ -1112,7 +1057,7 @@ export class SqliteExecutionStore implements SharedStore {
         );
       }
       return {
-        position: fromPositionRow(row),
+        position: fromOpenPositionRow(row),
         unprotected_since: fromStoredTimestamp(row.residual_unprotected_since),
         alerted_at: fromStoredTimestampOrNull(row.residual_rearm_alerted_at),
       };
@@ -1135,142 +1080,4 @@ function parseJsonColumn(idempotency_key: string, column: string, raw: string): 
       { cause },
     );
   }
-}
-
-/**
- * #1014 review, finding 4: the guarded read of a `modelled_cost_breakdown_json`
- * column — #1001's own, on `flatten_submissions` and on `open_positions`.
- *
- * The defect this closes is the one #509 closed repo-wide and
- * `getFlattenAttribution` already guards for its other two columns: a value
- * cast to a type with no runtime check, failing far from the cause. Two ways
- * this column can be bad — invalid JSON (a truncated write, a corrupted page)
- * and valid JSON of the wrong shape (a future migration writing something
- * else into it) — and an `as` cast catches neither: the first throws a
- * `SyntaxError` from deep inside `getFlattenAttribution` on the fill-ingest
- * path, and the second sails straight through into arithmetic that quietly
- * produces `NaN` money.
- *
- * DEGRADES TO `null` rather than throwing, which is where it deliberately
- * parts company with the two sibling guards a few lines above it. Those two
- * columns are the MONEY path — `lot_idempotency_keys` and
- * `lot_held_quantities` decide which lot gets which share of a fill, so a
- * corrupted one has no safe interpretation and must fail closed. This column
- * is INSTRUMENTATION: it is the estimate a later analysis diffs a realised
- * fill against (#1001), it is already `null` for every pre-migration-0037 row
- * and for every order whose best-effort submit-time capture failed, and every
- * consumer already handles that null. Throwing here would let a corrupted
- * instrumentation byte abort the ingest of a REAL FILL — trading the thing
- * that matters for the thing that measures it, which is exactly backwards.
- * So a bad value is treated as the absence it effectively is.
- *
- * `NaN`/`Infinity` are rejected along with the wrong types: JSON cannot encode
- * them, so their presence means the column was written by something other than
- * this file's `JSON.stringify`, and letting one through would poison the
- * prorated figures `redistributeOneFlatten` derives from it.
- */
-function parseModelledCostBreakdownColumn(
-  raw: string | null,
-): FlattenAttribution['modelled_cost_breakdown'] {
-  if (raw === null) return null;
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
-  const candidate: Record<string, unknown> = parsed as Record<string, unknown>;
-
-  // Read one by one and REBUILT below rather than returned as the parsed
-  // object: what leaves this function is then constructed from four values
-  // this function has personally checked are finite numbers, so the return
-  // type is earned rather than asserted — no `as` on the result, which is the
-  // whole point of the #509 pattern.
-  const spread_cost = candidate['spread_cost'];
-  const commission = candidate['commission'];
-  const slippage = candidate['slippage'];
-  const market_impact = candidate['market_impact'];
-  if (
-    !isFiniteNumber(spread_cost) ||
-    !isFiniteNumber(commission) ||
-    !isFiniteNumber(slippage) ||
-    !isFiniteNumber(market_impact)
-  ) {
-    return null;
-  }
-
-  return { spread_cost, commission, slippage, market_impact };
-}
-
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value);
-}
-
-export function fromPositionRow(row: OpenPositionRow): OpenPosition {
-  const modelledCostBreakdown = parseModelledCostBreakdownColumn(row.modelled_cost_breakdown_json);
-
-  return {
-    idempotency_key: row.idempotency_key,
-    debate_id: row.debate_id,
-    instrument: row.instrument,
-    asset_class: row.asset_class,
-    side: row.side,
-    intent_type: row.intent_type,
-    requested_size: row.requested_size,
-    filled_size: row.filled_size,
-    avg_entry_price: row.avg_entry_price,
-    stop: row.stop,
-    target: row.target,
-    order_state: row.order_state,
-    broker_order_ids: JSON.parse(row.broker_order_ids) as string[],
-    opened_at: fromStoredTimestamp(row.opened_at),
-    decision_timestamp: fromStoredTimestamp(row.decision_timestamp),
-    conviction: row.conviction,
-    converged: row.converged === 1,
-    // #1001, migration 0037 — omitted (not `null`) on a pre-migration row or
-    // an uncaptured best-effort read, matching `fromFillRow`'s own convention
-    // for `cost_breakdown`/`exit_reason` below.
-    ...(row.decision_price === null ? {} : { decision_price: row.decision_price }),
-    ...(row.quote_bid === null ? {} : { quote_bid: row.quote_bid }),
-    ...(row.quote_ask === null ? {} : { quote_ask: row.quote_ask }),
-    ...(row.quote_mid === null ? {} : { quote_mid: row.quote_mid }),
-    ...(row.quote_observed_at === null
-      ? {}
-      : { quote_observed_at: fromStoredTimestamp(row.quote_observed_at) }),
-    // #1014 review, finding 4: the same guarded read `getFlattenAttribution`
-    // uses — this is the "identical `fromPositionRow` block" the review names,
-    // and an unvalidated cast here would throw on a corrupted row inside
-    // whichever caller happened to load the position (`reconcile`, the
-    // residual sweep, `ingestFills`). A bad value reads as absent, which is
-    // the same thing every pre-migration-0037 row already looks like.
-    ...(modelledCostBreakdown === null ? {} : { modelled_cost_breakdown: modelledCostBreakdown }),
-    ...(row.abandon_reason === null ? {} : { abandon_reason: row.abandon_reason }),
-  };
-}
-
-function fromFillRow(row: FillRow): Fill {
-  return {
-    idempotency_key: row.idempotency_key,
-    broker_fill_id: toBrokerFillId(row.broker_fill_id),
-    leg: row.leg,
-    price: row.price,
-    qty: row.qty,
-    fee: row.fee,
-    timestamp: fromStoredTimestamp(row.timestamp),
-    ...(row.cost_breakdown_json === null
-      ? {}
-      : {
-          cost_breakdown: JSON.parse(row.cost_breakdown_json) as NonNullable<
-            Fill['cost_breakdown']
-          >,
-        }),
-    ...(row.exit_reason === null ? {} : { exit_reason: row.exit_reason }),
-    ...(row.flatten_idempotency_key === null
-      ? {}
-      : { flatten_idempotency_key: row.flatten_idempotency_key }),
-    ...(row.fee_currency === null ? {} : { fee_currency: row.fee_currency }),
-  };
 }

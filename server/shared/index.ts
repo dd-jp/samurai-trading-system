@@ -19,6 +19,7 @@ export { nonEmpty, positiveIntegerFromEnv, requireIntegerAtLeast } from './env-i
 // #568: the one fill-record arithmetic every exit-sizing and flatness
 // judgement runs — Trader, Execution and the residual sweep — so the three
 // can never disagree on what a lot still holds.
+export { type EscalationCadence, escalatesAt } from './escalation-cadence.js';
 export type { ExitFill, LotHeldQuantity, RecordedHeldQuantity } from './held-quantity.js';
 export {
   coversQty,

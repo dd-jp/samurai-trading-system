@@ -20,7 +20,7 @@ import {
   LseRegularHoursCalendar,
 } from '../../../providers/market-data-service/index.js';
 import type { OpenPosition, TradingArm } from '../../../shared/index.js';
-import { formatTraderDiagnosticAlert } from '../trader-diagnostic-alert-channel.js';
+import { ALERT_CATALOGUE } from '../alert-catalogue.js';
 import type { LogEntry, Logger } from '../types.js';
 import {
   buildCarriedLotReporter,
@@ -248,9 +248,9 @@ describe('buildCarriedLotReporter', () => {
     // `arm` is identical, which is exactly the pair that used to page twice
     // with indistinguishable text.
     expect(liveArm[0]?.instrument).toBe(controlArm[0]?.instrument);
-    expect(formatTraderDiagnosticAlert(liveArm[0] as TraderDiagnosticAlert)).not.toBe(
-      formatTraderDiagnosticAlert(controlArm[0] as TraderDiagnosticAlert),
-    );
+    expect(
+      ALERT_CATALOGUE.traderDiagnosticAlerts.text(liveArm[0] as TraderDiagnosticAlert),
+    ).not.toBe(ALERT_CATALOGUE.traderDiagnosticAlerts.text(controlArm[0] as TraderDiagnosticAlert));
   });
 
   it('does not re-alert on every 15s poll while the lot stays open', async () => {

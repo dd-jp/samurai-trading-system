@@ -7,7 +7,7 @@
  * Three operator-facing escalations existed with real transports available and
  * none of them wired: the dead-man's-switch heartbeat (#96), the orphaned
  * go-verdict alert (#209), and the permanently-unpriced-fill alert (#298). All
- * three fell through to `console-channels.ts`'s log-only stand-ins **by
+ * three fell through to the catalogue's log-only stand-ins **by
  * omission** — the composition root simply never constructed a
  * `TelegramClient`. That satisfies each ticket's acceptance criteria and none
  * of their intent: the failures they exist to surface (the bot silently
@@ -22,9 +22,9 @@
  * dangerous configuration is refused rather than defaulted. So:
  *
  * - `SAMURAI_ALERTS=telegram` — push notifications. The posture an unattended
- *   run requires. Demands `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`,
- *   `TELEGRAM_ALLOWED_USER_IDS` and `TELEGRAM_HEARTBEAT_CHAT_ID` (#342, below);
- *   startup fails naming whichever are absent.
+ *   run requires. Demands `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` and
+ *   `TELEGRAM_HEARTBEAT_CHAT_ID` (#342, below); startup fails naming
+ *   whichever are absent.
  * - `SAMURAI_ALERTS=log-only` — the log-only stand-ins. A legitimate, and
  *   explicitly acknowledged, choice for an **attended** run: a local dev run, a
  *   supervised smoke test, a backtest. It is logged at `warn` every time,
@@ -70,34 +70,17 @@
  * it must detect is this process dying — so it stays out of scope here, and
  * the separate chat is what makes the current shape survivable meanwhile.
  *
- * ## Why the allowlist is required for outbound-only alerts
+ * ## Outbound only
  *
- * `TELEGRAM_ALLOWED_USER_IDS` is on the required list even though nothing here
- * receives anything. That is a consequence of construction, not a claim that
- * this ticket arms the HITL gate: `TelegramBotApiClient` is the only in-repo
- * `TelegramClient`, and it validates the allowlist in its constructor
- * (allowlist.ts) — deliberately, since an unset or wildcard allowlist is either
- * a silently fail-closed gate or a critical exposure, and verdict-spec.md
- * requires that to be caught at boot rather than discovered at runtime.
- *
- * To be unambiguous about what this file does NOT do: no poll loop is started
- * (`client.start()` is never called — `getUpdates` is single-consumer per bot
- * token, and starting one here would make a *second* process' approval poll
- * impossible), no approval handler is registered, and
- * `ProductionConfig.approvals` still falls back to `UnwiredApprovalChannel`
- * (`production.ts`'s `resolveApprovalsChannel`), which THROWS rather than
- * fabricating consent if Verdict's HITL gate (6) is ever reached — ADR-0007
- * already makes that gate unreachable at the shipped `auto` dial, and
- * `assertAutomationLevelSupported` refuses to boot at all on `manual`/
- * `semi_auto` (verdict-spec.md "Problem Statement"), so there is no
- * auto-approving stand-in wired here for either guard to fall through to.
- * Wiring HITL approvals through Telegram, if the gate is ever re-enabled,
- * would be a code change — async-approval semantics, not a config edit
- * (verdict-spec.md; #434, closed, reached the same conclusion) — on top of
- * the inbound half #275 (closed) already built. Validating the allowlist now
- * rather than then is the same fail-at-boot posture the spec asks for: an
- * unattended soak must not discover a broken allowlist on the day approvals
- * go live.
+ * Nothing here receives anything from Telegram. `TelegramBotApiClient` is
+ * outbound-only (ADR-0007, ADR-0013: no human gate anywhere), and
+ * `ProductionConfig.approvals` still falls back to
+ * `UnwiredApprovalChannel` (`production.ts`'s `resolveApprovalsChannel`),
+ * which THROWS rather than fabricating consent if Verdict's HITL gate (6) is
+ * ever reached — ADR-0007 makes that gate unreachable at the shipped `auto`
+ * dial, and `assertAutomationLevelSupported` refuses to boot at all on
+ * `manual`/`semi_auto`, so there is no auto-approving stand-in wired here for
+ * either guard to fall through to.
  *
  * ## Why here and not in `production.ts`
  *
@@ -113,36 +96,10 @@
  */
 import { TelegramBotApiClient, TelegramChannel } from '../../pipeline/verdict/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
+import { ALERT_IDS, type AlertId, type AlertPort, tradeChannelAlert } from './alert-catalogue.js';
 import { SqliteAlertDeliveryLog } from './alert-delivery-log.js';
-import { TradeChannelAnalystSkipAlert } from './analyst-skip-alert-channel.js';
-import { TradeChannelArmDivergenceAlert } from './arm-divergence-alert-channel.js';
-import { TradeChannelBreachAlert } from './breach-alert-channel.js';
-import { TradeChannelCalendarFallbackAlert } from './calendar-fallback-alert-channel.js';
-import { TradeChannelDataFailoverAlert } from './data-failover-alert-channel.js';
-import { TradeChannelExitValuationDegradedAlert } from './exit-valuation-alert-channel.js';
-import { TradeChannelFlattenReconcileAlert } from './flatten-reconcile-alert-channel.js';
-import { TradeChannelHeartbeat } from './heartbeat-channel.js';
-import { TradeChannelLlmFailureRateAlert } from './llm-failure-rate-alert-channel.js';
-import { TradeChannelLoosenNotice } from './loosen-notification-channel.js';
-import { TradeChannelLseCalendarCoverageAlert } from './lse-calendar-coverage-alert-channel.js';
-import { TradeChannelMiCoverageAlert } from './mi-coverage-alert-channel.js';
-import { TradeChannelNonSterlingFeeAlert } from './non-sterling-fee-alert-channel.js';
-import { TradeChannelOcoDoubleFillAlert } from './oco-double-fill-channel.js';
-import { TradeChannelOrphanAlert } from './orphan-alert-channel.js';
 import type { AlertChannelSlots, ProductionConfig } from './production.js';
-import { TradeChannelPromptTierAlert } from './prompt-tier-alert-channel.js';
-import { TradeChannelResidualExposureAlert } from './residual-exposure-alert-channel.js';
-import {
-  TradeChannelDormantLegsUnresolvedAlert,
-  TradeChannelLegResizeUnverifiedAlert,
-  TradeChannelUnresolvedPriceUnitAlert,
-} from './saxo-alert-channels.js';
-import { SqliteAuditLog } from './sqlite-audit-log.js';
-import { TradeChannelThresholdClampAlert } from './threshold-clamp-alert-channel.js';
-import { TradeChannelTickSkipAlert } from './tick-skip-alert-channel.js';
-import { TradeChannelTraderDiagnosticAlert } from './trader-diagnostic-alert-channel.js';
 import type { Logger } from './types.js';
-import { TradeChannelUnpricedFillAlert } from './unpriced-fill-channel.js';
 
 const ENV_VAR = 'SAMURAI_ALERTS';
 
@@ -154,10 +111,8 @@ export type AlertsMode = (typeof ALERTS_MODES)[number];
  * The `AlertChannelSlots` fields this module owns — the outbound operator
  * escalations, and nothing else. Verdict's `approvals` is deliberately absent
  * from `AlertChannelSlots` itself: it is an inbound round trip
- * (`requestApproval` returns an *answer*), not an alert. #275 (closed)
- * already built the inbound half; nothing wires it into `AlertChannelSlots`
- * today, and ADR-0007's `auto` dial makes the gate it would serve
- * unreachable at the shipped config.
+ * (`requestApproval` returns an *answer*), not an alert, and ADR-0007's
+ * `auto` dial makes the gate it would serve unreachable at the shipped config.
  *
  * `breachAlerts` joined the list in #327: a kill-threshold breach is the
  * fourth outbound escalation, and it had the same shape of hole as the
@@ -175,155 +130,22 @@ export type AlertsMode = (typeof ALERTS_MODES)[number];
  * and the same hole — a real channel type with no transport selected for it —
  * was found and patched by hand TEN times running: the original three, then
  * #431 (sixth), #465 (seventh), #551 (eighth, `residualExposureAlerts`), #586
- * (ninth, `ocoDoubleFillAlerts`), and #519 (tenth, `flattenReconcileAlerts`,
- * below).** `satisfies readonly (keyof AlertChannelSlots)[]` only ever caught
- * a field that does NOT belong here; it could not catch one that was missing.
- * `ALL_ALERT_CHANNEL_FIELDS_COVERED` below is what closes that direction: an
- * eleventh channel added to `AlertChannelSlots` (production/config.ts)
- * without a matching entry here now fails `yarn typecheck` instead of
- * waiting for an eleventh human to notice.
+ * (ninth, `ocoDoubleFillAlerts`), and #519 (tenth,
+ * `flattenReconcileAlerts`).** `satisfies readonly (keyof AlertChannelSlots)[]`
+ * only ever caught a field that does NOT belong here; it could not catch one
+ * that was missing. `ALL_ALERT_CHANNEL_FIELDS_COVERED` below is what closes
+ * that direction: a channel added to `AlertChannelSlots` (production/config.ts)
+ * with no catalogue entry (`ALERT_IDS`, alert-catalogue.ts) behind it now
+ * fails `yarn typecheck` instead of waiting for an eleventh human to notice.
  */
 export const ALERT_CHANNEL_FIELDS = [
-  'heartbeatChannel',
-  'orphanAlerts',
-  'unpricedFillAlerts',
-  // #551 — the eighth. `ResidualExposureAlertChannel` existed since #525 with
-  // only `LoggingResidualExposureAlertChannel` behind it — the same hole as
-  // every entry on this list: a real channel type with no transport selected
-  // for it, so an unprotected residual position after a failed re-arm reached
-  // only the log stream during an unattended soak.
-  'residualExposureAlerts',
-  // #586 — the ninth, and the first added AFTER `ALL_ALERT_CHANNEL_FIELDS_COVERED`
-  // below started enforcing this list: an emulated crypto OCO's double fill
-  // (both protective legs filled inside one poll window — the accepted-risk
-  // window of #586's emulation) leaves the lot over-closed and a reverse
-  // position possibly open at the venue.
-  'ocoDoubleFillAlerts',
-  // #519 — the tenth. Same hole as `residualExposureAlerts`: a real channel
-  // type existed (`FlattenReconcileAlertChannel`) with only a log-only
-  // implementation behind it, so an unresolved flatten — a lot stuck in
-  // genuine ambiguity about whether it is still held — reached only the log
-  // stream during an unattended soak.
-  'flattenReconcileAlerts',
-  'breachAlerts',
-  'loosenNotices',
-  // #431 — the sixth. Same hole as the original three: a real channel type
-  // (analysts-spec.md story 25) with no transport selected for it, and the
-  // failure it reports (the analyst stage skipping every tick) is invisible in
-  // an unattended run precisely because nothing else changes when it happens.
-  'analystSkipAlerts',
-  // #465 — the seventh. `NotifyingVerdict` existed and was constructed
-  // nowhere, so a `go` verdict reached the operator only if something
-  // downstream happened to alert. Filtered at the decorator so wiring it does
-  // not buy ~300 messages a day.
+  ...ALERT_IDS,
+  // #465. `NotifyingVerdict` existed and was constructed nowhere, so a `go`
+  // verdict reached the operator only if something downstream happened to
+  // alert. Filtered at the decorator so wiring it does not buy ~300 messages
+  // a day. Not a catalogue entry: its port is shaped for a `VerdictDecision`
+  // and implemented by Verdict's own `TelegramChannel`.
   'verdictAlerts',
-  // #698 — the eleventh, and the first whose channel type and transport landed
-  // in the SAME change rather than the type existing first and waiting for a
-  // human to notice the hole. The condition it reports (the Trader running on
-  // a calendar that cannot answer, or on corrupt bar data) is invisible from
-  // outside by construction: the Trader keeps returning defensible answers and
-  // the heartbeat keeps beating, so the only symptom is a book that quietly
-  // stops trading.
-  'traderDiagnosticAlerts',
-  // #752 — the twelfth. A real channel type (`MiCoverageAlertChannel`,
-  // production/mi-coverage.ts) landing in the SAME change as its transport,
-  // like `traderDiagnosticAlerts` before it: the condition it reports (a name
-  // in the active list with no scored market-intelligence item inside the
-  // staleness window) is invisible from outside by construction — the debate
-  // still runs, narrowed by one analyst's worth of evidence, and the
-  // heartbeat keeps beating regardless.
-  'miCoverageAlerts',
-  // #766 — the thirteenth. Same hole as `traderDiagnosticAlerts`: a real
-  // channel type (`ThresholdClampAlertChannel`, production/threshold-clamp-
-  // alert.ts) landing in the SAME change as its transport. The condition it
-  // reports — #638's in-code clamp refusing an out-of-bound `risk_thresholds`
-  // row at runtime — was already fail-closed on trading; what was missing was
-  // that the refusal reached only a log line, so a run in which it trips on
-  // every tick is indistinguishable from outside from a quiet market with no
-  // setups.
-  'thresholdClampAlerts',
-  // #562 — the fourteenth. The live orchestrator gained an OHLCV fallback in
-  // the same change, and its alert had to reach the live transport rather
-  // than the place #560's equivalent went: the backfill script's stdout,
-  // which nobody reads during an unattended soak. The condition it reports
-  // (bars now served by a second vendor with a different volume convention)
-  // is invisible from outside — the tick keeps producing answers.
-  'dataFailoverAlerts',
-  // #841 — the fifteenth. Channel type and transport in the SAME change, like
-  // `traderDiagnosticAlerts` and `thresholdClampAlerts` before it. The
-  // condition it reports (an exit priced against a book with a dark held
-  // mark in it) previously had no alert at all AND no exit: the valuation
-  // refusal aborted the tick, so the flatten never fired and the only trace
-  // was `tick-loop.ts`'s `instrument failed` line — a position carried
-  // overnight, reported as a generic tick failure.
-  'exitValuationAlerts',
-  // #684 — the sixteenth. Channel type and transport in the SAME change, like
-  // `traderDiagnosticAlerts`/`thresholdClampAlerts`/`exitValuationAlerts`
-  // before it. The condition it reports (the paper equity leg's Alpaca
-  // calendar fetch failed at boot and fell back to the hand-entered session
-  // table) is invisible from outside by construction: the run keeps ticking
-  // and flattening on the fallback table, which is a defensible calendar —
-  // just not the venue's own, and not immune to its own coverage cliff.
-  'calendarFallbackAlerts',
-  // #971 — the seventeenth. Channel type and transport in the SAME change, like
-  // `calendarFallbackAlerts` before it. The condition it reports (the matched
-  // control arm out-performing the debate-driven live arm on return AND
-  // drawdown together) is invisible from outside by construction: both arms
-  // keep trading and the heartbeat keeps beating, and the only thing that has
-  // happened is that the debate layer stopped earning its cost — which is
-  // precisely the falsifier ADR-0014 amendment 2 mandates the system watch for.
-  'armDivergenceAlerts',
-  // #1084 — the eighteenth. Channel type and transport in the SAME change,
-  // like `armDivergenceAlerts`/`calendarFallbackAlerts` before it. The
-  // condition it reports (a tick pass that dropped at least half the planned
-  // universe because the previous pass had not finished) previously had no
-  // alert at all — only an `info` log line the busy-skip comment in
-  // `production.ts` deliberately keeps quiet for the ordinary case. The
-  // real-world measurement behind the threshold lives in
-  // `tick-skip-alert.ts`'s file doc, not repeated here.
-  'tickSkipAlerts',
-  // #1155 — the nineteenth. Channel type and transport in the SAME change,
-  // like `tickSkipAlerts`/`armDivergenceAlerts` before it.
-  // `crossesPromptTier` (shared/llm/pricing.ts) had existed since #969 with
-  // no caller at all — not even a log line — so a large-prompt-tier
-  // crossing's 2.5x unit-cost step happened silently inside the meter. The
-  // condition is invisible from outside by construction: `llm_spend` keeps
-  // writing rows and ADR-0008's cap keeps enforcing against them, and the
-  // only symptom is that the burn rate quietly changed.
-  'promptTierAlerts',
-  // #1378. The condition it reports (the LIVE equity leg's hand-entered LSE
-  // session tables running out) is invisible from outside by construction
-  // until the day it bites: the calendar keeps answering — a normal 16:30
-  // close, unmodelled half-days included — right up to the boot that
-  // finally refuses.
-  'lseCalendarCoverageAlerts',
-  // #1396. The condition it reports (a sustained rise in outright LLM call
-  // failures) is invisible from outside by construction: both causes of
-  // `termination = 'latency_truncated'` — an LLM failure and ordinary
-  // latency-budget expiry — write the same row shape everywhere except this
-  // one column, so nothing else on this list would ever notice.
-  'llmFailureRateAlerts',
-  // #1400 — the Saxo adapter's three, arriving together with the venue that
-  // constructs it. Unlike every entry above, these channel types did NOT
-  // reach only a log line before: `SaxoBrokerAdapter` has required all three
-  // since #1215/#1216/#1302 with no default at all, so the hole was one step
-  // further back — nothing constructed the adapter, so nothing had to supply
-  // them and no transport was ever selected. Each reports a state that does
-  // not clear itself and is invisible from outside: a stop possibly sized to
-  // the wrong quantity, a leg pair the venue audit trail will not adjudicate,
-  // and a fill whose quote unit is unknown (a 100x error on a pence line if
-  // guessed).
-  'legResizeAlerts',
-  'dormantLegsAlerts',
-  'priceUnitAlerts',
-  // #1465 — the twenty-fifth. Channel type and transport in the SAME
-  // change: #1220 raised `FEE_CURRENCY_NOT_BOOK_CURRENCY` at `error` with no
-  // channel behind it, the same hole `residualExposureAlerts` closed for
-  // #525. The condition it reports (a fill fee outside book currency) means
-  // an instrument was traded that `tradeableUniverse()` should already have
-  // excluded — a selection-layer defect that already reached the venue with
-  // real money.
-  'nonSterlingFeeAlerts',
 ] as const satisfies readonly (keyof AlertChannelSlots)[];
 
 /**
@@ -355,7 +177,7 @@ export const ALL_ALERT_CHANNEL_FIELDS_COVERED: {
  */
 export const TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR = 'TELEGRAM_HEARTBEAT_CHAT_ID';
 
-/** What `SAMURAI_ALERTS=telegram` needs in the environment. See the module doc for the allowlist. */
+/** What `SAMURAI_ALERTS=telegram` needs in the environment. */
 export const TELEGRAM_ALERT_ENV_VARS = [
   'TELEGRAM_BOT_TOKEN',
   'TELEGRAM_CHAT_ID',
@@ -404,13 +226,12 @@ export function resolveAlertsMode(injected: Partial<ProductionConfig>): AlertsMo
  * The channels for `alertsMode`, omitting any the caller already injected.
  *
  * `log-only` returns nothing at all, deliberately: `production.ts` already
- * documents and constructs `LoggingHeartbeatChannel` /
- * `LoggingOrphanAlertChannel` / `LoggingUnpricedFillAlertChannel` as its
- * defaults, and a second set built here would be two places to keep in sync
- * for no behavioural difference. The `warn` is the point of the branch.
+ * documents and constructs `loggingAlertChannel(id, logger)` as its defaults,
+ * and a second set built here would be two places to keep in sync for no
+ * behavioural difference. The `warn` is the point of the branch.
  *
- * `telegram` builds ONE `TelegramBotApiClient` shared by every adapter this
- * branch constructs (eight as of #551) — not one each: they share a bot
+ * `telegram` builds ONE `TelegramBotApiClient` shared by every catalogue
+ * entry this branch constructs — not one each: they share a bot
  * token, a retry budget and Telegram's ~30 messages/second ceiling, and
  * separate clients would each believe they owned the whole allowance.
  */
@@ -444,20 +265,13 @@ export function buildAlertChannels(deps: {
   const heartbeatChatId =
     deps.injected.heartbeatChannel === undefined ? requireHeartbeatChatId(chatId) : undefined;
 
-  // The bot token and the allowlist are read by the client itself, from the
-  // same variables — not re-read here, so there is exactly one place that
-  // touches the token and exactly one that validates the allowlist.
+  // The bot token is read by the client itself, from the environment — not
+  // re-read here, so there is exactly one place that touches it.
   const telegram = new TelegramBotApiClient({
-    // Where the client posts its own repeated-allowlist-rejection security
-    // alert. The same chat the alerts go to: it is the channel the operator is
-    // already watching, and a security signal with nowhere to go is the
-    // failure mode this whole ticket is about.
+    // Where the client posts its own repeated-delivery-failure notice. The
+    // same chat the alerts go to: it is the channel the operator is already
+    // watching.
     alertChatId: chatId,
-    // Written to on an inbound allowlist rejection. Unused while nothing polls
-    // (see the module doc), and supplied anyway rather than stubbed: the store
-    // is the durable one every other component here writes to, so the day
-    // approvals are wired there is no second decision to get wrong.
-    auditLog: new SqliteAuditLog(deps.db),
     // Durable record of a send that exhausts retries (#1108) — the same
     // shared store every other component here writes to, so "how many
     // escalations went undelivered" survives the process that raised them.
@@ -488,10 +302,9 @@ export function buildAlertChannels(deps: {
       'positions, unresolved flatten reconciliations, kill-threshold breaches and APPLIED ' +
       `risk-threshold loosenings will be pushed to the escalation chat (TELEGRAM_CHAT_ID). ` +
       `${heartbeatClause} ` +
-      'Keep the escalation chat unmuted. No approval poll is started here: HITL approvals ' +
-      'still resolve through ProductionConfig.approvals (#275), and the loosening notice is ' +
-      'outbound-only — it reports a dial the Feedback Loop already moved on its own authority, ' +
-      'inside the hard bounds, and no reply to it is read (#366/#736).',
+      'Keep the escalation chat unmuted. Nothing is read back from Telegram: the loosening ' +
+      'notice is outbound-only — it reports a dial the Feedback Loop already moved on its own ' +
+      'authority, inside the hard bounds, and no reply to it is read (#366/#736).',
     // Never the token, and never either chat id: none is a secret worth a log
     // line, and the token is a bearer credential for the entire bot. The
     // heartbeat field is the machine-readable form of the clause above — two
@@ -502,174 +315,31 @@ export function buildAlertChannels(deps: {
     },
   });
 
-  return {
-    ...(heartbeatChatId === undefined
-      ? {}
-      : { heartbeatChannel: new TradeChannelHeartbeat(telegram, heartbeatChatId) }),
-    ...(deps.injected.orphanAlerts === undefined
-      ? { orphanAlerts: new TradeChannelOrphanAlert(telegram, chatId) }
-      : {}),
-    ...(deps.injected.unpricedFillAlerts === undefined
-      ? { unpricedFillAlerts: new TradeChannelUnpricedFillAlert(telegram, chatId) }
-      : {}),
-    // #551. The escalation chat, not the heartbeat chat: an unprotected
-    // residual position sitting at the venue with no stop or target is an
-    // event an operator must act on, not a beat (#342's split).
-    ...(deps.injected.residualExposureAlerts === undefined
-      ? { residualExposureAlerts: new TradeChannelResidualExposureAlert(telegram, chatId) }
-      : {}),
-    // #586. The escalation chat: a lot over-closed into a possible reverse
-    // position is a decision waiting on the operator, not a beat (#342).
-    ...(deps.injected.ocoDoubleFillAlerts === undefined
-      ? { ocoDoubleFillAlerts: new TradeChannelOcoDoubleFillAlert(telegram, chatId) }
-      : {}),
-    // #519. The escalation chat, not the heartbeat chat: a flatten reconcile
-    // could not settle is a lot stuck in genuine ambiguity about whether it
-    // is still held — a decision waiting on the operator, not a beat.
-    ...(deps.injected.flattenReconcileAlerts === undefined
-      ? { flattenReconcileAlerts: new TradeChannelFlattenReconcileAlert(telegram, chatId) }
-      : {}),
-    ...(deps.injected.breachAlerts === undefined
-      ? { breachAlerts: new TradeChannelBreachAlert(telegram, chatId, deps.logger) }
-      : {}),
-    // #366/#736. The escalation chat, not the heartbeat chat: a risk limit
-    // the system widened by itself is an event the operator has to see, and
-    // the whole point of #342's split is that those do not share a
-    // destination with the beat.
-    ...(deps.injected.loosenNotices === undefined
-      ? { loosenNotices: new TradeChannelLoosenNotice(telegram, chatId, deps.logger) }
-      : {}),
-    // #465. The escalation chat rather than the heartbeat's: a trade that
-    // executed, or the system halting itself, is an event — not a beat.
-    ...(deps.injected.verdictAlerts === undefined
-      ? { verdictAlerts: new TelegramChannel(telegram, chatId) }
-      : {}),
-    // #431. The escalation chat: "no decision is being produced at all" is the
-    // most consequential thing this process can report, and it must not sit in
-    // the chat #342 expects the operator to mute.
-    ...(deps.injected.analystSkipAlerts === undefined
-      ? { analystSkipAlerts: new TradeChannelAnalystSkipAlert(telegram, chatId) }
-      : {}),
-    // #698. The escalation chat, for the same reason `analystSkipAlerts` uses
-    // it: a Trader that cannot trust its calendar produces no trades while
-    // looking completely healthy from outside, and that must not sit in the
-    // chat #342 expects the operator to mute.
-    ...(deps.injected.traderDiagnosticAlerts === undefined
-      ? { traderDiagnosticAlerts: new TradeChannelTraderDiagnosticAlert(telegram, chatId) }
-      : {}),
-    // #752. The escalation chat: a coverage gap on a live-path name is a
-    // decision waiting on the operator (does GDELT need to land sooner?),
-    // not a beat — same reasoning as `analystSkipAlerts`.
-    ...(deps.injected.miCoverageAlerts === undefined
-      ? { miCoverageAlerts: new TradeChannelMiCoverageAlert(telegram, chatId) }
-      : {}),
-    // #766. The escalation chat: an out-of-bound risk threshold tripping the
-    // #638 clamp at runtime is a decision waiting on the operator (fix the
-    // risk_thresholds row), not a beat — same reasoning as
-    // `traderDiagnosticAlerts`.
-    ...(deps.injected.thresholdClampAlerts === undefined
-      ? { thresholdClampAlerts: new TradeChannelThresholdClampAlert(telegram, chatId, deps.logger) }
-      : {}),
-    // #562. The escalation chat: the run has left its primary market-data
-    // vendor and is reading bars from a fallback with a different volume
-    // convention. #560's own failover alert reached the backfill script's
-    // stdout, which is exactly the "nobody is watching" hole this list exists
-    // to close.
-    ...(deps.injected.dataFailoverAlerts === undefined
-      ? { dataFailoverAlerts: new TradeChannelDataFailoverAlert(telegram, chatId) }
-      : {}),
-    // #841. The escalation chat: a dark mark in the held book is a feed fault
-    // the operator has to act on, and it fires beside a flatten that DID go
-    // out — the one moment the book's own record of itself is incomplete.
-    // Same reasoning as `thresholdClampAlerts`, never the heartbeat chat.
-    ...(deps.injected.exitValuationAlerts === undefined
-      ? {
-          exitValuationAlerts: new TradeChannelExitValuationDegradedAlert(
-            telegram,
-            chatId,
-            deps.logger,
-          ),
-        }
-      : {}),
-    // #684. The escalation chat: a boot-time fallback from the venue's own
-    // calendar to the hand-entered table is a decision waiting on the
-    // operator (check Alpaca connectivity, watch the fallback's own coverage
-    // cliff), not a beat — same reasoning as `thresholdClampAlerts`.
-    ...(deps.injected.calendarFallbackAlerts === undefined
-      ? {
-          calendarFallbackAlerts: new TradeChannelCalendarFallbackAlert(
-            telegram,
-            chatId,
-            deps.logger,
-          ),
-        }
-      : {}),
-    // #971. The escalation chat, never the heartbeat chat: the control arm
-    // beating the debate arm is the falsifying result the whole two-arm design
-    // exists to detect, and it is a decision waiting on the operator (#636's
-    // "did the debate layer earn its cost"), not a beat.
-    ...(deps.injected.armDivergenceAlerts === undefined
-      ? {
-          armDivergenceAlerts: new TradeChannelArmDivergenceAlert(telegram, chatId, deps.logger),
-        }
-      : {}),
-    // #1084. The escalation chat, never the heartbeat chat: a tick pass that
-    // dropped at least half the universe is a decision waiting on the
-    // operator (is one instrument's debate hung, does the concurrency cap
-    // need revisiting), not a beat — same reasoning as `calendarFallbackAlerts`.
-    ...(deps.injected.tickSkipAlerts === undefined
-      ? { tickSkipAlerts: new TradeChannelTickSkipAlert(telegram, chatId) }
-      : {}),
-    // #1155. The escalation chat, never the heartbeat chat: a prompt-tier
-    // crossing is a cost-rate event against ADR-0008's cap — a decision
-    // waiting on the operator (is this call's retrieval size expected?) —
-    // not a beat, same reasoning as `thresholdClampAlerts`.
-    ...(deps.injected.promptTierAlerts === undefined
-      ? { promptTierAlerts: new TradeChannelPromptTierAlert(telegram, chatId, deps.logger) }
-      : {}),
-    // #1378. The escalation chat, never the heartbeat chat: the live leg's
-    // own table-coverage cliff approaching is a decision waiting on the
-    // operator (extend LSE_HOLIDAYS/LSE_HALF_DAYS), not a beat — same
-    // reasoning as `calendarFallbackAlerts`.
-    ...(deps.injected.lseCalendarCoverageAlerts === undefined
-      ? {
-          lseCalendarCoverageAlerts: new TradeChannelLseCalendarCoverageAlert(
-            telegram,
-            chatId,
-            deps.logger,
-          ),
-        }
-      : {}),
-    // #1396. The escalation chat, never the heartbeat chat: an elevated
-    // llm_failure rate is a decision waiting on the operator (is the
-    // provider degraded, is a key rate-limited), not a beat — same
-    // reasoning as `miCoverageAlerts`.
-    ...(deps.injected.llmFailureRateAlerts === undefined
-      ? { llmFailureRateAlerts: new TradeChannelLlmFailureRateAlert(telegram, chatId) }
-      : {}),
-    // #1400. The escalation chat for all three, never the heartbeat chat:
-    // each is a position-level state an operator has to unwind by hand on the
-    // venue — a stop possibly sized wrong, legs the venue will not adjudicate,
-    // a fill that cannot be priced — and none of them clears itself. Same
-    // reasoning as `residualExposureAlerts`, which is the closest in kind.
-    ...(deps.injected.legResizeAlerts === undefined
-      ? { legResizeAlerts: new TradeChannelLegResizeUnverifiedAlert(telegram, chatId) }
-      : {}),
-    ...(deps.injected.dormantLegsAlerts === undefined
-      ? { dormantLegsAlerts: new TradeChannelDormantLegsUnresolvedAlert(telegram, chatId) }
-      : {}),
-    ...(deps.injected.priceUnitAlerts === undefined
-      ? { priceUnitAlerts: new TradeChannelUnresolvedPriceUnitAlert(telegram, chatId) }
-      : {}),
-    // #1465. The escalation chat, never the heartbeat chat: a foreign fill
-    // fee means an instrument was traded that `tradeableUniverse()` should
-    // already have excluded — a decision waiting on the operator (check the
-    // universe pool / selection wiring), not a beat — same reasoning as
-    // `residualExposureAlerts`, the closest in kind.
-    ...(deps.injected.nonSterlingFeeAlerts === undefined
-      ? { nonSterlingFeeAlerts: new TradeChannelNonSterlingFeeAlert(telegram, chatId) }
-      : {}),
-  };
+  const channels: AlertChannels = {};
+  for (const id of ALERT_IDS) {
+    if (deps.injected[id] !== undefined) continue;
+    if (id === 'heartbeatChannel') {
+      if (heartbeatChatId !== undefined) {
+        channels.heartbeatChannel = tradeChannelAlert(id, {
+          telegram,
+          chatId: heartbeatChatId,
+          logger: deps.logger,
+        });
+      }
+      continue;
+    }
+    assign(channels, id, tradeChannelAlert(id, { telegram, chatId, logger: deps.logger }));
+  }
+  if (deps.injected.verdictAlerts === undefined) {
+    channels.verdictAlerts = new TelegramChannel(telegram, chatId);
+  }
+  return channels;
+}
+
+/** `channels[id] = channel` with the key and the value typed together, which a plain assignment loses on a union key. */
+function assign<K extends AlertId>(channels: AlertChannels, id: K, channel: AlertPort<K>): void {
+  const slot: Pick<AlertChannelSlots, K> = channels;
+  slot[id] = channel;
 }
 
 /**

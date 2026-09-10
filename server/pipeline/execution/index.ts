@@ -85,7 +85,7 @@ export type {
   DormantLegsUnresolvedAlert,
   DormantLegsUnresolvedAlertChannel,
 } from './dormant-legs-unresolved-alert.js';
-export { ExecutionImpl } from './execute.js';
+export { ExecutionImpl, executeVerdict } from './execute.js';
 export {
   ALERT_AFTER_CONSECUTIVE_ZERO_SIZE,
   FILLED_ZERO_SIZE_REANNOUNCE_EVERY_MS,
@@ -129,6 +129,7 @@ export type {
   ExecutionConfig,
   ExecutionInput,
   ExecutionResult,
+  FillIngestInput,
   FlattenAttribution,
   FlattenSubmissionWriteAhead,
   LotAdvance,
@@ -137,12 +138,16 @@ export type {
   NormalizedOrder,
   NormalizedPosition,
   ReconcileDivergence,
+  ReconcileInput,
   ReconcileReport,
   ResidualProtectionSweepResult,
+  ResidualSweepInput,
   SharedStore,
   SimulatedAdapterConfig,
+  SubmitInput,
   UnprotectedResidualLot,
   UnresolvedFlattenSubmission,
+  WedgedSweepInput,
 } from './types.js';
 export type { UnpricedFillAlert, UnpricedFillAlertChannel } from './unpriced-fill-alert.js';
 export type {

@@ -98,13 +98,13 @@ import type { TraderDiagnosticAlertChannel } from './trader-diagnostic-alert.js'
 export interface AlertChannelSlots {
   /**
    * Trade channel the dead-man's-switch heartbeat posts over. Optional: when
-   * omitted a log-only `LoggingHeartbeatChannel` stands in, which is a diary
+   * omitted the catalogue's log-only form stands in, which is a diary
    * rather than a dead-man's switch — its whole point is that its SILENCE is
    * noticed by something outside this process.
    *
    * **The shipped entrypoint no longer reaches that default by omission
    * (#322).** `startFromEnvironment` resolves `SAMURAI_ALERTS` — a required
-   * variable with no default — and passes `TradeChannelHeartbeat` over a real
+   * variable with no default — and passes the catalogue's Telegram form over a real
    * `TelegramBotApiClient` (#275) under `telegram`, or nothing at all under an
    * explicitly-named `log-only`. This field stays the port rather than a
    * Telegram client, so a programmatic caller can still inject its
@@ -119,7 +119,7 @@ export interface AlertChannelSlots {
   heartbeatChannel?: HeartbeatChannel;
   /**
    * Where a restart-time orphaned `go` verdict is reported. Defaults to the
-   * log; `TradeChannelOrphanAlert` (orphan-alert-channel.ts) is the
+   * log; the Telegram form (`orphanAlerts` in alert-catalogue.ts) is the
    * reachable-from-a-phone implementation, wired by `SAMURAI_ALERTS=telegram`
    * (#322).
    */
@@ -127,9 +127,9 @@ export interface AlertChannelSlots {
   /**
    * Where a fill the venue reports filled but will not price is escalated once
    * it has been stuck too long (#298). Defaults to
-   * `LoggingUnpricedFillAlertChannel`, with the same caveat as
+   * `loggingAlertChannel('unpricedFillAlerts', …)`, with the same caveat as
    * `heartbeatChannel`: the default is reachable only by an operator reading
-   * the log stream. `TradeChannelUnpricedFillAlert` (unpriced-fill-channel.ts)
+   * the log stream. `tradeChannelAlert('unpricedFillAlerts', …)`
    * is what an unattended soak (#238) needs, and `SAMURAI_ALERTS=telegram`
    * (#322) is what supplies it.
    */
@@ -138,10 +138,10 @@ export interface AlertChannelSlots {
    * Where a residual position `ingestFills()` failed to re-arm after a
    * partial flatten is escalated (#525) — posted only on a FAILED re-arm,
    * never on a successful one (see `ResidualExposureAlert`'s doc for why).
-   * Defaults to `LoggingResidualExposureAlertChannel`, with the same caveat
+   * Defaults to `loggingAlertChannel('residualExposureAlerts', …)`, with the same caveat
    * as `unpricedFillAlerts`: reachable only by an operator reading the log
-   * stream. `TradeChannelResidualExposureAlert`
-   * (residual-exposure-alert-channel.ts) is what an unattended soak (#238)
+   * stream. `tradeChannelAlert('residualExposureAlerts', …)`
+   * is what an unattended soak (#238)
    * needs, and `SAMURAI_ALERTS=telegram` (#322, wired for this channel by
    * #551) is what supplies it — the same move every other channel on this
    * interface makes.
@@ -153,9 +153,9 @@ export interface AlertChannelSlots {
    * and a reverse position may be open at the venue — the risk the owner
    * accepted when choosing local emulation over Alpaca's crypto-rejected
    * native order classes, surfaced rather than hidden. Defaults to
-   * `LoggingOcoDoubleFillAlertChannel`, with the same caveat as
+   * `loggingAlertChannel('ocoDoubleFillAlerts', …)`, with the same caveat as
    * `unpricedFillAlerts`: reachable only by an operator reading the log
-   * stream. `TradeChannelOcoDoubleFillAlert` (oco-double-fill-channel.ts) is
+   * stream. `tradeChannelAlert('ocoDoubleFillAlerts', …)` is
    * what an unattended soak (#238) needs, and `SAMURAI_ALERTS=telegram` is
    * what supplies it — the ninth `ALERT_CHANNEL_FIELDS` member.
    */
@@ -166,10 +166,10 @@ export interface AlertChannelSlots {
    * sized to the ORIGINAL amount, which over-closes into a reversed position
    * if it fires. Saxo's, and REQUIRED by `SaxoBrokerAdapter`'s constructor
    * with no default of its own; the composition root supplies
-   * `LoggingLegResizeUnverifiedAlertChannel` when nothing else does, with the
+   * `loggingAlertChannel('legResizeAlerts', …)` when nothing else does, with the
    * same caveat as `unpricedFillAlerts` — reachable only by an operator
-   * reading the log stream. `TradeChannelLegResizeUnverifiedAlert`
-   * (saxo-alert-channels.ts) is what `SAMURAI_ALERTS=telegram` supplies.
+   * reading the log stream. `tradeChannelAlert('legResizeAlerts', …)`
+   * is what `SAMURAI_ALERTS=telegram` supplies.
    */
   legResizeAlerts?: LegResizeUnverifiedAlertChannel;
   /**
@@ -194,10 +194,10 @@ export interface AlertChannelSlots {
    * Where a `flatten_submissions` row `reconcile()`'s sweep could not settle
    * is escalated (#519) — genuine ignorance, or a venue contradiction on an
    * already-acked row (`reconcileFlatten`, execution/reconcile.ts).
-   * Defaults to `LoggingFlattenReconcileAlertChannel`, with the same caveat
+   * Defaults to `loggingAlertChannel('flattenReconcileAlerts', …)`, with the same caveat
    * as `residualExposureAlerts`: reachable only by an operator reading the
-   * log stream. `TradeChannelFlattenReconcileAlert`
-   * (flatten-reconcile-alert-channel.ts) is what an unattended soak (#238)
+   * log stream. `tradeChannelAlert('flattenReconcileAlerts', …)`
+   * is what an unattended soak (#238)
    * needs, and `SAMURAI_ALERTS=telegram` supplies it, the same move #551
    * made for `residualExposureAlerts` — the tenth `ALERT_CHANNEL_FIELDS`
    * member. The two channels deliberately diverge since #1349: this one
@@ -207,25 +207,25 @@ export interface AlertChannelSlots {
   flattenReconcileAlerts?: FlattenReconcileAlertChannel;
   /**
    * Where a run of consecutive analyst quorum skips is escalated (#431,
-   * analysts-spec.md story 25). Defaults to `LoggingAnalystSkipAlertChannel`,
+   * analysts-spec.md story 25). Defaults to `loggingAlertChannel('analystSkipAlerts', …)`,
    * with the same caveat as the others: an analyst stage that has skipped every
    * tick for six hours is the failure an unattended soak cannot see any other
    * way — the heartbeat keeps beating and a skipped tick at a 15-minute cadence
-   * looks like a quiet market. `TradeChannelAnalystSkipAlert` is what
+   * looks like a quiet market. `tradeChannelAlert('analystSkipAlerts', …)` is what
    * `SAMURAI_ALERTS=telegram` supplies.
    */
   analystSkipAlerts?: AnalystSkipAlertChannel;
   /**
    * Where a kill-threshold breach goes (#93, wired #327). Defaults to
-   * `LoggingBreachAlertChannel`; `SAMURAI_ALERTS=telegram` replaces it with
-   * `TradeChannelBreachAlert` at the entrypoint, like the other outbound
+   * `loggingAlertChannel('breachAlerts', …)`; `SAMURAI_ALERTS=telegram` replaces it with
+   * `tradeChannelAlert('breachAlerts', …)` at the entrypoint, like the other outbound
    * alerts (alert-transport.ts).
    */
   breachAlerts?: BreachAlertChannel;
   /**
    * Where the notice of an APPLIED risk-threshold LOOSENING goes (#91, wired
-   * #366, retargeted #736). Defaults to `LoggingLoosenNotificationChannel`;
-   * `SAMURAI_ALERTS=telegram` replaces it with `TradeChannelLoosenNotice`,
+   * #366, retargeted #736). Defaults to `loggingAlertChannel('loosenNotices', …)`;
+   * `SAMURAI_ALERTS=telegram` replaces it with `tradeChannelAlert('loosenNotices', …)`,
    * like the other outbound escalations (alert-transport.ts).
    *
    * Top-level rather than a field of `feedback` for the reason every other
@@ -248,12 +248,12 @@ export interface AlertChannelSlots {
    * Where a degraded-but-continuing Trader condition is escalated (#698) — a
    * calendar reporting a close already in the past, a non-crypto calendar that
    * cannot resolve a session at all, or a non-finite ATR on a full window.
-   * Absent = log-only, and there is deliberately NO `Logging…Channel` standing
-   * in behind it, unlike `analystSkipAlerts`. `buildTraderStep` writes every
+   * Absent = log-only, and there is deliberately NO log-only form standing
+   * in behind it (`UNLOGGED_ALERT_IDS`), unlike `analystSkipAlerts`. `buildTraderStep` writes every
    * diagnostic to its own logger at `error` BEFORE it reaches this channel, so a
    * logging implementation would emit each condition twice; absent here means
-   * "no second, audible copy", not "silent". `TradeChannelTraderDiagnosticAlert`
-   * (trader-diagnostic-alert-channel.ts) is what an unattended soak (#238)
+   * "no second, audible copy", not "silent". `tradeChannelAlert('traderDiagnosticAlerts', …)`
+   * is what an unattended soak (#238)
    * needs, and `SAMURAI_ALERTS=telegram` supplies it — the eleventh
    * `ALERT_CHANNEL_FIELDS` member.
    *
@@ -276,11 +276,11 @@ export interface AlertChannelSlots {
   /**
    * Where a degraded market-intelligence coverage gap is escalated (#752) — a
    * name in the active list with no scored item inside the staleness window.
-   * Defaults to `LoggingMiCoverageAlertChannel`, with the same caveat as
+   * Defaults to `loggingAlertChannel('miCoverageAlerts', …)`, with the same caveat as
    * `heartbeatChannel`: log-only is reachable only by an operator reading the
    * log stream, and criterion 6 of #752 is explicit that log-only does NOT
-   * satisfy this alert. `TradeChannelMiCoverageAlert`
-   * (mi-coverage-alert-channel.ts) is what an unattended soak (#238) needs,
+   * satisfy this alert. `tradeChannelAlert('miCoverageAlerts', …)`
+   * is what an unattended soak (#238) needs,
    * and `SAMURAI_ALERTS=telegram` (#322) is what supplies it — the twelfth
    * `ALERT_CHANNEL_FIELDS` member.
    *
@@ -294,11 +294,11 @@ export interface AlertChannelSlots {
    * at RUNTIME is escalated (#766) — the live-read seam
    * (`RiskManagerImpl.evaluate()`, every tick) and the daily kill-line check
    * (`computeMetrics`). Absent = log-only, and there is deliberately NO
-   * `Logging…Channel` standing in behind it, the same reason
+   * log-only form standing in behind it (`UNLOGGED_ALERT_IDS`), the same reason
    * `traderDiagnosticAlerts` has none: both catch sites already write an
    * `error`-level log line before reaching this port, so a logging
    * implementation would emit each trip twice.
-   * `TradeChannelThresholdClampAlert` (threshold-clamp-alert-channel.ts) is
+   * `tradeChannelAlert('thresholdClampAlerts', …)` is
    * what an unattended soak (#238) needs, and `SAMURAI_ALERTS=telegram`
    * supplies it — the thirteenth `ALERT_CHANNEL_FIELDS` member.
    *
@@ -315,11 +315,11 @@ export interface AlertChannelSlots {
    * Where a LIVE OHLCV failover is escalated (#562): the primary market-data
    * vendor threw for one (instrument, timeframe) and the fallback vendor is
    * serving those bars instead. Defaults to
-   * `LoggingDataFailoverAlertChannel`, with the same caveat as
+   * `loggingAlertChannel('dataFailoverAlerts', …)`, with the same caveat as
    * `miCoverageAlerts` — the log-only stand-in cannot wake anyone, and #562's
    * third criterion is explicit that the failover must reach the LIVE
    * transport rather than the script output #560 settled for.
-   * `TradeChannelDataFailoverAlert` (data-failover-alert-channel.ts) is what
+   * `tradeChannelAlert('dataFailoverAlerts', …)` is what
    * an unattended soak (#238) needs, and `SAMURAI_ALERTS=telegram` (#322)
    * supplies it — the fourteenth `ALERT_CHANNEL_FIELDS` member.
    *
@@ -334,12 +334,12 @@ export interface AlertChannelSlots {
    * Where an EXIT priced against a partly-valued book is escalated (#841):
    * a held instrument's mark could not be read or was stale, so the
    * flat-by-close flatten was valued WITHOUT it rather than suppressed
-   * outright. Absent = log-only, with deliberately NO `Logging…Channel`
-   * standing in — both seams (`buildRiskStep`, `buildVerdictStep` in
+   * outright. Absent = log-only, with deliberately NO log-only form
+   * standing in (`UNLOGGED_ALERT_IDS`) — both seams (`buildRiskStep`, `buildVerdictStep` in
    * direct-bind.ts) write an `error`-level line before reaching this port,
    * the same call `thresholdClampAlerts` and `traderDiagnosticAlerts` make.
-   * `TradeChannelExitValuationDegradedAlert`
-   * (exit-valuation-alert-channel.ts) is what an unattended soak (#238)
+   * `tradeChannelAlert('exitValuationAlerts', …)`
+   * is what an unattended soak (#238)
    * needs, and `SAMURAI_ALERTS=telegram` supplies it — the fifteenth
    * `ALERT_CHANNEL_FIELDS` member.
    *
@@ -355,11 +355,11 @@ export interface AlertChannelSlots {
    * Where a failed Alpaca `GET /v2/calendar` fetch at boot is escalated
    * (#684) — the paper equity leg fell back to the hand-entered
    * `UsEquityRegularHoursCalendar` session table instead of the venue's own.
-   * Defaults to `LoggingCalendarFallbackAlertChannel`, with the same caveat
+   * Defaults to `loggingAlertChannel('calendarFallbackAlerts', …)`, with the same caveat
    * as `miCoverageAlerts`/`dataFailoverAlerts`: log-only cannot page anyone,
    * and an unattended 14-day soak needs to know its flatten boundary is
    * running on a table with a coverage cliff rather than the live one.
-   * `TradeChannelCalendarFallbackAlert` (calendar-fallback-alert-channel.ts)
+   * `tradeChannelAlert('calendarFallbackAlerts', …)`
    * is what `SAMURAI_ALERTS=telegram` (#322) supplies — the sixteenth
    * `ALERT_CHANNEL_FIELDS` member.
    *
@@ -375,10 +375,10 @@ export interface AlertChannelSlots {
    * live arm is escalated (#971, under #636 and #913) — the seventeenth
    * `ALERT_CHANNEL_FIELDS` member, channel type and transport landing in the
    * SAME change like `traderDiagnosticAlerts`/`calendarFallbackAlerts` before it.
-   * Defaults to `LoggingArmDivergenceAlertChannel`, with the same caveat as
+   * Defaults to `loggingAlertChannel('armDivergenceAlerts', …)`, with the same caveat as
    * `calendarFallbackAlerts`: log-only cannot page anyone, and #913 is explicit
    * that the divergence reaches the trade channel.
-   * `TradeChannelArmDivergenceAlert` (arm-divergence-alert-channel.ts) is what
+   * `tradeChannelAlert('armDivergenceAlerts', …)` is what
    * `SAMURAI_ALERTS=telegram` (#322) supplies.
    *
    * Deliberately its own slot rather than a reuse of `breachAlerts`: the breach
@@ -398,11 +398,11 @@ export interface AlertChannelSlots {
    * eighteenth `ALERT_CHANNEL_FIELDS` member, channel type and transport
    * landing in the SAME change like `armDivergenceAlerts`/
    * `calendarFallbackAlerts` before it. Defaults to
-   * `LoggingTickSkipAlertChannel`, with the same caveat as
+   * `loggingAlertChannel('tickSkipAlerts', …)`, with the same caveat as
    * `calendarFallbackAlerts`: log-only cannot page anyone. The real-world
    * measurement that motivated this slot lives in `tick-skip-alert.ts`'s file
    * doc, not repeated here.
-   * `TradeChannelTickSkipAlert` (tick-skip-alert-channel.ts) is what
+   * `tradeChannelAlert('tickSkipAlerts', …)` is what
    * `SAMURAI_ALERTS=telegram` (#322) supplies.
    *
    * Never a change to the skip mechanism itself: `startTickLoop`'s existing
@@ -422,11 +422,11 @@ export interface AlertChannelSlots {
    * Where a prompt-tier crossing is escalated (#1155) — the nineteenth
    * `ALERT_CHANNEL_FIELDS` member, channel type and transport landing in the
    * SAME change like `tickSkipAlerts`/`armDivergenceAlerts` before it.
-   * Defaults to `LoggingPromptTierAlertChannel`, with the same caveat as
+   * Defaults to `loggingAlertChannel('promptTierAlerts', …)`, with the same caveat as
    * `calendarFallbackAlerts`: log-only cannot page anyone, and a run whose
    * cost rate silently jumped 2.5x mid-run needs more than a log line an
-   * unattended soak (#238) never reads. `TradeChannelPromptTierAlert`
-   * (prompt-tier-alert-channel.ts) is what `SAMURAI_ALERTS=telegram` (#322)
+   * unattended soak (#238) never reads. `tradeChannelAlert('promptTierAlerts', …)`
+   * is what `SAMURAI_ALERTS=telegram` (#322)
    * supplies.
    *
    * The condition it reports is invisible from outside by construction: the
@@ -444,12 +444,12 @@ export interface AlertChannelSlots {
    * only through `LSE_TABLE_COVERAGE_END`; `assertLseCalendarCoverage`
    * (`lse-calendar-coverage-guard.ts`) posts this once that date is within
    * `LSE_COVERAGE_ALERT_HORIZON_DAYS`. Defaults to
-   * `LoggingLseCalendarCoverageAlertChannel`, with the same caveat as
+   * `loggingAlertChannel('lseCalendarCoverageAlerts', …)`, with the same caveat as
    * `calendarFallbackAlerts`: log-only cannot page anyone, and the live leg
    * running past this date is the exact overnight-carry risk ADR-0014
    * forbids (an unmodelled half-day reads as an ordinary 16:30 close — see
-   * `LSE_HALF_DAYS`'s doc). `TradeChannelLseCalendarCoverageAlert`
-   * (lse-calendar-coverage-alert-channel.ts) is what
+   * `LSE_HALF_DAYS`'s doc). `tradeChannelAlert('lseCalendarCoverageAlerts', …)`
+   * is what
    * `SAMURAI_ALERTS=telegram` (#322) supplies.
    *
    * Distinct from `calendarFallbackAlerts` (#684): that one is the PAPER
@@ -465,11 +465,11 @@ export interface AlertChannelSlots {
    * escalated (#1396) — `checkLlmFailureRate`'s edge-triggered alert
    * (`llm-failure-rate-guard.ts`) posts here once the 24h rate crosses
    * `LLM_FAILURE_RATE_THRESHOLD` on enough samples. Defaults to
-   * `LoggingLlmFailureRateAlertChannel`, with the same caveat as
+   * `loggingAlertChannel('llmFailureRateAlerts', …)`, with the same caveat as
    * `miCoverageAlerts`: log-only cannot page anyone, and an LLM outage
    * masquerading as ordinary latency-budget truncation is exactly the
-   * failure mode this alert exists to surface. `TradeChannelLlmFailureRateAlert`
-   * (llm-failure-rate-alert-channel.ts) is what `SAMURAI_ALERTS=telegram`
+   * failure mode this alert exists to surface. `tradeChannelAlert('llmFailureRateAlerts', …)`
+   * is what `SAMURAI_ALERTS=telegram`
    * (#322) supplies.
    */
   llmFailureRateAlerts?: LlmFailureRateAlertChannel;
@@ -478,12 +478,13 @@ export interface AlertChannelSlots {
    * the other half of #1220, which raised `FEE_CURRENCY_NOT_BOOK_CURRENCY` at
    * `error` with no channel behind it. `warnOnNonSterlingFee`
    * (pipeline/execution/ingest-fills.ts) posts here. Absent = log-only, and
-   * there is deliberately NO `Logging…Channel` standing in behind it, the
+   * there is deliberately NO log-only form standing in behind it
+   * (`UNLOGGED_ALERT_IDS`), the
    * same reason `traderDiagnosticAlerts`/`thresholdClampAlerts` have none:
    * `warnOnNonSterlingFee` already writes an `error`-level log line before
    * reaching this port, so a logging implementation would emit each trip
-   * twice. `TradeChannelNonSterlingFeeAlert`
-   * (non-sterling-fee-alert-channel.ts) is what an unattended soak (#238)
+   * twice. `tradeChannelAlert('nonSterlingFeeAlerts', …)`
+   * is what an unattended soak (#238)
    * needs, and `SAMURAI_ALERTS=telegram` supplies it — the twenty-fifth
    * `ALERT_CHANNEL_FIELDS` member.
    *
@@ -534,12 +535,10 @@ export interface ProductionConfig extends AlertChannelSlots {
    */
   alpacaDataClient?: AlpacaMarketDataClient;
   /**
-   * HITL approval round-trip (Verdict's HITL gate, 6). Same shape as
-   * `heartbeatChannel`: pass `SignedApprovalChannel`
-   * (verdict/notifications/verified-approval-channel.ts) so #207's HMAC
-   * verification is in the path — the composition root cannot construct it
-   * for you, because its `ApprovalRequestSender` leaf is another
-   * unimplemented transport.
+   * Approval round-trip behind Verdict's HITL gate (6). No adapter for it
+   * exists in the repo (ADR-0007, ADR-0013: no human gate anywhere), so the
+   * composition root falls back to `UnwiredApprovalChannel`, which throws if
+   * the gate is ever reached.
    */
   approvals?: ApprovalChannel;
   /**
@@ -987,7 +986,7 @@ export interface FeedbackCycleConfig {
    * Per-cycle override for `ProductionConfig.loosenNotices`. Optional since
    * #366: the channel is a transport, so it is resolved from `SAMURAI_ALERTS`
    * alongside the other outbound escalations and falls back to
-   * `LoggingLoosenNotificationChannel` — the same shape `breachAlerts` has.
+   * `loggingAlertChannel('loosenNotices', …)` — the same shape `breachAlerts` has.
    * Supply it here only to override that for this cycle's config specifically.
    */
   loosenNotices?: LoosenNotificationChannel;

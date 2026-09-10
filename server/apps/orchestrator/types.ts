@@ -119,9 +119,9 @@ export interface AuditLog {
     timestamp: Date;
     /**
      * Which instrument this trace belonged to (migration 0013). Optional
-     * because the HITL callback path records under an existing `trace_id`
-     * with no `Signal` in scope; absent means "not attributable", never
-     * "no instrument".
+     * because the retired HITL callback path recorded under an existing
+     * `trace_id` with no `Signal` in scope; absent means "not attributable",
+     * never "no instrument".
      */
     instrument?: string;
     asset_class?: AssetClass;

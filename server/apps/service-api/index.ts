@@ -218,9 +218,9 @@ const providers = new ProviderStatusPoller({ alpaca: buildAlpacaClient() });
  * per row (migration 0043), and the only path that writes rows is
  * `alert-transport.ts`'s telegram branch — the one place in the tree that
  * supplies a `TelegramBotApiClient` with an `alertDeliveryLog` at all — so
- * at most two ids appear in this table per configuration: `sendMessage` and
- * `sendApprovalButtons` are the only callers of `#recordDeliveryFailure`,
- * each posting to a chat that branch fixes from env (`TELEGRAM_CHAT_ID`, or
+ * at most two ids appear in this table per configuration: `sendMessage` is
+ * the only caller of `#recordDeliveryFailure`,
+ * posting to a chat that branch fixes from env (`TELEGRAM_CHAT_ID`, or
  * `TELEGRAM_HEARTBEAT_CHAT_ID` for the beat when it builds the heartbeat
  * itself), and `alert-transport.ts` refuses to start when those two are
  * equal (#342). A caller-injected `ProductionConfig.heartbeatChannel`
@@ -228,7 +228,7 @@ const providers = new ProviderStatusPoller({ alpaca: buildAlpacaClient() });
  * no heartbeat chat id is read (see the second bullet below) — and smoke,
  * which injects every `ALERT_CHANNEL_FIELDS` member, leaves
  * `resolveAlertsMode` returning `undefined`, so no `TelegramBotApiClient` is
- * constructed there and its `LoggingHeartbeatChannel` writes nothing. The
+ * constructed there and its log-only heartbeat writes nothing. The
  * table is also durable across runs, so rotating `TELEGRAM_CHAT_ID` leaves a
  * third, historical id behind rather than clearing it — so the two-id
  * scoping above understates the signal's false-fire surface, which
@@ -246,7 +246,7 @@ const providers = new ProviderStatusPoller({ alpaca: buildAlpacaClient() });
  *    `ProductionConfig.heartbeatChannel` (`production/config.ts`) opts out of
  *    `TELEGRAM_HEARTBEAT_CHAT_ID` entirely, so a beat routed to some third
  *    chat over a client sharing this store would look like a mismatch; no
- *    in-tree caller does that today (smoke injects `LoggingHeartbeatChannel`),
+ *    in-tree caller does that today (smoke injects the log-only heartbeat),
  *    which is why this is a hedge, not a measurement. A service-api env wrong
  *    on BOTH vars is not a false fire — the tile is genuinely misconfigured
  *    then, and firing is correct.

@@ -146,8 +146,8 @@ export interface AlpacaBrokerAdapterInput {
    * precedent — the comment above calls that default "the #295 bug" — so the
    * one seam whose absence IS the failure mode does not get one.
    *
-   * Log-only is a legitimate implementation (`LoggingUnpricedFillAlertChannel`,
-   * the production default until a `TelegramClient` is wired at the composition
+   * Log-only is a legitimate implementation (the catalogue's log line, the
+   * production default until a `TelegramClient` is wired at the composition
    * root, #275); silence is not.
    */
   unpricedFillAlerts: UnpricedFillAlertChannel;
@@ -1199,7 +1199,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
           // an UnpricedFillError itself (#524 review, deepseek) — it is a
           // MODELLED, EXPECTED condition (#298's whole reason for existing:
           // the age-out clock just above, and the eventual alert through
-          // `escalateAgedUnpricedFills` -> `unpriced-fill-channel.ts`), not a
+          // `escalateAgedUnpricedFills` -> the `unpricedFillAlerts` port), not a
           // failure, which is exactly what this catch's OWN first comment
           // already says ("skipped, not swallowed... retried on the next
           // one"). Counting it here contradicted that: `failures.length > 0`

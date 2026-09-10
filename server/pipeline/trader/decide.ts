@@ -49,6 +49,7 @@ import type { DebateResult } from '../debate-engine/types.js';
 // (portfolio-view.ts) throws it bare on either a stale mark or a failed/
 // omitted mark read, and the base type is what catches both.
 import { BookValuationError } from '../risk-manager/index.js';
+import { priceBracket, sideFor, sizeBracket, type TradeDirection } from './build-bracket.js';
 import { NO_PRECEDENT_MULTIPLIER, retrieveCosinePrecedent } from './cosine-precedent.js';
 import { readSignalDecay } from './early-exit.js';
 import {
@@ -57,13 +58,14 @@ import {
   intentSideFor,
 } from './idempotency-key.js';
 import { buildSetupVector } from './setup-vector.js';
-import { resolveSubclassBracket, riskFractionFor } from './subclass-bracket.js';
-import type { AssetClass, TraderConfig, TraderInput } from './types.js';
-
-/** trader-spec.md Module: Side Derivation. `neutral` has no directional edge to act on. */
-function sideFor(direction: 'bullish' | 'bearish'): 'buy' | 'sell' {
-  return direction === 'bullish' ? 'buy' : 'sell';
-}
+import { resolveSubclassBracket } from './subclass-bracket.js';
+import type {
+  AssetClass,
+  TraderDiagnosticKind,
+  TraderInput,
+  TraderReasonDetail,
+  TraderSkipReason,
+} from './types.js';
 
 /**
  * The lot to attribute a position-level decision to when several are open on
@@ -439,35 +441,19 @@ function decisionBarFor(debate: DebateResult): Date {
 }
 
 /**
- * Threshold-gated linear conviction scaling: 0 at the conviction floor,
- * rising to 1 at conviction 1.0 (trader-spec.md Module: Position Sizing).
- *
- * Anchoring the ramp at 0 rather than at some minimum keeps the floor
- * continuous — conviction a hair above the floor takes a hair of risk,
- * instead of jumping from no-trade to a materially sized position. Sizes
- * that round down to dust near the floor are caught by the min-viable-size
- * skip, which is exactly what the spec asks that skip to do.
- */
-function convictionMultiplier(conviction: number, floor: number): number {
-  const span = 1 - floor;
-  if (span <= 0) return 1;
-  return Math.min(1, (conviction - floor) / span);
-}
-
-function maxRiskFor(assetClass: AssetClass, config: TraderConfig): number {
-  return config.max_risk_per_trade * config.asset_class_risk_multiplier[assetClass];
-}
-
-/**
  * Builds a full entry or scale_in bracket, or a NAMED skip (#475). Skips when:
  * conviction is below the floor, ATR cannot be computed, a priced input is not
  * finite, or the resulting position is below the minimum viable notional.
  * Shared by both intent types (trader-spec.md Module: Position Awareness —
  * scale_in sizes exactly like an entry; Risk enforces the exposure cap
- * downstream).
+ * downstream). The reads live here; the arithmetic is `build-bracket.ts`.
+ *
+ * `direction` is the router's already-narrowed `debate.direction`: the type
+ * is what keeps a neutral debate out, so nothing here re-checks it.
  */
 async function buildBracket(
   input: TraderInput,
+  direction: TradeDirection,
   intentType: 'entry' | 'scale_in',
   diagnostics: TraderDiagnostic[],
 ): Promise<TraderOutcome> {
@@ -475,13 +461,6 @@ async function buildBracket(
   // #753: absent means the live arm — the arm that existed before the control
   // did — never "unknown".
   const arm = input.arm ?? 'live';
-
-  // Every caller must have already excluded 'neutral' — sideFor has no
-  // direction to derive a side from. Checked here, not just assumed, so the
-  // invariant is enforced rather than merely documented.
-  if (debate.direction === 'neutral') {
-    throw new Error('buildBracket: debate.direction must not be neutral');
-  }
 
   // THE SIZING READ (#847), resolved HERE — the first thing this function does
   // once it knows it is sizing, and the ONLY place in the module that touches
@@ -679,32 +658,9 @@ async function buildBracket(
   // error the ADR's sizing amendment exists to prevent.
   const bracket = resolveSubclassBracket(instrument, config.subclass_of, config.subclass_brackets);
 
-  const volFloor = config.vol_floor_fraction * entry;
-  const effectiveVol = Math.max(atr, volFloor);
-  // Under the frozen bracket the stop is a percentage of ENTRY and ATR does not
-  // enter it at all — that is the withdrawal of the ATR-floating geometry
-  // (trader-spec.md "Sizing math"), not a re-parameterisation of it.
-  const stopDistance = bracket === null ? config.atr_k * effectiveVol : bracket.stop_pct * entry;
-  if (stopDistance <= 0) return skip('stop_distance_not_positive');
-  const targetDistance =
-    bracket === null ? config.reward_risk_multiple * stopDistance : bracket.take_profit_pct * entry;
-
-  const convictionMult = convictionMultiplier(debate.confidence, config.conviction_floor);
-  // `riskFractionFor` is D5's deployment converted through D3's frozen stop and
-  // net of #897's headroom reserve, so that `size x entry` lands on
-  // `deployment_fraction x (1 - headroom_reserve_fraction) x equity` — the
-  // assertion that discriminates it from both of the ADR's recorded error
-  // modes. The first tranche therefore lands BELOW the Risk Manager's
-  // `per_subclass_deployment_cap` (unchanged at 35%/25%), which is what leaves
-  // a later `scale_in` — sized by this same line, then trimmed by that cap to
-  // the remaining headroom — admissible rather than rejected at zero. The
-  // asset-class multiplier is superseded on this path (trader-spec.md: the
-  // surviving dial is `risk_fraction` keyed on subclass) and cannot express
-  // ADR-0018's split, because both ETP subclasses are the same asset class.
-  const maxRiskFraction =
-    bracket === null ? maxRiskFor(mark.asset_class, config) : riskFractionFor(bracket);
-  const baseRiskFraction = maxRiskFraction * convictionMult;
-  const nonConvergedHaircut = debate.converged ? 1 : config.non_converged_haircut;
+  const priced = priceBracket({ direction, entry, atr, bracket, config });
+  if (priced.priced === null) return skip(priced.skip.reason, priced.skip.reason_detail);
+  const { side, stop, target, stop_distance: stopDistance } = priced.priced;
 
   // The setup this decision represents, embedded once and used twice: to find
   // precedent now, and — if this intent survives the skip guards below — as
@@ -712,63 +668,18 @@ async function buildBracket(
   const setupVector = buildSetupVector(debate, { entry, atr, stopDistance, bars });
   const precedent = retrieveCosinePrecedent(setupVector, setupStore, asOf);
 
-  // Multiplicative stacking — penalties compound honestly (trader-spec.md
-  // Module: Non-Convergence & Skip Policy).
-  const riskFraction = baseRiskFraction * nonConvergedHaircut * precedent.cosine_multiplier;
-  const size = (equity * riskFraction) / stopDistance;
-
-  // Backstop covering every numeric inlet at once, including `equity`, which
-  // comes from an account read this module does not validate. The per-input
-  // checks above say WHICH input was bad; this one guarantees that no future
-  // inlet can reach an emitted intent unchecked. Must precede the min-notional
-  // line: `NaN < min_viable_notional` is false, so that check passes NaN.
-  if (!Number.isFinite(size)) return skip('size_not_finite');
-
-  // #941: the venue's quantity grid, applied to the ENTRY only. `Math.floor`
-  // rather than rounding to nearest, and the direction of the rounding is the
-  // whole point — rounding up would submit more than D5's envelope sized and
-  // more than every cap the Risk Manager is about to approve against, turning
-  // a venue accommodation into an unrecorded amendment of ADR-0018 D5. Erring
-  // small is the ADR's own declared preference. `size` is always positive here
-  // (the direction lives in `side`, not the sign), so a plain floor is a floor
-  // toward zero exposure on both sides.
-  //
-  // Sited AFTER the finite check so `Math.floor(NaN)` cannot reach the
-  // guards below, and BEFORE `min_viable_notional` so the notional test reads
-  // the quantity that will actually be submitted rather than the unquantised
-  // one — a 0.8-share intent is dust the venue would refuse, and it must not
-  // pass a notional check on the strength of a fraction we cannot send.
-  //
-  // Exits are NOT quantised here or anywhere: `buildFlattenExit` sizes from
-  // `heldQuantitiesFor`, i.e. from what actually filled, and rounding that
-  // could stranded a remainder or zero a flatten outright. Under this flag
-  // every entry fills whole, so held quantities are whole and no exit needs
-  // it; if that ever stops being true the residual must still go out verbatim.
-  const submittableSize = config.whole_share_sizing ? Math.floor(size) : size;
-
-  // Its own reason rather than folding into `below_min_notional`, because the
-  // two say different things to a soak: `below_min_notional` means the
-  // strategy sized dust, this means the strategy sized a real position and the
-  // venue's quantity grid ate it. A run in which this fires steadily is a run
-  // whose deployment fraction cannot buy one share of the names it is trading
-  // — a sizing/universe mismatch, not a quiet market. It also cannot be left
-  // to the notional check below: 0.8 shares of a $300 name is $240 of intended
-  // notional, which passes a $10 dust floor comfortably and would then be
-  // submitted as a zero quantity.
-  //
-  // `size > 0` is what keeps the two distinguishable in the direction that
-  // matters. A gate that damped conviction to nothing produces size EXACTLY
-  // zero, and that is the strategy declining to deploy, not the venue's grid
-  // eating a real position — it belongs in `below_min_notional` where it has
-  // always been reported, and #870's ceiling test asserts precisely that.
-  if (submittableSize <= 0 && size > 0) return skip('rounds_to_zero_shares');
-
-  if (submittableSize * entry < config.min_viable_notional) {
-    return skip('below_min_notional', {
-      compared_value: submittableSize * entry,
-      threshold: config.min_viable_notional,
-    });
-  }
+  const sized = sizeBracket({
+    priced: priced.priced,
+    entry,
+    equity,
+    conviction: debate.confidence,
+    converged: debate.converged,
+    cosine_multiplier: precedent.cosine_multiplier,
+    bracket,
+    asset_class: mark.asset_class,
+    config,
+  });
+  if (sized.sized === null) return skip(sized.skip.reason, sized.skip.reason_detail);
 
   // Written only once every skip guard has passed, so a decision the Trader
   // itself declined leaves no row.
@@ -786,9 +697,6 @@ async function buildBracket(
   // re-decided bar — replay, or a crash-restart on the same bar — safe rather
   // than fatal.
   setupStore.writeSetup(debate.debate_id, setupVector, asOf);
-
-  const side = sideFor(debate.direction);
-  const direction = side === 'buy' ? 1 : -1;
 
   const decisionBar = decisionBarFor(debate);
 
@@ -810,10 +718,10 @@ async function buildBracket(
       asset_class: mark.asset_class,
       side,
       intent_type: intentType,
-      size: submittableSize,
+      size: sized.sized.size,
       entry,
-      stop: entry - direction * stopDistance,
-      target: entry + direction * targetDistance,
+      stop,
+      target,
       time_in_force: config.time_in_force[mark.asset_class],
       decision_timestamp: decisionBar,
       decided_at: asOf,
@@ -825,24 +733,7 @@ async function buildBracket(
         arm,
         conviction: debate.confidence,
         converged: debate.converged,
-        sizing: {
-          base_risk_fraction: baseRiskFraction,
-          conviction_multiplier: convictionMult,
-          // How much the floor widened the stop. A non-positive ATR (perfectly
-          // flat history) leaves the ratio undefined and the floor as sole
-          // determinant; recorded as 1.
-          vol_floor_factor: atr > 0 ? effectiveVol / atr : 1,
-          non_converged_haircut: nonConvergedHaircut,
-          cosine_multiplier: precedent.cosine_multiplier,
-          // Spread rather than field-by-field so a bracket field added to
-          // config cannot be silently dropped from the audit record.
-          ...(bracket === null ? {} : { frozen_bracket: { ...bracket } }),
-          // Spread-or-absent for the same `exactOptionalPropertyTypes` reason
-          // the bracket above is, and absent when the floor changed nothing so
-          // that its PRESENCE means "this intent under-deploys D5" rather than
-          // merely "the flag is on".
-          ...(submittableSize === size ? {} : { unquantised_size: size }),
-        },
+        sizing: sized.sized.sizing,
         cosine_precedent: {
           neighbor_count: precedent.neighbor_count,
           weighted_mean_r: precedent.weighted_mean_r,
@@ -1223,91 +1114,6 @@ async function buildFlattenExit(
 }
 
 /**
- * Every distinct way the Trader can decline to trade (#475).
- *
- * A CLOSED UNION rather than free text, so the set is greppable, countable
- * across a soak, and impossible to typo into a new category that looks like a
- * new phenomenon. Adding a skip path means adding a member here, which is the
- * point: the compiler asks the question the old bare `null` let us skip.
- *
- * Ordered roughly by how often they should fire in a healthy run. The last
- * four are data-quality failures — if any of them appears in soak logs at all,
- * the market data feed is the thing to look at, not the strategy.
- */
-export type TraderSkipReason =
-  | 'neutral_direction_while_flat'
-  | 'below_conviction_floor'
-  // #668: inside the flat-by-close window, so no new exposure is opened. A
-  // distinct reason rather than a silent skip because "nothing traded after
-  // 16:25" and "nothing traded because the market was quiet" are the same row
-  // otherwise, and only one of them is the system working as designed.
-  | 'session_closing'
-  | 'below_min_notional'
-  | 'holding_neutral_or_non_converged'
-  | 'scale_in_conviction_delta_not_met'
-  | 'exit_no_filled_size'
-  // #568: a lot whose recorded exit fills exceed what it ever opened. NOT a
-  // quiet variant of `exit_no_filled_size` — that one means "nothing to
-  // close", this one means "the store's own record of this instrument
-  // disagrees with itself", and the exit it suppresses may be one a sibling
-  // lot genuinely needs. If this ever appears in a soak log, the fill record
-  // is the thing to look at, and an instrument is stuck un-exitable until it
-  // is.
-  | 'exit_held_quantity_diverged'
-  // #1389: this arm has already SENT a flatten for this instrument and it is
-  // not resolved yet (`submitting`, or `submitted` with fills unswept), so no
-  // second flatten is produced. Its own reason and not a variant of
-  // `exit_no_filled_size`: that one says the lot has nothing left to close,
-  // this one says the close is already in flight and the held quantities are
-  // stale until the sweep lands. A soak in which this appears more than
-  // briefly is a soak whose fill poll is wedged, and the instrument is
-  // un-flattenable until it is — which is what the carried-lot alert exists to
-  // make audible.
-  | 'flatten_in_flight'
-  // #743, tick path only: no lot is open for this instrument, so the exit
-  // check has nothing to evaluate. By far the commonest tick-path outcome and
-  // entirely healthy — it is the exit-cadence sibling of a quiet decision.
-  | 'no_open_position'
-  // #748, tick path only: a lot is held, the flat-by-close window has not
-  // opened, and the momentum axis still supports the held side. The healthy
-  // holding outcome and by far the commonest one on an instrument that holds
-  // something — holding through the session is what a position is for.
-  //
-  // **This REPLACES #743's `flatten_not_due`**, which is deliberately gone
-  // rather than kept alongside. Once the early exit runs on every non-flatten
-  // tick, "the flatten is not due" is no longer a decision the Trader reaches:
-  // it is a branch it passes THROUGH on the way to the decay read. Keeping the
-  // old member would have left a value nothing can emit — the no-caller shape
-  // this codebase keeps shipping — and, worse, would have made a working hold
-  // and a decay read that never ran the same row.
-  | 'signal_still_supports_position'
-  // #748, tick path only: a lot is held, the flatten is not due, and the
-  // momentum read could not be taken at all — an instrument too cold for the
-  // MACD warm-up, typically in the first session after it enters the universe.
-  //
-  // Its OWN reason, not folded into `signal_still_supports_position`, and the
-  // distinction is the point: one says the signal was read and still supports
-  // the position, the other says nothing was read. A soak in which this appears
-  // steadily is a soak whose early exit is not running, and under one shared
-  // reason that is indistinguishable from a healthy hold.
-  | 'early_exit_signal_unavailable'
-  | 'no_position_side'
-  | 'atr_insufficient_bars'
-  | 'atr_not_finite'
-  | 'mark_not_finite'
-  | 'stop_distance_not_positive'
-  | 'size_not_finite'
-  // #941: the entry sized to less than one whole share on a venue that only
-  // accepts whole shares (`whole_share_sizing`). Not a data-quality failure
-  // and not dust — see the guard's own comment in `decide`.
-  | 'rounds_to_zero_shares'
-  // #1089, `arm === 'control'` ONLY: a whole-book valuation refusal
-  // (`BookValuationError`/`AggregateError`) from `equity()` that the live arm
-  // would instead let propagate into `#507`'s retry. See `buildBracket`'s
-  // read of `input.equity()` for the full reasoning.
-  | 'control_arm_valuation_refused';
-
-/**
  * WHY a `TraderSkipReason` fired, at the granularity an operator's next
  * action needs (#1109).
  *
@@ -1371,7 +1177,7 @@ export type TraderDecisionClass = 'declined_on_signal' | 'could_not_decide' | 'i
  *
  * `rounds_to_zero_shares` sits with `below_min_notional`, not with the
  * data-quality reasons below it in `TraderSkipReason`'s ordering — its own
- * comment in `buildBracket` says it "belongs in `below_min_notional` where it
+ * comment in `sizeBracket` says it "belongs in `below_min_notional` where it
  * has always been reported": both are the strategy correctly declining to
  * deploy a real, well-formed size, not a corrupt input.
  */
@@ -1467,94 +1273,6 @@ function classifyDecision(
     baseClass === 'declined_on_signal' && !DECLINED_ON_SIGNAL_NOT_DEBATE_DERIVED.has(skip_reason);
   return isDebateDerivedDecline && debateWasDegraded(debate) ? 'could_not_decide' : baseClass;
 }
-
-/**
- * The compared value and the threshold it missed, for a skip reason that IS
- * a numeric gate (#1109). Present only on the four sites that compare a
- * value to a configured threshold — `below_conviction_floor`,
- * `below_min_notional`, `scale_in_conviction_delta_not_met`,
- * `atr_insufficient_bars` — so a near-miss (0.549 against a 0.55 floor) is
- * distinguishable from a decisive one (0.1 against 0.55) without re-deriving
- * either number from a raw log line.
- *
- * Not attempted for `session_closing`: its comparison lives inside
- * `withinFlattenWindow`'s own remaining-time arithmetic, and widening that
- * verdict's shape to export a millisecond figure would touch the flat-by-close
- * ordering the function's own comment calls load-bearing, for a diagnostic
- * this ticket does not require. Not attempted for `rounds_to_zero_shares`
- * either: its comparison is against the literal `1` (`submittableSize <= 0`),
- * not a configured threshold — see the reason's own siting comment in
- * `buildBracket`.
- */
-export interface TraderReasonDetail {
-  compared_value: number;
-  threshold: number;
-}
-
-/**
- * A condition the Trader DETECTED but did not treat as fatal (#698).
- *
- * Distinct from `TraderSkipReason` on purpose, and the distinction is the whole
- * point of this type. A skip reason says why THIS tick produced no order, and
- * every value it can take is a decision the Trader made correctly. A diagnostic
- * says the Trader is running in a DEGRADED state that it papered over — it kept
- * going, it returned a defensible answer, and something is nonetheless wrong
- * upstream of it.
- *
- * That difference is why these do not simply become new skip reasons. Two of the
- * three below occur on paths that still produce an intent (a flatten exit is an
- * emit, not a skip), so there is no skip row to hang them on; and the third
- * (`atr_not_finite`) already HAS a skip reason and is listed here anyway,
- * because a durable `trader_log` row is not an alert and nobody is reading the
- * table at 3am during an unattended soak (#238).
- *
- * Returned as data rather than logged from inside `decide`, deliberately.
- * trader-spec.md's contract is "fully deterministic given its inputs + the
- * clock-scoped market data", and admitting a logger to `TraderInput` would make
- * the decision path side-effecting to buy a diagnostic. #698 itself weighs both
- * options and calls this one "probably right"; the adapter that already writes
- * `trader_log` is the natural place for the effect.
- */
-export type TraderDiagnosticKind =
-  /**
-   * `sessionEnd` returned null for a class that is not crypto. Null means "this
-   * venue never closes", which is the documented and intended answer for crypto
-   * and a broken calendar for anything else — and the two are the same `false`
-   * today, so an equity leg whose calendar has quietly stopped resolving
-   * sessions never flattens and carries overnight against ADR-0014.
-   */
-  | 'session_end_absent_on_non_crypto'
-  /**
-   * ATR came back non-finite on a FULL window — corrupt bar data, which
-   * `atrFor` calls "never expected". Its sibling `atr_insufficient_bars` is
-   * deliberately NOT here: that one is a warm-up or a data gap, is expected
-   * early in a soak, and alerting it would fire on day 1 for every instrument.
-   */
-  | 'atr_not_finite'
-  /**
-   * #1089, `arm === 'control'` ONLY: paired with the `control_arm_valuation_
-   * refused` skip reason, for exactly the reason `atr_not_finite` is listed
-   * here despite already having one — a durable `trader_log` row is not an
-   * alert. Raised from `buildBracket`'s equity read, before the mark read
-   * that would otherwise supply `asset_class` — see `TraderDiagnostic.
-   * asset_class` for why this is the one kind that can carry `undefined`.
-   */
-  | 'control_arm_valuation_refused'
-  /**
-   * #1389: a lot is STILL OPEN after `flatten_after_close_ms` has expired — the
-   * flatten window has now closed for that session and this lot did not make
-   * it out. Flat-by-close has been missed, the position is carried overnight
-   * against ADR-0014, and the next session's window is the earliest anything
-   * will target it again.
-   *
-   * The one kind in this union raised from OUTSIDE `decide` — the tick loop
-   * stops at the bell, so nothing on the decision path is still running when
-   * the grace expires; the fill-sync poll is (`carried-lot-alert.ts`). It is a
-   * diagnostic rather than a skip reason for the reason the whole type exists:
-   * there is no tick, no decision and no `trader_log` row to hang it on, and
-   * the failure it reports is precisely the one that used to be silent.
-   */
-  | 'lot_carried_past_session_close';
 
 /** One detected degradation, with enough context for an operator to act. */
 export interface TraderDiagnostic {
@@ -1731,7 +1449,7 @@ async function routeDecision(
 
   if (positions.length === 0) {
     if (debate.direction === 'neutral') return skip('neutral_direction_while_flat');
-    return buildBracket(input, 'entry', diagnostics);
+    return buildBracket(input, debate.direction, 'entry', diagnostics);
   }
 
   // All lots for one instrument are the same side by construction (v1
@@ -1793,7 +1511,7 @@ async function routeDecision(
     });
   }
 
-  return buildBracket(input, 'scale_in', diagnostics);
+  return buildBracket(input, debate.direction, 'scale_in', diagnostics);
 }
 
 /**

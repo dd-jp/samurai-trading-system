@@ -14,7 +14,6 @@ import { SqliteDebateLogStore } from '../../pipeline/debate-engine/index.js';
 import { SqliteExecutionStore } from '../../pipeline/execution/index.js';
 import type { EvaluatedCondition, RiskCriticVerdict } from '../../pipeline/risk-manager/index.js';
 import { SqliteRiskCriticStore } from '../../pipeline/risk-manager/index.js';
-import type { CallbackAuditLog } from '../../pipeline/verdict/index.js';
 import { TelegramBotApiClient } from '../../pipeline/verdict/index.js';
 import type { ClosedTrade, DebateLog, Fill, OpenPosition } from '../../shared/index.js';
 import { toBrokerFillId } from '../../shared/index.js';
@@ -939,7 +938,6 @@ describe('SqliteQueryStore.getAlertDeliveryFailureCount (#1108)', () => {
   it('reads every permanently-failed send through the durable log even when the channel is totally dead, escalation attempts included', async () => {
     const db = makeDb();
     const alertDeliveryLog = new SqliteAlertDeliveryLog(db);
-    const auditLog: CallbackAuditLog = { record: () => {} };
     const fetchMock = vi.fn(async () => {
       throw new TypeError('fetch failed', { cause: new Error('connect ECONNREFUSED 127.0.0.1:9') });
     });
@@ -947,8 +945,6 @@ describe('SqliteQueryStore.getAlertDeliveryFailureCount (#1108)', () => {
 
     const client = new TelegramBotApiClient({
       botToken: '1234567:test-fake-bot-token',
-      allowedUserIds: '4242',
-      auditLog,
       alertChatId: ALERT_CHAT_ID,
       alertDeliveryLog,
       retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },

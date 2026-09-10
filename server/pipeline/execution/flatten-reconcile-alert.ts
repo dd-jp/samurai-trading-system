@@ -2,7 +2,8 @@
  * The operator-escalation port for a `flatten_submissions` row `reconcile()`
  * could not settle (#519) — the same shape `ResidualExposureAlertChannel`
  * takes (residual-exposure-alert.ts): declared beside its caller, implemented
- * by `LoggingFlattenReconcileAlertChannel` and wired at the composition root.
+ * by the alert catalogue (orchestrator/alert-catalogue.ts) and wired at the
+ * composition root.
  *
  * ## Why this exists
  *

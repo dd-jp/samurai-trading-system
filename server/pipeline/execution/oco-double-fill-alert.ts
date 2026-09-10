@@ -23,8 +23,8 @@
  *
  * Same shape as `ResidualExposureAlertChannel` / `FlattenOverfillAlertChannel`:
  * declared beside its caller (adapters/alpaca-crypto-emulation.ts),
- * implemented by `LoggingOcoDoubleFillAlertChannel`
- * (orchestrator/console-channels.ts), Telegram transport wired through
+ * implemented by the alert catalogue (orchestrator/alert-catalogue.ts),
+ * Telegram transport wired through
  * `SAMURAI_ALERTS` (orchestrator/alert-transport.ts) as the ninth
  * `ALERT_CHANNEL_FIELDS` member.
  *

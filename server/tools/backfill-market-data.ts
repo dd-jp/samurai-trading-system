@@ -123,11 +123,11 @@
  * overlapping window can never double-write a bar.
  */
 
-import { LoggingDataFailoverAlertChannel } from '../apps/orchestrator/console-channels.js';
 import {
   buildAlertChannels,
   DEFAULT_UNIVERSE,
   JsonLogger,
+  loggingAlertChannel,
   resolveAlertsMode,
   type UniverseInstrument,
 } from '../apps/orchestrator/index.js';
@@ -434,7 +434,7 @@ export async function runFromEnvironment(): Promise<void> {
   // `production.ts` defaults to for the live path (`production.ts:640`),
   // rather than inventing a second one, so both paths degrade identically.
   const dataFailoverAlertChannel: DataFailoverAlertChannel =
-    channels.dataFailoverAlerts ?? new LoggingDataFailoverAlertChannel(logger);
+    channels.dataFailoverAlerts ?? loggingAlertChannel('dataFailoverAlerts', logger);
   const alertFailover = buildBackfillFailoverAlerter({
     alertChannel: dataFailoverAlertChannel,
     logger,

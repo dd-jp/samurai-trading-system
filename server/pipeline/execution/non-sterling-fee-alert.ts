@@ -16,7 +16,7 @@
  * `FlattenOverfillAlertChannel`'s post — this channel is what turns that
  * durable row into something a phone rings on.
  *
- * ## Optional, with deliberately NO `Logging…Channel` standing in
+ * ## Optional, with deliberately NO log-only form standing in
  *
  * Unlike `ResidualExposureAlertChannel`/`FlattenOverfillAlertChannel`/
  * `FlattenReconcileAlertChannel`, this field is OPTIONAL on `ExecutionInput`

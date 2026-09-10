@@ -181,7 +181,6 @@ describe('missingCredentialEnvVars', () => {
     'NOUS_SENTIMENT_API_KEY',
     'TELEGRAM_BOT_TOKEN',
     'TELEGRAM_CHAT_ID',
-    'TELEGRAM_ALLOWED_USER_IDS',
     'TELEGRAM_HEARTBEAT_CHAT_ID',
   ] as const;
   const saved: Record<string, string | undefined> = {};
@@ -340,12 +339,6 @@ describe('missingCredentialEnvVars', () => {
       'TELEGRAM_CHAT_ID',
       'TELEGRAM_HEARTBEAT_CHAT_ID',
     ]);
-    // Not `TELEGRAM_ALLOWED_USER_IDS` as of #434 — a boot cannot be blocked on
-    // a credential whose only consumer (the inbound approval callback) is
-    // unreachable while ADR-0007 keeps the HITL gate off.
-    expect(missingCredentialEnvVars({}, 'telegram', 'paper', 'alpaca')).not.toContain(
-      'TELEGRAM_ALLOWED_USER_IDS',
-    );
     expect(missingCredentialEnvVars({}, 'log-only', 'paper', 'alpaca')).not.toContain(
       'TELEGRAM_BOT_TOKEN',
     );

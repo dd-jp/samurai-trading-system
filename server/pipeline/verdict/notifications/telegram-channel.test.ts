@@ -64,8 +64,6 @@ function makeDecision(overrides: Partial<VerdictDecision> = {}): VerdictDecision
 function makeClient(overrides: Partial<TelegramClient> = {}): TelegramClient {
   return {
     sendMessage: vi.fn().mockResolvedValue(undefined),
-    sendApprovalButtons: vi.fn().mockResolvedValue(undefined),
-    onApprovalCallback: vi.fn(),
     ...overrides,
   };
 }

@@ -45,7 +45,7 @@
 import type { MarketContext } from '../../../providers/market-intelligence/index.js';
 import { resolveMiSubject } from '../../../providers/universe-pool/index.js';
 import type { AssetClass, InstrumentSubclass, Logger } from '../../../shared/index.js';
-import { describeThrownSafely } from '../../../shared/index.js';
+import { describeThrownSafely, escalatesAt } from '../../../shared/index.js';
 
 /** The bucket a per-subclass counter uses when the universe declares no subclass for a name. */
 export const UNCLASSIFIED_SUBCLASS = 'unclassified' as const;
@@ -149,9 +149,13 @@ export const ALERT_AFTER_CONSECUTIVE_NO_DATA = 1;
  */
 export const ALERT_REPEAT_EVERY_NO_DATA = 8;
 
+const NO_DATA_CADENCE = {
+  after: ALERT_AFTER_CONSECUTIVE_NO_DATA,
+  every: ALERT_REPEAT_EVERY_NO_DATA,
+};
+
 function shouldAlertAt(consecutive: number): boolean {
-  if (consecutive < ALERT_AFTER_CONSECUTIVE_NO_DATA) return false;
-  return (consecutive - ALERT_AFTER_CONSECUTIVE_NO_DATA) % ALERT_REPEAT_EVERY_NO_DATA === 0;
+  return escalatesAt(consecutive, NO_DATA_CADENCE);
 }
 
 /**

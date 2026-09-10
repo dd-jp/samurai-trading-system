@@ -13,17 +13,56 @@ import type {
   OpenPosition,
   OrderState,
 } from '../../../shared/index.js';
+import type { ModelledCostBreakdown } from '../../../shared/store/index.js';
 
 /**
- * Execution's writer seam over the shared store, of which it is the sole
- * writer (cross-spec §4).
+ * The open book: every lot still in flight and how much of each is already
+ * closed. Read by every surface that sizes against held quantity — the
+ * submit path, the fill poll, reconcile, the wedged-lot sweep — and by the
+ * composition root, the dashboard snapshot and the control arm outside
+ * Execution.
+ */
+export interface PositionReader {
+  /**
+   * Lots whose lifecycle is still running — what `ingestFills()` advances.
+   * Terminal records (`closed`/`cancelled`/`rejected`/`expired`) are excluded:
+   * a fill against a closed lot is not ours to act on, and this is what makes
+   * a re-poll after close a no-op.
+   */
+  getOpenPositions(): Promise<OpenPosition[]>;
+  /**
+   * The mirror of `getEntryFillSizes` over the CLOSING legs (`leg != 'entry'`
+   * — `ingest-fills.ts`'s `isExitFill` discriminator, in SQL): each named
+   * lot's already-closed quantity, summed. Same batch shape and same
+   * "a lot with no such fill is absent from the Map, not present at 0".
+   *
+   * #568: this is what makes held quantity — `filled_size` minus this —
+   * derivable wherever an exit is sized, instead of `filled_size` (an
+   * entry-only total that no exit fill ever reduces) standing in for it. See
+   * `shared/held-quantity.ts`.
+   *
+   * Two neighbours in `ingest-fills.ts` deliberately do NOT read through this:
+   * `redistributeFlattenFills`, whose split reads the held quantities the
+   * flatten JOURNALLED at write-ahead (#571) rather than re-deriving them
+   * here — a live re-derivation would shrink as this very flatten's own fills
+   * persisted, and an unstable split is what `broker_fill_id` dedup cannot
+   * survive; and `maybeRearmResidual`, which arrives at the same residual
+   * from the fill rows it is already holding for the lot it is advancing, so
+   * a batch read keyed by lot would buy it nothing.
+   */
+  getExitFillSizes(idempotency_keys: readonly string[]): Promise<Map<string, number>>;
+}
+
+/**
+ * The bracket path's write-ahead-then-resolve journal over `open_positions`
+ * (execute.ts), plus reconcile's settle of a stranded `pending` row.
  *
  * `findByKey` is intentionally identical to the read-only `PositionStore`
  * that Verdict (#79) declared for its dedup gate, so one concrete store
  * satisfies both seams. Verdict's file is left alone: it consumes this store
  * read-only and has no reason to depend on the writer surface.
  */
-export interface SharedStore {
+export interface LotJournal {
   /**
    * True if an order or fill already exists under this idempotency key —
    * OR a flatten submission does (#508 review, PR #516). An exit writes no
@@ -42,13 +81,13 @@ export interface SharedStore {
     idempotency_key: string,
     update: { order_state: OrderState; broker_order_ids: string[] },
   ): Promise<void>;
-  /**
-   * Lots whose lifecycle is still running — what `ingestFills()` advances.
-   * Terminal records (`closed`/`cancelled`/`rejected`/`expired`) are excluded:
-   * a fill against a closed lot is not ours to act on, and this is what makes
-   * a re-poll after close a no-op.
-   */
-  getOpenPositions(): Promise<OpenPosition[]>;
+}
+
+/**
+ * Reads over `fills`: the dedup check and the per-lot fill history the fill
+ * poll and both residual-protection surfaces reconstruct held quantity from.
+ */
+export interface FillReader {
   /**
    * True if this `(idempotency_key, broker_fill_id)` pair was already
    * ingested — the full `fills` primary key, not `broker_fill_id` alone
@@ -92,27 +131,14 @@ export interface SharedStore {
    * despite being a stable one.
    */
   getEntryFillSizes(idempotency_keys: readonly string[]): Promise<Map<string, number>>;
-  /**
-   * The mirror of `getEntryFillSizes` over the CLOSING legs (`leg != 'entry'`
-   * — `ingest-fills.ts`'s `isExitFill` discriminator, in SQL): each named
-   * lot's already-closed quantity, summed. Same batch shape and same
-   * "a lot with no such fill is absent from the Map, not present at 0".
-   *
-   * #568: this is what makes held quantity — `filled_size` minus this —
-   * derivable wherever an exit is sized, instead of `filled_size` (an
-   * entry-only total that no exit fill ever reduces) standing in for it. See
-   * `shared/held-quantity.ts`.
-   *
-   * Two neighbours in `ingest-fills.ts` deliberately do NOT read through this:
-   * `redistributeFlattenFills`, whose split reads the held quantities the
-   * flatten JOURNALLED at write-ahead (#571) rather than re-deriving them
-   * here — a live re-derivation would shrink as this very flatten's own fills
-   * persisted, and an unstable split is what `broker_fill_id` dedup cannot
-   * survive; and `maybeRearmResidual`, which arrives at the same residual
-   * from the fill rows it is already holding for the lot it is advancing, so
-   * a batch read keyed by lot would buy it nothing.
-   */
-  getExitFillSizes(idempotency_keys: readonly string[]): Promise<Map<string, number>>;
+}
+
+/**
+ * What `ingestFills()` persists through and nothing else does: the atomic
+ * lot advance, and the flatten-row reads and marks that route a flatten's
+ * fill back to the lot(s) it closed.
+ */
+export interface FillJournal {
   /**
    * Persist one poll's advance of a lot — new fills, the recomputed lot
    * state, and on round-trip-to-flat the `ClosedTrade` — atomically. A crash
@@ -127,6 +153,36 @@ export interface SharedStore {
    * a second close for the same lot fails the whole advance.
    */
   applyLotAdvance(advance: LotAdvance): Promise<void>;
+  /**
+   * What a flatten submission journalled about the lot(s) it was closing
+   * (#517, widened by #571) — or `null` if `key` names no flatten submission,
+   * or names one written before migration 0020 added the lot identity.
+   * `ingestFills()` is this method's only reader: a flatten's fill carries
+   * the flatten's OWN idempotency key, never a held lot's, so this is how a
+   * fill bucketed under that key gets routed back to the lot(s) it actually
+   * closed instead of being silently dropped.
+   */
+  getFlattenAttribution(idempotency_key: string): Promise<FlattenAttribution | null>;
+  /**
+   * Marks a flatten's fill(s) as durably applied to every lot it named THIS
+   * poll — `ingest-fills.ts`'s call site, right after every one of a
+   * flatten's named lots has either advanced cleanly or had nothing new to
+   * advance. This is what bounds `FlattenJournal.getUnresolvedFlattens()`; see
+   * migration 0023 for why the bound cannot be `order_state` alone, and why
+   * this may NOT be called merely because a raw fill was observed — only
+   * once it is durably applied, or a lot-advance failure this poll would
+   * become permanently unrecoverable instead of retried on the next
+   * `reconcile()` pass.
+   */
+  markFlattenFillsSwept(idempotency_key: string, swept_at: Date): Promise<void>;
+}
+
+/**
+ * The flatten path's write-ahead-then-resolve journal over
+ * `flatten_submissions` (#508 review, PR #516) — written by `executeExit`,
+ * settled by `reconcile()`.
+ */
+export interface FlattenJournal {
   /**
    * Write-ahead for a flatten (#508 review, PR #516) — persisted at
    * `'submitting'` BEFORE `broker.submitFlatten` is called, the same
@@ -166,16 +222,6 @@ export interface SharedStore {
    */
   isRetryableFlattenError(idempotency_key: string): Promise<boolean>;
   /**
-   * What a flatten submission journalled about the lot(s) it was closing
-   * (#517, widened by #571) — or `null` if `key` names no flatten submission,
-   * or names one written before migration 0020 added the lot identity.
-   * `ingestFills()` is this method's only reader: a flatten's fill carries
-   * the flatten's OWN idempotency key, never a held lot's, so this is how a
-   * fill bucketed under that key gets routed back to the lot(s) it actually
-   * closed instead of being silently dropped.
-   */
-  getFlattenAttribution(idempotency_key: string): Promise<FlattenAttribution | null>;
-  /**
    * `reconcile()`'s worklist (#519, #526) — every flatten row a crash could
    * have stranded, bounded so the sweep does not re-poll the venue for a
    * flatten that finished closing its lot(s) days ago (0022's own doc for
@@ -211,18 +257,13 @@ export interface SharedStore {
     idempotency_key: string,
     update: { order_state: OrderState; broker_order_ids: string[] },
   ): Promise<void>;
-  /**
-   * Marks a flatten's fill(s) as durably applied to every lot it named THIS
-   * poll — `ingest-fills.ts`'s call site, right after every one of a
-   * flatten's named lots has either advanced cleanly or had nothing new to
-   * advance. This is what bounds `getUnresolvedFlattens()` above; see
-   * migration 0023 for why the bound cannot be `order_state` alone, and why
-   * this may NOT be called merely because a raw fill was observed — only
-   * once it is durably applied, or a lot-advance failure this poll would
-   * become permanently unrecoverable instead of retried on the next
-   * `reconcile()` pass.
-   */
-  markFlattenFillsSwept(idempotency_key: string, swept_at: Date): Promise<void>;
+}
+
+/**
+ * The #549 durable marker on a lot whose partial-flatten residual is not yet
+ * confirmed protected, and the sweep worklist it feeds.
+ */
+export interface ResidualMarkers {
   /**
    * #549: durably marks a lot's partial-flatten residual as observed but not
    * yet confirmed protected — written by `maybeRearmResidual`
@@ -274,6 +315,14 @@ export interface SharedStore {
    * target, requested_size) plus the marker's own two timestamps.
    */
   getUnprotectedResidualLots(): Promise<UnprotectedResidualLot[]>;
+}
+
+/**
+ * Bookkeeping closes of lots that were never real positions — no venue
+ * action, ever (#1215's rule). Reconcile's terminal-row sweep and the
+ * wedged-zero-fill sweep's only write.
+ */
+export interface LotRetirement {
   /**
    * #1088: deletes the `open_positions` rows that were never real positions
    * and never will be — `rejected`/`cancelled`/`expired` lots with
@@ -331,6 +380,20 @@ export interface SharedStore {
    */
   abandonWedgedZeroFillLot(idempotency_key: string, reason: string): Promise<boolean>;
 }
+
+/**
+ * Execution's writer seam over the shared store, of which it is the sole
+ * writer (cross-spec §4) — every role above, which is what one concrete
+ * store implements and the composition root shares. Each surface's input
+ * type (types/execution.ts) names only the roles it reads.
+ */
+export type SharedStore = PositionReader &
+  LotJournal &
+  FillReader &
+  FillJournal &
+  FlattenJournal &
+  ResidualMarkers &
+  LotRetirement;
 
 /**
  * One lot the #549 residual-protection sweep still has work to do on — see
@@ -404,12 +467,7 @@ export interface FlattenAttribution {
    * reports no breakdown of its own. `null` for a flatten row written before
    * migration 0037, or whose submit-time capture failed.
    */
-  modelled_cost_breakdown: {
-    spread_cost: number;
-    commission: number;
-    slippage: number;
-    market_impact: number;
-  } | null;
+  modelled_cost_breakdown: ModelledCostBreakdown | null;
   /**
    * #1014 review, finding 3: the quantity the flatten was SUBMITTED for —
    * `flatten_submissions.size`, the denominator `modelled_cost_breakdown` was
@@ -494,10 +552,5 @@ export interface FlattenSubmissionWriteAhead {
   quote_ask: number | null;
   quote_mid: number | null;
   quote_observed_at: Date | null;
-  modelled_cost_breakdown: {
-    spread_cost: number;
-    commission: number;
-    slippage: number;
-    market_impact: number;
-  } | null;
+  modelled_cost_breakdown: ModelledCostBreakdown | null;
 }
