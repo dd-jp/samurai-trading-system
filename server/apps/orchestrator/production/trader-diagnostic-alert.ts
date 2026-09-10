@@ -49,8 +49,8 @@ export interface TraderDiagnosticAlert {
    * (`carried-lot-alert.ts`), whose reporter is built once per arm against
    * that arm's own store: without this, a live and a control lot carried on
    * the same instrument post two alerts an operator cannot tell apart.
-   * `undefined` for every other kind, all raised from `decide.ts`'s shared
-   * tick loop with no arm carried through to this alert yet.
+   * `undefined` for every other kind, posted by `buildTraderStep`
+   * (direct-bind.ts), which does not populate this field.
    */
   arm?: TradingArm;
   /**

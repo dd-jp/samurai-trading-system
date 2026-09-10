@@ -269,6 +269,7 @@ export function buildCarriedLotReporter(deps: CarriedLotReporterDeps): () => Pro
         message: 'flat-by-close missed: lot carried past the session close',
         payload: {
           instrument: lot.instrument,
+          arm: deps.arm,
           held: lot.held,
           session_close: lot.missedClose.toISOString(),
         },

@@ -211,7 +211,7 @@ describe('buildCarriedLotReporter', () => {
     expect(lines).toHaveLength(1);
     expect(lines[0]?.level).toBe('error');
     expect(lines[0]?.trace_id).toBe('trace-carried');
-    expect(lines[0]?.payload).toMatchObject({ instrument: '3USL', held: 12 });
+    expect(lines[0]?.payload).toMatchObject({ instrument: '3USL', arm: 'live', held: 12 });
 
     expect(posted).toHaveLength(1);
     expect(posted[0]?.instrument).toBe('3USL');
