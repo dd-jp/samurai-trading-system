@@ -4,6 +4,7 @@
  * interfaces that read and write these.
  */
 import type { AnalystContribution, Direction } from '../../pipeline/debate-engine/index.js';
+import type { LotHeldQuantity } from '../held-quantity.js';
 import type { AssetClass, TradingArm } from './primitives.js';
 
 /**
@@ -167,6 +168,26 @@ export interface OrderIntentMetadata {
    * place and omitted in another.
    */
   mandatory_flatten?: true;
+  /**
+   * #1497: the Trader's own per-lot breakdown of `heldSize` at decide-time —
+   * `buildFlattenExit`'s already-computed `held` (`heldQuantitiesFor`, #568),
+   * carried forward instead of collapsed into `size`'s total. `executeExit`
+   * re-derives its own per-lot view independently and, when this is present,
+   * compares it lot by lot against this snapshot — catching a compensating
+   * swap (one lot's held quantity up, a sibling's down by the same amount,
+   * between the Trader's read and Execution's read) that leaves the TOTAL
+   * unchanged and so is invisible to the `order.size !== heldSize` guard
+   * alone.
+   *
+   * Optional in the TYPE and set unconditionally by `buildFlattenExit`, the
+   * only production Trader site that builds an exit intent — matching
+   * `unpriced_exit`/`mandatory_flatten` above: a reader checks presence, not
+   * a sentinel value. Left absent by any other producer (`smoke-run.ts`'s
+   * `exitPathOrder`, `replay-driver.ts`) — `executeExit` skips the per-lot
+   * comparison when absent rather than refusing, so those paths are
+   * unaffected; the total-only guard still covers them.
+   */
+  lot_held_quantities?: readonly LotHeldQuantity[];
   conviction: number;
   converged: boolean;
   sizing: {

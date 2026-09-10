@@ -1361,6 +1361,89 @@ describe('ExecutionImpl.execute', () => {
         expect(broker.flattenCalls).toHaveLength(0);
         expect(await store.countAllFlattenSubmissions()).toBe(0);
       });
+
+      describe('per-lot cross-check against the recorded held quantities (#1497)', () => {
+        /**
+         * Two lots, 20 held each, so the TOTAL (40) matches `makeExitGo`'s
+         * default `size: 40` either way — the compensating swap below only
+         * shows up per lot, never in the sum.
+         */
+        async function seedTwoHeldLots(
+          store: ReturnType<typeof openTestExecutionStore>['store'],
+        ): Promise<void> {
+          await seedHeldLot(store, { requested_size: 20, filled_size: 20 });
+          await seedHeldLot(store, {
+            idempotency_key: 'key-aapl-entry-2',
+            requested_size: 20,
+            filled_size: 20,
+            broker_order_ids: ['seed:entry-2', 'seed:stop-2', 'seed:target-2'],
+          });
+        }
+
+        it('refuses a compensating swap between two lots even though the total is unchanged', async () => {
+          const { store } = openTestExecutionStore();
+          const broker = makeBroker();
+          await seedTwoHeldLots(store); // store: 20 + 20 = 40
+
+          // What the Trader recorded at decide-time: one lot up, the other
+          // down by the same amount. 25 + 15 === 20 + 20 === order.size (40),
+          // so the total-only guard above stays silent on this — it is only
+          // visible per lot.
+          const result = await new ExecutionImpl(makeInput({ store, broker })).execute(
+            makeExitGo({
+              metadata: {
+                ...makeIntent().metadata,
+                exit_reason: 'flatten',
+                lot_held_quantities: [
+                  { idempotency_key: 'key-aapl-entry-1', held: 25 },
+                  { idempotency_key: 'key-aapl-entry-2', held: 15 },
+                ],
+              },
+            }),
+          );
+
+          expect(result.status).toBe('error');
+          expect(result.reason).toContain('key-aapl-entry-1');
+          expect(result.reason).toContain('diverged');
+          expect(broker.cancelCalls).toHaveLength(0);
+          expect(broker.flattenCalls).toHaveLength(0);
+          expect(await store.countAllFlattenSubmissions()).toBe(0);
+        });
+
+        it('submits when the recorded per-lot held quantities match the store exactly', async () => {
+          const { store } = openTestExecutionStore();
+          const broker = makeBroker();
+          await seedTwoHeldLots(store); // store: 20 + 20 = 40
+
+          const result = await new ExecutionImpl(makeInput({ store, broker })).execute(
+            makeExitGo({
+              metadata: {
+                ...makeIntent().metadata,
+                exit_reason: 'flatten',
+                lot_held_quantities: [
+                  { idempotency_key: 'key-aapl-entry-1', held: 20 },
+                  { idempotency_key: 'key-aapl-entry-2', held: 20 },
+                ],
+              },
+            }),
+          );
+
+          expect(result.status).toBe('submitted');
+          expect(broker.flattenCalls).toHaveLength(1);
+        });
+
+        it('does not refuse when the intent carries no per-lot snapshot at all', async () => {
+          const { store } = openTestExecutionStore();
+          const broker = makeBroker();
+          await seedHeldLot(store); // filled_size 40, no lot_held_quantities on the intent
+
+          const result = await new ExecutionImpl(makeInput({ store, broker })).execute(
+            makeExitGo(),
+          );
+
+          expect(result.status).toBe('submitted');
+        });
+      });
     });
 
     // AC: "Exit submissions are covered against the simulated adapter,
