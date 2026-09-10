@@ -2,7 +2,7 @@
 
 **Status:** Draft (resolved wayfinder decisions synthesized)  
 **Owner:** David (Deepak)  
-**Date:** 2026-07-13, last amended 2026-08-16
+**Date:** 2026-07-13, last amended 2026-09-10
 
 **2026-08-16 — the four items this spec listed as "pending re-specification" are now decided, and the banner announcing them is deleted rather than extended.** A banner that says the body below is wrong leaves the body wrong; each item is resolved here in the body, at the section it affects.
 
@@ -78,7 +78,7 @@ Key architectural decisions:
 7. ~~As the Trader, I want position size derived from an ATR-based stop with a volatility floor, so that higher volatility automatically yields a smaller position for the same fractional risk and ultra-low vol can't inflate size absurdly.~~ **Superseded 2026-08-16 — `stop_distance` is the frozen percentage stop, so this story described a second, conflicting sizing rule.** See "Sizing math", which withdraws the ATR-floating geometry: ADR-0018 sets the bracket per *subclass, pooled*, and re-deriving the stop per instrument from that instrument's ATR is the per-instrument threshold fitting ADR-0018 refuses (see the Threshold derivation row above). **What is lost with it is real and is not silently dropped:** under a frozen stop **once armed**, size no longer falls automatically as volatility rises, and that response exists nowhere in the system **on the armed path** *(2026-09-09 — not true on the unarmed path: `decide.ts`'s `atr_k` fallback still shrinks size as ATR rises, see "Sizing math")* — which is exactly the gap `risk-manager-spec.md` records when it says the volatility halt is the only volatility-responsive mechanism left, and names volatility-targeted sizing as target state. The two specs agree on the armed state; this story was the last line asserting otherwise there.
 8. As the Trader, I want to never use full Kelly and to scale risk down for fat-tailed **subclasses** (3× single-stock ETPs more conservative than 3× index ETPs), so that drawdowns stay within tolerance (CONTEXT.md; research: quarter-Kelly-or-less for fat-tailed markets). *(Amended 2026-08-16 — was "asset classes (crypto more conservative than stocks)"; the discipline is unchanged, the dimension it keys on is not.)*
 9. As the Trader, I want to emit a full bracket (entry + stop + target + TIF), so that **the STOP and TARGET exits** are attached at entry and need no separate price-watching loop. *(Narrowed 2026-08-16 — this said "the exit" and "no separate loop" without qualification, which the key-decision amendment above contradicts: the forced flatten at close − 5 minutes is a **time** condition and the indicator-based early exit is a **signal** condition, and no broker-side bracket can express either. Both run on the tick path. The bracket is still the whole story for price-triggered exits, which is what spares Risk and Execution a continuous price watch.)*
-10. As the Trader, I want to assign a deterministic idempotency key = hash(instrument + bar/timestamp), so that a re-run (crash-restart or replay) — including the Debate Engine re-running the debate from scratch — produces the same key and Execution dedupes to exactly one order.
+10. As the Trader, I want to assign a deterministic idempotency key ~~= hash(instrument + bar/timestamp)~~ **= sha256 over `{ instrument, bar, side }`, plus `arm` when the arm is not `'live'`**, so that a re-run (crash-restart or replay) — including the Debate Engine re-running the debate from scratch — produces the same key and Execution dedupes to exactly one order. *(Amended 2026-09-10 — `side` (#686/#748) and `arm` (#753) are not refinements of the coordinate; they are what stop the mandatory flatten and the control arm being deduped away by a same-bar entry. See "The idempotency key, and why the arm is in the hash".)*
 11. As the Trader, I want to attach full metadata (provenance + sizing decomposition + cosine precedent summary) to the intent, so that Risk can trim intelligently and the audit log is self-explaining.
 
 ### Cosine Precedent
@@ -116,11 +116,178 @@ Key architectural decisions:
 - Consume `DebateResult`; read market data, position state, and cosine neighbors (all via the injected clock).
 - Reconcile the debate against current holdings (position-aware routing).
 - Compute size (conviction scaling → ATR/vol sizing → non-converged haircut → cosine multiplier → min-viable-size skip).
-- Construct the bracket, assign the idempotency key = hash(instrument + bar/timestamp), attach metadata.
+- Construct the bracket, assign the idempotency key ~~= hash(instrument + bar/timestamp)~~ **= sha256 over `{ instrument, bar, side }`, plus `arm` off the live arm** *(2026-09-10 — see "The idempotency key, and why the arm is in the hash")*, attach metadata.
 - Write the setup vector to the store for later outcome labelling.
 - Return the order intent, or null (no trade).
 
 **Key Interfaces**
+
+> **Amended 2026-09-10 — the block below was written before the Trader became async, before the `'early_close'` intent side (#748), before equity became a thunk (#847) and before the control arm existed (#753). An implementer building to the pre-amendment shape collides idempotency keys across the two arms.** Raised as **P12** in [`docs/reviews/entire-app-2026-09-04.md`](../reviews/entire-app-2026-09-04.md) and resolved by [#1171](https://github.com/dd-jp/samurai-trading-system/issues/1171). Five drifts:
+>
+> 1. **`decide` is async, and it is not the production entry point.** `getMark`/`getBars` return promises, so the synchronous signature was shorthand. More importantly `decide` is a one-line projection of **`decideWithReason`**, which returns a `TraderOutcome` — the Trader has nineteen distinct ways to produce no order and a bare `null` cannot tell them apart. See "Module: Skip reasons".
+> 2. **`equity` is a thunk, not a number** (#847). The whole-book valuation behind it can refuse, and an eager number made that refusal abort the pass before `routeDecision` could reach the flat-by-close flatten — which ADR-0014 forbids.
+> 3. **`TraderInput` gained `arm`, `instrument`, `config`, `sessionCalendars`, `exitFillSizes` and `onUnpricedFlatten`, and `positionState` is a thunk** rather than a `PositionStore`.
+> 4. **`OrderIntentMetadata` gained `arm`, `exit_reason`, `unpriced_exit`, `mandatory_flatten`, `sizing.frozen_bracket` and `sizing.unquantised_size`.**
+> 5. **`arm` is an input to the idempotency hash** — the dangerous one, and the reason this amendment exists rather than a typo fix. See "The idempotency key, and why the arm is in the hash" below.
+
+```typescript
+// The test seam. Fully deterministic given its inputs + the (clock-scoped) stores.
+// `server/pipeline/trader/decide.ts` implements it, and BOTH arms reach that one
+// implementation — see "Module: The control arm".
+interface Trader {
+  decide(input: TraderInput): Promise<OrderIntent | null>;   // null = skip / no-trade
+}
+
+// The production entry point. `decide` above is `(await decideWithReason(input)).intent`,
+// kept because it is the seam this spec's tests assert at — but a caller that only
+// reads the intent throws away WHY there was no order, and that is the whole of what
+// `trader_log` has to show for a quiet session.
+function decideWithReason(input: TraderInput): Promise<TraderOutcome>;
+
+interface TraderOutcome {
+  intent: OrderIntent | null;
+  skip_reason: TraderSkipReason | null;        // non-null exactly when `intent` is null
+  decision_class: TraderDecisionClass | null;  // 'declined_on_signal' | 'could_not_decide' | 'input_unusable'
+  reason_detail: TraderReasonDetail | null;    // the numbers the reason was decided on
+  atr: number | null;
+  diagnostics: readonly TraderDiagnostic[];
+}
+
+interface TraderInput {
+  trace_id: string;              // cross-cutting correlation ID, threaded from the Orchestrator's tick — not business data
+  arm?: TradingArm;              // #753: 'live' | 'control'. ABSENT MEANS 'live', so every
+                                 // pre-#753 call site keeps meaning what it meant. It reaches
+                                 // two places and only two — the intent's `idempotency_key`
+                                 // and `OrderIntentMetadata.arm` — and changes NO decision
+                                 // logic. See "Module: The control arm".
+  instrument: string;            // `DebateResult` carries no instrument and
+                                 // `OrderIntent.instrument` cannot be built without one; the
+                                 // Orchestrator's tick is per-instrument.
+  debate: DebateResult;          // from the Debate Engine, and on the control arm the SAME
+                                 // shape synthesized from the deterministic axis vote. Carries
+                                 // the two additions specced below: a structured
+                                 // `direction: bullish|bearish|neutral` (a mechanical Trader
+                                 // cannot derive `side` from the free-text `position`) and a
+                                 // deterministic `debate_id` for provenance/setup-store joins.
+  clock: Clock;                  // wall-clock live, simulated T in replay
+  marketData: MarketDataService; // price, ATR/vol, indicators (clock-scoped)
+  equity: () => Promise<number>; // #847 — a THUNK, not a value, so that only the branches
+                                 // that size pay for a whole-book valuation and only they
+                                 // fail on it. It must return a whole-book figure or throw;
+                                 // a degraded partial would under-count exposure and
+                                 // over-size the entry.
+  config: TraderConfig;          // conviction floor, per-subclass brackets and `subclass_of`,
+                                 // the `atr_k`/`vol_floor_fraction`/`reward_risk_multiple`
+                                 // fallback geometry, TIF per asset class, the flatten window
+  sessionCalendars: Record<AssetClass, TradingCalendar>;  // #668 — what the flat-by-close rule resolves through
+  positionState: () => Promise<OpenPosition[]>;           // a thunk over the shared store's open lots,
+                                                          // NOT a `PositionStore`; `decide` filters to `instrument`
+  exitFillSizes: (idempotency_keys: readonly string[]) => Promise<Map<string, number>>;
+                                 // #568: each lot's already-closed quantity. An exit sizes to
+                                 // what the venue still HOLDS; without this a partially
+                                 // flattened lot oversells into a reverse position.
+  setupStore: SetupStore;        // Feedback Loop-owned; neighbors + R outcomes
+  onUnpricedFlatten?: (report: UnpricedFlattenReport) => void;
+                                 // #826: the mandatory flatten went out without a mark. Optional,
+                                 // and the degradation does not depend on it — forgetting it costs
+                                 // an operator page, never the exit.
+}
+
+// The bracket handed to the Risk Manager.
+interface OrderIntent {
+  idempotency_key: string;       // sha256 over canonical JSON of
+                                 // { instrument, bar, side } — plus `arm` when the arm is
+                                 // not 'live'. The market decision coordinate. Deliberately
+                                 // NOT keyed on debate_id: the Debate Engine re-runs debates
+                                 // from scratch on crash (no persistence), so a debate id is
+                                 // volatile; keying on the bar keeps the key stable across
+                                 // re-runs so Execution dedupes to one fill (CONTEXT.md
+                                 // idempotency invariant).
+                                 //
+                                 // `side` is 'open' | 'close' | 'early_close' — #686 added the
+                                 // open/close split, #748 the third member. Without the split, a
+                                 // same-bar entry and the mandatory flat-by-close exit (#668)
+                                 // hashed identically and the exit lost: a suppressed mandatory
+                                 // exit carries a position overnight, which ADR-0014 forbids.
+                                 // It is not the full `intent_type` deliberately — entry and
+                                 // scale_in MUST keep sharing a key, or a crash-replay of a bar
+                                 // that produced both would place two orders instead of one.
+                                 //
+                                 // `arm` is #753's discriminator and is load-bearing for exactly
+                                 // the same reason. See "The idempotency key, and why the arm is
+                                 // in the hash" — including why 'live' OMITS the field rather
+                                 // than hashing the string.
+  instrument: string;
+  asset_class: AssetClass;       // `contracts/primitives.ts` — 'crypto' | 'stocks'
+  side: 'buy' | 'sell';
+  intent_type: 'entry' | 'scale_in' | 'exit';   // a reversal is exit-then-fresh-entry,
+                                                 // not a single zero-crossing bracket
+  size: number;
+  entry: number;                 // limit/entry price
+  stop: number;
+  target: number;
+  time_in_force: string;         // the RESOLVED per-order value. Its source,
+                                 // `TraderConfig.time_in_force`, is per asset class
+                                 // (#381): Alpaca crypto accepts `gtc`/`ioc` and
+                                 // rejects `day`, equities take `day`, so one value
+                                 // cannot serve a universe spanning both.
+  decision_timestamp: Date;      // the bar/decision time (retained from the idempotency-key
+                                 // hash input) — the idempotency key and `OpenPosition`
+                                 // persistence still read this; no freshness gate does any
+                                 // more (#1190 moved `staleness` onto `decided_at` below).
+  decided_at: Date;              // clock.now() at Trader intent-build time, never floored to
+                                 // a bar (#1190). Verdict's `staleness` gate (gate 1) reads
+                                 // this; `decision_timestamp` above doesn't expose it.
+  metadata: OrderIntentMetadata;
+}
+
+interface OrderIntentMetadata {
+  debate_id: string;
+  arm?: TradingArm;              // #753. The DECISION record's copy, and absent means 'live'.
+                                 // It is NOT what makes a control trade distinguishable in
+                                 // `open_positions`/`closed_trades`: those carry their own
+                                 // `arm` column (migration 0033).
+  exit_reason?: ExitReason;      // 'flatten' | 'signal_decay' | 'direction_flip', on exits only
+  unpriced_exit?: true;          // #826: this flatten was built without a mark
+  mandatory_flatten?: true;      // #894: exempts this exit from Verdict's staleness gate
+  conviction: number;
+  converged: boolean;
+  sizing: {
+    base_risk_fraction: number;    // after conviction scaling
+    conviction_multiplier: number;
+    vol_floor_factor: number;      // effect of max(ATR, vol_floor)
+    non_converged_haircut: number; // 1.0 if converged
+    cosine_multiplier: number;     // 0.5–1.5, or 0.75 no-precedent default
+    frozen_bracket?: {             // #739: ADR-0018 D3/D5's bracket AS RESOLVED for this
+                                   // decision. Present exactly when the per-subclass regime is
+                                   // armed for the instrument, absent on the universes that
+                                   // declare no subclass and still size off ATR — so its
+                                   // absence is how a reader tells the two geometries apart.
+      take_profit_pct: number;
+      stop_pct: number;
+      deployment_fraction: number;
+      round_trip_cost_pct: number;
+      headroom_reserve_fraction?: number;  // #897's scale-in reserve, as it stood for this decision
+    };
+    unquantised_size?: number;     // #941: what D5 sized before `whole_share_sizing` floored it
+                                   // to the venue's quantity grid. Present exactly when the flag
+                                   // is on AND the floor moved the number.
+  };
+  cosine_precedent: {
+    neighbor_count: number;
+    weighted_mean_r: number | null;
+    no_precedent: boolean;
+  };
+}
+
+// The setup vector embedded for cosine retrieval (both debate + market features).
+interface SetupVector {
+  debate_features: number[];   // conviction, direction, converged, disagreement magnitude
+  market_features: number[];   // volatility bucket, trend, key indicators at decision time
+}
+```
+
+**Superseded 2026-09-10 — the pre-amendment block, preserved rather than deleted**, because code and tests written against it stay recognisable only if the shape they were written against is on the record:
 
 ```typescript
 // Single test seam. Fully deterministic given its inputs + the (clock-scoped) stores.
@@ -211,12 +378,39 @@ interface SetupVector {
 }
 ```
 
+### The idempotency key, and why the arm is in the hash *(2026-09-10, [#1171](https://github.com/dd-jp/samurai-trading-system/issues/1171))*
+
+`computeIdempotencyKey` (`server/pipeline/trader/idempotency-key.ts`) is the whole of the rule:
+
+```typescript
+const payload = arm === 'live'
+  ? JSON.stringify({ instrument, bar: bar.toISOString(), side })
+  : JSON.stringify({ instrument, bar: bar.toISOString(), side, arm });
+return createHash('sha256').update(payload).digest('hex');
+```
+
+Four hash inputs, and each is there because omitting it merged two decisions that must stay separate:
+
+- **`instrument` + `bar`** — the market decision coordinate, stable across the Debate Engine's re-run-from-scratch (story 10).
+- **`side`: `'open' | 'close' | 'early_close'`** — #686 split open from close after a same-bar entry and mandatory flatten hashed identically; #748 added `'early_close'`. Entry and `scale_in` deliberately share `'open'`.
+- **`arm`** — #753's discriminator, and load-bearing for exactly the reason `side` is.
+
+**What collides without `arm`.** The control arm trades the same names on the same bars with the same exit rule — that sameness is the point of a matched control — so on every bar the two arms agree, `{ instrument, bar, side }` is the same triple and the two intents hash to the SAME key. `open_positions` and `closed_trades` both hold `idempotency_key` as `PRIMARY KEY` (`server/shared/store/migrations/0001_init.sql`), and `execute()` gates on `store.findByKey(idempotencyKey)` before submitting (`server/pipeline/execution/execute.ts`), so the second arm's order is silently deduped away. Two properties make that worse than a lost order:
+
+1. **It is suppressed precisely on the agreement subset** — the bars where the two arms decided the same thing — which is the subset the comparison is most sensitive to. The control's record is not thinned at random; it is thinned exactly where it would have matched.
+2. **It is indistinguishable from a control that declined to trade.** No error is raised and no row records the suppression, so the measurement does not fail loudly — it reports a control that traded less than the live arm and invites the difference to be read as edge.
+
+That is the destruction of the control the whole edge thesis is falsified against: falsifier arm 2 is mandated as the PRIMARY matched control by [ADR-0014](../adr/0014-intraday-flat-by-close-horizon.md)'s amendment 2 ("Falsifier arm 2 restated") and [ADR-0017](../adr/0017-validation-gates-paper-operational-thesis-expectancy.md)'s Consequences, and [`docs/research/12-edge-hypothesis-critique.md`](../research/12-edge-hypothesis-critique.md) **D4** rules out the substitute a lost control would leave (a return-only comparison against a risk-targeted stream).
+
+**And what breaks if `arm` is hashed unconditionally.** The live arm omits the field from the payload rather than hashing the string `'live'`, so **every live key is byte-identical to its pre-#753 value**. Hashing it for both arms would re-key every existing `open_positions`/`closed_trades` row and every venue order id derived from one, and a crash-restart replay would then sail past `findByKey` and re-place orders the store already holds. The field's ABSENCE on the live arm is as load-bearing as its presence on the control, and an implementation that "cleans up" the asymmetry breaks idempotency across the restart boundary.
+
 ### Cross-Spec Requirement: DebateResult additions
 
 The Trader consumes `DebateResult` and, being mechanical (no LLM), needs two fields beyond the base Debate Engine contract (debate-engine-spec.md `DebateResult` = synthesis, position, confidence, contributions, disagreement_summary, open_items, converged, rounds_completed, latency_ms):
 
 1. **`direction: 'bullish' | 'bearish' | 'neutral'`** — the structured signal the Trader maps to `side`. Without it, deriving side from the free-text `position` would require an LLM (which the Trader deliberately omits). The mediator already knows the direction; it just needs to be exposed structurally.
-2. **`debate_id: string`, deterministic** = hash of the debate's inputs (instrument + bar + the AnalystView set). Must be stable across the Debate Engine's re-run-from-scratch (no-persistence, #10), so it is a reliable provenance/setup-store join key. (It is NOT used in the idempotency key — that keys on instrument + bar.)
+2. **`debate_id: string`, deterministic** = hash of the debate's inputs (instrument + bar + the AnalystView set). Must be stable across the Debate Engine's re-run-from-scratch (no-persistence, #10), so it is a reliable provenance/setup-store join key. ~~(It is NOT used in the idempotency key — that keys on instrument + bar.)~~
+   > **Amended 2026-09-10 ([#1171](https://github.com/dd-jp/samurai-trading-system/issues/1171)).** The first half still holds — `debate_id` is not a hash input — but the key does not key on `instrument + bar` either. It is sha256 over `{ instrument, bar, side }`, plus `arm` when the arm is not `'live'`. See *The idempotency key, and why the arm is in the hash* above; `side` (#686, #748) and `arm` (#753) both postdate this line.
 
 **Both are defined.** `debate-engine-spec.md` specs `direction` and `debate_id` on `DebateResult`, and `cross-spec-contracts.md` §1/§2 record them as settled, load-bearing fields — not an open contract question.
 
@@ -268,6 +462,20 @@ The Trader consumes `DebateResult` and, being mechanical (no LLM), needs two fie
 - **Multiplicative stacking:** `size = base_risk(conviction) × non_converged_haircut × cosine_multiplier` (via ATR sizing).
 - **Minimum-viable-position skip:** if the result falls below a min notional / min risk threshold (respecting broker minimum order size), return null (skip) rather than a dust order.
 
+### Module: Skip reasons *(2026-09-10, [#1171](https://github.com/dd-jp/samurai-trading-system/issues/1171))*
+
+**A skip is a typed reason, not a bare `null`.** `decideWithReason` returns `skip_reason` and a `decision_class` alongside the (null) intent, because "nothing traded" has nineteen causes and only some of them are the system working as designed. The class is what a reader triages on: `declined_on_signal` is a decision, `input_unusable` is an input that could not be priced or reconciled, `could_not_decide` is neither, and it is a LIVE bucket rather than a dead one: no reason maps to it in `SKIP_REASON_CLASS`, but that table is only the BASELINE. `classifyDecision` overrides it — when `debateWasDegraded(debate)` holds, every `declined_on_signal` reason except the ones in `DECLINED_ON_SIGNAL_NOT_DEBATE_DERIVED` (today, `session_closing` alone, because `withinFlattenWindow` reads the clock and not the debate) is reclassified `could_not_decide`. The reason stays what it was; only the class moves. The point is that a decline read off a debate that never finished is not a decline, and an operator triaging `below_conviction_floor` needs to know which of the two it was — #1109 pins the count of this bucket. **Reading `SKIP_REASON_CLASS` alone tells you the baseline, not the class the row was written with.**
+
+`declined_on_signal` (9) — the Trader looked and said no:
+
+`neutral_direction_while_flat`, `below_conviction_floor`, `session_closing` (#668 — inside the flat-by-close window, so no new exposure opens), `below_min_notional`, `holding_neutral_or_non_converged`, `scale_in_conviction_delta_not_met`, `no_open_position`, `signal_still_supports_position`, `rounds_to_zero_shares`.
+
+`input_unusable` (10) — the decision could not be made on what was available:
+
+`exit_no_filled_size`, `exit_held_quantity_diverged`, `early_exit_signal_unavailable`, `no_position_side`, `atr_insufficient_bars`, `atr_not_finite`, `mark_not_finite`, `stop_distance_not_positive`, `size_not_finite`, **`control_arm_valuation_refused`**.
+
+**`control_arm_valuation_refused` is control-arm-only, and the asymmetry is the point** (#1089/#1098). `buildBracket` awaits the `equity()` thunk first; when that whole-book valuation refuses — a `BookValuationError`, or an `AggregateError` whose errors are all `BookValuationError` — the **control** arm records this skip and a matching diagnostic, while the **live** arm lets the rejection propagate as a fault into the tick loop's error path (#507's retry). The live arm's book is real money and a refusal to value it must be audible; the control arm's is a simulated book whose failure must not take the live tick down with it. It is narrowed by error TYPE and not by arm alone: any other rejection still propagates on both arms. Its diagnostic is the one kind carrying no `asset_class` — a whole-book refusal is not attributable to the instrument the pass happened to be about.
+
 ### Module: Position Awareness
 
 Routing against `positionState`, producing `intent_type`:
@@ -275,6 +483,24 @@ Routing against `positionState`, producing `intent_type`:
 - Holding, same direction → hold (return null) or bounded `scale_in` if conviction rose materially (bounded by exposure — Risk enforces the hard cap).
 - Holding, opposite direction → `exit` (flatten to zero). A reversal is not a single zero-crossing bracket; if the opposite side is still warranted, it opens as a fresh `entry` on the next cycle when flat. This keeps every `OrderIntent` a single-side bracket and spares Risk/Execution from reasoning about zero-crossings.
 - Holding + neutral/`converged: false` → hold; optionally tighten the stop.
+
+### Module: The control arm (falsifier arm 2, #753) *(2026-09-10, [#1171](https://github.com/dd-jp/samurai-trading-system/issues/1171))*
+
+**The control arm is a path through this stage, not a field on the metadata.** [ADR-0014](../adr/0014-intraday-flat-by-close-horizon.md)'s amendment 2 and [ADR-0017](../adr/0017-validation-gates-paper-operational-thesis-expectancy.md)'s Consequences mandate falsifier arm 2 — *same name selection, same exit rule, same stop, entry by indicator alone, no LLM in the path* — as the system's primary matched control, owned by [#636](https://github.com/dd-jp/samurai-trading-system/issues/636). A spec that names only `metadata.arm` describes the label and not the arm, and an implementer working from it builds one arm with a column.
+
+**The Trader has one implementation and both arms reach it.** The control arm is the live arm's own tick runner with exactly one stage replaced: instead of the Debate Engine, `controlArmDecision` (`server/pipeline/control-arm/axis-vote-decision.ts`) synthesizes a `DebateResult`-shaped value whose `direction` and `confidence` are the technical analyst's deterministic axis vote (`assessAxes`), taken off the SAME `AnalystView[]` the live arm is about to debate — relayed, not re-run, so no model call is reachable and the analyst cost is paid once. Everything downstream is the code specced above, unchanged: the same conviction floor thresholds it, the same `TraderConfig` and the same per-subclass bracket constants set its stop and target, the same `routeDecision` handles its holdings, the same flat-by-close flatten closes it.
+
+**A second Trader entry point was the rejected alternative, and rejecting it is what makes the control matched.** A lower-level entry taking `AnalystView[]` directly would be a second place for the conviction floor, the frozen bracket, the flatten window and the scale-in rule to live — and therefore a second place for them to drift. With the synthesis, "the two arms share an exit rule and a stop" is structural rather than a property somebody maintains.
+
+**What the control arm therefore adds to the Trader's contract is exactly one optional input:** `TraderInput.arm`, defaulting to `'live'`. It reaches the idempotency key and `OrderIntentMetadata.arm` and nothing else. It changes no decision logic — and the one skip reason that IS arm-conditional, `control_arm_valuation_refused`, is a containment rule about a simulated book, not a difference in how a trade is decided.
+
+**Three honest asymmetries, recorded here so they are not discovered as bugs:**
+
+- **The Risk stage runs without the red-team critic on the control arm** (`critic: undefined` in `server/apps/orchestrator/production/control-arm-wiring.ts`) — the deliberate one. The critic is part of the LLM layer the control exists to exclude, so a critic veto on the control path would make the "no LLM" claim false.
+- **`converged: true`, `rounds_completed: 0`, `latency_ms: 0`, empty `contributions`** on the synthesized debate. `converged: true` states that a single deterministic vote has no disagreement left to resolve; `false` would hand the control a `non_converged_haircut` and a different position-awareness routing, which is a difference in sizing and exits that a matched control may not have. The consequence is stated rather than hidden: on a bar where the LIVE debate fails to converge, the live arm takes the haircut and refuses a scale-in while the control does neither, so the two arms' sizing diverges on exactly those bars.
+- **Four things are per-arm below this stage** — the execution store (`arm: 'control'`), the broker (a `SimulatedBrokerAdapter`, never the live venue), the circuit breakers with their own state, and the account-state provider. Control decisions are namespaced by a `'control:'` `debate_id` prefix and a `':control'` `trace_id` suffix so `trader_log`/`risk_log`/`verdict_log` stay separable; control TRADES are distinguished by the real `arm` column on `open_positions`/`closed_trades` (migration 0033) rather than by a string prefix.
+
+**The comparison this arm exists to feed** is built by `buildArmComparison` (`server/pipeline/control-arm/arm-comparison.ts`) and rendered by `formatArmComparison` (`server/tools/report-arm-comparison.ts`) — the builder produces the `ArmComparison` value and prints nothing; the renderer is where the two arms appear side by side and where the NOTE naming their asymmetries is emitted. The control's refused passes are IN that comparison as of [#1099](https://github.com/dd-jp/samurai-trading-system/issues/1099): `ArmPerformance.refused_pass_count` is a required field, `buildArmComparison` takes a required `refused_passes: ArmRefusedPassCounts`, and `SqliteArmComparisonSource.getRefusedPassCountsBetween` counts `trader_log` rows with `skip_reason = 'control_arm_valuation_refused'` over the same half-open `(from, to]` window as the trades. A control that refuses more passes than it trades is a control that is not measuring the live arm, and the comparison now says so instead of showing a quiet arm. **The count is not durable yet**: `PersistedArmPerformance = Omit<ArmPerformance, 'refused_pass_count'>` (`server/pipeline/feedback-loop/types/arm-comparison.ts`) drops the field on the read-back from `arm_comparison_samples`, because persisting it needs a migration — deferred to [#1483](https://github.com/dd-jp/samurai-trading-system/issues/1483). Until that ships, the figure is live in the report and absent from history.
 
 ### Module: Determinism & Replay
 
@@ -286,7 +512,8 @@ Routing against `positionState`, producing `intent_type`:
 
 ### What Makes a Good Test
 
-- Test at the `Trader.decide(input)` seam: given a `DebateResult` + mocked stores/market data + mock clock, assert on the returned `OrderIntent` (or null).
+- Test at the `Trader.decide(input)` seam: given a `DebateResult` + mocked stores/market data + mock clock, assert on the returned `OrderIntent` (or null). *(Amended 2026-09-10 — `decide` is async and is a projection of `decideWithReason`, so a test asserting only on `null` cannot tell nineteen skips apart. Assert on `TraderOutcome.skip_reason` wherever the case under test is a skip.)*
+- **Both arms, one seam** *(2026-09-10)*: the control arm is the same `decide` reached with `arm: 'control'` and a synthesized `debate`, so its bracket, stop, sizing and exits need no separate assertions — what does need asserting is that `arm` reaches the idempotency key (two arms on the same instrument, bar and side must produce two DIFFERENT keys, and the live key must be unchanged from its pre-#753 value), that `metadata.arm` is recorded, and that a `BookValuationError` from `equity()` skips with `control_arm_valuation_refused` on the control arm and propagates on the live one.
 - Mock the Market Data Service, position store, and setup store — the sizing/routing/skip logic is what's under test; the Trader has no LLM to mock.
 - Determinism test: identical input → identical `OrderIntent` (including idempotency key) across runs.
 - Point-in-time test: the setup store, driven by a mock clock, never returns a neighbor whose trade closed after T.
@@ -367,5 +594,6 @@ Wayfinder decisions for this stage live in [docs/wayfinder/trader-map.md](../way
 - **Non-converged policy** — fixed haircut + conviction floor; multiplicative stacking; min-viable-size skip.
 - **Cosine retrieval** — combined debate+market setup vector; Feedback-Loop-owned store; R-multiple labels; point-in-time closed-only retrieval; bounded similarity-weighted-R multiplier; 0.75× no-precedent default.
 - **Backtest determinism** — same code path live vs replay; point-in-time via injected clock; natural warm-up handling.
+- **The control arm is a path, not a flag** *(2026-09-10, [#1171](https://github.com/dd-jp/samurai-trading-system/issues/1171))* — falsifier arm 2 ([#753](https://github.com/dd-jp/samurai-trading-system/issues/753), owned by [#636](https://github.com/dd-jp/samurai-trading-system/issues/636), mandated by ADR-0014's amendment 2 and ADR-0017's Consequences) reaches this same Trader with `arm: 'control'` and a `DebateResult` synthesized from the deterministic axis vote. `arm` is a HASH INPUT to the idempotency key — omitting it collides the two arms' keys on every bar they agree and silently deletes the control — and `control_arm_valuation_refused` is the one arm-conditional skip.
 
 **Downstream dependency:** the cosine setup store is owned by the Feedback Loop (Stage 6), still to be charted; the Trader depends on it but does not build it.
