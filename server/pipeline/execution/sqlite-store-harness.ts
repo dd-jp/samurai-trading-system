@@ -23,14 +23,12 @@ import type { ClosedTrade, OpenPosition, OrderState, TradingArm } from '../../sh
 import {
   type ClosedTradeRow,
   fromClosedTradeRow,
+  fromOpenPositionRow,
+  type OpenPositionRow,
   openSharedStore,
   type StoreHandle,
 } from '../../shared/store/index.js';
-import {
-  fromPositionRow,
-  type OpenPositionRow,
-  SqliteExecutionStore,
-} from './sqlite-shared-store.js';
+import { SqliteExecutionStore } from './sqlite-shared-store.js';
 import type { FlattenSubmissionWriteAhead } from './types.js';
 
 /** Row shape for `TestExecutionStore.getFlattenSubmission` — a read the production port never needs. */
@@ -202,7 +200,7 @@ export class TestExecutionStore extends SqliteExecutionStore {
     const row = this.testDb
       .prepare('SELECT * FROM open_positions WHERE idempotency_key = ?')
       .get(idempotency_key) as OpenPositionRow | undefined;
-    return row === undefined ? null : fromPositionRow(row);
+    return row === undefined ? null : fromOpenPositionRow(row);
   }
 
   async countAllPositions(): Promise<number> {
