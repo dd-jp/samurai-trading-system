@@ -195,8 +195,6 @@ import {
 import {
   AlpacaNewsClient,
   CiiConsumer,
-  DEFAULT_MAX_SEARCH_RESULTS,
-  DEFAULT_MI_ARCHIVE_RETENTION_DAYS,
   GdeltGkgClient,
   GdeltIngestAgent,
   GdeltScoringPass,
@@ -215,15 +213,12 @@ import type { AssetClass, Clock, TuningStore } from '../../shared/index.js';
 import {
   isThresholdBoundViolation,
   logCaughtFailure,
-  positiveIntegerFromEnv,
-  requireIntegerAtLeast,
   resolveVenuePacing,
   TokenBucket,
 } from '../../shared/index.js';
 import { tryNousCredentials } from '../../shared/llm/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import {
-  DEFAULT_MAX_LLM_CALL_ROWS,
   guardedStore,
   pruneLlmCallLog,
   SqliteLlmSpendCapStore,
@@ -231,10 +226,7 @@ import {
   SqliteTraderLogStore,
 } from '../../shared/store/index.js';
 import { CostModelImpl, SqliteStage2SelectionStore } from '../../tools/backtest/index.js';
-import {
-  DEFAULT_ALERT_DELIVERY_FAILURE_RETENTION_DAYS,
-  SqliteAlertDeliveryLog,
-} from './alert-delivery-log.js';
+import { SqliteAlertDeliveryLog } from './alert-delivery-log.js';
 import { AnalystSkipKindRelay } from './analysts-decision.js';
 import { LLM_SPEND_CAP_BREACH } from './breach-alert-channel.js';
 import {
@@ -302,6 +294,7 @@ import {
   type TraderStepDeps,
   type VerdictStepDeps,
 } from './production/direct-bind.js';
+import { type ProductionEnvironment, readProductionEnvironment } from './production/environment.js';
 import { assertFlattenWindowCoversTickInterval } from './production/flatten-tick-coupling.js';
 import { LlmFailureRateMonitor } from './production/llm-failure-rate-guard.js';
 import { assertLseCalendarCoverage } from './production/lse-calendar-coverage-guard.js';
@@ -635,6 +628,15 @@ export interface ProductionComponents {
    * mechanism this composition root constructs but never calls.
    */
   debateLog: SqliteDebateLogStore;
+  /**
+   * Every `process.env` read this root made, resolved once at the top of
+   * `buildProductionComponents` (production/environment.ts).
+   * `buildProductionOrchestrator`'s daily sweeps take their retention values
+   * from here rather than reading the environment a second time, so the two
+   * roots cannot disagree and a test that overrides one variable overrides it
+   * for both.
+   */
+  environment: ProductionEnvironment;
 }
 
 /**
@@ -649,41 +651,6 @@ export interface ProductionComponents {
  * instance over the same account would silently lose bracket-leg lookups for
  * orders the first one placed.
  */
-/**
- * Whether LLM prompt/response text is persisted to `llm_call_log` (#1035).
- *
- * DEFAULT ON, and the asymmetry with `SAMURAI_ALERTS` — which deliberately has
- * no default at all — is the point rather than an inconsistency. An unset
- * `SAMURAI_ALERTS` would silently route operator alerts to an EXTERNAL
- * channel, so it must be named out loud; this writes to a local SQLite table
- * at a measured ~7 MB per 14-day soak. The cost of defaulting wrong is a few
- * megabytes of disk. The cost of defaulting OFF is that the soak this exists
- * to diagnose runs without it, and nobody finds out until they need the data
- * and it was never recorded.
- *
- * Exported so the default is pinned by a test rather than inferred from a
- * `!== 'off'` buried in a long composition root — this repo's characteristic
- * defect is a mechanism that is built, tested, and then reached by nothing on
- * the shipped path.
- */
-export function captureLlmTextFromEnvironment(
-  value: string | undefined = process.env.SAMURAI_LLM_CAPTURE,
-): boolean {
-  return value?.trim().toLowerCase() !== 'off';
-}
-
-/** The variable that overrides `llm_call_log`'s row ceiling (#1045). */
-export const ENV_LLM_CALL_LOG_MAX_ROWS = 'SAMURAI_LLM_CALL_LOG_MAX_ROWS';
-
-/** The variable that overrides the MI archive's retention window (#1060). */
-export const ENV_MI_ARCHIVE_RETENTION_DAYS = 'SAMURAI_MI_ARCHIVE_RETENTION_DAYS';
-
-/** The variable that overrides `alert_delivery_failures`'s retention window (#1131). */
-export const ENV_ALERT_DELIVERY_FAILURE_RETENTION_DAYS =
-  'SAMURAI_ALERT_DELIVERY_FAILURE_RETENTION_DAYS';
-
-/** The variable that overrides how many X posts a sentiment call fetches (#969). */
-export const ENV_X_MAX_SEARCH_RESULTS = 'SAMURAI_X_MAX_RESULTS';
 
 /**
  * Node clamps a `setTimeout` delay above this (2^31 - 1 ms, ~24.85 days) and
@@ -695,31 +662,16 @@ export const ENV_X_MAX_SEARCH_RESULTS = 'SAMURAI_X_MAX_RESULTS';
  */
 const MAX_SET_TIMEOUT_DELAY_MS = 2 ** 31 - 1;
 
-/**
- * How many `llm_call_log` rows to keep (#1045).
- *
- * `min = 1`, not `0` — the one place this deliberately departs from the file
- * sink's identical-looking setting, where `0` legally means "keep nothing".
- * Here "keep nothing" is already spelled `SAMURAI_LLM_CAPTURE=off`, and a
- * ceiling of zero would mean writing every prompt to disk purely to delete it
- * on the next sweep. Two spellings for one intention is how a config comes to
- * disagree with itself, so this one refuses.
- *
- * Exported and tested for the same reason `captureLlmTextFromEnvironment` is:
- * a retention policy read inline in a 3,000-line composition root is a policy
- * nobody can see.
- */
-export function llmCallLogMaxRowsFromEnvironment(
-  value: string | undefined = process.env[ENV_LLM_CALL_LOG_MAX_ROWS],
-): number {
-  return positiveIntegerFromEnv(
-    value,
-    ENV_LLM_CALL_LOG_MAX_ROWS,
-    DEFAULT_MAX_LLM_CALL_ROWS,
-    1,
-    "the captured LLM prompt/response table's row ceiling (#1045)",
-  );
-}
+export {
+  alertDeliveryFailureRetentionDaysFromEnvironment,
+  captureLlmTextFromEnvironment,
+  ENV_ALERT_DELIVERY_FAILURE_RETENTION_DAYS,
+  ENV_LLM_CALL_LOG_MAX_ROWS,
+  ENV_MI_ARCHIVE_RETENTION_DAYS,
+  ENV_X_MAX_SEARCH_RESULTS,
+  llmCallLogMaxRowsFromEnvironment,
+  miArchiveRetentionDaysFromEnvironment,
+} from './production/environment.js';
 
 /**
  * Prunes, reports what it removed, and never throws.
@@ -775,35 +727,6 @@ function pruneLlmCallLogWithLog(
 }
 
 /**
- * How many days of MI archive history to keep (#1060).
- *
- * The specced rule here is a DAY WINDOW, not a row ceiling — the opposite of
- * `llmCallLogMaxRowsFromEnvironment` above, and deliberately so: LLM capture
- * volume is cadence-bound (a 15-minute-debate measurement does not hold at a
- * different cadence), whereas the archive's value genuinely is time-bound — a
- * 90-day-old news item is not useful to a backtest replay of last week. The
- * six spec statements this settles are reconciled in
- * `docs/specs/market-intelligence-spec.md`.
- *
- * `min = 1`, matching `llmCallLogMaxRowsFromEnvironment`'s reasoning: there is
- * no "keep nothing" spelling to protect here (unlike `SAMURAI_LLM_CAPTURE`),
- * but a zero-day window would purge same-tick writes before `hydrate()` could
- * ever read them back, which is not a retention policy anyone would choose on
- * purpose.
- */
-export function miArchiveRetentionDaysFromEnvironment(
-  value: string | undefined = process.env[ENV_MI_ARCHIVE_RETENTION_DAYS],
-): number {
-  return positiveIntegerFromEnv(
-    value,
-    ENV_MI_ARCHIVE_RETENTION_DAYS,
-    DEFAULT_MI_ARCHIVE_RETENTION_DAYS,
-    1,
-    "the MI archive's specced retention window (#1060)",
-  );
-}
-
-/**
  * Prunes the MI archive, reports what it removed, and never throws — same
  * posture as `pruneLlmCallLogWithLog` and for the same reason: a throw at
  * boot would abort a trading process over housekeeping, and a throw on the
@@ -844,86 +767,6 @@ function pruneMiArchiveWithLog(
       payload: { error: error instanceof Error ? error.message : String(error), trigger },
     });
   }
-}
-
-/**
- * How many days of `alert_delivery_failures` rows to keep on disk (#1131).
- *
- * Day window, matching `miArchiveRetentionDaysFromEnvironment`'s reasoning:
- * this table's growth tracks outage/event frequency, which is genuinely
- * time-bound, not the cadence-bound growth `llmCallLogMaxRowsFromEnvironment`
- * guards against with a row ceiling instead.
- *
- * `min = 2`, NOT `1` like the two resolvers above. This table also feeds
- * `countFailures`'s Rail window, and 1 day is exactly that window's 24-hour
- * `ALERT_DELIVERY_FAILURE_WINDOW_MS`. Two things break at that equality.
- *
- * FIRST, with no clock premise at all: `contracts/snapshot.ts`'s
- * `alert_delivery_failures_24h` doc drops the tile's old lifetime total,
- * and what makes that defensible is that the same question stays
- * "answerable over the retention window by reading
- * `alert_delivery_failures` directly" — bounded by that retention, never a
- * lifetime. At `retention == window` a row is pruned at about the boundary
- * the tile clears it, so the raw table no longer outlives the tile and
- * answers nothing the tile does not already show.
- *
- * SECOND is the intuitive reason, and it survives only in a form far
- * narrower than it is usually stated: "a 1-day retention lets the daily
- * sweep delete a row the tile is still supposed to count". The prune
- * deletes `timestamp < T_prune - retention`; the count includes
- * `timestamp > asOf - window`. At `retention == window` both predicates
- * hold only for rows in `(asOf - window, T_prune - window)`, an interval
- * that is non-empty exactly when `T_prune > asOf` — so the claim reduces
- * to whether a prune can commit after a live request's `asOf`.
- *
- * Mostly it cannot. The two boundaries are computed in different processes
- * but against one host clock, and `service-api`'s `server.ts` passes a
- * fresh `new Date()` into `buildSnapshot` per request, so a prune that
- * committed before the request began is already behind that request's
- * `asOf`. What that call site gives, though, is sample-then-read rather
- * than read-then-sample: `asOf` is materialised in `server.ts`,
- * `getAlertDeliveryFailureCount` runs partway down `snapshot.ts`'s
- * `buildSnapshot`, after other store reads on the same connection, and
- * nothing spans them — `SqliteDashboardQueryStore` runs each read as its
- * own prepared statement, with no transaction and therefore no snapshot
- * isolation. A
- * prune committing inside THAT gap does have `T_prune > asOf`, and the
- * rows it removes from the counted window are real.
- *
- * So the exposure is the sub-second width of one snapshot build, and it
- * costs a count only if a failure row happens to be timestamped inside a
- * band of exactly `window` ago at the moment the once-a-day sweep lands
- * there. A floor measured in DAYS is not sized against that; FIRST is what
- * it is sized against, and FIRST is the reason for it. That the floor also
- * closes the race is a consequence rather than the argument — above
- * `retention == window` the overlap would need `T_prune > asOf` by the
- * whole `retention - window` difference, a full day at `min = 2`.
- *
- * Given FIRST, 2 is simply the smallest day count strictly above the
- * 24-hour window; nothing is special about 2 beyond the window's size and
- * this variable's unit.
- *
- * The floor by ITSELF orders nothing. `min = 2` is 48h against today's 24h
- * window; widen `ALERT_DELIVERY_FAILURE_WINDOW_MS` to 48h and the two become
- * EQUAL, not ordered. What holds the inequality is a pair of assertions in
- * `alert-delivery-failure-retention.test.ts`, one per direction: a widened
- * window fails its `2 days > ALERT_DELIVERY_FAILURE_WINDOW_MS` check (and
- * the matching one for the 30-day default), a lowered minimum fails its
- * `'1'`-throws case. Both restate the `2` as their own literal rather than
- * reading it from this resolver, so they are guards on the two directions,
- * not a derivation of the bound from this argument.
- */
-export function alertDeliveryFailureRetentionDaysFromEnvironment(
-  value: string | undefined = process.env[ENV_ALERT_DELIVERY_FAILURE_RETENTION_DAYS],
-): number {
-  return positiveIntegerFromEnv(
-    value,
-    ENV_ALERT_DELIVERY_FAILURE_RETENTION_DAYS,
-    DEFAULT_ALERT_DELIVERY_FAILURE_RETENTION_DAYS,
-    2,
-    "alert_delivery_failures's retention window (#1131), which must stay longer than the " +
-      '24-hour Rail count window or the table stops outliving the tile that reads it',
-  );
 }
 
 /**
@@ -987,6 +830,9 @@ export function resolveApprovalsChannel(
 
 export function buildProductionComponents(config: ProductionConfig): ProductionComponents {
   const clock = config.clock;
+  // The only environment read in this root; a malformed variable refuses the
+  // boot here, before any store or wire client below is opened.
+  const environment = readProductionEnvironment(config);
 
   // Before anything is built, for the same reason the LLM budget below is:
   // refuse a bad config while nothing is half-constructed. This one rejects an
@@ -1786,13 +1632,12 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // every call into `llm_spend` under `stage: 'market_intelligence'`, so
   // ADR-0008's cap covers this stage too, and it checks that cap BEFORE
   // calling.
-  const sentimentEnabled =
-    config.sentimentEnabled ?? process.env.SAMURAI_SENTIMENT?.trim().toLowerCase() !== 'off';
+  const sentimentEnabled = environment.sentimentEnabled;
 
-  // #1035. Read ONCE here and passed down, so both spend sinks agree and
+  // #1035. Passed down from the one read, so both spend sinks agree and
   // neither reads the environment for itself — the same rule the file sink
   // follows (`buildEntrypointLogger`).
-  const captureLlmText = captureLlmTextFromEnvironment();
+  const captureLlmText = environment.captureLlmText;
 
   /**
    * #1045. The row ceiling is read and APPLIED here, at boot, and again on the
@@ -1810,7 +1655,8 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * exist, be tested, and never be called from anything that ships — dead
    * code its whole life, retired by #1059.
    */
-  const llmCallLogMaxRows = llmCallLogMaxRowsFromEnvironment();
+  const { llmCallLogMaxRows, miArchiveRetentionDays, alertDeliveryFailureRetentionDays } =
+    environment;
   pruneLlmCallLogWithLog(config.db, llmCallLogMaxRows, logger, 'startup');
 
   /**
@@ -1827,7 +1673,6 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * place (#1060's own gap) and how #313's observed-fill prune shipped
    * uncalled, and was eventually retired unused (#1059).
    */
-  const miArchiveRetentionDays = miArchiveRetentionDaysFromEnvironment();
   pruneMiArchiveWithLog(config.miArchive, miArchiveRetentionDays, clock, logger, 'startup');
   /**
    * #1131. Same two-call-site shape as the MI archive purge immediately
@@ -1836,7 +1681,6 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * count was previously all-time with no lower bound, and the table itself
    * had no pruning).
    */
-  const alertDeliveryFailureRetentionDays = alertDeliveryFailureRetentionDaysFromEnvironment();
   pruneAlertDeliveryFailuresWithLog(
     config.db,
     alertDeliveryFailureRetentionDays,
@@ -1901,9 +1745,9 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    *    invoice (the plan's V3). Until it has, turning this on is a deliberate,
    *    dated act by an operator, not a default.
    *
-   * `SAMURAI_X_MAX_RESULTS` is the dial, and the env path is read through the
-   * SHARED `positiveIntegerFromEnv` (#1045) rather than a validator of its
-   * own. That helper's header makes the argument — "two env vars in one
+   * `SAMURAI_X_MAX_RESULTS` is the dial, and the env path
+   * (production/environment.ts) is read through the SHARED
+   * `positiveIntegerFromEnv` (#1045) rather than a validator of its own. That helper's header makes the argument — "two env vars in one
    * system come to disagree about whether `\"abc\"` means abc, the default,
    * or 0" — and a spend dial is the last place to disagree about it.
    * Concretely it means a malformed value **throws at startup naming the
@@ -1913,10 +1757,11 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * discover days later that nothing changed.
    *
    * `config.xMaxSearchResults` (#1161) is held to the same bound via
-   * `requireIntegerAtLeast` rather than passed through unchecked: without it,
-   * a programmatic caller's `0` or `-1` would skip the throw entirely and
-   * reach `XSearchClient`'s ceiling clamp below, which is built to forgive an
-   * operator's excessive value, not to catch a nonsensical one.
+   * `requireIntegerAtLeast` (production/environment.ts) rather than passed
+   * through unchecked: without it, a programmatic caller's `0` or `-1` would
+   * skip the throw entirely and reach `XSearchClient`'s ceiling clamp below,
+   * which is built to forgive an operator's excessive value, not to catch a
+   * nonsensical one.
    *
    * The ceiling is enforced separately and does NOT throw, on either path.
    * `XSearchClient` clamps to `[1, MAX_SEARCH_RESULTS_CEILING]` and warns,
@@ -1925,27 +1770,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * capping it and saying so. So: unusable input refuses, excessive input
    * clamps.
    */
-  const sentimentRetrieval =
-    config.sentimentRetrieval ??
-    process.env.SAMURAI_SENTIMENT_RETRIEVAL?.trim().toLowerCase() === 'on';
-  const xMaxSearchResultsPurpose =
-    "the number of X posts each sentiment call retrieves, the soak's main LLM cost lever after " +
-    'the debate itself (#969)';
-  const xMaxSearchResults =
-    config.xMaxSearchResults === undefined
-      ? positiveIntegerFromEnv(
-          process.env[ENV_X_MAX_SEARCH_RESULTS],
-          ENV_X_MAX_SEARCH_RESULTS,
-          DEFAULT_MAX_SEARCH_RESULTS,
-          1,
-          xMaxSearchResultsPurpose,
-        )
-      : requireIntegerAtLeast(
-          config.xMaxSearchResults,
-          'ProductionConfig.xMaxSearchResults',
-          1,
-          xMaxSearchResultsPurpose,
-        );
+  const { sentimentRetrieval, xMaxSearchResults } = environment;
 
   const grokAgent =
     sentimentCredentials === undefined
@@ -2546,6 +2371,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     marketIntelligenceRefresh,
     universe,
     debateLog: debateLogStore,
+    environment,
   };
 }
 
@@ -3573,16 +3399,10 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     return sample.comparison;
   };
 
-  // #1045. Read here as well as in `buildProductionComponents`, not passed
-  // between them: these are two separate composition roots, the read is pure
-  // and validated, and both resolve the same variable in the same process, so
-  // they cannot disagree. Threading it through `ProductionComponents` would
-  // widen a public shape to carry a housekeeping constant.
-  const llmCallLogMaxRows = llmCallLogMaxRowsFromEnvironment();
-  // #1060. Same reasoning, same shape, for the MI archive's 90-day window.
-  const miArchiveRetentionDays = miArchiveRetentionDaysFromEnvironment();
-  // #1131. Same reasoning, same shape, for alert_delivery_failures's retention window.
-  const alertDeliveryFailureRetentionDays = alertDeliveryFailureRetentionDaysFromEnvironment();
+  // #1045 / #1060 / #1131: the same values the boot-time sweeps in
+  // `buildProductionComponents` applied, from the one environment read.
+  const { llmCallLogMaxRows, miArchiveRetentionDays, alertDeliveryFailureRetentionDays } =
+    components.environment;
 
   const runFeedbackCycle = (feedback: FeedbackCycleConfig): void => {
     // #1045, and FIRST — outside the try below, before any of the tuning work.
