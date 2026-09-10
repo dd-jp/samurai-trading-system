@@ -31,8 +31,12 @@ export interface DormantLegsUnresolvedAlert {
   instrument: string;
   /**
    * How long the corroboration has been stuck non-terminal, wall-clock from
-   * the first deferred poll — reporting only. The alert's own bound is a
-   * consecutive-poll count, not this duration; see `escalateIfStale`.
+   * the first deferred poll — reporting only, distinct from the bounds that
+   * decide whether THIS alert fires: the first alert's grace is a
+   * consecutive-poll count (`DORMANT_DEFER_ALERT_AFTER`), and the repeat
+   * that follows is a separate wall-clock interval
+   * (`DORMANT_DEFER_ALERT_REPEAT_EVERY_MS`) measured from the previous
+   * alert, not from `firstObservedAt`; see `escalateIfStale`.
    */
   stuck_ms: number;
   observed_at: Date;
