@@ -96,9 +96,9 @@ describe('computeFlattenIdempotencyKey (#1389)', () => {
     expect(computeFlattenIdempotencyKey('3USL', SESSION_CLOSE, 'control')).not.toBe(base);
     // The NEXT session's close: a lot carried past the grace must be targetable
     // again tomorrow rather than deduped against today's refusal.
-    expect(
-      computeFlattenIdempotencyKey('3USL', new Date('2026-08-15T20:00:00.000Z')),
-    ).not.toBe(base);
+    expect(computeFlattenIdempotencyKey('3USL', new Date('2026-08-15T20:00:00.000Z'))).not.toBe(
+      base,
+    );
   });
 
   it('cannot collide with a bar-keyed key, even when the close IS a bar boundary', () => {

@@ -234,9 +234,7 @@ describe('buildCarriedLotReporter', () => {
     let now = PAST_GRACE;
 
     for (let poll = 0; poll < 40; poll += 1) {
-      await buildCarriedLotReporter(
-        deps({ positions: [lot()], now, alerts, throttle }),
-      )();
+      await buildCarriedLotReporter(deps({ positions: [lot()], now, alerts, throttle }))();
       now = new Date(now.getTime() + 15_000);
     }
 
@@ -253,7 +251,9 @@ describe('buildCarriedLotReporter', () => {
     const throttle = new CarriedLotAlertThrottle();
     const later = new Date(PAST_GRACE.getTime() + CARRIED_LOT_ALERT_REPEAT_MS);
 
-    await buildCarriedLotReporter(deps({ positions: [lot()], now: PAST_GRACE, alerts, throttle }))();
+    await buildCarriedLotReporter(
+      deps({ positions: [lot()], now: PAST_GRACE, alerts, throttle }),
+    )();
     await buildCarriedLotReporter(deps({ positions: [lot()], now: later, alerts, throttle }))();
 
     expect(posted).toHaveLength(2);
@@ -272,7 +272,9 @@ describe('buildCarriedLotReporter', () => {
     const throttle = new CarriedLotAlertThrottle();
     const nextEvening = new Date('2026-08-20T16:40:00+01:00');
 
-    await buildCarriedLotReporter(deps({ positions: [lot()], now: PAST_GRACE, alerts, throttle }))();
+    await buildCarriedLotReporter(
+      deps({ positions: [lot()], now: PAST_GRACE, alerts, throttle }),
+    )();
     await buildCarriedLotReporter(
       deps({ positions: [lot()], now: nextEvening, alerts, throttle }),
     )();

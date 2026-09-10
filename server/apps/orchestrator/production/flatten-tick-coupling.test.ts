@@ -148,7 +148,11 @@ describe('assertFlattenWindowCoversTickInterval', () => {
       // check would let a comfortable window vouch for a grace of zero.
       expect(() =>
         assertFlattenWindowCoversTickInterval(
-          { ...DEFAULT_TRADER_CONFIG, flatten_before_close_ms: 60 * MINUTE, flatten_after_close_ms: 1 },
+          {
+            ...DEFAULT_TRADER_CONFIG,
+            flatten_before_close_ms: 60 * MINUTE,
+            flatten_after_close_ms: 1,
+          },
           MINUTE,
         ),
       ).toThrow(/flatten_after_close_ms/);

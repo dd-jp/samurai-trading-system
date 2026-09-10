@@ -205,8 +205,7 @@ describe('UniverseScheduler.nextTick', () => {
     const PAST_THE_GRACE = new Date('2026-07-15T20:06:00Z');
 
     /** The real predicate's shape: inside the grace, and nowhere else. */
-    const graceWindow = (instant: Date): boolean =>
-      instant.getTime() === AFTER_THE_BELL.getTime();
+    const graceWindow = (instant: Date): boolean => instant.getTime() === AFTER_THE_BELL.getTime();
 
     it('plans the universe after the bell when the grace says so', () => {
       const scheduler = makeScheduler({ postCloseFlattenWindow: graceWindow });

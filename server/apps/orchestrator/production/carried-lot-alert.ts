@@ -54,7 +54,10 @@ import type { TradingCalendar } from '../../../providers/market-data-service/ind
 import type { Clock, OpenPosition } from '../../../shared/index.js';
 import { heldQuantitiesFor } from '../../../shared/index.js';
 import type { Logger } from '../types.js';
-import type { TraderDiagnosticAlert, TraderDiagnosticAlertChannel } from './trader-diagnostic-alert.js';
+import type {
+  TraderDiagnosticAlert,
+  TraderDiagnosticAlertChannel,
+} from './trader-diagnostic-alert.js';
 
 /**
  * How long before the same carried lot is reported again — see the file

@@ -246,10 +246,12 @@ async function driveFlatten(venue: Venue, opts: DriveFlattenOptions = {}) {
   // Exactly what `tick-runner.ts` hands `runExitCheckPass`.
   const bar = floorToBar(now, DEBATE_BAR_TIMEFRAME_MS);
 
-  const session: FlattenSession = opts.session ?? (() => {
-    const fresh = openSharedStore(':memory:');
-    return { db: fresh, store: new SqliteExecutionStore(fresh) };
-  })();
+  const session: FlattenSession =
+    opts.session ??
+    (() => {
+      const fresh = openSharedStore(':memory:');
+      return { db: fresh, store: new SqliteExecutionStore(fresh) };
+    })();
   const { db, store } = session;
   if (opts.session === undefined) {
     const lot = heldLot(new Date(now.getTime() - 6 * 60 * 60 * 1_000));

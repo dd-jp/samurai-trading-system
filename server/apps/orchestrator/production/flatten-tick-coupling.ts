@@ -162,7 +162,7 @@ export function assertFlattenWindowCoversTickInterval(
     throw new Error(
       `traderConfig.flatten_after_close_ms (${grace}ms) must be at least tickIntervalMs ` +
         `(${tickIntervalMs}ms), but only ${(grace / tickIntervalMs).toFixed(2)} tick(s) fit ` +
-        'inside the post-close flatten grace. The grace is #1389\'s second chance at a lot the ' +
+        "inside the post-close flatten grace. The grace is #1389's second chance at a lot the " +
         'pre-close window missed, and it is evaluated ON a tick too — a grace no tick lands in ' +
         'restores the forward-only window, silently. Widen flatten_after_close_ms or shorten ' +
         'tickIntervalMs (#1389).',
