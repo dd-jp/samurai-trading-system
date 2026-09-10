@@ -649,8 +649,11 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
       // rather than rendering the literal string "undefined".
       const assetClassSuffix =
         diagnostic.asset_class === undefined ? '' : ` (${diagnostic.asset_class})`;
+      // Only `lot_carried_past_session_close` sets `arm` (see
+      // `TraderDiagnosticAlert.arm`); omitted rather than printing "undefined arm".
+      const armSuffix = alert.arm === undefined ? '' : ` [${alert.arm} arm]`;
       return (
-        `Samurai TRADER DEGRADED: ${alert.instrument}${assetClassSuffix} reported ` +
+        `Samurai TRADER DEGRADED: ${alert.instrument}${assetClassSuffix}${armSuffix} reported ` +
         `${diagnostic.kind} on ${alert.consecutive_ticks} consecutive tick(s) as of ` +
         `${alert.reported_at.toISOString()}.\n` +
         `${TRADER_DIAGNOSTIC_CONSEQUENCE[diagnostic.kind]}\n` +
