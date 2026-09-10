@@ -1315,11 +1315,18 @@ describe('SqliteExecutionStore', () => {
         [live, 'live'],
         [control, 'control'],
       ] as const) {
+        // Two DIFFERENT instruments, because one instrument may only ever have
+        // one unresolved flatten (#1214 review — `writeAheadFlatten`'s own
+        // guard). The arm-scoping claim under test is unaffected: it is about
+        // which arm's rows a scan returns, not which instrument they name.
         await store.writeAheadFlatten(
-          makeFlattenWriteAhead({ idempotency_key: `${prefix}-submitting` }),
+          makeFlattenWriteAhead({ idempotency_key: `${prefix}-submitting`, instrument: 'AAPL' }),
         );
         await store.writeAheadFlatten(
-          makeFlattenWriteAhead({ idempotency_key: `${prefix}-submitted-unswept` }),
+          makeFlattenWriteAhead({
+            idempotency_key: `${prefix}-submitted-unswept`,
+            instrument: 'TSLA',
+          }),
         );
         await store.resolveFlattenSubmitted(
           `${prefix}-submitted-unswept`,

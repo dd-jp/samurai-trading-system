@@ -172,6 +172,33 @@ export class DuplicateFlattenSubmissionError extends Error {
   }
 }
 
+/**
+ * #1214 review — a flatten was refused because ANOTHER flatten on the same
+ * instrument is still unresolved, so submitting this one would put two market
+ * orders on the same held quantity (the #516 reverse-position hazard).
+ *
+ * Named, like `DuplicateFlattenSubmissionError`, because both callers have to
+ * DISCRIMINATE on it: this is not a store failure but a deliberate refusal, and
+ * the right answer to it is to stand down quietly (`executeExit` → `deduped`,
+ * `reflattenResidual` → `flatten_in_flight`) rather than to report a broken
+ * journal. `blocking_key` names the row that stood this one down, so a log line
+ * says which flatten reconcile must settle before the instrument moves again.
+ */
+export class UnresolvedFlattenForInstrumentError extends Error {
+  constructor(
+    readonly idempotency_key: string,
+    readonly instrument: string,
+    readonly blocking_key: string,
+  ) {
+    super(
+      `SqliteExecutionStore.writeAheadFlatten: refusing to journal flatten ` +
+        `'${idempotency_key}' — flatten '${blocking_key}' on '${instrument}' is still ` +
+        'unresolved, and two live flattens on one instrument can reverse the position (#516).',
+    );
+    this.name = 'UnresolvedFlattenForInstrumentError';
+  }
+}
+
 export class SqliteExecutionStore implements SharedStore {
   /**
    * Which arm's book this instance reads and writes (#753).
@@ -659,55 +686,96 @@ export class SqliteExecutionStore implements SharedStore {
    * for the same reason `writeAheadPosition` distinguishes it: `execute()`'s
    * `findByKey` gate normally prevents this, so a collision here means a
    * concurrent caller won the same race, not a generic write failure.
+   *
+   * #1214 review — the one-flatten-per-instrument invariant is enforced HERE,
+   * in the same synchronous better-sqlite3 transaction as the INSERT, rather
+   * than by each caller reading `getUnresolvedFlattens()` first. Two submitters
+   * exist (`executeExit`'s flatten window and `reflattenResidual`'s residual
+   * walk) on two independent timers, so a caller-side read leaves a real window
+   * between "no flatten is in flight" and "my row exists" in which the other
+   * caller can journal and submit. Inside the transaction there is no such
+   * window: better-sqlite3 is synchronous and neither caller can interleave
+   * with it, so the check and the row that answers it commit together.
+   *
+   * The predicate is `getUnresolvedFlattens`' own, arm filter included — the
+   * two must agree, or a row invisible to reconcile could block a flatten
+   * nothing will ever unblock, or (arm dropped) the control arm's rows could
+   * stand the live arm's mandatory flat-by-close down.
    */
   async writeAheadFlatten(submission: FlattenSubmissionWriteAhead): Promise<void> {
     try {
-      this.db
-        .prepare(
-          `INSERT INTO flatten_submissions (
-             idempotency_key, instrument, asset_class, side, size,
-             status, submitted_at, lot_idempotency_keys, lot_held_quantities, exit_reason,
-             decision_price, quote_bid, quote_ask, quote_mid, quote_observed_at,
-             modelled_cost_breakdown_json, arm
-           ) VALUES (?, ?, ?, ?, ?, 'submitting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          submission.idempotency_key,
-          submission.instrument,
-          submission.asset_class,
-          submission.side,
-          submission.size,
-          toStoredTimestamp(submission.submitted_at),
-          // Both columns projected from the SAME array in the same statement,
-          // so the pairing they encode positionally cannot be wrong here.
-          // `getFlattenAttribution` re-establishes it on the way out.
-          JSON.stringify(submission.lot_held_quantities.map((lot) => lot.idempotency_key)),
-          JSON.stringify(submission.lot_held_quantities.map((lot) => lot.held)),
-          submission.exit_reason,
-          // #1001, migration 0037 — see `FlattenSubmissionWriteAhead`'s own
-          // field docs (types/store.ts).
-          submission.decision_price,
-          submission.quote_bid,
-          submission.quote_ask,
-          submission.quote_mid,
-          submission.quote_observed_at === null
-            ? null
-            : toStoredTimestamp(submission.quote_observed_at),
-          submission.modelled_cost_breakdown === null
-            ? null
-            : JSON.stringify(submission.modelled_cost_breakdown),
-          // #1124, migration 0050 — this INSTANCE's arm, the same posture
-          // `writeAheadPosition`/`insertClosedTrade` already take: the
-          // writer's identity is the fact being recorded, not a field the
-          // caller can mislabel via `FlattenSubmissionWriteAhead`.
-          this.arm,
-        );
+      this.db.transaction(() => {
+        const blocking = this.db
+          .prepare(
+            `SELECT idempotency_key FROM flatten_submissions
+              WHERE arm = ?
+                AND instrument = ?
+                AND idempotency_key <> ?
+                AND (status = 'submitting'
+                 OR (status = 'submitted' AND fills_swept_at IS NULL))
+              LIMIT 1`,
+          )
+          .get(this.arm, submission.instrument, submission.idempotency_key) as
+          | { idempotency_key: string }
+          | undefined;
+        if (blocking !== undefined) {
+          throw new UnresolvedFlattenForInstrumentError(
+            submission.idempotency_key,
+            submission.instrument,
+            blocking.idempotency_key,
+          );
+        }
+        this.insertFlattenWriteAhead(submission);
+      })();
     } catch (cause) {
       if (isUniqueConstraintError(cause)) {
         throw new DuplicateFlattenSubmissionError(submission.idempotency_key);
       }
       throw cause;
     }
+  }
+
+  private insertFlattenWriteAhead(submission: FlattenSubmissionWriteAhead): void {
+    this.db
+      .prepare(
+        `INSERT INTO flatten_submissions (
+             idempotency_key, instrument, asset_class, side, size,
+             status, submitted_at, lot_idempotency_keys, lot_held_quantities, exit_reason,
+             decision_price, quote_bid, quote_ask, quote_mid, quote_observed_at,
+             modelled_cost_breakdown_json, arm
+           ) VALUES (?, ?, ?, ?, ?, 'submitting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        submission.idempotency_key,
+        submission.instrument,
+        submission.asset_class,
+        submission.side,
+        submission.size,
+        toStoredTimestamp(submission.submitted_at),
+        // Both columns projected from the SAME array in the same statement,
+        // so the pairing they encode positionally cannot be wrong here.
+        // `getFlattenAttribution` re-establishes it on the way out.
+        JSON.stringify(submission.lot_held_quantities.map((lot) => lot.idempotency_key)),
+        JSON.stringify(submission.lot_held_quantities.map((lot) => lot.held)),
+        submission.exit_reason,
+        // #1001, migration 0037 — see `FlattenSubmissionWriteAhead`'s own
+        // field docs (types/store.ts).
+        submission.decision_price,
+        submission.quote_bid,
+        submission.quote_ask,
+        submission.quote_mid,
+        submission.quote_observed_at === null
+          ? null
+          : toStoredTimestamp(submission.quote_observed_at),
+        submission.modelled_cost_breakdown === null
+          ? null
+          : JSON.stringify(submission.modelled_cost_breakdown),
+        // #1124, migration 0050 — this INSTANCE's arm, the same posture
+        // `writeAheadPosition`/`insertClosedTrade` already take: the
+        // writer's identity is the fact being recorded, not a field the
+        // caller can mislabel via `FlattenSubmissionWriteAhead`.
+        this.arm,
+      );
   }
 
   /** Persist the post-ack transition (`'submitting'` → `'submitted'`). */
@@ -736,7 +804,7 @@ export class SqliteExecutionStore implements SharedStore {
     }
   }
 
-  /** Persist `'submitting'` → `'error'` — see `SharedStore.resolveFlattenError` for when this applies. */
+  /** Persist → `'error'` — see `SharedStore.resolveFlattenError` for when this applies. */
   async resolveFlattenError(
     idempotency_key: string,
     reason: string,
@@ -760,7 +828,9 @@ export class SqliteExecutionStore implements SharedStore {
   /**
    * Pure read — see `SharedStore.isRetryableFlattenError` for the invariant
    * this backs (a fresh retry key is only safe over a row PROVABLY dead at
-   * the venue). A key naming no row at all is `false`, same as a
+   * the venue, which since #1214's review is either "never landed" or "the
+   * venue terminally refused it having filled nothing"). A key naming no row
+   * at all is `false`, same as a
    * `'submitting'`/`'submitted'` row: only `'error'` clears the walk in
    * `execute.ts`'s `resolveExitRetryKey` to try this exact candidate again.
    */
@@ -891,9 +961,13 @@ export class SqliteExecutionStore implements SharedStore {
    * `reconcile()`'s worklist (#519, #526) — see `SharedStore.getUnresolvedFlattens`
    * for the bound this query implements: `'submitting'` outright, or
    * `'submitted'` rows not yet confirmed swept (`fills_swept_at IS NULL`).
-   * `'error'` rows are excluded by the `status IN (...)` clause itself —
-   * that status means the flatten provably never reached the broker, so
-   * there is nothing left to ask the venue.
+   * `'error'` rows are excluded by the `status` clause itself — that status
+   * means the flatten is provably dead at the venue (never landed, or
+   * terminally refused having filled nothing), so there is nothing left to ask.
+   *
+   * `writeAheadFlatten`'s one-flatten-per-instrument guard runs this SAME
+   * predicate — see its doc. A change here is a change to what may be
+   * submitted, not only to what reconcile looks at.
    *
    * `arm`-scoped since migration 0050 (#1124) — this is a SCAN, not a
    * key-based lookup, and this class's own arm-scoping doc (above) is

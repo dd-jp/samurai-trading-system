@@ -19,7 +19,9 @@
  *   calendar pair the daily flatten resolves its window against
  *   (`withinFlattenWindow`, trader/decide.ts).
  * - **Does not fight the daily flatten cadence.** Any unresolved
- *   `flatten_submissions` row on the instrument stands the attempt down.
+ *   `flatten_submissions` row on the instrument stands the attempt down — and
+ *   symmetrically, `writeAheadFlatten` refuses the daily flatten while one of
+ *   THIS path's rows is unresolved. See "One submitter at a time" below.
  * - **Never throws.** Every failure is swallowed and reported, exactly as
  *   `maybeRearmResidual`'s docblock requires of whatever replaces the re-arm
  *   call.
@@ -32,21 +34,35 @@
  * order whose size is not the whole instrument's held quantity. A residual is
  * one lot's remainder, which is exactly the case that guard rejects.
  *
- * ## What is deliberately NOT re-flattened
+ * ## One submitter at a time
  *
- * A lot with NO exit fill on record (`exitQty === 0`) — #867's
- * `markLotsUnprotected` marks lots at their FULL held quantity when a cancel
- * failed and the flatten was refused. Those lots are still owned by the exit
- * path's own retry chain: `resolveExitRetryKey` (execute.ts) ADVANCES past a
- * `'error'` flatten row (`isRetryableFlattenError`) and re-fires the whole
- * cancel-then-flatten sequence on the next tick, and it cannot see this
- * module's key chain any more than this module can predict its next tick. Two
- * submitters on one lot is the collision the decision's third constraint
- * forbids, so this path stands down and leaves them to the existing page.
+ * The collision the decision's third constraint forbids is two live market
+ * orders on one held quantity, and what prevents it is `writeAheadFlatten`
+ * itself: it refuses, atomically with the insert, any flatten whose instrument
+ * already has an unresolved row (see its `SharedStore` doc). That holds in BOTH
+ * orderings — this path over a daily flatten, and `executeExit` over one of
+ * these — which a check made by either caller before calling cannot, since they
+ * run on independent timers with a window between the read and the write.
+ *
+ * The `getUnresolvedFlattens()` read below is therefore advisory: it turns a
+ * refusal into a named skip and a log line instead of a caught throw, and it
+ * lets the key walk treat any existing candidate as settled. It is not what
+ * makes the invariant true.
+ *
+ * This is why a #867-shaped lot — full held quantity, no exit fill, marked by
+ * `markLotsUnprotected` after `executeExit` cancelled its legs and then refused
+ * the flatten — IS re-flattened here. An earlier version of this module stood
+ * those down on `exitQty === 0`, reasoning that `execute.ts`'s
+ * `resolveExitRetryKey` chain still owned them; that inference was wrong twice.
+ * `exitQty` records whether any exit fill has landed, not who owns the lot's
+ * closure, and the retry chain hangs off the ORDER's per-bar key, so nothing
+ * derives lot-to-chain ownership from it. A lot whose legs are already gone and
+ * whose flatten was refused is exactly the naked residual #1214 says to close.
  */
 
 import type { OpenPosition } from '../../shared/index.js';
 import { describeThrownSafely, logCaughtFailure, safeLog } from '../../shared/index.js';
+import { UnresolvedFlattenForInstrumentError } from './sqlite-shared-store.js';
 import type { ResidualReflattenInput } from './types.js';
 
 /**
@@ -65,14 +81,18 @@ export const MAX_RESIDUAL_REFLATTEN_ATTEMPTS = 3;
 
 /** Why an attempt was not made — a bare code for the log payload and the sweep's divergence reason. */
 export type ResidualReflattenSkipReason =
-  /** #867: no exit fill on record, so the exit path's retry chain still owns this lot. */
-  | 'exit_path_owns_lot'
   /** The venue is shut — a market order must not be fired into it. */
   | 'venue_shut'
   /** The calendar could not answer, so "is the venue open" is unknown. Fail closed. */
   | 'session_unknown'
-  /** A flatten on this instrument is still in flight (the daily cadence's, or this path's own). */
+  /** Someone ELSE's flatten on this instrument is still in flight — the daily cadence's. */
   | 'flatten_in_flight'
+  /**
+   * THIS lot's own earlier re-flatten is still working at the venue. Distinct
+   * from `flatten_in_flight` because the caller must not page for it: the
+   * residual is being closed, by an order this path itself sent.
+   */
+  | 'own_reflatten_in_flight'
   /** The journal could not be read, so neither of the two gates above could be evaluated. */
   | 'journal_read_failed'
   /** `MAX_RESIDUAL_REFLATTEN_ATTEMPTS` already spent on this lot. */
@@ -89,11 +109,6 @@ export type ResidualReflattenOutcome =
  * this runs inside `ingestFills`' per-lot loop and inside the #549 sweep, and
  * an escape here would abort every other lot's processing in the same pass.
  *
- * `exitQty` is the lot's recorded exit-leg quantity, which both call sites
- * have already computed off the same persisted record they derived `residual`
- * from — passed in rather than re-read, so this module cannot disagree with
- * its caller about what the lot has already sold.
- *
  * The caller decides what to do with the outcome; the only thing this returns
  * that suppresses the #525 page is `submitted`, and only until the attempt
  * budget runs out.
@@ -102,23 +117,10 @@ export async function reflattenResidual(
   input: ResidualReflattenInput,
   position: OpenPosition,
   residual: number,
-  exitQty: number,
   now: Date,
 ): Promise<ResidualReflattenOutcome> {
   const { store, broker } = input;
   const lotKey = position.idempotency_key;
-
-  if (!(exitQty > 0)) {
-    return skip(
-      input,
-      position,
-      residual,
-      'exit_path_owns_lot',
-      'no exit fill on record — this lot is #867 shaped (legs cancelled, flatten refused) and ' +
-        "the exit path's own retry chain still owns it; two submitters on one lot is the " +
-        'collision #1214 forbids',
-    );
-  }
 
   // Calendar lookup INSIDE the try deliberately: a composition root that
   // handed over a partial map makes this a TypeError rather than a silent
@@ -150,7 +152,7 @@ export async function reflattenResidual(
     );
   }
 
-  let unresolved: readonly { instrument: string }[];
+  let unresolved: readonly { instrument: string; idempotency_key: string }[];
   try {
     unresolved = await store.getUnresolvedFlattens();
   } catch (error) {
@@ -171,15 +173,14 @@ export async function reflattenResidual(
   // ever having two of its own attempts live at once, since its rows carry
   // the same instrument, which is why the key walk below can treat any
   // existing candidate as settled.
-  if (unresolved.some((row) => row.instrument === position.instrument)) {
-    return skip(
-      input,
-      position,
-      residual,
-      'flatten_in_flight',
-      'a flatten on this instrument is still unresolved — standing down rather than submitting ' +
-        'a second market order against the same lot (#1214: the two paths must not both submit)',
-    );
+  //
+  // Advisory, not the guarantee — see the file doc's "One submitter at a
+  // time". `writeAheadFlatten` re-checks this atomically; what this read buys
+  // is a named skip and a log line rather than a caught refusal, and the walk
+  // invariant above.
+  const blocking = unresolved.find((row) => row.instrument === position.instrument);
+  if (blocking !== undefined) {
+    return standDown(input, position, residual, lotKey, blocking.idempotency_key);
   }
 
   let candidate: string | null;
@@ -248,6 +249,14 @@ export async function reflattenResidual(
       modelled_cost_breakdown: null,
     });
   } catch (error) {
+    // The store's own one-flatten-per-instrument refusal is not a failure —
+    // it is the gate above, re-evaluated atomically and this time authoritative
+    // (a flatten was journalled between that read and this write). Reported as
+    // the same skip, so the outcome does not depend on which of the two reads
+    // saw it.
+    if (error instanceof UnresolvedFlattenForInstrumentError) {
+      return standDown(input, position, residual, lotKey, error.blocking_key);
+    }
     return fail(
       input,
       position,
@@ -341,6 +350,43 @@ async function resolveReflattenKey(input: ResidualReflattenInput, lotKey: string
     if (!(await input.store.findByKey(candidate))) return candidate;
   }
   return null;
+}
+
+/**
+ * The stand-down for an unresolved flatten on the instrument, whichever of the
+ * two gates saw it (the advisory read, or `writeAheadFlatten`'s authoritative
+ * refusal).
+ *
+ * Splits on WHOSE flatten it is, and only for the caller's paging decision:
+ * one of this lot's own earlier re-flatten keys means the residual is already
+ * being closed by an order this path sent, so a "the residual could not be
+ * closed" page would be false — and its documented remedy, manual action at
+ * the venue, would be a third submitter on a lot that already has one working.
+ * The exposure is not thereby unwatched: a re-flatten that fills clears the
+ * marker, one the venue terminally refuses is resolved by `reconcile()` and
+ * the walk advances to `attempts_exhausted`, which DOES page, and a row
+ * reconcile cannot settle pages on `FlattenReconcileAlertChannel`.
+ */
+function standDown(
+  input: ResidualReflattenInput,
+  position: OpenPosition,
+  residual: number,
+  lotKey: string,
+  blockingKey: string,
+): ResidualReflattenOutcome {
+  const own = blockingKey.startsWith(`${lotKey}:residual-reflatten-`);
+  return skip(
+    input,
+    position,
+    residual,
+    own ? 'own_reflatten_in_flight' : 'flatten_in_flight',
+    own
+      ? `this lot's own re-flatten '${blockingKey}' is still unresolved — the residual is already ` +
+          'being closed, so this pass adds nothing and must not page'
+      : `flatten '${blockingKey}' on this instrument is still unresolved — standing down rather ` +
+          'than submitting a second market order against the same lot (#1214: the two paths must ' +
+          'not both submit)',
+  );
 }
 
 function skip(

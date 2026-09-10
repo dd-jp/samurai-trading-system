@@ -90,7 +90,13 @@ const SAXO_DUPLICATE_WINDOW_MS = 15_000;
  */
 const PLACEMENT_LOOKBACK_MS = 4 * SAXO_DUPLICATE_WINDOW_MS;
 
-/** Saxo's `ExternalReference` limit; the `:target` suffix is the longest this adapter appends. */
+/**
+ * Saxo's `ExternalReference` limit. `:target` is the longest suffix this
+ * adapter itself appends — but the budget belongs to the WHOLE key, and the
+ * caller's own suffixes eat into it first: `:retry-N` (execute.ts) and
+ * `:residual-reflatten-N` (residual-reflatten.ts, #1214), the latter costing 22
+ * characters before this adapter adds anything.
+ */
 const EXTERNAL_REFERENCE_MAX_CHARS = 50;
 const LEG_SUFFIX_MAX_CHARS = ':target'.length;
 

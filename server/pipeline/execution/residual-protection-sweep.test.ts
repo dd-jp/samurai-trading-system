@@ -182,8 +182,15 @@ class SweepBroker implements BrokerAdapter {
   async getOrder(): Promise<NormalizedOrder | null> {
     return null;
   }
-  async resumeFlatten(): Promise<NormalizedOrder | null> {
-    return null;
+  /**
+   * #1214 review: scriptable, keyed by client order id, so a test can give
+   * `reconcile()` a real venue answer for a flatten it already acked. The
+   * default `null` is "the adapter cannot reconfirm it", which every test
+   * written before this relied on.
+   */
+  readonly resumeFlattenAnswers = new Map<string, NormalizedOrder>();
+  async resumeFlatten(clientOrderId: string): Promise<NormalizedOrder | null> {
+    return this.resumeFlattenAnswers.get(clientOrderId) ?? null;
   }
   /**
    * #1214: the residual re-flatten's own submit. Recorded rather than
@@ -611,6 +618,49 @@ describe('residual-protection sweep (#549)', () => {
     );
   });
 
+  it('does NOT page while this lot’s own re-flatten is still working (#1214 review, finding 4)', async () => {
+    // The pass right after a successful submit sees the very order it sent.
+    // Paging here would tell the operator the residual "could not be closed"
+    // of a lot with a live closing order, and the page's remedy — act at the
+    // venue by hand — would be a THIRD submitter. Contrast the test above: a
+    // flatten belonging to someone else still pages, because that one leaves
+    // this lot's residual genuinely unattended.
+    const { db, store } = openTestExecutionStore();
+    await seedPosition(store);
+    await seedPartiallyFlattenedFills(store);
+    await store.markResidualUnprotected(LOT, NOW);
+    const ownKey = `${LOT}:residual-reflatten-1`;
+    await store.writeAheadFlatten(flattenWriteAhead(ownKey));
+    await store.resolveFlattenSubmitted(
+      ownKey,
+      { order_state: 'submitted', broker_order_ids: [ownKey] },
+      NOW,
+    );
+
+    const restartedStore = new TestExecutionStore(db);
+    const broker = new SweepBroker();
+    broker.rearmFailure = new ProtectiveRearmUnsupportedError('saxo', 'IsOcoOrderSupported false');
+    const alerts = makeResidualExposureAlerts();
+    const logger = recordingLogger();
+    const execution = new ExecutionImpl(makeInput(broker, restartedStore, alerts, logger));
+
+    await execution.sweepResidualProtection();
+
+    expect(broker.flattenCalls).toEqual([]);
+    expect(alerts.alerts).toEqual([]);
+    // The marker stays: protection is still NOT confirmed, and it is the
+    // re-flatten's fill that clears it.
+    expect(
+      (await restartedStore.getResidualProtectionMarker(LOT))?.unprotected_since,
+    ).not.toBeNull();
+    expect(logger.entries).toContainEqual(
+      expect.objectContaining({
+        event: 'residual_reflatten_skipped',
+        payload: expect.objectContaining({ reason: 'own_reflatten_in_flight' }),
+      }),
+    );
+  });
+
   it('stops after MAX_RESIDUAL_REFLATTEN_ATTEMPTS and falls back to the page (#1214)', async () => {
     // The bound is DURABLE, not an in-memory counter: three spent keys in the
     // journal are what stop the fourth attempt, so a restart cannot reset it.
@@ -645,11 +695,59 @@ describe('residual-protection sweep (#549)', () => {
     );
   });
 
-  it('leaves a #867 full-quantity lot to the exit path, which is still retrying it (#1214)', async () => {
+  it('a re-flatten the venue refused without filling does not wedge the mechanism (#1214 review)', async () => {
+    // The wedge: `fills_swept_at` is the ONLY thing that ever bounds a
+    // 'submitted' flatten row, and only `ingestFills()` sets it, only for a
+    // flatten that produced fills. A re-flatten the venue rejected outright
+    // therefore had nothing that could resolve it — `getUnresolvedFlattens()`
+    // named its instrument forever, across restarts, so every later attempt
+    // stood down on 'flatten_in_flight' and 'attempts_exhausted' was never
+    // reached.
+    const { db, store } = openTestExecutionStore();
+    await seedPosition(store);
+    await seedPartiallyFlattenedFills(store);
+    await store.markResidualUnprotected(LOT, NOW);
+
+    const broker = new SweepBroker();
+    broker.rearmFailure = new ProtectiveRearmUnsupportedError('saxo', 'IsOcoOrderSupported false');
+    const firstKey = `${LOT}:residual-reflatten-1`;
+
+    await new ExecutionImpl(
+      makeInput(broker, new TestExecutionStore(db)),
+    ).sweepResidualProtection();
+    expect(broker.flattenCalls.map((call) => call.clientOrderId)).toEqual([firstKey]);
+
+    // The venue's verdict on it: terminal, and it closed nothing.
+    broker.resumeFlattenAnswers.set(firstKey, {
+      client_order_id: firstKey,
+      broker_order_ids: [firstKey],
+      order_state: 'rejected',
+      filled_qty: 0,
+    });
+
+    // A restart, then one reconcile pass: its flatten loop settles the dead
+    // row, and the #549 sweep that runs later in the SAME pass then finds the
+    // instrument clear and walks on to the next key.
+    const restartedStore = new TestExecutionStore(db);
+    await new ExecutionImpl(makeInput(broker, restartedStore)).reconcile();
+
+    expect(broker.flattenCalls.map((call) => call.clientOrderId)).toEqual([
+      firstKey,
+      `${LOT}:residual-reflatten-2`,
+    ]);
+    expect((await restartedStore.getFlattenSubmission(firstKey))?.status).toBe('error');
+  });
+
+  it('CLOSES a #867 full-quantity lot too — no exit fill is not exit-path ownership (#1214 review)', async () => {
     // `markLotsUnprotected` (execute.ts) marks lots whose legs were cancelled
-    // before a flatten the cancel loop then refused — no exit fill landed, and
-    // `resolveExitRetryKey` re-fires the whole sequence on the next tick. A
-    // second submitter here is exactly the collision the decision forbids.
+    // before a flatten the cancel loop then refused: full held quantity, no
+    // exit fill. This module used to stand those down on `exitQty === 0`,
+    // reasoning that `resolveExitRetryKey` still owned them — but that chain
+    // hangs off the ORDER's per-bar key, so nothing derives lot ownership from
+    // an exit-fill count, and the lot is naked by exactly the definition #1214
+    // says to close. What actually prevents two submitters is
+    // `writeAheadFlatten`'s atomic per-instrument refusal (see the
+    // 'flatten_in_flight' cases above), which holds in both orderings.
     const { db, store } = openTestExecutionStore();
     await seedPosition(store);
     await seedEntryOnlyFills(store);
@@ -664,14 +762,16 @@ describe('residual-protection sweep (#549)', () => {
 
     await execution.sweepResidualProtection();
 
-    expect(broker.flattenCalls).toEqual([]);
-    expect(alerts.alerts[0]).toMatchObject({ residual_qty: 10, rearm_unsupported: true });
-    expect(logger.entries).toContainEqual(
-      expect.objectContaining({
-        event: 'residual_reflatten_skipped',
-        payload: expect.objectContaining({ reason: 'exit_path_owns_lot' }),
-      }),
-    );
+    // The WHOLE held quantity, not a remainder — nothing was ever sold.
+    expect(broker.flattenCalls).toEqual([
+      {
+        clientOrderId: `${LOT}:residual-reflatten-1`,
+        instrument: 'AAPL',
+        side: 'sell',
+        size: 10,
+      },
+    ]);
+    expect(alerts.alerts).toEqual([]);
   });
 
   it("leaves a thrown submitFlatten at 'submitting' for reconcile, and pages (#1214)", async () => {

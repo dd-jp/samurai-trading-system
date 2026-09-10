@@ -335,7 +335,24 @@ async function sweepOne(
     // left this residual behind" — which the observing poll, running with its
     // own flatten row still unswept, cannot.
     if (unsupported) {
-      const reflatten = await reflattenResidual(input, position, residual, exitQty, now);
+      const reflatten = await reflattenResidual(input, position, residual, now);
+      // #1214 review, finding 4: a pass that finds THIS lot's own re-flatten
+      // still working is the same state as the pass that sent it — the
+      // residual is being closed — so it suppresses the page for the same
+      // reason. Paging here would say "could not be closed" of a lot with a
+      // live closing order, and its remedy (manual venue action) would be a
+      // third submitter. See `standDown` for why the exposure stays watched.
+      if (reflatten.kind === 'skipped' && reflatten.reason === 'own_reflatten_in_flight') {
+        return {
+          idempotency_key: key,
+          instrument: position.instrument,
+          store_state: position.order_state,
+          broker_state: null,
+          action: 'undetermined',
+          kind: 'sweep',
+          reason: reflatten.detail,
+        };
+      }
       if (reflatten.kind === 'submitted') {
         // No page: the residual is being CLOSED, and the marker stays until
         // the fill lands and the lot reads flat (the `isFlat` branch above).

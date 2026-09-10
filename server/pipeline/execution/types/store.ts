@@ -193,6 +193,17 @@ export interface FlattenJournal {
    * of the attempt anywhere — not dedupable, not reconcilable. This is that
    * trace. Deliberately thin: no stop/target/entry price, because a flatten
    * is a plain market order and has none of those to journal.
+   *
+   * **Also the one-flatten-per-instrument gate (#1214 review).** An
+   * implementation MUST refuse — atomically with the insert — a submission
+   * whose instrument already has an unresolved flatten (`getUnresolvedFlattens`'
+   * own predicate). Two independent submitters exist on two timers,
+   * `executeExit`'s flatten window and `reflattenResidual`'s residual walk, and
+   * any check either makes BEFORE calling this leaves a window after it in
+   * which the other can journal and submit — two market orders on one held
+   * quantity, i.e. #516. Both callers still stand down gracefully on the
+   * refusal (`deduped` / `flatten_in_flight`); this is the backstop that makes
+   * their own reads advisory rather than load-bearing.
    */
   writeAheadFlatten(submission: FlattenSubmissionWriteAhead): Promise<void>;
   /** Persist the post-ack transition (`'submitting'` → `'submitted'`). */
@@ -202,18 +213,28 @@ export interface FlattenJournal {
     resolved_at: Date,
   ): Promise<void>;
   /**
-   * Persist `'submitting'` → `'error'` for a flatten that PROVABLY never
-   * reached the broker (e.g. the pre-flatten bracket cancel failed) — as
-   * opposed to a `submitFlatten` call that itself threw, which is genuine
-   * ambiguity (the venue may have seen it) and is left at `'submitting'`
-   * for reconcile to resolve later, exactly as the bracket path leaves a
-   * `pending` record on a `submitBracket` failure.
+   * Persist → `'error'` for a flatten PROVABLY dead at the venue. Two ways in:
+   *
+   * - It never reached the broker at all (e.g. the pre-flatten bracket cancel
+   *   failed, so `executeExit` refused to submit) — as opposed to a
+   *   `submitFlatten` call that itself threw, which is genuine ambiguity (the
+   *   venue may have seen it) and is left at `'submitting'` for reconcile to
+   *   resolve later, exactly as the bracket path leaves a `pending` record on a
+   *   `submitBracket` failure.
+   * - #1214 review: reconcile observed the venue report it terminally
+   *   (`TERMINAL_ORDER_STATES`) having filled NOTHING. It reached the broker
+   *   and was refused; it closed no quantity and never will. Without this,
+   *   nothing ever resolved such a row — only `ingestFills()` sets
+   *   `fills_swept_at`, and only for a flatten that produced fills — so it
+   *   stayed "in flight" forever and wedged every later flatten on the
+   *   instrument. See `reconcileFlatten` for why the zero-fill half of the
+   *   condition is load-bearing.
    */
   resolveFlattenError(idempotency_key: string, reason: string, resolved_at: Date): Promise<void>;
   /**
    * True iff `idempotency_key` names a `flatten_submissions` row resolved to
-   * `'error'` — i.e. `resolveFlattenError`'s own invariant: the flatten
-   * PROVABLY never reached the broker. A `'submitting'` or `'submitted'` row
+   * `'error'` — i.e. `resolveFlattenError`'s own invariant: the flatten is
+   * PROVABLY dead at the venue. A `'submitting'` or `'submitted'` row
    * returns `false` — retrying under a fresh key while the broker's answer
    * to the ORIGINAL attempt is still unknown (`'submitting'`) or the
    * original attempt already succeeded (`'submitted'`) risks a double

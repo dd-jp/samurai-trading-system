@@ -89,6 +89,7 @@
 
 import type { OpenPosition, OrderState } from '../../shared/index.js';
 import { describeThrownSafely, safeLog } from '../../shared/index.js';
+import { TERMINAL_ORDER_STATES } from '../../shared/store/index.js';
 import { sweepResidualProtection } from './residual-protection-sweep.js';
 import type {
   ReconcileDivergence,
@@ -283,6 +284,40 @@ async function reconcileFlatten(
   // The venue named an order. `resumeFlatten`'s side effect already
   // re-populated the adapter's own flatten-sweep worklist; what is left is
   // updating the journal so this row eventually stops being "unresolved".
+
+  // #1214 review — the ONE venue answer that must resolve the row here rather
+  // than merely be recorded on it. `fills_swept_at` is the only thing that
+  // ever bounds a `'submitted'` row (`getUnresolvedFlattens`), and only
+  // `ingestFills()` sets it, only for a flatten that actually produced fills.
+  // A flatten the venue terminally refused therefore had NOTHING to resolve
+  // it: `recordFlattenOrderStateObserved` below leaves `status`/`resolved_at`
+  // untouched, so the row stayed unresolved forever — wedging every later
+  // flatten on the instrument, both this instrument's daily flatten
+  // (`executeExit`'s write-ahead guard) and the #1214 re-flatten walk, across
+  // restarts.
+  //
+  // `filled_qty === 0` is load-bearing, not belt-and-braces: a flatten that
+  // filled part of the lot and was then cancelled still has fills in flight
+  // for `ingestFills()` to sweep, and `resumeFlatten`'s worklist side effect
+  // above is what recovers them after a restart. Only a flatten that closed
+  // NOTHING is dead with nothing owing.
+  if (TERMINAL_ORDER_STATES.includes(order.order_state) && order.filled_qty === 0) {
+    const reason =
+      `reconcile: the venue reports this flatten '${order.order_state}' having filled nothing — ` +
+      'it closed no quantity and never will, so the journal row is resolved rather than left ' +
+      'standing as an in-flight flatten on the instrument';
+    await store.resolveFlattenError(row.idempotency_key, reason, now);
+    return {
+      idempotency_key: row.idempotency_key,
+      instrument: row.instrument,
+      store_state: storeState,
+      broker_state: order.order_state,
+      action: 'rejected',
+      kind: 'flatten',
+      reason,
+    };
+  }
+
   if (row.status === 'submitting') {
     // The genuine first resolution of this write-ahead's ambiguity —
     // `resolveFlattenSubmitted` is the right write here (sets `resolved_at`,

@@ -23,7 +23,10 @@ import { ingestFills } from './ingest-fills.js';
 import { reconcile } from './reconcile.js';
 import { markResidualsUnprotected } from './residual-protection.js';
 import { sweepResidualProtection } from './residual-protection-sweep.js';
-import { DuplicatePositionError } from './sqlite-shared-store.js';
+import {
+  DuplicatePositionError,
+  UnresolvedFlattenForInstrumentError,
+} from './sqlite-shared-store.js';
 import type {
   Execution,
   ExecutionInput,
@@ -624,7 +627,11 @@ async function resolveExitRetryKey(
  *    exit has no bracket and no `OpenPosition` to write ahead, so without
  *    this row a replay of the same decision sailed past `findByKey` every
  *    time, and a `submitFlatten` response lost to a timeout left no durable
- *    clientOrderId for #86's reconcile to resolve against.
+ *    clientOrderId for #86's reconcile to resolve against. That write is also
+ *    what refuses this flatten while ANOTHER is still unresolved on the
+ *    instrument (#1214's review — `reflattenResidual` is a second submitter
+ *    this function's `getOpenPositions()` sizing cannot see); see the call
+ *    site's comment.
  * 3. **Cancel the held lot's bracket before flattening.** `submitFlatten` is
  *    a plain, unrelated market order — it does not touch the held lot's
  *    stop/target legs (confirmed against the Alpaca adapter: `cancel()` is
@@ -788,35 +795,64 @@ async function executeExit(
   // cancel/flatten calls below proceed with no durable record behind them,
   // the exact failure `writeAheadPosition`'s catch in the bracket path above
   // guards against.
-  await store.writeAheadFlatten({
-    idempotency_key: idempotencyKey,
-    instrument: order.instrument,
-    asset_class: order.asset_class,
-    side: order.side,
-    // #793: threaded through to `closed_trades.close_reason` via
-    // `flatten_submissions.exit_reason` — see `redistributeOneFlatten`.
-    exit_reason: order.metadata.exit_reason,
-    size: order.size,
-    submitted_at: now,
-    // Which lots this flatten closes AND what each of them holds, so
-    // `ingestFills()` can attribute and SPLIT the fill without re-deriving
-    // either from whatever is still open when it lands (migrations 0020 and
-    // 0021 carry both arguments). `perLotHeld` is `heldLots` mapped
-    // one-to-one, preserving `getOpenPositions()`'s `ORDER BY opened_at`,
-    // which the split relies on to allocate a partial fill oldest-lot-first.
+  //
+  // The ONE refusal that is caught: #1214's review found this path could
+  // submit a second market order over a re-flatten `reflattenResidual` had
+  // already sent on the same lot. This function sizes purely from
+  // `getOpenPositions()` minus `getExitFillSizes` — an in-flight flatten whose
+  // fills have not landed is invisible to both — so it cannot see the other
+  // submitter, and the two run on independent timers. `writeAheadFlatten`
+  // refuses atomically instead (see its `SharedStore` doc), and it is placed
+  // HERE, above the cancel loop, so a refusal destroys no protective legs: the
+  // lot is left exactly as it was, still bracketed, with the other flatten
+  // working.
+  try {
+    await store.writeAheadFlatten({
+      idempotency_key: idempotencyKey,
+      instrument: order.instrument,
+      asset_class: order.asset_class,
+      side: order.side,
+      // #793: threaded through to `closed_trades.close_reason` via
+      // `flatten_submissions.exit_reason` — see `redistributeOneFlatten`.
+      exit_reason: order.metadata.exit_reason,
+      size: order.size,
+      submitted_at: now,
+      // Which lots this flatten closes AND what each of them holds, so
+      // `ingestFills()` can attribute and SPLIT the fill without re-deriving
+      // either from whatever is still open when it lands (migrations 0020 and
+      // 0021 carry both arguments). `perLotHeld` is `heldLots` mapped
+      // one-to-one, preserving `getOpenPositions()`'s `ORDER BY opened_at`,
+      // which the split relies on to allocate a partial fill oldest-lot-first.
+      //
+      // A lot holding NOTHING — its entry fill has not landed — is still named.
+      // The cancel loop below iterates `heldLots` regardless of this journal, so
+      // its protective legs go either way; dropping it here would remove the
+      // only thing that re-arms them (#525). Its share is then exactly zero.
+      lot_held_quantities: perLotHeld,
+      decision_price: snapshot.decision_price,
+      quote_bid: snapshot.quote_bid,
+      quote_ask: snapshot.quote_ask,
+      quote_mid: snapshot.quote_mid,
+      quote_observed_at: snapshot.quote_observed_at,
+      modelled_cost_breakdown: snapshot.modelled_cost_breakdown,
+    });
+  } catch (error) {
+    if (!(error instanceof UnresolvedFlattenForInstrumentError)) throw error;
+    // `deduped`, not `error`: something IS already closing this instrument, so
+    // the flat-by-close intent is being served — by the other submitter's
+    // order, not by a failure of this one. The next tick in the #826 window
+    // re-runs this whole function, and the flatten proceeds as soon as the
+    // in-flight row resolves (its fills swept, or reconcile settling it —
+    // including the terminal-non-fill case #1214's review closed, which is
+    // what keeps this refusal from being permanent).
     //
-    // A lot holding NOTHING — its entry fill has not landed — is still named.
-    // The cancel loop below iterates `heldLots` regardless of this journal, so
-    // its protective legs go either way; dropping it here would remove the
-    // only thing that re-arms them (#525). Its share is then exactly zero.
-    lot_held_quantities: perLotHeld,
-    decision_price: snapshot.decision_price,
-    quote_bid: snapshot.quote_bid,
-    quote_ask: snapshot.quote_ask,
-    quote_mid: snapshot.quote_mid,
-    quote_observed_at: snapshot.quote_observed_at,
-    modelled_cost_breakdown: snapshot.modelled_cost_breakdown,
-  });
+    // The refusal is INSTRUMENT-scoped while a residual re-flatten closes one
+    // lot's remainder, so a sibling lot on the same instrument waits for that
+    // row too. Deliberate: `UnresolvedFlattenSubmission` carries no lot
+    // identity to narrow it by, and the narrower alternative is the
+    // two-submitters-one-instrument reversal #516 exists to prevent.
+    return result('deduped', idempotencyKey, now, { reason: error.message });
+  }
 
   // Lots this loop has ALREADY cancelled successfully, in order. Load-bearing
   // for the catch below, which is the only thing that reads it.

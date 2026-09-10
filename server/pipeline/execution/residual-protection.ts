@@ -286,15 +286,19 @@ export async function maybeRearmResidual(
     );
     // #1214's recorded remedy, tried before the page: on a venue that cannot
     // arm legs at all, the residual is closed rather than protected. Only a
-    // SUBMITTED order suppresses the page — every stand-down and every
-    // failure falls through to the existing #525 escalation below, so this
-    // change can only ever add an action, never remove an alert. The marker
+    // live closing order suppresses the page — a fresh submit, or this lot's
+    // own earlier one still working; every other stand-down and every failure
+    // falls through to the existing #525 escalation below. The marker
     // stays set either way: it clears when the lot reads flat, which is what
     // a filled re-flatten makes true. Never throws (its own contract), so it
     // cannot break this function's.
     if (unsupported) {
-      const reflatten = await reflattenResidual(input, position, residual, exitQty, now);
+      const reflatten = await reflattenResidual(input, position, residual, now);
       if (reflatten.kind === 'submitted') return;
+      // #1214 review, finding 4: this lot's own re-flatten is already working
+      // at the venue — the same state as a fresh submit, so the same
+      // suppression. See `standDown` (residual-reflatten.ts).
+      if (reflatten.kind === 'skipped' && reflatten.reason === 'own_reflatten_in_flight') return;
     }
     // #549: the marker stays set (protection is NOT confirmed). The episode
     // is recorded as already-alerted ONLY when the channel accepted the

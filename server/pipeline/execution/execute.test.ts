@@ -37,6 +37,8 @@ import type {
   FlattenReconcileAlertChannel,
   NativeBracketRequest,
   NormalizedFill,
+  NormalizedOrder,
+  NormalizedPosition,
   ResidualExposureAlert,
   ResidualExposureAlertChannel,
 } from './types.js';
@@ -1080,6 +1082,108 @@ describe('ExecutionImpl.execute', () => {
       expect(second.reason).toBe('an order or fill already exists for this idempotency_key');
       expect(broker.cancelCalls).toHaveLength(1);
       expect(broker.flattenCalls).toHaveLength(1);
+    });
+
+    /**
+     * #1214's review, findings 1 and 3, against the REAL store — the guard
+     * being proven lives in `SqliteExecutionStore.writeAheadFlatten`, so a
+     * fake store would prove nothing about it.
+     *
+     * Finding 1: `executeExit` sizes purely from `getOpenPositions()` minus
+     * `getExitFillSizes`, and an in-flight flatten whose fills have not landed
+     * moves neither. So it could not see a residual re-flatten
+     * (`reflattenResidual`) already working on the same lot, and would submit a
+     * SECOND market order on it at the next flatten-window tick.
+     *
+     * Finding 3: with that guard in place, a re-flatten nothing could resolve
+     * would no longer merely wedge the re-flatten mechanism — it would wedge
+     * the mandatory flat-by-close. The second test is that pair together.
+     */
+    describe('one flatten per instrument (#1214 review)', () => {
+      const REFLATTEN_KEY = 'key-aapl-entry-1:residual-reflatten-1';
+
+      /** A live residual re-flatten on the held lot: journalled, acked by the venue, no fills swept. */
+      async function seedLiveReflatten(
+        store: ReturnType<typeof openTestExecutionStore>['store'],
+      ): Promise<void> {
+        await store.writeAheadFlatten({
+          idempotency_key: REFLATTEN_KEY,
+          instrument: 'AAPL',
+          asset_class: 'stocks',
+          side: 'sell',
+          size: 6,
+          submitted_at: NOW,
+          lot_held_quantities: [{ idempotency_key: 'key-aapl-entry-1', held: 6 }],
+          exit_reason: 'flatten',
+          decision_price: null,
+          quote_bid: null,
+          quote_ask: null,
+          quote_mid: null,
+          quote_observed_at: null,
+          modelled_cost_breakdown: null,
+        });
+        await store.resolveFlattenSubmitted(
+          REFLATTEN_KEY,
+          { order_state: 'submitted', broker_order_ids: [`${REFLATTEN_KEY}:flatten`] },
+          NOW,
+        );
+      }
+
+      it('refuses the flatten while a residual re-flatten is still working the same lot', async () => {
+        const { store } = openTestExecutionStore();
+        const broker = makeBroker();
+        await seedHeldLot(store);
+        await seedLiveReflatten(store);
+
+        const result = await new ExecutionImpl(makeInput({ store, broker })).execute(makeExitGo());
+
+        expect(broker.flattenCalls).toEqual([]);
+        // 'deduped', not 'error': the instrument IS being closed, by the other
+        // submitter's order.
+        expect(result.status).toBe('deduped');
+        // The refusal happens at the write-ahead, ABOVE the cancel loop, so the
+        // lot keeps the protective legs it still has. A guard placed after the
+        // cancel loop would have stripped them and then refused.
+        expect(broker.cancelCalls).toEqual([]);
+        expect(await store.getFlattenSubmission('key-aapl-1355')).toBeNull();
+      });
+
+      it('proceeds again once reconcile settles a re-flatten the venue refused without filling', async () => {
+        const { store } = openTestExecutionStore();
+        await seedHeldLot(store);
+        await seedLiveReflatten(store);
+
+        // The venue's answer for that re-flatten: terminal, and it closed
+        // NOTHING. Nothing else can resolve such a row — only `ingestFills()`
+        // sets `fills_swept_at`, and only for a flatten that produced fills —
+        // so before this fix the row stayed unresolved forever and the refusal
+        // above became permanent, across restarts.
+        const reconcilingBroker = {
+          ...makeBroker(),
+          async resumeFlatten(): Promise<NormalizedOrder> {
+            return {
+              client_order_id: REFLATTEN_KEY,
+              broker_order_ids: [`${REFLATTEN_KEY}:flatten`],
+              order_state: 'rejected',
+              filled_qty: 0,
+            };
+          },
+          async getOpenPositions(): Promise<NormalizedPosition[]> {
+            return [];
+          },
+        };
+        await new ExecutionImpl(makeInput({ store, broker: reconcilingBroker })).reconcile();
+
+        expect(await store.getUnresolvedFlattens()).toEqual([]);
+
+        const broker = makeBroker();
+        const result = await new ExecutionImpl(makeInput({ store, broker })).execute(makeExitGo());
+
+        expect(result.status).toBe('submitted');
+        expect(broker.flattenCalls).toEqual([
+          { instrument: 'AAPL', side: 'sell', size: 40, clientOrderId: 'key-aapl-1355' },
+        ]);
+      });
     });
 
     // #921: closing gap #1 in the issue's remaining "resilience gaps" list.
