@@ -17,7 +17,7 @@ import type {
   OcoDoubleFillAlert,
   OcoDoubleFillAlertChannel,
 } from '../../pipeline/execution/index.js';
-import type { DiscordClient, TelegramClient } from '../../pipeline/verdict/index.js';
+import { TradeChannelAlert } from './trade-channel.js';
 
 /**
  * Composed only from the alert's own curated fields — identifiers this
@@ -35,31 +35,12 @@ function formatOcoDoubleFillAlert(alert: OcoDoubleFillAlert): string {
   );
 }
 
-export class TradeChannelOcoDoubleFillAlert implements OcoDoubleFillAlertChannel {
-  readonly #telegram: TelegramClient;
-  readonly #telegramChatId: string;
-  readonly #discord: DiscordClient | undefined;
-  readonly #discordChannelId: string | undefined;
-
-  constructor(
-    telegram: TelegramClient,
-    telegramChatId: string,
-    discord?: DiscordClient,
-    discordChannelId?: string,
-  ) {
-    this.#telegram = telegram;
-    this.#telegramChatId = telegramChatId;
-    this.#discord = discord;
-    this.#discordChannelId = discordChannelId;
-  }
-
+export class TradeChannelOcoDoubleFillAlert
+  extends TradeChannelAlert
+  implements OcoDoubleFillAlertChannel
+{
   async postOcoDoubleFillAlert(alert: OcoDoubleFillAlert): Promise<void> {
     const text = formatOcoDoubleFillAlert(alert);
-    await Promise.all([
-      this.#telegram.sendMessage(this.#telegramChatId, text),
-      this.#discord && this.#discordChannelId
-        ? this.#discord.sendMessage(this.#discordChannelId, text)
-        : Promise.resolve(),
-    ]);
+    await this.send(text);
   }
 }

@@ -31,7 +31,7 @@
  */
 
 import { currentTraceId, describeThrownSafely } from '../../../shared/index.js';
-import type { SharedStore } from '../../../shared/store/index.js';
+import type { StoreHandle } from '../../../shared/store/index.js';
 import type { Logger } from '../../../shared/types.js';
 
 /** The three refusal kinds `#refuse` stamps and escalates (see its doc). */
@@ -183,7 +183,7 @@ export class SqliteSpendCap implements SpendCap {
   #faultAnnounced = false;
 
   constructor(
-    private readonly db: SharedStore,
+    private readonly db: StoreHandle,
     private readonly budgetUsd: number,
     private readonly logger?: Logger,
     /**

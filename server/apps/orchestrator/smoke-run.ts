@@ -257,7 +257,7 @@ import {
   TokenBucket,
   toBrokerFillId,
 } from '../../shared/index.js';
-import { openSharedStore, type SharedStore as SqliteHandle } from '../../shared/store/index.js';
+import { openSharedStore, type StoreHandle } from '../../shared/store/index.js';
 import type { CostConfig, CostModel } from '../../tools/backtest/index.js';
 import { CostModelImpl } from '../../tools/backtest/index.js';
 import {
@@ -1586,7 +1586,7 @@ export interface ExitPathEvidence {
  * `bestEffortMarkerWrite`. The two paths share no MARKER-WRITING path (#1285
  * N5, round-2 review corrects the earlier "share no code" framing here,
  * which was false: `residual-protection-sweep.ts` imports
- * `recordedExposure`/`coversQty` from `ingest-fills.ts`, so that arithmetic
+ * `heldQuantityFromFills`/`isFlat` from `shared/held-quantity.ts`, so that arithmetic
  * IS shared code) — what they share is only those two exported helpers,
  * which `sweepOne` deliberately calls fresh off the persisted fill record
  * rather than trusting any cached figure, "so the two surfaces cannot
@@ -1635,7 +1635,7 @@ export function findSweepDivergence(
  * needs that is not itself a store row.
  */
 async function runExitPathScenarios(input: {
-  db: SqliteHandle;
+  db: StoreHandle;
   clock: SimulatedClock;
   costConfig: CostConfig;
   executionConfig: ExecutionConfig;
@@ -1816,7 +1816,7 @@ async function runExitPathScenarios(input: {
 
 /** Everything the extracted exit-path scenarios below share and mutate in sequence. */
 interface ExitPathScenarioContext {
-  readonly db: SqliteHandle;
+  readonly db: StoreHandle;
   readonly clock: SimulatedClock;
   readonly costModel: CostModelImpl;
   readonly marketData: MarketDataService;
@@ -1921,7 +1921,7 @@ async function runPartialFlattenScenario(
     'scenario 2 exit',
   );
   await ctx.execution.ingestFills();
-  // Matches ingest-fills.ts's own `filledSize - exitQty`, not an algebraic
+  // Matches `heldQuantityFromFills`'s own `filledSize - exitQty` (shared/held-quantity.ts), not an algebraic
   // rearrangement of it — the two are not guaranteed to be the same float64
   // bit pattern (ADR-0005), only the SAME expression is.
   const exitFillQty = EXIT_PATH_LOT_SIZE * PARTIAL_FLATTEN_FRACTION;
@@ -2078,7 +2078,7 @@ async function runResidualSweepScenario(
   // lot's residual is left naked with only the marker pointing at it.
   await ctx.execution.ingestFills();
   const exitFillQty = EXIT_PATH_LOT_SIZE * PARTIAL_FLATTEN_FRACTION;
-  // Same `filledSize - exitQty` expression as ingest-fills.ts — scenario 2's
+  // Same `filledSize - exitQty` expression as `heldQuantityFromFills` — scenario 2's
   // own float-identity reasoning, unchanged.
   const expectedResidual = EXIT_PATH_LOT_SIZE - exitFillQty;
 
@@ -2350,7 +2350,7 @@ const CRYPTO_EMULATION_LOT_KEY = 'smoke-crypto-emulated-lot';
  * sibling), then read the journal back off the SAME db the gate reads.
  */
 async function runCryptoEmulationScenario(
-  db: SqliteHandle,
+  db: StoreHandle,
   logger: Logger,
 ): Promise<CryptoEmulationEvidence> {
   const client = new CryptoEmulationScenarioClient();
@@ -2979,7 +2979,7 @@ export interface SmokeObservations {
 
 /** Reads everything the gate and the report need, in one pass over the store. */
 export function readSmokeObservations(
-  db: SqliteHandle,
+  db: StoreHandle,
   miArchive?: MiArchiveStore,
   marketIntelligence?: MarketIntelligenceStore,
 ): SmokeObservations {
@@ -3504,7 +3504,7 @@ export interface OutsideBenchmarkEvidence {
  * evidence the real scheduler ran, not evidence a probe standing in for it
  * ran.
  */
-function feedbackCycleScheduleWasWritten(db: SqliteHandle): boolean {
+function feedbackCycleScheduleWasWritten(db: StoreHandle): boolean {
   return new SqliteFeedbackCycleScheduleStore(db).lastBoundary() !== null;
 }
 
@@ -3537,7 +3537,7 @@ export type SizingCeilingEvidence = {
 };
 
 function readSizingCeilingStamps(
-  db: SqliteHandle,
+  db: StoreHandle,
   expected: number | undefined,
 ): SizingCeilingEvidence {
   const rows = db
@@ -3572,7 +3572,7 @@ function readSizingCeilingStamps(
  * here means the wire's "never armed" case leaked into a process that DID
  * boot — `armed_at` stopped being read on the path that fills the wire.
  */
-function readPublishedLlmCap(db: SqliteHandle): {
+function readPublishedLlmCap(db: StoreHandle): {
   capUsd: number | null;
   capArmedAt: string | null;
 } {
@@ -3581,7 +3581,7 @@ function readPublishedLlmCap(db: SqliteHandle): {
 }
 
 /** Drives the shipped arm-comparison cycle over the smoke run's own store. */
-export function runArmComparisonProbe(db: SqliteHandle): ArmComparisonEvidence {
+export function runArmComparisonProbe(db: StoreHandle): ArmComparisonEvidence {
   let alerts = 0;
   const samples = new SqliteArmComparisonSampleStore(db);
   const sample = runArmComparisonCycle({
@@ -3654,7 +3654,7 @@ class FixtureBenchmarkSeriesSource implements BenchmarkSeriesSource {
 
 /** Drives the shipped outside-benchmark cycle over the arm comparison's window. */
 async function runOutsideBenchmarkProbe(
-  db: SqliteHandle,
+  db: StoreHandle,
   comparison: ArmComparison,
 ): Promise<OutsideBenchmarkEvidence> {
   const samples = new SqliteOutsideBenchmarkSampleStore(db);
@@ -5840,7 +5840,7 @@ export function evaluateSmokeGate(
   // marker is already set) and clears via `store.confirmResidualProtected`
   // directly. What makes the two indistinguishable to the other three checks
   // is not a shared code path but `sweepOne`'s own doc'd choice to recompute
-  // off the SAME `recordedExposure`/`coversQty` expressions
+  // off the SAME `heldQuantityFromFills`/`isFlat` expressions
   // `maybeRearmResidual` uses, so both leave an identical marker/qty/alert
   // footprint. The `scenario5Alerts` count check below, and the
   // `markerCleared`/`protectedQty` checks further below, all read a healed-

@@ -5,7 +5,7 @@
  * different sample, and the previous verdict is the record of what was believed
  * when a capital decision was made.
  */
-import { openSharedStore, type SharedStore } from '../../shared/store/index.js';
+import { openSharedStore, type StoreHandle } from '../../shared/store/index.js';
 import { SqliteStage2SelectionStore } from './sqlite-stage2-selection-store.js';
 import type { Stage2Selection } from './stage2-selection.js';
 
@@ -27,7 +27,7 @@ function selection(overrides: Partial<Stage2Selection> = {}): Stage2Selection {
 }
 
 describe('SqliteStage2SelectionStore', () => {
-  let db: SharedStore;
+  let db: StoreHandle;
   let store: SqliteStage2SelectionStore;
 
   beforeEach(() => {

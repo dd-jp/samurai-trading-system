@@ -22,9 +22,9 @@
 import type { ClosedTrade, OpenPosition, OrderState, TradingArm } from '../../shared/index.js';
 import {
   type ClosedTradeRow,
-  type SharedStore as Db,
   fromClosedTradeRow,
   openSharedStore,
+  type StoreHandle,
 } from '../../shared/store/index.js';
 import {
   fromPositionRow,
@@ -72,7 +72,7 @@ export class TestExecutionStore extends SqliteExecutionStore {
   // 'live' one already writes to, to compare the two arms' closed_trades
   // rows from one shared table the way `SqliteArmComparisonSource` does.
   constructor(
-    private readonly testDb: Db,
+    private readonly testDb: StoreHandle,
     arm: TradingArm = 'live',
   ) {
     super(testDb, arm);
@@ -125,6 +125,19 @@ export class TestExecutionStore extends SqliteExecutionStore {
   override async markFlattenFillsSwept(idempotency_key: string, swept_at: Date): Promise<void> {
     this.writeLog.push(`mark-flatten-fills-swept:${idempotency_key}`);
     return super.markFlattenFillsSwept(idempotency_key, swept_at);
+  }
+
+  /**
+   * Rewrites a journal row's `lot_held_quantities` column after the write-ahead
+   * — `null` ages it to its pre-migration-0021 shape (the only one that still
+   * routes the split through `getEntryFillSizes`); any other string is what a
+   * corrupted row would read back as. Tests reach the column through this so
+   * the raw SQL lives in one place next to the store it targets.
+   */
+  ageFlattenHeldQuantities(idempotency_key: string, raw: string | null = null): void {
+    this.testDb
+      .prepare('UPDATE flatten_submissions SET lot_held_quantities = ? WHERE idempotency_key = ?')
+      .run(raw, idempotency_key);
   }
 
   override async markResidualUnprotected(
@@ -222,7 +235,7 @@ export class TestExecutionStore extends SqliteExecutionStore {
   }
 }
 
-export function openTestExecutionStore(): { db: Db; store: TestExecutionStore } {
+export function openTestExecutionStore(): { db: StoreHandle; store: TestExecutionStore } {
   const db = openSharedStore(':memory:');
   return { db, store: new TestExecutionStore(db) };
 }

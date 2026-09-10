@@ -48,7 +48,9 @@ import type {
   LoosenAppliedNotice,
   LoosenNotificationChannel,
 } from '../../pipeline/feedback-loop/index.js';
-import type { DiscordClient, TelegramClient } from '../../pipeline/verdict/index.js';
+import type { TelegramClient } from '../../pipeline/verdict/index.js';
+import { describeThrownSafely } from '../../shared/index.js';
+import { TradeChannelAlert } from './trade-channel.js';
 import type { Logger } from './types.js';
 
 /**
@@ -68,47 +70,26 @@ function formatLoosenNotice(notice: LoosenAppliedNotice): string {
   );
 }
 
-export class TradeChannelLoosenNotice implements LoosenNotificationChannel {
-  readonly #telegram: TelegramClient;
-  readonly #telegramChatId: string;
-  readonly #discord: DiscordClient | undefined;
-  readonly #discordChannelId: string | undefined;
+export class TradeChannelLoosenNotice
+  extends TradeChannelAlert
+  implements LoosenNotificationChannel
+{
   readonly #logger: Logger;
 
   /**
-   * `logger` is REQUIRED and sits ahead of the optional Discord pair for
-   * `TradeChannelBreachAlert`'s reason: the only alternative to logging a
-   * failed send is silence, and a limit the system widened by itself and told
-   * nobody about is something the operator has to be able to find afterwards.
+   * `logger` is REQUIRED, for `TradeChannelBreachAlert`'s reason: the only
+   * alternative to logging a failed send is silence, and a limit the system
+   * widened by itself and told nobody about is something the operator has to
+   * be able to find afterwards.
    */
-  constructor(
-    telegram: TelegramClient,
-    telegramChatId: string,
-    logger: Logger,
-    discord?: DiscordClient,
-    discordChannelId?: string,
-  ) {
-    this.#telegram = telegram;
-    this.#telegramChatId = telegramChatId;
+  constructor(telegram: TelegramClient, telegramChatId: string, logger: Logger) {
+    super(telegram, telegramChatId);
     this.#logger = logger;
-    this.#discord = discord;
-    this.#discordChannelId = discordChannelId;
   }
 
   notifyLoosenApplied(notice: LoosenAppliedNotice): void {
     const text = formatLoosenNotice(notice);
-    // Both attempted together, mirroring the breach alert's shape, so a
-    // Telegram outage does not silence the Discord copy.
-    void Promise.allSettled([
-      this.#telegram.sendMessage(this.#telegramChatId, text),
-      this.#discord && this.#discordChannelId
-        ? this.#discord.sendMessage(this.#discordChannelId, text)
-        : Promise.resolve(),
-    ]).then((results) => {
-      const failed = results.filter((r) => r.status === 'rejected');
-      if (failed.length === 0) {
-        return;
-      }
+    this.sendDetached(text, (error: unknown) => {
       this.#logger.log({
         trace_id: 'feedback-cycle',
         stage: 'feedback-loop',
@@ -126,7 +107,7 @@ export class TradeChannelLoosenNotice implements LoosenNotificationChannel {
           to: notice.to,
           applied_at: notice.applied_at.toISOString(),
           applied: true,
-          failures: failed.length,
+          error: describeThrownSafely(error),
         },
       });
     });

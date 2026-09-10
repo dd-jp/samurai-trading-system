@@ -8,7 +8,7 @@
  * rather than recomputed on read — see the migration's own comment, and
  * `SqliteArmComparisonSampleStore`, which this mirrors.
  */
-import type { SharedStore } from '../../shared/store/index.js';
+import type { StoreHandle } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';
 import type { OutsideBenchmarkId, OutsideBenchmarkSample } from '../outside-benchmark/index.js';
 import type { OutsideBenchmarkSampleStore } from './types.js';
@@ -41,7 +41,7 @@ function fromRow(row: OutsideBenchmarkSampleRow): OutsideBenchmarkSample {
 }
 
 export class SqliteOutsideBenchmarkSampleStore implements OutsideBenchmarkSampleStore {
-  constructor(private readonly db: SharedStore) {}
+  constructor(private readonly db: StoreHandle) {}
 
   /**
    * One row per (cycle instant, benchmark). `INSERT OR REPLACE` for the reason

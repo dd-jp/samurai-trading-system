@@ -512,7 +512,7 @@ describe('SaxoHttpBrokerClient', () => {
   // placeOrder" above — the placeOrder test below does NOT by itself catch a
   // classifier regression: `maxAttempts: 1` pins it to one attempt
   // regardless of what `isRetryableSaxoBrokerError` answers (confirmed by
-  // mutation — reverting `isRetrySafeSaxoMethod` to always `true` leaves
+  // mutation — reverting `isRetrySafeMethod` to always `true` leaves
   // this file's 21 tests green). The classification-level guarantee is
   // proven in isolation by `saxo-broker-errors.test.ts`'s
   // "timeout/rate-limit/5xx retryability is verb-aware" suite, four cases of

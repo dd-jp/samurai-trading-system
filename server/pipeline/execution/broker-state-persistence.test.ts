@@ -18,7 +18,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type Clock, TokenBucket, toBrokerFillId } from '../../shared/index.js';
 import { recordingLogger } from '../../shared/recording-logger.js';
-import { type SharedStore as Db, openSharedStore } from '../../shared/store/index.js';
+import { openSharedStore, type StoreHandle } from '../../shared/store/index.js';
 import { AlpacaBrokerAdapter } from './adapters/alpaca-adapter.js';
 import type { AlpacaBrokerClient, AlpacaOrder } from './adapters/alpaca-client.js';
 import type { BrokerVenue } from './broker-state-store.js';
@@ -81,10 +81,10 @@ function noopDoubleFillAlerts(): OcoDoubleFillAlertChannel {
 }
 
 const tempDirs: string[] = [];
-const openDbs: Db[] = [];
+const openDbs: StoreHandle[] = [];
 
 /** A real file, for the reason in the file header. */
-function openFileStore(): { path: string; db: Db } {
+function openFileStore(): { path: string; db: StoreHandle } {
   const dir = mkdtempSync(join(tmpdir(), 'samurai-broker-state-'));
   tempDirs.push(dir);
   const path = join(dir, 'samurai-test.sqlite');
@@ -92,7 +92,7 @@ function openFileStore(): { path: string; db: Db } {
 }
 
 /** A NEW connection over the same file — the "restart". */
-function reopen(path: string): Db {
+function reopen(path: string): StoreHandle {
   const db = openSharedStore(path);
   openDbs.push(db);
   return db;

@@ -341,7 +341,7 @@ async function postFlattenReconcileAlert(
     // someone reading the log. Fixed, self-authored message, never the
     // channel's own error — the same CREDENTIALS posture
     // `alertResidualExposure`'s own channel-failure catch takes
-    // (ingest-fills.ts): a Telegram/Discord transport failure quotes the
+    // (ingest-fills.ts): a Telegram transport failure quotes the
     // request it failed on, which can carry a bot token.
     safeLog(input.logger, {
       trace_id: input.trace_id,

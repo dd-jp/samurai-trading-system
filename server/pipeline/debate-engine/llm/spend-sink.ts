@@ -29,7 +29,7 @@ import {
   promptTokensOf,
   rateFor,
 } from '../../../shared/llm/pricing.js';
-import type { SharedStore } from '../../../shared/store/index.js';
+import type { StoreHandle } from '../../../shared/store/index.js';
 import { toStoredTimestamp } from '../../../shared/store/index.js';
 import type { Logger } from '../../../shared/types.js';
 import { type PromptTierAlertChannel, PromptTierCrossingThrottle } from './prompt-tier-alert.js';
@@ -139,7 +139,7 @@ export const NULL_SPEND_SINK: LlmSpendSink = { record: () => {} };
 /** Appends to `llm_spend`, pricing the usage on the way in. */
 export class SqliteLlmSpendStore implements LlmSpendSink {
   constructor(
-    private readonly db: SharedStore,
+    private readonly db: StoreHandle,
     private readonly logger?: Logger,
     /**
      * Whether the prompt and response text are persisted to `llm_call_log`

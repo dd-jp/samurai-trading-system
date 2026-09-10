@@ -66,7 +66,7 @@ import {
 } from '../../../providers/universe-pool/index.js';
 import type { Clock } from '../../../shared/index.js';
 import { resolveVenuePacing, TokenBucket } from '../../../shared/index.js';
-import { guardedStore, type SharedStore as SqliteHandle } from '../../../shared/store/index.js';
+import { guardedStore, type StoreHandle } from '../../../shared/store/index.js';
 import type { Logger, UniverseInstrument } from '../types.js';
 import type { ProductionConfig } from './config.js';
 
@@ -143,7 +143,7 @@ export interface SaxoVenueDeps {
   universe: readonly UniverseInstrument[];
   /** `ProductionConfig.accountState` — REQUIRED here; see the module doc. */
   accountState: ProductionConfig['accountState'];
-  db: SqliteHandle;
+  db: StoreHandle;
   logger: Logger;
   legResizeAlerts: LegResizeUnverifiedAlertChannel;
   dormantLegsAlerts: DormantLegsUnresolvedAlertChannel;

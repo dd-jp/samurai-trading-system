@@ -80,6 +80,7 @@ export {
   computePortfolioView,
   MarkReadError,
   StaleMarkError,
+  unrealizedFor,
 } from './portfolio-view.js';
 export {
   RISK_THRESHOLD_KEYS,

@@ -30,7 +30,7 @@
  * ships with it deliberately: rebuilding the file takes an exclusive lock, and
  * an always-on trading process is not the place to hold one.
  */
-import type { SharedStore } from './open-shared-store.js';
+import type { StoreHandle } from './open-shared-store.js';
 
 /**
  * Rows kept, newest first.
@@ -68,7 +68,7 @@ export const DEFAULT_MAX_LLM_CALL_ROWS = 5_000;
  * hazard this whole file is written around, and it is asserted in the tests
  * rather than trusted here.
  */
-export function pruneLlmCallLog(db: SharedStore, maxRows: number): number {
+export function pruneLlmCallLog(db: StoreHandle, maxRows: number): number {
   // `OFFSET maxRows` skips the rows being kept, so the subquery returns the id
   // of the FIRST row past the ceiling — the newest row that must go — and
   // `<=` takes it and everything older. Reads down the `id` primary key index,

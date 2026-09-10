@@ -31,7 +31,7 @@ import {
 import {
   alertDeliveryFailureRetentionDaysFromEnvironment,
   ENV_ALERT_DELIVERY_FAILURE_RETENTION_DAYS,
-} from './production.js';
+} from './production/environment.js';
 
 describe('alertDeliveryFailureRetentionDaysFromEnvironment', () => {
   it('defaults to 30 days when unset', () => {
@@ -156,7 +156,7 @@ describe('the alert_delivery_failures purge is spelled at the composition root, 
     // `alert_delivery_failures` is in `STAGE_OWNED_TABLES.orchestrator`
     // (write-guard.ts) — the prune must go through `guardedStore(db,
     // 'orchestrator')` like every other orchestrator-owned table's
-    // housekeeping, not bypass the guard with a raw `SqliteHandle`.
+    // housekeeping, not bypass the guard with a raw `StoreHandle`.
     expect(source).toMatch(
       /guardedStore\(db, 'orchestrator'\)\)\.pruneOlderThan\(\s*cutoff,?\s*\)/,
     );

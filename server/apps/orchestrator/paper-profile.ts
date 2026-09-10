@@ -112,6 +112,7 @@ import type { CiiConsumerConfig } from '../../providers/market-intelligence/inde
 import type { InstrumentSubclass } from '../../shared/index.js';
 import { type CostConfig, SAXO_COMMISSION_RATE } from '../../tools/backtest/index.js';
 import { LIVE_MONEY_GATE_SUMMARY } from './live-money-gates.js';
+import { toCapitalCeilingUsd } from './production/capital-ceiling.js';
 import { SqliteDailyEquityMetricsSource } from './production/daily-equity-metrics-source.js';
 import { WORST_CASE_LLM_CALLS_PER_DEBATE } from './production/debate-adapter.js';
 import {
@@ -2737,9 +2738,9 @@ export function paperStartingProfile(
     // conversion, and on this path there is none to announce.
     ...(mode === 'paper'
       ? bookCurrency === 'GBP'
-        ? { capitalCeilingUsd: LIVE_BOOK_GBP }
+        ? { capitalCeilingUsd: toCapitalCeilingUsd(LIVE_BOOK_GBP, 'LIVE_BOOK_GBP') }
         : {
-            capitalCeilingUsd: LIVE_BOOK_SIZING_USD,
+            capitalCeilingUsd: toCapitalCeilingUsd(LIVE_BOOK_SIZING_USD, 'LIVE_BOOK_SIZING_USD'),
             capitalCeilingUsdPerGbp: SIZING_USD_PER_GBP,
           }
       : {}),

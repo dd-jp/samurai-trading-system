@@ -86,10 +86,10 @@ import type {
 } from '../../shared/index.js';
 import { toBrokerFillId } from '../../shared/index.js';
 import {
-  type SharedStore as Db,
   fromStoredTimestamp,
   fromStoredTimestampOrNull,
   isUniqueConstraintError,
+  type StoreHandle,
   TERMINAL_ORDER_STATES,
   toStoredTimestamp,
 } from '../../shared/store/index.js';
@@ -290,7 +290,7 @@ export class SqliteExecutionStore implements SharedStore {
   private readonly sizingCapitalCeiling: number | undefined;
 
   constructor(
-    private readonly db: Db,
+    private readonly db: StoreHandle,
     arm: TradingArm = 'live',
     sizingCapitalCeiling?: number,
   ) {

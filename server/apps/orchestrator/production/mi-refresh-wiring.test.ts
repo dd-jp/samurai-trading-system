@@ -45,7 +45,7 @@
 import { DEFAULT_TRADER_CONFIG } from '../../../pipeline/trader/index.js';
 import type { LogEntry, Logger } from '../../../shared/index.js';
 import { SimulatedClock } from '../../../shared/index.js';
-import { openSharedStore, type SharedStore } from '../../../shared/store/index.js';
+import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import {
   buildProductionComponents,
   buildProductionOrchestrator,
@@ -75,7 +75,7 @@ function recordingLogger(): { logger: Logger; entries: LogEntry[] } {
 }
 
 /** Spends the whole budget before the run starts, so the cap refuses from the first check. */
-function recordSpend(db: SharedStore, costUsd: number): void {
+function recordSpend(db: StoreHandle, costUsd: number): void {
   db.prepare(
     `INSERT INTO llm_spend (
        trace_id, stage, debate_id, model,
@@ -89,7 +89,7 @@ function recordSpend(db: SharedStore, costUsd: number): void {
 type StubConfig = ProductionConfig & Required<Pick<ProductionConfig, 'alpacaBrokerClient'>>;
 
 /** The narrowest `ProductionConfig` that reaches a bound `steps.analysts`. Every transport is a stub. */
-function stubConfig(db: SharedStore, overrides: Partial<ProductionConfig>): StubConfig {
+function stubConfig(db: StoreHandle, overrides: Partial<ProductionConfig>): StubConfig {
   return {
     db,
     clock: new SimulatedClock(NOW),
@@ -173,7 +173,7 @@ describe('MI refresh wiring (#1085)', () => {
     'SAMURAI_SENTIMENT_RETRIEVAL',
   ] as const;
   const previous: Partial<Record<(typeof ENV_VARS)[number], string | undefined>> = {};
-  let db: SharedStore;
+  let db: StoreHandle;
 
   beforeEach(() => {
     db = openSharedStore(':memory:');

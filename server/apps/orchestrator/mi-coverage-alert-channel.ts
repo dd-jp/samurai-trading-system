@@ -1,8 +1,8 @@
 /**
  * Trade-channel adapter for the market-intelligence degraded-coverage alert
  * (#752) — the twelfth outbound operator escalation. Same shape as
- * `TradeChannelAnalystSkipAlert`: wrap the already-provisioned Telegram (and
- * optional Discord) client, and post to the ESCALATION chat, never the
+ * `TradeChannelAnalystSkipAlert`: wrap the already-provisioned Telegram
+ * client, and post to the ESCALATION chat, never the
  * heartbeat chat (#342) — a coverage gap is a decision waiting on the
  * operator (does GDELT need to land sooner than planned?), not a beat.
  *
@@ -15,8 +15,8 @@
  * (production/mi-coverage.ts) catches and logs it, so the tick still returns
  * its answer and the undelivered alert is on the record.
  */
-import type { DiscordClient, TelegramClient } from '../../pipeline/verdict/index.js';
 import type { MiCoverageAlert, MiCoverageAlertChannel } from './production/mi-coverage.js';
+import { TradeChannelAlert } from './trade-channel.js';
 
 function formatMiCoverageAlert(alert: MiCoverageAlert): string {
   return (
@@ -32,31 +32,12 @@ function formatMiCoverageAlert(alert: MiCoverageAlert): string {
   );
 }
 
-export class TradeChannelMiCoverageAlert implements MiCoverageAlertChannel {
-  readonly #telegram: TelegramClient;
-  readonly #telegramChatId: string;
-  readonly #discord: DiscordClient | undefined;
-  readonly #discordChannelId: string | undefined;
-
-  constructor(
-    telegram: TelegramClient,
-    telegramChatId: string,
-    discord?: DiscordClient,
-    discordChannelId?: string,
-  ) {
-    this.#telegram = telegram;
-    this.#telegramChatId = telegramChatId;
-    this.#discord = discord;
-    this.#discordChannelId = discordChannelId;
-  }
-
+export class TradeChannelMiCoverageAlert
+  extends TradeChannelAlert
+  implements MiCoverageAlertChannel
+{
   async postCoverageAlert(alert: MiCoverageAlert): Promise<void> {
     const text = formatMiCoverageAlert(alert);
-    await Promise.all([
-      this.#telegram.sendMessage(this.#telegramChatId, text),
-      this.#discord && this.#discordChannelId
-        ? this.#discord.sendMessage(this.#discordChannelId, text)
-        : Promise.resolve(),
-    ]);
+    await this.send(text);
   }
 }

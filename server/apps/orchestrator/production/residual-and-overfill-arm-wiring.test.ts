@@ -71,7 +71,7 @@ import { PolymarketClient } from '../../../providers/market-intelligence/index.j
 import type { Logger, OpenPosition } from '../../../shared/index.js';
 import { SimulatedClock, TokenBucket, toBrokerFillId } from '../../../shared/index.js';
 import { recordingLogger } from '../../../shared/recording-logger.js';
-import { guardedStore, openSharedStore, type SharedStore } from '../../../shared/store/index.js';
+import { guardedStore, openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import { buildProductionOrchestrator, type ProductionConfig } from '../production.js';
 import {
   makeWiringCiiConsumerConfig,
@@ -254,7 +254,7 @@ async function seedPosition(
 /** `filled-zero-size-wiring.test.ts`'s `StubConfig`, verbatim reasoning. */
 type StubConfig = ProductionConfig & Required<Pick<ProductionConfig, 'alpacaBrokerClient'>>;
 
-function stubConfig(db: SharedStore, logger: Logger, broker: BrokerAdapter): StubConfig {
+function stubConfig(db: StoreHandle, logger: Logger, broker: BrokerAdapter): StubConfig {
   return {
     db,
     clock: new SimulatedClock(NOW),
@@ -330,7 +330,7 @@ function stubConfig(db: SharedStore, logger: Logger, broker: BrokerAdapter): Stu
 }
 
 describe('residual-exposure and flatten-overfill alerts name the arm that raised them (#1348)', () => {
-  let db: SharedStore;
+  let db: StoreHandle;
 
   beforeEach(() => {
     db = openSharedStore(':memory:');

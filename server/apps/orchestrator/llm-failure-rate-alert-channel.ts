@@ -9,11 +9,11 @@
  * (production/llm-failure-rate-guard.ts) catches and logs it, so the tick
  * still returns its answer and the undelivered alert is on the record.
  */
-import type { TelegramClient } from '../../pipeline/verdict/index.js';
 import type {
   LlmFailureRateAlert,
   LlmFailureRateAlertChannel,
 } from './production/llm-failure-rate-guard.js';
+import { TradeChannelAlert } from './trade-channel.js';
 
 function formatLlmFailureRateAlert(alert: LlmFailureRateAlert): string {
   const hours = Math.round(alert.window_ms / 3_600_000);
@@ -27,16 +27,11 @@ function formatLlmFailureRateAlert(alert: LlmFailureRateAlert): string {
   );
 }
 
-export class TradeChannelLlmFailureRateAlert implements LlmFailureRateAlertChannel {
-  readonly #telegram: TelegramClient;
-  readonly #chatId: string;
-
-  constructor(telegram: TelegramClient, chatId: string) {
-    this.#telegram = telegram;
-    this.#chatId = chatId;
-  }
-
+export class TradeChannelLlmFailureRateAlert
+  extends TradeChannelAlert
+  implements LlmFailureRateAlertChannel
+{
   async postLlmFailureRateAlert(alert: LlmFailureRateAlert): Promise<void> {
-    await this.#telegram.sendMessage(this.#chatId, formatLlmFailureRateAlert(alert));
+    await this.send(formatLlmFailureRateAlert(alert));
   }
 }

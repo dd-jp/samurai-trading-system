@@ -15,8 +15,8 @@
  * alert, because the fallback alert lives inside the attempt that never runs
  * again. The recorded #525 decision rejected a retry LOOP on the
  * order-submitting poll path; this sweep is the accepted alternative — a
- * durable marker (migration 0024, written by `ingest-fills.ts` the moment
- * the residual is first known) checked idempotently on an ongoing basis.
+ * durable marker (migration 0024, written by `residual-protection.ts` the
+ * moment the residual is first known) checked idempotently on an ongoing basis.
  *
  * ## When it runs
  *
@@ -84,14 +84,15 @@
  * targets it in the flatten window like any other.
  */
 
-import { describeThrownSafely, logCaughtFailure, safeLog } from '../../shared/index.js';
 import {
-  alertResidualExposure,
-  coversQty,
-  type ResidualExposureFlags,
-  recordedExposure,
-} from './ingest-fills.js';
+  describeThrownSafely,
+  heldQuantityFromFills,
+  isFlat,
+  logCaughtFailure,
+  safeLog,
+} from '../../shared/index.js';
 import { isProtectiveRearmUnsupported } from './protective-rearm-unsupported.js';
+import { alertResidualExposure, type ResidualExposureFlags } from './residual-protection.js';
 import type {
   ExecutionInput,
   ReconcileDivergence,
@@ -166,8 +167,8 @@ export async function sweepResidualProtection(
 /**
  * Settle one marked lot. Recomputes the residual off the persisted fill
  * record fresh — never off the marker's age or any cached figure — with the
- * SAME expressions the observing poll uses (`recordedExposure`/`coversQty`,
- * ingest-fills.ts), so the two surfaces cannot disagree about flatness.
+ * SAME expressions the observing poll uses (`heldQuantityFromFills`/`isFlat`,
+ * shared/held-quantity.ts), so the two surfaces cannot disagree about flatness.
  */
 async function sweepOne(
   input: ExecutionInput,
@@ -181,7 +182,7 @@ async function sweepOne(
   let filledSize: number;
   let exitQty: number;
   try {
-    ({ filledSize, exitQty } = recordedExposure(await store.getFills(key)));
+    ({ filledSize, exitQty } = heldQuantityFromFills(await store.getFills(key)));
   } catch (error) {
     // The exact residual is unknowable without this read — the same
     // upper-bound escalation `maybeRearmResidual`'s own store-read catch
@@ -224,7 +225,7 @@ async function sweepOne(
   // Flat by the persisted record: the residual is gone (a later fill closed
   // it), so "not yet confirmed protected" is settled — there is nothing left
   // to protect. Clearing here is what makes crash window (d) a no-op sweep.
-  if (coversQty(exitQty, filledSize)) {
+  if (isFlat({ filledSize, exitQty })) {
     await store.confirmResidualProtected(key);
     return {
       idempotency_key: key,
@@ -242,7 +243,7 @@ async function sweepOne(
   const residual = filledSize - exitQty;
 
   // Fail-closed, `maybeRearmResidual`'s own guard verbatim: a garbage
-  // residual while `coversQty` says "not flat" is a store divergence to
+  // residual while `isFlat` says "not flat" is a store divergence to
   // surface, never a quantity to hand the broker — and never a quantity to
   // hand the OPERATOR either (#549 review, round 3): NaN serializes to null
   // in the page payload and a negative reads as nonsense, so the alert

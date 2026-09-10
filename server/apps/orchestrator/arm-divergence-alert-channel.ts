@@ -23,6 +23,7 @@ import type {
 } from '../../pipeline/feedback-loop/index.js';
 import type { TelegramClient } from '../../pipeline/verdict/index.js';
 import { describeThrownSafely } from '../../shared/index.js';
+import { TradeChannelAlert } from './trade-channel.js';
 import type { Logger } from './types.js';
 
 function pct(value: number): string {
@@ -63,20 +64,20 @@ export function formatArmDivergenceAlert(alert: ArmDivergenceAlert): string {
   );
 }
 
-export class TradeChannelArmDivergenceAlert implements ArmDivergenceAlertChannel {
-  readonly #telegram: TelegramClient;
-  readonly #chatId: string;
+export class TradeChannelArmDivergenceAlert
+  extends TradeChannelAlert
+  implements ArmDivergenceAlertChannel
+{
   readonly #logger: Logger;
 
   constructor(telegram: TelegramClient, chatId: string, logger: Logger) {
-    this.#telegram = telegram;
-    this.#chatId = chatId;
+    super(telegram, chatId);
     this.#logger = logger;
   }
 
   postArmDivergenceAlert(alert: ArmDivergenceAlert): void {
     const text = formatArmDivergenceAlert(alert);
-    void this.#telegram.sendMessage(this.#chatId, text).catch((error: unknown) => {
+    this.sendDetached(text, (error: unknown) => {
       // Same reasoning as `TradeChannelCalendarFallbackAlert`: an escalation
       // that failed to send must itself stay visible in the log stream.
       this.#logger.log({

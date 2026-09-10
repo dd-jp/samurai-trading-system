@@ -10,7 +10,7 @@
  * comparison.
  */
 
-import type { SharedStore } from '../../shared/store/index.js';
+import type { StoreHandle } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';
 import type { Bar, Mark, MarketDataStore } from './types.js';
 
@@ -33,7 +33,7 @@ interface LatestMarkRow {
 }
 
 export class SqliteMarketDataStore implements MarketDataStore {
-  constructor(private readonly db: SharedStore) {}
+  constructor(private readonly db: StoreHandle) {}
 
   /**
    * `INSERT OR IGNORE` on the `(instrument, timeframe, open_time)` PK: a

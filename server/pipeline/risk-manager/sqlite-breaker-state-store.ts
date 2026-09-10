@@ -15,7 +15,7 @@
  * untripped defaults rather than an empty-but-present state.
  */
 
-import type { SharedStore as Db } from '../../shared/store/index.js';
+import type { StoreHandle } from '../../shared/store/index.js';
 import { fromStoredTimestampOrNull, toStoredTimestampOrNull } from '../../shared/store/index.js';
 import type { PersistedBreakerState } from './types.js';
 
@@ -25,7 +25,7 @@ export interface BreakerStatePersistence {
 }
 
 export class SqliteBreakerStateStore implements BreakerStatePersistence {
-  constructor(private readonly db: Db) {}
+  constructor(private readonly db: StoreHandle) {}
 
   save(states: readonly PersistedBreakerState[]): void {
     const upsert = this.db.prepare(

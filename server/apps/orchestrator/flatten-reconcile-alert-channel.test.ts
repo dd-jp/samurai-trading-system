@@ -1,5 +1,5 @@
 import type { FlattenReconcileAlert } from '../../pipeline/execution/index.js';
-import type { DiscordClient, TelegramClient } from '../../pipeline/verdict/index.js';
+import type { TelegramClient } from '../../pipeline/verdict/index.js';
 import { TradeChannelFlattenReconcileAlert } from './flatten-reconcile-alert-channel.js';
 
 const ALERT: FlattenReconcileAlert = {
@@ -16,10 +16,6 @@ function makeTelegram(): TelegramClient {
     sendApprovalButtons: vi.fn().mockResolvedValue(undefined),
     onApprovalCallback: vi.fn(),
   };
-}
-
-function makeDiscord(): DiscordClient {
-  return { sendMessage: vi.fn().mockResolvedValue(undefined) };
 }
 
 describe('TradeChannelFlattenReconcileAlert.postFlattenReconcileAlert', () => {
@@ -52,21 +48,17 @@ describe('TradeChannelFlattenReconcileAlert.postFlattenReconcileAlert', () => {
   // DECISION (David, 2026-09-08, #1349): the control arm's broker is
   // `SimulatedBrokerAdapter` — there is no venue, so this page's "check the
   // order on the venue by hand" instruction is never actionable for a
-  // control-arm trace_id. The predicate drops it before either transport is
+  // control-arm trace_id. The predicate drops it before the transport is
   // touched.
-  it('does not page Telegram or Discord for the control arm (#1349)', async () => {
+  it('does not page Telegram for the control arm (#1349)', async () => {
     const telegram = makeTelegram();
-    const discord = makeDiscord();
 
-    await new TradeChannelFlattenReconcileAlert(
-      telegram,
-      'chat-1',
-      discord,
-      'channel-1',
-    ).postFlattenReconcileAlert({ ...ALERT, trace_id: 'control-arm-reconcile' });
+    await new TradeChannelFlattenReconcileAlert(telegram, 'chat-1').postFlattenReconcileAlert({
+      ...ALERT,
+      trace_id: 'control-arm-reconcile',
+    });
 
     expect(telegram.sendMessage).not.toHaveBeenCalled();
-    expect(discord.sendMessage).not.toHaveBeenCalled();
   });
 
   it("does not page for the control arm's poll surface either", async () => {
@@ -89,21 +81,6 @@ describe('TradeChannelFlattenReconcileAlert.postFlattenReconcileAlert', () => {
         trace_id: 'control-arm-reconcile',
       }),
     ).resolves.toBeUndefined();
-  });
-
-  it('fans out to Discord as well when one is configured, for the live arm', async () => {
-    const telegram = makeTelegram();
-    const discord = makeDiscord();
-
-    await new TradeChannelFlattenReconcileAlert(
-      telegram,
-      'chat-1',
-      discord,
-      'channel-1',
-    ).postFlattenReconcileAlert(ALERT);
-
-    expect(telegram.sendMessage).toHaveBeenCalledTimes(1);
-    expect(discord.sendMessage).toHaveBeenCalledTimes(1);
   });
 
   // #1349: implementing the predicate gives the transport `trace_id` it did

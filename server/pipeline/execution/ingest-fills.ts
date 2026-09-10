@@ -57,25 +57,30 @@
  * `throwContainedFailures`'s own doc).
  */
 
-import type {
-  BrokerFillId,
-  ClosedTrade,
-  Fill,
-  OpenPosition,
-  OrderState,
-} from '../../shared/index.js';
+import type { Fill, OpenPosition, OrderState } from '../../shared/index.js';
 import {
   BOOK_CURRENCY,
+  coversQty,
   isBookCurrency,
+  isExitFill,
+  isFlat,
   logCaughtFailure,
+  QTY_EPSILON_RELATIVE,
   safeLog,
   toBrokerFillId,
+  totalQty,
+  weightedAvgPrice,
 } from '../../shared/index.js';
-import { isProtectiveRearmUnsupported } from './protective-rearm-unsupported.js';
+import { closedTrade } from './closed-trade.js';
+import {
+  chargeTopUpTo,
+  type ModelledEntryCost,
+  modelledEntryCostFor,
+  prorateCostBreakdown,
+} from './fill-cost.js';
+import { splitFlattenFills } from './flatten-attribution.js';
+import { markResidualsUnprotected, maybeRearmResidual } from './residual-protection.js';
 import type { ExecutionInput, NonSterlingFeeAlert, NormalizedFill } from './types.js';
-
-/** A fill on a protective/closing leg — anything that isn't opening the lot. */
-type ExitFill = Fill & { leg: 'stop' | 'target' | 'exit' };
 
 /**
  * #1087: a lot `reconcile()` adopted as `filled`/`partially_filled` from
@@ -622,162 +627,13 @@ async function redistributeOneFlatten(
       ? await entryTotalShares(store, lotKeys)
       : new Map(journalledHeld.map((lot) => [lot.idempotency_key, lot.held]));
 
-  // Processed in the feed's own order, decrementing an IN-MEMORY copy of
-  // `totalShare` across `rawFills` — a flatten is modelled/observed as one
-  // fill in practice (an IOC market order does not rest, so there is
-  // normally exactly one raw fill per flatten to allocate), but this stays
-  // general instead of assuming that: if the feed ever legitimately offers
-  // more than one raw fill for the same flatten in one poll, an EARLIER
-  // one in this SAME pass must still count against a lot's fixed share
-  // before a LATER one is allocated, or the two would double-book it.
-  const remaining = new Map(totalShare);
-  for (const rawFill of rawFills) {
-    let leftover = rawFill.qty;
-    // #527: every id this rawFill actually attributes THIS pass — the
-    // dedup key for the warning below. `broker_fill_id` is deterministic
-    // per (rawFill, lotKey) (see the comment on `splitFill` below), so if any
-    // of these already exist in `fills`, this exact rawFill's split already
-    // ran to completion in an earlier poll and its leftover was warned about
-    // then — a re-offered fill (this module's own `hasFill` dedup contract)
-    // must not re-fire the same warning forever.
-    const attributedIdsThisRawFill: { idempotency_key: string; broker_fill_id: BrokerFillId }[] =
-      [];
-    for (const lotKey of lotKeys) {
-      if (leftover <= 0) break;
-      const need = remaining.get(lotKey) ?? 0;
-      if (need <= 0) continue;
-
-      const take = Math.min(need, leftover);
-      const share = take / rawFill.qty;
-      // #1121: computed ahead of the object literal below because it feeds
-      // BOTH `fee` (the charge) and `cost_breakdown` (the record of it) —
-      // see `toFill`'s doc for why the modelled commission is charged rather
-      // than left as an unspent estimate.
-      const flattenCostBreakdown =
-        rawFill.cost_breakdown === undefined &&
-        attribution.modelled_cost_breakdown !== null &&
-        attribution.size > 0
-          ? prorateCostBreakdown(attribution.modelled_cost_breakdown, take / attribution.size)
-          : undefined;
-      const splitFill: NormalizedFill = {
-        ...rawFill,
-        // Forced regardless of what the adapter tagged the raw fill — see
-        // `redistributeFlattenFills`'s docstring. This is the fill-MECHANICS
-        // leg ("a market order that closed the position"), not the reason it
-        // was submitted — `fills.leg` keeps its four-value CHECK unchanged.
-        leg: 'exit',
-        // #793: the REASON leg — WHY this flatten was submitted, journalled
-        // on write-ahead (`FlattenSubmissionWriteAhead.exit_reason`,
-        // migration 0031) and read back here so `closedTrade()` can name a
-        // flatten and an early release differently in `close_reason` instead
-        // of collapsing both into `leg`'s generic `'exit'`. Omitted (not set
-        // to `undefined` — `exactOptionalPropertyTypes`) only for a flatten
-        // row written before 0031 (legacy, reason never recorded); every
-        // flatten submitted from here forward always carries one
-        // (`executeExit` refuses to write ahead without it).
-        ...(attribution.exit_reason === null ? {} : { exit_reason: attribution.exit_reason }),
-        // #1001: the flatten's OWN key — `clientOrderId` is this function's
-        // lookup key for `getFlattenAttribution`, i.e. exactly the
-        // `flatten_submissions.idempotency_key` that produced this raw fill,
-        // before the split below re-keys the row to the LOT. Carried
-        // through so the persisted row can be joined back to the specific
-        // flatten submission that priced it — see `Fill.flatten_idempotency_key`.
-        flatten_idempotency_key: clientOrderId,
-        // `fills`' row identity is `(idempotency_key, broker_fill_id)` — the
-        // table's PK — so the SAME venue fill id can legitimately hold ONE
-        // ROW PER LOT it is split across. That is the right scope here: a
-        // multi-lot flatten's raw fill deliberately becomes several
-        // accounting rows, one per named lot, so uniqueness has to be judged
-        // per (lot, id) pair, not by id alone across every lot — a blanket
-        // "this broker_fill_id exists somewhere, so skip it" rule would read
-        // lot B's rightful share as a duplicate of lot A's the moment lot
-        // A's is persisted.
-        //
-        // `hasFill` itself now takes `idempotency_key` and scopes on the
-        // full PK (#1320), so this suffix is no longer the ONLY thing
-        // keeping one lot's split from shadowing another's dedup — but the
-        // id shape stays as-is anyway: changing it would re-key rows this
-        // system has already persisted under the suffixed form. Stable
-        // across polls for the reason `totalShare` above is: the SAME
-        // (id, qty) pair recomputes every time, so a repeat poll dedupes
-        // cleanly instead of colliding with a differently-sized earlier
-        // attempt.
-        broker_fill_id: toBrokerFillId(`${rawFill.broker_fill_id}:${lotKey}`),
-        qty: take,
-        // #1121: the venue-reported share (`rawFill.fee * share`) TOPPED UP
-        // to the modelled commission share, when the flatten carries one —
-        // the same per-fill "top up, never stack" rule `toFill` applies to an
-        // entry fill, and for the same reason: Saxo reports a fee computed
-        // from the SAME constant this fallback's estimate came from, so adding
-        // rather than topping up would charge that flatten twice over.
-        //
-        // Per fill, not per lot (#1121). A flatten the venue splits into
-        // several raw fills applies `max` to each slice, and `Σ max ≥ max(Σ,
-        // Σ)`, so the lot's total lands in `[max(Σvenue, Σmodelled), Σvenue +
-        // Σmodelled]` rather than on the modelled figure exactly — see
-        // `chargeTopUpTo`'s doc for the bound and why the overshoot is bps of
-        // bps here. It is bounded on both
-        // sides because the two per-slice inputs each sum to the lot's own
-        // share: `share` is `take / rawFill.qty` (sums to 1 per raw fill) and
-        // `flattenCostBreakdown` is prorated by `take / attribution.size`
-        // (sums to the lot's fraction of the submission), so neither side is
-        // re-counted across slices.
-        fee: chargeTopUpTo(rawFill.fee * share, flattenCostBreakdown?.commission),
-        // #1001: FALLBACK only — `rawFill.cost_breakdown` is already set (and
-        // left untouched by this spread) on the Simulated adapter's own
-        // flatten fill, which is priced by `CostModel.fill` directly and
-        // needs no modelled estimate substituted for it. On a real-broker
-        // fill (`rawFill.cost_breakdown === undefined`, always, on that
-        // path), this attaches the flatten's OWN submit-time modelled cost
-        // breakdown instead — the venue reports no breakdown of its own.
-        //
-        // #1014: prorated against the SUBMISSION's `size`,
-        // NOT against `share`. The two denominators differ and the difference
-        // is a double-count. `share` is `take / rawFill.qty` — this lot's
-        // slice of THIS RAW FILL, which sums to 1.0 per raw fill, and that is
-        // exactly right for the venue-reported input to `fee` above (a
-        // per-raw-fill actual the venue reported) and wrong here:
-        // `modelled_cost_breakdown` was priced ONCE against the whole
-        // submitted `size` (`captureSubmitSnapshot` passes `order.size`). A
-        // flatten the venue splits into two partial raw fills would then
-        // distribute the entire snapshot across the first one's shares and
-        // the entire snapshot AGAIN across the second's, so the summed
-        // modelled cost over the flatten's fills would come to twice the
-        // single estimate it is supposed to reconstruct — and, since #1121,
-        // twice the amount actually charged.
-        //
-        // `take / attribution.size` makes every slice a fraction of the one
-        // submission instead, so the shares sum to 1.0 across the flatten
-        // however many raw fills it arrives in — and to LESS than 1.0 if the
-        // venue under-fills, which is the honest reading: the unfilled
-        // remainder was never traded and cost nothing.
-        //
-        // `attribution.size > 0` is guarded rather than assumed: `executeExit`
-        // never writes a zero-size flatten (it refuses when the held quantity
-        // is not positive), so this is a corrupted-row guard, and dividing by
-        // it would silently write `Infinity`/`NaN` money onto a fill row.
-        ...(flattenCostBreakdown !== undefined ? { cost_breakdown: flattenCostBreakdown } : {}),
-        // #842: CLEARED, not inherited from `...rawFill`. `take` is this
-        // lot's ALLOCATION of the raw fill, not the venue's cumulative
-        // quantity for the order, and the id it is written under is
-        // lot-scoped rather than the bare order id — so neither half of
-        // `qty_is_cumulative`'s contract holds any more, and leaving it set
-        // would invite `advanceLot`'s top-up to take a difference against a
-        // number that was never a cumulative total.
-        qty_is_cumulative: false,
-      };
-
-      const bucket = byLot.get(lotKey);
-      if (bucket === undefined) byLot.set(lotKey, [splitFill]);
-      else bucket.push(splitFill);
-
-      attributedIdsThisRawFill.push({
-        idempotency_key: lotKey,
-        broker_fill_id: splitFill.broker_fill_id,
-      });
-      remaining.set(lotKey, need - take);
-      leftover -= take;
-    }
+  const split = splitFlattenFills({ clientOrderId, rawFills, lotKeys, totalShare, attribution });
+  for (const [lotKey, splitFills] of split.splits) {
+    const bucket = byLot.get(lotKey);
+    if (bucket === undefined) byLot.set(lotKey, [...splitFills]);
+    else bucket.push(...splitFills);
+  }
+  for (const { attributed, leftover } of split.outcomes) {
     // `leftover > 0` here means the flatten filled more than the named lots
     // HELD when it was submitted (#571 — before that, more than their
     // ENTRIES ever covered, which a lot with prior exits could exceed
@@ -820,8 +676,9 @@ async function redistributeOneFlatten(
       // "line repeated daily is a line nobody reads" failure #342 already
       // named for a different channel.
       //
-      // `attributedIdsThisRawFill` are this rawFill's OWN derived ids
-      // (deterministic per (rawFill, lotKey) — see `splitFill` above): if any
+      // `attributed` are this rawFill's OWN derived ids
+      // (deterministic per (rawFill, lotKey) — see `splitFill` in
+      // flatten-attribution.ts): if any
       // is already in `fills`, this exact rawFill's split already ran to
       // completion — and so was already warned about — in an earlier poll.
       // Empty only when EVERY named lot was already fully satisfied before
@@ -830,7 +687,7 @@ async function redistributeOneFlatten(
       // narrow case still warns every poll; named, not solved, here.
       let alreadyWarned = false;
       try {
-        for (const { idempotency_key, broker_fill_id } of attributedIdsThisRawFill) {
+        for (const { idempotency_key, broker_fill_id } of attributed) {
           if (await store.hasFill({ idempotency_key, broker_fill_id })) {
             alreadyWarned = true;
             break;
@@ -874,7 +731,7 @@ async function redistributeOneFlatten(
           // traced locally with a FIXED, self-authored message rather than
           // the channel's own error — `alpaca-adapter.ts`'s
           // `escalateAgedUnpricedFills` sets the precedent this follows: a
-          // Telegram/Discord transport failure quotes the request it failed
+          // Telegram transport failure quotes the request it failed
           // on, and that URL can carry a bot token, so the channel's error is
           // read and discarded, never logged.
           safeLog(input.logger, {
@@ -913,27 +770,18 @@ async function redistributeOneFlatten(
   // not turn a successful redistribution into a contained failure. A failed
   // write only narrows #549's crash coverage back to the old poll-scoped
   // window, and says so in the log.
-  for (const [lotKey, unclosed] of remaining) {
-    if (!(unclosed > 0)) continue;
-    try {
-      await store.markResidualUnprotected(lotKey, input.clock.now());
-    } catch (error) {
-      logCaughtFailure(
-        input.logger,
-        {
-          trace_id: input.trace_id,
-          stage: 'execution',
-          event: 'residual_mark_failed',
-          level: 'warn',
-          message:
-            'markResidualUnprotected failed during flatten redistribution — a crash before the ' +
-            "re-arm confirms would leave this lot's residual invisible to the #549 sweep",
-        },
-        error,
-        { idempotency_key: lotKey, flatten_client_order_id: clientOrderId },
-      );
-    }
-  }
+  await markResidualsUnprotected(
+    input,
+    [...split.remaining].filter(([, unclosed]) => unclosed > 0).map(([lotKey]) => lotKey),
+    input.clock.now(),
+    {
+      level: 'warn',
+      message:
+        'markResidualUnprotected failed during flatten redistribution — a crash before the ' +
+        "re-arm confirms would leave this lot's residual invisible to the #549 sweep",
+      payload: { flatten_client_order_id: clientOrderId },
+    },
+  );
 
   // Consumed LAST, not before the split. The split loop above cannot throw —
   // the split itself is arithmetic over two Maps, and #527's over-fill
@@ -1181,7 +1029,8 @@ async function advanceLot(
   }
 
   const avgEntryPrice = weightedAvgPrice(entryFills);
-  const flat = coversQty(totalQty(exitFills), filledSize);
+  const exitQty = totalQty(exitFills);
+  const flat = isFlat({ filledSize, exitQty });
   const orderState = nextState(position, filledSize, flat);
 
   // Size the protection to what actually filled, before persisting the
@@ -1200,7 +1049,7 @@ async function advanceLot(
   // naked, never merely under-sized — that's `resizeProtectiveLegs`'
   // case, handled above.
   if (!flat && (ingestedExit || flattenTargetedThisPoll)) {
-    await maybeRearmResidual(input, position, now, { filledSize, exitQty: totalQty(exitFills) });
+    await maybeRearmResidual(input, position, now, { filledSize, exitQty });
   }
 
   // One transaction: fills, lot state, and (on flat) the ClosedTrade land
@@ -1223,375 +1072,6 @@ async function advanceLot(
 }
 
 /**
- * Re-arms a residual left by a partial flatten (#525's recorded decision —
- * option 1), or posts the fallback alert when the re-arm itself fails or
- * cannot be attempted safely. Never throws: every failure this function can
- * observe — the store read on the `known === undefined` path, the broker
- * call rejecting, the alert channel itself failing — is swallowed here, the
- * same posture `shared/safe-log.ts`'s `safeLog()`/`logCaughtFailure()` take
- * on the logging calls this function ALSO makes now (#573) — so a flaky
- * store, a flaky re-arm, or a flaky alert transport can never escape into
- * `advanceLot` and abort `ingestFills`' per-lot loop for every OTHER lot the
- * same poll has yet to reach.
- *
- * `known` lets the caller in `advanceLot`'s main path hand over
- * `filledSize`/`exitQty` it already computed off the SAME persisted record,
- * rather than re-reading the store; the zero-new-fill branch above has no
- * such record in hand and reads it fresh here instead.
- */
-async function maybeRearmResidual(
-  input: ExecutionInput,
-  position: OpenPosition,
-  now: Date,
-  known?: { filledSize: number; exitQty: number },
-): Promise<void> {
-  const { broker, store } = input;
-
-  let filledSize: number;
-  let exitQty: number;
-  if (known === undefined) {
-    let recorded: Fill[];
-    try {
-      recorded = await store.getFills(position.idempotency_key);
-    } catch (error) {
-      // #573: this is THE local diagnostic trace `ResidualExposureAlert`
-      // cannot carry — its CREDENTIALS note (below) forbids a caught error's
-      // text in the alert payload, so without this the operator saw a
-      // flagged upper-bound estimate with no way to tell WHY the exact
-      // figure was unavailable. `logCaughtFailure`, not `safeLog`: the
-      // store's own error text IS the deliverable here, unlike the alert/
-      // channel failures elsewhere in this file (`ResidualExposureAlert`'s
-      // CREDENTIALS note is about what a downstream ALERT TRANSPORT can leak
-      // — Telegram/Discord quoting the failed request — not about a local
-      // store-driver error, which carries no such transport detail; #297's
-      // H1 precedent `reconcileLot` (reconcile.ts) already cites applies the
-      // same way here).
-      logCaughtFailure(
-        input.logger,
-        {
-          trace_id: input.trace_id,
-          stage: 'execution',
-          event: 'residual_size_read_failed',
-          level: 'error',
-          message:
-            'maybeRearmResidual: store read failed while computing the exact residual after a ' +
-            'partial flatten — alerting with the upper-bound requested_size instead',
-        },
-        error,
-        { idempotency_key: position.idempotency_key },
-      );
-      // The exact residual is unknowable without the read that just
-      // failed — alerting with `requested_size` (the lot's own, always
-      // in hand, untouched by this failure) rather than a smaller,
-      // possibly-wrong guess: it can only OVER-state what is genuinely at
-      // risk, never under-state it, which is the conservative direction
-      // for an operator deciding whether to go check the venue by hand.
-      // NOT `Number.NaN` — `LoggingResidualExposureAlertChannel` writes
-      // this alert through `JSON.stringify` (logger.ts), which silently
-      // turns `NaN` into `null`, and a `null` quantity is less legible
-      // than an honest upper bound. Never rethrown: see this function's
-      // "Never throws" doc above.
-      //
-      // Flagged as an upper bound rather than passed off as the exact
-      // residual (#569): without the flag a persistent store outage
-      // reads as a stream of confident alerts, and an operator cannot tell
-      // an estimate from a measurement. The caught error itself is not
-      // forwarded to the ALERT — see `ResidualExposureAlert`'s CREDENTIALS
-      // note — but it IS now in the local log line just above.
-      //
-      // #549: marked BEFORE the alert — the residual cannot be recomputed
-      // right now, which is exactly a "protection not confirmed" state the
-      // sweep must keep retrying with a fresh read.
-      await bestEffortMarkerWrite(input, position, now, 'mark-unprotected');
-      // #549: the alert-dedup marker records only a delivery the
-      // channel ACCEPTED — a swallowed transport failure must leave the
-      // episode un-alerted so the sweep pages again on its next pass.
-      if (
-        await alertResidualExposure(input, position, position.requested_size, now, {
-          residualQtyIsUpperBound: true,
-        })
-      ) {
-        await bestEffortMarkerWrite(input, position, now, 'mark-alerted');
-      }
-      return;
-    }
-    ({ filledSize, exitQty } = recordedExposure(recorded));
-  } else {
-    ({ filledSize, exitQty } = known);
-  }
-
-  // No entry fill on record yet: there is nothing open to protect. Cannot
-  // happen on the `known` path (the caller already refused to reach here
-  // with `filledSize === 0`), but the zero-new-fill path above has no such
-  // guarantee — a flatten can, in principle, name a lot whose entry fill is
-  // still outstanding.
-  if (filledSize === 0) return;
-  // Flat by this fuller read even though the per-poll signal said
-  // "not flat": nothing left to protect. #549: a marker
-  // `redistributeOneFlatten` set for this lot (off this poll's split
-  // arithmetic) is cleared here off the fuller persisted record — flat IS
-  // "nothing left unprotected", confirmed.
-  if (coversQty(exitQty, filledSize)) {
-    await bestEffortMarkerWrite(input, position, now, 'confirm-protected');
-    return;
-  }
-
-  const residual = filledSize - exitQty;
-
-  // #549: the durable marker, written BEFORE the re-arm attempt below. Both
-  // of this function's triggers (`ingestedExit`, `flattenTargetedThisPoll`)
-  // are poll-scoped, so without this row a crash — or a re-arm failure the
-  // process survives — between here and a confirmed re-arm left the residual
-  // naked FOREVER: the next poll's `hasFill` dedup empties `newFills`, no
-  // flatten resolves, and `advanceLot` returns early indefinitely.
-  // `sweepResidualProtection` (residual-protection-sweep.ts) is what reads
-  // it back, on reconcile/fill-sync cadence, and only a CONFIRMED re-arm (or
-  // a flat read) clears it. Best-effort, never throwing (this function's own
-  // contract): a failed marker write is logged and must not stop the actual
-  // re-arm attempt, which matters more than its bookkeeping.
-  await bestEffortMarkerWrite(input, position, now, 'mark-unprotected');
-
-  // Fail-closed (`executeExit`'s precedent, execute.ts): a non-finite or
-  // non-positive residual while `coversQty` above says "not flat" means the
-  // store's own numbers disagree in a way `QTY_EPSILON_RELATIVE` was not
-  // built to absorb. Refusing to hand the broker a garbage quantity and
-  // alerting instead is the same posture `executeExit` takes on a
-  // store/venue size mismatch — surface it, never guess.
-  if (!(residual > 0) || !Number.isFinite(residual)) {
-    if (await alertResidualExposure(input, position, residual, now)) {
-      await bestEffortMarkerWrite(input, position, now, 'mark-alerted');
-    }
-    return;
-  }
-
-  try {
-    await broker.rearmProtectiveLegs(
-      position.idempotency_key,
-      position.instrument,
-      position.side,
-      residual,
-      position.stop,
-      position.target,
-    );
-    // #549: protection is now CONFIRMED — the venue acked the re-arm (or the
-    // adapter adopted legs it verified already live) — so the marker clears.
-    // Best-effort: if this write fails the sweep retries a re-arm that is
-    // already in place, which every adapter path tolerates (equities
-    // adopt-or-place on the deterministic `:rearm` wire id; crypto emulation
-    // retires stale legs before arming; Simulated re-sets the same qty).
-    await bestEffortMarkerWrite(input, position, now, 'confirm-protected');
-  } catch (error) {
-    // The broker's own error is not forwarded to the ALERT — see
-    // `ResidualExposureAlert`'s CREDENTIALS note: this channel carries only
-    // fields chosen here, never broker error text. Losing the detail there
-    // is fine; an operator reads the alert and checks the venue directly.
-    //
-    // #573: safe to put in the LOCAL log, though, same as the store-read
-    // catch above — #297's H1 (cited by `reconcileLot`, reconcile.ts) makes
-    // every broker adapter convert what its client threw into a curated,
-    // credential-free error before it is visible here, so the credentialed
-    // original never reaches this catch either.
-    //
-    // #1214: a venue that cannot express an entry-less protective pair at
-    // all refuses this call permanently, and the #549 sweep will re-attempt
-    // it on every pass regardless — a venue's capabilities are re-read on
-    // every attempt, not cached here. What must differ is what the operator
-    // is told: "retry failed" trains them to wait for a sweep that will
-    // never succeed.
-    const unsupported = isProtectiveRearmUnsupported(error);
-    logCaughtFailure(
-      input.logger,
-      // Two whole entries rather than one with a conditional `event`: every
-      // logged code must be a bare snake_case literal, greppable from the
-      // source (`log-event-code.test.ts`).
-      unsupported
-        ? {
-            trace_id: input.trace_id,
-            stage: 'execution',
-            event: 'residual_rearm_unsupported',
-            level: 'error',
-            message:
-              'maybeRearmResidual: this venue cannot arm protective legs at all, so no retry ' +
-              'can protect this residual — alerting for manual action at the venue',
-          }
-        : {
-            trace_id: input.trace_id,
-            stage: 'execution',
-            event: 'residual_rearm_failed',
-            level: 'error',
-            message: 'maybeRearmResidual: broker.rearmProtectiveLegs failed — alerting instead',
-          },
-      error,
-      { idempotency_key: position.idempotency_key, residual_qty: residual },
-    );
-    // #549: the marker stays set (protection is NOT confirmed). The episode
-    // is recorded as already-alerted ONLY when the channel accepted the
-    // delivery (#549) — so the sweep retries the re-arm on cadence
-    // without paging again for a page that actually landed (#342), and DOES
-    // page again for one a transport outage swallowed.
-    if (
-      await alertResidualExposure(input, position, residual, now, {
-        rearmUnsupported: unsupported,
-      })
-    ) {
-      await bestEffortMarkerWrite(input, position, now, 'mark-alerted');
-    }
-  }
-}
-
-/**
- * The best-effort #549 marker writes, one parameterized helper. Each op
- * swallows its own store failure — `maybeRearmResidual`'s
- * "never throws" contract, and the same reasoning as this file's other
- * contained writes: the marker is recovery BOOKKEEPING, and losing a
- * bookkeeping write must never abort the actual re-arm (or the poll) it
- * books. Logged at `warn` via `logCaughtFailure` (#608) with an op-specific
- * message: what a failed write COSTS differs per op, and that is exactly
- * what an operator grepping after an incident needs to see.
- */
-const MARKER_WRITES = {
-  'mark-unprotected': {
-    write: (input: ExecutionInput, key: string, now: Date) =>
-      input.store.markResidualUnprotected(key, now),
-    failureMessage:
-      'markResidualUnprotected failed — if this process dies before the re-arm is confirmed, ' +
-      'the #549 sweep will not know to retry this lot',
-  },
-  'confirm-protected': {
-    write: (input: ExecutionInput, key: string, _now: Date) =>
-      input.store.confirmResidualProtected(key),
-    failureMessage:
-      'confirmResidualProtected failed — the lot stays marked and the #549 sweep will ' +
-      're-verify a protection that is already in place (idempotent on every adapter path)',
-  },
-  'mark-alerted': {
-    write: (input: ExecutionInput, key: string, now: Date) =>
-      input.store.markResidualAlerted(key, now),
-    failureMessage:
-      'markResidualAlerted failed — the #549 sweep may page a second time for an episode ' +
-      'that was already alerted (noisy, not unsafe)',
-  },
-} as const;
-
-async function bestEffortMarkerWrite(
-  input: ExecutionInput,
-  position: OpenPosition,
-  now: Date,
-  op: keyof typeof MARKER_WRITES,
-): Promise<void> {
-  const { write, failureMessage } = MARKER_WRITES[op];
-  try {
-    await write(input, position.idempotency_key, now);
-  } catch (error) {
-    logCaughtFailure(
-      input.logger,
-      {
-        trace_id: input.trace_id,
-        stage: 'execution',
-        event: 'residual_alert_mark_failed',
-        level: 'warn',
-        message: failureMessage,
-      },
-      error,
-      { idempotency_key: position.idempotency_key },
-    );
-  }
-}
-
-/**
- * The two qualifiers a caller can put on the page. Named rather than
- * positional (#1214): both are booleans that read identically at a call
- * site, and every producer sets at most one of them.
- */
-export interface ResidualExposureFlags {
-  /**
-   * `true` only on the path where the fill read failed and `residualQty` is
-   * therefore the lot's whole requested size rather than the exact residual
-   * (#569).
-   */
-  residualQtyIsUpperBound?: boolean;
-  /**
-   * `true` when the re-arm was refused as impossible on this venue rather
-   * than merely failing (#1214, `isProtectiveRearmUnsupported`) — see
-   * `ResidualExposureAlert.rearm_unsupported`. Only the two paths that
-   * actually attempted a re-arm can set it; the paths that never got that
-   * far leave it false, which reads as "not known to be impossible", the
-   * conservative direction for a flag that tells an operator whether waiting
-   * is an option.
-   */
-  rearmUnsupported?: boolean;
-}
-
-/**
- * The #525 fallback, posted when a re-arm failed or could not be safely
- * attempted. Fire-and-forget and fully swallowed on failure — the alert IS
- * the fallback, so there is nothing left to fall back to if delivering it
- * also fails; the caller (`maybeRearmResidual`) must keep running either
- * way, the same reasoning `shared/safe-log.ts`'s `safeLog()` is built around.
- *
- * Exported (#549) for `sweepResidualProtection` (residual-protection-sweep.ts),
- * whose escalation is the SAME alert with the same CREDENTIALS boundary —
- * a second hand-rolled copy of this channel's swallow/trace posture is
- * exactly the drift `shared/safe-log.ts` was extracted to prevent.
- *
- * Returns whether the channel RESOLVED (#549): the once-per-episode
- * dedup (`markResidualAlerted`) may only be recorded against a delivery the
- * channel accepted — marking it after a swallowed failure would let a
- * transient transport outage permanently suppress the only page for a
- * still-naked residual. The swallow itself is unchanged; only the caller's
- * bookkeeping branches on the answer.
- */
-export async function alertResidualExposure(
-  input: ExecutionInput,
-  position: OpenPosition,
-  residualQty: number,
-  now: Date,
-  flags: ResidualExposureFlags = {},
-): Promise<boolean> {
-  const residualQtyIsUpperBound = flags.residualQtyIsUpperBound ?? false;
-  try {
-    await input.residualExposureAlerts.postResidualExposureAlert({
-      trace_id: input.trace_id,
-      idempotency_key: position.idempotency_key,
-      instrument: position.instrument,
-      side: position.side,
-      residual_qty: residualQty,
-      residual_qty_is_upper_bound: residualQtyIsUpperBound,
-      rearm_unsupported: flags.rearmUnsupported ?? false,
-      stop: position.stop,
-      target: position.target,
-      observed_at: now,
-    });
-    return true;
-  } catch {
-    // The redistribution/advance this alert reports on already completed —
-    // see this function's doc comment for why that must not be undone here.
-    // #573: this IS the fallback failing, the most severe blind spot this
-    // whole file has — a residual is unprotected AND nobody was told, not
-    // even locally. Traced with a FIXED, self-authored message rather than
-    // the channel's own error (same CREDENTIALS posture as the
-    // flatten-overfill channel catch above, `escalateAgedUnpricedFills`'s
-    // precedent in alpaca-adapter.ts): a Telegram/Discord transport failure
-    // quotes the request it failed on, which can carry a bot token.
-    safeLog(input.logger, {
-      trace_id: input.trace_id,
-      stage: 'execution',
-      event: 'residual_exposure_alert_send_failed',
-      level: 'error',
-      message:
-        'postResidualExposureAlert delivery failed — a residual position is unprotected and ' +
-        'the operator was not paged; check the venue by hand',
-      payload: {
-        idempotency_key: position.idempotency_key,
-        residual_qty: residualQty,
-        residual_qty_is_upper_bound: residualQtyIsUpperBound,
-      },
-    });
-    return false;
-  }
-}
-
-/**
  * `partially_filled` while the entry is still working, `filled` once it is
  * complete, `closed` on round-trip-to-flat. A lot that fills and exits
  * between two polls lands on `closed` directly — the intermediate states are
@@ -1600,135 +1080,6 @@ export async function alertResidualExposure(
 function nextState(position: OpenPosition, filledSize: number, flat: boolean): OrderState {
   if (flat) return 'closed';
   return coversQty(filledSize, position.requested_size) ? 'filled' : 'partially_filled';
-}
-
-/**
- * Relative tolerance on the quantity comparisons, because both sides are
- * float64 sums of decimal `Fill.qty` rows and two sums of the SAME total
- * differ unless the tranches happen to share a summation order: entry
- * tranches of 0.3 + 0.3 + 0.4 total exactly 1, while exit tranches of
- * 0.7 + 0.2 + 0.1 total 0.9999999999999999. A bare `>=` therefore reads a
- * fully-exited lot as still open — forever, since no further fill is coming:
- * no `ClosedTrade` for the Feedback Loop, and a phantom lot left in
- * `getOpenPositions()` consuming Risk's exposure caps.
- *
- * The margin over float noise, measured against the same (n+2)·2^-53 bound
- * ADR-0005 §1 derives (n products, an n-term naive summation, one division),
- * is 88x at n = 100 fills (1.13e-14) and 36x at the 250-fills-per-leg worst
- * case (2.80e-14) — comfortable, but tens of times, NOT orders of
- * magnitude: a workload past ~9,000 fills on one leg would need this
- * constant revisited. The margin in the other direction is the wide one: a
- * residue of 1e-12 of a lot is orders below any venue's minimum quantity
- * increment, so it does not exist at the broker either and a lot that reads
- * flat here is flat there too. The tolerance has to carry that argument on
- * its own — `reconcile()` (#86) only inspects `pending`/`submitted` lots, so
- * it never revisits one this code has marked terminal.
- * See [ADR-0005](../../docs/adr/0005-money-math-precision.md).
- */
-const QTY_EPSILON_RELATIVE = 1e-12;
-
-/**
- * `actual >= target`, tolerant of float64 summation noise on either side.
- * Exported (#549) so `sweepResidualProtection` (residual-protection-sweep.ts)
- * judges "flat" with the SAME expression this module does, not an algebraic
- * rearrangement that is not guaranteed the same float64 answer (ADR-0005).
- */
-export function coversQty(actual: number, target: number): boolean {
-  return actual >= target - Math.abs(target) * QTY_EPSILON_RELATIVE;
-}
-
-/**
- * The two totals every residual decision is made from, computed off a lot's
- * full persisted fill record — exported (#549) for the same single-expression
- * reason as `coversQty` above: the sweep's recomputation must be
- * bit-identical to the observing poll's, or a lot could read not-flat on one
- * surface and flat on the other.
- */
-export function recordedExposure(fills: readonly Fill[]): { filledSize: number; exitQty: number } {
-  return {
-    filledSize: totalQty(fills.filter((fill) => fill.leg === 'entry')),
-    exitQty: totalQty(fills.filter(isExitFill)),
-  };
-}
-
-function closedTrade(
-  position: OpenPosition,
-  lot: {
-    filledSize: number;
-    avgEntryPrice: number;
-    entryFills: readonly Fill[];
-    exitFills: readonly ExitFill[];
-  },
-): ClosedTrade {
-  const { filledSize, avgEntryPrice, entryFills, exitFills } = lot;
-
-  // The fill that took the lot flat — it names how the trade ended and when.
-  const closing = exitFills[exitFills.length - 1] as ExitFill;
-  const avgExitPrice = weightedAvgPrice(exitFills);
-
-  // Signed against the direction of the lot: a short earns the fall.
-  const gross =
-    position.side === 'buy'
-      ? (avgExitPrice - avgEntryPrice) * filledSize
-      : (avgEntryPrice - avgExitPrice) * filledSize;
-  const feesTotal = [...entryFills, ...exitFills].reduce((sum, fill) => sum + fill.fee, 0);
-
-  return {
-    idempotency_key: position.idempotency_key,
-    debate_id: position.debate_id,
-    instrument: position.instrument,
-    asset_class: position.asset_class,
-    side: position.side,
-    entry: avgEntryPrice,
-    // The lot's INITIAL stop, carried from the bracket — R's denominator is
-    // the risk taken at open.
-    stop: position.stop,
-    filled_size: filledSize,
-    realized_pnl_net: gross - feesTotal,
-    fees_total: feesTotal,
-    opened_at: position.opened_at,
-    closed_at: closing.timestamp,
-    // #793: 'stop'/'target' already name a bracket hit precisely — left as
-    // `closing.leg`. A flatten-originated close (`closing.leg === 'exit'`)
-    // additionally carries `exit_reason` (migration 0031) naming WHICH of
-    // the three in-process reasons it was; that is the more specific answer
-    // and wins whenever it is present. Falls back to the bare `'exit'` leg
-    // only for a row this system genuinely never recorded a reason for — the
-    // pre-0031 legacy case (see the migration's own doc; not invented here).
-    close_reason: closing.exit_reason ?? closing.leg,
-    modelled_cost_charged: modelledCostCharged(entryFills, exitFills),
-  };
-}
-
-/**
- * #1121 AC5: whether every leg of this round trip that the modelled-cost
- * mechanism COVERS carries the `cost_breakdown` the charge is taken from —
- * which, since `chargeTopUpTo` only ever fires alongside setting it, is the
- * same question as "was this lot charged the modelled cost on every leg it
- * could be".
- *
- * Derived from the fills, not stamped as a literal, because going through
- * `toFill` is not the same as being charged by it: `modelledEntryCostFor` is
- * nullable (no submit-time snapshot) and `redistributeOneFlatten`'s is too, so
- * a live lot can close having paid nothing. Stamping `1` on those said the
- * opposite of what happened — worse than the pre-fix state, since the row then
- * certifies a cost basis it is not on.
- *
- * COVERAGE, and why `'stop'`/`'target'` legs do not veto: no modelled estimate
- * exists for a protective leg on either arm (see `toFill`'s "What this still
- * does not cover", #1301). Vetoing on them would drop live trades BECAUSE they
- * exited on a stop — selection on outcome, since stops are the losers, which is
- * a worse and far less visible bias than the exit-leg under-charge it would be
- * papering over. So coverage is the entry legs plus flatten (`'exit'`) legs,
- * which is exactly the set both arms price.
- *
- * The control arm always answers `true`: `SimulatedBrokerAdapter` prices its
- * own fills and stamps `cost_breakdown` on every one of them.
- */
-function modelledCostCharged(entryFills: readonly Fill[], exitFills: readonly ExitFill[]): boolean {
-  return [...entryFills, ...exitFills.filter((fill) => fill.leg === 'exit')].every(
-    (fill) => fill.cost_breakdown !== undefined,
-  );
 }
 
 /**
@@ -1749,7 +1100,7 @@ const TOP_UP_ID_SEPARATOR = '#';
  * append-only by construction (`applyLotAdvance` inserts; there is no update
  * path, and the table's PK is `(idempotency_key, broker_fill_id)`), and every
  * derived figure — `filled_size`, `avg_entry_price`, realized PnL, the
- * residual sweep's `recordedExposure` — is REBUILT from the rows on every
+ * residual sweep's `heldQuantityFromFills` — is REBUILT from the rows on every
  * poll. Appending the difference therefore repairs all of them at once, with
  * no migration: the base id keeps the exact value it was first written under,
  * so nothing already persisted is re-keyed and no in-flight lot is re-booked
@@ -1874,101 +1225,6 @@ async function cumulativeTopUp(
     // cumulative feed), just a later increment of it.
     modelledEntryCostFor(position),
   );
-}
-
-/**
- * #1121: the charge a real-broker fill carries — the venue's own reported fee
- * TOPPED UP to the modelled commission, never stacked on top of it.
- *
- * `venueFee + max(0, modelled − venueFee)`, i.e. `max(venueFee, modelled)`,
- * never `venueFee + modelled` — the two numbers are the same commission.
- * `venueFee + modelled` is correct only for a commission-free venue, which is
- * an Alpaca-paper accident, not a property of the mechanism: `saxo-adapter.ts`
- * reports `price * qty * SAXO_COMMISSION_RATE` and `paper-profile.ts` prices
- * the modelled estimate from the SAME `SAXO_COMMISSION_RATE` constant, so
- * adding them would charge the live arm 2x — with no venue check, no
- * `fee === 0` precondition, and no test that could see it.
- *
- * `max` rather than "defer to the venue whenever it reports anything": a venue
- * that reports a small NON-commission fee (a regulatory or exchange charge)
- * would otherwise suppress the whole modelled commission and put the arms back
- * on different cost bases, which is the defect this ticket exists to close.
- *
- * WHAT `max` COSTS (#1121). `max` treats the venue's report and the model's estimate
- * as two measurements of ONE commission. Where a venue charge is genuinely
- * ADDITIONAL to commission, `max` absorbs it instead of adding it: a levy
- * smaller than the modelled commission is charged nothing extra, and a levy
- * LARGER than it displaces the modelled commission entirely. The alternative
- * (`venueFee + modelled`) has the mirror failure and a worse one — it
- * double-charges the commission itself on every Saxo fill, which is this
- * ticket's whole defect. `max` is chosen on the venues actually in play, not
- * as a general truth: Alpaca paper reports `fee: 0`; `saxo-adapter.ts`'s
- * reported `fee` is commission-only; ADR-0015 records no per-order minimum;
- * SDRT is structurally exempt on the ETFs/ETCs this book trades; and the PTM
- * levy's £10,000 order threshold is unreachable at a £1,000 book. Add a venue
- * with an additive levy and this function is the place that has to change.
- *
- * SCOPE OF "CHARGED ONCE". This is a PER-FILL rule, and it does not aggregate
- * to a per-lot equality, because `max` is applied to each slice separately and
- * `Σ max(aᵢ, bᵢ) ≥ max(Σa, Σb)`. Over a lot's fills the total charge is
- * bounded by `[max(Σvenue, Σmodelled), Σvenue + Σmodelled]`, hitting the lower
- * bound only when one side dominates slice by slice. Both bounds follow from
- * `max(a, b) ≥ a, b` and `max(a, b) ≤ a + b` on non-negative inputs, which the
- * two call sites guarantee (`Math.max(0, …)` on the cumulative top-up;
- * `rawFill.fee * share` with a non-negative venue fee on the flatten split).
- * The gap is real, not hypothetical, wherever the venue's per-increment fee
- * crosses the modelled share: 100 shares filled 50/50 against a modelled 1.0
- * with venue increments 0.7 then 0.3 charges `0.7 + 0.5 = 1.2`, not 1.0. On
- * the cumulative path that is synthetic today (it is Alpaca-only and Alpaca
- * reports 0); on `redistributeOneFlatten`'s multi-raw-fill split it is
- * reachable under Saxo, whose fee tracks each execution's fill price while the
- * modelled share tracks quantity alone. The magnitude there is bps of bps, so
- * the money is negligible — it is the invariant that has to be stated
- * honestly, not the arithmetic that has to change.
- */
-function chargeTopUpTo(venueFee: number, modelledCommission: number | undefined): number {
-  return modelledCommission === undefined ? venueFee : Math.max(venueFee, modelledCommission);
-}
-
-/**
- * #1001: scales every component of a modelled cost breakdown by `share` — the
- * same linear approximation `redistributeOneFlatten`'s `fee: rawFill.fee *
- * share` already makes for the flatten split, extended to the OTHER money
- * this snapshot carries. Not physically exact for `market_impact` (the
- * cost model's own √-law term is nonlinear in size), but consistent with the
- * existing precedent rather than inventing a second approximation scheme, and
- * still strictly better than attaching the UNSCALED snapshot to every fill a
- * single modelled estimate happens to cover.
- */
-function prorateCostBreakdown(
-  breakdown: NonNullable<Fill['cost_breakdown']>,
-  share: number,
-): NonNullable<Fill['cost_breakdown']> {
-  return {
-    spread_cost: breakdown.spread_cost * share,
-    commission: breakdown.commission * share,
-    slippage: breakdown.slippage * share,
-    market_impact: breakdown.market_impact * share,
-  };
-}
-
-/**
- * #1001's fallback source for an `'entry'` leg's modelled cost breakdown —
- * `OpenPosition.modelled_cost_breakdown`, captured once at submit time
- * (`execute.ts`'s `captureSubmitSnapshot`) against the lot's whole
- * `requested_size`. `null` when the lot carries none (pre-migration-0037 row,
- * or the submit-time capture failed) — `toFill`'s caller then leaves
- * `cost_breakdown` unset, exactly as before this ticket.
- */
-interface ModelledEntryCost {
-  breakdown: NonNullable<Fill['cost_breakdown']>;
-  requestedSize: number;
-}
-
-function modelledEntryCostFor(position: OpenPosition): ModelledEntryCost | null {
-  return position.modelled_cost_breakdown === undefined
-    ? null
-    : { breakdown: position.modelled_cost_breakdown, requestedSize: position.requested_size };
 }
 
 /**
@@ -2206,21 +1462,6 @@ function toFill(
     // closed the `cumulativeTopUp` gap — see that function's own call).
     ...(fill.fee_currency === undefined ? {} : { fee_currency: fill.fee_currency }),
   };
-}
-
-function isExitFill(fill: Fill): fill is ExitFill {
-  return fill.leg !== 'entry';
-}
-
-function totalQty(fills: readonly Fill[]): number {
-  return fills.reduce((sum, fill) => sum + fill.qty, 0);
-}
-
-/** Size-weighted, so two unequal partials give the true average. */
-function weightedAvgPrice(fills: readonly Fill[]): number {
-  const qty = totalQty(fills);
-  if (qty === 0) return 0;
-  return fills.reduce((sum, fill) => sum + fill.price * fill.qty, 0) / qty;
 }
 
 function earliest(dates: readonly Date[]): Date {

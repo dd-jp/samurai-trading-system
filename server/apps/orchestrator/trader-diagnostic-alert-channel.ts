@@ -20,11 +20,11 @@
  * and logs it, so the tick still returns its decision and the undelivered alert
  * is on the record.
  */
-import type { TelegramClient } from '../../pipeline/verdict/index.js';
 import type {
   TraderDiagnosticAlert,
   TraderDiagnosticAlertChannel,
 } from './production/trader-diagnostic-alert.js';
+import { TradeChannelAlert } from './trade-channel.js';
 
 /**
  * What each kind means in one line, and what it costs while it persists.
@@ -71,16 +71,11 @@ function formatTraderDiagnosticAlert(alert: TraderDiagnosticAlert): string {
   );
 }
 
-export class TradeChannelTraderDiagnosticAlert implements TraderDiagnosticAlertChannel {
-  readonly #telegram: TelegramClient;
-  readonly #chatId: string;
-
-  constructor(telegram: TelegramClient, chatId: string) {
-    this.#telegram = telegram;
-    this.#chatId = chatId;
-  }
-
+export class TradeChannelTraderDiagnosticAlert
+  extends TradeChannelAlert
+  implements TraderDiagnosticAlertChannel
+{
   async postTraderDiagnosticAlert(alert: TraderDiagnosticAlert): Promise<void> {
-    await this.#telegram.sendMessage(this.#chatId, formatTraderDiagnosticAlert(alert));
+    await this.send(formatTraderDiagnosticAlert(alert));
   }
 }

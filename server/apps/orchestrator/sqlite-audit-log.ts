@@ -12,7 +12,7 @@
  * `SqliteExecutionStore.getFills` orders by `rowid`).
  */
 
-import type { SharedStore } from '../../shared/store/index.js';
+import type { StoreHandle } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';
 import type { AssetClass, AuditLog } from './types.js';
 
@@ -48,7 +48,7 @@ interface AuditLogRow {
 }
 
 export class SqliteAuditLog implements AuditLog {
-  constructor(private readonly db: SharedStore) {}
+  constructor(private readonly db: StoreHandle) {}
 
   record(entry: AuditLogEntry): void {
     this.db

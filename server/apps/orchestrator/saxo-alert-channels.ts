@@ -14,9 +14,6 @@
  * Three classes in one file rather than three files: they share a formatter
  * shape and a destination, and they arrive together as one venue's escalation
  * set.
- *
- * Discord is optional and mirrors the heartbeat's shape: both are attempted
- * together, so a Telegram outage does not silence the Discord copy.
  */
 import type {
   DormantLegsUnresolvedAlert,
@@ -26,43 +23,10 @@ import type {
   UnresolvedPriceUnitAlert,
   UnresolvedPriceUnitAlertChannel,
 } from '../../pipeline/execution/index.js';
-import type { DiscordClient, TelegramClient } from '../../pipeline/verdict/index.js';
-
-/**
- * The send half every channel below shares. Composed only from the alert's
- * own curated fields — no venue error, no response body; see each alert
- * type's CREDENTIALS note for why that boundary is hard.
- */
-abstract class SaxoTradeChannelAlert {
-  readonly #telegram: TelegramClient;
-  readonly #telegramChatId: string;
-  readonly #discord: DiscordClient | undefined;
-  readonly #discordChannelId: string | undefined;
-
-  constructor(
-    telegram: TelegramClient,
-    telegramChatId: string,
-    discord?: DiscordClient,
-    discordChannelId?: string,
-  ) {
-    this.#telegram = telegram;
-    this.#telegramChatId = telegramChatId;
-    this.#discord = discord;
-    this.#discordChannelId = discordChannelId;
-  }
-
-  protected async send(text: string): Promise<void> {
-    await Promise.all([
-      this.#telegram.sendMessage(this.#telegramChatId, text),
-      this.#discord && this.#discordChannelId
-        ? this.#discord.sendMessage(this.#discordChannelId, text)
-        : Promise.resolve(),
-    ]);
-  }
-}
+import { TradeChannelAlert } from './trade-channel.js';
 
 export class TradeChannelLegResizeUnverifiedAlert
-  extends SaxoTradeChannelAlert
+  extends TradeChannelAlert
   implements LegResizeUnverifiedAlertChannel
 {
   async postLegResizeUnverifiedAlert(alert: LegResizeUnverifiedAlert): Promise<void> {
@@ -78,7 +42,7 @@ export class TradeChannelLegResizeUnverifiedAlert
 }
 
 export class TradeChannelDormantLegsUnresolvedAlert
-  extends SaxoTradeChannelAlert
+  extends TradeChannelAlert
   implements DormantLegsUnresolvedAlertChannel
 {
   async postDormantLegsUnresolvedAlert(alert: DormantLegsUnresolvedAlert): Promise<void> {
@@ -93,7 +57,7 @@ export class TradeChannelDormantLegsUnresolvedAlert
 }
 
 export class TradeChannelUnresolvedPriceUnitAlert
-  extends SaxoTradeChannelAlert
+  extends TradeChannelAlert
   implements UnresolvedPriceUnitAlertChannel
 {
   async postUnresolvedPriceUnitAlert(alert: UnresolvedPriceUnitAlert): Promise<void> {

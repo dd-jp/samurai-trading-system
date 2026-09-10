@@ -10,7 +10,7 @@
  * including unrealized positions, not of realized trades).
  */
 
-import type { SharedStore } from '../../shared/store/index.js';
+import type { StoreHandle } from '../../shared/store/index.js';
 import { toStoredTimestamp } from '../../shared/store/index.js';
 
 const SINGLETON_KEY = 'default';
@@ -39,7 +39,7 @@ export class SqliteAccountStateStore {
    * arm's singleton row, so every existing caller is unchanged.
    */
   constructor(
-    private readonly db: SharedStore,
+    private readonly db: StoreHandle,
     private readonly key: string = SINGLETON_KEY,
   ) {}
 

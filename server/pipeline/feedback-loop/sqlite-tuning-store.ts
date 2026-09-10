@@ -15,7 +15,7 @@
 
 import type { Clock, TuningStore } from '../../shared/index.js';
 import { assertThresholdWithinBounds, SystemClock } from '../../shared/index.js';
-import type { SharedStore } from '../../shared/store/index.js';
+import type { StoreHandle } from '../../shared/store/index.js';
 import { toStoredTimestamp } from '../../shared/store/index.js';
 
 /**
@@ -48,7 +48,7 @@ const RISK_THRESHOLDS: DialTable = {
 
 export class SqliteTuningStore implements TuningStore {
   constructor(
-    private readonly db: SharedStore,
+    private readonly db: StoreHandle,
     private readonly clock: Clock = new SystemClock(),
   ) {}
 

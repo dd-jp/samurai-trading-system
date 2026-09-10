@@ -1,4 +1,4 @@
-import type { DiscordClient, TelegramClient } from '../../pipeline/verdict/index.js';
+import type { TelegramClient } from '../../pipeline/verdict/index.js';
 import { TradeChannelOrphanAlert } from './orphan-alert-channel.js';
 import type { OrphanGoVerdict } from './orphan-verdict-scan.js';
 
@@ -15,10 +15,6 @@ function makeTelegram(): TelegramClient {
     sendApprovalButtons: vi.fn().mockResolvedValue(undefined),
     onApprovalCallback: vi.fn(),
   };
-}
-
-function makeDiscord(): DiscordClient {
-  return { sendMessage: vi.fn().mockResolvedValue(undefined) };
 }
 
 function sentText(telegram: TelegramClient): string {
@@ -61,33 +57,5 @@ describe('TradeChannelOrphanAlert.postOrphanAlert', () => {
     await new TradeChannelOrphanAlert(telegram, 'chat-1').postOrphanAlert(ORPHAN);
 
     expect(sentText(telegram)).toMatch(/by hand/i);
-  });
-
-  it('fans out to Discord as well when one is configured', async () => {
-    const telegram = makeTelegram();
-    const discord = makeDiscord();
-
-    await new TradeChannelOrphanAlert(telegram, 'chat-1', discord, 'channel-1').postOrphanAlert(
-      ORPHAN,
-    );
-
-    expect(telegram.sendMessage).toHaveBeenCalledTimes(1);
-    expect(discord.sendMessage).toHaveBeenCalledTimes(1);
-  });
-
-  it('still posts to Discord when Telegram fails, and rejects', async () => {
-    // Both transports are attempted together so one outage cannot silence the
-    // other copy — the same posture `TradeChannelHeartbeat` takes. The
-    // rejection still surfaces: `OrphanVerdictScanner.scan` catches and logs
-    // it per orphan, and a swallowed failure would make that log impossible.
-    const telegram = makeTelegram();
-    const discord = makeDiscord();
-    (telegram.sendMessage as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('503'));
-
-    await expect(
-      new TradeChannelOrphanAlert(telegram, 'chat-1', discord, 'channel-1').postOrphanAlert(ORPHAN),
-    ).rejects.toThrow();
-
-    expect(discord.sendMessage).toHaveBeenCalledTimes(1);
   });
 });

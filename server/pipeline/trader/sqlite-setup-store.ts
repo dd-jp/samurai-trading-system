@@ -23,7 +23,7 @@
  */
 
 import type { SetupNeighbor, SetupStore, SetupVector } from '../../shared/index.js';
-import type { SharedStore } from '../../shared/store/index.js';
+import type { StoreHandle } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';
 
 export type SetupAssetClass = 'crypto' | 'stocks';
@@ -52,7 +52,7 @@ export class SqliteSetupStore implements SetupStore {
   private readonly idempotencyKeyFor: (debateId: string) => string;
 
   constructor(
-    private readonly db: SharedStore,
+    private readonly db: StoreHandle,
     options: SqliteSetupStoreOptions = {},
   ) {
     this.instrument = options.instrument ?? DEFAULT_INSTRUMENT;

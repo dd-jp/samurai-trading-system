@@ -11,7 +11,7 @@
  * the snapshot is local.
  */
 
-import type { SharedStore } from '../../shared/store/index.js';
+import type { StoreHandle } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';
 
 /** The three snapshot keys: two asset classes plus the portfolio-level figure. */
@@ -43,7 +43,7 @@ interface RealizedRow {
 }
 
 export class SqliteSessionEquityStore {
-  constructor(private readonly db: SharedStore) {}
+  constructor(private readonly db: StoreHandle) {}
 
   /** The stored snapshot for `key`, or null before one has ever been written. */
   get(key: SessionEquityKey): SessionEquitySnapshot | null {

@@ -16,6 +16,7 @@ import type {
 } from '../../pipeline/debate-engine/index.js';
 import type { TelegramClient } from '../../pipeline/verdict/index.js';
 import { describeThrownSafely } from '../../shared/index.js';
+import { TradeChannelAlert } from './trade-channel.js';
 import type { Logger } from './types.js';
 
 export function formatPromptTierAlert(alert: PromptTierAlert): string {
@@ -29,20 +30,20 @@ export function formatPromptTierAlert(alert: PromptTierAlert): string {
   );
 }
 
-export class TradeChannelPromptTierAlert implements PromptTierAlertChannel {
-  readonly #telegram: TelegramClient;
-  readonly #chatId: string;
+export class TradeChannelPromptTierAlert
+  extends TradeChannelAlert
+  implements PromptTierAlertChannel
+{
   readonly #logger: Logger;
 
   constructor(telegram: TelegramClient, chatId: string, logger: Logger) {
-    this.#telegram = telegram;
-    this.#chatId = chatId;
+    super(telegram, chatId);
     this.#logger = logger;
   }
 
   postPromptTierAlert(alert: PromptTierAlert): void {
     const text = formatPromptTierAlert(alert);
-    void this.#telegram.sendMessage(this.#chatId, text).catch((error: unknown) => {
+    this.sendDetached(text, (error: unknown) => {
       // The one alert whose failure to send must itself stay visible — see
       // `TradeChannelThresholdClampAlert`'s identical reasoning.
       this.#logger.log({

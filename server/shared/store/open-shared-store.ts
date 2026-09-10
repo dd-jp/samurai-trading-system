@@ -13,8 +13,13 @@ import { dirname } from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
 import { runMigrations } from './migrate.js';
 
-/** The typed handle passed to components by constructor injection. */
-export type SharedStore = BetterSqlite3.Database;
+/**
+ * The raw database handle passed to components by constructor injection.
+ * Named for what it is — a handle, not a store — so it cannot be mistaken for
+ * the execution `SharedStore` port (pipeline/execution/types/store.ts), the
+ * typed row-level interface over this handle.
+ */
+export type StoreHandle = BetterSqlite3.Database;
 
 /**
  * The environments that may own a shared-store file. `NODE_ENV` is matched
@@ -197,7 +202,7 @@ function ensureParentDirectory(dbPath: string): void {
   mkdirSync(directory, { recursive: true });
 }
 
-export function openSharedStore(dbPath: string): SharedStore {
+export function openSharedStore(dbPath: string): StoreHandle {
   ensureParentDirectory(dbPath);
   const db = new BetterSqlite3(dbPath);
   // WAL is a no-op on an in-memory DB; SQLite ignores it rather than failing.

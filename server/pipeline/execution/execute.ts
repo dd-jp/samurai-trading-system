@@ -21,6 +21,7 @@ import type { CostBreakdown, FillRequest, MarketState } from '../../tools/backte
 import type { VerdictDecision } from '../verdict/index.js';
 import { ingestFills } from './ingest-fills.js';
 import { reconcile } from './reconcile.js';
+import { markResidualsUnprotected } from './residual-protection.js';
 import { sweepResidualProtection } from './residual-protection-sweep.js';
 import { DuplicatePositionError } from './sqlite-shared-store.js';
 import type {
@@ -656,9 +657,9 @@ async function executeExit(
   // plausible and is not. `execute()` is the last checkpoint before funds
   // move, so it refuses and names the lot rather than trading on the sum.
   //
-  // A bare `< 0`, not ADR-0005's `coversQty` tolerance, and that is not an
+  // A bare `< 0`, not ADR-0005's `coversQty` tolerance (shared/held-quantity.ts), and that is not an
   // oversight: a lot whose exit fills merely APPROACH its filled size is
-  // marked `closed` by `ingestFills()` (`coversQty(exitQty, filledSize)`) and
+  // marked `closed` by `ingestFills()` (`isFlat`) and
   // so has already left `getOpenPositions()`. Every lot reaching this line
   // therefore holds a residual comfortably outside that epsilon, and a
   // negative here is a real contradiction rather than summation noise.
@@ -882,27 +883,18 @@ async function markLotsUnprotected(
     { failed_lot: failedLotKey, unprotected_lots: cancelledLots.map((lot) => lot.idempotency_key) },
   );
 
-  for (const lot of cancelledLots) {
-    try {
-      await input.store.markResidualUnprotected(lot.idempotency_key, now);
-    } catch (markError) {
-      logCaughtFailure(
-        input.logger,
-        {
-          trace_id: input.trace_id,
-          stage: 'execution',
-          event: 'residual_mark_failed',
-          level: 'error',
-          message:
-            'executeExit: markResidualUnprotected failed for a lot whose protective legs were ' +
-            'already cancelled — the #549 sweep will not know to re-arm it, so this lot is ' +
-            'open and unprotected with no automatic recovery behind it',
-        },
-        markError,
-        { idempotency_key: lot.idempotency_key },
-      );
-    }
-  }
+  await markResidualsUnprotected(
+    input,
+    cancelledLots.map((lot) => lot.idempotency_key),
+    now,
+    {
+      level: 'error',
+      message:
+        'executeExit: markResidualUnprotected failed for a lot whose protective legs were ' +
+        'already cancelled — the #549 sweep will not know to re-arm it, so this lot is ' +
+        'open and unprotected with no automatic recovery behind it',
+    },
+  );
 }
 
 function result(

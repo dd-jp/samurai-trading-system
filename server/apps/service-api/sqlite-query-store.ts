@@ -58,8 +58,8 @@ import {
   type ClosedTradeRow,
   fromClosedTradeRow,
   fromStoredTimestamp,
-  type SharedStore,
   SqliteLlmSpendCapStore,
+  type StoreHandle,
   toStoredTimestamp,
 } from '../../shared/store/index.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
@@ -309,7 +309,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
   private readonly spendCap: SqliteLlmSpendCapStore;
 
   constructor(
-    private readonly db: SharedStore,
+    private readonly db: StoreHandle,
     private readonly attributionWindowDays = 30,
     /**
      * The escalation chat `alert_delivery_failures.chat_id` is scoped

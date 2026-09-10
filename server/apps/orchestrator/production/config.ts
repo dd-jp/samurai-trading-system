@@ -60,13 +60,14 @@ import type {
   TokenBucketConfig,
   VenuePacingConfig,
 } from '../../../shared/index.js';
-import type { SharedStore as SqliteHandle } from '../../../shared/store/index.js';
+import type { StoreHandle } from '../../../shared/store/index.js';
 import type { CostConfig, SqliteStage2SelectionStore } from '../../../tools/backtest/index.js';
 import type { HeartbeatChannel } from '../heartbeat.js';
 import type { OrphanAlertChannel } from '../orphan-verdict-scan.js';
 import type { Logger, UniverseInstrument } from '../types.js';
 import type { AnalystSkipAlertChannel } from './analysts-adapter.js';
 import type { CalendarFallbackAlertChannel } from './calendar-fallback-alert.js';
+import type { CapitalCeilingUsd } from './capital-ceiling.js';
 import { DEFAULT_STAGE2_MAX_AGE_DAYS } from './daily-equity-metrics-source.js';
 import type { DataFailoverAlertChannel } from './data-failover.js';
 import type { AccountStateProvider, VolatilityReadingProvider } from './direct-bind.js';
@@ -106,7 +107,7 @@ export interface AlertChannelSlots {
    * variable with no default — and passes `TradeChannelHeartbeat` over a real
    * `TelegramBotApiClient` (#275) under `telegram`, or nothing at all under an
    * explicitly-named `log-only`. This field stays the port rather than a
-   * Telegram/Discord client, so a programmatic caller can still inject its
+   * Telegram client, so a programmatic caller can still inject its
    * own; see alert-transport.ts.
    *
    * Under `telegram` the beat goes to `TELEGRAM_HEARTBEAT_CHAT_ID` — a chat of
@@ -501,7 +502,7 @@ export interface AlertChannelSlots {
  */
 export interface ProductionConfig extends AlertChannelSlots {
   /** The shared SQLite handle (`openSharedStore(...)`) every store here is built over. */
-  db: SqliteHandle;
+  db: StoreHandle;
   clock: Clock;
   /** `paper` for the first run; `live` only after graduation (CLAUDE.md). */
   mode: 'live' | 'paper' | 'backtest';
@@ -835,6 +836,14 @@ export interface ProductionConfig extends AlertChannelSlots {
    */
   llmBudgetUsd?: number;
   /**
+   * The environment `readProductionEnvironment` (production/environment.ts)
+   * reads — every variable the composition root honours is listed there.
+   * Defaults to `process.env`; a test or programmatic caller passes a record
+   * instead of mutating the process environment (docs/coding-standards.md,
+   * "an option with an env default, never a mid-wiring read").
+   */
+  processEnv?: NodeJS.ProcessEnv;
+  /**
    * The declared capital ceiling a live run is bounded by, in account currency
    * (#511, `SAMURAI_LIVE_MAX_CAPITAL_USD`).
    *
@@ -851,15 +860,16 @@ export interface ProductionConfig extends AlertChannelSlots {
    * runs and every test leave it undefined, which restores the pre-#511
    * behaviour exactly — `undefined` is "no ceiling declared", not "a ceiling of
    * zero". `liveStartingProfile` is the only in-repo caller that sets it, and
-   * it refuses to be built without a positive finite figure, so a live run
-   * cannot reach here with the field missing.
+   * it refuses to be built without one, so a live run cannot reach here with
+   * the field missing. Positive and finite is the TYPE's guarantee
+   * (`toCapitalCeilingUsd`, capital-ceiling.ts), not a check repeated here.
    *
    * It does NOT re-anchor the six `riskConfig` notional caps at runtime: those
    * are derived from the same ceiling at profile-build time. See
    * live-profile.ts's header for what that costs when equity is below the
    * ceiling.
    */
-  capitalCeilingUsd?: number;
+  capitalCeilingUsd?: CapitalCeilingUsd;
   /**
    * The USD-per-GBP rate `capitalCeilingUsd` above was CONVERTED at, when it
    * was converted at all (#1180).
@@ -1042,7 +1052,7 @@ export interface DailyMetricsSourceDeps {
    * over an append-only table, so a second instance cannot disagree with the
    * sampler.
    */
-  db: SqliteHandle;
+  db: StoreHandle;
   /** The root's own instance — the same reader `runDailyCycle` attributes over. */
   trades: ClosedTradeStore;
   logger: Logger;

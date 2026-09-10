@@ -17,11 +17,11 @@ import type {
   TraderDecisionRecord,
   TraderLogStore,
 } from '../decision-records.js';
-import type { SharedStore } from './open-shared-store.js';
+import type { StoreHandle } from './open-shared-store.js';
 import { toStoredTimestamp } from './sqlite-utils.js';
 
 export class SqliteTraderLogStore implements TraderLogStore {
-  constructor(private readonly db: SharedStore) {}
+  constructor(private readonly db: StoreHandle) {}
 
   write(record: TraderDecisionRecord): void {
     this.db
@@ -67,7 +67,7 @@ export class SqliteTraderLogStore implements TraderLogStore {
 }
 
 export class SqliteRiskLogStore implements RiskLogStore {
-  constructor(private readonly db: SharedStore) {}
+  constructor(private readonly db: StoreHandle) {}
 
   write(record: RiskDecisionRecord): void {
     this.db

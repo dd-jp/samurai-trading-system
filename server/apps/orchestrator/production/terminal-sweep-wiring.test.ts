@@ -37,7 +37,7 @@ import { DEFAULT_TRADER_CONFIG } from '../../../pipeline/trader/index.js';
 import type { Logger, OpenPosition } from '../../../shared/index.js';
 import { SimulatedClock } from '../../../shared/index.js';
 import { recordingLogger } from '../../../shared/recording-logger.js';
-import { openSharedStore, type SharedStore } from '../../../shared/store/index.js';
+import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import { buildProductionComponents, type ProductionConfig } from '../production.js';
 import { buildExecutionSurface } from './direct-bind.js';
 import {
@@ -117,7 +117,7 @@ async function seedOldRejectedPosition(store: ExecutionSharedStore): Promise<voi
 /** Same device as `filled-zero-size-wiring.test.ts`'s `stubConfig` — see its own doc for why. */
 type StubConfig = ProductionConfig & Required<Pick<ProductionConfig, 'alpacaBrokerClient'>>;
 
-function stubConfig(db: SharedStore, logger: Logger): StubConfig {
+function stubConfig(db: StoreHandle, logger: Logger): StubConfig {
   return {
     db,
     clock: new SimulatedClock(NOW),
@@ -184,7 +184,7 @@ function stubConfig(db: SharedStore, logger: Logger): StubConfig {
 }
 
 describe('the #1088 terminal-row sweep is wired through the real composition root', () => {
-  let db: SharedStore;
+  let db: StoreHandle;
 
   beforeEach(() => {
     db = openSharedStore(':memory:');

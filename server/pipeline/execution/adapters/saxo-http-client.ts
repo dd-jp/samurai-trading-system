@@ -497,7 +497,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
    * 15 s window (doc 43), so a retried POST after a slow reply can place a
    * second order. Recovery is the adapter's adopt-or-place lookup instead.
    *
-   * Since #1273, `isRetryableSaxoBrokerError` (via `isRetrySafeSaxoMethod`)
+   * Since #1273, `isRetryableSaxoBrokerError` (via `isRetrySafeMethod`)
    * already refuses retry for every error shape `request()` can throw on a
    * POST: a status-less transport failure (`retryableTransportFailure` is
    * `method === 'GET'`), a timeout, a rate-limit, and a 5xx response (all

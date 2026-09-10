@@ -33,8 +33,9 @@
  * computed`, production.ts); this adapter has no retry queue either way.
  */
 import type { BreachAlert, BreachAlertChannel } from '../../pipeline/feedback-loop/index.js';
-import type { DiscordClient, TelegramClient } from '../../pipeline/verdict/index.js';
-import { currentTraceId } from '../../shared/index.js';
+import type { TelegramClient } from '../../pipeline/verdict/index.js';
+import { currentTraceId, describeThrownSafely } from '../../shared/index.js';
+import { TradeChannelAlert } from './trade-channel.js';
 import type { Logger } from './types.js';
 
 /**
@@ -231,47 +232,23 @@ export function formatBreachAlert(alert: BreachAlert): string {
   );
 }
 
-export class TradeChannelBreachAlert implements BreachAlertChannel {
-  readonly #telegram: TelegramClient;
-  readonly #telegramChatId: string;
-  readonly #discord: DiscordClient | undefined;
-  readonly #discordChannelId: string | undefined;
+export class TradeChannelBreachAlert extends TradeChannelAlert implements BreachAlertChannel {
   readonly #logger: Logger;
 
   /**
-   * `logger` is REQUIRED and sits ahead of the optional Discord pair for that
-   * reason. The only alternative to logging a failed send is silence on the
-   * one alert that matters most — a breach whose push failed would otherwise
-   * vanish entirely — so this is not a dependency a caller may decline.
+   * `logger` is REQUIRED. The only alternative to logging a failed send is
+   * silence on the one alert that matters most — a breach whose push failed
+   * would otherwise vanish entirely — so this is not a dependency a caller
+   * may decline.
    */
-  constructor(
-    telegram: TelegramClient,
-    telegramChatId: string,
-    logger: Logger,
-    discord?: DiscordClient,
-    discordChannelId?: string,
-  ) {
-    this.#telegram = telegram;
-    this.#telegramChatId = telegramChatId;
+  constructor(telegram: TelegramClient, telegramChatId: string, logger: Logger) {
+    super(telegram, telegramChatId);
     this.#logger = logger;
-    this.#discord = discord;
-    this.#discordChannelId = discordChannelId;
   }
 
   postBreachAlert(alert: BreachAlert): void {
     const text = formatBreachAlert(alert);
-    // Both attempted together, mirroring the heartbeat's shape, so a Telegram
-    // outage does not silence the Discord copy.
-    void Promise.allSettled([
-      this.#telegram.sendMessage(this.#telegramChatId, text),
-      this.#discord && this.#discordChannelId
-        ? this.#discord.sendMessage(this.#discordChannelId, text)
-        : Promise.resolve(),
-    ]).then((results) => {
-      const failed = results.filter((r) => r.status === 'rejected');
-      if (failed.length === 0) {
-        return;
-      }
+    this.sendDetached(text, (error: unknown) => {
       // A breach that could not be delivered is itself an operator-visible
       // event — otherwise the one alert that matters most fails silently.
       this.#logger.log({
@@ -290,7 +267,7 @@ export class TradeChannelBreachAlert implements BreachAlertChannel {
         payload: {
           breaches: alert.breaches,
           reported_at: alert.reported_at.toISOString(),
-          failures: failed.length,
+          error: describeThrownSafely(error),
         },
       });
     });

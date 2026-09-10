@@ -5,7 +5,7 @@
  * nobody is watching during a fourteen-day unattended soak.
  *
  * Same shape as `TradeChannelMiCoverageAlert`: wrap the already-provisioned
- * Telegram (and optional Discord) client and post to the ESCALATION chat,
+ * Telegram client and post to the ESCALATION chat,
  * never the heartbeat chat (#342) — leaving the primary market-data vendor is
  * a fact that should interrupt someone, not a beat.
  *
@@ -16,8 +16,8 @@
  * (production/data-failover.ts) catches and logs it, so the failover still
  * returns its bars and the undelivered alert is on the record.
  */
-import type { DiscordClient, TelegramClient } from '../../pipeline/verdict/index.js';
 import type { DataFailoverAlert, DataFailoverAlertChannel } from './production/data-failover.js';
+import { TradeChannelAlert } from './trade-channel.js';
 
 function formatDataFailoverAlert(alert: DataFailoverAlert): string {
   return (
@@ -36,31 +36,12 @@ function formatDataFailoverAlert(alert: DataFailoverAlert): string {
   );
 }
 
-export class TradeChannelDataFailoverAlert implements DataFailoverAlertChannel {
-  readonly #telegram: TelegramClient;
-  readonly #telegramChatId: string;
-  readonly #discord: DiscordClient | undefined;
-  readonly #discordChannelId: string | undefined;
-
-  constructor(
-    telegram: TelegramClient,
-    telegramChatId: string,
-    discord?: DiscordClient,
-    discordChannelId?: string,
-  ) {
-    this.#telegram = telegram;
-    this.#telegramChatId = telegramChatId;
-    this.#discord = discord;
-    this.#discordChannelId = discordChannelId;
-  }
-
+export class TradeChannelDataFailoverAlert
+  extends TradeChannelAlert
+  implements DataFailoverAlertChannel
+{
   async postDataFailoverAlert(alert: DataFailoverAlert): Promise<void> {
     const text = formatDataFailoverAlert(alert);
-    await Promise.all([
-      this.#telegram.sendMessage(this.#telegramChatId, text),
-      this.#discord && this.#discordChannelId
-        ? this.#discord.sendMessage(this.#discordChannelId, text)
-        : Promise.resolve(),
-    ]);
+    await this.send(text);
   }
 }

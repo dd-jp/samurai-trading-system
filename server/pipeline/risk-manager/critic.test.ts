@@ -18,7 +18,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MarketDataService } from '../../providers/market-data-service/index.js';
 import type { Logger, OrderIntent } from '../../shared/index.js';
 import { runWithTraceId } from '../../shared/index.js';
-import { openSharedStore, type SharedStore } from '../../shared/store/index.js';
+import { openSharedStore, type StoreHandle } from '../../shared/store/index.js';
 import type {
   AnthropicMessageRequest,
   AnthropicMessagesClient,
@@ -605,7 +605,7 @@ describe('LlmRiskCriticProducer (live/paper)', () => {
 });
 
 describe('LlmRiskCriticProducer spend metering (#957 acceptance: meters into llm_spend)', () => {
-  let db: SharedStore;
+  let db: StoreHandle;
 
   beforeEach(() => {
     db = openSharedStore(':memory:');
@@ -940,14 +940,14 @@ describe('LlmRiskCriticProducer — the invalidation fold (#994)', () => {
 });
 
 /** Reads the row back through the real store, failing loudly rather than casting an absent row into shape. */
-function readStoredVerdict(db: SharedStore): RiskCriticVerdict {
+function readStoredVerdict(db: StoreHandle): RiskCriticVerdict {
   const logged = new SqliteRiskCriticStore(db).getByDebateId(DEBATE_ID);
   if (logged === undefined) throw new Error('the test wrote no row for this debate');
   return logged.verdict;
 }
 
 describe('SqliteRiskCriticStore', () => {
-  let db: SharedStore;
+  let db: StoreHandle;
 
   beforeEach(() => {
     db = openSharedStore(':memory:');

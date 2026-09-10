@@ -16,12 +16,21 @@ export type {
   TraderLogStore,
 } from './decision-records.js';
 export { nonEmpty, positiveIntegerFromEnv, requireIntegerAtLeast } from './env-integer.js';
-// #568: the one definition of "what this lot still holds", shared by the two
-// stages that size an exit — Trader (`buildExitIntent`) and Execution
-// (`executeExit`). Cross-module, so it belongs on this barrel rather than in
-// either stage's own module.
-export type { LotHeldQuantity } from './held-quantity.js';
-export { heldQuantitiesFor, totalHeldQuantity } from './held-quantity.js';
+// #568: the one fill-record arithmetic every exit-sizing and flatness
+// judgement runs — Trader, Execution and the residual sweep — so the three
+// can never disagree on what a lot still holds.
+export type { ExitFill, LotHeldQuantity, RecordedHeldQuantity } from './held-quantity.js';
+export {
+  coversQty,
+  heldQuantitiesFor,
+  heldQuantityFromFills,
+  isExitFill,
+  isFlat,
+  QTY_EPSILON_RELATIVE,
+  totalHeldQuantity,
+  totalQty,
+  weightedAvgPrice,
+} from './held-quantity.js';
 export { delay } from './http/delay.js';
 export { fetchWithTimeout } from './http/fetch-with-timeout.js';
 export {

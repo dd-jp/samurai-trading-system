@@ -86,11 +86,7 @@ import type { ClosedTrade, OrderIntent, TradingArm } from '../../shared/index.js
 import { currentTraceId, SimulatedClock, TokenBucket, toBrokerFillId } from '../../shared/index.js';
 import type { NousCredentials } from '../../shared/llm/index.js';
 import { DEFAULT_NOUS_MODELS } from '../../shared/llm/index.js';
-import {
-  guardedStore,
-  openSharedStore,
-  type SharedStore as SqliteHandle,
-} from '../../shared/store/index.js';
+import { guardedStore, openSharedStore, type StoreHandle } from '../../shared/store/index.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
 import { CostModelImpl, SqliteStage2SelectionStore } from '../../tools/backtest/index.js';
 import { LLM_SPEND_CAP_BREACH } from './breach-alert-channel.js';
@@ -98,6 +94,7 @@ import { LoggingBreachAlertChannel, UnwiredApprovalChannel } from './console-cha
 import { DebateBarDecisionGate } from './decision-bar-gate.js';
 import { FILL_SYNC_TRACE_ID, RECONCILE_TRACE_ID } from './fill-sync.js';
 import { LIVE_BOOK_GBP, LIVE_BOOK_SIZING_USD, paperStartingProfile } from './paper-profile.js';
+import { type CapitalCeilingUsd, toCapitalCeilingUsd } from './production/capital-ceiling.js';
 import {
   CONTROL_FILL_SYNC_TRACE_ID,
   CONTROL_RECONCILE_TRACE_ID,
@@ -324,7 +321,7 @@ const offlinePolymarketClient = new PolymarketClient({
   }) as unknown as typeof fetch,
 });
 
-function stubConfig(db: SqliteHandle, overrides: Partial<ProductionConfig> = {}): StubConfig {
+function stubConfig(db: StoreHandle, overrides: Partial<ProductionConfig> = {}): StubConfig {
   const submitOrder = vi.fn(async () => ({
     id: 'alpaca-order-1',
     client_order_id: 'k',
@@ -866,7 +863,7 @@ describe('universe resolution is a single site (#1167)', () => {
 });
 
 describe('universe resolution is shared, not re-derived (#1167)', () => {
-  let db: SqliteHandle;
+  let db: StoreHandle;
 
   const EXPLICIT_UNIVERSE: readonly UniverseInstrument[] = [
     { asset: 'ISF', asset_class: 'stocks' },
@@ -953,7 +950,7 @@ describe('resolveApprovalsChannel (#1152)', () => {
 });
 
 describe('buildProductionComponents', () => {
-  let db: SqliteHandle;
+  let db: StoreHandle;
 
   beforeEach(() => {
     db = openSharedStore(':memory:');
@@ -1163,17 +1160,17 @@ describe('buildProductionComponents', () => {
   it.each([
     ['NaN', Number.NaN],
     ['Infinity', Number.POSITIVE_INFINITY],
-    // Finite, so a finiteness-only check let these through — and `Math.min`
-    // would clamp every size in the run to zero or below.
     ['zero', 0],
     ['negative', -1_000],
   ])(
-    'refuses to build with mode "live" and a %s capital ceiling (#569 review) — the ' +
-      'hand-assembled-config caller this gate exists for can pass a failed parse just as ' +
-      'easily as omit the field, and `sizingEquity` would otherwise only refuse at the first ' +
-      'sizing of the first tick, with every store and wire client already open',
+    'refuses to build with a %s capital ceiling smuggled past the brand (#569 review) — the ' +
+      'brand is compile-time only, and a JS or cast caller assembling ProductionConfig by hand ' +
+      'can still pass a failed parse; `Math.min` would read NaN as "no bound"',
     (_label, ceiling: number) => {
-      const config = stubConfig(db, { mode: 'live', capitalCeilingUsd: ceiling });
+      const config = stubConfig(db, {
+        mode: 'live',
+        capitalCeilingUsd: ceiling as CapitalCeilingUsd,
+      });
 
       expect(() => buildProductionComponents(config)).toThrow(/capitalCeilingUsd/);
     },
@@ -1229,7 +1226,10 @@ describe('buildProductionComponents', () => {
 
   it('logs a ceiling declared in the account currency as derived by nothing (#1180)', () => {
     const logger = recordingLogger();
-    const config = stubConfig(db, { logger, capitalCeilingUsd: 2_000 });
+    const config = stubConfig(db, {
+      logger,
+      capitalCeilingUsd: toCapitalCeilingUsd(2_000, 'test'),
+    });
 
     buildProductionComponents(config);
 
@@ -1465,7 +1465,7 @@ describe('buildProductionComponents', () => {
     (instrument) => {
       const config = stubConfig(db, {
         mode: 'live',
-        capitalCeilingUsd: 1_000,
+        capitalCeilingUsd: toCapitalCeilingUsd(1_000, 'test'),
         universe: [{ asset: instrument, asset_class: 'stocks' }],
       });
 
@@ -1523,7 +1523,7 @@ describe('buildProductionComponents', () => {
     () => {
       const config = stubConfig(db, {
         mode: 'live',
-        capitalCeilingUsd: 1_000,
+        capitalCeilingUsd: toCapitalCeilingUsd(1_000, 'test'),
         tradingCalendar: new UsEquityRegularHoursCalendar(),
         universe: [{ asset: 'SPY', asset_class: 'stocks' }],
       });
@@ -1543,7 +1543,7 @@ describe('buildProductionComponents', () => {
     () => {
       const config = stubConfig(db, {
         mode: 'live',
-        capitalCeilingUsd: 1_000,
+        capitalCeilingUsd: toCapitalCeilingUsd(1_000, 'test'),
         tradingCalendar: new AlwaysOpenCalendar(),
         universe: [{ asset: 'SPY', asset_class: 'stocks' }],
       });
@@ -1566,7 +1566,7 @@ describe('buildProductionComponents', () => {
       class SubclassCalendar extends UsEquityRegularHoursCalendar {}
       const config = stubConfig(db, {
         mode: 'live',
-        capitalCeilingUsd: 1_000,
+        capitalCeilingUsd: toCapitalCeilingUsd(1_000, 'test'),
         tradingCalendar: new SubclassCalendar(),
         universe: [{ asset: 'SPY', asset_class: 'stocks' }],
       });
@@ -1583,7 +1583,7 @@ describe('buildProductionComponents', () => {
     () => {
       const config = stubConfig(db, {
         mode: 'live',
-        capitalCeilingUsd: 1_000,
+        capitalCeilingUsd: toCapitalCeilingUsd(1_000, 'test'),
         universe: [{ asset: 'AAPL', asset_class: 'stocks' }],
       });
 
@@ -1598,7 +1598,7 @@ describe('buildProductionComponents', () => {
     () => {
       const config = stubConfig(db, {
         mode: 'live',
-        capitalCeilingUsd: 1_000,
+        capitalCeilingUsd: toCapitalCeilingUsd(1_000, 'test'),
         universe: [{ asset: 'spy', asset_class: 'stocks' }],
       });
 
@@ -1615,7 +1615,7 @@ describe('buildProductionComponents', () => {
     () => {
       const config = stubConfig(db, {
         mode: 'live',
-        capitalCeilingUsd: 1_000,
+        capitalCeilingUsd: toCapitalCeilingUsd(1_000, 'test'),
         universe: [{ asset: '3SPY', asset_class: 'stocks' }],
         lseMarkClient: {
           vendor: 'fake-lse-vendor',
@@ -1645,7 +1645,7 @@ describe('buildProductionComponents', () => {
       () => {
         const config = stubConfig(db, {
           mode: 'live',
-          capitalCeilingUsd: 1_000,
+          capitalCeilingUsd: toCapitalCeilingUsd(1_000, 'test'),
           clock: new SimulatedClock(oneDayPastCoverage),
         });
 
@@ -1672,7 +1672,7 @@ describe('buildProductionComponents', () => {
     it('does NOT refuse at exactly LSE_TABLE_COVERAGE_END — the last covered date', () => {
       const config = stubConfig(db, {
         mode: 'live',
-        capitalCeilingUsd: 1_000,
+        capitalCeilingUsd: toCapitalCeilingUsd(1_000, 'test'),
         clock: new SimulatedClock(new Date(`${LSE_TABLE_COVERAGE_END}T12:00:00Z`)),
       });
 
@@ -1691,7 +1691,7 @@ describe('buildProductionComponents', () => {
     it('does not run this guard for mode "live" with an injected non-LSE tradingCalendar', () => {
       const config = stubConfig(db, {
         mode: 'live',
-        capitalCeilingUsd: 1_000,
+        capitalCeilingUsd: toCapitalCeilingUsd(1_000, 'test'),
         tradingCalendar: new UsEquityRegularHoursCalendar(),
         clock: new SimulatedClock(oneDayPastCoverage),
       });
@@ -1711,7 +1711,7 @@ describe('buildProductionComponents', () => {
         );
         const config = stubConfig(db, {
           mode: 'live',
-          capitalCeilingUsd: 1_000,
+          capitalCeilingUsd: toCapitalCeilingUsd(1_000, 'test'),
           clock: new SimulatedClock(withinHorizon),
           lseCalendarCoverageAlerts: {
             postLseCalendarCoverageAlert: (alert) => {
@@ -1732,7 +1732,7 @@ describe('buildProductionComponents', () => {
       const posted: LseCalendarCoverageAlert[] = [];
       const config = stubConfig(db, {
         mode: 'live',
-        capitalCeilingUsd: 1_000,
+        capitalCeilingUsd: toCapitalCeilingUsd(1_000, 'test'),
         lseCalendarCoverageAlerts: {
           postLseCalendarCoverageAlert: (alert) => {
             posted.push(alert);
@@ -1751,7 +1751,7 @@ describe('buildProductionComponents', () => {
       atHorizon.setUTCDate(atHorizon.getUTCDate() - LSE_COVERAGE_ALERT_HORIZON_DAYS);
       const config = stubConfig(db, {
         mode: 'live',
-        capitalCeilingUsd: 1_000,
+        capitalCeilingUsd: toCapitalCeilingUsd(1_000, 'test'),
         clock: new SimulatedClock(atHorizon),
         lseCalendarCoverageAlerts: {
           postLseCalendarCoverageAlert: (alert) => {
@@ -1773,7 +1773,7 @@ describe('buildProductionComponents', () => {
       );
       const config = stubConfig(db, {
         mode: 'live',
-        capitalCeilingUsd: 1_000,
+        capitalCeilingUsd: toCapitalCeilingUsd(1_000, 'test'),
         clock: new SimulatedClock(oneDayOutsideHorizon),
         lseCalendarCoverageAlerts: {
           postLseCalendarCoverageAlert: (alert) => {
@@ -1818,7 +1818,7 @@ describe('buildProductionComponents', () => {
       expect(unmodelledHalfDay.getUTCDay()).toBeLessThanOrEqual(5);
       const config = stubConfig(db, {
         mode: 'live',
-        capitalCeilingUsd: 1_000,
+        capitalCeilingUsd: toCapitalCeilingUsd(1_000, 'test'),
         clock: new SimulatedClock(unmodelledHalfDay),
       });
 
@@ -1877,7 +1877,7 @@ describe('buildProductionComponents', () => {
  * no `fetch` stub is needed.
  */
 describe('buildProductionComponents (default llmClient fallback)', () => {
-  let db: SqliteHandle;
+  let db: StoreHandle;
   const NOUS_VARS = [
     'NOUS_API_KEY',
     'NOUS_BASE_URL',
@@ -2128,7 +2128,7 @@ describe('buildProductionComponents (default llmClient fallback)', () => {
  * reads the log the wired sink writes to.
  */
 describe('technical_indicator_unavailable is wired by the composition root (#745)', () => {
-  let db: SqliteHandle;
+  let db: StoreHandle;
 
   beforeEach(() => {
     db = openSharedStore(':memory:');
@@ -2202,7 +2202,7 @@ describe('technical_indicator_unavailable is wired by the composition root (#745
  * this stub, so the ticking instrument is guaranteed to miss coverage.
  */
 describe('market-intelligence coverage is wired by the composition root (#752)', () => {
-  let db: SqliteHandle;
+  let db: StoreHandle;
 
   beforeEach(() => {
     db = openSharedStore(':memory:');
@@ -2294,7 +2294,7 @@ describe('market-intelligence coverage is wired by the composition root (#752)',
  * that half is `llm-failure-rate-guard.test.ts`'s job.
  */
 describe('llm-failure-rate guard is wired by the composition root (#1396)', () => {
-  let db: SqliteHandle;
+  let db: StoreHandle;
 
   beforeEach(() => {
     db = openSharedStore(':memory:');
@@ -2412,7 +2412,7 @@ describe('llm-failure-rate guard is wired by the composition root (#1396)', () =
  * enforcement evidence that comment points to.
  */
 describe('tickSkipAlerts is wired by the composition root (#1084)', () => {
-  let db: SqliteHandle;
+  let db: StoreHandle;
 
   beforeEach(() => {
     db = openSharedStore(':memory:');
@@ -2548,7 +2548,7 @@ describe('tickSkipAlerts is wired by the composition root (#1084)', () => {
  * asserted here.
  */
 describe("the spend cap's breach payload is wired by the composition root (#1280)", () => {
-  let db: SqliteHandle;
+  let db: StoreHandle;
 
   beforeEach(() => {
     db = openSharedStore(':memory:');
@@ -2601,7 +2601,7 @@ describe("the spend cap's breach payload is wired by the composition root (#1280
  * `AlwaysOpenCalendar` default in place.
  */
 describe('sessionCalendars is wired by the composition root (#746)', () => {
-  let db: SqliteHandle;
+  let db: StoreHandle;
 
   beforeEach(() => {
     db = openSharedStore(':memory:');
@@ -2685,7 +2685,7 @@ describe('sessionCalendars is wired by the composition root (#746)', () => {
 });
 
 describe('composed tick chain (integration)', () => {
-  let db: SqliteHandle;
+  let db: StoreHandle;
 
   beforeEach(() => {
     db = openSharedStore(':memory:');
@@ -3018,7 +3018,7 @@ describe('composed tick chain (integration)', () => {
 });
 
 describe('startTickLoop', () => {
-  let db: SqliteHandle;
+  let db: StoreHandle;
 
   beforeEach(() => {
     db = openSharedStore(':memory:');
@@ -3900,7 +3900,7 @@ function openLot(instrument: string, idempotencyKey: string) {
 }
 
 describe('heldAssets covers both arms, through the composition root (#1390)', () => {
-  let db: SqliteHandle;
+  let db: StoreHandle;
 
   beforeEach(() => {
     db = openSharedStore(':memory:');
@@ -3964,7 +3964,7 @@ describe('heldAssets covers both arms, through the composition root (#1390)', ()
  * happens to hold), and observes real dispatch order.
  */
 describe('held-first reordering reaches a real tick through buildProductionOrchestrator (#1390)', () => {
-  let db: SqliteHandle;
+  let db: StoreHandle;
 
   beforeEach(() => {
     db = openSharedStore(':memory:');
@@ -4021,7 +4021,7 @@ describe('held-first reordering reaches a real tick through buildProductionOrche
 });
 
 describe('buildProductionOrchestrator', () => {
-  let db: SqliteHandle;
+  let db: StoreHandle;
 
   beforeEach(() => {
     db = openSharedStore(':memory:');
@@ -6196,7 +6196,7 @@ describe('buildProductionOrchestrator', () => {
     }
 
     function metricsConfig(
-      db: SqliteHandle,
+      db: StoreHandle,
       overrides: {
         sample?: DailyMetricsSample | undefined;
         backtest_reference_sharpe?: number;
@@ -7484,7 +7484,7 @@ describe('buildProductionOrchestrator', () => {
  * satisfy "made no call" just as well.
  */
 describe('risk critic in backtest mode is replay-only at the composition root (#957)', () => {
-  let db: SqliteHandle;
+  let db: StoreHandle;
 
   beforeEach(() => {
     db = openSharedStore(':memory:');
@@ -7711,7 +7711,7 @@ describe('risk critic in backtest mode is replay-only at the composition root (#
  * keep in step with the composition root.
  */
 describe('falsifier arm 2, through the composition root (#753)', () => {
-  let db: SqliteHandle;
+  let db: StoreHandle;
 
   beforeEach(() => {
     db = openSharedStore(':memory:');
@@ -7765,7 +7765,7 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
    * observe what moves.
    */
   async function runOneDecisionPass(options: {
-    handle: SqliteHandle;
+    handle: StoreHandle;
     llmClient: NonNullable<ProductionConfig['llmClient']>;
     traderConfig?: ProductionConfig['traderConfig'];
     /** Defaults to BTC-USD; the D3-bracket case drives a real LSE ETP instead. */
@@ -7824,7 +7824,7 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
     return { persistence, steps, config };
   }
 
-  function lotsByArm(handle: SqliteHandle) {
+  function lotsByArm(handle: StoreHandle) {
     return handle
       .prepare(
         'SELECT arm, idempotency_key, instrument, side, stop, target, avg_entry_price, ' +
@@ -8246,7 +8246,7 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
         ...REAL_CONFIGS.traderConfig,
         subclass_of: { [LSE_ETP.asset]: 'single_stock_etp_3x' },
       } as unknown as ProductionConfig['traderConfig'],
-      configOverrides: { capitalCeilingUsd: LIVE_BOOK_GBP },
+      configOverrides: { capitalCeilingUsd: toCapitalCeilingUsd(LIVE_BOOK_GBP, 'LIVE_BOOK_GBP') },
     });
 
     const lots = lotsByArm(db);
@@ -8335,7 +8335,7 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
     await runOneDecisionPass({
       handle: db,
       llmClient: llmForOneDebate(),
-      configOverrides: { capitalCeilingUsd: LIVE_BOOK_GBP },
+      configOverrides: { capitalCeilingUsd: toCapitalCeilingUsd(LIVE_BOOK_GBP, 'LIVE_BOOK_GBP') },
     });
     const clamped = lotsByArm(db);
     expect(clamped.map((lot) => lot.arm)).toEqual(['control', 'live']);
@@ -8352,7 +8352,7 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
         // a ceiling that never binds, which is what `capitalCeilingUsd ===
         // undefined` behaved like before this fix (`sizingEquity` is a
         // passthrough once the ceiling is >= equity).
-        configOverrides: { capitalCeilingUsd: LIVE_BOOK_GBP * 100 },
+        configOverrides: { capitalCeilingUsd: toCapitalCeilingUsd(LIVE_BOOK_GBP * 100, 'test') },
       });
       const raw = lotsByArm(unclamped);
       expect(raw.map((lot) => lot.arm)).toEqual(['control', 'live']);

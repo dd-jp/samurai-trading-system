@@ -16,7 +16,7 @@ import type {
   NonSterlingFeeAlert,
   NonSterlingFeeAlertChannel,
 } from '../../pipeline/execution/index.js';
-import type { TelegramClient } from '../../pipeline/verdict/index.js';
+import { TradeChannelAlert } from './trade-channel.js';
 
 /**
  * Composed only from the alert's own curated fields — no broker error, no
@@ -32,16 +32,11 @@ function formatNonSterlingFeeAlert(alert: NonSterlingFeeAlert): string {
   );
 }
 
-export class TradeChannelNonSterlingFeeAlert implements NonSterlingFeeAlertChannel {
-  readonly #telegram: TelegramClient;
-  readonly #chatId: string;
-
-  constructor(telegram: TelegramClient, chatId: string) {
-    this.#telegram = telegram;
-    this.#chatId = chatId;
-  }
-
+export class TradeChannelNonSterlingFeeAlert
+  extends TradeChannelAlert
+  implements NonSterlingFeeAlertChannel
+{
   async postNonSterlingFeeAlert(alert: NonSterlingFeeAlert): Promise<void> {
-    await this.#telegram.sendMessage(this.#chatId, formatNonSterlingFeeAlert(alert));
+    await this.send(formatNonSterlingFeeAlert(alert));
   }
 }

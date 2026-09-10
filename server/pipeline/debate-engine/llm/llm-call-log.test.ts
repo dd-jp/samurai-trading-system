@@ -10,7 +10,7 @@
  * tested where the default is decided, in `production.ts`'s wiring, and the
  * seam's own default (`false`) is tested here.
  */
-import { openSharedStore, type SharedStore } from '../../../shared/store/index.js';
+import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import type { LogEntry } from '../../../shared/types.js';
 import { SqliteLlmSpendStore } from './spend-sink.js';
 
@@ -28,7 +28,7 @@ interface CallRow {
   timestamp: string;
 }
 
-function callRows(db: SharedStore): CallRow[] {
+function callRows(db: StoreHandle): CallRow[] {
   return db.prepare('SELECT * FROM llm_call_log ORDER BY id').all() as CallRow[];
 }
 

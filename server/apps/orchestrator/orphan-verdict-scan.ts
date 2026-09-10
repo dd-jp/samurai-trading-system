@@ -46,7 +46,7 @@
  */
 
 import { describeThrownSafely } from '../../shared/index.js';
-import type { SharedStore } from '../../shared/store/index.js';
+import type { StoreHandle } from '../../shared/store/index.js';
 import { fromStoredTimestamp } from '../../shared/store/index.js';
 import type { Logger } from './types.js';
 
@@ -83,7 +83,7 @@ interface OrphanRow {
  */
 export class OrphanVerdictScanner {
   async scan(
-    db: SharedStore,
+    db: StoreHandle,
     channel: OrphanAlertChannel,
     logger: Logger,
   ): Promise<OrphanGoVerdict[]> {

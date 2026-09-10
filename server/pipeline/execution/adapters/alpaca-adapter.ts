@@ -515,7 +515,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * failure. That ordering is safe because a bracket and its lot's re-arm
    * are never BOTH live: `rearmProtectiveLegs` is only ever reached
    * downstream of a successful `cancel()` of that bracket
-   * (`maybeRearmResidual` in ingest-fills.ts, once a flatten fill lands,
+   * (`maybeRearmResidual` in residual-protection.ts, once a flatten fill lands,
    * and `sweepResidualProtection`'s retry of a lot that path already
    * marked) — so when a re-arm exists the original bracket is already
    * terminal, and the bracket cancel below is a venue no-op that
@@ -1536,7 +1536,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       } catch {
         // The channel's own error is READ AND DISCARDED, never re-thrown or
         // attached — `BrokerError`'s posture (broker-error.ts), and it applies
-        // just as hard here: a Telegram/Discord transport failure quotes the
+        // just as hard here: a Telegram transport failure quotes the
         // request it failed on, and that URL carries the bot token. What is
         // replaced cannot leak. The row stays unalerted, so the next sweep
         // retries delivery.

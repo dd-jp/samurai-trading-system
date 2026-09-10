@@ -10,7 +10,7 @@ import type {
 } from '../../../pipeline/execution/index.js';
 import { SaxoBrokerAdapter } from '../../../pipeline/execution/index.js';
 import { LSE_ETP_POOL, tradeableUniverse } from '../../../providers/universe-pool/index.js';
-import { openSharedStore, type SharedStore } from '../../../shared/store/index.js';
+import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import type { Logger, UniverseInstrument } from '../types.js';
 import {
   BROKER_VENUE_ENV_VAR,
@@ -45,7 +45,7 @@ function fixtureClient(
   };
 }
 
-function saxoDeps(db: SharedStore, overrides: Record<string, unknown> = {}): never {
+function saxoDeps(db: StoreHandle, overrides: Record<string, unknown> = {}): never {
   return {
     mode: 'paper',
     universe: saxoTradeableUniverse(),
@@ -112,7 +112,7 @@ describe('saxoTradeableUniverse', () => {
 });
 
 describe('buildSaxoBroker', () => {
-  let db: SharedStore;
+  let db: StoreHandle;
 
   beforeEach(() => {
     db = openSharedStore(':memory:');

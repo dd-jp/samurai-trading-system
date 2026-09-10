@@ -723,11 +723,10 @@ export class TelegramBotApiClient implements TelegramClient {
    * ABSENCE is not diagnostic. Nobody can observe a message they never
    * received, so silence is indistinguishable from a healthy channel. That
    * is why the durable count, not this notice, is the surface. There is no
-   * alternative transport to fail over to: `DiscordClient` exists as a type
-   * in this repo (notifications/types.ts) but no implementation of it is
-   * ever constructed, and `alert-transport.ts`'s composition root wires
-   * every `TradeChannel*` with `telegram` alone — a seam nobody calls, not a
-   * live channel. Routing this notice to the heartbeat chat instead would
+   * alternative transport to fail over to: every `TradeChannel*` adapter
+   * sends over this one client (`TradeChannelAlert`, trade-channel.ts), and
+   * the Discord seam that once existed as a type was deleted for never
+   * having an implementation (#1154). Routing this notice to the heartbeat chat instead would
    * not help either: that chat is a different `chat_id` over the identical
    * bot/`#call` stack, so it fails identically when Telegram itself is down,
    * and posting an escalation there would violate #342's isolation invariant

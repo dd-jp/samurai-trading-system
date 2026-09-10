@@ -20,7 +20,7 @@
  * which is what `llm_spend_cap`'s entry in `STAGE_OWNED_TABLES` declares.
  */
 
-import type { SharedStore } from './open-shared-store.js';
+import type { StoreHandle } from './open-shared-store.js';
 import { toStoredTimestamp } from './sqlite-utils.js';
 
 interface LlmSpendCapRow {
@@ -41,7 +41,7 @@ export interface LlmSpendCapState {
 }
 
 export class SqliteLlmSpendCapStore {
-  constructor(private readonly db: SharedStore) {}
+  constructor(private readonly db: StoreHandle) {}
 
   /**
    * Records the ceiling this process is enforcing, replacing whatever the

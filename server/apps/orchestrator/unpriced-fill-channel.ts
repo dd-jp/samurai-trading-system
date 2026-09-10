@@ -11,15 +11,12 @@
  * line nobody is tailing at 3am, whereas this one reaches a phone. Since #322
  * it is wired for real — `SAMURAI_ALERTS=telegram` builds it over a
  * `TelegramBotApiClient` at the entrypoint (alert-transport.ts).
- *
- * Discord is optional and mirrors the heartbeat's shape: both are attempted
- * together, so a Telegram outage does not silence the Discord copy.
  */
 import type {
   UnpricedFillAlert,
   UnpricedFillAlertChannel,
 } from '../../pipeline/execution/index.js';
-import type { DiscordClient, TelegramClient } from '../../pipeline/verdict/index.js';
+import { TradeChannelAlert } from './trade-channel.js';
 
 /**
  * Composed only from the alert's own curated fields — no broker error, no
@@ -39,31 +36,12 @@ function formatUnpricedFillAlert(alert: UnpricedFillAlert): string {
   );
 }
 
-export class TradeChannelUnpricedFillAlert implements UnpricedFillAlertChannel {
-  readonly #telegram: TelegramClient;
-  readonly #telegramChatId: string;
-  readonly #discord: DiscordClient | undefined;
-  readonly #discordChannelId: string | undefined;
-
-  constructor(
-    telegram: TelegramClient,
-    telegramChatId: string,
-    discord?: DiscordClient,
-    discordChannelId?: string,
-  ) {
-    this.#telegram = telegram;
-    this.#telegramChatId = telegramChatId;
-    this.#discord = discord;
-    this.#discordChannelId = discordChannelId;
-  }
-
+export class TradeChannelUnpricedFillAlert
+  extends TradeChannelAlert
+  implements UnpricedFillAlertChannel
+{
   async postUnpricedFillAlert(alert: UnpricedFillAlert): Promise<void> {
     const text = formatUnpricedFillAlert(alert);
-    await Promise.all([
-      this.#telegram.sendMessage(this.#telegramChatId, text),
-      this.#discord && this.#discordChannelId
-        ? this.#discord.sendMessage(this.#discordChannelId, text)
-        : Promise.resolve(),
-    ]);
+    await this.send(text);
   }
 }

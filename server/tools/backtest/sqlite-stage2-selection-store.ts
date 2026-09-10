@@ -7,7 +7,7 @@
  * was made. Readers take the newest row per asset class; nothing is destroyed.
  */
 
-import type { SharedStore } from '../../shared/store/index.js';
+import type { StoreHandle } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';
 import type { Stage2Selection } from './stage2-selection.js';
 
@@ -27,7 +27,7 @@ interface SelectionRow {
 }
 
 export class SqliteStage2SelectionStore {
-  constructor(private readonly db: SharedStore) {}
+  constructor(private readonly db: StoreHandle) {}
 
   /**
    * Records one frozen selection.

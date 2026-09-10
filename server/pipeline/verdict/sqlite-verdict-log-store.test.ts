@@ -7,7 +7,7 @@
  */
 
 import type { VerdictLog } from '../../shared/index.js';
-import { openSharedStore, type SharedStore } from '../../shared/store/index.js';
+import { openSharedStore, type StoreHandle } from '../../shared/store/index.js';
 import { SqliteVerdictLogStore } from './sqlite-verdict-log-store.js';
 
 function makeLog(overrides: Partial<VerdictLog> = {}): VerdictLog {
@@ -35,7 +35,7 @@ interface VerdictLogRow {
   timestamp: string;
 }
 
-function readRow(db: SharedStore, trace_id: string): VerdictLogRow | undefined {
+function readRow(db: StoreHandle, trace_id: string): VerdictLogRow | undefined {
   return db.prepare('SELECT * FROM verdict_log WHERE trace_id = ?').get(trace_id) as
     | VerdictLogRow
     | undefined;

@@ -1,6 +1,6 @@
 import type { ClosedTrade, Fill, OpenPosition } from '../../shared/index.js';
 import { toBrokerFillId } from '../../shared/index.js';
-import { type SharedStore as Db, openSharedStore } from '../../shared/store/index.js';
+import { openSharedStore, type StoreHandle } from '../../shared/store/index.js';
 import { SqliteExecutionStore } from './sqlite-shared-store.js';
 
 const OPENED_AT = new Date('2026-07-20T14:00:00Z');
@@ -79,7 +79,7 @@ function makeFlattenWriteAhead(
  * under test rather than the round trip.
  */
 function overwriteJournalColumn(
-  db: Db,
+  db: StoreHandle,
   column: 'lot_idempotency_keys' | 'lot_held_quantities' | 'modelled_cost_breakdown_json',
   idempotency_key: string,
   raw: string | null,
@@ -96,7 +96,11 @@ function overwriteJournalColumn(
 }
 
 /** The `open_positions` counterpart of `overwriteJournalColumn` — #1014 review, finding 4. */
-function overwritePositionCostBreakdown(db: Db, idempotency_key: string, raw: string | null): void {
+function overwritePositionCostBreakdown(
+  db: StoreHandle,
+  idempotency_key: string,
+  raw: string | null,
+): void {
   db.prepare(
     'UPDATE open_positions SET modelled_cost_breakdown_json = ? WHERE idempotency_key = ?',
   ).run(raw, idempotency_key);
@@ -104,7 +108,7 @@ function overwritePositionCostBreakdown(db: Db, idempotency_key: string, raw: st
 
 /** Raw journal columns `SqliteExecutionStore`'s own port never reads back — test-only, like `overwriteJournalColumn` above. */
 function readFlattenRow(
-  db: Db,
+  db: StoreHandle,
   idempotency_key: string,
 ):
   | {
@@ -148,7 +152,7 @@ function makeClosedTrade(overrides: Partial<ClosedTrade> = {}): ClosedTrade {
   };
 }
 
-function makeStore(): { db: Db; store: SqliteExecutionStore } {
+function makeStore(): { db: StoreHandle; store: SqliteExecutionStore } {
   const db = openSharedStore(':memory:');
   return { db, store: new SqliteExecutionStore(db) };
 }
@@ -1219,7 +1223,7 @@ describe('SqliteExecutionStore', () => {
    */
   describe('arm scoping (#753)', () => {
     function makeArmedStores(): {
-      db: Db;
+      db: StoreHandle;
       live: SqliteExecutionStore;
       control: SqliteExecutionStore;
     } {
@@ -1233,7 +1237,7 @@ describe('SqliteExecutionStore', () => {
       };
     }
 
-    function armsOf(db: Db, table: 'open_positions' | 'closed_trades'): string[] {
+    function armsOf(db: StoreHandle, table: 'open_positions' | 'closed_trades'): string[] {
       return (
         db.prepare(`SELECT idempotency_key, arm FROM ${table} ORDER BY idempotency_key`).all() as {
           idempotency_key: string;
@@ -1353,7 +1357,10 @@ describe('SqliteExecutionStore', () => {
    * off the declared book.
    */
   describe('sizing capital ceiling stamp (#1112)', () => {
-    function ceilingsOf(db: Db, table: 'open_positions' | 'closed_trades'): (number | null)[] {
+    function ceilingsOf(
+      db: StoreHandle,
+      table: 'open_positions' | 'closed_trades',
+    ): (number | null)[] {
       return (
         db
           .prepare(`SELECT sizing_capital_ceiling FROM ${table} ORDER BY idempotency_key`)
@@ -1413,7 +1420,7 @@ describe('SqliteExecutionStore', () => {
   });
 
   describe('modelled cost charged stamp (#1121, migration 0049)', () => {
-    function chargedFlagOf(db: Db, idempotency_key: string): number {
+    function chargedFlagOf(db: StoreHandle, idempotency_key: string): number {
       return (
         db
           .prepare('SELECT modelled_cost_charged FROM closed_trades WHERE idempotency_key = ?')

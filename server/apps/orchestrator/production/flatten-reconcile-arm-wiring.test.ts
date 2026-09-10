@@ -43,7 +43,7 @@ import { PolymarketClient } from '../../../providers/market-intelligence/index.j
 import type { Logger } from '../../../shared/index.js';
 import { SimulatedClock, TokenBucket } from '../../../shared/index.js';
 import { recordingLogger } from '../../../shared/recording-logger.js';
-import { guardedStore, openSharedStore, type SharedStore } from '../../../shared/store/index.js';
+import { guardedStore, openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import { buildProductionOrchestrator, type ProductionConfig } from '../production.js';
 import {
   makeWiringCiiConsumerConfig,
@@ -132,7 +132,7 @@ type StubConfig = ProductionConfig & Required<Pick<ProductionConfig, 'alpacaBrok
  * driving one surface: `tradingCalendar`, `polymarketClient` and
  * `polymarketPollIntervalMs` (each commented at its site).
  */
-function stubConfig(db: SharedStore, logger: Logger): StubConfig {
+function stubConfig(db: StoreHandle, logger: Logger): StubConfig {
   return {
     db,
     clock: new SimulatedClock(NOW),
@@ -215,7 +215,7 @@ function stubConfig(db: SharedStore, logger: Logger): StubConfig {
 }
 
 describe("an unresolved flatten's alert names the arm that raised it (#1331)", () => {
-  let db: SharedStore;
+  let db: StoreHandle;
 
   beforeEach(() => {
     db = openSharedStore(':memory:');

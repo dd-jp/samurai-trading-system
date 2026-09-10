@@ -20,7 +20,7 @@ import type { ClosedTrade, TradingArm } from '../../shared/index.js';
 import {
   type ClosedTradeRow,
   fromClosedTradeRow,
-  type SharedStore,
+  type StoreHandle,
   toStoredTimestamp,
 } from '../../shared/store/index.js';
 import type { ArmRefusedPassCounts } from './arm-comparison.js';
@@ -57,7 +57,7 @@ const REFUSED_PASS_ARM_BY_SKIP_REASON = new Map<string, TradingArm>(
 );
 
 export class SqliteArmComparisonSource {
-  constructor(private readonly db: SharedStore) {}
+  constructor(private readonly db: StoreHandle) {}
 
   /**
    * Every closed trade in the window, both arms, half-open at the start so

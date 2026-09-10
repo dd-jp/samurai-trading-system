@@ -39,6 +39,7 @@ import { openSharedStore } from '../../../shared/store/index.js';
 import { OrphanVerdictScanner } from '../orphan-verdict-scan.js';
 import { SqliteAuditLog } from '../sqlite-audit-log.js';
 import { SqliteCurrentTickStore } from '../sqlite-current-tick-store.js';
+import { type CapitalCeilingUsd, toCapitalCeilingUsd } from './capital-ceiling.js';
 import type { PortfolioSnapshot } from './direct-bind.js';
 import {
   buildExecutionStep,
@@ -585,31 +586,19 @@ describe('buildTraderStep — decision_class on trader_log (#1109)', () => {
 });
 
 describe('sizingEquity (#511)', () => {
+  const CEILING = toCapitalCeilingUsd(2_000, 'test');
+
   it('takes the ceiling when equity exceeds it — a funded account cannot widen the run', () => {
-    expect(sizingEquity(250_000, 2_000)).toBe(2_000);
+    expect(sizingEquity(250_000, CEILING)).toBe(2_000);
   });
 
   it('takes real equity when it is below the ceiling — a ceiling is not a floor', () => {
-    expect(sizingEquity(500, 2_000)).toBe(500);
+    expect(sizingEquity(500, CEILING)).toBe(500);
   });
 
   it('leaves equity untouched when no ceiling is declared', () => {
     // Paper, backtest, and every existing caller: the pre-#511 behaviour.
     expect(sizingEquity(10_000, undefined)).toBe(10_000);
-  });
-
-  it.each([
-    Number.NaN,
-    Number.POSITIVE_INFINITY,
-  ])('throws for an unusable ceiling of %j instead of sizing off unclamped equity (#569)', (ceiling) => {
-    // `Math.min(10_000, NaN)` is `NaN`, and "unclamped" is exactly the
-    // fail-OPEN outcome #511 exists to prevent: a live run whose declared
-    // ceiling somehow arrives non-finite must refuse to size, not silently
-    // size off the raw account equity. Unreachable via the shipped
-    // entrypoint (`resolveLiveCapitalCeilingUsd`/`assertLiveCapitalCeilingUsd`
-    // refuse both at boot), so this pins the guard itself for any caller
-    // that reaches `sizingEquity` some other way.
-    expect(() => sizingEquity(10_000, ceiling)).toThrow(/finite/);
   });
 });
 
@@ -636,7 +625,7 @@ describe('buildTraderStep capital ceiling (#511)', () => {
     flatten_before_close_ms: 5 * 60 * 1_000,
   };
 
-  function stepWithCeiling(capitalCeilingUsd?: number) {
+  function stepWithCeiling(capitalCeilingUsd?: CapitalCeilingUsd) {
     return buildTraderStep({
       marketData: FAKE_MARKET_DATA,
       circuitBreakers: new CircuitBreakers({
@@ -669,7 +658,7 @@ describe('buildTraderStep capital ceiling (#511)', () => {
     });
   }
 
-  async function sizeFor(capitalCeilingUsd?: number): Promise<number> {
+  async function sizeFor(capitalCeilingUsd?: CapitalCeilingUsd): Promise<number> {
     const intent = await stepWithCeiling(capitalCeilingUsd)({
       trace_id: TRACE_ID,
       instrument: 'AAPL',
@@ -686,7 +675,7 @@ describe('buildTraderStep capital ceiling (#511)', () => {
     // unclamped size rather than an absolute, so it pins the clamp rather than
     // re-deriving `decide`'s arithmetic here.
     const unclamped = await sizeFor(undefined);
-    const clamped = await sizeFor(1_000);
+    const clamped = await sizeFor(toCapitalCeilingUsd(1_000, 'test'));
 
     expect(clamped).toBeCloseTo(unclamped / 10, 10);
   });
@@ -694,28 +683,18 @@ describe('buildTraderStep capital ceiling (#511)', () => {
   it('does not inflate a size when the ceiling is above real equity', async () => {
     // A ceiling is a bound, never a target: a $1m declaration against a $10k
     // account must not size as if the money were there.
-    expect(await sizeFor(1_000_000)).toBeCloseTo(await sizeFor(undefined), 10);
+    expect(await sizeFor(toCapitalCeilingUsd(1_000_000, 'test'))).toBeCloseTo(
+      await sizeFor(undefined),
+      10,
+    );
   });
 
-  it('rejects instead of silently sizing off unclamped equity when a declared ceiling is non-finite (#569)', async () => {
-    // `sizingEquity`'s own unit tests (above) pin the corrected behaviour
-    // directly; this asserts the same guard is actually reached through the
-    // real `buildTraderStep` composition, not merely the standalone
-    // function. `sizeFor(undefined)` two tests up already establishes "no
-    // ceiling declared" stays unclamped — this is the DEFINED-but-unusable
-    // case, deliberately not the same input.
-    await expect(sizeFor(Number.NaN)).rejects.toThrow(/finite/);
-  });
-
-  it('rejects instead of skipping when the CONTROL arm hits the #569 non-finite-ceiling guard (#1089)', async () => {
-    // #1089's new `control_arm_valuation_refused` skip is narrowed by error
-    // TYPE (`StaleMarkError`/`AggregateError`), not merely by `arm === 'control'`
-    // — this pins that the narrowing actually holds. `sizingEquity` throws a
-    // plain `Error` for a declared-but-unusable ceiling, which is a fail-open
-    // refusal that must stay a FAULT on either arm; if the catch in
-    // `buildBracket` only checked `arm`, this would be silently downgraded to
-    // a skip instead of rethrown, and a broken control-arm ceiling would go
-    // unnoticed for the rest of the soak.
+  it('rejects instead of skipping when the CONTROL arm cannot read the account (#1089)', async () => {
+    // #1089's `control_arm_valuation_refused` skip is narrowed by error TYPE
+    // (`BookValuationError`/`AggregateError`), not merely by `arm === 'control'`.
+    // A plain account-read failure must stay a FAULT on either arm; were the
+    // catch in `buildBracket` to check only `arm`, it would be downgraded to a
+    // skip and a broken control-arm read would go unnoticed for the soak.
     const step = buildTraderStep({
       marketData: FAKE_MARKET_DATA,
       circuitBreakers: new CircuitBreakers({
@@ -726,7 +705,11 @@ describe('buildTraderStep capital ceiling (#511)', () => {
         volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
         auto_rearm: { recovery_drawdown_pct: 0.05, max_days_tripped: 5 },
       }),
-      accountState: FAKE_ACCOUNT_STATE,
+      accountState: {
+        getAccountState: async () => {
+          throw new Error('account read failed');
+        },
+      },
       volatility: FAKE_VOLATILITY,
       getOpenPositions: async () => NO_POSITIONS,
       maxMarkAge: TEST_MAX_MARK_AGE,
@@ -740,13 +723,13 @@ describe('buildTraderStep capital ceiling (#511)', () => {
         crypto: new AlwaysOpenCalendar(),
         stocks: new UsEquityRegularHoursCalendar(),
       },
-      capitalCeilingUsd: Number.NaN,
+      capitalCeilingUsd: toCapitalCeilingUsd(1_000, 'test'),
       arm: 'control',
     });
 
     await expect(
       step({ trace_id: TRACE_ID, instrument: 'AAPL', debate: makeDebate(), clock: CLOCK }),
-    ).rejects.toThrow(/finite/);
+    ).rejects.toThrow(/account read failed/);
   });
 });
 

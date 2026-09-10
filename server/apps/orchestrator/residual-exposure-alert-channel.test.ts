@@ -1,5 +1,5 @@
 import type { ResidualExposureAlert } from '../../pipeline/execution/index.js';
-import type { DiscordClient, TelegramClient } from '../../pipeline/verdict/index.js';
+import type { TelegramClient } from '../../pipeline/verdict/index.js';
 import { TradeChannelResidualExposureAlert } from './residual-exposure-alert-channel.js';
 
 const ALERT: ResidualExposureAlert = {
@@ -21,10 +21,6 @@ function makeTelegram(): TelegramClient {
     sendApprovalButtons: vi.fn().mockResolvedValue(undefined),
     onApprovalCallback: vi.fn(),
   };
-}
-
-function makeDiscord(): DiscordClient {
-  return { sendMessage: vi.fn().mockResolvedValue(undefined) };
 }
 
 describe('TradeChannelResidualExposureAlert.postResidualExposureAlert', () => {
@@ -80,21 +76,6 @@ describe('TradeChannelResidualExposureAlert.postResidualExposureAlert', () => {
     expect(text).toContain('NOTHING will retry');
     expect(text).toContain('by hand');
     expect(text).not.toContain('Re-arming at stop');
-  });
-
-  it('fans out to Discord as well when one is configured', async () => {
-    const telegram = makeTelegram();
-    const discord = makeDiscord();
-
-    await new TradeChannelResidualExposureAlert(
-      telegram,
-      'chat-1',
-      discord,
-      'channel-1',
-    ).postResidualExposureAlert(ALERT);
-
-    expect(telegram.sendMessage).toHaveBeenCalledTimes(1);
-    expect(discord.sendMessage).toHaveBeenCalledTimes(1);
   });
 
   // #1348: `trace_id` was added to `ResidualExposureAlert` purely to

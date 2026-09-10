@@ -109,7 +109,7 @@ export type UnvaluableMarkPolicy = 'refuse' | 'exclude';
  *
  * `decide.ts`'s `buildBracket` is that caller: it converts a whole-book
  * valuation refusal into a named skip on the control arm while letting every
- * OTHER rejection (e.g. `sizingEquity`'s #569 non-finite-ceiling guard)
+ * OTHER rejection (an account-state read failing, say)
  * propagate unchanged on either arm. `readMarks` below has two failure
  * shapes under this base — a stale mark (`StaleMarkError`) and a mark that
  * could not be read at all (`MarkReadError`: feed timeout, unknown symbol,
@@ -225,7 +225,7 @@ function markFor(marks: Map<string, number>, instrument: string): number {
  * no PnL, and `avg_entry_price` is 0 until the first fill lands, which is why
  * the two fields must be read together.
  */
-function unrealizedFor(position: OpenPosition, mark: number): number {
+export function unrealizedFor(position: OpenPosition, mark: number): number {
   const direction = position.side === 'buy' ? 1 : -1;
   return (mark - position.avg_entry_price) * position.filled_size * direction;
 }

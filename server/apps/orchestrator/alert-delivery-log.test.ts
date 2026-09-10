@@ -2,7 +2,7 @@
  * `SqliteAlertDeliveryLog` (#1108) — direct unit coverage over its own
  * `:memory:` DB, mirroring sqlite-audit-log.test.ts's shape.
  */
-import type { SharedStore } from '../../shared/store/index.js';
+import type { StoreHandle } from '../../shared/store/index.js';
 import { fromStoredTimestamp, openSharedStore } from '../../shared/store/index.js';
 import {
   ALERT_DELIVERY_FAILURE_WINDOW_MS,
@@ -25,7 +25,7 @@ function failure(overrides: Partial<AlertDeliveryFailure> = {}): AlertDeliveryFa
   };
 }
 
-function makeStore(): { log: SqliteAlertDeliveryLog; db: SharedStore } {
+function makeStore(): { log: SqliteAlertDeliveryLog; db: StoreHandle } {
   const db = openSharedStore(':memory:');
   return { log: new SqliteAlertDeliveryLog(db), db };
 }

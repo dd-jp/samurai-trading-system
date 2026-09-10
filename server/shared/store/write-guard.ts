@@ -1,7 +1,7 @@
 /**
  * The sole-writer guard (#837 M9).
  *
- * `SharedStore` is a bare alias to `BetterSqlite3.Database`, so
+ * `StoreHandle` is a bare alias to `BetterSqlite3.Database`, so
  * cross-spec-contracts.md §4's guarantee — "Execution is the SOLE writer of
  * `open_positions`/`fills`/`closed_trades`" — was held by convention and code
  * review and by nothing else. Any component holding the injected handle can
@@ -18,7 +18,7 @@
  *
  * Four properties are the whole design, and each is a deliberate limit:
  *
- * 1. **Default permissive.** An UNDECLARED handle — the raw `SharedStore` —
+ * 1. **Default permissive.** An UNDECLARED handle — the raw `StoreHandle` —
  *    stays exactly as it is today. Wiring is therefore incremental and
  *    verifiable site by site, rather than an all-or-nothing change across
  *    every store construction in the tree. A missed site loses detection at
@@ -44,13 +44,13 @@
  *    left implicit because a guard that overstates its coverage is worse than
  *    one whose narrow scope is written down.
  *
- * No new abstraction over `SharedStore` and no change to the `transaction()`
+ * No new abstraction over `StoreHandle` and no change to the `transaction()`
  * seam: the guarded handle is a `Proxy` whose methods delegate to the same
  * underlying connection, so a transaction still spans tables, still nests, and
  * a violation raised inside one propagates out of `better-sqlite3`'s own
  * wrapper and rolls the transaction back like any other throw.
  */
-import type { SharedStore } from './open-shared-store.js';
+import type { StoreHandle } from './open-shared-store.js';
 
 /**
  * The stages that own tables in the shared store. Named after the OWNING
@@ -292,10 +292,10 @@ function assertOwnedTables(
  * `process.env`.
  */
 export function guardedStore(
-  store: SharedStore,
+  store: StoreHandle,
   stage: StoreOwnerStage,
   options: { readonly enabled?: boolean } = {},
-): SharedStore {
+): StoreHandle {
   if (!(options.enabled ?? isStoreWriteGuardEnabled())) return store;
   const allowed = new Set(STAGE_OWNED_TABLES[stage]);
 

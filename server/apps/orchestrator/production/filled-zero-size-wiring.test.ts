@@ -54,7 +54,7 @@ import { DEFAULT_TRADER_CONFIG } from '../../../pipeline/trader/index.js';
 import type { Logger, OpenPosition } from '../../../shared/index.js';
 import { SimulatedClock, toBrokerFillId } from '../../../shared/index.js';
 import { recordingLogger } from '../../../shared/recording-logger.js';
-import { openSharedStore, type SharedStore } from '../../../shared/store/index.js';
+import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import { buildProductionComponents, type ProductionConfig } from '../production.js';
 import { buildExecutionSurface } from './direct-bind.js';
 import {
@@ -147,7 +147,7 @@ async function seedWedgedPosition(store: ExecutionSharedStore): Promise<void> {
  */
 type StubConfig = ProductionConfig & Required<Pick<ProductionConfig, 'alpacaBrokerClient'>>;
 
-function stubConfig(db: SharedStore, logger: Logger): StubConfig {
+function stubConfig(db: StoreHandle, logger: Logger): StubConfig {
   return {
     db,
     clock: new SimulatedClock(NOW),
@@ -217,7 +217,7 @@ function stubConfig(db: SharedStore, logger: Logger): StubConfig {
 }
 
 describe('the FILLED_WITH_ZERO_SIZE throttle is wired through the real composition root (#1087)', () => {
-  let db: SharedStore;
+  let db: StoreHandle;
 
   beforeEach(() => {
     db = openSharedStore(':memory:');
@@ -318,7 +318,7 @@ describe('the FILLED_WITH_ZERO_SIZE throttle is wired through the real compositi
       await surfaceB.ingestFills();
     }
 
-    // No `getPosition` on the `SharedStore` port itself (only the test
+    // No `getPosition` on the `StoreHandle` port itself (only the test
     // harness's `TestExecutionStore` adds that convenience) — `getOpenPositions`
     // is the real port surface, same as `ingestFills()` itself reads.
     const [position] = await components.executionStore.getOpenPositions();

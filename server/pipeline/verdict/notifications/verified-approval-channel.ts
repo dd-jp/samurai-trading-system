@@ -1,7 +1,7 @@
 /**
  * HMAC-authenticated `ApprovalChannel` (ticket #207). See
  * docs/specs/verdict-spec.md ("Module: Human-in-the-Loop"): the live
- * Telegram/Discord bot listener that will actually receive inbound
+ * Telegram bot listener that will actually receive inbound
  * approve/reject webhooks is an ops/setup task (spec "Out of Scope: Channel
  * provisioning") — there is no live SDK wiring anywhere in `server/` yet
  * (mirrors server/providers/market-intelligence/worldmonitor-adapter/cii-consumer.ts's
