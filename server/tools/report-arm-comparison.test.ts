@@ -185,7 +185,30 @@ describe('formatArmComparison (#753 AC4/AC5)', () => {
     expect(text).toContain('refused passes');
     expect(text).toMatch(/control\s+0\s+0\.00\s+0\.00%\s+0\.00%\s+6/);
     expect(text).toMatch(/live\s+1\s+40\.00\s+4\.00%\s+0\.00%\s+0/);
-    expect(text).toContain('6 pass(es) in this window were REFUSED rather than declined');
+    expect(text).toContain('REFUSED rather than declined — control: 6 pass(es)');
+  });
+
+  /**
+   * The count is per arm on `ArmPerformance`, and the note must stay per arm
+   * too. Only the control can refuse today (`REFUSED_PASS_SKIP_REASONS.live` is
+   * empty), so a summed figure would read correctly right up to the day a
+   * live-arm reason lands and the page names no arm at all.
+   */
+  it('attributes refused passes to each arm rather than printing a merged total', () => {
+    const text = formatArmComparison(
+      buildArmComparison({
+        basis: 1_000,
+        refused_passes: { live: 2, control: 5 },
+        from: FROM,
+        to: TO,
+        trades: [trade('live', 40, '2026-09-02T00:00:00.000Z')],
+      }),
+    );
+
+    expect(text).toContain('REFUSED rather than declined — live: 2 pass(es), control: 5 pass(es)');
+    expect(text).not.toContain('7 pass(es)');
+    expect(text).toMatch(/live\s+1\s+40\.00\s+4\.00%\s+0\.00%\s+2/);
+    expect(text).toMatch(/control\s+0\s+0\.00\s+0\.00%\s+0\.00%\s+5/);
   });
 
   it('reads a zero control count as a refusal, not as an unbound control arm, when refusals exist', () => {

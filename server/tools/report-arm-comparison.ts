@@ -115,16 +115,22 @@ export function formatArmComparison(comparison: ArmComparison): string {
   // once a refusal count is on the page: a refused pass is positive evidence
   // the arm ran and could not act, which is the one thing that note otherwise
   // tells the operator to go and check by hand.
-  const refusedPasses = comparison.live.refused_pass_count + comparison.control.refused_pass_count;
-  if (refusedPasses > 0) {
+  // Per arm, never a total: today only the control can refuse, but the count is
+  // a per-arm field and a merged figure would name no arm on the day that
+  // changes.
+  const refusedByArm = [comparison.live, comparison.control]
+    .filter((arm) => arm.refused_pass_count > 0)
+    .map((arm) => `${arm.arm}: ${arm.refused_pass_count} pass(es)`);
+  if (refusedByArm.length > 0) {
     lines.push(
       '',
-      `  NOTE: ${refusedPasses} pass(es) in this window were REFUSED rather than declined —`,
-      '  the arm could not value its book at all (a dark or stale mark), so it never',
-      '  reached a trading decision. Refused passes write `trader_log` rows and no',
-      '  `closed_trades` row, so without this column a stretch of them reads exactly',
-      '  like a quiet market (#1089, #1099). A long stretch means the comparison is',
-      '  measuring fewer opportunities than the window suggests, on that arm only.',
+      `  NOTE: REFUSED rather than declined — ${refusedByArm.join(', ')}.`,
+      '  A refused pass is one the arm could not value its book for at all (a dark or',
+      '  stale mark), so it never reached a trading decision. Refused passes write',
+      '  `trader_log` rows and no `closed_trades` row, so without this column a stretch',
+      '  of them reads exactly like a quiet market (#1089, #1099). A long stretch means',
+      '  the comparison is measuring fewer opportunities than the window suggests, on',
+      '  the arm(s) named above.',
       '',
       '  Do NOT read `refused / trades` as a rate. The trade counts above are filtered',
       '  (`modelled_cost_charged`, the #1112 sizing regime) and this count is not, so',

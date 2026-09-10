@@ -41,9 +41,9 @@ export type ArmedClosedTrade = ClosedTrade & { arm: TradingArm };
  *
  * The live arm's list is empty and that is the true count, not a placeholder: a
  * live-arm valuation failure stays a fault that aborts the tick (decide.ts's
- * `throw error`), so it never reaches `trader_log` as a skip at all. Adding a
- * live-arm reason here is the whole change needed if that ever stops being
- * true.
+ * `throw error`), so it never reaches `trader_log` as a skip at all. If that
+ * ever stops being true, adding the reason here is all this module needs — the
+ * count is per-arm end to end — but nothing enforces that the entry is made.
  */
 const REFUSED_PASS_SKIP_REASONS: Readonly<Record<TradingArm, readonly string[]>> = {
   live: [],
