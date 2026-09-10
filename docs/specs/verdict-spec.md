@@ -43,7 +43,7 @@ Key architectural decisions:
 
 ### Automated Final Checks
 
-7. As the Verdict stage, I want to dedup against existing orders/fills for this idempotency key, so that I never double-fire on the same instrument+bar across restarts/retries.
+7. As the Verdict stage, I want to dedup against existing orders/fills for this idempotency key, so that I never double-fire ~~on the same instrument+bar~~ **on the same instrument+bar+side (and arm, when not `'live'`)** across restarts/retries. *(Amended 2026-09-10, [#1487](https://github.com/dd-jp/samurai-trading-system/issues/1487) — wrong as written since #686: an entry and the mandatory flatten legitimately fire on the same instrument+bar and are distinguished by `side`. See `docs/specs/trader-spec.md`'s "The idempotency key, and why the arm is in the hash", the authority; `server/pipeline/trader/idempotency-key.ts` is the implementation.)*
 8. As the Verdict stage, I want to reject stock orders when the market is closed (no extended-hours permission), so that I don't queue invalid orders.
 9. As the Verdict stage, I want to re-check the kill-switch and breaker state at fire time, so that state changes since Risk approved (especially after HITL delay) still block the trade.
 
