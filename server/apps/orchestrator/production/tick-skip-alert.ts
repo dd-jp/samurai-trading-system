@@ -22,7 +22,12 @@
  * (#752) and `trader-diagnostic-alert.ts` (#698): alert at a threshold, then
  * every 8th tick while the condition persists — never a new pattern.
  */
-import { describeThrownSafely, type Logger, sanitizeLogText } from '../../../shared/index.js';
+import {
+  describeThrownSafely,
+  escalatesAt,
+  type Logger,
+  sanitizeLogText,
+} from '../../../shared/index.js';
 
 /** One materially-degraded tick pass, reported once the throttle clears it to fire. */
 export interface TickSkipAlert {
@@ -130,12 +135,13 @@ export const ALERT_AFTER_CONSECUTIVE_DEGRADED_TICKS = 1;
  */
 export const ALERT_REPEAT_EVERY_DEGRADED_TICKS = 8;
 
-/** Fires at the threshold, then on a bounded repeat while the pass stays degraded. */
+const DEGRADED_TICK_CADENCE = {
+  after: ALERT_AFTER_CONSECUTIVE_DEGRADED_TICKS,
+  every: ALERT_REPEAT_EVERY_DEGRADED_TICKS,
+};
+
 function shouldAlertAt(consecutive: number): boolean {
-  if (consecutive < ALERT_AFTER_CONSECUTIVE_DEGRADED_TICKS) return false;
-  return (
-    (consecutive - ALERT_AFTER_CONSECUTIVE_DEGRADED_TICKS) % ALERT_REPEAT_EVERY_DEGRADED_TICKS === 0
-  );
+  return escalatesAt(consecutive, DEGRADED_TICK_CADENCE);
 }
 
 /**

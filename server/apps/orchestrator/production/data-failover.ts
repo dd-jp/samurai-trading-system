@@ -110,6 +110,7 @@ import {
   currentTraceId,
   DEFAULT_POLYGON_PACING,
   describeThrownSafely,
+  escalatesAt,
   type Logger,
   resolvePolygonPacing,
   TokenBucket,
@@ -235,6 +236,9 @@ export function guardFallbackPacing(pacing: TokenBucketConfig, logger: Logger): 
  */
 export const ALERT_REPEAT_EVERY_FAILOVERS = 8;
 
+/** No grace: the first failover of an incident is already worth a page. */
+const FAILOVER_CADENCE = { after: 1, every: ALERT_REPEAT_EVERY_FAILOVERS };
+
 /**
  * Quiet time after which the next failover for the same instrument/timeframe
  * is a NEW incident, loud again. One hour is the live tick path's own bar
@@ -273,7 +277,7 @@ export class DataFailoverAlertThrottle {
     }
 
     const count = previous.count + 1;
-    const alert = (count - 1) % ALERT_REPEAT_EVERY_FAILOVERS === 0;
+    const alert = escalatesAt(count, FAILOVER_CADENCE);
     this.#state.set(key, { count, lastAt: at, suppressed: alert ? 0 : previous.suppressed + 1 });
     return { alert, suppressedSinceLast: alert ? previous.suppressed : 0 };
   }

@@ -41,7 +41,7 @@
  *   venue itself publishes per instrument.
  */
 import type { Clock, Logger } from '../../../shared/index.js';
-import { safeLog, toBrokerFillId } from '../../../shared/index.js';
+import { escalatesAt, safeLog, toBrokerFillId } from '../../../shared/index.js';
 import { SAXO_COMMISSION_RATE } from '../../../tools/backtest/index.js';
 import { sanitizeBrokerError } from '../broker-error.js';
 import {
@@ -183,9 +183,13 @@ function refusedKey(externalReference: string): string {
   return `refused:${externalReference}`;
 }
 
+const DORMANT_DEFER_CADENCE = {
+  after: DORMANT_DEFER_ALERT_AFTER,
+  every: DORMANT_DEFER_ALERT_REPEAT_EVERY,
+};
+
 function shouldWarnDormantDefer(consecutive: number): boolean {
-  if (consecutive < DORMANT_DEFER_ALERT_AFTER) return false;
-  return (consecutive - DORMANT_DEFER_ALERT_AFTER) % DORMANT_DEFER_ALERT_REPEAT_EVERY === 0;
+  return escalatesAt(consecutive, DORMANT_DEFER_CADENCE);
 }
 
 /**
@@ -203,6 +207,8 @@ function shouldWarnDormantDefer(consecutive: number): boolean {
  * first look, and a refused fill is a lot that cannot go terminal meanwhile.
  */
 export const PRICE_UNIT_ALERT_REPEAT_EVERY = 8;
+
+const PRICE_UNIT_CADENCE = { after: 1, every: PRICE_UNIT_ALERT_REPEAT_EVERY };
 
 export interface SaxoInstrumentRef extends SaxoQuoteUnit {
   readonly uic: number;
@@ -881,7 +887,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     const key = `${site}:${uic}`;
     const consecutive = (this.priceUnitDefer.get(key) ?? 0) + 1;
     this.priceUnitDefer.set(key, consecutive);
-    return (consecutive - 1) % PRICE_UNIT_ALERT_REPEAT_EVERY === 0;
+    return escalatesAt(consecutive, PRICE_UNIT_CADENCE);
   }
 
   /**

@@ -39,6 +39,8 @@ export interface PromptTierAlertChannel {
   postPromptTierAlert(alert: PromptTierAlert): void;
 }
 
+import { escalatesAt } from '../../../shared/index.js';
+
 /**
  * Alert on the FIRST crossing, unlike the analyst-skip channel's threshold of
  * two (#431): a 2.5x unit-cost step against ADR-0008's $50/14d cap should
@@ -62,14 +64,13 @@ export const ALERT_AFTER_CONSECUTIVE_PROMPT_TIER_CROSSINGS = 1;
  */
 export const ALERT_REPEAT_EVERY_PROMPT_TIER_CROSSINGS = 8;
 
-/** Fires at the threshold, then on a bounded repeat while the model stays on the tier. */
+const PROMPT_TIER_CADENCE = {
+  after: ALERT_AFTER_CONSECUTIVE_PROMPT_TIER_CROSSINGS,
+  every: ALERT_REPEAT_EVERY_PROMPT_TIER_CROSSINGS,
+};
+
 function shouldAlertAt(consecutive: number): boolean {
-  if (consecutive < ALERT_AFTER_CONSECUTIVE_PROMPT_TIER_CROSSINGS) return false;
-  return (
-    (consecutive - ALERT_AFTER_CONSECUTIVE_PROMPT_TIER_CROSSINGS) %
-      ALERT_REPEAT_EVERY_PROMPT_TIER_CROSSINGS ===
-    0
-  );
+  return escalatesAt(consecutive, PROMPT_TIER_CADENCE);
 }
 
 /**

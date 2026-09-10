@@ -38,6 +38,7 @@
  * it, so there is nothing here to sanitize a credential out of.
  */
 import type { TraderDiagnostic } from '../../../pipeline/trader/index.js';
+import { escalatesAt } from '../../../shared/index.js';
 
 /** One degraded-but-continuing condition, on one instrument, on one tick. */
 export interface TraderDiagnosticAlert {
@@ -126,10 +127,13 @@ export const ALERT_AFTER_CONSECUTIVE_DIAGNOSTICS = 1;
  */
 export const ALERT_REPEAT_EVERY_DIAGNOSTICS = 8;
 
-/** Fires at the threshold, then on a bounded repeat while the condition persists. */
+const DIAGNOSTIC_CADENCE = {
+  after: ALERT_AFTER_CONSECUTIVE_DIAGNOSTICS,
+  every: ALERT_REPEAT_EVERY_DIAGNOSTICS,
+};
+
 export function shouldAlertAtDiagnosticCount(consecutive: number): boolean {
-  if (consecutive < ALERT_AFTER_CONSECUTIVE_DIAGNOSTICS) return false;
-  return (consecutive - ALERT_AFTER_CONSECUTIVE_DIAGNOSTICS) % ALERT_REPEAT_EVERY_DIAGNOSTICS === 0;
+  return escalatesAt(consecutive, DIAGNOSTIC_CADENCE);
 }
 
 /**

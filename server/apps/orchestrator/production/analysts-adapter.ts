@@ -62,7 +62,12 @@ import type {
   AnalystOrchestrator,
   AssetClass,
 } from '../../../pipeline/analysts/index.js';
-import { describeThrownSafely, type Logger, sanitizeLogText } from '../../../shared/index.js';
+import {
+  describeThrownSafely,
+  escalatesAt,
+  type Logger,
+  sanitizeLogText,
+} from '../../../shared/index.js';
 import { type AnalystSkipKindRelay, skipKindOf } from '../analysts-decision.js';
 import type { TickSteps } from '../types.js';
 import { type CheckMiCoverageDeps, checkMiCoverage } from './mi-coverage.js';
@@ -336,10 +341,10 @@ export function buildAnalystsStep(
   };
 }
 
-/** Fires at the threshold, then on a bounded repeat while the stage stays broken. */
+const SKIP_CADENCE = { after: ALERT_AFTER_CONSECUTIVE_SKIPS, every: ALERT_REPEAT_EVERY_SKIPS };
+
 function shouldAlertAt(consecutiveSkips: number): boolean {
-  if (consecutiveSkips < ALERT_AFTER_CONSECUTIVE_SKIPS) return false;
-  return (consecutiveSkips - ALERT_AFTER_CONSECUTIVE_SKIPS) % ALERT_REPEAT_EVERY_SKIPS === 0;
+  return escalatesAt(consecutiveSkips, SKIP_CADENCE);
 }
 
 /**
