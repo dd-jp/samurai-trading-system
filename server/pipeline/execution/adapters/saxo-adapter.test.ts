@@ -951,6 +951,26 @@ describe('SaxoBrokerAdapter.getOrder', () => {
     expect(order?.order_state).toBe('cancelled');
   });
 
+  it("maps the venue's own full-fill audit row — Status 'FinalFill', not 'Filled' (#1216, measured on SIM 2026-09-10) — to 'filled'", async () => {
+    const client = makeClient({
+      listOrderActivities: vi.fn().mockResolvedValue([
+        activity({
+          LogId: '252169181',
+          Status: 'FinalFill',
+          SubStatus: 'Confirmed',
+          ActivityTime: '2026-09-05T08:40:00.000000Z',
+          FillAmount: 3,
+          AveragePrice: 709.07,
+        }),
+      ]),
+    });
+    const { adapter } = makeAdapter(client);
+
+    const order = await adapter.getOrder('key-3usl-0930', '3USL');
+
+    expect(order).toMatchObject({ order_state: 'filled', filled_qty: 3 });
+  });
+
   it("maps a Placed/Rejected audit row to 'rejected'", async () => {
     const client = makeClient({
       listOrderActivities: vi.fn().mockResolvedValue([activity({ SubStatus: 'Rejected' })]),
@@ -1787,6 +1807,18 @@ describe('SaxoBrokerAdapter.fetchNewFills', () => {
       listOrderActivities: vi
         .fn()
         .mockResolvedValue([activity({ LogId: 'log-fill', Status: 'Filled' })]),
+    });
+    const { adapter } = makeAdapter(client);
+    await adapter.submitBracket(makeBracket());
+
+    await expect(adapter.fetchNewFills(since)).rejects.toThrow(/log-fill/);
+  });
+
+  it("throws on the venue's own FinalFill row carrying no fill amount or price — the shape a Filled-only guard would have dropped (#1216)", async () => {
+    const client = makeClient({
+      listOrderActivities: vi
+        .fn()
+        .mockResolvedValue([activity({ LogId: 'log-fill', Status: 'FinalFill' })]),
     });
     const { adapter } = makeAdapter(client);
     await adapter.submitBracket(makeBracket());
