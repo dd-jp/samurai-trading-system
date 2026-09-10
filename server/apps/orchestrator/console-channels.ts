@@ -174,8 +174,9 @@ export class UnwiredApprovalChannel implements ApprovalChannel {
         'automation dial is `auto` for both asset classes, under which this gate is ' +
         'unreachable — so reaching it means `verdictConfig.automation_level` was set to ' +
         '`manual` or `semi_auto` without also supplying `ProductionConfig.approvals`. Either ' +
-        'set the dial back to `auto`, or wire a real channel (TelegramApprovalGateway, which ' +
-        'is built and tested but has no production caller). Refusing rather than ' +
+        'set the dial back to `auto`, or build and wire a real channel — none exists in the ' +
+        'repo since the Telegram approval half was retired (ADR-0007, ADR-0013). Refusing ' +
+        'rather than ' +
         `auto-approving: trace ${request.trace_id}, ` +
         `${request.order_intent.side} ${request.order_intent.size} ` +
         `${request.order_intent.instrument}.`,

@@ -56,7 +56,6 @@ const HEARTBEAT_CHAT_ID = '-1009876543210';
 function configureTelegramEnv(): void {
   process.env.TELEGRAM_BOT_TOKEN = SENTINEL_TOKEN;
   process.env.TELEGRAM_CHAT_ID = ESCALATION_CHAT_ID;
-  process.env.TELEGRAM_ALLOWED_USER_IDS = '42';
   process.env.TELEGRAM_HEARTBEAT_CHAT_ID = HEARTBEAT_CHAT_ID;
 }
 
@@ -206,24 +205,17 @@ describe('resolveAlertsMode', () => {
 });
 
 describe('TELEGRAM_ALERT_ENV_VARS', () => {
-  it('names the bot token and both chat ids — and NOT the approval allowlist (#434)', () => {
+  it('names the bot token and both chat ids', () => {
     // The heartbeat chat id joined this list in #342: a heartbeat sharing the
     // escalation chat is the alert-fatigue failure, and there is no chat id
-    // this process could invent as a default.
-    //
-    // `TELEGRAM_ALLOWED_USER_IDS` LEFT it in #434. It was here because
-    // `TelegramBotApiClient` validated it at construction — but its only
-    // consumer is the inbound approval callback, and ADR-0007 turned the HITL
-    // gate off, so this run forced an operator to supply a credential for a
-    // seam nothing reaches. The outbound escalations on this list (orphaned go
-    // verdicts, stuck fills, kill breaches, heartbeat) accept nothing FROM
-    // Telegram and need no allowlist.
+    // this process could invent as a default. The outbound escalations on
+    // this list (orphaned go verdicts, stuck fills, kill breaches, heartbeat)
+    // accept nothing FROM Telegram, so no allowlist belongs here.
     expect([...TELEGRAM_ALERT_ENV_VARS]).toEqual([
       'TELEGRAM_BOT_TOKEN',
       'TELEGRAM_CHAT_ID',
       'TELEGRAM_HEARTBEAT_CHAT_ID',
     ]);
-    expect([...TELEGRAM_ALERT_ENV_VARS]).not.toContain('TELEGRAM_ALLOWED_USER_IDS');
     expect(TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR).toBe('TELEGRAM_HEARTBEAT_CHAT_ID');
   });
 });
@@ -353,31 +345,6 @@ describe('buildAlertChannels — telegram', () => {
     expect(JSON.stringify(logger.entries)).not.toContain(SENTINEL_TOKEN);
     // And it did log something — otherwise this assertion is vacuous.
     expect(logger.entries.some((e) => e.message.includes('telegram'))).toBe(true);
-  });
-
-  it('fails loudly, without the token, when the allowlist is malformed', () => {
-    // `parseAllowedUserIds` throws at construction. The message must name the
-    // variable and carry no credential — it is printed to stderr by the
-    // entrypoint's startup catch.
-    configureTelegramEnv();
-    process.env.TELEGRAM_ALLOWED_USER_IDS = '*';
-
-    const error = (() => {
-      try {
-        buildAlertChannels({
-          alertsMode: 'telegram',
-          injected: {},
-          db: openSharedStore(':memory:'),
-          logger: recordingLogger(),
-        });
-        return undefined;
-      } catch (e) {
-        return e as Error;
-      }
-    })();
-
-    expect(error?.message).toContain('TELEGRAM_ALLOWED_USER_IDS');
-    expect(error?.message).not.toContain(SENTINEL_TOKEN);
   });
 });
 

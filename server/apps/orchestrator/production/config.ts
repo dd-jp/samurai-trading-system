@@ -535,12 +535,10 @@ export interface ProductionConfig extends AlertChannelSlots {
    */
   alpacaDataClient?: AlpacaMarketDataClient;
   /**
-   * HITL approval round-trip (Verdict's HITL gate, 6). Same shape as
-   * `heartbeatChannel`: pass `SignedApprovalChannel`
-   * (verdict/notifications/verified-approval-channel.ts) so #207's HMAC
-   * verification is in the path — the composition root cannot construct it
-   * for you, because its `ApprovalRequestSender` leaf is another
-   * unimplemented transport.
+   * Approval round-trip behind Verdict's HITL gate (6). No adapter for it
+   * exists in the repo — the Telegram approval half was retired with the
+   * human gate (ADR-0007, ADR-0013) — so the composition root falls back to
+   * `UnwiredApprovalChannel`, which throws if the gate is ever reached.
    */
   approvals?: ApprovalChannel;
   /**

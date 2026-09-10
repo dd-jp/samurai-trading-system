@@ -390,8 +390,6 @@ function telegramStub(outcome: 'sends' | 'fails'): TelegramClient & { sent: [str
       if (outcome === 'fails') throw new Error('telegram 502');
       sent.push([chatId, text]);
     },
-    sendApprovalButtons: async () => {},
-    onApprovalCallback: () => {},
   };
 }
 

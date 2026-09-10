@@ -15,7 +15,7 @@
  * that short-circuits at Analysts, Trader or Risk is visible here, and the
  * lane universe is derived from those same rows (#619). What stays invisible
  * is only what is genuinely unattributable: rows predating migration 0013, and
- * audit rows written outside a tick (the HITL Telegram callback).
+ * audit rows written outside a tick (the retired HITL Telegram callback's).
  *
  * Two bounds remain, and they are deliberate rather than hidden:
  *

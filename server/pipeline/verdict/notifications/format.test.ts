@@ -1,7 +1,7 @@
 import type { OrderIntent } from '../../../shared/index.js';
 import type { RiskDecision } from '../../risk-manager/index.js';
-import type { ApprovalRequest, VerdictDecision } from '../types.js';
-import { formatApprovalRequest, formatDecisionMessage } from './format.js';
+import type { VerdictDecision } from '../types.js';
+import { formatDecisionMessage } from './format.js';
 
 function makeIntent(overrides: Partial<OrderIntent> = {}): OrderIntent {
   return {
@@ -85,22 +85,5 @@ describe('formatDecisionMessage', () => {
   it('reports GO for a passing decision', () => {
     const message = formatDecisionMessage(makeDecision(), makeRiskDecision());
     expect(message).toContain('Verdict: GO');
-  });
-});
-
-describe('formatApprovalRequest', () => {
-  it('includes order context and the timeout window', () => {
-    const request: ApprovalRequest = {
-      order_intent: makeIntent(),
-      risk_decision: makeRiskDecision(),
-      trace_id: 'trace-1',
-      timeout_ms: 300_000,
-    };
-
-    const message = formatApprovalRequest(request);
-
-    expect(message).toContain('Approval requested');
-    expect(message).toContain('AAPL');
-    expect(message).toContain('Timeout: 300000ms');
   });
 });

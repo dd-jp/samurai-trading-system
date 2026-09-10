@@ -562,9 +562,7 @@ function assertCredentialsPresent(
       (telegram.length > 0
         ? `SAMURAI_ALERTS=telegram is what makes ${telegram.join(', ')} required — re-run with ` +
           'SAMURAI_ALERTS=log-only to accept log-only alerting for an ATTENDED run instead ' +
-          '(not for an unattended soak). TELEGRAM_ALLOWED_USER_IDS is on that list because ' +
-          'TelegramBotApiClient validates the HITL approval allowlist at construction, not ' +
-          'because this process polls for approvals — see alert-transport.ts. ' +
+          '(not for an unattended soak). ' +
           `${TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR} must name a DIFFERENT chat from ` +
           'TELEGRAM_CHAT_ID (#342): the heartbeat posts forever on a fixed interval, and ' +
           'sharing the escalation chat is what drives an operator to mute the one channel ' +

@@ -26,10 +26,10 @@ export interface AuditLogEntry {
   /**
    * Which instrument this trace belonged to (migration 0013).
    *
-   * Optional because not every audit row comes from a tick: the HITL callback
-   * path records under an existing `trace_id` with no `Signal` in scope. A
-   * missing value means "not attributable", never "no instrument" — readers
-   * must not treat it as a lane.
+   * Optional because not every audit row comes from a tick: the retired HITL
+   * callback path recorded under an existing `trace_id` with no `Signal` in
+   * scope, and those rows persist. A missing value means "not attributable",
+   * never "no instrument" — readers must not treat it as a lane.
    */
   instrument?: string;
   asset_class?: AssetClass;

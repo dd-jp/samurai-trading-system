@@ -5,7 +5,7 @@
  * risk decision the message text is always the same.
  */
 import type { RiskDecision } from '../../risk-manager/index.js';
-import type { ApprovalRequest, VerdictDecision } from '../types.js';
+import type { VerdictDecision } from '../types.js';
 
 function orderContextLines(riskDecision: RiskDecision): string[] {
   const order = riskDecision.order_intent;
@@ -36,16 +36,6 @@ export function formatDecisionMessage(
     `Approval path: ${decision.approval_path}`,
     ...orderContextLines(riskDecision),
     `Idempotency key: ${decision.idempotency_key}`,
-  ];
-  return lines.join('\n');
-}
-
-/** Formats a HITL approval request for the trade channel (verdict-spec story 12). */
-export function formatApprovalRequest(request: ApprovalRequest): string {
-  const lines = [
-    'Approval requested',
-    ...orderContextLines(request.risk_decision),
-    `Timeout: ${request.timeout_ms}ms`,
   ];
   return lines.join('\n');
 }

@@ -22,9 +22,9 @@
  * dangerous configuration is refused rather than defaulted. So:
  *
  * - `SAMURAI_ALERTS=telegram` — push notifications. The posture an unattended
- *   run requires. Demands `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`,
- *   `TELEGRAM_ALLOWED_USER_IDS` and `TELEGRAM_HEARTBEAT_CHAT_ID` (#342, below);
- *   startup fails naming whichever are absent.
+ *   run requires. Demands `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` and
+ *   `TELEGRAM_HEARTBEAT_CHAT_ID` (#342, below); startup fails naming
+ *   whichever are absent.
  * - `SAMURAI_ALERTS=log-only` — the log-only stand-ins. A legitimate, and
  *   explicitly acknowledged, choice for an **attended** run: a local dev run, a
  *   supervised smoke test, a backtest. It is logged at `warn` every time,
@@ -70,34 +70,17 @@
  * it must detect is this process dying — so it stays out of scope here, and
  * the separate chat is what makes the current shape survivable meanwhile.
  *
- * ## Why the allowlist is required for outbound-only alerts
+ * ## Outbound only
  *
- * `TELEGRAM_ALLOWED_USER_IDS` is on the required list even though nothing here
- * receives anything. That is a consequence of construction, not a claim that
- * this ticket arms the HITL gate: `TelegramBotApiClient` is the only in-repo
- * `TelegramClient`, and it validates the allowlist in its constructor
- * (allowlist.ts) — deliberately, since an unset or wildcard allowlist is either
- * a silently fail-closed gate or a critical exposure, and verdict-spec.md
- * requires that to be caught at boot rather than discovered at runtime.
- *
- * To be unambiguous about what this file does NOT do: no poll loop is started
- * (`client.start()` is never called — `getUpdates` is single-consumer per bot
- * token, and starting one here would make a *second* process' approval poll
- * impossible), no approval handler is registered, and
- * `ProductionConfig.approvals` still falls back to `UnwiredApprovalChannel`
- * (`production.ts`'s `resolveApprovalsChannel`), which THROWS rather than
- * fabricating consent if Verdict's HITL gate (6) is ever reached — ADR-0007
- * already makes that gate unreachable at the shipped `auto` dial, and
- * `assertAutomationLevelSupported` refuses to boot at all on `manual`/
- * `semi_auto` (verdict-spec.md "Problem Statement"), so there is no
- * auto-approving stand-in wired here for either guard to fall through to.
- * Wiring HITL approvals through Telegram, if the gate is ever re-enabled,
- * would be a code change — async-approval semantics, not a config edit
- * (verdict-spec.md; #434, closed, reached the same conclusion) — on top of
- * the inbound half #275 (closed) already built. Validating the allowlist now
- * rather than then is the same fail-at-boot posture the spec asks for: an
- * unattended soak must not discover a broken allowlist on the day approvals
- * go live.
+ * Nothing here receives anything from Telegram. `TelegramBotApiClient` is
+ * outbound-only since the human approval half was retired (ADR-0007,
+ * ADR-0013), and `ProductionConfig.approvals` still falls back to
+ * `UnwiredApprovalChannel` (`production.ts`'s `resolveApprovalsChannel`),
+ * which THROWS rather than fabricating consent if Verdict's HITL gate (6) is
+ * ever reached — ADR-0007 makes that gate unreachable at the shipped `auto`
+ * dial, and `assertAutomationLevelSupported` refuses to boot at all on
+ * `manual`/`semi_auto`, so there is no auto-approving stand-in wired here for
+ * either guard to fall through to.
  *
  * ## Why here and not in `production.ts`
  *
@@ -116,7 +99,6 @@ import type { StoreHandle } from '../../shared/store/index.js';
 import { ALERT_IDS, type AlertId, type AlertPort, tradeChannelAlert } from './alert-catalogue.js';
 import { SqliteAlertDeliveryLog } from './alert-delivery-log.js';
 import type { AlertChannelSlots, ProductionConfig } from './production.js';
-import { SqliteAuditLog } from './sqlite-audit-log.js';
 import type { Logger } from './types.js';
 
 const ENV_VAR = 'SAMURAI_ALERTS';
@@ -129,10 +111,8 @@ export type AlertsMode = (typeof ALERTS_MODES)[number];
  * The `AlertChannelSlots` fields this module owns — the outbound operator
  * escalations, and nothing else. Verdict's `approvals` is deliberately absent
  * from `AlertChannelSlots` itself: it is an inbound round trip
- * (`requestApproval` returns an *answer*), not an alert. #275 (closed)
- * already built the inbound half; nothing wires it into `AlertChannelSlots`
- * today, and ADR-0007's `auto` dial makes the gate it would serve
- * unreachable at the shipped config.
+ * (`requestApproval` returns an *answer*), not an alert, and ADR-0007's
+ * `auto` dial makes the gate it would serve unreachable at the shipped config.
  *
  * `breachAlerts` joined the list in #327: a kill-threshold breach is the
  * fourth outbound escalation, and it had the same shape of hole as the
@@ -197,7 +177,7 @@ export const ALL_ALERT_CHANNEL_FIELDS_COVERED: {
  */
 export const TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR = 'TELEGRAM_HEARTBEAT_CHAT_ID';
 
-/** What `SAMURAI_ALERTS=telegram` needs in the environment. See the module doc for the allowlist. */
+/** What `SAMURAI_ALERTS=telegram` needs in the environment. */
 export const TELEGRAM_ALERT_ENV_VARS = [
   'TELEGRAM_BOT_TOKEN',
   'TELEGRAM_CHAT_ID',
@@ -285,20 +265,13 @@ export function buildAlertChannels(deps: {
   const heartbeatChatId =
     deps.injected.heartbeatChannel === undefined ? requireHeartbeatChatId(chatId) : undefined;
 
-  // The bot token and the allowlist are read by the client itself, from the
-  // same variables — not re-read here, so there is exactly one place that
-  // touches the token and exactly one that validates the allowlist.
+  // The bot token is read by the client itself, from the environment — not
+  // re-read here, so there is exactly one place that touches it.
   const telegram = new TelegramBotApiClient({
-    // Where the client posts its own repeated-allowlist-rejection security
-    // alert. The same chat the alerts go to: it is the channel the operator is
-    // already watching, and a security signal with nowhere to go is the
-    // failure mode this whole ticket is about.
+    // Where the client posts its own repeated-delivery-failure notice. The
+    // same chat the alerts go to: it is the channel the operator is already
+    // watching.
     alertChatId: chatId,
-    // Written to on an inbound allowlist rejection. Unused while nothing polls
-    // (see the module doc), and supplied anyway rather than stubbed: the store
-    // is the durable one every other component here writes to, so the day
-    // approvals are wired there is no second decision to get wrong.
-    auditLog: new SqliteAuditLog(deps.db),
     // Durable record of a send that exhausts retries (#1108) — the same
     // shared store every other component here writes to, so "how many
     // escalations went undelivered" survives the process that raised them.
@@ -329,10 +302,9 @@ export function buildAlertChannels(deps: {
       'positions, unresolved flatten reconciliations, kill-threshold breaches and APPLIED ' +
       `risk-threshold loosenings will be pushed to the escalation chat (TELEGRAM_CHAT_ID). ` +
       `${heartbeatClause} ` +
-      'Keep the escalation chat unmuted. No approval poll is started here: HITL approvals ' +
-      'still resolve through ProductionConfig.approvals (#275), and the loosening notice is ' +
-      'outbound-only — it reports a dial the Feedback Loop already moved on its own authority, ' +
-      'inside the hard bounds, and no reply to it is read (#366/#736).',
+      'Keep the escalation chat unmuted. Nothing is read back from Telegram: the loosening ' +
+      'notice is outbound-only — it reports a dial the Feedback Loop already moved on its own ' +
+      'authority, inside the hard bounds, and no reply to it is read (#366/#736).',
     // Never the token, and never either chat id: none is a secret worth a log
     // line, and the token is a bearer credential for the entire bot. The
     // heartbeat field is the machine-readable form of the clause above — two

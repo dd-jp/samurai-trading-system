@@ -612,10 +612,10 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * `audit_log.instrument` / `.asset_class`, since migration 0013. Both are
    * written by tick-runner.ts's single `record` closure, so EVERY stage row of
    * every tick carries them; tick-loop.ts's `crashed` row carries them too.
-   * The remaining NULLs are rows predating 0013 and the HITL Telegram callback
-   * path, which records under an existing `trace_id` with no `Signal` in scope
-   * — both mean "not attributable", never "no instrument", and neither may be
-   * guessed into a lane.
+   * The remaining NULLs are rows predating 0013 and rows the retired HITL
+   * Telegram callback wrote under an existing `trace_id` with no `Signal` in
+   * scope — both mean "not attributable", never "no instrument", and neither
+   * may be guessed into a lane.
    *
    * `llm_spend.debate_id -> debate_log.instrument` is deliberately NOT used as
    * a second source: it misses `quorum_skip` (the tick never reaches an LLM
@@ -835,10 +835,10 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * result set the fold sees.
    *
    * The `stage IN (…)` filter is not defensive tidiness: `audit_log.stage` is
-   * unconstrained TEXT and the HITL Telegram callback writes
+   * unconstrained TEXT and the retired HITL Telegram callback wrote
    * `verdict.hitl.telegram_callback` rows under the pipeline's own `trace_id`
-   * (telegram-bot-api-client.ts:112). Without the filter those land in a lane
-   * as a seventh, unrenderable stage.
+   * — rows that persist in older stores. Without the filter those land in a
+   * lane as a seventh, unrenderable stage.
    *
    * `ORDER BY … timestamp, rowid` is `SqliteAuditLog.getByTraceId`'s ordering,
    * for its reason: `audit_log` has no primary key, SQLite's tie-break for
