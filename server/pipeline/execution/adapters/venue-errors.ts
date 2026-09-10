@@ -30,9 +30,9 @@ export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 export class VenueTimeoutError extends Error {
   readonly method: HttpMethod;
 
-  constructor(name: string, message: string, method: HttpMethod) {
+  constructor(message: string, method: HttpMethod) {
     super(message);
-    this.name = name;
+    this.name = new.target.name;
     this.method = method;
   }
 }
@@ -43,9 +43,9 @@ export class VenueRateLimitError extends Error {
   readonly retryAfterMs: number | undefined;
   readonly method: HttpMethod;
 
-  constructor(name: string, message: string, method: HttpMethod, retryAfterMs?: number) {
+  constructor(message: string, method: HttpMethod, retryAfterMs?: number) {
     super(message);
-    this.name = name;
+    this.name = new.target.name;
     this.method = method;
     this.retryAfterMs = retryAfterMs;
   }

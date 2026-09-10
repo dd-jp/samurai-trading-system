@@ -265,6 +265,7 @@ import type { OrphanGoVerdict, OrphanVerdictScanner } from './orphan-verdict-sca
 import { LIVE_BOOK_SIZING_USD } from './paper-profile.js';
 import { AlpacaAccountStateProvider } from './production/account-state.js';
 import { buildAnalystsStep, composeMarketIntelligence } from './production/analysts-adapter.js';
+import { toCapitalCeilingUsd } from './production/capital-ceiling.js';
 // #753: the control arm's own account scalars — see `control-account-state.ts`.
 import {
   buildControlBookAnchorResolver,
@@ -640,19 +641,6 @@ export interface ProductionComponents {
 }
 
 /**
- * Builds the six `TickSteps` from real stage implementations — four direct
- * binds (#234) and two adapter binds (#235) — plus the shared instances they
- * close over. Exported so the composition-root seam the spec names ("assert
- * the returned `TickSteps` callables produce the same call shape") is
- * testable without starting a loop.
- *
- * Built once and shared deliberately: `AlpacaBrokerAdapter` keeps
- * `client_order_id -> bracket parent id` in memory, so a second adapter
- * instance over the same account would silently lose bracket-leg lookups for
- * orders the first one placed.
- */
-
-/**
  * Node clamps a `setTimeout` delay above this (2^31 - 1 ms, ~24.85 days) and
  * fires immediately instead — undocumented in the public API but stable
  * platform behavior. `scheduleFeedbackCycle`'s delay is always `<= intervalMs`
@@ -661,17 +649,6 @@ export interface ProductionComponents {
  * otherwise tight-loop instead of waiting.
  */
 const MAX_SET_TIMEOUT_DELAY_MS = 2 ** 31 - 1;
-
-export {
-  alertDeliveryFailureRetentionDaysFromEnvironment,
-  captureLlmTextFromEnvironment,
-  ENV_ALERT_DELIVERY_FAILURE_RETENTION_DAYS,
-  ENV_LLM_CALL_LOG_MAX_ROWS,
-  ENV_MI_ARCHIVE_RETENTION_DAYS,
-  ENV_X_MAX_SEARCH_RESULTS,
-  llmCallLogMaxRowsFromEnvironment,
-  miArchiveRetentionDaysFromEnvironment,
-} from './production/environment.js';
 
 /**
  * Prunes, reports what it removed, and never throws.
@@ -828,11 +805,20 @@ export function resolveApprovalsChannel(
   return config.approvals ?? new UnwiredApprovalChannel();
 }
 
+/**
+ * Builds the six `TickSteps` from real stage implementations — four direct
+ * binds (#234) and two adapter binds (#235) — plus the shared instances they
+ * close over. Exported so the composition-root seam the spec names ("assert
+ * the returned `TickSteps` callables produce the same call shape") is
+ * testable without starting a loop.
+ *
+ * Built once and shared deliberately: `AlpacaBrokerAdapter` keeps
+ * `client_order_id -> bracket parent id` in memory, so a second adapter
+ * instance over the same account would silently lose bracket-leg lookups for
+ * orders the first one placed.
+ */
 export function buildProductionComponents(config: ProductionConfig): ProductionComponents {
   const clock = config.clock;
-  // The only environment read in this root; a malformed variable refuses the
-  // boot here, before any store or wire client below is opened.
-  const environment = readProductionEnvironment(config);
 
   // Before anything is built, for the same reason the LLM budget below is:
   // refuse a bad config while nothing is half-constructed. This one rejects an
@@ -893,11 +879,15 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // correct reading for paper/backtest — so it cannot also be the live-mode
   // gate; the gate belongs here (#569), before anything below is
   // half-built, the same placement `assertAutomationLevelSupported` above
-  // uses. Only ABSENCE is checked: a `NaN`, zero or negative figure cannot
-  // be typed as `CapitalCeilingUsd` at all (`toCapitalCeilingUsd`,
-  // production/capital-ceiling.ts), which is where #569's positive-and-finite
-  // rule now lives for every caller, hand-assembled configs included.
-  const ceiling = config.capitalCeilingUsd;
+  // uses. The brand is compile-time only, and this gate exists for the
+  // hand-assembled config — a JS caller or an `as CapitalCeilingUsd` cast can
+  // still hand over `NaN`, which `Math.min` would read as "no bound" (#569,
+  // fail-open on the money path). So a DEFINED ceiling is re-minted through
+  // the one rule (`toCapitalCeilingUsd`) here, at boot, rather than trusted.
+  const ceiling =
+    config.capitalCeilingUsd === undefined
+      ? undefined
+      : toCapitalCeilingUsd(config.capitalCeilingUsd, 'ProductionConfig.capitalCeilingUsd');
   if (config.mode === 'live' && ceiling === undefined) {
     throw new Error(
       'Orchestrator cannot start: mode "live" requires ProductionConfig.capitalCeilingUsd, and ' +
@@ -907,6 +897,11 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
         'field explicitly. Refusing to size a live run off unclamped equity.',
     );
   }
+
+  // The only environment read in this root, after the config gates above so a
+  // hand-assembled config is refused for its own faults first, and before any
+  // store or wire client below is opened.
+  const environment = readProductionEnvironment(config);
 
   // The one place ProductionConfig.universe's default is applied (#1167).
   // Every other consumer reads it off the fields below instead of re-deriving it.
@@ -1726,50 +1721,6 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       ),
     );
 
-  /**
-   * Whether the sentiment agent RETRIEVES (#969), as opposed to asking a model
-   * what it remembers.
-   *
-   * A separate switch from `sentimentEnabled`, not a widening of it, and
-   * DEFAULT OFF. Three reasons, in the order they bite:
-   *
-   * 1. It changes what the soak measures. `sentiment` has been excluded from
-   *    the evidence average while mute (#676); real items put it back in, and
-   *    that is the same gate that produced #625's zero-trade result. A run
-   *    with this on is a different experiment from #625/#752, and flipping it
-   *    by accident would make two soaks silently incomparable.
-   * 2. It changes what the run costs. Search results ride in the prompt —
-   *    roughly 5,300 input tokens per call at the default result count — so
-   *    this is the soak's main LLM cost lever after the debate itself.
-   * 3. The metered figure has not yet been reconciled against the provider's
-   *    invoice (the plan's V3). Until it has, turning this on is a deliberate,
-   *    dated act by an operator, not a default.
-   *
-   * `SAMURAI_X_MAX_RESULTS` is the dial, and the env path
-   * (production/environment.ts) is read through the SHARED
-   * `positiveIntegerFromEnv` (#1045) rather than a validator of its own. That helper's header makes the argument — "two env vars in one
-   * system come to disagree about whether `\"abc\"` means abc, the default,
-   * or 0" — and a spend dial is the last place to disagree about it.
-   * Concretely it means a malformed value **throws at startup naming the
-   * variable** instead of silently falling back, which is the right failure
-   * for a setting whose whole job is bounding cost: an operator who typed
-   * `SAMURAI_X_MAX_RESULTS=ten` meant to change the spend and should not
-   * discover days later that nothing changed.
-   *
-   * `config.xMaxSearchResults` (#1161) is held to the same bound via
-   * `requireIntegerAtLeast` (production/environment.ts) rather than passed
-   * through unchecked: without it, a programmatic caller's `0` or `-1` would
-   * skip the throw entirely and reach `XSearchClient`'s ceiling clamp below,
-   * which is built to forgive an operator's excessive value, not to catch a
-   * nonsensical one.
-   *
-   * The ceiling is enforced separately and does NOT throw, on either path.
-   * `XSearchClient` clamps to `[1, MAX_SEARCH_RESULTS_CEILING]` and warns,
-   * because 100 is a well-formed integer that an operator plausibly meant as
-   * "as many as you can" — refusing to boot over it would be worse than
-   * capping it and saying so. So: unusable input refuses, excessive input
-   * clamps.
-   */
   const { sentimentRetrieval, xMaxSearchResults } = environment;
 
   const grokAgent =

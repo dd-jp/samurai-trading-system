@@ -100,13 +100,6 @@ import {
   safeLog,
   sanitizeLogText,
 } from '../../../shared/index.js';
-// Aliased: this module already imports a DIFFERENT `SharedStore` above (an
-// unrelated `execution/index.js` interface, `ExecutionStepDeps.store`'s
-// type) — the alias names which one `VerdictStepDeps.store` actually is,
-// rather than leaning on `ConstructorParameters<typeof SqliteVerdictLogStore>`
-// to dodge the collision (kimi-3-review/deepseek-review on #302's PR: that
-// form only surfaces a shape mismatch at the `new SqliteVerdictLogStore(...)`
-// call site, not here at the interface).
 import type { StoreHandle } from '../../../shared/store/index.js';
 import { guardedStore } from '../../../shared/store/index.js';
 import type { CostModel } from '../../../tools/backtest/index.js';
@@ -1379,9 +1372,8 @@ export interface VerdictStepDeps extends BreakerStateDeps {
   /**
    * Backs the `LoggingVerdict` decorator's `verdict_log` write (#302). Same
    * shared handle every other Sqlite* store in this composition root reads/
-   * writes through — see `buildPersistence` below. `VerdictLogDb` is this
-   * file's own import alias for `shared/store/index.js`'s `SharedStore`
-   * (see the import above for why it's aliased, not the bare name).
+   * writes through — see `buildPersistence` below. The raw handle, not the
+   * execution `SharedStore` port `ExecutionStepDeps.store` carries.
    */
   store: StoreHandle;
 }

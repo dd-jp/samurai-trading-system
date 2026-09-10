@@ -38,17 +38,9 @@ import {
 /** See `HttpMethod` (venue-errors.ts); `AlpacaHttpBrokerClient.request` types `init.method` as this. */
 export type AlpacaHttpMethod = HttpMethod;
 
-export class AlpacaBrokerTimeoutError extends VenueTimeoutError {
-  constructor(message: string, method: AlpacaHttpMethod) {
-    super('AlpacaBrokerTimeoutError', message, method);
-  }
-}
-
-export class AlpacaBrokerRateLimitError extends VenueRateLimitError {
-  constructor(message: string, method: AlpacaHttpMethod, retryAfterMs?: number) {
-    super('AlpacaBrokerRateLimitError', message, method, retryAfterMs);
-  }
-}
+/** Own classes, not the venue-agnostic bases: `instanceof` and `.name` never cross venues. */
+export class AlpacaBrokerTimeoutError extends VenueTimeoutError {}
+export class AlpacaBrokerRateLimitError extends VenueRateLimitError {}
 
 /** Any other upstream failure (auth, bad request, 5xx, network) — not classified further. */
 export class AlpacaBrokerProviderError extends Error {

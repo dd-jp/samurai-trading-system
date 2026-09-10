@@ -2,17 +2,14 @@
  * Residual protection (#549/#525) — the one owner of "a lot's partial-flatten
  * residual is not yet CONFIRMED protected".
  *
- * Three surfaces used to each hold a slice of this: `ingestFills()` re-armed
- * on the observing poll and wrote the durable marker, `executeExit` marked
- * lots whose legs it had already cancelled when a flatten was refused, and
- * the #549 sweep (residual-protection-sweep.ts) retried on cadence. The
- * marker's four store writes (`markResidualUnprotected`,
- * `confirmResidualProtected`, `markResidualAlerted`,
- * `getUnprotectedResidualLots`) and the re-arm decision now live here, and
- * those callers import the decision rather than the store methods. Two
- * self-scheduling loops (the tick loop and fill-sync) still reach this code
- * concurrently — the writes stay idempotent / first-writer-wins for exactly
- * that reason (see each store method's doc).
+ * Three callers reach it: `ingestFills()` re-arms on the observing poll and
+ * writes the durable marker, `executeExit` marks lots whose legs it has
+ * already cancelled when a flatten is refused, and the #549 sweep
+ * (residual-protection-sweep.ts) retries on cadence. They import the
+ * decision from here, not the store's marker methods. Two self-scheduling
+ * loops (the tick loop and fill-sync) reach this code concurrently — the
+ * writes stay idempotent / first-writer-wins for exactly that reason (see
+ * each store method's doc).
  *
  * Flatness and the residual quantity come from `shared/held-quantity.ts`
  * (`heldQuantityFromFills`, `isFlat`, `coversQty`) — the same module the
@@ -74,7 +71,7 @@ export async function markResidualsUnprotected(
  *
  * `known` lets the caller in `advanceLot`'s main path hand over
  * `filledSize`/`exitQty` it already computed off the SAME persisted record,
- * rather than re-reading the store; the zero-new-fill branch above has no
+ * rather than re-reading the store; the zero-new-fill branch in ingest-fills.ts has no
  * such record in hand and reads it fresh here instead.
  */
 export async function maybeRearmResidual(
@@ -190,7 +187,7 @@ export async function maybeRearmResidual(
   await bestEffortMarkerWrite(input, position, now, 'mark-unprotected');
 
   // Fail-closed (`executeExit`'s precedent, execute.ts): a non-finite or
-  // non-positive residual while `coversQty` above says "not flat" means the
+  // non-positive residual while `isFlat` (shared/held-quantity.ts) says "not flat" means the
   // store's own numbers disagree in a way `QTY_EPSILON_RELATIVE` was not
   // built to absorb. Refusing to hand the broker a garbage quantity and
   // alerting instead is the same posture `executeExit` takes on a
@@ -408,7 +405,7 @@ export async function alertResidualExposure(
     // whole file has — a residual is unprotected AND nobody was told, not
     // even locally. Traced with a FIXED, self-authored message rather than
     // the channel's own error (same CREDENTIALS posture as the
-    // flatten-overfill channel catch above, `escalateAgedUnpricedFills`'s
+    // flatten-overfill channel catch in ingest-fills.ts, `escalateAgedUnpricedFills`'s
     // precedent in alpaca-adapter.ts): a Telegram transport failure
     // quotes the request it failed on, which can carry a bot token.
     safeLog(input.logger, {

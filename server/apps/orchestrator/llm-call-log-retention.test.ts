@@ -28,7 +28,10 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_MAX_LLM_CALL_ROWS } from '../../shared/store/index.js';
-import { ENV_LLM_CALL_LOG_MAX_ROWS, llmCallLogMaxRowsFromEnvironment } from './production.js';
+import {
+  ENV_LLM_CALL_LOG_MAX_ROWS,
+  llmCallLogMaxRowsFromEnvironment,
+} from './production/environment.js';
 
 describe('llmCallLogMaxRowsFromEnvironment', () => {
   it('defaults to the shipped ceiling when unset', () => {

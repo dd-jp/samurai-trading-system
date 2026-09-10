@@ -24,17 +24,9 @@ import {
 /** See `HttpMethod` (venue-errors.ts); `SaxoHttpBrokerClient.request` types `init.method` as this. */
 export type SaxoHttpMethod = HttpMethod;
 
-export class SaxoBrokerTimeoutError extends VenueTimeoutError {
-  constructor(message: string, method: SaxoHttpMethod) {
-    super('SaxoBrokerTimeoutError', message, method);
-  }
-}
-
-export class SaxoBrokerRateLimitError extends VenueRateLimitError {
-  constructor(message: string, method: SaxoHttpMethod, retryAfterMs?: number) {
-    super('SaxoBrokerRateLimitError', message, method, retryAfterMs);
-  }
-}
+/** Own classes, not the venue-agnostic bases: `instanceof` and `.name` never cross venues. */
+export class SaxoBrokerTimeoutError extends VenueTimeoutError {}
+export class SaxoBrokerRateLimitError extends VenueRateLimitError {}
 
 /**
  * Any other upstream failure. `status`, `code` and `venueMessage` are the

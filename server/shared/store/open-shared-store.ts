@@ -16,8 +16,8 @@ import { runMigrations } from './migrate.js';
 /**
  * The raw database handle passed to components by constructor injection.
  * Named for what it is — a handle, not a store — so it cannot be mistaken for
- * the execution `SharedStore` port (pipeline/execution/types/store.ts), which
- * is the typed row-level interface over this handle and used to share its name.
+ * the execution `SharedStore` port (pipeline/execution/types/store.ts), the
+ * typed row-level interface over this handle.
  */
 export type StoreHandle = BetterSqlite3.Database;
 

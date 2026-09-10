@@ -63,6 +63,7 @@ import {
   coversQty,
   isBookCurrency,
   isExitFill,
+  isFlat,
   logCaughtFailure,
   QTY_EPSILON_RELATIVE,
   safeLog,
@@ -80,8 +81,6 @@ import {
 import { splitFlattenFills } from './flatten-attribution.js';
 import { markResidualsUnprotected, maybeRearmResidual } from './residual-protection.js';
 import type { ExecutionInput, NonSterlingFeeAlert, NormalizedFill } from './types.js';
-
-/** A fill on a protective/closing leg — anything that isn't opening the lot. */
 
 /**
  * #1087: a lot `reconcile()` adopted as `filled`/`partially_filled` from
@@ -1030,7 +1029,8 @@ async function advanceLot(
   }
 
   const avgEntryPrice = weightedAvgPrice(entryFills);
-  const flat = coversQty(totalQty(exitFills), filledSize);
+  const exitQty = totalQty(exitFills);
+  const flat = isFlat({ filledSize, exitQty });
   const orderState = nextState(position, filledSize, flat);
 
   // Size the protection to what actually filled, before persisting the
@@ -1049,7 +1049,7 @@ async function advanceLot(
   // naked, never merely under-sized — that's `resizeProtectiveLegs`'
   // case, handled above.
   if (!flat && (ingestedExit || flattenTargetedThisPoll)) {
-    await maybeRearmResidual(input, position, now, { filledSize, exitQty: totalQty(exitFills) });
+    await maybeRearmResidual(input, position, now, { filledSize, exitQty });
   }
 
   // One transaction: fills, lot state, and (on flat) the ClosedTrade land

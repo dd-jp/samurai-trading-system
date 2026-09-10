@@ -30,7 +30,7 @@ import { DEFAULT_MI_ARCHIVE_RETENTION_DAYS } from '../../providers/market-intell
 import {
   ENV_MI_ARCHIVE_RETENTION_DAYS,
   miArchiveRetentionDaysFromEnvironment,
-} from './production.js';
+} from './production/environment.js';
 
 describe('miArchiveRetentionDaysFromEnvironment', () => {
   it('defaults to the specced 90-day window when unset', () => {

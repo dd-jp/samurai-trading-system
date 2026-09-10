@@ -1,14 +1,11 @@
 /**
- * Every `process.env` read the production composition root makes, in one
- * place and read ONCE (`readProductionEnvironment`, at the top of
- * `buildProductionComponents`). Before this file the same variables were
- * resolved in `buildProductionComponents` and then again in
- * `buildProductionOrchestrator` for the daily sweeps, each helper defaulting
- * its argument to `process.env` so a call site could read the environment
- * without saying so; a reader had to grep the root for `process.env` to know
- * what a deployment could set. The helpers keep their names and their tests
- * and now take the raw value explicitly — the environment is read here and
- * nowhere else in the root.
+ * Every environment variable the production composition root reads, in one
+ * place and read ONCE (`readProductionEnvironment`, from
+ * `buildProductionComponents`; `buildProductionOrchestrator`'s daily sweeps
+ * take the same values off `ProductionComponents.environment`). What a
+ * deployment can set is this interface, not a grep of the root. The helpers
+ * below take the raw value explicitly — nothing in the root reads
+ * `process.env` for itself.
  *
  * `ProductionConfig`'s programmatic fields (`sentimentEnabled`,
  * `sentimentRetrieval`, `xMaxSearchResults`, #1161) win over the environment,
@@ -36,26 +33,70 @@ export interface ProductionEnvironment {
   readonly alertDeliveryFailureRetentionDays: number;
   /** #464 / ADR-0009: `config.sentimentEnabled`, else `SAMURAI_SENTIMENT=off` is the only off switch; anything else runs the stage. */
   readonly sentimentEnabled: boolean;
-  /** #969: `config.sentimentRetrieval`, else `SAMURAI_SENTIMENT_RETRIEVAL=on` — default OFF, see production.ts's doc at its use site for the three reasons. */
+  /**
+   * Whether the sentiment agent RETRIEVES (#969), as opposed to asking a model
+   * what it remembers: `config.sentimentRetrieval`, else
+   * `SAMURAI_SENTIMENT_RETRIEVAL=on`.
+   *
+   * A separate switch from `sentimentEnabled`, not a widening of it, and
+   * DEFAULT OFF. Three reasons, in the order they bite:
+   *
+   * 1. It changes what the soak measures. `sentiment` has been excluded from
+   *    the evidence average while mute (#676); real items put it back in, and
+   *    that is the same gate that produced #625's zero-trade result. A run
+   *    with this on is a different experiment from #625/#752, and flipping it
+   *    by accident would make two soaks silently incomparable.
+   * 2. It changes what the run costs. Search results ride in the prompt —
+   *    roughly 5,300 input tokens per call at the default result count — so
+   *    this is the soak's main LLM cost lever after the debate itself.
+   * 3. The metered figure has not yet been reconciled against the provider's
+   *    invoice (the plan's V3). Until it has, turning this on is a deliberate,
+   *    dated act by an operator, not a default.
+   */
   readonly sentimentRetrieval: boolean;
   /**
-   * #969 / #1161: `config.xMaxSearchResults`, else `SAMURAI_X_MAX_RESULTS`.
-   * Both paths are held to the same `>= 1` bound so a programmatic `0` or
-   * `-1` cannot skip the throw and reach `XSearchClient`'s clamp, which is
-   * built to forgive an excessive value, not to catch a nonsensical one.
+   * How many X posts a sentiment call retrieves: `config.xMaxSearchResults`
+   * (#1161), else `SAMURAI_X_MAX_RESULTS` (#969).
+   *
+   * The env path is read through the SHARED `positiveIntegerFromEnv` (#1045)
+   * rather than a validator of its own. That helper's header makes the
+   * argument — "two env vars in one system come to disagree about whether
+   * `\"abc\"` means abc, the default, or 0" — and a spend dial is the last
+   * place to disagree about it. Concretely it means a malformed value
+   * **throws at startup naming the variable** instead of silently falling
+   * back, which is the right failure for a setting whose whole job is
+   * bounding cost: an operator who typed `SAMURAI_X_MAX_RESULTS=ten` meant to
+   * change the spend and should not discover days later that nothing changed.
+   *
+   * The config path is held to the same bound via `requireIntegerAtLeast`
+   * rather than passed through unchecked: without it, a programmatic caller's
+   * `0` or `-1` would skip the throw entirely and reach `XSearchClient`'s
+   * ceiling clamp, which is built to forgive an operator's excessive value,
+   * not to catch a nonsensical one.
+   *
+   * The ceiling is enforced separately and does NOT throw, on either path.
+   * `XSearchClient` clamps to `[1, MAX_SEARCH_RESULTS_CEILING]` and warns,
+   * because 100 is a well-formed integer that an operator plausibly meant as
+   * "as many as you can" — refusing to boot over it would be worse than
+   * capping it and saying so. So: unusable input refuses, excessive input
+   * clamps.
    */
   readonly xMaxSearchResults: number;
 }
 
+const X_MAX_SEARCH_RESULTS_PURPOSE =
+  "the number of X posts each sentiment call retrieves, the soak's main LLM cost lever after " +
+  'the debate itself (#969)';
+
 export type ProductionEnvironmentOverrides = Pick<
   ProductionConfig,
-  'sentimentEnabled' | 'sentimentRetrieval' | 'xMaxSearchResults'
+  'processEnv' | 'sentimentEnabled' | 'sentimentRetrieval' | 'xMaxSearchResults'
 >;
 
 export function readProductionEnvironment(
   config: ProductionEnvironmentOverrides,
-  env: NodeJS.ProcessEnv = process.env,
 ): ProductionEnvironment {
+  const env = config.processEnv ?? process.env;
   return {
     captureLlmText: captureLlmTextFromEnvironment(env.SAMURAI_LLM_CAPTURE),
     llmCallLogMaxRows: llmCallLogMaxRowsFromEnvironment(env[ENV_LLM_CALL_LOG_MAX_ROWS]),
@@ -86,10 +127,6 @@ export function readProductionEnvironment(
           ),
   };
 }
-
-const X_MAX_SEARCH_RESULTS_PURPOSE =
-  "the number of X posts each sentiment call retrieves, the soak's main LLM cost lever after " +
-  'the debate itself (#969)';
 
 /**
  * Whether LLM prompt/response text is persisted to `llm_call_log` (#1035).

@@ -94,7 +94,7 @@ import { LoggingBreachAlertChannel, UnwiredApprovalChannel } from './console-cha
 import { DebateBarDecisionGate } from './decision-bar-gate.js';
 import { FILL_SYNC_TRACE_ID, RECONCILE_TRACE_ID } from './fill-sync.js';
 import { LIVE_BOOK_GBP, LIVE_BOOK_SIZING_USD, paperStartingProfile } from './paper-profile.js';
-import { toCapitalCeilingUsd } from './production/capital-ceiling.js';
+import { type CapitalCeilingUsd, toCapitalCeilingUsd } from './production/capital-ceiling.js';
 import {
   CONTROL_FILL_SYNC_TRACE_ID,
   CONTROL_RECONCILE_TRACE_ID,
@@ -1152,6 +1152,25 @@ describe('buildProductionComponents', () => {
       'which always sets it) could otherwise size a live run off unclamped equity',
     () => {
       const config = stubConfig(db, { mode: 'live' });
+
+      expect(() => buildProductionComponents(config)).toThrow(/capitalCeilingUsd/);
+    },
+  );
+
+  it.each([
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['zero', 0],
+    ['negative', -1_000],
+  ])(
+    'refuses to build with a %s capital ceiling smuggled past the brand (#569 review) — the ' +
+      'brand is compile-time only, and a JS or cast caller assembling ProductionConfig by hand ' +
+      'can still pass a failed parse; `Math.min` would read NaN as "no bound"',
+    (_label, ceiling: number) => {
+      const config = stubConfig(db, {
+        mode: 'live',
+        capitalCeilingUsd: ceiling as CapitalCeilingUsd,
+      });
 
       expect(() => buildProductionComponents(config)).toThrow(/capitalCeilingUsd/);
     },

@@ -109,7 +109,7 @@ export type UnvaluableMarkPolicy = 'refuse' | 'exclude';
  *
  * `decide.ts`'s `buildBracket` is that caller: it converts a whole-book
  * valuation refusal into a named skip on the control arm while letting every
- * OTHER rejection (e.g. `sizingEquity`'s #569 non-finite-ceiling guard)
+ * OTHER rejection (an account-state read failing, say)
  * propagate unchanged on either arm. `readMarks` below has two failure
  * shapes under this base — a stale mark (`StaleMarkError`) and a mark that
  * could not be read at all (`MarkReadError`: feed timeout, unknown symbol,

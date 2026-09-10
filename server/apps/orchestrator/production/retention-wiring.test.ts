@@ -66,10 +66,12 @@ import {
 import {
   buildProductionComponents,
   buildProductionOrchestrator,
-  ENV_ALERT_DELIVERY_FAILURE_RETENTION_DAYS,
-  ENV_MI_ARCHIVE_RETENTION_DAYS,
   type ProductionConfig,
 } from '../production.js';
+import {
+  ENV_ALERT_DELIVERY_FAILURE_RETENTION_DAYS,
+  ENV_MI_ARCHIVE_RETENTION_DAYS,
+} from './environment.js';
 import {
   makeWiringCiiConsumerConfig,
   makeWiringCorrelationConfig,

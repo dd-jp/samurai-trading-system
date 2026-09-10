@@ -836,6 +836,14 @@ export interface ProductionConfig extends AlertChannelSlots {
    */
   llmBudgetUsd?: number;
   /**
+   * The environment `readProductionEnvironment` (production/environment.ts)
+   * reads — every variable the composition root honours is listed there.
+   * Defaults to `process.env`; a test or programmatic caller passes a record
+   * instead of mutating the process environment (docs/coding-standards.md,
+   * "an option with an env default, never a mid-wiring read").
+   */
+  processEnv?: NodeJS.ProcessEnv;
+  /**
    * The declared capital ceiling a live run is bounded by, in account currency
    * (#511, `SAMURAI_LIVE_MAX_CAPITAL_USD`).
    *

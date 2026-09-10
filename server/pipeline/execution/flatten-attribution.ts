@@ -66,7 +66,7 @@ export function splitFlattenFills(input: FlattenSplitInput): FlattenSplit {
     // per (rawFill, lotKey) (see the comment on `splitFill` below), so if any
     // of these already exist in `fills`, this exact rawFill's split already
     // ran to completion in an earlier poll and its leftover was warned about
-    // then — a re-offered fill (this module's own `hasFill` dedup contract)
+    // then — a re-offered fill (`SharedStore.hasFill`'s dedup contract)
     // must not re-fire the same warning forever.
     const attributedIdsThisRawFill: { idempotency_key: string; broker_fill_id: BrokerFillId }[] =
       [];

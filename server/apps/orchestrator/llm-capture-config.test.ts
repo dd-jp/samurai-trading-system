@@ -13,7 +13,7 @@
  * against a real SQLite instance. Between them: the switch resolves ON unless
  * an operator says otherwise, and a sink handed `true` writes rows.
  */
-import { captureLlmTextFromEnvironment } from './production.js';
+import { captureLlmTextFromEnvironment } from './production/environment.js';
 
 describe('captureLlmTextFromEnvironment', () => {
   it('is ON when the variable is unset', () => {

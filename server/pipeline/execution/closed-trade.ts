@@ -22,7 +22,10 @@ export function closedTrade(
   const { filledSize, avgEntryPrice, entryFills, exitFills } = lot;
 
   // The fill that took the lot flat — it names how the trade ended and when.
-  const closing = exitFills[exitFills.length - 1] as ExitFill;
+  const closing = exitFills.at(-1);
+  if (closing === undefined) {
+    throw new Error(`closedTrade: ${position.idempotency_key} is flat with no exit fill recorded`);
+  }
   const avgExitPrice = weightedAvgPrice(exitFills);
 
   // Signed against the direction of the lot: a short earns the fall.
