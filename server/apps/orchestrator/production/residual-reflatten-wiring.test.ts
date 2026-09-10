@@ -206,6 +206,11 @@ function stubConfig(db: StoreHandle, logger: Logger): StubConfig {
     riskConfig: makeWiringRiskConfig(),
     verdictConfig: {
       automation_level: { crypto: 'auto', stocks: 'auto' },
+      // Read by `assertFlattenGraceWithinMarkAge` at boot (#1389): the
+      // post-bell flatten grace must not outrun gate 2a's staleness ceiling.
+      // Nothing in this file turns on the value; it just has to clear
+      // `DEFAULT_TRADER_CONFIG.flatten_after_close_ms`.
+      max_mark_age: { crypto: 2 * 60_000, stocks: 15 * 60_000 },
     } as ProductionConfig['verdictConfig'],
     executionConfig: makeWiringExecutionConfig(),
     correlationConfig: makeWiringCorrelationConfig(),

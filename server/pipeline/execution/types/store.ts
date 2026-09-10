@@ -202,8 +202,17 @@ export interface FlattenJournal {
    * any check either makes BEFORE calling this leaves a window after it in
    * which the other can journal and submit — two market orders on one held
    * quantity, i.e. #516. Both callers still stand down gracefully on the
-   * refusal (`deduped` / `flatten_in_flight`); this is the backstop that makes
-   * their own reads advisory rather than load-bearing.
+   * refusal (`executeExit` → `deduped` with a `flatten_refused_in_flight` warn
+   * line; `reflattenResidual` → `flatten_in_flight`, or
+   * `own_reflatten_in_flight` when the blocking row is that lot's own earlier
+   * re-flatten attempt); this is the backstop that makes their own reads
+   * advisory rather than load-bearing.
+   *
+   * The refusal is BOUNDED, not open-ended: every row this gate can block on
+   * has a resolution path that terminates — see `getUnresolvedFlattens` and
+   * `resolveFlattenError` for the three ways a row leaves the predicate, and
+   * `UNRESOLVABLE_FLATTEN_MAX_AGE_MS` (reconcile.ts) for the bound on the one
+   * that used to have none.
    */
   writeAheadFlatten(submission: FlattenSubmissionWriteAhead): Promise<void>;
   /** Persist the post-ack transition (`'submitting'` → `'submitted'`). */
@@ -213,7 +222,7 @@ export interface FlattenJournal {
     resolved_at: Date,
   ): Promise<void>;
   /**
-   * Persist → `'error'` for a flatten PROVABLY dead at the venue. Two ways in:
+   * Persist → `'error'` for a flatten the venue will never fill. Three ways in:
    *
    * - It never reached the broker at all (e.g. the pre-flatten bracket cancel
    *   failed, so `executeExit` refused to submit) — as opposed to a
@@ -229,12 +238,21 @@ export interface FlattenJournal {
    *   stayed "in flight" forever and wedged every later flatten on the
    *   instrument. See `reconcileFlatten` for why the zero-fill half of the
    *   condition is load-bearing.
+   * - #1214 review round 2: reconcile has asked the venue about an ACKED
+   *   (`'submitted'`) flatten for longer than `UNRESOLVABLE_FLATTEN_MAX_AGE_MS`
+   *   (reconcile.ts) and the venue has consistently answered that it has no
+   *   such order. This is the one way in that is NOT proof — it is bounded
+   *   consistent negative evidence, forced to a decision because the
+   *   alternative is an instrument that can never be flattened again. Read
+   *   `reconcileFlatten`'s own doc before reasoning about it; the reason string
+   *   it writes says so explicitly so an operator reading the journal is never
+   *   told the venue proved something it did not.
    */
   resolveFlattenError(idempotency_key: string, reason: string, resolved_at: Date): Promise<void>;
   /**
    * True iff `idempotency_key` names a `flatten_submissions` row resolved to
-   * `'error'` — i.e. `resolveFlattenError`'s own invariant: the flatten is
-   * PROVABLY dead at the venue. A `'submitting'` or `'submitted'` row
+   * `'error'` — i.e. `resolveFlattenError`'s own invariant: the venue will
+   * never fill this flatten. A `'submitting'` or `'submitted'` row
    * returns `false` — retrying under a fresh key while the broker's answer
    * to the ORIGINAL attempt is still unknown (`'submitting'`) or the
    * original attempt already succeeded (`'submitted'`) risks a double
@@ -250,9 +268,24 @@ export interface FlattenJournal {
    * lost) OR (`status = 'submitted'` AND `fills_swept_at IS NULL` — acked,
    * but not yet confirmed durably applied to every lot it named).
    *
-   * `'error'` rows are excluded outright: that status means the flatten
-   * PROVABLY never reached the broker (`resolveFlattenError`'s own doc), so
-   * there is nothing left for the venue to answer about it.
+   * `'error'` rows are excluded outright: that status means the venue will
+   * never fill this flatten (`resolveFlattenError`'s own doc), so there is
+   * nothing left for the venue to answer about it. It does NOT mean the order
+   * never reached the broker — that was true of the only way in when this
+   * scan was written, and stopped being true when #1214's review added the
+   * terminal-non-fill and bounded-unresolvable paths, both of which mark rows
+   * the broker demonstrably DID see. The exclusion still holds for all three,
+   * for the reason that is actually load-bearing: a fill is routed home by
+   * `getFlattenAttribution`, which is keyed on `idempotency_key` alone with no
+   * status filter, so dropping a row out of this scan never orphans a fill
+   * that arrives afterwards.
+   *
+   * This scan is also the one-flatten-per-instrument gate's predicate
+   * (`writeAheadFlatten`) and, since #1389, the Trader's own
+   * `flattenAlreadyInFlight` refusal. Every row it returns therefore blocks
+   * the instrument, which is why every row it returns must have a resolution
+   * path that terminates: fills swept (`markFlattenFillsSwept`), or one of
+   * `resolveFlattenError`'s three ways in.
    *
    * Scoped to the calling instance's own arm (migration 0050, #1124) — this
    * is a SCAN over `flatten_submissions`, not a key-based lookup, so it needs
@@ -444,6 +477,15 @@ export interface UnresolvedFlattenSubmission {
    * scan (see `SharedStore.markFlattenFillsSwept`).
    */
   status: 'submitting' | 'submitted';
+  /**
+   * The write-ahead time (migration 0019's `submitted_at`) — how long this row
+   * has been blocking its instrument, and the anchor
+   * `UNRESOLVABLE_FLATTEN_MAX_AGE_MS` (reconcile.ts) measures against. Read
+   * off the row rather than counted in memory on purpose: the bound has to
+   * survive a restart, and the column already exists, so it needs no migration
+   * and no durable counter of its own.
+   */
+  submitted_at: Date;
 }
 
 /**

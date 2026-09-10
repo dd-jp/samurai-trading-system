@@ -851,6 +851,32 @@ async function executeExit(
     // row too. Deliberate: `UnresolvedFlattenSubmission` carries no lot
     // identity to narrow it by, and the narrower alternative is the
     // two-submitters-one-instrument reversal #516 exists to prevent.
+    //
+    // #1214 review round 2: the STATUS stays `deduped` but the outcome is not
+    // the same as the ordinary "already flat" dedup, so it gets its own warn
+    // line rather than its own status value. A status is the wrong carrier —
+    // `ExecutionResult['status']` is exhaustively switched by the verdict
+    // recorder, the dashboard and the feedback loop, and none of them has a
+    // decision to make that differs here — whereas the thing an operator
+    // actually needs is to be able to tell, in the log, a mandatory
+    // flat-by-close that was REFUSED from one that had nothing to do.
+    safeLog(input.logger, {
+      trace_id: input.trace_id,
+      stage: 'execution',
+      event: 'flatten_refused_in_flight',
+      level: 'warn',
+      message:
+        'executeExit: the mandatory flat-by-close was refused because another flatten on this ' +
+        'instrument is still unresolved — reported as `deduped`, which is NOT the same as ' +
+        '"already flat": this lot is still held. The next tick in the #826 window retries, and ' +
+        'the blocking row is bounded (reconcile.ts UNRESOLVABLE_FLATTEN_MAX_AGE_MS).',
+      payload: {
+        idempotency_key: idempotencyKey,
+        instrument: order.instrument,
+        blocking_key: error.blocking_key,
+        exit_reason: order.metadata.exit_reason,
+      },
+    });
     return result('deduped', idempotencyKey, now, { reason: error.message });
   }
 

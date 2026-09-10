@@ -7,6 +7,7 @@
  * fixture instead of the rule.
  */
 import { describe, expect, it } from 'vitest';
+import { UNRESOLVABLE_FLATTEN_MAX_AGE_MS } from '../../../pipeline/execution/index.js';
 import type { TraderConfig } from '../../../pipeline/trader/index.js';
 import { DEFAULT_TRADER_CONFIG } from '../../../pipeline/trader/index.js';
 import {
@@ -189,5 +190,43 @@ describe('assertFlattenGraceWithinMarkAge (#1389)', () => {
         MAX_MARK_AGE_STOCKS,
       ),
     ).not.toThrow();
+  });
+});
+
+/**
+ * #1214 review round 2, finding 2 — the ONE claim the PR body makes about when
+ * a bounded-unresolvable flatten row stops blocking its instrument, asserted
+ * rather than left as prose. It lives in this file because it is the same
+ * family of arithmetic the two assertions above police, and because the
+ * derivation reads the Trader's own defaults, which `reconcile.ts` deliberately
+ * does NOT import — execution must not depend on the trader, so the constant is
+ * duplicated there with its source cited and this test is what stops the two
+ * drifting apart silently.
+ */
+describe("UNRESOLVABLE_FLATTEN_MAX_AGE_MS's flatten-window derivation (#1214)", () => {
+  it('equals the pre-bell half of the flatten window, so an already-blocking row is terminal by the bell', () => {
+    // The guarantee: a row still blocking when the window OPENS (at
+    // `sessionEnd - flatten_before_close_ms`) has been alive at least this long
+    // by the bell, so `reconcileFlatten` forces it terminal no later than
+    // `sessionEnd` — and reconcile runs on every fill-sync poll (#921) with no
+    // calendar gate, so the forcing pass really does land there.
+    expect(UNRESOLVABLE_FLATTEN_MAX_AGE_MS).toBe(DEFAULT_TRADER_CONFIG.flatten_before_close_ms);
+  });
+
+  it('leaves a post-bell grace with ticks left in it for the unblocked flatten to be submitted', () => {
+    // Resolving the row is not the outcome; SUBMITTING the flatten is, and that
+    // happens only on a tick (`withinFlattenWindow`). The post-bell grace is
+    // what remains after the bound expires, and it has to hold ticks —
+    // `assertFlattenWindowCoversTickInterval` guarantees
+    // MIN_TICKS_INSIDE_FLATTEN_WINDOW fit in a span of
+    // `flatten_before_close_ms`, so an equal-or-longer grace holds as many.
+    expect(DEFAULT_TRADER_CONFIG.flatten_after_close_ms).toBeGreaterThanOrEqual(
+      DEFAULT_TRADER_CONFIG.flatten_before_close_ms,
+    );
+    const maxTickInterval =
+      DEFAULT_TRADER_CONFIG.flatten_before_close_ms / MIN_TICKS_INSIDE_FLATTEN_WINDOW;
+    expect(
+      Math.floor(DEFAULT_TRADER_CONFIG.flatten_after_close_ms / maxTickInterval),
+    ).toBeGreaterThanOrEqual(MIN_TICKS_INSIDE_FLATTEN_WINDOW);
   });
 });

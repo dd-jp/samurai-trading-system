@@ -178,7 +178,18 @@ export async function reflattenResidual(
   // time". `writeAheadFlatten` re-checks this atomically; what this read buys
   // is a named skip and a log line rather than a caught refusal, and the walk
   // invariant above.
-  const blocking = unresolved.find((row) => row.instrument === position.instrument);
+  //
+  // Which MATCHING row is handed on matters, because `standDown` splits its
+  // paging decision on whether the blocker is this lot's own earlier
+  // re-flatten (#1214 review round 2). With more than one unresolved row on
+  // the instrument — a daily flatten and this lot's own attempt both in
+  // flight, or rows left by an older build — `find` would pick by table order,
+  // which is arbitrary and could report someone else's flatten while this
+  // lot's own order is the one working. Prefer this lot's own key, and only
+  // fall back to any other row on the instrument.
+  const onInstrument = unresolved.filter((row) => row.instrument === position.instrument);
+  const blocking =
+    onInstrument.find((row) => isOwnReflattenKey(row.idempotency_key, lotKey)) ?? onInstrument[0];
   if (blocking !== undefined) {
     return standDown(input, position, residual, lotKey, blocking.idempotency_key);
   }
@@ -344,7 +355,19 @@ export async function reflattenResidual(
  * `'error'` row, or a `'submitted'` one whose fills are swept — and either way
  * that attempt is spent and the walk moves on.
  */
-async function resolveReflattenKey(input: ResidualReflattenInput, lotKey: string): Promise<string | null> {
+/**
+ * Whether `key` is one of `lotKey`'s own re-flatten attempts — the same key
+ * shape `resolveReflattenKey` walks, asked as a predicate so the advisory read
+ * and `standDown` cannot disagree about what "own" means.
+ */
+function isOwnReflattenKey(key: string, lotKey: string): boolean {
+  return key.startsWith(`${lotKey}:residual-reflatten-`);
+}
+
+async function resolveReflattenKey(
+  input: ResidualReflattenInput,
+  lotKey: string,
+): Promise<string | null> {
   for (let attempt = 1; attempt <= MAX_RESIDUAL_REFLATTEN_ATTEMPTS; attempt++) {
     const candidate = `${lotKey}:residual-reflatten-${attempt}`;
     if (!(await input.store.findByKey(candidate))) return candidate;
@@ -374,7 +397,7 @@ function standDown(
   lotKey: string,
   blockingKey: string,
 ): ResidualReflattenOutcome {
-  const own = blockingKey.startsWith(`${lotKey}:residual-reflatten-`);
+  const own = isOwnReflattenKey(blockingKey, lotKey);
   return skip(
     input,
     position,

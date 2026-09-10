@@ -981,7 +981,7 @@ export class SqliteExecutionStore implements SharedStore {
   async getUnresolvedFlattens(): Promise<UnresolvedFlattenSubmission[]> {
     const rows = this.db
       .prepare(
-        `SELECT idempotency_key, instrument, status
+        `SELECT idempotency_key, instrument, status, submitted_at
            FROM flatten_submissions
           WHERE arm = ?
             AND (status = 'submitting'
@@ -991,12 +991,14 @@ export class SqliteExecutionStore implements SharedStore {
       idempotency_key: string;
       instrument: string;
       status: 'submitting' | 'submitted';
+      submitted_at: string;
     }>;
 
     return rows.map((row) => ({
       idempotency_key: row.idempotency_key,
       instrument: row.instrument,
       status: row.status,
+      submitted_at: new Date(row.submitted_at),
     }));
   }
 

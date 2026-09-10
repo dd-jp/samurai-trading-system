@@ -23,8 +23,10 @@ function hostileThrownValue(): Record<string, unknown> {
 import type { TradingCalendar } from '../../providers/market-data-service/index.js';
 import { AlwaysOpenCalendar } from '../../providers/market-data-service/index.js';
 import type { AssetClass } from '../../shared/index.js';
+import { recordingLogger } from '../../shared/recording-logger.js';
 import { ExecutionImpl } from './execute.js';
 import { FilledZeroSizeThrottle } from './filled-zero-size-throttle.js';
+import { UNRESOLVABLE_FLATTEN_MAX_AGE_MS } from './reconcile.js';
 import { SimulatedBrokerAdapter } from './simulated-adapter.js';
 import { openTestExecutionStore, TestExecutionStore } from './sqlite-store-harness.js';
 import type {
@@ -289,8 +291,12 @@ function makeInput(overrides: Partial<ExecutionInput> = {}): ExecutionInput {
     residualExposureAlerts: makeResidualExposureAlerts(),
     flattenOverfillAlerts: makeFlattenOverfillAlerts(),
     flattenReconcileAlerts: makeFlattenReconcileAlerts(),
-    // #573: `execute()` never logs — every failure it observes flows into
-    // the `ExecutionResult` it returns instead. A no-op is enough here.
+    // #573: `execute()` routes every failure it observes into the
+    // `ExecutionResult` it returns rather than a log line, so a no-op is
+    // enough for almost every test here. The exceptions pass their own
+    // `recordingLogger()`: the #1001 snapshot-budget warn, and #1214 review
+    // round 2's `flatten_refused_in_flight`, which is an outcome a caller
+    // cannot tell from an ordinary dedup by status alone.
     logger: { log: () => {} },
     filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
     ...overrides,
@@ -1105,6 +1111,7 @@ describe('ExecutionImpl.execute', () => {
       /** A live residual re-flatten on the held lot: journalled, acked by the venue, no fills swept. */
       async function seedLiveReflatten(
         store: ReturnType<typeof openTestExecutionStore>['store'],
+        submittedAt: Date = NOW,
       ): Promise<void> {
         await store.writeAheadFlatten({
           idempotency_key: REFLATTEN_KEY,
@@ -1112,7 +1119,7 @@ describe('ExecutionImpl.execute', () => {
           asset_class: 'stocks',
           side: 'sell',
           size: 6,
-          submitted_at: NOW,
+          submitted_at: submittedAt,
           lot_held_quantities: [{ idempotency_key: 'key-aapl-entry-1', held: 6 }],
           exit_reason: 'flatten',
           decision_price: null,
@@ -1125,22 +1132,43 @@ describe('ExecutionImpl.execute', () => {
         await store.resolveFlattenSubmitted(
           REFLATTEN_KEY,
           { order_state: 'submitted', broker_order_ids: [`${REFLATTEN_KEY}:flatten`] },
-          NOW,
+          submittedAt,
         );
       }
 
       it('refuses the flatten while a residual re-flatten is still working the same lot', async () => {
         const { store } = openTestExecutionStore();
         const broker = makeBroker();
+        const logger = recordingLogger();
         await seedHeldLot(store);
         await seedLiveReflatten(store);
 
-        const result = await new ExecutionImpl(makeInput({ store, broker })).execute(makeExitGo());
+        const result = await new ExecutionImpl(makeInput({ store, broker, logger })).execute(
+          makeExitGo(),
+        );
 
         expect(broker.flattenCalls).toEqual([]);
         // 'deduped', not 'error': the instrument IS being closed, by the other
         // submitter's order.
         expect(result.status).toBe('deduped');
+        /**
+         * #1214 review round 2, finding 4. THE MUTATION THIS KILLS: delete the
+         * `safeLog` call in `executeExit`'s `UnresolvedFlattenForInstrumentError`
+         * catch. Without it a refused MANDATORY flat-by-close is byte-identical
+         * in every operator-visible surface to the ordinary "already flat"
+         * dedup — same status, same shape — and the one case where the lot is
+         * still held becomes invisible.
+         */
+        expect(logger.entries).toContainEqual(
+          expect.objectContaining({
+            level: 'warn',
+            event: 'flatten_refused_in_flight',
+            payload: expect.objectContaining({
+              instrument: 'AAPL',
+              blocking_key: REFLATTEN_KEY,
+            }),
+          }),
+        );
         // The refusal happens at the write-ahead, ABOVE the cancel loop, so the
         // lot keeps the protective legs it still has. A guard placed after the
         // cancel loop would have stripped them and then refused.
@@ -1183,6 +1211,98 @@ describe('ExecutionImpl.execute', () => {
         expect(broker.flattenCalls).toEqual([
           { instrument: 'AAPL', side: 'sell', size: 40, clientOrderId: 'key-aapl-1355' },
         ]);
+      });
+
+      /**
+       * #1214 review round 2, finding 1 — the failure mode round 1 CREATED.
+       *
+       * Round 1's guard made an unresolved row refuse every later flatten on
+       * the instrument, including `executeExit`'s mandatory flat-by-close. But
+       * `reconcileFlatten` had a shape it never resolved: an already-acked
+       * (`'submitted'`) row the venue afterwards denies all knowledge of. It
+       * was "left untouched and escalated" on every pass, forever — no fills
+       * to sweep, no terminal order state to observe, nothing else that can
+       * retire a `'submitted'` row. The instrument became un-flattenable for
+       * the life of the database, across restarts and trading days, with no
+       * operator path short of editing SQLite by hand.
+       *
+       * The pair below is the proof the bound closed it. Both run the SAME
+       * venue answer (null on a row it acked) against the REAL store; the only
+       * difference is how long the row has been blocking.
+       *
+       * THE MUTATION THIS KILLS: delete the `age >= UNRESOLVABLE_FLATTEN_MAX_AGE_MS`
+       * branch in `reconcileFlatten`, or raise the constant to a value no
+       * trading session reaches. The first test still passes (the refusal is
+       * the safe direction and stays); the second fails, which is the point —
+       * "fails safe" is not the property under test, "can eventually flatten
+       * again" is.
+       */
+      describe('an unresolvable acked flatten is bounded, not permanent', () => {
+        /** The venue denies all knowledge of a flatten it acked — forever. */
+        const deniesEverything = {
+          ...makeBroker(),
+          async resumeFlatten(): Promise<NormalizedOrder | null> {
+            return null;
+          },
+          async getOpenPositions(): Promise<NormalizedPosition[]> {
+            return [];
+          },
+        };
+
+        it('still refuses while the row is inside the bound — the safe direction is unchanged', async () => {
+          const { store } = openTestExecutionStore();
+          await seedHeldLot(store);
+          await seedLiveReflatten(store, new Date(NOW.getTime() - 60_000));
+
+          await new ExecutionImpl(makeInput({ store, broker: deniesEverything })).reconcile();
+
+          expect((await store.getUnresolvedFlattens()).map((row) => row.idempotency_key)).toEqual([
+            REFLATTEN_KEY,
+          ]);
+          const broker = makeBroker();
+          const result = await new ExecutionImpl(makeInput({ store, broker })).execute(
+            makeExitGo(),
+          );
+          expect(result.status).toBe('deduped');
+          expect(broker.flattenCalls).toEqual([]);
+        });
+
+        it('forces the row terminal past the bound, and the instrument flattens again', async () => {
+          const { store } = openTestExecutionStore();
+          await seedHeldLot(store);
+          await seedLiveReflatten(
+            store,
+            new Date(NOW.getTime() - UNRESOLVABLE_FLATTEN_MAX_AGE_MS - 1),
+          );
+
+          const report = await new ExecutionImpl(
+            makeInput({ store, broker: deniesEverything }),
+          ).reconcile();
+
+          expect(report.divergences).toContainEqual(
+            expect.objectContaining({
+              idempotency_key: REFLATTEN_KEY,
+              action: 'rejected',
+              kind: 'flatten',
+            }),
+          );
+          // The reason must not claim proof the venue never gave.
+          const row = await store.getFlattenSubmission(REFLATTEN_KEY);
+          expect(row?.status).toBe('error');
+          expect(row?.reason).toContain('DECISION on consistent negative evidence, not proof');
+          expect(await store.getUnresolvedFlattens()).toEqual([]);
+
+          // The whole point: the mandatory flat-by-close goes out, for the
+          // instrument's FULL held quantity.
+          const broker = makeBroker();
+          const result = await new ExecutionImpl(makeInput({ store, broker })).execute(
+            makeExitGo(),
+          );
+          expect(result.status).toBe('submitted');
+          expect(broker.flattenCalls).toEqual([
+            { instrument: 'AAPL', side: 'sell', size: 40, clientOrderId: 'key-aapl-1355' },
+          ]);
+        });
       });
     });
 

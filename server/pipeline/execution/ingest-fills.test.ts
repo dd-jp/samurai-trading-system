@@ -1660,7 +1660,11 @@ describe('ExecutionImpl.ingestFills', () => {
       // The row's own designed recovery: still unswept, so still found by a
       // future reconcile() pass — "rescanned next poll", not leaked.
       expect(await store.getUnresolvedFlattens()).toEqual([
-        { idempotency_key: 'flatten-1', instrument: 'AAPL', status: 'submitted' },
+        expect.objectContaining({
+          idempotency_key: 'flatten-1',
+          instrument: 'AAPL',
+          status: 'submitted',
+        }),
       ]);
       // #573: before this ticket this failure "resolved quietly" — no local
       // trace at all when it was the ONLY failure this poll (the comment on

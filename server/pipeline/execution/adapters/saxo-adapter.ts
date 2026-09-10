@@ -94,8 +94,18 @@ const PLACEMENT_LOOKBACK_MS = 4 * SAXO_DUPLICATE_WINDOW_MS;
  * Saxo's `ExternalReference` limit. `:target` is the longest suffix this
  * adapter itself appends — but the budget belongs to the WHOLE key, and the
  * caller's own suffixes eat into it first: `:retry-N` (execute.ts) and
- * `:residual-reflatten-N` (residual-reflatten.ts, #1214), the latter costing 22
- * characters before this adapter adds anything.
+ * `:residual-reflatten-N` (residual-reflatten.ts, #1214), the latter costing 21
+ * characters before this adapter adds anything (and staying 21 for every
+ * attempt `MAX_RESIDUAL_REFLATTEN_ATTEMPTS` can reach).
+ *
+ * The suffix arithmetic is already moot for a flatten, and is written down
+ * here rather than acted on: `computeIdempotencyKey` returns a 64-character
+ * sha256 hex digest, and `submitFlatten` calls
+ * `assertExternalReferenceFits(clientOrderId, 0)`, so a BARE Saxo flatten key
+ * overruns this 50-character limit before any suffix is appended. That is
+ * latent rather than live only because `SaxoBrokerAdapter` has no production
+ * construction site yet — it is not a #1214 regression and is deliberately
+ * not fixed here.
  */
 const EXTERNAL_REFERENCE_MAX_CHARS = 50;
 const LEG_SUFFIX_MAX_CHARS = ':target'.length;

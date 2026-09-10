@@ -979,7 +979,12 @@ describe('SqliteExecutionStore', () => {
       const unresolved = await store.getUnresolvedFlattens();
 
       expect(unresolved).toEqual([
-        { idempotency_key: 'flatten-stuck', instrument: 'AAPL', status: 'submitting' },
+        {
+          idempotency_key: 'flatten-stuck',
+          instrument: 'AAPL',
+          status: 'submitting',
+          submitted_at: OPENED_AT,
+        },
       ]);
     });
 
@@ -995,7 +1000,12 @@ describe('SqliteExecutionStore', () => {
       const unresolved = await store.getUnresolvedFlattens();
 
       expect(unresolved).toEqual([
-        { idempotency_key: 'flatten-acked', instrument: 'AAPL', status: 'submitted' },
+        {
+          idempotency_key: 'flatten-acked',
+          instrument: 'AAPL',
+          status: 'submitted',
+          submitted_at: OPENED_AT,
+        },
       ]);
     });
 

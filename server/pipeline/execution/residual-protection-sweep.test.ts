@@ -661,6 +661,55 @@ describe('residual-protection sweep (#549)', () => {
     );
   });
 
+  it('prefers this lot’s OWN re-flatten when several unresolved rows name the instrument (#1214 review round 2, finding 6)', async () => {
+    // `writeAheadFlatten`'s own gate makes two unresolved rows on one
+    // instrument unreachable going forward, so this state can only be
+    // pre-gate data — but it is data a live database can hold, and the
+    // classification it feeds decides whether this pass PAGES. Picking by
+    // `Array.find` over the scan meant picking by table order: here the
+    // someone-else's row sorts first, so a plain `find` reports
+    // `flatten_in_flight` and pages about a lot whose own closing order is
+    // working. THE MUTATION THIS KILLS: drop the own-key preference in
+    // `reflattenResidual` and take `onInstrument[0]`.
+    const { db, store } = openTestExecutionStore();
+    await seedPosition(store);
+    await seedPartiallyFlattenedFills(store);
+    await store.markResidualUnprotected(LOT, NOW);
+    const ownKey = `${LOT}:residual-reflatten-1`;
+    const insert = db.prepare(
+      `INSERT INTO flatten_submissions (
+         idempotency_key, instrument, asset_class, side, size, status,
+         order_state, broker_order_ids, submitted_at, resolved_at, arm
+       ) VALUES (?, 'AAPL', 'stocks', 'sell', 6, 'submitted', 'submitted', ?, ?, ?, 'live')`,
+    );
+    // Inserted first, so `find` over the scan would return this one.
+    insert.run(
+      'daily-flatten-1',
+      JSON.stringify(['daily-flatten-1']),
+      NOW.toISOString(),
+      NOW.toISOString(),
+    );
+    insert.run(ownKey, JSON.stringify([ownKey]), NOW.toISOString(), NOW.toISOString());
+
+    const restartedStore = new TestExecutionStore(db);
+    const broker = new SweepBroker();
+    broker.rearmFailure = new ProtectiveRearmUnsupportedError('saxo', 'IsOcoOrderSupported false');
+    const alerts = makeResidualExposureAlerts();
+    const logger = recordingLogger();
+    const execution = new ExecutionImpl(makeInput(broker, restartedStore, alerts, logger));
+
+    await execution.sweepResidualProtection();
+
+    expect(broker.flattenCalls).toEqual([]);
+    expect(alerts.alerts).toEqual([]);
+    expect(logger.entries).toContainEqual(
+      expect.objectContaining({
+        event: 'residual_reflatten_skipped',
+        payload: expect.objectContaining({ reason: 'own_reflatten_in_flight' }),
+      }),
+    );
+  });
+
   it('stops after MAX_RESIDUAL_REFLATTEN_ATTEMPTS and falls back to the page (#1214)', async () => {
     // The bound is DURABLE, not an in-memory counter: three spent keys in the
     // journal are what stop the fourth attempt, so a restart cannot reset it.
