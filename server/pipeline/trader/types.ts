@@ -412,3 +412,159 @@ export interface Trader {
    */
   decide(input: TraderInput): Promise<OrderIntent | null>;
 }
+
+/**
+ * Every distinct way the Trader can decline to trade (#475).
+ *
+ * A CLOSED UNION rather than free text, so the set is greppable, countable
+ * across a soak, and impossible to typo into a new category that looks like a
+ * new phenomenon. Adding a skip path means adding a member here, which is the
+ * point: the compiler asks the question the old bare `null` let us skip.
+ *
+ * Ordered roughly by how often they should fire in a healthy run. The last
+ * four are data-quality failures — if any of them appears in soak logs at all,
+ * the market data feed is the thing to look at, not the strategy.
+ */
+export type TraderSkipReason =
+  | 'neutral_direction_while_flat'
+  | 'below_conviction_floor'
+  // #668: inside the flat-by-close window, so no new exposure is opened. A
+  // distinct reason rather than a silent skip because "nothing traded after
+  // 16:25" and "nothing traded because the market was quiet" are the same row
+  // otherwise, and only one of them is the system working as designed.
+  | 'session_closing'
+  | 'below_min_notional'
+  | 'holding_neutral_or_non_converged'
+  | 'scale_in_conviction_delta_not_met'
+  | 'exit_no_filled_size'
+  // #568: a lot whose recorded exit fills exceed what it ever opened. NOT a
+  // quiet variant of `exit_no_filled_size` — that one means "nothing to
+  // close", this one means "the store's own record of this instrument
+  // disagrees with itself", and the exit it suppresses may be one a sibling
+  // lot genuinely needs. If this ever appears in a soak log, the fill record
+  // is the thing to look at, and an instrument is stuck un-exitable until it
+  // is.
+  | 'exit_held_quantity_diverged'
+  // #743, tick path only: no lot is open for this instrument, so the exit
+  // check has nothing to evaluate. By far the commonest tick-path outcome and
+  // entirely healthy — it is the exit-cadence sibling of a quiet decision.
+  | 'no_open_position'
+  // #748, tick path only: a lot is held, the flat-by-close window has not
+  // opened, and the momentum axis still supports the held side. The healthy
+  // holding outcome and by far the commonest one on an instrument that holds
+  // something — holding through the session is what a position is for.
+  //
+  // **This REPLACES #743's `flatten_not_due`**, which is deliberately gone
+  // rather than kept alongside. Once the early exit runs on every non-flatten
+  // tick, "the flatten is not due" is no longer a decision the Trader reaches:
+  // it is a branch it passes THROUGH on the way to the decay read. Keeping the
+  // old member would have left a value nothing can emit — the no-caller shape
+  // this codebase keeps shipping — and, worse, would have made a working hold
+  // and a decay read that never ran the same row.
+  | 'signal_still_supports_position'
+  // #748, tick path only: a lot is held, the flatten is not due, and the
+  // momentum read could not be taken at all — an instrument too cold for the
+  // MACD warm-up, typically in the first session after it enters the universe.
+  //
+  // Its OWN reason, not folded into `signal_still_supports_position`, and the
+  // distinction is the point: one says the signal was read and still supports
+  // the position, the other says nothing was read. A soak in which this appears
+  // steadily is a soak whose early exit is not running, and under one shared
+  // reason that is indistinguishable from a healthy hold.
+  | 'early_exit_signal_unavailable'
+  | 'no_position_side'
+  | 'atr_insufficient_bars'
+  | 'atr_not_finite'
+  | 'mark_not_finite'
+  | 'stop_distance_not_positive'
+  | 'size_not_finite'
+  // #941: the entry sized to less than one whole share on a venue that only
+  // accepts whole shares (`whole_share_sizing`). Not a data-quality failure
+  // and not dust — see the guard's own comment in `sizeBracket`.
+  | 'rounds_to_zero_shares'
+  // #1089, `arm === 'control'` ONLY: a whole-book valuation refusal
+  // (`BookValuationError`/`AggregateError`) from `equity()` that the live arm
+  // would instead let propagate into `#507`'s retry. See `buildBracket`'s
+  // read of `input.equity()` for the full reasoning.
+  | 'control_arm_valuation_refused';
+
+/**
+ * The compared value and the threshold it missed, for a skip reason that IS
+ * a numeric gate (#1109). Present only on the four sites that compare a
+ * value to a configured threshold — `below_conviction_floor`,
+ * `below_min_notional`, `scale_in_conviction_delta_not_met`,
+ * `atr_insufficient_bars` — so a near-miss (0.549 against a 0.55 floor) is
+ * distinguishable from a decisive one (0.1 against 0.55) without re-deriving
+ * either number from a raw log line.
+ *
+ * Not attempted for `session_closing`: its comparison lives inside
+ * `withinFlattenWindow`'s own remaining-time arithmetic, and widening that
+ * verdict's shape to export a millisecond figure would touch the flat-by-close
+ * ordering the function's own comment calls load-bearing, for a diagnostic
+ * this ticket does not require. Not attempted for `rounds_to_zero_shares`
+ * either: its comparison is against the literal `1` (`submittableSize <= 0`),
+ * not a configured threshold — see the reason's own siting comment in
+ * `sizeBracket`.
+ */
+export interface TraderReasonDetail {
+  compared_value: number;
+  threshold: number;
+}
+
+/**
+ * A condition the Trader DETECTED but did not treat as fatal (#698).
+ *
+ * Distinct from `TraderSkipReason` on purpose, and the distinction is the whole
+ * point of this type. A skip reason says why THIS tick produced no order, and
+ * every value it can take is a decision the Trader made correctly. A diagnostic
+ * says the Trader is running in a DEGRADED state that it papered over — it kept
+ * going, it returned a defensible answer, and something is nonetheless wrong
+ * upstream of it.
+ *
+ * That difference is why these do not simply become new skip reasons. Two of the
+ * three below occur on paths that still produce an intent (a flatten exit is an
+ * emit, not a skip), so there is no skip row to hang them on; and the third
+ * (`atr_not_finite`) already HAS a skip reason and is listed here anyway,
+ * because a durable `trader_log` row is not an alert and nobody is reading the
+ * table at 3am during an unattended soak (#238).
+ *
+ * Returned as data rather than logged from inside `decide`, deliberately.
+ * trader-spec.md's contract is "fully deterministic given its inputs + the
+ * clock-scoped market data", and admitting a logger to `TraderInput` would make
+ * the decision path side-effecting to buy a diagnostic. #698 itself weighs both
+ * options and calls this one "probably right"; the adapter that already writes
+ * `trader_log` is the natural place for the effect.
+ */
+export type TraderDiagnosticKind =
+  /**
+   * The calendar reports a session close at or before `now`. Flattening is the
+   * correct response and `withinFlattenWindow` gives it (see its docblock), but
+   * a calendar stuck in this state parks the book flat FOREVER and stops
+   * trading — and at a 15-minute cadence that is indistinguishable from a quiet
+   * market, which is the failure #625 actually produced (96 debates, 0 trades).
+   */
+  | 'session_end_in_past'
+  /**
+   * `sessionEnd` returned null for a class that is not crypto. Null means "this
+   * venue never closes", which is the documented and intended answer for crypto
+   * and a broken calendar for anything else — and the two are the same `false`
+   * today, so an equity leg whose calendar has quietly stopped resolving
+   * sessions never flattens and carries overnight against ADR-0014.
+   */
+  | 'session_end_absent_on_non_crypto'
+  /**
+   * ATR came back non-finite on a FULL window — corrupt bar data, which
+   * `atrFor` calls "never expected". Its sibling `atr_insufficient_bars` is
+   * deliberately NOT here: that one is a warm-up or a data gap, is expected
+   * early in a soak, and alerting it would fire on day 1 for every instrument.
+   */
+  | 'atr_not_finite'
+  /**
+   * #1089, `arm === 'control'` ONLY: paired with the `control_arm_valuation_
+   * refused` skip reason, for exactly the reason `atr_not_finite` is listed
+   * here despite already having one — a durable `trader_log` row is not an
+   * alert. Raised from `buildBracket`'s equity read, before the mark read
+   * that would otherwise supply `asset_class` — see `TraderDiagnostic.
+   * asset_class` for why this is the one kind that can carry `undefined`.
+   */
+  | 'control_arm_valuation_refused';
