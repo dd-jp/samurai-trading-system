@@ -36,10 +36,6 @@ import { TradeChannelAlert } from './trade-channel.js';
  * instrument is skipping on bad data while the rest of the run continues.
  */
 const CONSEQUENCE: Record<TraderDiagnosticAlert['diagnostic']['kind'], string> = {
-  session_end_in_past:
-    'The calendar resolved a close that has already passed, so the book is being parked FLAT ' +
-    'and no new position will be opened for this leg while that persists. A run in this state ' +
-    'looks identical to a quiet market.',
   session_end_absent_on_non_crypto:
     'A non-crypto calendar returned no session end at all, so flat-by-close (ADR-0014) cannot ' +
     'be enforced for this leg — a position opened on it may be carried overnight.',
@@ -50,6 +46,11 @@ const CONSEQUENCE: Record<TraderDiagnosticAlert['diagnostic']['kind'], string> =
     'The control arm (#753 falsifier arm 2) could not value its shadow book and skipped this ' +
     'pass instead of crashing it. The live arm is unaffected, but a control that keeps skipping ' +
     'cannot answer the debate-beats-indicators question at the end of the soak (#1089).',
+  lot_carried_past_session_close:
+    'A lot is STILL OPEN after the flatten grace expired, so flat-by-close (ADR-0014) has been ' +
+    'MISSED for this session and the position is carried overnight — on a leveraged ETP that is ' +
+    'the worst outcome the intraday horizon has. Nothing will target it again until the next ' +
+    "session's flatten window; closing it before then is a manual decision at the venue.",
 };
 
 function formatTraderDiagnosticAlert(alert: TraderDiagnosticAlert): string {

@@ -109,6 +109,11 @@ describe('PAPER_PROFILE_PROVENANCE', () => {
       'riskConfig.per_asset_cap_fraction_of_equity',
       'riskConfig.per_asset_class_cap_fraction_of_equity.crypto',
       'riskConfig.per_asset_class_cap_fraction_of_equity.stocks',
+      // #1389: how long the flatten may keep trying after the bell. No doc
+      // states it — 5 minutes is a choice bounded below by the tick interval
+      // and above by `verdictConfig.max_mark_age.stocks`, and the soak's real
+      // post-bell fills are what would replace it.
+      'traderConfig.flatten_after_close_ms',
       'verdictConfig.drift_tolerance_pct.crypto',
       'verdictConfig.drift_tolerance_pct.stocks',
       'verdictConfig.human_timeout',

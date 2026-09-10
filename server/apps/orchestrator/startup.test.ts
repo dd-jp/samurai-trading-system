@@ -291,8 +291,14 @@ const STAGE_CONFIGS = {
   traderConfig: DEFAULT_TRADER_CONFIG as never,
   riskConfig: {} as never,
   // See #434: the composition root reads the automation dial to refuse a
-  // HITL-engaging config, so this one cannot stay an empty cast.
-  verdictConfig: { automation_level: { crypto: 'auto', stocks: 'auto' } } as never,
+  // HITL-engaging config, so this one cannot stay an empty cast. And since
+  // #1389 it reads `max_mark_age.stocks` too — the ceiling the post-close
+  // flatten grace is bounded against, since gate 2a is what refuses a flatten
+  // priced off a stale mark.
+  verdictConfig: {
+    automation_level: { crypto: 'auto', stocks: 'auto' },
+    max_mark_age: { crypto: 3_600_000, stocks: 3_600_000 },
+  } as never,
   executionConfig: {} as never,
   correlationConfig: {} as never,
   // Like `verdictConfig` above, and for the same class of reason: since #634

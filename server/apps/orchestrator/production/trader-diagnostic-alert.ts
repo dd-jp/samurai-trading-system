@@ -49,18 +49,20 @@ export interface TraderDiagnosticAlert {
    *
    * The count is a severity signal, NOT a filter — see
    * `ALERT_AFTER_CONSECUTIVE_DIAGNOSTICS`, which is 1. It separates a one-off
-   * from an entrenched fault: `session_end_in_past` once means the calendar
-   * answered with a close that had already passed at the instant it was asked
-   * about, and the same condition on the fortieth consecutive tick means it has
-   * been doing that for ten hours.
+   * from an entrenched fault: `session_end_absent_on_non_crypto` once means the
+   * equity calendar answered "this venue never closes" on a single tick, and the
+   * same condition on the fortieth consecutive tick means it has been doing that
+   * for ten hours and the leg has no flatten boundary at all.
    *
-   * Neither is routine. A previous version of this comment called a single
-   * `session_end_in_past` "an ordinary tick just after the bell", and that is
-   * wrong: `decide.ts` resolves `sessionEnd` from `clock.now()` on every call,
-   * and both shipped calendars return a close strictly after the instant they
-   * are given, so a conforming calendar cannot produce it at all. The claim was
-   * load-bearing enough to send a reviewer looking for a grace threshold this
-   * channel must not have (#710).
+   * Neither is routine, and no kind on this channel has a benign single
+   * occurrence — that is the standard `TraderDiagnosticKind` is selected
+   * against. This paragraph used to reason about `session_end_in_past`, a kind
+   * #1389 deleted along with the branch that raised it: a close already in the
+   * past is now an ordinary instant inside the post-close grace, answered by
+   * flattening against that close rather than by reporting a fault (see
+   * `withinFlattenWindow`). Its wording was load-bearing enough to send a
+   * reviewer looking for a grace threshold this channel must not have (#710),
+   * so it is replaced rather than left pointing at a kind that no longer exists.
    */
   consecutive_ticks: number;
   reported_at: Date;
@@ -139,8 +141,9 @@ export function shouldAlertAtDiagnosticCount(consecutive: number): boolean {
  * **Keyed per KIND, not per instrument.** ADR-0008 §1 had to make exactly this
  * correction for the spend cap's own latch, and the reasoning transfers: under a
  * single per-instrument counter, a transient `atr_not_finite` would fire, set
- * the counter, and then recover — and a `session_end_in_past` appearing later
- * would be counted as a continuation of a run it has nothing to do with. One
+ * the counter, and then recover — and a `session_end_absent_on_non_crypto`
+ * appearing later would be counted as a continuation of a run it has nothing to
+ * do with. One
  * condition must not be able to consume another's alert, nor reset it.
  *
  * In memory and restart-clean, for the reason `consecutiveSkips` is: the counter

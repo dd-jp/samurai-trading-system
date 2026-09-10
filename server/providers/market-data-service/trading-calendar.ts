@@ -101,8 +101,8 @@ export interface TradingCalendar {
    * into an overnight carry against ADR-0014 with nothing logged, which is the
    * same silent-non-flatten failure #670 exists to prevent.
    *
-   * There are TWO callers on the money path, they are caught in DIFFERENT
-   * places, and they leave different durable records. Both were verified from
+   * There are FOUR callers on the money path, they are caught in DIFFERENT
+   * places, and they leave different durable records. All were verified from
    * the code, not assumed:
    *
    * - `withinFlattenWindow` (`server/pipeline/trader/decide.ts`) runs inside a
@@ -119,19 +119,45 @@ export interface TradingCalendar {
    *   handler that logs `tick failed` at `level: 'error'`). That drops the
    *   WHOLE tick — crypto included — and writes NO `audit_log` row. The log
    *   line is the only record.
+   * - `postCloseFlattenTail` (same file as `withFlattenTail`, #1389) runs in
+   *   the same `nextTick` plan construction and is caught in the same place,
+   *   with the same whole-tick blast radius.
+   * - `findCarriedLots` (`server/apps/orchestrator/production/carried-lot-alert.ts`,
+   *   #1389) runs on the fill-sync poll, and `buildCarriedLotReporter` catches
+   *   its own throw: an exhausted walk there logs `carried_lot_check_failed` at
+   *   error and the poll continues. It is the only one of the four that cannot
+   *   take anything else down with it.
    *
-   * Neither is a crash, and both are LOGGED at error level where the heartbeat
-   * and the operator can see them, which is the whole reason the throw is
-   * acceptable. The second is the weaker of the two: wider blast radius, no
-   * durable row. It is tolerable only because `nextTick` consults `sessionEnd`
+   * None is a crash, and all are LOGGED at error level where the heartbeat and
+   * the operator can see them, which is the whole reason the throw is
+   * acceptable. The `nextTick` pair is the weaker: wider blast radius, no
+   * durable row.
+   *
+   * **#1389 narrowed the guarantee that made that pair tolerable, and did so on
+   * purpose.** This paragraph used to say `nextTick` consults `sessionEnd`
    * exclusively when `isOpen(instant)` is already true, so an exhausted forward
-   * walk there needs a calendar that is inconsistent with itself.
+   * walk needed a calendar inconsistent with itself. That is still true of
+   * `withFlattenTail` and is now FALSE of the scheduler as a whole:
+   * `postCloseFlattenTail` is OR'd with the open-hours branch precisely so a
+   * tick can be planned after the bell, which means `sessionEnd` is now
+   * consulted overnight, at weekends and on holidays too.
+   *
+   * The consequence is bounded and was checked rather than assumed. Both equity
+   * implementations answer a date their table does not cover the same way they
+   * always did — `UsEquityRegularHoursCalendar` throws past
+   * `US_TABLE_COVERAGE_END`, `AlpacaEquitySessionCalendar` throws once the walk
+   * exhausts — and on a WEEKDAY past coverage `isOpen` already threw from
+   * `#closeMinutesFor` before this caller existed. What #1389 adds is the
+   * weekend and holiday instants of an already-past-coverage run, where the
+   * whole-tick drop is the same fault surfacing one day earlier rather than a
+   * new one. The live leg's cliff is refused at boot outright
+   * (`assertLseCalendarCoverage`, #1378).
    *
    * That is a CROSS-MODULE claim and this port cannot enforce it. It is named
    * here rather than left implicit so the next reader can check it in one grep;
-   * if either handler ever stops catching, or drops to `warn`, this paragraph
+   * if any handler ever stops catching, or drops to `warn`, this paragraph
    * becomes wrong and the flatten path becomes a silent skip. Any new caller on
-   * the money path must preserve the property.
+   * the money path must state where its throw lands.
    */
   sessionEnd(instant: Date): Date | null;
 }

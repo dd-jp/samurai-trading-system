@@ -45,7 +45,7 @@ import { FixtureSetupStore } from './fixture-setup-store.js';
 // Imported so the #687 cases can state WHICH bar the key must be on, rather
 // than only comparing two `decide()` calls against each other — two calls that
 // re-derive the same wrong bar agree with one another perfectly.
-import { computeIdempotencyKey } from './idempotency-key.js';
+import { computeFlattenIdempotencyKey, computeIdempotencyKey } from './idempotency-key.js';
 import type { AssetClass, TraderConfig, TraderInput } from './types.js';
 import { DEFAULT_TRADER_CONFIG } from './types.js';
 
@@ -234,6 +234,7 @@ function traderInput(overrides: Partial<TraderInput> = {}): TraderInput {
     // #568: no exit fill on record for any lot — "missing is absent", so held
     // quantity is `filled_size`, which is what every pre-#568 case here means.
     exitFillSizes: async () => new Map<string, number>(),
+    unresolvedFlattens: async () => [],
     setupStore: new FixtureSetupStore(),
     // #668. The real calendars, not stubs — DECISION_BAR is 10:00 UTC (06:00
     // ET), ten hours from the 16:00 ET close, so every pre-#668 case here sits
@@ -1387,11 +1388,13 @@ describe('decide — flat by close (#668)', () => {
    * they pin is that the conditions are now AUDIBLE, which is the whole ticket.
    * Each of these was previously indistinguishable from a healthy quiet tick.
    */
-  it('reports a stale session close as a diagnostic, on the same pass that exits (#698)', async () => {
-    // The load-bearing case for the diagnostic's placement: this path returns an
-    // INTENT, not a skip. A diagnostic modelled as a variant of `skip_reason`
-    // could not have reported it, which is why `TraderOutcome.diagnostics` is
-    // orthogonal to the intent/skip pair rather than a third alternative.
+  it('still flattens against a close already gone, and no longer calls it a diagnostic (#1389)', async () => {
+    // #698 reported this as `session_end_in_past` on the reasoning that a
+    // conforming calendar could never produce a close already past. #1389
+    // deleted the kind, because past the bell the window now works against a
+    // past close BY DESIGN and the alert would fire every session on every
+    // held instrument. The ANSWER is what mattered and it is unchanged: be
+    // flat.
     const pastClose = new Date('2026-07-15T19:00:00Z');
     const stuckCalendar = {
       isOpen: () => true,
@@ -1410,10 +1413,7 @@ describe('decide — flat by close (#668)', () => {
     );
 
     expect(outcome.intent?.intent_type).toBe('exit');
-    expect(outcome.diagnostics.map((diagnostic) => diagnostic.kind)).toEqual([
-      'session_end_in_past',
-    ]);
-    expect(outcome.diagnostics[0]?.asset_class).toBe('stocks');
+    expect(outcome.diagnostics).toEqual([]);
   });
 
   it('reports a non-crypto calendar that cannot resolve a session end at all (#698)', async () => {
@@ -2364,6 +2364,8 @@ describe('checkExitsWithReason — the tick-path exit entry point (#743)', () =>
   // it from the clock in here is the #687 defect shape one seam down. The key
   // assertion below fails if the implementation re-floors.
   const TICK_BAR = new Date('2026-07-15T18:00:00Z');
+  /** 2026-07-15 is EDT, so `UsEquityRegularHoursCalendar` closes 16:00 ET. */
+  const SESSION_CLOSE = new Date('2026-07-15T20:00:00Z');
 
   /**
    * BULLISH momentum (#748): RSI above 50 and a positive MACD histogram, so
@@ -2389,6 +2391,7 @@ describe('checkExitsWithReason — the tick-path exit entry point (#743)', () =>
       sessionCalendars: base.sessionCalendars,
       positionState: async () => [openPosition({ side: 'buy', filled_size: 10 })],
       exitFillSizes: base.exitFillSizes,
+      unresolvedFlattens: base.unresolvedFlattens,
       bar: TICK_BAR,
       ...overrides,
     };
@@ -2436,18 +2439,137 @@ describe('checkExitsWithReason — the tick-path exit entry point (#743)', () =>
     expect(outcome.intent?.metadata.conviction).toBe(0.6);
   });
 
-  it('keys the exit to the PASSED bar, not a clock re-floor', async () => {
+  it('keys the flatten to the SESSION CLOSE, not to any bar (#1389)', async () => {
     const outcome = await checkExitsWithReason(exitInput());
 
-    // 19:56 floors to 19:00; the passed bar is 18:00. Equal keys prove the
-    // passed coordinate won — and this is the same key a decision-pass flatten
-    // on the same bar computes, so the two paths dedupe on one order.
+    // The obligation is one session close, not one bar — so neither the passed
+    // bar (18:00) nor a clock re-floor (19:56 -> 19:00) may appear in the key.
+    // A bar coordinate is what let a flatten decided at 19:59:56 and the retry
+    // at 20:00:06 hash differently and both reach the venue (#1389).
     expect(outcome.intent?.idempotency_key).toBe(
+      computeFlattenIdempotencyKey(exitInput().instrument, SESSION_CLOSE),
+    );
+    expect(outcome.intent?.idempotency_key).not.toBe(
       computeIdempotencyKey(exitInput().instrument, TICK_BAR, 'close'),
     );
     expect(outcome.intent?.idempotency_key).not.toBe(
       computeIdempotencyKey(exitInput().instrument, new Date('2026-07-15T19:00:00Z'), 'close'),
     );
+  });
+
+  /**
+   * #1389. The window used to end AT the bell, because it was resolved from
+   * `sessionEnd` and every conforming calendar answers that strictly forward —
+   * so one instant past the close it named TOMORROW's close and the flatten
+   * silently stopped being produced. These pin the grace, its far edge, and
+   * the coordinate that makes the two sides of the bell one obligation.
+   */
+  describe('the grace past the bell (#1389)', () => {
+    /** `flatten_after_close_ms` defaults to 5 minutes — see `TraderConfig`. */
+    const INSIDE_GRACE = new Date('2026-07-15T20:04:00Z');
+    const PAST_GRACE = new Date('2026-07-15T20:06:00Z');
+
+    it('still emits the mandatory flatten four minutes AFTER the close', async () => {
+      const outcome = await checkExitsWithReason(
+        exitInput({ clock: new ManualClock(INSIDE_GRACE) }),
+      );
+
+      expect(outcome.intent?.intent_type).toBe('exit');
+      expect(outcome.intent?.metadata.exit_reason).toBe('flatten');
+      expect(outcome.intent?.metadata.mandatory_flatten).toBe(true);
+    });
+
+    it('keys the post-bell flatten to the SAME close the in-window one enforced', async () => {
+      // `sessionEnd(now)` before the bell and `sessionStart(now)` after it name
+      // one instant, which is what lets gate 3 dedupe ACROSS the boundary.
+      // Reading `sessionEnd` on both sides yields tomorrow's close past the
+      // bell, the keys diverge, and the lot is flattened twice.
+      const before = await checkExitsWithReason(exitInput());
+      const after = await checkExitsWithReason(exitInput({ clock: new ManualClock(INSIDE_GRACE) }));
+
+      expect(after.intent?.idempotency_key).toBe(before.intent?.idempotency_key);
+      expect(after.intent?.idempotency_key).toBe(
+        computeFlattenIdempotencyKey(INSTRUMENT, SESSION_CLOSE),
+      );
+    });
+
+    it('produces exactly ONE key across every tick in the window and the grace', async () => {
+      // AC 2: the flatten must not be a fresh order every tick. The bound is
+      // asserted as a COUNT rather than a spot check, because a `now`-derived
+      // or lot-anchored coordinate passes any single-instant comparison and
+      // fails this one immediately.
+      const keys = new Set<string>();
+      for (
+        let at = SESSION_CLOSE.getTime() - 5 * 60_000;
+        at <= SESSION_CLOSE.getTime() + 5 * 60_000;
+        at += 30_000
+      ) {
+        const outcome = await checkExitsWithReason(
+          exitInput({ clock: new ManualClock(new Date(at)) }),
+        );
+        expect(outcome.intent?.metadata.exit_reason).toBe('flatten');
+        if (outcome.intent !== null) keys.add(outcome.intent.idempotency_key);
+      }
+
+      expect(keys.size).toBe(1);
+    });
+
+    it('closes the window again once the grace expires', async () => {
+      const outcome = await checkExitsWithReason(exitInput({ clock: new ManualClock(PAST_GRACE) }));
+
+      // No flatten, and no crash: the lot falls through to the ordinary decay
+      // read, which is what the carried-lot alert exists to make audible.
+      expect(outcome.intent?.metadata.exit_reason).not.toBe('flatten');
+    });
+  });
+
+  /**
+   * #1389's SECOND guard. The idempotency key dedups one coordinate; it was
+   * never a per-instrument in-flight guard, and between `submitFlatten` and
+   * the fill sweep `getExitFillSizes` still reports nothing closed — so any
+   * second flatten that reaches the builder sizes off the full `filled_size`
+   * and sells the lot again, into a short.
+   */
+  describe('the in-flight flatten guard (#1389)', () => {
+    it('produces no flatten while this arm holds an unresolved flatten for the instrument', async () => {
+      const outcome = await checkExitsWithReason(
+        exitInput({
+          unresolvedFlattens: async () => [{ instrument: INSTRUMENT }],
+        }),
+      );
+
+      expect(outcome.intent).toBeNull();
+      expect(outcome.skip_reason).toBe('flatten_in_flight');
+    });
+
+    it('does NOT fall through to the decay release when it skips', async () => {
+      // Falling through would size the same over-sell off the same stale held
+      // quantities and label it `signal_decay`, which is worse than the bug it
+      // replaces: the row would not even say "flatten".
+      const decayed = marketDataWithLiveSignal();
+      decayed.indicatorReads.set('rsi', 40);
+      decayed.indicatorReads.set('macd_histogram', -0.5);
+
+      const outcome = await checkExitsWithReason(
+        exitInput({
+          marketData: decayed,
+          unresolvedFlattens: async () => [{ instrument: INSTRUMENT }],
+        }),
+      );
+
+      expect(outcome.intent).toBeNull();
+      expect(outcome.skip_reason).toBe('flatten_in_flight');
+    });
+
+    it('is scoped to the instrument — another name in flight does not block this one', async () => {
+      const outcome = await checkExitsWithReason(
+        exitInput({
+          unresolvedFlattens: async () => [{ instrument: 'SOME-OTHER-NAME' }],
+        }),
+      );
+
+      expect(outcome.intent?.metadata.exit_reason).toBe('flatten');
+    });
   });
 
   it('attributes to the MOST RECENT lot when several are open', async () => {
@@ -2494,6 +2616,8 @@ describe('checkExitsWithReason — the indicator-based early exit (#748)', () =>
   const INSIDE_WINDOW = new Date('2026-07-15T19:56:00Z');
   const OUTSIDE_WINDOW = new Date('2026-07-15T15:00:00Z');
   const TICK_BAR = new Date('2026-07-15T18:00:00Z');
+  /** 2026-07-15 is EDT, so `UsEquityRegularHoursCalendar` closes 16:00 ET. */
+  const SESSION_CLOSE = new Date('2026-07-15T20:00:00Z');
 
   const MOMENTUM_BULLISH = { rsi: 60, macd: 0.5 };
   const MOMENTUM_BEARISH = { rsi: 40, macd: -0.5 };
@@ -2530,6 +2654,7 @@ describe('checkExitsWithReason — the indicator-based early exit (#748)', () =>
         openPosition({ side: 'buy', filled_size: 10, ...BRACKETS_UNTOUCHED }),
       ],
       exitFillSizes: base.exitFillSizes,
+      unresolvedFlattens: base.unresolvedFlattens,
       bar: TICK_BAR,
       ...overrides,
     };
@@ -2680,8 +2805,11 @@ describe('checkExitsWithReason — the indicator-based early exit (#748)', () =>
     expect(decay.intent?.idempotency_key).toBe(
       computeIdempotencyKey(INSTRUMENT, TICK_BAR, 'early_close'),
     );
+    // #1389 widened the separation: the two are now in different key SPACES
+    // (`{instrument, bar, side}` vs `{instrument, session_close, side}`), not
+    // merely different `side` discriminators within one.
     expect(flatten.intent?.idempotency_key).toBe(
-      computeIdempotencyKey(INSTRUMENT, TICK_BAR, 'close'),
+      computeFlattenIdempotencyKey(INSTRUMENT, SESSION_CLOSE),
     );
     expect(decay.intent?.idempotency_key).not.toBe(flatten.intent?.idempotency_key);
   });
@@ -2881,6 +3009,7 @@ describe('decide/checkExits — the mark read fails (#826)', () => {
       sessionCalendars: base.sessionCalendars,
       positionState: async () => [openPosition({ side: 'buy', filled_size: 10 })],
       exitFillSizes: base.exitFillSizes,
+      unresolvedFlattens: base.unresolvedFlattens,
       bar: TICK_BAR,
       ...overrides,
     };

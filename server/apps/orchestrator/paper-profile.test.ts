@@ -464,6 +464,7 @@ describe('paperStartingProfile', () => {
           config: traderConfig,
           positionState: async () => [],
           exitFillSizes: async () => new Map<string, number>(),
+          unresolvedFlattens: async () => [],
           setupStore: new FixtureSetupStore(),
           sessionCalendars: {
             crypto: new AlwaysOpenCalendar(),

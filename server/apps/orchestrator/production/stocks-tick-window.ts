@@ -92,3 +92,47 @@ export function withFlattenTail(
     return remaining >= 0 && remaining <= flattenBeforeCloseMs;
   };
 }
+
+/**
+ * The tail on the OTHER side of the bell (#1389): true while `instant` is
+ * within `flattenAfterCloseMs` of the close that has just passed.
+ *
+ * ## Why this is a separate predicate rather than a widened `withFlattenTail`
+ *
+ * `withFlattenTail` narrows a session the scheduler has ALREADY decided is
+ * open — the scheduler evaluates it only under `calendar.isOpen(instant)`, and
+ * its own docblock says so. Widening its bound past the close would produce
+ * `true` at instants the conjunct upstream has already turned into `false`, so
+ * the extra range would be unreachable and the fix would look landed while
+ * doing nothing. That is the #706 failure shape exactly: a predicate that reads
+ * correct at the site that cannot reach it.
+ *
+ * So the grace enters the plan as its OWN, OR'd input
+ * (`SchedulerConfig.postCloseFlattenWindow`), and this is what feeds it.
+ *
+ * ## Why `sessionStart`
+ *
+ * `sessionEnd` is contractually forward — past the bell it names TOMORROW's
+ * close — so it cannot answer "which close just passed". `sessionStart` is
+ * documented as the most recent regular or early close AT OR BEFORE the
+ * instant, which is that close. The same pair, in the same order, that
+ * `withinFlattenWindow` resolves the flatten's own coordinate through: the
+ * scheduler and the Trader must agree about which instants are inside the
+ * grace, or the plan admits ticks the Trader declines (waste) or withholds
+ * ticks it needs (the bug).
+ *
+ * A `null` `sessionEnd` is a venue that never closes (`AlwaysOpenCalendar`,
+ * #667). It has no close to be past, so there is no grace — the same answer
+ * `withFlattenTail` gives, and for the same #667 reason.
+ */
+export function postCloseFlattenTail(
+  calendar: TradingCalendar,
+  flattenAfterCloseMs: number,
+): (instant: Date) => boolean {
+  return (instant: Date): boolean => {
+    if (calendar.sessionEnd(instant) === null) return false;
+
+    const elapsed = instant.getTime() - calendar.sessionStart(instant).getTime();
+    return elapsed >= 0 && elapsed <= flattenAfterCloseMs;
+  };
+}

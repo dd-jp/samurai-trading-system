@@ -364,6 +364,7 @@ function traderInput(confidence: number, equity = EQUITY, instrument = INDEX_ETP
     config,
     positionState: async () => [],
     exitFillSizes: async () => new Map<string, number>(),
+    unresolvedFlattens: async () => [],
     setupStore: new SelfPrecedentStore(),
     sessionCalendars: {
       crypto: new AlwaysOpenCalendar(),

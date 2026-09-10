@@ -193,4 +193,55 @@ describe('UniverseScheduler.nextTick', () => {
   it('DEFAULT_UNIVERSE carries no crypto row (#738 — crypto out of the production schedule)', () => {
     expect(DEFAULT_UNIVERSE.every((instrument) => instrument.asset_class !== 'crypto')).toBe(true);
   });
+
+  /**
+   * #1389. Before this, NO tick existed after the bell at all: `isOpen` gates
+   * the whole plan and `stocksTradingWindow` can only narrow it further, so
+   * ADR-0014's post-close grace had nothing to run on no matter what
+   * `decide.ts` said about it. The grace enters as its own OR'd predicate.
+   */
+  describe('the post-close flatten grace (#1389)', () => {
+    const AFTER_THE_BELL = new Date('2026-07-15T20:00:10Z');
+    const PAST_THE_GRACE = new Date('2026-07-15T20:06:00Z');
+
+    /** The real predicate's shape: inside the grace, and nowhere else. */
+    const graceWindow = (instant: Date): boolean => instant.getTime() === AFTER_THE_BELL.getTime();
+
+    it('plans the universe after the bell when the grace says so', () => {
+      const scheduler = makeScheduler({ postCloseFlattenWindow: graceWindow });
+
+      // The calendar says SHUT at this instant — that is the point. This is the
+      // one predicate here that can put an instrument in the plan on its own.
+      expect(assets(scheduler.nextTick(clockAt(AFTER_THE_BELL)).instruments)).toHaveLength(
+        DEFAULT_UNIVERSE.length,
+      );
+    });
+
+    it('plans nothing once the grace has expired', () => {
+      const scheduler = makeScheduler({ postCloseFlattenWindow: graceWindow });
+
+      expect(assets(scheduler.nextTick(clockAt(PAST_THE_GRACE)).instruments)).toEqual([]);
+    });
+
+    it('does not widen an entry window that a profile deliberately narrowed', () => {
+      // The grace is OR'd with the OPEN test, not with the narrowing: a run
+      // that trades only the LSE/US overlap still gets its post-close ticks,
+      // and a run inside the session still gets none it did not ask for.
+      const scheduler = makeScheduler({
+        postCloseFlattenWindow: graceWindow,
+        stocksTradingWindow: () => false,
+      });
+
+      expect(assets(scheduler.nextTick(clockAt(MARKET_OPEN)).instruments)).toEqual([]);
+      expect(assets(scheduler.nextTick(clockAt(AFTER_THE_BELL)).instruments)).toHaveLength(
+        DEFAULT_UNIVERSE.length,
+      );
+    });
+
+    it('is absent by default — the backtest harness gets no post-close ticks', () => {
+      const scheduler = makeScheduler();
+
+      expect(assets(scheduler.nextTick(clockAt(AFTER_THE_BELL)).instruments)).toEqual([]);
+    });
+  });
 });

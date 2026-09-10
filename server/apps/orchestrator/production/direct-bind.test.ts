@@ -173,6 +173,7 @@ describe('buildTraderStep', () => {
       early_exit: DEFAULT_EARLY_EXIT_CONFIG,
       time_in_force: { crypto: 'gtc', stocks: 'day' },
       flatten_before_close_ms: 5 * 60 * 1_000,
+      flatten_after_close_ms: 5 * 60 * 1_000,
     };
     const step = buildTraderStep({
       marketData: FAKE_MARKET_DATA,
@@ -195,6 +196,7 @@ describe('buildTraderStep', () => {
       setupStore: new FixtureSetupStore(),
       // #568: no lot open in these cases, so nothing to look an exit fill up for.
       getExitFillSizes: async () => new Map<string, number>(),
+      getUnresolvedFlattens: async () => [],
       // #668: the Trader resolves flat-by-close through the instrument's own
       // venue calendar, so the step needs the same pair production builds once.
       sessionCalendars: {
@@ -240,6 +242,7 @@ describe('buildTraderStep', () => {
       early_exit: DEFAULT_EARLY_EXIT_CONFIG,
       time_in_force: { crypto: 'gtc', stocks: 'day' },
       flatten_before_close_ms: 5 * 60 * 1_000,
+      flatten_after_close_ms: 5 * 60 * 1_000,
     };
     const step = buildTraderStep({
       marketData: FAKE_MARKET_DATA,
@@ -261,6 +264,7 @@ describe('buildTraderStep', () => {
       config,
       setupStore: new FixtureSetupStore(),
       getExitFillSizes: async () => new Map<string, number>(),
+      getUnresolvedFlattens: async () => [],
       sessionCalendars: {
         crypto: new AlwaysOpenCalendar(),
         stocks: new UsEquityRegularHoursCalendar(),
@@ -308,6 +312,7 @@ describe('buildTraderStep', () => {
       early_exit: DEFAULT_EARLY_EXIT_CONFIG,
       time_in_force: { crypto: 'gtc', stocks: 'day' },
       flatten_before_close_ms: 5 * 60 * 1_000,
+      flatten_after_close_ms: 5 * 60 * 1_000,
     };
     const step = buildTraderStep({
       marketData: FAKE_MARKET_DATA,
@@ -330,6 +335,7 @@ describe('buildTraderStep', () => {
       setupStore: new FixtureSetupStore(),
       // #568: no lot open in these cases, so nothing to look an exit fill up for.
       getExitFillSizes: async () => new Map<string, number>(),
+      getUnresolvedFlattens: async () => [],
       // #668: the Trader resolves flat-by-close through the instrument's own
       // venue calendar, so the step needs the same pair production builds once.
       sessionCalendars: {
@@ -375,6 +381,7 @@ describe('buildTraderStep', () => {
       early_exit: DEFAULT_EARLY_EXIT_CONFIG,
       time_in_force: { crypto: 'gtc', stocks: 'day' },
       flatten_before_close_ms: 5 * 60 * 1_000,
+      flatten_after_close_ms: 5 * 60 * 1_000,
     };
     const store = new SqliteExecutionStore(openSharedStore(':memory:'));
     await store.writeAheadPosition({
@@ -428,6 +435,7 @@ describe('buildTraderStep', () => {
       getOpenPositions: () => store.getOpenPositions(),
       maxMarkAge: TEST_MAX_MARK_AGE,
       getExitFillSizes: (idempotency_keys) => store.getExitFillSizes(idempotency_keys),
+      getUnresolvedFlattens: async () => [],
       mode: 'paper',
       breakerState: NOOP_BREAKER_STATE,
       portfolioSnapshots: new Map(),
@@ -483,6 +491,7 @@ describe('buildTraderStep — decision_class on trader_log (#1109)', () => {
     early_exit: DEFAULT_EARLY_EXIT_CONFIG,
     time_in_force: { crypto: 'gtc', stocks: 'day' },
     flatten_before_close_ms: 5 * 60 * 1_000,
+    flatten_after_close_ms: 5 * 60 * 1_000,
   };
 
   function makeStep(writes: TraderDecisionRecord[]) {
@@ -506,6 +515,7 @@ describe('buildTraderStep — decision_class on trader_log (#1109)', () => {
       config: CONFIG,
       setupStore: new FixtureSetupStore(),
       getExitFillSizes: async () => new Map<string, number>(),
+      getUnresolvedFlattens: async () => [],
       sessionCalendars: {
         crypto: new AlwaysOpenCalendar(),
         stocks: new UsEquityRegularHoursCalendar(),
@@ -623,6 +633,7 @@ describe('buildTraderStep capital ceiling (#511)', () => {
     early_exit: DEFAULT_EARLY_EXIT_CONFIG,
     time_in_force: { crypto: 'gtc', stocks: 'day' },
     flatten_before_close_ms: 5 * 60 * 1_000,
+    flatten_after_close_ms: 5 * 60 * 1_000,
   };
 
   function stepWithCeiling(capitalCeilingUsd?: CapitalCeilingUsd) {
@@ -648,6 +659,7 @@ describe('buildTraderStep capital ceiling (#511)', () => {
       setupStore: new FixtureSetupStore(),
       // #568: no lot open in these cases, so nothing to look an exit fill up for.
       getExitFillSizes: async () => new Map<string, number>(),
+      getUnresolvedFlattens: async () => [],
       // #668: the Trader resolves flat-by-close through the instrument's own
       // venue calendar, so the step needs the same pair production builds once.
       sessionCalendars: {
@@ -719,6 +731,7 @@ describe('buildTraderStep capital ceiling (#511)', () => {
       config: CEILING_CONFIG,
       setupStore: new FixtureSetupStore(),
       getExitFillSizes: async () => new Map<string, number>(),
+      getUnresolvedFlattens: async () => [],
       sessionCalendars: {
         crypto: new AlwaysOpenCalendar(),
         stocks: new UsEquityRegularHoursCalendar(),
@@ -794,6 +807,7 @@ describe('buildTraderSteps exit_reason persistence (#748)', () => {
     early_exit: DEFAULT_EARLY_EXIT_CONFIG,
     time_in_force: { crypto: 'gtc', stocks: 'day' },
     flatten_before_close_ms: 5 * 60 * 1_000,
+    flatten_after_close_ms: 5 * 60 * 1_000,
   };
 
   it('records signal_decay on the row the exit-check path writes', async () => {
@@ -832,6 +846,7 @@ describe('buildTraderSteps exit_reason persistence (#748)', () => {
       // is the amount ALREADY closed (#568), so seeding it would leave zero to
       // release and the exit would correctly decline to fire.
       getExitFillSizes: async () => new Map<string, number>(),
+      getUnresolvedFlattens: async () => [],
       sessionCalendars: {
         crypto: new AlwaysOpenCalendar(),
         stocks: new UsEquityRegularHoursCalendar(),
@@ -907,6 +922,7 @@ describe('buildTraderSteps exit-skip decision_class (#1128)', () => {
     early_exit: DEFAULT_EARLY_EXIT_CONFIG,
     time_in_force: { crypto: 'gtc', stocks: 'day' },
     flatten_before_close_ms: 5 * 60 * 1_000,
+    flatten_after_close_ms: 5 * 60 * 1_000,
   };
 
   // RSI 60 + a positive MACD histogram nets +1: momentum AGREES with the held
@@ -950,6 +966,7 @@ describe('buildTraderSteps exit-skip decision_class (#1128)', () => {
       config: CONFIG,
       setupStore: new FixtureSetupStore(),
       getExitFillSizes: overrides.getExitFillSizes ?? (async () => new Map<string, number>()),
+      getUnresolvedFlattens: async () => [],
       sessionCalendars: {
         crypto: new AlwaysOpenCalendar(),
         stocks: new UsEquityRegularHoursCalendar(),
@@ -1289,6 +1306,7 @@ describe('buildTraderSteps unpriced flatten escalation (#826)', () => {
     early_exit: DEFAULT_EARLY_EXIT_CONFIG,
     time_in_force: { crypto: 'gtc', stocks: 'day' },
     flatten_before_close_ms: 5 * 60 * 1_000,
+    flatten_after_close_ms: 5 * 60 * 1_000,
   };
 
   function buildExitCheck(overrides: { exitValuationAlerts?: ExitValuationDegradedAlertChannel }) {
@@ -1319,6 +1337,7 @@ describe('buildTraderSteps unpriced flatten escalation (#826)', () => {
       config: CONFIG,
       setupStore: new FixtureSetupStore(),
       getExitFillSizes: async () => new Map<string, number>(),
+      getUnresolvedFlattens: async () => [],
       sessionCalendars: {
         crypto: new AlwaysOpenCalendar(),
         stocks: new UsEquityRegularHoursCalendar(),
@@ -1411,6 +1430,7 @@ describe('buildTraderSteps unpriced flatten escalation (#826)', () => {
       config: CONFIG,
       setupStore: new FixtureSetupStore(),
       getExitFillSizes: async () => new Map<string, number>(),
+      getUnresolvedFlattens: async () => [],
       sessionCalendars: {
         crypto: new AlwaysOpenCalendar(),
         stocks: new UsEquityRegularHoursCalendar(),
@@ -1461,6 +1481,7 @@ describe('buildTraderSteps unpriced flatten escalation (#826)', () => {
       config: CONFIG,
       setupStore: new FixtureSetupStore(),
       getExitFillSizes: async () => new Map<string, number>(),
+      getUnresolvedFlattens: async () => [],
       sessionCalendars: {
         crypto: new AlwaysOpenCalendar(),
         stocks: new UsEquityRegularHoursCalendar(),
@@ -1485,16 +1506,24 @@ describe('buildTraderSteps unpriced flatten escalation (#826)', () => {
 
 describe('buildTraderStep diagnostic escalation (#698, #710)', () => {
   /**
-   * A calendar that answers with a close already in the past — the fault
-   * `session_end_in_past` exists to report, which a conforming implementation
-   * cannot produce (both shipped ones return a close strictly after the
-   * instant).
+   * A calendar that answers "this venue never closes" for an EQUITY — the fault
+   * `session_end_absent_on_non_crypto` exists to report, which a conforming
+   * implementation cannot produce (both shipped equity calendars resolve a
+   * close).
+   *
+   * This fixture used to answer with a close already in the PAST, reporting
+   * `session_end_in_past`. #1389 deleted that kind: a close already gone is now
+   * an ordinary instant inside the post-close grace, answered by flattening
+   * against that close. These four tests are about the ESCALATION MACHINERY —
+   * log every tick, alert on a bounded interval, under the tick trace, with or
+   * without a channel — so they need any kind that a broken calendar still
+   * raises, and this is the one left.
    */
   const BROKEN_STOCKS_CALENDAR: TradingCalendar = {
     isOpen: () => true,
     isTradingDay: () => true,
     sessionStart: (instant: Date) => instant,
-    sessionEnd: () => new Date(NOW.getTime() - 60 * 60 * 1_000),
+    sessionEnd: () => null,
   };
 
   const CONFIG: TraderConfig = {
@@ -1517,6 +1546,7 @@ describe('buildTraderStep diagnostic escalation (#698, #710)', () => {
     early_exit: DEFAULT_EARLY_EXIT_CONFIG,
     time_in_force: { crypto: 'gtc', stocks: 'day' },
     flatten_before_close_ms: 5 * 60 * 1_000,
+    flatten_after_close_ms: 5 * 60 * 1_000,
   };
 
   function buildStep(options: {
@@ -1543,6 +1573,7 @@ describe('buildTraderStep diagnostic escalation (#698, #710)', () => {
       config: CONFIG,
       setupStore: new FixtureSetupStore(),
       getExitFillSizes: async () => new Map<string, number>(),
+      getUnresolvedFlattens: async () => [],
       sessionCalendars: {
         crypto: new AlwaysOpenCalendar(),
         stocks: BROKEN_STOCKS_CALENDAR,
@@ -1561,7 +1592,7 @@ describe('buildTraderStep diagnostic escalation (#698, #710)', () => {
       (entry) =>
         entry.stage === 'trader' &&
         entry.level === 'error' &&
-        entry.message.includes('session_end_in_past'),
+        entry.message.includes('session_end_absent_on_non_crypto'),
     );
   }
 
@@ -3121,6 +3152,7 @@ describe('#847: a dark mark must not suppress a newly decided flatten', () => {
     early_exit: DEFAULT_EARLY_EXIT_CONFIG,
     time_in_force: { crypto: 'gtc', stocks: 'day' },
     flatten_before_close_ms: 5 * 60 * 1_000,
+    flatten_after_close_ms: 5 * 60 * 1_000,
   };
 
   function makeHeld(instrument: string): OpenPosition {
@@ -3191,6 +3223,7 @@ describe('#847: a dark mark must not suppress a newly decided flatten', () => {
       config: TRADER_CONFIG,
       setupStore: new FixtureSetupStore(),
       getExitFillSizes: async () => new Map<string, number>(),
+      getUnresolvedFlattens: async () => [],
       sessionCalendars: {
         crypto: new AlwaysOpenCalendar(),
         stocks: new UsEquityRegularHoursCalendar(),

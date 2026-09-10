@@ -15,9 +15,9 @@ import {
 
 function diagnostic(overrides: Partial<TraderDiagnostic> = {}): TraderDiagnostic {
   return {
-    kind: 'session_end_in_past',
+    kind: 'session_end_absent_on_non_crypto',
     asset_class: 'stocks',
-    detail: 'the calendar resolved a close in the past',
+    detail: 'the calendar resolved no session end',
     ...overrides,
   };
 }
@@ -135,7 +135,7 @@ describe('TraderDiagnosticThrottle', () => {
     // counted as a continuation of a run it has nothing to do with.
     const throttle = new TraderDiagnosticThrottle();
 
-    throttle.observe('SPY', [diagnostic({ kind: 'session_end_in_past' })]);
+    throttle.observe('SPY', [diagnostic({ kind: 'session_end_absent_on_non_crypto' })]);
     // The first kind clears; a different one appears. It must alert on its own
     // first occurrence rather than inheriting the other's run.
     const due = alerting(throttle.observe('SPY', [diagnostic({ kind: 'atr_not_finite' })]));
@@ -149,13 +149,13 @@ describe('TraderDiagnosticThrottle', () => {
     const throttle = new TraderDiagnosticThrottle();
 
     const due = throttle.observe('SPY', [
-      diagnostic({ kind: 'session_end_in_past' }),
+      diagnostic({ kind: 'session_end_absent_on_non_crypto' }),
       diagnostic({ kind: 'atr_not_finite' }),
     ]);
 
     expect(due.map((entry) => entry.diagnostic.kind).sort()).toEqual([
       'atr_not_finite',
-      'session_end_in_past',
+      'session_end_absent_on_non_crypto',
     ]);
   });
 

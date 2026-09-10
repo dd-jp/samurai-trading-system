@@ -149,6 +149,27 @@ export interface SchedulerConfig {
    * the backtest harness want.
    */
   stocksTradingWindow?: (instant: Date) => boolean;
+  /**
+   * A WIDENING, OR'd in after the calendar has already said shut (#1389) — the
+   * only predicate here that can put an instrument in the plan on its own.
+   *
+   * `stocksTradingWindow` above is a narrowing on top of `isOpen`, so no
+   * combination of the two can produce a tick after the bell — and after the
+   * bell is exactly when ADR-0014's flatten grace has to run. The Trader is
+   * still the only thing that flattens and it is still evaluated on a tick, so
+   * a grace with no tick in it is a grace that does not exist.
+   *
+   * **Additive rather than replacing the `isOpen` conjunct**, deliberately.
+   * Making `stocksTradingWindow` authoritative instead of narrowing would let a
+   * bare wall-clock entry window admit weekends and holidays, which is precisely
+   * what the calendar is there to refuse. This predicate resolves the close
+   * through the same calendar object (`postCloseFlattenTail`), so a non-trading
+   * day has no close to be inside the grace of and it answers `false`.
+   *
+   * Undefined means "no post-close ticks", which is what the backtest harness
+   * and every fixture want.
+   */
+  postCloseFlattenWindow?: (instant: Date) => boolean;
 }
 
 export class UniverseScheduler implements Scheduler {
@@ -165,12 +186,28 @@ export class UniverseScheduler implements Scheduler {
     const marketOpen =
       this.config.calendar.isOpen(tickTime) &&
       (this.config.stocksTradingWindow?.(tickTime) ?? true);
+    // #1389: OR'd, and read on the same `tickTime` for the same reason. The
+    // grace runs when the venue is already shut, so it cannot be expressed as a
+    // narrowing of an open session.
+    //
+    // A tick admitted here can only CLOSE — the entry path consults
+    // `withinFlattenWindow` too and returns `skip('session_closing')` — but it
+    // is NOT free. That skip is inside the Trader (`decide.ts`), and
+    // `tick-runner.ts` runs the analysts and the debate before it on a decision
+    // bar. The US close at 20:00Z sits exactly on the 1h debate-bar grid, so the
+    // first grace tick after it claims a fresh decision bar and pays a full
+    // analyst + debate pass over the universe before the Trader skips: ~1 extra
+    // decision bar/day, ≈+15% on the US paper leg. The live bill is untouched —
+    // LSE closes at 15:30Z, which floors into the 15:00 bar, so no LSE grace
+    // tick claims a new decision bar. Making the grace tick flatten-only is
+    // deliberately out of scope here — see #1389's PR body for the follow-up.
+    const inFlattenGrace = this.config.postCloseFlattenWindow?.(tickTime) ?? false;
 
     return {
       // No always-open exception for any asset_class (#738) — every
       // instrument in the universe is gated on the same calendar/window
       // instant, or it does not appear in the plan.
-      instruments: marketOpen ? [...this.config.universe] : [],
+      instruments: marketOpen || inFlattenGrace ? [...this.config.universe] : [],
       tick_time: tickTime,
     };
   }
