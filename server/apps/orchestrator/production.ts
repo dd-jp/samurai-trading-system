@@ -3986,6 +3986,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
           getExitFillSizes: (keys) => components.controlArmWiring.store.getExitFillSizes(keys),
           logger,
           traceId: CONTROL_FILL_SYNC_TRACE_ID,
+          arm: 'control',
           ...(config.traderDiagnosticAlerts === undefined
             ? {}
             : { alerts: config.traderDiagnosticAlerts }),
@@ -4007,6 +4008,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
           getExitFillSizes: (keys) => components.executionStore.getExitFillSizes(keys),
           logger,
           traceId: FILL_SYNC_TRACE_ID,
+          arm: 'live',
           ...(config.traderDiagnosticAlerts === undefined
             ? {}
             : { alerts: config.traderDiagnosticAlerts }),

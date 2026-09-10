@@ -38,11 +38,21 @@
  * it, so there is nothing here to sanitize a credential out of.
  */
 import type { TraderDiagnostic } from '../../../pipeline/trader/index.js';
+import type { TradingArm } from '../../../shared/index.js';
 
 /** One degraded-but-continuing condition, on one instrument, on one tick. */
 export interface TraderDiagnosticAlert {
   instrument: string;
   diagnostic: TraderDiagnostic;
+  /**
+   * Which arm reported this. Set only by `lot_carried_past_session_close`
+   * (`carried-lot-alert.ts`), whose reporter is built once per arm against
+   * that arm's own store: without this, a live and a control lot carried on
+   * the same instrument post two alerts an operator cannot tell apart.
+   * `undefined` for every other kind, posted by `buildTraderStep`
+   * (direct-bind.ts), which does not populate this field.
+   */
+  arm?: TradingArm;
   /**
    * How many consecutive ticks this instrument has reported this KIND,
    * including this one.

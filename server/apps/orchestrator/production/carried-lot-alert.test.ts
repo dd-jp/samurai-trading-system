@@ -19,7 +19,8 @@ import {
   AlwaysOpenCalendar,
   LseRegularHoursCalendar,
 } from '../../../providers/market-data-service/index.js';
-import type { OpenPosition } from '../../../shared/index.js';
+import type { OpenPosition, TradingArm } from '../../../shared/index.js';
+import { formatTraderDiagnosticAlert } from '../trader-diagnostic-alert-channel.js';
 import type { LogEntry, Logger } from '../types.js';
 import {
   buildCarriedLotReporter,
@@ -78,6 +79,7 @@ function deps(options: {
   alerts?: { postTraderDiagnosticAlert: (alert: TraderDiagnosticAlert) => Promise<void> };
   throttle?: CarriedLotAlertThrottle;
   calendar?: LseRegularHoursCalendar | AlwaysOpenCalendar;
+  arm?: TradingArm;
 }) {
   return {
     clock: { now: () => options.now },
@@ -87,6 +89,7 @@ function deps(options: {
     getExitFillSizes: options.exitFills ?? NO_EXIT_FILLS,
     logger: options.logger ?? { log: () => {} },
     traceId: 'trace-carried',
+    arm: options.arm ?? 'live',
     ...(options.alerts === undefined ? {} : { alerts: options.alerts }),
     ...(options.throttle === undefined ? {} : { throttle: options.throttle }),
   };
@@ -208,7 +211,7 @@ describe('buildCarriedLotReporter', () => {
     expect(lines).toHaveLength(1);
     expect(lines[0]?.level).toBe('error');
     expect(lines[0]?.trace_id).toBe('trace-carried');
-    expect(lines[0]?.payload).toMatchObject({ instrument: '3USL', held: 12 });
+    expect(lines[0]?.payload).toMatchObject({ instrument: '3USL', arm: 'live', held: 12 });
 
     expect(posted).toHaveLength(1);
     expect(posted[0]?.instrument).toBe('3USL');
@@ -216,6 +219,38 @@ describe('buildCarriedLotReporter', () => {
     // The two facts an operator acts on: which name, and how much of it.
     expect(posted[0]?.diagnostic.detail).toContain('3USL');
     expect(posted[0]?.diagnostic.detail).toContain('12');
+  });
+
+  it("carries the reporter's own arm on the alert, so a live and a control lot on the same instrument do not render identically", async () => {
+    const liveArm: TraderDiagnosticAlert[] = [];
+    const controlArm: TraderDiagnosticAlert[] = [];
+
+    await buildCarriedLotReporter(
+      deps({
+        positions: [lot()],
+        now: PAST_GRACE,
+        arm: 'live',
+        alerts: { postTraderDiagnosticAlert: async (alert) => void liveArm.push(alert) },
+      }),
+    )();
+    await buildCarriedLotReporter(
+      deps({
+        positions: [lot()],
+        now: PAST_GRACE,
+        arm: 'control',
+        alerts: { postTraderDiagnosticAlert: async (alert) => void controlArm.push(alert) },
+      }),
+    )();
+
+    expect(liveArm[0]?.arm).toBe('live');
+    expect(controlArm[0]?.arm).toBe('control');
+    // Both fire for the SAME instrument at the SAME instant — everything but
+    // `arm` is identical, which is exactly the pair that used to page twice
+    // with indistinguishable text.
+    expect(liveArm[0]?.instrument).toBe(controlArm[0]?.instrument);
+    expect(formatTraderDiagnosticAlert(liveArm[0] as TraderDiagnosticAlert)).not.toBe(
+      formatTraderDiagnosticAlert(controlArm[0] as TraderDiagnosticAlert),
+    );
   });
 
   it('does not re-alert on every 15s poll while the lot stays open', async () => {

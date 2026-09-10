@@ -61,7 +61,7 @@
  */
 import type { TraderDiagnostic } from '../../../pipeline/trader/index.js';
 import type { TradingCalendar } from '../../../providers/market-data-service/index.js';
-import type { Clock, OpenPosition } from '../../../shared/index.js';
+import type { Clock, OpenPosition, TradingArm } from '../../../shared/index.js';
 import { heldQuantitiesFor } from '../../../shared/index.js';
 import type { Logger } from '../types.js';
 import type {
@@ -108,6 +108,14 @@ export class CarriedLotAlertThrottle {
 
 export interface CarriedLotReporterDeps {
   clock: Clock;
+  /**
+   * Which arm's book this reporter watches. Two reporters run, one per arm
+   * (`production.ts`), each bound to that arm's own store and posting to the
+   * SAME channel — without this on the alert, a live and a control lot
+   * carried on the same instrument render two identical messages and an
+   * operator cannot tell which venue position to go fix.
+   */
+  arm: TradingArm;
   /**
    * The equity calendar — the SAME object the scheduler's grace tail and the
    * Trader's window resolve through (`equityCalendarFor`). A second calendar
@@ -242,6 +250,7 @@ export function buildCarriedLotReporter(deps: CarriedLotReporterDeps): () => Pro
       const alert: TraderDiagnosticAlert = {
         instrument: lot.instrument,
         diagnostic,
+        arm: deps.arm,
         // The unit here is a REPORT, not a tick — see the file docblock. One
         // alert per repeat interval, so the count would be a poll number that
         // means nothing to an operator; the interval is the severity signal.
@@ -260,6 +269,7 @@ export function buildCarriedLotReporter(deps: CarriedLotReporterDeps): () => Pro
         message: 'flat-by-close missed: lot carried past the session close',
         payload: {
           instrument: lot.instrument,
+          arm: deps.arm,
           held: lot.held,
           session_close: lot.missedClose.toISOString(),
         },

@@ -53,7 +53,7 @@ const CONSEQUENCE: Record<TraderDiagnosticAlert['diagnostic']['kind'], string> =
     "session's flatten window; closing it before then is a manual decision at the venue.",
 };
 
-function formatTraderDiagnosticAlert(alert: TraderDiagnosticAlert): string {
+export function formatTraderDiagnosticAlert(alert: TraderDiagnosticAlert): string {
   const { diagnostic } = alert;
   // `asset_class` is `undefined` for exactly `control_arm_valuation_refused`
   // (see `TraderDiagnostic.asset_class`'s own doc) — it fires before the mark
@@ -61,8 +61,13 @@ function formatTraderDiagnosticAlert(alert: TraderDiagnosticAlert): string {
   // rather than rendering the literal string "undefined".
   const assetClassSuffix =
     diagnostic.asset_class === undefined ? '' : ` (${diagnostic.asset_class})`;
+  // `arm` is undefined for the three kinds raised inside decide.ts's shared
+  // tick loop — only `lot_carried_past_session_close` sets it (see
+  // `TraderDiagnosticAlert.arm`), so the suffix is omitted rather than
+  // printing a misleading "undefined arm".
+  const armSuffix = alert.arm === undefined ? '' : ` [${alert.arm} arm]`;
   return (
-    `Samurai TRADER DEGRADED: ${alert.instrument}${assetClassSuffix} reported ` +
+    `Samurai TRADER DEGRADED: ${alert.instrument}${assetClassSuffix}${armSuffix} reported ` +
     `${diagnostic.kind} on ${alert.consecutive_ticks} consecutive tick(s) as of ` +
     `${alert.reported_at.toISOString()}.\n` +
     `${CONSEQUENCE[diagnostic.kind]}\n` +

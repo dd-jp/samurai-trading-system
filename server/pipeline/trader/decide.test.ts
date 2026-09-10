@@ -977,6 +977,27 @@ describe('decide — flat by close (#668)', () => {
   });
 
   /**
+   * `routeDecision`'s OWN in-flight guard (#1389) — the decision/bar path's
+   * copy of the same check `checkExitsWithReason` makes on the tick path (see
+   * "the in-flight flatten guard" below). The two call `flattenAlreadyInFlight`
+   * from two separate branches in `decide.ts`, so a guard removed from one
+   * site is invisible to tests that only ever drive the other; this one goes
+   * through `decideWithReason` with a debate present, never `checkExitsWithReason`.
+   */
+  it('produces no flatten while this arm holds an unresolved flatten for the instrument, on the decision path', async () => {
+    const outcome = await decideWithReason(
+      traderInput({
+        clock: new ManualClock(INSIDE_WINDOW),
+        positionState: async () => [holding()],
+        unresolvedFlattens: async () => [{ instrument: INSTRUMENT }],
+      }),
+    );
+
+    expect(outcome.intent).toBeNull();
+    expect(outcome.skip_reason).toBe('flatten_in_flight');
+  });
+
+  /**
    * The ordering assertion, and the reason the check sits above every other
    * holding branch. `neutral` was 92 of the 94 debates in the soak — if the
    * neutral skip ran first it would suppress the flatten on almost every tick
