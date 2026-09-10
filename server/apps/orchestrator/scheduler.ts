@@ -200,7 +200,7 @@ export class UniverseScheduler implements Scheduler {
     // decision bar/day, ≈+15% on the US paper leg. The live bill is untouched —
     // LSE closes at 15:30Z, which floors into the 15:00 bar, so no LSE grace
     // tick claims a new decision bar. Making the grace tick flatten-only is
-    // #1389's filed follow-up, not this change.
+    // deliberately out of scope here — see #1389's PR body for the follow-up.
     const inFlattenGrace = this.config.postCloseFlattenWindow?.(tickTime) ?? false;
 
     return {
