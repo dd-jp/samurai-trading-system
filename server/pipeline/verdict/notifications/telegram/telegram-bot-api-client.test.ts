@@ -1,5 +1,5 @@
 import type { SqliteAuditLog } from '../../../../apps/orchestrator/index.js';
-import { SqliteAlertDeliveryLog } from '../../../../apps/orchestrator/index.js';
+import { formatLogLine, SqliteAlertDeliveryLog } from '../../../../apps/orchestrator/index.js';
 import type { LogEntry, Logger, RetryConfig } from '../../../../shared/index.js';
 import { MAX_ERROR_BODY_CHARS } from '../../../../shared/index.js';
 import { openSharedStore } from '../../../../shared/store/index.js';
@@ -1130,6 +1130,42 @@ describe('TelegramBotApiClient allowlist enforcement', () => {
     expect(detail.chat_id).toBe(Number(CHAT_ID));
     expect(detail.reason).toBe('from_id_not_allowlisted');
     expect(detail.correlation_token_prefix).toBe(token.slice(0, 8));
+  });
+
+  // #1133 review: the audit-log assertion above only proves the PAYLOAD
+  // digest carries the prefix intact — `redactPayload` walks that. It says
+  // nothing about the `telegram_allowlist_rejected` warn's own MESSAGE
+  // string, which interpolates the same prefix directly and is masked by
+  // `formatLogLine`'s central `maskCredentials` pass, a different mechanism
+  // with its own bareword rule. A production call site using `token=` there
+  // (instead of `token_prefix=`) leaves this exact suite green, because
+  // nothing else in this file formats that entry's `message` through the
+  // real masking path — this test drives the real allowlist-rejection call
+  // site and formats its recorded entry through `formatLogLine` itself.
+  it('keeps the correlation prefix readable in the rejected-callback MESSAGE line after masking', async () => {
+    const entries: LogEntry[] = [];
+    const h = makeClient({ logger: { log: (entry) => entries.push(entry) } });
+    await h.client.sendApprovalButtons(CHAT_ID, 'text', {
+      trace_id: 'trace-8',
+      idempotency_key: 'idem-8',
+      timeout_ms: 60_000,
+    });
+    const markup = h.calls()[0]?.body.reply_markup as {
+      inline_keyboard: { callback_data: string }[][];
+    };
+    const token = markup.inline_keyboard[0]?.[0]?.callback_data as string;
+
+    h.fetchMock.mockImplementation(async (url: string) =>
+      okResponse(String(url).includes('/getUpdates') ? [callbackUpdate(1, token, 999)] : true),
+    );
+    await h.client.pollOnce();
+
+    const rejectedEntry = entries.find((entry) => entry.event === 'telegram_allowlist_rejected');
+    expect(rejectedEntry).toBeDefined();
+
+    const line = formatLogLine(rejectedEntry as LogEntry);
+    expect(line).toContain(`token_prefix=${token.slice(0, 8)}…)`);
+    expect(line).not.toContain('[REDACTED]');
   });
 
   it('never writes the full correlation token to the audit log', async () => {
