@@ -181,6 +181,7 @@ function traderInput(instrument: string, overrides: Partial<TraderInput> = {}): 
     config: armedConfig(),
     positionState: async () => [],
     exitFillSizes: async () => new Map<string, number>(),
+    unresolvedFlattens: async () => [],
     setupStore: new SelfPrecedentStore(),
     sessionCalendars: {
       crypto: new AlwaysOpenCalendar(),

@@ -193,6 +193,38 @@ interface DriveFlattenOptions {
    * isolate-one-gate posture the file header uses for the healthy-mark choice.
    */
   readonly allowExtendedHours?: boolean;
+  /**
+   * #1389: where the DECISION clock sits relative to `sessionEnd`. Negative is
+   * inside ADR-0014's pre-close window (the default, `−4 min`); positive is
+   * after the bell, inside `flatten_after_close_ms`. This is the knob the
+   * post-bell cases turn — `verdictDelayMs` moves only the Verdict/Execution
+   * clock and so cannot reach the Trader's own window read at all.
+   */
+  readonly decisionOffsetMs?: number;
+  /**
+   * Reuse a previous drive's store, so a second flatten of the SAME lot sees
+   * the first drive's `flatten_submissions` and `positions` rows. Without it
+   * every drive gets a virgin `:memory:` store and gate 3 has nothing to
+   * dedupe against.
+   */
+  readonly session?: FlattenSession;
+  /**
+   * Stubs the Trader's in-flight guard (`TraderInput.unresolvedFlattens`).
+   * Defaults to the real store read, which is what production binds.
+   *
+   * The cross-boundary dedup case stubs it EMPTY on purpose: after a first
+   * drive submits, the store holds a `submitted`-and-unswept row, the guard
+   * fires, and no intent reaches Verdict — so the key coordinate that case
+   * exists to prove would never be exercised. Neutralizing one of the two
+   * guards is how the other one gets asserted.
+   */
+  readonly unresolvedFlattens?: () => Promise<readonly { readonly instrument: string }[]>;
+}
+
+/** A store shared across drives — see `DriveFlattenOptions.session`. */
+interface FlattenSession {
+  readonly db: ReturnType<typeof openSharedStore>;
+  readonly store: SqliteExecutionStore;
 }
 
 /**
@@ -207,17 +239,22 @@ async function driveFlatten(venue: Venue, opts: DriveFlattenOptions = {}) {
   if (sessionEnd === null) throw new Error(`${venue.name}: calendar resolved no session close`);
   // Inside ADR-0014's window (close - 5 min), one minute clear of the edge so
   // the case cannot turn on a boundary comparison it is not about.
-  const now = new Date(sessionEnd.getTime() - 4 * 60_000);
+  const now = new Date(sessionEnd.getTime() + (opts.decisionOffsetMs ?? -4 * 60_000));
   const decisionClock: Clock = { now: () => now };
   const verdictNow = new Date(now.getTime() + (opts.verdictDelayMs ?? 0));
   const verdictClock: Clock = { now: () => verdictNow };
   // Exactly what `tick-runner.ts` hands `runExitCheckPass`.
   const bar = floorToBar(now, DEBATE_BAR_TIMEFRAME_MS);
 
-  const db = openSharedStore(':memory:');
-  const store = new SqliteExecutionStore(db);
-  const lot = heldLot(new Date(now.getTime() - 6 * 60 * 60 * 1_000));
-  await store.writeAheadPosition(lot);
+  const session: FlattenSession = opts.session ?? (() => {
+    const fresh = openSharedStore(':memory:');
+    return { db: fresh, store: new SqliteExecutionStore(fresh) };
+  })();
+  const { db, store } = session;
+  if (opts.session === undefined) {
+    const lot = heldLot(new Date(now.getTime() - 6 * 60 * 60 * 1_000));
+    await store.writeAheadPosition(lot);
+  }
 
   const marketData = makeMarketData(now);
   const sessionCalendars = { crypto: new AlwaysOpenCalendar(), stocks: venue.calendar };
@@ -240,6 +277,9 @@ async function driveFlatten(venue: Venue, opts: DriveFlattenOptions = {}) {
     config: PROFILE.traderConfig,
     setupStore: new FixtureSetupStore(),
     getExitFillSizes: (keys: readonly string[]) => store.getExitFillSizes(keys),
+    // #1389's second guard, bound to the SAME store the lots came from — see
+    // `DriveFlattenOptions.unresolvedFlattens` for why one case stubs it.
+    getUnresolvedFlattens: opts.unresolvedFlattens ?? (() => store.getUnresolvedFlattens()),
     sessionCalendars,
   });
 
@@ -286,7 +326,18 @@ async function driveFlatten(venue: Venue, opts: DriveFlattenOptions = {}) {
     filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
   })(verdict);
 
-  return { now, verdictNow, bar, intent, riskDecision, verdict, execution, broker, sessionEnd };
+  return {
+    now,
+    verdictNow,
+    bar,
+    intent,
+    riskDecision,
+    verdict,
+    execution,
+    broker,
+    sessionEnd,
+    session,
+  };
 }
 
 const VENUES: readonly Venue[] = [
@@ -500,4 +551,87 @@ describe('#1388: a mandatory flatten verdicted after the close still reaches Exe
     expect(verdict.status).toBe('no_go');
     expect(verdict.no_go_reason).toBe('market_closed');
   });
+});
+
+/**
+ * #1389 — THE MANDATORY FLATTEN SURVIVES THE BELL ITSELF.
+ *
+ * #894 and #1388 both moved a gate DOWNSTREAM of the Trader. This one is about
+ * the Trader's own window: `withinFlattenWindow` resolved it from
+ * `TradingCalendar.sessionEnd`, which every conforming calendar answers
+ * strictly forward, so one instant past the bell the window pointed at
+ * TOMORROW's close, `within` was false, and a held lot fell through to the
+ * holding branches with no flatten intent produced at all. On 2026-09-08 seven
+ * control lots carried overnight exactly this way — a single tick's Trader
+ * arrivals ran 19:58:27 to 20:02:02, and the lots reached after 20:00:00Z were
+ * refused by the WINDOW, not by any gate.
+ *
+ * `decisionOffsetMs` is the knob: it moves the TRADER's own clock past
+ * `sessionEnd`, which `verdictDelayMs` (Verdict/Execution only) cannot reach.
+ */
+describe('#1389: a lot held past the bell is still flattened inside the grace', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  for (const venue of VENUES) {
+    describe(`${venue.name} close`, () => {
+      it('decides the mandatory flatten 10s AFTER the close and submits it at the venue', async () => {
+        const { intent, now, sessionEnd, verdict, execution, broker } = await driveFlatten(venue, {
+          decisionOffsetMs: 10_000,
+        });
+
+        // The premise, asserted: the TRADER itself decided after the bell.
+        expect(now.getTime()).toBeGreaterThan(sessionEnd.getTime());
+        expect(intent.metadata.exit_reason).toBe('flatten');
+        expect(intent.metadata.mandatory_flatten).toBe(true);
+        expect(verdict.no_go_reason).toBeNull();
+        expect(verdict.status).toBe('go');
+        expect(execution.status).toBe('submitted');
+        expect(broker.submitFlatten).toHaveBeenCalledWith(
+          INSTRUMENT,
+          'sell',
+          HELD_SIZE,
+          intent.idempotency_key,
+        );
+      });
+
+      it('does not re-flatten across the bell: the post-close drive dedupes against the in-window one', async () => {
+        // The in-flight guard is stubbed EMPTY on purpose — see
+        // `DriveFlattenOptions.unresolvedFlattens`. With the real read the
+        // first drive's `submitted`-and-unswept row would skip the second
+        // drive inside the Trader, and the KEY COORDINATE this case exists to
+        // prove would never reach Verdict's gate 3 at all.
+        const noneInFlight = async () => [];
+
+        const inWindow = await driveFlatten(venue, { unresolvedFlattens: noneInFlight });
+        expect(inWindow.execution.status).toBe('submitted');
+        expect(inWindow.broker.submitFlatten).toHaveBeenCalledTimes(1);
+
+        const afterBell = await driveFlatten(venue, {
+          decisionOffsetMs: 10_000,
+          session: inWindow.session,
+          unresolvedFlattens: noneInFlight,
+        });
+
+        // One session close on both sides of the bell => one key => gate 3.
+        expect(afterBell.intent.idempotency_key).toBe(inWindow.intent.idempotency_key);
+        expect(afterBell.verdict.status).toBe('no_go');
+        expect(afterBell.verdict.no_go_reason).toBe('dedup');
+        expect(afterBell.broker.submitFlatten).not.toHaveBeenCalled();
+      });
+
+      it('skips the flatten entirely while an unresolved flatten for the instrument is in flight', async () => {
+        const inWindow = await driveFlatten(venue);
+        expect(inWindow.broker.submitFlatten).toHaveBeenCalledTimes(1);
+
+        // The REAL store read this time: the first drive left a `submitted`
+        // row whose fills are unswept, so the Trader must produce nothing at
+        // all rather than a second intent for Verdict to catch.
+        await expect(
+          driveFlatten(venue, { decisionOffsetMs: 10_000, session: inWindow.session }),
+        ).rejects.toThrow('the tick path produced no flatten intent');
+      });
+    });
+  }
 });

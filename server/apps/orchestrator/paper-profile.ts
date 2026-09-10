@@ -180,6 +180,14 @@ export const PAPER_PROFILE_PROVENANCE = {
   // anything here, it is the value #657 resolved on 2026-08-09 and ADR-0014's
   // flat-by-close horizon is what makes it binding.
   'traderConfig.flatten_before_close_ms': 'SPEC',
+  // #1389. UNSOURCED, and deliberately labelled so: no doc states how long
+  // after the bell the flatten may keep trying. 5 minutes was CHOSEN — long
+  // enough for several ticks at any cadence this profile has run, short enough
+  // to stay well inside `verdictConfig.max_mark_age.stocks` (15 min), which is
+  // the ceiling gate 2a actually enforces on the price a flatten is marked at.
+  // It is a starting point to be measured against real post-bell fills, not a
+  // derived constant.
+  'traderConfig.flatten_after_close_ms': 'UNSOURCED',
   'traderConfig.max_risk_per_trade': 'SPEC',
   'traderConfig.asset_class_risk_multiplier.crypto': 'SPEC',
   // #1112 follow-up — DERIVED, not SPEC: 1.9x is computed from

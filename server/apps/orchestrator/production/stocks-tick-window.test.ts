@@ -19,7 +19,7 @@ import {
 } from '../../../providers/market-data-service/index.js';
 import { UniverseScheduler } from '../scheduler.js';
 import type { UniverseInstrument } from '../types.js';
-import { withFlattenTail } from './stocks-tick-window.js';
+import { postCloseFlattenTail, withFlattenTail } from './stocks-tick-window.js';
 
 /** `DEFAULT_TRADER_CONFIG.flatten_before_close_ms` (`trader/types.ts:236`). */
 const FLATTEN_MS = 5 * 60 * 1_000;
@@ -158,5 +158,55 @@ describe('the flatten tail is reachable', () => {
     const brittle = withFlattenTail(londonEntryWindow(), brokenCalendar, FLATTEN_MS);
 
     expect(() => brittle(at('16:26'))).toThrow(/No LSE session close found/);
+  });
+});
+
+/**
+ * #1389: the tail on the OTHER side of the bell.
+ *
+ * `withFlattenTail` above cannot be widened to cover this — the scheduler
+ * evaluates it only under `calendar.isOpen(instant)`, so any range it claims
+ * past the close is unreachable at the one site that consults it. That is the
+ * #706 failure shape (a predicate that reads correct where it cannot be
+ * reached), which is why the grace enters the plan as its own OR'd input.
+ *
+ * Asserted against the REAL `LseRegularHoursCalendar` (16:30 London), not a
+ * stub: the whole question is whether the close a conforming calendar resolves
+ * can be reached from the far side, and a stub would answer whatever it was
+ * told to.
+ */
+describe('postCloseFlattenTail (#1389)', () => {
+  /** `DEFAULT_TRADER_CONFIG.flatten_after_close_ms`. */
+  const GRACE_MS = 5 * 60 * 1_000;
+  const inGrace = postCloseFlattenTail(new LseRegularHoursCalendar(), GRACE_MS);
+
+  it('is true from the bell to the end of the grace, and false either side', () => {
+    expect(inGrace(at('16:29'))).toBe(false); // still open — `withFlattenTail`'s half
+    expect(inGrace(at('16:30'))).toBe(true); // the bell itself
+    expect(inGrace(at('16:34'))).toBe(true);
+    expect(inGrace(at('16:35'))).toBe(true); // the far edge, inclusive
+    expect(inGrace(at('16:36'))).toBe(false);
+  });
+
+  it('meets the pre-close tail exactly at the bell, with no instant uncovered', () => {
+    // The two predicates are what the scheduler ORs together, and a gap between
+    // them at the close is a tick the flatten cannot be decided on — which is
+    // the entire defect, reintroduced at a boundary instead of a branch.
+    const beforeTail = withFlattenTail(() => false, new LseRegularHoursCalendar(), FLATTEN_MS);
+
+    for (const hhmm of ['16:26', '16:27', '16:28', '16:29', '16:30', '16:31', '16:32']) {
+      expect(beforeTail(at(hhmm)) || inGrace(at(hhmm))).toBe(true);
+    }
+  });
+
+  it('is false on a venue that never closes — crypto has no close to be past (#667)', () => {
+    expect(postCloseFlattenTail(new AlwaysOpenCalendar(), GRACE_MS)(at('16:31'))).toBe(false);
+  });
+
+  it('is false the next morning, when the grace is long gone', () => {
+    // `sessionStart` still names yesterday's close there, so a predicate that
+    // forgot the upper bound would admit the whole overnight and the whole next
+    // session.
+    expect(inGrace(new Date('2026-08-20T08:30:00+01:00'))).toBe(false);
   });
 });

@@ -50,6 +50,7 @@ import {
   makeWiringCostConfig,
   makeWiringExecutionConfig,
   makeWiringRiskConfig,
+  makeWiringVerdictConfig,
 } from './wiring-config-fixtures.js';
 
 const NOW = new Date('2026-08-05T14:00:00Z');
@@ -1097,9 +1098,7 @@ function stubConfig(db: StoreHandle, overrides: Partial<ProductionConfig>): Stub
     riskConfig: makeWiringRiskConfig(),
     // Carries the automation dial, which `buildProductionComponents` reads to
     // refuse a HITL-engaging config (#434). `auto` is ADR-0007's setting.
-    verdictConfig: {
-      automation_level: { crypto: 'auto', stocks: 'auto' },
-    } as ProductionConfig['verdictConfig'],
+    verdictConfig: makeWiringVerdictConfig(),
     executionConfig: makeWiringExecutionConfig(),
     correlationConfig: makeWiringCorrelationConfig(),
     // Not an empty cast since #634: `CircuitBreakers` validates its

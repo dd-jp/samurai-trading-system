@@ -1,8 +1,9 @@
 /**
- * Real, cast-free values for the five `ProductionConfig` fields every
+ * Real, cast-free values for the six `ProductionConfig` fields every
  * composition-root wiring test under this directory needs to construct but
  * none of them exercises (#1456): `riskConfig`, `executionConfig`,
- * `correlationConfig`, `costConfig`, `ciiConsumerConfig`. A cast to the
+ * `correlationConfig`, `costConfig`, `ciiConsumerConfig`, and — since #1389 —
+ * `verdictConfig`. A cast to the
  * field's type here (`{} as ProductionConfig['X']` or `as unknown as`)
  * would hide a wrong-shaped value from `tsc` — docs/coding-standards.md,
  * "Test stubs must type-check without casts". `CiiConsumerConfig`'s
@@ -17,6 +18,7 @@
  */
 import type { ExecutionConfig } from '../../../pipeline/execution/index.js';
 import type { CorrelationConfig, RiskConfig } from '../../../pipeline/risk-manager/index.js';
+import type { VerdictConfig } from '../../../pipeline/verdict/index.js';
 import type { CiiConsumerConfig } from '../../../providers/market-intelligence/index.js';
 import type { CostConfig } from '../../../tools/backtest/index.js';
 
@@ -93,6 +95,34 @@ export function makeWiringCiiConsumerConfig(
     // shipped `paperStartingProfile` value (paper-profile.ts) — 10 min,
     // within WorldMonitor's own decoupled poll cadence (ADR-0002 §2, 5-15 min).
     pollIntervalMs: 600_000,
+    ...overrides,
+  };
+}
+
+/**
+ * The sixth (#1389). Every wiring test under this directory used to declare
+ * `verdictConfig` as `{ automation_level: ... } as ProductionConfig['verdictConfig']`
+ * — a cast that type-checks while omitting five required fields, so
+ * `buildProductionComponents` read `config.verdictConfig.max_mark_age` as
+ * `undefined` the moment a boot assertion started consulting it, and eleven
+ * files failed at once on a shape `tsc` had already been told was fine. That is
+ * the exact hazard this module's header is about, so the fixture is real rather
+ * than the assertion made tolerant of a missing field.
+ *
+ * Values mirror `production.test.ts`'s `REAL_CONFIGS`. `max_mark_age` matches
+ * `makeWiringRiskConfig`'s: the two are separate dials on separate configs and
+ * only equal by coincidence, but a wiring fixture has no reason to make them
+ * disagree.
+ */
+export function makeWiringVerdictConfig(overrides: Partial<VerdictConfig> = {}): VerdictConfig {
+  return {
+    automation_level: { crypto: 'auto', stocks: 'auto' },
+    max_signal_age: { crypto: 3_600_000, stocks: 3_600_000 },
+    max_mark_age: { crypto: 3_600_000, stocks: 3_600_000 },
+    drift_tolerance_pct: { crypto: 0.05, stocks: 0.05 },
+    human_timeout: 300_000,
+    allow_extended_hours: false,
+    flag_thresholds: { size_over: 1_000_000 },
     ...overrides,
   };
 }

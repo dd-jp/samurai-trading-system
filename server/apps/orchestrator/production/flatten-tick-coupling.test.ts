@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest';
 import type { TraderConfig } from '../../../pipeline/trader/index.js';
 import { DEFAULT_TRADER_CONFIG } from '../../../pipeline/trader/index.js';
 import {
+  assertFlattenGraceWithinMarkAge,
   assertFlattenWindowCoversTickInterval,
   MIN_TICKS_INSIDE_FLATTEN_WINDOW,
 } from './flatten-tick-coupling.js';
@@ -103,6 +104,86 @@ describe('assertFlattenWindowCoversTickInterval', () => {
     // either default cannot quietly reintroduce it.
     expect(() =>
       assertFlattenWindowCoversTickInterval(DEFAULT_TRADER_CONFIG, MINUTE),
+    ).not.toThrow();
+  });
+
+  /**
+   * #1389's grace is the same invariant one bell later: it too is a set of
+   * instants at which flattening becomes possible, and a tick still has to land
+   * in it. A grace no tick fits inside silently restores the forward-only
+   * window this ticket removed.
+   */
+  describe('the post-close grace (#1389)', () => {
+    // The pre-close window is widened out of the way: it is checked FIRST, so
+    // leaving it at the default would make these cases fail on that bound
+    // instead of the grace they are about.
+    function configWithGrace(flattenAfterCloseMs: number): TraderConfig {
+      return {
+        ...DEFAULT_TRADER_CONFIG,
+        flatten_before_close_ms: 60 * MINUTE,
+        flatten_after_close_ms: flattenAfterCloseMs,
+      };
+    }
+
+    it('rejects a grace shorter than one tick interval', () => {
+      // A 2-minute grace at the paper profile's 15-minute cadence: no tick can
+      // land in it, so the second chance #1389 exists to give does not exist.
+      expect(() =>
+        assertFlattenWindowCoversTickInterval(configWithGrace(2 * MINUTE), 15 * MINUTE),
+      ).toThrow(/flatten_after_close_ms .* must be at least tickIntervalMs/);
+    });
+
+    it('accepts a grace of exactly one tick interval', () => {
+      // ONE, not `MIN_TICKS_INSIDE_FLATTEN_WINDOW` — the grace is the backstop
+      // to the pre-close window, not the path carrying the obligation, and
+      // every extra minute is spent against gate 2a's ceiling.
+      expect(() =>
+        assertFlattenWindowCoversTickInterval(configWithGrace(MINUTE), MINUTE),
+      ).not.toThrow();
+    });
+
+    it('checks the grace even when the pre-close window is generous', () => {
+      // The two bounds are independent: a wide pre-close window says nothing
+      // about whether a tick lands after the bell, and folding them into one
+      // check would let a comfortable window vouch for a grace of zero.
+      expect(() =>
+        assertFlattenWindowCoversTickInterval(
+          { ...DEFAULT_TRADER_CONFIG, flatten_before_close_ms: 60 * MINUTE, flatten_after_close_ms: 1 },
+          MINUTE,
+        ),
+      ).toThrow(/flatten_after_close_ms/);
+    });
+  });
+});
+
+describe('assertFlattenGraceWithinMarkAge (#1389)', () => {
+  const MAX_MARK_AGE_STOCKS = 15 * MINUTE;
+
+  it('accepts the shipped 5-minute grace against the shipped 15-minute ceiling', () => {
+    expect(() =>
+      assertFlattenGraceWithinMarkAge(DEFAULT_TRADER_CONFIG, MAX_MARK_AGE_STOCKS),
+    ).not.toThrow();
+  });
+
+  it('rejects a grace past the price gate that would refuse every tick in it', () => {
+    // A priced mandatory flatten is exempt from gate 1 and gate 4, NOT from
+    // gate 2a — so past `max_mark_age.stocks` the extra grace produces ticks
+    // that can only ever be refused `stale_feed`, while `trader_log` reads like
+    // a grace that is working.
+    expect(() =>
+      assertFlattenGraceWithinMarkAge(
+        { ...DEFAULT_TRADER_CONFIG, flatten_after_close_ms: 20 * MINUTE },
+        MAX_MARK_AGE_STOCKS,
+      ),
+    ).toThrow(/must not exceed verdictConfig.max_mark_age.stocks/);
+  });
+
+  it('accepts a grace exactly at the ceiling', () => {
+    expect(() =>
+      assertFlattenGraceWithinMarkAge(
+        { ...DEFAULT_TRADER_CONFIG, flatten_after_close_ms: MAX_MARK_AGE_STOCKS },
+        MAX_MARK_AGE_STOCKS,
+      ),
     ).not.toThrow();
   });
 });

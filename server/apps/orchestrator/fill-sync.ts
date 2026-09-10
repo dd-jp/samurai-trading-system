@@ -173,6 +173,24 @@ export interface FillSyncDeps {
   reconcileTraceId: string;
   /** `trace_id` for this loop's own fill-poll log lines. Same reasoning as `reconcileTraceId`. */
   fillSyncTraceId: string;
+  /**
+   * #1389: reports a lot still open after ADR-0014's flatten grace expired
+   * (`buildCarriedLotReporter`).
+   *
+   * It rides on THIS loop because there is nowhere else it could: the tick
+   * scheduler has already stopped for the day by the time the grace expires,
+   * and this loop has no market-hours gate. A NAMED hook rather than a generic
+   * `afterPoll` callback, so what runs here is visible at the type and a
+   * future caller cannot quietly hang unrelated work off the fill poll.
+   *
+   * Optional because the backtest harness and every fixture drive this loop
+   * without a calendar; the production root wires it on BOTH arms — the
+   * 2026-09-08 lots that motivated #1389 were CONTROL-arm lots, so a live-only
+   * detector would leave the reproduced incident unalerted.
+   *
+   * Must not throw; it is called inside the poll and is wrapped anyway.
+   */
+  reportCarriedLots?: () => Promise<void>;
 }
 
 /**
@@ -397,6 +415,24 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
           payload: {
             error: sweepError instanceof Error ? sweepError.message : String(sweepError),
           },
+        });
+      }
+
+      // #1389, and it runs AFTER the ingest+sweep in the same `finally` — even
+      // when the poll failed. The lots it reports are exactly the ones a failed
+      // poll did not retire, and its own failure is contained to a log line for
+      // the reason the sweep's is: this loop's posture is log-and-poll-again,
+      // and a detector must not add a second way to end the run.
+      try {
+        await deps.reportCarriedLots?.();
+      } catch (carriedLotError) {
+        deps.logger.log({
+          trace_id: deps.fillSyncTraceId,
+          stage: 'execution',
+          event: 'carried_lot_report_failed',
+          level: 'error',
+          message: 'carried-lot report failed',
+          payload: { error: describeThrownSafely(carriedLotError) },
         });
       }
     }

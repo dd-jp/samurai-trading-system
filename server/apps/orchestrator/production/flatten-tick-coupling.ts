@@ -132,15 +132,81 @@ export function assertFlattenWindowCoversTickInterval(
 
   const window = traderConfig.flatten_before_close_ms;
   const required = MIN_TICKS_INSIDE_FLATTEN_WINDOW * tickIntervalMs;
-  if (window >= required) return;
+  if (window < required) {
+    const ticksInWindow = (window / tickIntervalMs).toFixed(2);
+    throw new Error(
+      `traderConfig.flatten_before_close_ms (${window}ms) must be at least ` +
+        `${MIN_TICKS_INSIDE_FLATTEN_WINDOW}x tickIntervalMs (${tickIntervalMs}ms = ${required}ms), ` +
+        `but only ${ticksInWindow} tick(s) fit inside the flatten window. ` +
+        'Flat-by-close is evaluated ON a tick, so a window this narrow is stepped over: the ' +
+        'position carries overnight against ADR-0014 with nothing logged as an error. ' +
+        'Widen flatten_before_close_ms or shorten tickIntervalMs (#670).',
+    );
+  }
 
-  const ticksInWindow = (window / tickIntervalMs).toFixed(2);
+  // #1389's grace, checked here because it is the same invariant one bell
+  // later: the grace is also a set of instants at which flattening becomes
+  // POSSIBLE, and a tick still has to land in it.
+  //
+  // ONE tick, not `MIN_TICKS_INSIDE_FLATTEN_WINDOW`. The pre-close window's
+  // second tick buys tolerance for one arbitrary lost tick on the path that
+  // carries the whole obligation. The grace is not that path — it is the
+  // SECOND chance, reached only when the pre-close window's own guaranteed
+  // ticks were already missed — so requiring the same margin twice would price
+  // a backstop as if it were the primary, and every extra minute of grace is
+  // spent against gate 2a's 15-minute ceiling (see `flatten_after_close_ms`).
+  // What this refuses is the degenerate case: a grace no tick can land in at
+  // all, which is a grace that silently does not exist.
+  const grace = traderConfig.flatten_after_close_ms;
+  if (grace < tickIntervalMs) {
+    throw new Error(
+      `traderConfig.flatten_after_close_ms (${grace}ms) must be at least tickIntervalMs ` +
+        `(${tickIntervalMs}ms), but only ${(grace / tickIntervalMs).toFixed(2)} tick(s) fit ` +
+        'inside the post-close flatten grace. The grace is #1389\'s second chance at a lot the ' +
+        'pre-close window missed, and it is evaluated ON a tick too — a grace no tick lands in ' +
+        'restores the forward-only window, silently. Widen flatten_after_close_ms or shorten ' +
+        'tickIntervalMs (#1389).',
+    );
+  }
+}
+
+/**
+ * Throws unless #1389's post-close grace fits under Verdict's price-staleness
+ * ceiling.
+ *
+ * ## Why this bound exists at all
+ *
+ * A mandatory flatten is exempt from gate 1 (`staleness`, #894) and gate 4
+ * (`market_closed`, #1388), and both exemptions are deliberate. It is NOT
+ * exempt from gate 2a, the price gate: a PRICED flatten still has its mark
+ * compared against `max_mark_age`, and past that age Verdict answers
+ * `stale_feed` no matter how mandatory the exit is.
+ *
+ * So `max_mark_age.stocks` is the real ceiling on how late any post-bell
+ * flatten can produce a `go`, and a grace configured past it buys nothing but
+ * ticks that cannot transact — while looking, in `trader_log`, exactly like a
+ * grace that is working.
+ *
+ * ## Why `verdictConfig`, not `riskConfig`
+ *
+ * Both carry a `max_mark_age` and they are the same value in every shipped
+ * profile today. Gate 2a reads **Verdict's** (`verdict/index.ts`), so that is
+ * the one asserted against. Asserting the Risk copy would pass every test in
+ * the repo and be wrong the first time the two diverge — which is the only
+ * time an assertion is worth having.
+ */
+export function assertFlattenGraceWithinMarkAge(
+  traderConfig: TraderConfig,
+  verdictMaxMarkAgeStocksMs: number,
+): void {
+  const grace = traderConfig.flatten_after_close_ms;
+  if (grace <= verdictMaxMarkAgeStocksMs) return;
+
   throw new Error(
-    `traderConfig.flatten_before_close_ms (${window}ms) must be at least ` +
-      `${MIN_TICKS_INSIDE_FLATTEN_WINDOW}x tickIntervalMs (${tickIntervalMs}ms = ${required}ms), ` +
-      `but only ${ticksInWindow} tick(s) fit inside the flatten window. ` +
-      'Flat-by-close is evaluated ON a tick, so a window this narrow is stepped over: the ' +
-      'position carries overnight against ADR-0014 with nothing logged as an error. ' +
-      'Widen flatten_before_close_ms or shorten tickIntervalMs (#670).',
+    `traderConfig.flatten_after_close_ms (${grace}ms) must not exceed ` +
+      `verdictConfig.max_mark_age.stocks (${verdictMaxMarkAgeStocksMs}ms). A priced mandatory ` +
+      'flatten is NOT exempt from Verdict gate 2a, so past that age every post-close flatten is ' +
+      'refused `stale_feed` — the extra grace produces ticks that cannot transact while reading ' +
+      'like a grace that works (#1389).',
   );
 }

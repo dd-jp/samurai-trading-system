@@ -190,3 +190,43 @@ The narrow question the previous amendment's "a shut venue cannot fill" reasonin
 ### What now holds by test
 
 `flat-by-close-to-execution.test.ts` extends the #894 harness's `verdictDelayMs` option (already built for #1190's stale-`decided_at` case) to push the Verdict/Execution clock PAST `sessionEnd` — reproducing #1388's own ten-second gap — and asserts the flatten still reaches Execution, at both the US and LSE closes, driven through the real `VerdictImpl` (`buildVerdictStep`) and the real calendars. The same file asserts an entry intent evaluated after the close, through the same production wiring, still produces `market_closed`. `verdict/index.test.ts` asserts the exemption directly (mandatory flatten: `go`) and its narrowing (a discretionary exit without the marker: still `market_closed`), with a synthetic calendar, since the real calendars' arithmetic is what the end-to-end file exists to exercise.
+
+## Amendment — 2026-09-10: the flatten window is no longer forward-only, and the flatten's idempotency key is the session close ([#1389](https://github.com/dd-jp/samurai-trading-system/issues/1389))
+
+The 2026-08-16 amendment called flat-by-close "an invariant with no exception case." It was not one.
+
+### The defect
+
+`withinFlattenWindow` resolved its window from `TradingCalendar.sessionEnd`, which every conforming calendar answers strictly FORWARD. One instant after the bell the window therefore pointed at *tomorrow's* close, `within` was false, and a held lot fell through to the holding branches with no flatten intent ever produced. Nothing logged an error: the run read exactly like a session with nothing to flatten, which is the same silent shape #670 and #706 each found one layer out.
+
+On 2026-09-08 seven control lots carried overnight this way. A single tick's Trader arrivals ran from 19:58:27 to 20:02:02, and every lot reached after 20:00:00Z was refused by the window itself — not by a gate, not by a broker.
+
+Compounding it, `UniverseScheduler.nextTick` gated the whole plan on `isOpen`, so past the bell there was no tick for the Trader to be wrong on in the first place.
+
+### The resolution
+
+The window now runs from `flatten_before_close_ms` before the close to **`flatten_after_close_ms`** after it (5 minutes, `DEFAULT_TRADER_CONFIG`), and the scheduler's stocks tail extends with it as its own OR'd input (`postCloseFlattenTail`) rather than by widening a predicate the open-hours conjunct already made unreachable.
+
+**The flatten's idempotency key is derived from the session close being enforced**, not from the debate bar: sha256 over `{ instrument, session_close, side: 'close' }`, plus `arm` off the live arm. `sessionEnd(now)` inside the window and `sessionStart(now)` past it name the same instant, so an in-window flatten and a post-bell flatten of the same lot hash identically and Verdict gate 3 dedupes across the bell. Under the bar coordinate they would not: the US close sits exactly on the 1h grid, so the two ticks straddle a bar boundary and the lot would be flattened twice — sold into a short, since `executeExit` sizes to a held quantity the unswept first flatten has not yet reduced.
+
+There is **no lot-derived anchor of any kind**. Two designs that anchored the key to lot state were built and discarded: each admitted a second flatten against a partially-filled first one, or dedupped a lot that had never been sent at all. The obligation is per instrument per close, so that is what the coordinate says. Non-flatten exits (`signal_decay`, `direction_flip`) are unchanged and keep the bar coordinate.
+
+A second, independent guard backs gate 3: **no flatten intent is produced for an instrument while `flatten_submissions` holds an unresolved row for it** (`getUnresolvedFlattens`, arm-scoped). Key dedup was never a per-instrument in-flight guard, and every discarded design failed at exactly that gap.
+
+No migration. The key is computed, not stored as a coordinate, and the flatten's key space is new in both arms, so no existing row is re-keyed.
+
+### The exemption stays bounded, and the bound is now arithmetic
+
+A **priced** flatten still runs gate 2a, so `verdictConfig.max_mark_age.stocks` (15 minutes) remains the real ceiling on how late any post-bell flatten can produce a `go` — the 2026-09-09 amendment's reasoning is unchanged, and it now binds `flatten_after_close_ms` directly, as a boot assertion (`assertFlattenGraceWithinMarkAge`).
+
+That ceiling is necessary, not sufficient: a flatten at `close + 5min` priced off a mark from `close − 2min` is seven minutes old, and gate 2a judges the MARK's age, not the grace's width. The bound says only that a grace past the ceiling buys ticks that provably cannot transact.
+
+The grace is bounded below too, by one `tickIntervalMs` (`assertFlattenWindowCoversTickInterval`) — a grace no tick lands in silently restores the forward-only window. **The consequence of the two bounds together is a derived constraint worth stating: `tickIntervalMs <= verdictConfig.max_mark_age.stocks` is now enforced at boot, transitively, for any config that flattens at all.** Today's profile clears it with room (2 min tick, 5 min grace, 15 min ceiling). ADR-0008's historical 15-minute cadence would have pinned the grace to exactly the ceiling, with no slack at either end.
+
+### The failure mode is now audible rather than silent
+
+A lot still open once the grace expires raises an operator alert naming the instrument and the held size, throttled, off the fill-sync poll — the only machinery that runs post-bell. It is **not** flattened pre-open at the next session: that was considered and deliberately left as a follow-up, because a pre-open flatten submits into a venue state this system has never traded against. The lot is targeted again by the next session's own window.
+
+**Flat-by-close therefore has a bounded failure mode that is audible, rather than an unbounded one that was silent.** That is the honest statement of the invariant, and it replaces the 2026-08-16 amendment's "no exception case".
+
+The `session_end_in_past` diagnostic — which this ADR's own implementation documented as unreachable — is deleted along with the branch that raised it. After this change a close already in the past is the ordinary case, answered by flattening against that close rather than by reporting a fault.

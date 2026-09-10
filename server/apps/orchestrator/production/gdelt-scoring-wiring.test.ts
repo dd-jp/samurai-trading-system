@@ -55,6 +55,7 @@ import {
   makeWiringCostConfig,
   makeWiringExecutionConfig,
   makeWiringRiskConfig,
+  makeWiringVerdictConfig,
 } from './wiring-config-fixtures.js';
 
 const NOW = new Date('2026-09-03T12:34:00Z');
@@ -140,9 +141,7 @@ function stubConfig(db: StoreHandle, overrides: Partial<ProductionConfig>): Prod
     } as unknown as ProductionConfig['polymarketClient'],
     traderConfig: DEFAULT_TRADER_CONFIG,
     riskConfig: makeWiringRiskConfig(),
-    verdictConfig: {
-      automation_level: { crypto: 'auto', stocks: 'auto' },
-    } as ProductionConfig['verdictConfig'],
+    verdictConfig: makeWiringVerdictConfig(),
     executionConfig: makeWiringExecutionConfig(),
     correlationConfig: makeWiringCorrelationConfig(),
     breakerConfig: {
