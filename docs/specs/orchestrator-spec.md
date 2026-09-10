@@ -44,8 +44,9 @@ Key architectural decisions:
 ### Scheduling & Universe
 
 1. ~~As the Orchestrator, I want to fire a tick for crypto instruments on a fixed interval 24/7, so that crypto's always-open market is continuously covered.~~ **WITHDRAWN 2026-08-16** — crypto left Samurai's scope entirely ([ADR-0014](../adr/0014-intraday-flat-by-close-horizon.md) amendment). Every instrument this system trades has a session, an open and a close, so there is no always-open case to cover.
-2. As the Orchestrator, I want to gate instrument ticks on a market-hours/trading-calendar check, so that a tick never fires into a closed market.
+2. As the Orchestrator, I want to gate instrument ticks on a market-hours/trading-calendar check, so that no tick fires into a closed market **except** the post-close flatten grace of story 2c.
 2b. As the Orchestrator, I want to gate ticks additionally on an injected **policy window**, so that entries are armed only inside the recorded 14:30–15:45 London window ([#706](https://github.com/dd-jp/samurai-trading-system/issues/706)) without narrowing the venue calendar, which is separately load-bearing for `sessionEnd`.
+2c. As the Orchestrator, I want to keep firing ticks for `flatten_after_close_ms` **after** the venue's close ([#1389](https://github.com/dd-jp/samurai-trading-system/issues/1389)), so that ADR-0014's flatten window has ticks in it after the bell — the Trader is the only producer of the mandatory flatten and it is evaluated on a tick, so a grace with no tick in it is a grace that does not exist. A tick admitted this way can only CLOSE: the entry path consults the same window and returns `skip('session_closing')`. **Flatten-only as of [#1499](https://github.com/dd-jp/samurai-trading-system/issues/1499):** a tick admitted ONLY by this grace (`TickPlan.grace_only`) never claims a decision bar, so it runs the tick path's exit check alone — no Analysts, no Debate — rather than paying a full decision pass to reach the Trader's skip. Before #1499 the claim was unconditional, and because the US close at 20:00Z sits exactly on the 1h debate-bar grid, the first grace tick after it claimed a fresh decision bar and paid the full pass: ~1 extra decision bar/day, ≈+15% on the US paper leg (the LSE leg was never exposed — its 15:30Z close floors into the 15:00 bar).
 3. As the Orchestrator, I want to iterate the active instrument list each tick, so that the covered universe changes at session boundaries without a code change.
 4. As the Orchestrator, I want to emit one `Signal{asset, asset_class}` per instrument **per decision**, so that the Analysts stage has a producer for the input it was already specced to consume (closes GAP-I).
 4b. As the Orchestrator, I want most ticks to run **only** the position-facing work — the Trader's exit-only entry point (positions, mark, flatten window; bracket exits rest at the venue) — so that a 2-minute exit cadence does not force a 2-minute cost for the analyst and debate stages, whose inputs change once per debate bar.
@@ -118,10 +119,22 @@ interface SchedulerConfig {
    * flat-by-close off once already.
    */
   stocksTradingWindow?: (instant: Date) => boolean;
+  /**
+   * The post-close flatten grace (#1389). A WIDENING, OR'd in after the
+   * calendar has already said shut — the only predicate here that can put an
+   * instrument in the plan on its own.
+   *
+   * Additive rather than replacing the `isOpen` conjunct: making
+   * `stocksTradingWindow` authoritative instead would let a bare wall-clock
+   * window admit weekends and holidays. This predicate resolves the close
+   * through the same calendar object, so a non-trading day has no close to be
+   * inside the grace of and it answers `false`.
+   */
+  postCloseFlattenWindow?: (instant: Date) => boolean;
 }
 ```
 
-- An instrument is included only if the trading-calendar source reports its market open at `tick_time` **and** the policy window admits `tick_time`. Both are read **once per tick**, for the same reason `isOpen` already is.
+- An instrument is included if the trading-calendar source reports its market open at `tick_time` **and** the policy window admits `tick_time`, **or** if the post-close flatten window admits `tick_time`. All three are read **once per tick**, for the same reason `isOpen` already is. The first two are a conjunction because the policy window narrows a session and cannot open one; the third is a disjunct because ADR-0014's grace runs when the venue is already shut, which no narrowing of an open session can express (`scheduler.ts`'s `nextTick`). This rule was AND-only until #1389.
 - ~~Crypto instruments always included.~~ **WITHDRAWN 2026-08-16** — crypto is out of scope ([ADR-0014](../adr/0014-intraday-flat-by-close-horizon.md) amendment). `asset_class` retains its `'crypto'` member for now because collapsing the type touches the wire contracts and every stage; **no scheduler behaviour may depend on that member.**
 - Trading-calendar source is a small injected dependency (holiday/session table), not designed in depth here — flagged as a light dependency, not a new component (OPEN-GAP: trading-calendar — ~~LOW severity~~, noted in cross-spec-contracts.md). **This gap is no longer LOW.** *(The strike is the point: cross-spec-contracts.md still carries the original LOW listing in its historical register and records the upgrade separately, so citing it without striking the severity pointed a reader at a grade that document itself has withdrawn.)* With a policy window layered on top and a daily out-of-session screener keyed to the *next trading day*, a wrong calendar now produces a wrong watchlist as well as a wrong tick — and [#696](https://github.com/dd-jp/samurai-trading-system/issues/696) reports the US equity calendar as weekend-only, trading through Thanksgiving. **One calendar, injected, never re-derived by a second consumer.**
 
@@ -384,7 +397,7 @@ function buildProductionTickRunner(config: ProductionConfig): {
   - **Exit independence** → the tick path completes with the analyst step stubbed to throw. If it does not, an exit is reading analyst output and the split is unsafe.
 - **Scheduler seam:** `Scheduler.nextTick(clock)` — given a clock and a trading-calendar fake, assert instruments included/excluded correctly around market open/close boundaries and holidays, **and** around the policy window's edges.
   - **The window's flatten tail needs its own assertion, unpinned.** Assert a tick fires inside `[sessionEnd − flatten_before_close_ms, sessionEnd)` even though it is outside the entry window. **Run it with the calendar unpinned** so it resolves through the mode-selected venue: a test that pins one venue passes against a hard-coded tail and proves nothing. Discriminator: replacing the composed tail with a literal single-venue calendar fails this assertion and leaves the entry-window assertions green.
-  - ~~assert crypto always included~~ — withdrawn with crypto's scope removal; assert instead that **no instrument ticks into a closed market**, with no always-open exception.
+  - ~~assert crypto always included~~ — withdrawn with crypto's scope removal; assert instead that **no instrument ticks into a closed market outside the post-close flatten grace**, with no always-open exception. #1389 added the one exception: assert a tick fires in `(sessionEnd, sessionEnd + flatten_after_close_ms]` and none fires after it, and that a non-trading day produces no grace tick at all. Discriminator: a grace expressed by widening the calendar instead of OR-ing a separate predicate moves `sessionEnd` and fails the second assertion.
 - Good tests here assert *wiring and sequencing*, not stage decision logic — each stage's own spec/tests own its decision correctness. Prior art: the same seam-testing discipline as every other stage spec (one high-level function, fakes for dependencies, assert on outputs/side-effects not internals).
 - Determinism test: same seed + injected simulated clock + fixed universe → byte-identical `TickOutcome` sequence and `audit_log` rows across two runs (mirrors cost-model-backtest-spec's determinism story).
 - **Composition root seam:** `buildProductionTickRunner(config)` — given fake/stub adapters for each closed-over dependency (broker, market data, approval channel, etc.), assert the returned `TickSteps` callables produce the same call shape the existing `SequentialTickRunner` unit tests already fake (i.e. the adapter shims for `analysts`/`debate` are covered directly, not just through an end-to-end run). A single real, non-mocked run against Alpaca paper (+ the narrow smoke universe) is the manual/CI-gated E2E check, not a unit test — it's the "wiring validated" done-bar (ADR-0004), run once per environment, not on every commit.

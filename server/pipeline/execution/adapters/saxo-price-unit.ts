@@ -43,27 +43,31 @@ export function saxoCashPerShare(unit: SaxoQuoteUnit, quotedPrice: number): numb
 /**
  * Cash per share -> the number to send back to the venue on an order.
  *
- * UNVERIFIED, SIM AND LIVE (#1302 AC3): that Saxo wants order prices on a GBX
- * line in the QUOTED unit (pence) rather than in `CurrencyCode` (pounds).
- * Nothing in doc 44 or doc 43 measured the write path — every probe there was
- * on a USD line, where `PriceToContractFactor` is 1.0 and the two readings
- * coincide. This is the symmetric assumption: the unit an order price is
- * expressed in is the unit the venue quotes in. It is deliberately the only
- * place that assumption is encoded, so one live probe can flip it here alone.
+ * That Saxo wants order prices on a GBX line in the QUOTED unit (pence)
+ * rather than in `CurrencyCode` (pounds) is MEASURED on SIM 2026-09-10,
+ * `docs/research/44-saxo-data-surface.md` §2.1a (#1444): `POST
+ * /trade/v2/orders/precheck` returns `EstimatedCashRequired` in the ACCOUNT
+ * currency, and it scales as `OrderPrice x PriceToContractFactor` — 0.01 on
+ * LQQ3, 1.0 on the 3USL control, same fixed term on both. So the symmetric
+ * assumption holds: the unit an order price is expressed in is the unit the
+ * venue quotes in. STILL OWED (#1302 AC3): the in-session marketability
+ * probe, which tests the matching engine rather than precheck's arithmetic,
+ * and the same reading against the LIVE gateway. This stays the only place
+ * the assumption is encoded, so either can flip it here alone.
  *
- * A SECOND assumption rides on the first and is equally unverified: that
- * `saxo-adapter.ts`'s `ORDER_DECIMALS` (2, from the line's `OrderDecimals`)
+ * A SECOND assumption rides on the first and is still UNVERIFIED, on SIM as
+ * well as live — nothing above touches it: that
+ * `saxo-adapter.ts`'s `ORDER_DECIMALS` (2, from the line's `Format.OrderDecimals`)
  * is a legal rounding for the number this returns. Applied to pence that is
  * 0.0001 GBP granularity, and `OrderDecimals` states precision rather than
  * the tick grid — a correctly scaled pence price can still be off-grid.
  *
- * The probe that settles both: place a `Limit` on a GBX line far enough from
- * the market that it rests, read it back on `GET /port/v1/orders/me`, and
- * compare the returned `Price` with the number sent. Equal in pence confirms
- * this function; the number sent x 0.01 means delete the division. A
- * rejection on price or tick grounds settles neither — it is the tick grid
- * answering, not the unit, and the details endpoint's own tick fields are
- * what to read then.
+ * The probe that settles what is left: place a `Limit` on a GBX line inside
+ * the LSE continuous session, far enough from the market that it rests, and
+ * read it back on `GET /port/v1/orders/me`. A rejection on price or tick
+ * grounds is the tick grid answering, not the unit; the grid to round onto is
+ * `TickSizeScheme` on the details response, which carries no flat `TickSize`
+ * field (doc 44 §2.1a).
  */
 export function saxoQuotedPrice(unit: SaxoQuoteUnit, cashPrice: number): number {
   return cashPrice / unit.price_to_contract_factor;

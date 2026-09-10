@@ -27,7 +27,7 @@ export {
   type SignalDecayVerdict,
 } from './early-exit.js';
 export { FixtureSetupStore } from './fixture-setup-store.js';
-export { computeIdempotencyKey } from './idempotency-key.js';
+export { computeFlattenIdempotencyKey, computeIdempotencyKey } from './idempotency-key.js';
 export { buildSetupVector, type SetupMarketContext } from './setup-vector.js';
 export {
   type SetupAssetClass,
@@ -54,5 +54,6 @@ export type {
   TraderInput,
   TraderSkipReason,
   UnpricedFlattenReport,
+  UnresolvedFlatten,
 } from './types.js';
 export { assertTraderConfigSound, DEFAULT_TRADER_CONFIG } from './types.js';

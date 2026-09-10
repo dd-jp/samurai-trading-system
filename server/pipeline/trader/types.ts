@@ -51,6 +51,36 @@ export interface TraderConfig {
    */
   flatten_before_close_ms: number;
   /**
+   * How long AFTER the session close the flatten stays enforceable (#1389).
+   *
+   * The window used to end at the bell, because it was resolved from
+   * `TradingCalendar.sessionEnd` and every conforming calendar answers that
+   * strictly forward — one instant past the close it named TOMORROW's close and
+   * the window silently shut. A lot the pre-close window did not reach (a
+   * saturated pass; #1390's own coverage bound) therefore got no second chance
+   * that day at all, which is how seven control lots carried overnight on
+   * 2026-09-08.
+   *
+   * The grace is bounded from both ends and neither bound is cosmetic:
+   *
+   *   - **Below**, by the tick interval. The flatten is evaluated ON a tick, so
+   *     a grace shorter than one interval is a grace no tick lands in —
+   *     `assertFlattenWindowCoversTickInterval` refuses it at boot, the same
+   *     way it refuses too narrow a pre-close window (#670).
+   *   - **Above**, by Verdict's `max_mark_age.stocks` (gate 2a). A PRICED
+   *     flatten is not exempt from the price-staleness gate, so past that age
+   *     every post-bell flatten is refused `stale_feed` and a longer grace buys
+   *     nothing but ticks that cannot produce a `go`.
+   *     `assertFlattenGraceWithinMarkAge` refuses that at boot too.
+   *
+   * The default is five minutes: long enough for several ticks at any cadence
+   * the coupling assertion admits, short enough to sit well inside the 15-minute
+   * ceiling. What it is NOT is a modelled claim about post-close fill quality on
+   * a GBP LSE ETP after the closing auction — nothing in this repo models that,
+   * and widening it is David's call, not a tuning exercise.
+   */
+  flatten_after_close_ms: number;
+  /**
    * Hard per-trade risk cap as a fraction of equity, reached at conviction
    * 1.0. Deliberately a small fraction, well under Kelly (research: full
    * Kelly implies 50-80% drawdowns). The Trader enforces only this per-trade
@@ -232,6 +262,7 @@ export const DEFAULT_TRADER_CONFIG: TraderConfig = {
   time_in_force: { crypto: 'gtc', stocks: 'day' },
   scale_in_conviction_delta: 0.1,
   flatten_before_close_ms: 5 * 60 * 1_000,
+  flatten_after_close_ms: 5 * 60 * 1_000,
   early_exit: DEFAULT_EARLY_EXIT_CONFIG,
 };
 
@@ -263,6 +294,17 @@ export function assertTraderConfigSound(config: TraderConfig): void {
     throw new Error(
       `traderConfig.flatten_before_close_ms must be > 0 (got ${config.flatten_before_close_ms}); ` +
         `a non-positive window disables flat-by-close, which ADR-0014 requires`,
+    );
+  }
+  // #1389. Silent in exactly the way the field above is: a zero grace restores
+  // the forward-only window this ticket removed — the bell shuts the flatten
+  // off mid-tick and a lot the pre-close window missed gets no second chance,
+  // with nothing in `trader_log` distinguishing that from a session that had
+  // nothing left to flatten.
+  if (!(config.flatten_after_close_ms > 0)) {
+    throw new Error(
+      `traderConfig.flatten_after_close_ms must be > 0 (got ${config.flatten_after_close_ms}); ` +
+        'a non-positive grace restores the forward-only flatten window #1389 removed',
     );
   }
 }
@@ -365,6 +407,32 @@ export interface TraderInput {
    */
   exitFillSizes: (idempotency_keys: readonly string[]) => Promise<Map<string, number>>;
   /**
+   * #1389: every flatten this arm has SENT but not yet resolved
+   * (`SharedStore.getUnresolvedFlattens` — `submitting`, or `submitted` with
+   * fills not yet swept). The Trader produces no flatten intent for an
+   * instrument this set names.
+   *
+   * **A second guard, deliberately independent of the idempotency key.** The
+   * key dedups one COORDINATE; it was never a per-instrument in-flight guard,
+   * and every design #1389's re-analysis discarded failed at exactly that gap:
+   * while a first flatten is submitted-but-unswept, `getExitFillSizes` still
+   * reports nothing closed, so a second flatten sized off `filled_size` would
+   * sell the whole lot again — into a short, on a 3x leveraged ETP.
+   *
+   * Required, not optional, for the reason `exitFillSizes` is: an optional
+   * reader is one a composition root can forget, and forgetting this one
+   * restores the over-sell silently, on the money path. It must be bound to the
+   * SAME store instance `positionState` and `exitFillSizes` read, which also
+   * makes it arm-scoped for free (migration 0050) — the live arm must not see
+   * the control arm's in-flight flattens, or either arm would block the other.
+   *
+   * The honest cost: a wedged fill poll leaves rows unresolved indefinitely and
+   * blocks flattening for that instrument until it is unwedged. That is bounded
+   * by the carried-lot alert, not by code — see ADR-0014's 2026-09-10
+   * amendment.
+   */
+  unresolvedFlattens: () => Promise<readonly UnresolvedFlatten[]>;
+  /**
    * #432: the cosine precedent store, read at decision time for neighbors and
    * written at decision time with the new setup (trader-spec.md stories 13 and
    * 16). Owned by the Feedback Loop, which labels the realized R on close.
@@ -394,6 +462,20 @@ export interface TraderInput {
    * suppression #826 removes. `buildFlattenExit` guards it anyway.
    */
   onUnpricedFlatten?: (report: UnpricedFlattenReport) => void;
+}
+
+/**
+ * One flatten this arm has sent and not yet resolved (#1389), as much of it as
+ * the Trader needs.
+ *
+ * Structural on purpose: `UnresolvedFlattenSubmission` lives in
+ * `pipeline/execution`, and the Trader importing from a stage DOWNSTREAM of it
+ * would be a new dependency edge between two stages that today share only
+ * `contracts/` and `shared/`. The execution store's richer row is assignable to
+ * this, so the composition root binds it directly with no adapter.
+ */
+export interface UnresolvedFlatten {
+  readonly instrument: string;
 }
 
 /** One mandatory flatten built without a mark (#826). */
@@ -445,6 +527,16 @@ export type TraderSkipReason =
   // is the thing to look at, and an instrument is stuck un-exitable until it
   // is.
   | 'exit_held_quantity_diverged'
+  // #1389: this arm has already SENT a flatten for this instrument and it is
+  // not resolved yet (`submitting`, or `submitted` with fills unswept), so no
+  // second flatten is produced. Its own reason and not a variant of
+  // `exit_no_filled_size`: that one says the lot has nothing left to close,
+  // this one says the close is already in flight and the held quantities are
+  // stale until the sweep lands. A soak in which this appears more than
+  // briefly is a soak whose fill poll is wedged, and the instrument is
+  // un-flattenable until it is — which is what the carried-lot alert exists to
+  // make audible.
+  | 'flatten_in_flight'
   // #743, tick path only: no lot is open for this instrument, so the exit
   // check has nothing to evaluate. By far the commonest tick-path outcome and
   // entirely healthy — it is the exit-cadence sibling of a quiet decision.
@@ -537,14 +629,6 @@ export interface TraderReasonDetail {
  */
 export type TraderDiagnosticKind =
   /**
-   * The calendar reports a session close at or before `now`. Flattening is the
-   * correct response and `withinFlattenWindow` gives it (see its docblock), but
-   * a calendar stuck in this state parks the book flat FOREVER and stops
-   * trading — and at a 15-minute cadence that is indistinguishable from a quiet
-   * market, which is the failure #625 actually produced (96 debates, 0 trades).
-   */
-  | 'session_end_in_past'
-  /**
    * `sessionEnd` returned null for a class that is not crypto. Null means "this
    * venue never closes", which is the documented and intended answer for crypto
    * and a broken calendar for anything else — and the two are the same `false`
@@ -567,4 +651,19 @@ export type TraderDiagnosticKind =
    * that would otherwise supply `asset_class` — see `TraderDiagnostic.
    * asset_class` for why this is the one kind that can carry `undefined`.
    */
-  | 'control_arm_valuation_refused';
+  | 'control_arm_valuation_refused'
+  /**
+   * #1389: a lot is STILL OPEN after `flatten_after_close_ms` has expired — the
+   * flatten window has now closed for that session and this lot did not make
+   * it out. Flat-by-close has been missed, the position is carried overnight
+   * against ADR-0014, and the next session's window is the earliest anything
+   * will target it again.
+   *
+   * The one kind in this union raised from OUTSIDE `decide` — the tick loop
+   * stops at the bell, so nothing on the decision path is still running when
+   * the grace expires; the fill-sync poll is (`carried-lot-alert.ts`). It is a
+   * diagnostic rather than a skip reason for the reason the whole type exists:
+   * there is no tick, no decision and no `trader_log` row to hang it on, and
+   * the failure it reports is precisely the one that used to be silent.
+   */
+  | 'lot_carried_past_session_close';

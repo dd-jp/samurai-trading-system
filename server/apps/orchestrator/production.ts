@@ -252,6 +252,7 @@ import { LIVE_BOOK_SIZING_USD } from './paper-profile.js';
 import { AlpacaAccountStateProvider } from './production/account-state.js';
 import { buildAnalystsStep, composeMarketIntelligence } from './production/analysts-adapter.js';
 import { toCapitalCeilingUsd } from './production/capital-ceiling.js';
+import { buildCarriedLotReporter } from './production/carried-lot-alert.js';
 // #753: the control arm's own account scalars — see `control-account-state.ts`.
 import {
   buildControlBookAnchorResolver,
@@ -282,7 +283,10 @@ import {
   type VerdictStepDeps,
 } from './production/direct-bind.js';
 import { type ProductionEnvironment, readProductionEnvironment } from './production/environment.js';
-import { assertFlattenWindowCoversTickInterval } from './production/flatten-tick-coupling.js';
+import {
+  assertFlattenGraceWithinMarkAge,
+  assertFlattenWindowCoversTickInterval,
+} from './production/flatten-tick-coupling.js';
 import { LlmFailureRateMonitor } from './production/llm-failure-rate-guard.js';
 import { assertLseCalendarCoverage } from './production/lse-calendar-coverage-guard.js';
 import { MiCoverageMonitor } from './production/mi-coverage.js';
@@ -290,7 +294,7 @@ import { MiCoverageMonitor } from './production/mi-coverage.js';
 // behind one spend check.
 import { MiRefreshQueue } from './production/mi-refresh-queue.js';
 import { withOnTradeClose } from './production/on-trade-close-hookup.js';
-import { withFlattenTail } from './production/stocks-tick-window.js';
+import { postCloseFlattenTail, withFlattenTail } from './production/stocks-tick-window.js';
 import {
   reportTickSkip,
   type TickSkipAlertChannel,
@@ -835,6 +839,15 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     config.traderConfig,
     config.tickIntervalMs ?? DEFAULT_TICK_INTERVAL_MS,
   );
+
+  // #1389, and the one that spans the Trader's config and VERDICT's. The three
+  // above bound the flatten window from below; this bounds the post-close grace
+  // from ABOVE, against the price-staleness ceiling gate 2a actually enforces —
+  // a grace past `max_mark_age.stocks` produces post-bell ticks that can only
+  // ever be refused `stale_feed`, which in `trader_log` is indistinguishable
+  // from a grace that is working. `verdictConfig`, not `riskConfig`: gate 2a
+  // reads Verdict's copy, and the two are equal today only by coincidence.
+  assertFlattenGraceWithinMarkAge(config.traderConfig, config.verdictConfig.max_mark_age.stocks);
 
   // Fourth of the same family, and the one ADR-0013 calls a precondition of
   // its own safety rather than a tidiness item (#638). With no human gate left
@@ -1927,6 +1940,10 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // re-derives it from. Two stores here would mean two answers to "what
     // does this lot still hold", which is the divergence #568 was.
     getExitFillSizes: (idempotency_keys) => executionStore.getExitFillSizes(idempotency_keys),
+    // #1389: the same `executionStore` again, for the same reason — and here
+    // it also carries the arm scoping (migration 0050), so the live arm's
+    // Trader sees the live arm's in-flight flattens and nobody else's.
+    getUnresolvedFlattens: () => executionStore.getUnresolvedFlattens(),
     setupStore,
     traderLog: new SqliteTraderLogStore(guardedStore(config.db, 'trader')),
     // #511: the declared capital ceiling, spread through rather than read
@@ -2991,6 +3008,15 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
             config.traderConfig.flatten_before_close_ms,
           ),
         }),
+    // #1389, and UNCONDITIONAL — unlike the narrowing above, which only exists
+    // when a profile chose one. The grace is not a policy a run opts into: it
+    // is the second half of ADR-0014's flatten window, and every equity run has
+    // it. It resolves through the SAME `equityCalendar`, so a non-trading day
+    // has no close to be inside the grace of and the predicate answers false.
+    postCloseFlattenWindow: postCloseFlattenTail(
+      equityCalendar,
+      config.traderConfig.flatten_after_close_ms,
+    ),
   });
   const heartbeat = new Heartbeat(
     config.heartbeatChannel ?? loggingAlertChannel('heartbeatChannel', logger),
@@ -3935,6 +3961,23 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         fillPollIntervalMs: config.fillPollIntervalMs ?? DEFAULT_FILL_POLL_INTERVAL_MS,
         reconcileTraceId: CONTROL_RECONCILE_TRACE_ID,
         fillSyncTraceId: CONTROL_FILL_SYNC_TRACE_ID,
+        // #1389, and the CONTROL arm's is not the afterthought: the seven lots
+        // that carried overnight on 2026-09-08 were control-arm lots, so a
+        // detector wired only on the live loop would leave the very incident
+        // this ticket reproduces unalerted. Bound to the control arm's OWN
+        // store, since `getOpenPositions` is arm-scoped (#753, migration 0050).
+        reportCarriedLots: buildCarriedLotReporter({
+          clock,
+          calendar: equityCalendar,
+          flattenAfterCloseMs: config.traderConfig.flatten_after_close_ms,
+          getOpenPositions: () => components.controlArmWiring.store.getOpenPositions(),
+          getExitFillSizes: (keys) => components.controlArmWiring.store.getExitFillSizes(keys),
+          logger,
+          traceId: CONTROL_FILL_SYNC_TRACE_ID,
+          ...(config.traderDiagnosticAlerts === undefined
+            ? {}
+            : { alerts: config.traderDiagnosticAlerts }),
+        }),
       });
 
       fillSync = startFillSync({
@@ -3944,6 +3987,18 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         fillPollIntervalMs: config.fillPollIntervalMs ?? DEFAULT_FILL_POLL_INTERVAL_MS,
         reconcileTraceId: RECONCILE_TRACE_ID,
         fillSyncTraceId: FILL_SYNC_TRACE_ID,
+        reportCarriedLots: buildCarriedLotReporter({
+          clock,
+          calendar: equityCalendar,
+          flattenAfterCloseMs: config.traderConfig.flatten_after_close_ms,
+          getOpenPositions: () => components.executionStore.getOpenPositions(),
+          getExitFillSizes: (keys) => components.executionStore.getExitFillSizes(keys),
+          logger,
+          traceId: FILL_SYNC_TRACE_ID,
+          ...(config.traderDiagnosticAlerts === undefined
+            ? {}
+            : { alerts: config.traderDiagnosticAlerts }),
+        }),
       });
 
       loop = startTickLoop({

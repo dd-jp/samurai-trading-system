@@ -1165,6 +1165,182 @@ describe('runTickPlan decision gate (#743)', () => {
     expect(steps.analysts).toHaveBeenCalledTimes(2);
   });
 
+  it('a grace-only plan never claims a decision bar — the runner takes the tick path (#1499)', async () => {
+    // The direct seam: the loop must not even ASK the gate to claim when the
+    // plan was admitted only by the post-close grace, or a bar-aligned close
+    // (the US 20:00Z case #1499 measured) claims a fresh decision bar exactly
+    // like an ordinary window tick would.
+    const seen: Array<TickContext['decision_bar']> = [];
+    const runner: TickRunner = {
+      async runInstrument(_signal, ctx) {
+        seen.push(ctx.decision_bar);
+        return { trace_id: ctx.trace_id, final_stage: 'position_check' };
+      },
+    };
+    const gate = new DebateBarDecisionGate();
+    const config = loopConfig(gate);
+    const usClose = new Date('2026-07-15T20:00:00Z'); // bar-aligned on the 1h grid
+
+    await runTickPlan(
+      { ...planAt(usClose, 'AAPL'), grace_only: true },
+      runner,
+      { now: () => usClose },
+      config,
+    );
+
+    expect(seen[0]).toBeUndefined();
+  });
+
+  it('a grace tick runs no analyst or debate step and still reaches exitCheck (#1499)', async () => {
+    const steps: TickSteps = {
+      exitCheck: vi.fn(async () => null),
+      analysts: vi.fn(async () => {
+        throw new Error('unreachable: a grace tick must not run analysts');
+      }),
+      debate: vi.fn(async () => {
+        throw new Error('unreachable: a grace tick must not run debate');
+      }),
+      trader: vi.fn(async () => {
+        throw new Error('unreachable: a grace tick has no Trader entry point of its own');
+      }),
+      risk: vi.fn(async () => {
+        throw new Error('unreachable');
+      }),
+      verdict: vi.fn(async () => {
+        throw new Error('unreachable');
+      }),
+      execution: vi.fn(async () => {
+        throw new Error('unreachable');
+      }),
+    };
+    const runner = new SequentialTickRunner(steps);
+    const gate = new DebateBarDecisionGate();
+    const config = loopConfig(gate);
+    const usClose = new Date('2026-07-15T20:00:00Z');
+
+    const outcomes = await runTickPlan(
+      { ...planAt(usClose, 'AAPL'), grace_only: true },
+      runner,
+      { now: () => usClose },
+      config,
+    );
+
+    expect(steps.exitCheck).toHaveBeenCalledTimes(1);
+    expect(steps.analysts).not.toHaveBeenCalled();
+    expect(steps.debate).not.toHaveBeenCalled();
+    expect(outcomes[0]?.final_stage).toBe('position_check');
+  });
+
+  it('a window tick (isOpen, not grace-admitted) still runs analysts and debate on a fresh bar (#1499)', async () => {
+    const intent: OrderIntent = {
+      idempotency_key: 'key-aapl-1400',
+      instrument: 'AAPL',
+      asset_class: 'stocks',
+      side: 'buy',
+      intent_type: 'entry',
+      size: 100,
+      entry: 100,
+      stop: 95,
+      target: 110,
+      time_in_force: 'day',
+      decision_timestamp: NOW,
+      decided_at: NOW,
+      metadata: {
+        debate_id: 'debate-1',
+        conviction: 0.7,
+        converged: true,
+        sizing: {
+          base_risk_fraction: 0.01,
+          conviction_multiplier: 1,
+          vol_floor_factor: 1,
+          non_converged_haircut: 1,
+          cosine_multiplier: 0.75,
+        },
+        cosine_precedent: { neighbor_count: 0, weighted_mean_r: null, no_precedent: true },
+      },
+    };
+    const barOpen = new Date('2026-07-15T14:00:00Z');
+    const steps: TickSteps = {
+      exitCheck: vi.fn(async () => {
+        throw new Error('unreachable: a fresh-bar window tick takes the decision path');
+      }),
+      analysts: vi.fn(async () => [
+        {
+          trace_id: 'trace-1',
+          analyst_id: 'technical-1',
+          analyst_type: 'technical' as const,
+          direction: 'bullish' as const,
+          confidence: 0.8,
+          key_points: ['price above the 50d'],
+          timestamp: barOpen,
+        },
+      ]),
+      debate: vi.fn(async () => ({
+        synthesis: 'bullish continuation',
+        position: 'enter long',
+        confidence: 0.7,
+        contributions: [],
+        disagreement_summary: '',
+        open_items: [],
+        converged: true,
+        rounds_completed: 2,
+        latency_ms: 1200,
+        direction: 'bullish' as const,
+        debate_id: 'debate-1',
+        bar_timestamp: barOpen,
+        read: true,
+      })),
+      trader: vi.fn(async () => intent),
+      risk: vi.fn(async () => ({
+        status: 'approved' as const,
+        order_intent: intent,
+        modifications: {
+          original_size: intent.size,
+          final_size: intent.size,
+          stop_tightened: false,
+        },
+        binding_constraint: null,
+        reasons: [],
+        warnings: [],
+        risk_snapshot: { exposure: {}, drawdown_pct: 0, armed_breakers: [] },
+        next_breaker_state: [],
+      })),
+      verdict: vi.fn(async () => ({
+        status: 'go' as const,
+        order: intent,
+        no_go_reason: null,
+        no_go_detail: null,
+        approval_path: 'automated' as const,
+        would_require_approval: false,
+        idempotency_key: intent.idempotency_key,
+        timestamp: barOpen,
+      })),
+      execution: vi.fn(async () => ({
+        status: 'submitted' as const,
+        idempotency_key: intent.idempotency_key,
+        broker_order_ids: ['broker-1'],
+        order_state: 'submitted' as const,
+        reason: null,
+        timestamp: barOpen,
+      })),
+    };
+    const runner = new SequentialTickRunner(steps);
+    const gate = new DebateBarDecisionGate();
+    const config = loopConfig(gate);
+
+    // `grace_only` absent — the property `makePlan`/`planAt` already produce.
+    const outcomes = await runTickPlan(
+      planAt(barOpen, 'AAPL'),
+      runner,
+      { now: () => barOpen },
+      config,
+    );
+
+    expect(steps.analysts).toHaveBeenCalledTimes(1);
+    expect(steps.debate).toHaveBeenCalledTimes(1);
+    expect(outcomes[0]?.final_stage).toBe('execution');
+  });
+
   it('still fires the flatten on every tick when the gate NEVER opens', async () => {
     // Mutation discriminator, hazard 1: force the gate permanently closed —
     // the decision chain is dead, and the flatten must still reach Execution

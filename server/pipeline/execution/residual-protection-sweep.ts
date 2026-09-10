@@ -79,9 +79,23 @@
  * mechanical alternatives it lists (a hand-emulated OCO carrying #586's
  * double-fill race, or re-flattening the residual instead of protecting it)
  * both change what the system DOES with live money and are the owner's call.
- * The bound on the exposure meanwhile is ADR-0014's flat-by-close: a marked
- * lot is still an open position, so `buildExitIntent` (trader/decide.ts)
- * targets it in the flatten window like any other.
+ *
+ * The bound on the exposure meanwhile is ADR-0014's flat-by-close, and it is a
+ * bound with a stated edge rather than a guarantee. A marked lot is still an
+ * open position, so `buildExitIntent` (trader/decide.ts) targets it like any
+ * other — but only on a TICK inside the flatten window, which runs from
+ * `flatten_before_close_ms` before the close to `flatten_after_close_ms` after
+ * it (#1389). Past that grace nothing targets the lot again until the next
+ * session's window, and the residual is carried overnight unprotected; the
+ * carried-lot alert (`orchestrator/production/carried-lot-alert.ts`) is what
+ * makes that outcome audible.
+ *
+ * This paragraph previously said the flatten targeted such a lot "in the
+ * flatten window like any other" with no edge stated, which read as an
+ * unconditional bound. It was worse than incomplete before #1389: the window
+ * was forward-only, so once the close had passed there was no instant at which
+ * a flatten could be produced at all, and the sentence was describing a remedy
+ * that could not run.
  */
 
 import {

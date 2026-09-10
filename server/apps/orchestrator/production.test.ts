@@ -427,8 +427,14 @@ function stubConfig(db: StoreHandle, overrides: Partial<ProductionConfig> = {}):
     // automation dial to refuse a HITL-engaging config (#434), so an empty cast
     // here is a lie the assertion is the first code to notice. `auto` is what
     // ADR-0007 mandates and what every other fixture in this file uses.
+    //
+    // `max_mark_age` is here for exactly the same reason since #1389: the boot
+    // assertion bounding the post-close flatten grace reads Verdict's copy —
+    // gate 2a is the ceiling the grace is spent against — so an omitted field
+    // reaches it as `undefined` and throws before any of these tests run.
     verdictConfig: {
       automation_level: { crypto: 'auto', stocks: 'auto' },
+      max_mark_age: { crypto: 3_600_000, stocks: 3_600_000 },
     } as ProductionConfig['verdictConfig'],
     executionConfig: {} as ProductionConfig['executionConfig'],
     correlationConfig: {} as ProductionConfig['correlationConfig'],
@@ -495,6 +501,45 @@ function goVerdict(): VerdictDecision {
 }
 
 /**
+ * The config a fixture needs when it parks its tick interval hours-wide to keep
+ * fake timers quiet.
+ *
+ * Parking the tick used to mean widening one number (#670). Since #1389 the
+ * flatten knobs are a coupled family and all three have to move together:
+ *
+ * - `flatten_before_close_ms` is bounded BELOW by
+ *   `MIN_TICKS_INSIDE_FLATTEN_WINDOW * tickIntervalMs`,
+ * - `flatten_after_close_ms` is bounded BELOW by one `tickIntervalMs`, and
+ * - `flatten_after_close_ms` is bounded ABOVE by
+ *   `verdictConfig.max_mark_age.stocks`, because gate 2a refuses a flatten
+ *   priced off a mark older than that however mandatory the exit is.
+ *
+ * So a 48-hour tick against the stub's 1-hour mark-age ceiling has NO sound
+ * config: widen the grace to fit the tick and the ceiling rejects it, leave it
+ * and the tick coupling rejects it. The honest fixture raises the ceiling with
+ * the tick rather than routing around either assertion.
+ *
+ * Real deployments never meet that squeeze — the shipped profile ticks every
+ * two minutes with a five-minute grace under a fifteen-minute ceiling — but the
+ * derived constraint is real and worth reading off this helper:
+ * `tickIntervalMs <= verdictConfig.max_mark_age.stocks` is now enforced at
+ * boot, transitively, for any config that flattens at all.
+ */
+function quietFlattenOverrides(tickIntervalMs: number): Partial<ProductionConfig> {
+  return {
+    traderConfig: {
+      ...DEFAULT_TRADER_CONFIG,
+      flatten_before_close_ms: MIN_TICKS_INSIDE_FLATTEN_WINDOW * tickIntervalMs,
+      flatten_after_close_ms: tickIntervalMs,
+    },
+    verdictConfig: {
+      automation_level: { crypto: 'auto', stocks: 'auto' },
+      max_mark_age: { crypto: tickIntervalMs, stocks: tickIntervalMs },
+    } as ProductionConfig['verdictConfig'],
+  };
+}
+
+/**
  * Real per-stage config values (same shapes direct-bind.test.ts pins).
  *
  * This is cast to its stage types at the use site, so a field going missing
@@ -508,6 +553,10 @@ const REAL_CONFIGS = {
   traderConfig: {
     conviction_floor: 0.5,
     flatten_before_close_ms: 5 * 60 * 1_000,
+    // #1389's other half of the same window, and absent here for the same
+    // reason `flatten_before_close_ms` was until #691: this object is cast at
+    // the use site, so only the boot guard notices it missing.
+    flatten_after_close_ms: 5 * 60 * 1_000,
     max_risk_per_trade: 0.01,
     asset_class_risk_multiplier: { crypto: 0.5, stocks: 1 },
     atr_timeframe: '1h',
@@ -4390,14 +4439,7 @@ describe('buildProductionOrchestrator', () => {
       tickIntervalMs: 48 * 60 * 60 * 1_000,
       heartbeatIntervalMs: 48 * 60 * 60 * 1_000,
       fillPollIntervalMs: NO_FILL_POLL_MS,
-      // Parked alongside the tick, for the reason QUIET_FLATTEN_WINDOW below
-      // gives (#670): a 48-hour tick can never land inside a 5-minute flatten
-      // window, and the boot assertion says so rather than letting the config
-      // claim a flat-by-close rule it cannot enforce.
-      traderConfig: {
-        ...DEFAULT_TRADER_CONFIG,
-        flatten_before_close_ms: MIN_TICKS_INSIDE_FLATTEN_WINDOW * 48 * 60 * 60 * 1_000,
-      },
+      ...quietFlattenOverrides(48 * 60 * 60 * 1_000),
     });
     const orchestrator = buildProductionOrchestrator(config);
 
@@ -4537,10 +4579,7 @@ describe('buildProductionOrchestrator', () => {
         tickIntervalMs: 48 * 60 * 60 * 1_000,
         heartbeatIntervalMs: 48 * 60 * 60 * 1_000,
         fillPollIntervalMs: NO_FILL_POLL_MS,
-        traderConfig: {
-          ...DEFAULT_TRADER_CONFIG,
-          flatten_before_close_ms: MIN_TICKS_INSIDE_FLATTEN_WINDOW * 48 * 60 * 60 * 1_000,
-        },
+        ...quietFlattenOverrides(48 * 60 * 60 * 1_000),
         feedback: {
           intervalMs: 1_000,
           config: paperStartingProfile('paper').feedback?.config as FeedbackConfig,
@@ -4725,10 +4764,7 @@ describe('buildProductionOrchestrator', () => {
         tickIntervalMs: 48 * 60 * 60 * 1_000,
         heartbeatIntervalMs: 48 * 60 * 60 * 1_000,
         fillPollIntervalMs: NO_FILL_POLL_MS,
-        traderConfig: {
-          ...DEFAULT_TRADER_CONFIG,
-          flatten_before_close_ms: MIN_TICKS_INSIDE_FLATTEN_WINDOW * 48 * 60 * 60 * 1_000,
-        },
+        ...quietFlattenOverrides(48 * 60 * 60 * 1_000),
         feedback: {
           intervalMs: 1_000,
           config: paperStartingProfile('paper').feedback?.config as FeedbackConfig,
@@ -4898,10 +4934,7 @@ describe('buildProductionOrchestrator', () => {
         tickIntervalMs: 48 * 60 * 60 * 1_000,
         heartbeatIntervalMs: 48 * 60 * 60 * 1_000,
         fillPollIntervalMs: NO_FILL_POLL_MS,
-        traderConfig: {
-          ...DEFAULT_TRADER_CONFIG,
-          flatten_before_close_ms: MIN_TICKS_INSIDE_FLATTEN_WINDOW * 48 * 60 * 60 * 1_000,
-        },
+        ...quietFlattenOverrides(48 * 60 * 60 * 1_000),
         feedback: {
           intervalMs: 1_000,
           config: paperStartingProfile('paper').feedback?.config as FeedbackConfig,
@@ -4970,10 +5003,7 @@ describe('buildProductionOrchestrator', () => {
         tickIntervalMs: 48 * 60 * 60 * 1_000,
         heartbeatIntervalMs: 48 * 60 * 60 * 1_000,
         fillPollIntervalMs: NO_FILL_POLL_MS,
-        traderConfig: {
-          ...DEFAULT_TRADER_CONFIG,
-          flatten_before_close_ms: MIN_TICKS_INSIDE_FLATTEN_WINDOW * 48 * 60 * 60 * 1_000,
-        },
+        ...quietFlattenOverrides(48 * 60 * 60 * 1_000),
         feedback: {
           intervalMs,
           config: paperStartingProfile('paper').feedback?.config as FeedbackConfig,
@@ -5588,6 +5618,19 @@ describe('buildProductionOrchestrator', () => {
         traderConfig: {
           ...paperStartingProfile('paper').traderConfig,
           flatten_before_close_ms: QUIET_FLATTEN_WINDOW,
+          // #1389's grace is the same argument one bell later, and one tick is
+          // all `assertFlattenWindowCoversTickInterval` requires of it.
+          flatten_after_close_ms: QUIET,
+        },
+        // ...but the grace is ALSO bounded above by gate 2a's mark-age ceiling
+        // (`assertFlattenGraceWithinMarkAge`), so parking the tick raises that
+        // ceiling too or no config exists at all. Spread the profile's own
+        // `verdictConfig` rather than casting a fresh one: the two fields these
+        // cases do not care about (`max_signal_age`, `drift_tolerance_pct`) are
+        // the profile's real values and there is no reason to lose them.
+        verdictConfig: {
+          ...paperStartingProfile('paper').verdictConfig,
+          max_mark_age: { crypto: QUIET, stocks: QUIET },
         },
         // #528: none of these cases exercise fill-sync — see NO_FILL_POLL_MS.
         fillPollIntervalMs: NO_FILL_POLL_MS,

@@ -60,7 +60,11 @@ import {
   RISK_CRITIC_SKIPPED_REASON,
   RiskManagerImpl,
 } from '../../../pipeline/risk-manager/index.js';
-import type { TraderConfig, TraderDiagnostic } from '../../../pipeline/trader/index.js';
+import type {
+  TraderConfig,
+  TraderDiagnostic,
+  UnresolvedFlatten,
+} from '../../../pipeline/trader/index.js';
 import {
   checkExitsWithReason,
   decideWithReason,
@@ -176,6 +180,17 @@ export interface TraderStepDeps extends BreakerStateDeps {
    * not mis-trade quietly, it stops every exit at the guard.
    */
   getExitFillSizes: (idempotency_keys: readonly string[]) => Promise<Map<string, number>>;
+  /**
+   * #1389: `SharedStore.getUnresolvedFlattens`, bound to the SAME store
+   * `getOpenPositions` and `getExitFillSizes` read — which is also what makes
+   * it arm-scoped (migration 0050). A cross-arm read here would have each arm
+   * blocking the other's flatten for an instrument they both hold, which is
+   * every instrument in a matched control.
+   *
+   * Required, matching `TraderInput.unresolvedFlattens`: forgetting it restores
+   * the second-flatten over-sell silently, on the money path.
+   */
+  getUnresolvedFlattens: () => Promise<readonly UnresolvedFlatten[]>;
   /**
    * #432: the same `SetupStore` instance `withOnTradeClose` labels through.
    * `decide` writes the setup at decision time and the close hook labels it
@@ -390,6 +405,11 @@ export function buildTraderSteps(deps: TraderStepDeps): {
         // #568: the same store the lots came from, so the exit the Trader sizes
         // and the exit `executeExit` validates are computed off ONE fill record.
         exitFillSizes: deps.getExitFillSizes,
+        // #1389. Bound on BOTH trader binds for the reason `onUnpricedFlatten`
+        // is: `routeDecision`'s holding branch reaches the flatten too, so a
+        // guard on only the tick path would leave every debate-bar flatten
+        // unguarded.
+        unresolvedFlattens: deps.getUnresolvedFlattens,
         setupStore: deps.setupStore,
         // #668: the same pair every other session-boundary consumer reads (the
         // daily-PnL boundary #331/#332, the volatility reading #386), threaded
@@ -513,6 +533,10 @@ export function buildTraderSteps(deps: TraderStepDeps): {
         config: deps.config,
         positionState: async () => positions,
         exitFillSizes: deps.getExitFillSizes,
+        // #1389, and THIS is the binding that matters most, for the same
+        // reason `onUnpricedFlatten`'s note below gives: the mandatory flatten
+        // is decided here on nearly every occurrence.
+        unresolvedFlattens: deps.getUnresolvedFlattens,
         sessionCalendars: deps.sessionCalendars,
         // #826, and THIS is the binding that matters most: the mandatory
         // flat-by-close flatten is decided on the tick path (`routeExitCheck`'s

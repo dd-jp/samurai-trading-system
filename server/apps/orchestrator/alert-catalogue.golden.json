@@ -791,7 +791,7 @@
     {
       "log": null,
       "logInTrace": null,
-      "text": "Samurai TRADER DEGRADED: SPY (stocks) reported session_end_in_past on 4 consecutive tick(s) as of 2026-09-10T08:15:00.000Z.\nThe calendar resolved a close that has already passed, so the book is being parked FLAT and no new position will be opened for this leg while that persists. A run in this state looks identical to a quiet market.\nDetail: close 15:59 already passed\nThe Trader is still running and still returning decisions, so this will not show up as downtime and the heartbeat will keep beating.",
+      "text": "Samurai TRADER DEGRADED: SPY (stocks) reported lot_carried_past_session_close on 4 consecutive tick(s) as of 2026-09-10T08:15:00.000Z.\nA lot is STILL OPEN after the flatten grace expired, so flat-by-close (ADR-0014) has been MISSED for this session and the position is carried overnight — on a leveraged ETP that is the worst outcome the intraday horizon has. Nothing will target it again until the next session's flatten window; closing it before then is a manual decision at the venue.\nDetail: grace expired 16:35\nThe Trader is still running and still returning decisions, so this will not show up as downtime and the heartbeat will keep beating.",
       "rejected": "telegram 502",
       "sendFailed": null,
       "sendFailedInTrace": null

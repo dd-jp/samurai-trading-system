@@ -8,9 +8,15 @@
  * ever exercises `entry` against `exit`, so nothing there would notice if
  * `scale_in` were split off too.
  */
-import { computeIdempotencyKey, intentSideFor } from './idempotency-key.js';
+import {
+  computeFlattenIdempotencyKey,
+  computeIdempotencyKey,
+  intentSideFor,
+} from './idempotency-key.js';
 
 const BAR = new Date('2026-08-14T19:00:00.000Z');
+/** The US close on the same day — deliberately ON the 1h bar grid (#1389). */
+const SESSION_CLOSE = new Date('2026-08-14T20:00:00.000Z');
 
 describe('intentSideFor', () => {
   it('groups the opening intents and separates the closing one', () => {
@@ -70,6 +76,57 @@ describe('computeIdempotencyKey', () => {
     // sha256 of {"instrument":"3USL","bar":"2026-08-14T19:00:00.000Z","side":"open"}
     expect(computeIdempotencyKey('3USL', BAR, 'open')).toBe(
       '1ba944cf4284db34501ab2ee8bdd9f34f93448e12b2ad1179375622a84e793b3',
+    );
+  });
+});
+
+describe('computeFlattenIdempotencyKey (#1389)', () => {
+  it('is one key per instrument per SESSION CLOSE', () => {
+    // The obligation is a close, not a bar — so every tick that enforces the
+    // same close, on either side of the bell, produces one key.
+    expect(computeFlattenIdempotencyKey('3USL', SESSION_CLOSE)).toBe(
+      computeFlattenIdempotencyKey('3USL', new Date(SESSION_CLOSE)),
+    );
+  });
+
+  it('separates instruments, arms and sessions', () => {
+    const base = computeFlattenIdempotencyKey('3USL', SESSION_CLOSE);
+
+    expect(computeFlattenIdempotencyKey('3LDE', SESSION_CLOSE)).not.toBe(base);
+    expect(computeFlattenIdempotencyKey('3USL', SESSION_CLOSE, 'control')).not.toBe(base);
+    // The NEXT session's close: a lot carried past the grace must be targetable
+    // again tomorrow rather than deduped against today's refusal.
+    expect(computeFlattenIdempotencyKey('3USL', new Date('2026-08-15T20:00:00.000Z'))).not.toBe(
+      base,
+    );
+  });
+
+  it('cannot collide with a bar-keyed key, even when the close IS a bar boundary', () => {
+    // The US close (20:00Z) sits exactly on the 1h debate-bar grid, so a
+    // payload that named the field `bar` would collide with a genuine
+    // 20:00 bar's own `'close'`-side key — the direction-flip exit's, which
+    // still uses the bar coordinate. The field name is what keeps the two key
+    // spaces apart.
+    expect(computeFlattenIdempotencyKey('3USL', SESSION_CLOSE)).not.toBe(
+      computeIdempotencyKey('3USL', SESSION_CLOSE, 'close'),
+    );
+    expect(computeFlattenIdempotencyKey('3USL', SESSION_CLOSE)).not.toBe(
+      computeIdempotencyKey('3USL', SESSION_CLOSE, 'early_close'),
+    );
+  });
+
+  it('omits the arm for the live arm, exactly as the bar-keyed payload does', () => {
+    expect(computeFlattenIdempotencyKey('3USL', SESSION_CLOSE, 'live')).toBe(
+      computeFlattenIdempotencyKey('3USL', SESSION_CLOSE),
+    );
+  });
+
+  /** Same contract as the pin above: the payload is a §7 shape, not a detail. */
+  it('pins the hash so the payload cannot change silently', () => {
+    // sha256 of
+    // {"instrument":"3USL","session_close":"2026-08-14T20:00:00.000Z","side":"close"}
+    expect(computeFlattenIdempotencyKey('3USL', SESSION_CLOSE)).toBe(
+      'c0438358292d9765c944d717fbd68501000239b74d746b47c1fc4ac57acf3ea9',
     );
   });
 });

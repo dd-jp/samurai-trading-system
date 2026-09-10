@@ -78,6 +78,7 @@ import {
   makeWiringCostConfig,
   makeWiringExecutionConfig,
   makeWiringRiskConfig,
+  makeWiringVerdictConfig,
 } from './wiring-config-fixtures.js';
 
 const NOW = new Date('2026-09-06T12:00:00Z');
@@ -171,9 +172,7 @@ function stubConfig(
     llmClient: { complete: vi.fn() } as unknown as ProductionConfig['llmClient'],
     traderConfig: DEFAULT_TRADER_CONFIG,
     riskConfig: makeWiringRiskConfig(),
-    verdictConfig: {
-      automation_level: { crypto: 'auto', stocks: 'auto' },
-    } as ProductionConfig['verdictConfig'],
+    verdictConfig: makeWiringVerdictConfig(),
     executionConfig: makeWiringExecutionConfig(),
     correlationConfig: makeWiringCorrelationConfig(),
     breakerConfig: {

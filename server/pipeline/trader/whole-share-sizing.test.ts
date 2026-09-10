@@ -146,6 +146,7 @@ function traderInput(overrides: Partial<TraderInput> = {}): TraderInput {
     config: configWith({ whole_share_sizing: true }),
     positionState: async () => [],
     exitFillSizes: async () => new Map<string, number>(),
+    unresolvedFlattens: async () => [],
     setupStore: new FixtureSetupStore(),
     sessionCalendars: {
       crypto: new AlwaysOpenCalendar(),

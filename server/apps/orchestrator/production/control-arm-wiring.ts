@@ -102,9 +102,17 @@ export class InMemoryBreakerStatePersistence implements BreakerStatePersistence 
 export interface ControlArmWiringDeps {
   /**
    * The live arm's Trader deps, verbatim. `getOpenPositions`,
-   * `getExitFillSizes` and the breaker fields are overridden below; everything
-   * else — config, calendars, setup store, capital ceiling — is shared, which
-   * is what makes the two arms' entry, sizing and exit rules one rule.
+   * `getExitFillSizes`, `getUnresolvedFlattens` and the breaker fields are
+   * overridden below; everything else — config, calendars, setup store, capital
+   * ceiling — is shared, which is what makes the two arms' entry, sizing and
+   * exit rules one rule.
+   *
+   * Every one of those overrides is a BOOK read, and an omitted one is
+   * invisible: the spread supplies the live arm's binding, the field is still
+   * present so `tsc` is satisfied, and nothing downstream can restore the
+   * arm-scoping (`SqliteExecutionStore` scopes on the instance, not the
+   * caller). `flatten-guard-arm-wiring.test.ts` is the standing proof for the
+   * one that shipped that way.
    */
   trader: TraderStepDeps;
   /** The live arm's Risk deps, verbatim, with the breaker fields overridden. */
@@ -243,6 +251,14 @@ export function buildControlArmWiring(deps: ControlArmWiringDeps): ControlArmWir
     // away — see `computeIdempotencyKey`.
     arm: 'control',
     getExitFillSizes: (keys) => deps.store.getExitFillSizes(keys),
+    // #1389: the in-flight flatten guard must ask the CONTROL book. Left to the
+    // spread it inherits the live arm's binding, and a live flatten stuck
+    // unresolved — a lost ack, or one that never fills and so is never swept —
+    // makes the control arm skip its own flatten for that instrument on every
+    // later tick and every future close. In a matched control that is every
+    // instrument both arms hold, so the falsifier baseline is the arm that
+    // carries lots past the bell.
+    getUnresolvedFlattens: () => deps.store.getUnresolvedFlattens(),
     // Deliberately NOT `withOnTradeClose`-wrapped upstream: the control arm
     // writes its setup vectors into the shared `cosine_setups` table under its
     // own `control:`-prefixed decision ids, and never labels them. Unlabelled

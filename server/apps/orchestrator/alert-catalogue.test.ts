@@ -144,9 +144,9 @@ const FIXTURES: { readonly [K in AlertId]: readonly AlertOf<K>[] } = {
     {
       instrument: 'SPY',
       diagnostic: {
-        kind: 'session_end_in_past',
+        kind: 'lot_carried_past_session_close',
         asset_class: 'stocks',
-        detail: 'close 15:59 already passed',
+        detail: 'grace expired 16:35',
       },
       consecutive_ticks: 4,
       reported_at: AT,

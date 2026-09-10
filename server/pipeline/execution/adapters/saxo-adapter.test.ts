@@ -33,7 +33,7 @@ import type {
 } from '../unresolved-price-unit-alert.js';
 import {
   DORMANT_DEFER_ALERT_AFTER,
-  DORMANT_DEFER_ALERT_REPEAT_EVERY,
+  DORMANT_DEFER_ALERT_REPEAT_EVERY_MS,
   PRICE_UNIT_ALERT_REPEAT_EVERY,
   SaxoBrokerAdapter,
   type SaxoInstrumentResolver,
@@ -49,6 +49,13 @@ import type {
   SaxoOrderPlacement,
 } from './saxo-client.js';
 import { saxoCashPerShare } from './saxo-price-unit.js';
+
+/**
+ * Mirrors `DEFAULT_FILL_POLL_INTERVAL_MS`'s default (production/defaults.ts)
+ * — restated rather than imported, since that constant lives in
+ * `apps/orchestrator` and this adapter's own tests live in `pipeline/`.
+ */
+const FILL_POLL_INTERVAL_MS = 15_000;
 
 const RESOLVER: SaxoInstrumentResolver = {
   resolve: (lseTicker) =>
@@ -257,6 +264,7 @@ function makeAdapter(
   client: SaxoOpenApiClient,
   state = new InMemoryBrokerStateStore(),
   instruments: SaxoInstrumentResolver = RESOLVER,
+  clock: { now(): Date } = { now: () => new Date('2026-09-05T09:00:00Z') },
 ) {
   const logger = recordingLogger();
   const legResizeAlerts = makeLegResizeAlerts();
@@ -266,13 +274,52 @@ function makeAdapter(
     client,
     instruments,
     state,
-    clock: { now: () => new Date('2026-09-05T09:00:00Z') },
+    clock,
     legResizeAlerts,
     dormantLegsAlerts,
     priceUnitAlerts,
     logger,
   });
   return { adapter, logger, state, legResizeAlerts, dormantLegsAlerts, priceUnitAlerts };
+}
+
+/**
+ * A clock the test advances explicitly between polls, rather than one that
+ * advances on its own read — `escalateIfStale`'s flow reads `clock.now()`
+ * more than once per `getOrder` call (the activity lookback window, then the
+ * defer record), so an auto-advancing clock would not correspond 1:1 with
+ * polls. `advance` models one fill-poll interval
+ * (`DEFAULT_FILL_POLL_INTERVAL_MS`) elapsing between polls, which is what the
+ * dormant-defer repeat (`DORMANT_DEFER_ALERT_REPEAT_EVERY_MS`) is measured
+ * against.
+ */
+function controllableClock(startAt = new Date('2026-09-05T09:00:00Z')) {
+  let currentMs = startAt.getTime();
+  return {
+    now: () => new Date(currentMs),
+    advance: (ms: number) => {
+      currentMs += ms;
+    },
+  };
+}
+
+/**
+ * Drives `DORMANT_DEFER_ALERT_AFTER` polls against the same reference, one
+ * `FILL_POLL_INTERVAL_MS` apart, so the first alert fires on the LAST poll —
+ * and leaves `clock` exactly at that poll's timestamp (no trailing advance),
+ * so a caller's next `clock.advance(x)` measures elapsed time since the
+ * alert precisely rather than `x + FILL_POLL_INTERVAL_MS`.
+ */
+async function primeDormantDeferAlert(
+  adapter: SaxoBrokerAdapter,
+  clock: ReturnType<typeof controllableClock>,
+  clientOrderId = 'key-3usl-0930',
+  instrument = '3USL',
+): Promise<void> {
+  for (let i = 0; i < DORMANT_DEFER_ALERT_AFTER; i++) {
+    if (i > 0) clock.advance(FILL_POLL_INTERVAL_MS);
+    await adapter.getOrder(clientOrderId, instrument);
+  }
 }
 
 describe('SaxoBrokerAdapter.submitBracket', () => {
@@ -718,35 +765,106 @@ describe('SaxoBrokerAdapter.getOrder', () => {
     expect(client.cancelOrder).not.toHaveBeenCalled();
   });
 
-  it('does not re-alert every poll while still stuck, before the repeat interval elapses (#1215 round 2)', async () => {
+  it('does not re-alert on the very next poll while still stuck, even though the grace threshold is already met (#1426)', async () => {
     const client = makeClient({
       listOpenOrders: vi.fn().mockResolvedValue([dormantLeg()]),
       listOrderActivities: vi.fn().mockResolvedValue([activity()]),
     });
-    const { adapter, dormantLegsAlerts } = makeAdapter(client);
+    const clock = controllableClock();
+    const { adapter, dormantLegsAlerts } = makeAdapter(
+      client,
+      new InMemoryBrokerStateStore(),
+      RESOLVER,
+      clock,
+    );
 
-    const pollsBeforeSecondAlert = DORMANT_DEFER_ALERT_AFTER + DORMANT_DEFER_ALERT_REPEAT_EVERY;
-    for (let i = 0; i < pollsBeforeSecondAlert - 1; i++) {
-      await adapter.getOrder('key-3usl-0930', '3USL');
-    }
+    await primeDormantDeferAlert(adapter, clock);
+    expect(dormantLegsAlerts.alerts).toHaveLength(1);
 
+    // One more poll, one fill-poll interval later — nowhere near
+    // DORMANT_DEFER_ALERT_REPEAT_EVERY_MS since the first alert.
+    clock.advance(FILL_POLL_INTERVAL_MS);
+    await adapter.getOrder('key-3usl-0930', '3USL');
     expect(dormantLegsAlerts.alerts).toHaveLength(1);
   });
 
-  it('repeats the alert once DORMANT_DEFER_ALERT_REPEAT_EVERY further polls elapse while still stuck (#1215 round 2, ruling c)', async () => {
+  it('does not re-alert just short of DORMANT_DEFER_ALERT_REPEAT_EVERY_MS wall-clock time since the last alert (#1426)', async () => {
     const client = makeClient({
       listOpenOrders: vi.fn().mockResolvedValue([dormantLeg()]),
       listOrderActivities: vi.fn().mockResolvedValue([activity()]),
     });
-    const { adapter, dormantLegsAlerts } = makeAdapter(client);
+    const clock = controllableClock();
+    const { adapter, dormantLegsAlerts } = makeAdapter(
+      client,
+      new InMemoryBrokerStateStore(),
+      RESOLVER,
+      clock,
+    );
 
-    const pollsForSecondAlert = DORMANT_DEFER_ALERT_AFTER + DORMANT_DEFER_ALERT_REPEAT_EVERY;
-    for (let i = 0; i < pollsForSecondAlert; i++) {
-      await adapter.getOrder('key-3usl-0930', '3USL');
-    }
+    await primeDormantDeferAlert(adapter, clock);
+    expect(dormantLegsAlerts.alerts).toHaveLength(1);
 
+    clock.advance(DORMANT_DEFER_ALERT_REPEAT_EVERY_MS - 1);
+    await adapter.getOrder('key-3usl-0930', '3USL');
+    expect(dormantLegsAlerts.alerts).toHaveLength(1);
+  });
+
+  it('repeats the alert once DORMANT_DEFER_ALERT_REPEAT_EVERY_MS wall-clock time elapses while still stuck (#1215 round 2 ruling c, re-derived #1426)', async () => {
+    const client = makeClient({
+      listOpenOrders: vi.fn().mockResolvedValue([dormantLeg()]),
+      listOrderActivities: vi.fn().mockResolvedValue([activity()]),
+    });
+    const clock = controllableClock();
+    const { adapter, dormantLegsAlerts } = makeAdapter(
+      client,
+      new InMemoryBrokerStateStore(),
+      RESOLVER,
+      clock,
+    );
+
+    await primeDormantDeferAlert(adapter, clock);
+    expect(dormantLegsAlerts.alerts).toHaveLength(1);
+
+    clock.advance(DORMANT_DEFER_ALERT_REPEAT_EVERY_MS);
+    await adapter.getOrder('key-3usl-0930', '3USL');
     expect(dormantLegsAlerts.alerts).toHaveLength(2);
   });
+
+  it(
+    'a wedge polled at the real fill-poll cadence does not flood — DORMANT_DEFER_ALERT_REPEAT_EVERY_MS / FILL_POLL_INTERVAL_MS polls apart, not ' +
+      'every DORMANT_DEFER_ALERT_REPEAT_EVERY polls (#1426, the poll-count-riding-cadence shape #1383 measured as a flood for the deleted ALERT_REPEAT_EVERY_ZERO_SIZE)',
+    async () => {
+      const client = makeClient({
+        listOpenOrders: vi.fn().mockResolvedValue([dormantLeg()]),
+        listOrderActivities: vi.fn().mockResolvedValue([activity()]),
+      });
+      const clock = controllableClock();
+      const { adapter, dormantLegsAlerts } = makeAdapter(
+        client,
+        new InMemoryBrokerStateStore(),
+        RESOLVER,
+        clock,
+      );
+
+      // Simulate the real fill-poll loop for a 2-hour wedge: one poll every
+      // FILL_POLL_INTERVAL_MS. At the pre-#1426 poll-count-8 repeat this would
+      // have alerted every 8 polls (~2 minutes) — 60 times in 2 hours. At the
+      // re-derived wall-clock repeat it must alert only on the polls that land
+      // at or past each DORMANT_DEFER_ALERT_REPEAT_EVERY_MS boundary.
+      const twoHoursOfPolls = Math.floor((2 * 60 * 60_000) / FILL_POLL_INTERVAL_MS);
+      for (let i = 0; i < twoHoursOfPolls; i++) {
+        await adapter.getOrder('key-3usl-0930', '3USL');
+        clock.advance(FILL_POLL_INTERVAL_MS);
+      }
+
+      const expectedRepeats = Math.floor(
+        ((twoHoursOfPolls - DORMANT_DEFER_ALERT_AFTER) * FILL_POLL_INTERVAL_MS) /
+          DORMANT_DEFER_ALERT_REPEAT_EVERY_MS,
+      );
+      expect(dormantLegsAlerts.alerts).toHaveLength(1 + expectedRepeats);
+      expect(dormantLegsAlerts.alerts.length).toBeLessThan(10);
+    },
+  );
 
   it('clears the deferred count once the audit trail settles, so a later dormant episode starts its own bound fresh (#1215 round 2)', async () => {
     const listOpenOrders = vi.fn().mockResolvedValue([dormantLeg()]);

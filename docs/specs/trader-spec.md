@@ -9,7 +9,7 @@
 | Was pending | Now |
 | --- | --- |
 | **The exit model** | **The neutral single bracket, per subclass** — see "The exit model" below. The tranche ladder was measured against it by [#708](https://github.com/dd-jp/samurai-trading-system/issues/708) and lost; the **−0.5% stop is dead**, on two independent grounds. The **indicator-based early exit is retained** and specified. |
-| **The horizon** | Flat by close is an invariant. The forced flatten is **close − 5 minutes resolved through the instrument's `TradingCalendar`** ([#657](https://github.com/dd-jp/samurai-trading-system/issues/657)), and it runs on the tick path — see "Exits are not all attached". |
+| **The horizon** | Flat by close is an invariant. The forced flatten's window is **close − 5 minutes to close + 5 minutes, resolved through the instrument's `TradingCalendar`** ([#657](https://github.com/dd-jp/samurai-trading-system/issues/657); the post-close half is `flatten_after_close_ms`, [#1389](https://github.com/dd-jp/samurai-trading-system/issues/1389)), and it runs on the tick path — see "Exits are not all attached". Its idempotency key is the odd one out: it keys on the **session close being enforced**, not on a bar. |
 | **Threshold derivation** | [ADR-0018](../adr/0018-intraday-thresholds-sizing-and-the-signal-bar.md) resolved it: **frozen percentage brackets per subclass, pooled — not per-instrument fits.** Per-instrument fitting is refused there as threshold fitting, and this spec must not reintroduce it under an ATR formula. |
 | **The execution venue** | Saxo Capital Markets UK, GIA — ADR-0015's 2026-08-30 amendment (this row said "Trading 212 ISA" until [#946](https://github.com/dd-jp/samurai-trading-system/issues/946)) — **GBP LSE-listed ETPs only**. No Saxo `BrokerAdapter` exists yet ([#659](https://github.com/dd-jp/samurai-trading-system/issues/659)) — that is a build gap, no longer a spec gap. |
 
@@ -250,6 +250,12 @@ interface OrderIntentMetadata {
   exit_reason?: ExitReason;      // 'flatten' | 'signal_decay' | 'direction_flip', on exits only
   unpriced_exit?: true;          // #826: this flatten was built without a mark
   mandatory_flatten?: true;      // #894: exempts this exit from Verdict's staleness gate
+  lot_held_quantities?: readonly LotHeldQuantity[]; // #1497: `buildFlattenExit`'s own per-lot
+                                 // breakdown of the exit's `size`, set unconditionally on every
+                                 // exit it builds. `executeExit` compares it lot by lot against
+                                 // its own re-derived held quantities, catching a compensating
+                                 // swap between lots that leaves the TOTAL — and so `size` —
+                                 // unchanged.
   conviction: number;
   converged: boolean;
   sizing: {
@@ -403,6 +409,25 @@ Four hash inputs, and each is there because omitting it merged two decisions tha
 That is the destruction of the control the whole edge thesis is falsified against: falsifier arm 2 is mandated as the PRIMARY matched control by [ADR-0014](../adr/0014-intraday-flat-by-close-horizon.md)'s amendment 2 ("Falsifier arm 2 restated") and [ADR-0017](../adr/0017-validation-gates-paper-operational-thesis-expectancy.md)'s Consequences, and [`docs/research/12-edge-hypothesis-critique.md`](../research/12-edge-hypothesis-critique.md) **D4** rules out the substitute a lost control would leave (a return-only comparison against a risk-targeted stream).
 
 **And what breaks if `arm` is hashed unconditionally.** The live arm omits the field from the payload rather than hashing the string `'live'`, so **every live key is byte-identical to its pre-#753 value**. Hashing it for both arms would re-key every existing `open_positions`/`closed_trades` row and every venue order id derived from one, and a crash-restart replay would then sail past `findByKey` and re-place orders the store already holds. The field's ABSENCE on the live arm is as load-bearing as its presence on the control, and an implementation that "cleans up" the asymmetry breaks idempotency across the restart boundary.
+
+#### The MANDATORY flatten does not use this key at all *(2026-09-10, [#1389](https://github.com/dd-jp/samurai-trading-system/issues/1389))*
+
+`computeFlattenIdempotencyKey` (same file) is a second, separate rule, and it is the only intent that does not key on a bar:
+
+```typescript
+const payload = arm === 'live'
+  ? JSON.stringify({ instrument, session_close, side: 'close' })
+  : JSON.stringify({ instrument, session_close, side: 'close', arm });
+return createHash('sha256').update(payload).digest('hex');
+```
+
+**The coordinate is the session close being enforced.** Not the bar, and nothing derived from the lot. The flatten is not a decision taken in a bar — it is the enforcement of ONE close, and #1389 made that close enforceable from either side of the bell: the window now runs from `flatten_before_close_ms` before the close to `flatten_after_close_ms` after it, so a lot missed at `close − 10s` is targeted again at `close + 10s`. Under the bar coordinate those two ticks straddle a bar boundary whenever the close sits on one — the US close, 20:00Z, sits exactly on the 1h grid — and two keys for one obligation means `findByKey`, the `open_positions` primary key and the venue `client_order_id` all wave the second one through. The lot is then flattened TWICE and sold into a short, because `executeExit` sizes to the held quantity a still-unswept first flatten has not yet reduced.
+
+`sessionEnd(now)` inside the window and `sessionStart(now)` past it name the same instant, so the two ticks hash identically and Verdict gate 3 dedupes across the bell.
+
+**Non-flatten exits keep the bar coordinate.** `signal_decay` (`'early_close'`, #748) and `direction_flip` (`'close'`, #686) are decisions taken in a bar and are still keyed by `computeIdempotencyKey`. The two key spaces cannot collide: the flatten payload's second field is named `session_close` rather than `bar`, and two distinct JSON shapes cannot serialize identically.
+
+**No migration, and none is owed.** The flatten's key space is new in BOTH arms, so no existing row is re-keyed — a lot already submitted under a bar-keyed flatten key simply gets a fresh key once, at the cutover, and the other two dedup layers are untouched.
 
 ### Cross-Spec Requirement: DebateResult additions
 

@@ -143,23 +143,49 @@ const DEFAULT_ACTIVITY_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
  * the record untouched on a throw for the same reason — ignorance is not
  * evidence either way, so it must not silently clear a wedge that outlives
  * one flaky poll).
+ *
+ * The wall-clock rejection above is about THIS bound only — the grace before
+ * the FIRST alert, which exists to absorb one race between two network calls
+ * and is equally sound however fast or slow those calls arrive. The REPEAT
+ * bound once alerting has already started is a different question (how often
+ * a human should be paged, not how many observations rule out a race) and is
+ * wall-clock for exactly that reason — see `DORMANT_DEFER_ALERT_REPEAT_EVERY_MS`.
  */
 export const DORMANT_DEFER_ALERT_AFTER = 2;
 
 /**
- * How often the alert repeats while the master stays unresolved, counted in
- * further consecutive defer observations after the first — the same
- * poll-count-8 warn cadence `ALERT_REPEAT_EVERY_DIAGNOSTICS`
- * (trader-diagnostic-alert.ts) uses, for the same reason: visible enough
- * that the channel is not a one-shot the operator can miss, rare enough it
- * is not an unbroken flood while the state persists (ruling (c), #1215
- * round 2: recurring, not silent — but not every poll either).
- * `FilledZeroSizeThrottle`'s own repeat used to be this same shape; #1383
- * rebuilt it into a warn-once, low-cadence-info design instead (see
- * filled-zero-size-throttle.ts) — a different problem's answer, not a
- * precedent for this one, which still wants a genuine `warn` repeat.
+ * How often the alert repeats while the master stays unresolved, in
+ * wall-clock milliseconds since the previous alert — NOT a poll count.
+ *
+ * It used to be: 8 further consecutive defer observations, the same
+ * poll-count-8 shape `ALERT_REPEAT_EVERY_DIAGNOSTICS` (trader-diagnostic-
+ * alert.ts) uses. That borrowed the number without adjusting for what it
+ * multiplies: `ALERT_REPEAT_EVERY_DIAGNOSTICS` counts Trader ticks, which run
+ * every 15 MINUTES (ADR-0008), so its 8 lands two hours apart. This alert's
+ * "poll" is `lookup()`/`cancel()`'s corroboration read, which runs on
+ * `DEFAULT_FILL_POLL_INTERVAL_MS` (defaults.ts) — 15 SECONDS, a 60x faster
+ * cadence — so the same "8" repeated every ~2 minutes: ~480 pages over a 12h
+ * unattended overnight session, a pager-flood rate, not a warn rate.
+ * `fillPollIntervalMs` is also caller-configured (`production.ts`), so any
+ * poll count is only ever correct at its default — the exact defect
+ * `FilledZeroSizeThrottle` was rebuilt to stop having, for the same reason
+ * (#1383, `filled-zero-size-throttle.ts`): "a poll-count repeat … would make
+ * re-announcement frequency a silent function of that cadence instead of a
+ * stated interval." This constant takes that fix's shape instead of its
+ * value — `FilledZeroSizeThrottle` warns once then drops to low-cadence
+ * `info`, which does not fit here: ruling (c) (#1215 round 2) requires a
+ * wedge to keep paging, audibly, for as long as the audit trail stays
+ * silent, so there is deliberately no cap and no escalation ladder, only a
+ * floor on how often the SAME page repeats.
+ *
+ * 15 minutes: frequent enough that an unattended overnight wedge is not
+ * mistaken for a resolved one between pages, rare enough that even a
+ * multi-hour wedge produces a page count (~48 over 12h) an operator's pager
+ * app will not auto-mute. Independent of `fillPollIntervalMs` by
+ * construction, so a future change to that interval cannot silently change
+ * this one.
  */
-export const DORMANT_DEFER_ALERT_REPEAT_EVERY = 8;
+export const DORMANT_DEFER_ALERT_REPEAT_EVERY_MS = 15 * 60_000;
 
 interface DormantDeferRecord {
   readonly consecutive: number;
@@ -176,6 +202,13 @@ interface DormantDeferRecord {
    * caller reads this, so it is recorded `false` there.
    */
   readonly masterSeenOpen: boolean;
+  /**
+   * Epoch ms of the last `DormantLegsUnresolvedAlert` this reference
+   * produced; `0` before the first alert. Read back by
+   * `dueForDormantDeferAlert` against `DORMANT_DEFER_ALERT_REPEAT_EVERY_MS` —
+   * see that function's own doc.
+   */
+  readonly lastAlertedAtMs: number;
 }
 
 /** `dormantDefer`'s namespace for the refusal counter — see that map's doc. */
@@ -183,13 +216,23 @@ function refusedKey(externalReference: string): string {
   return `refused:${externalReference}`;
 }
 
-const DORMANT_DEFER_CADENCE = {
-  after: DORMANT_DEFER_ALERT_AFTER,
-  every: DORMANT_DEFER_ALERT_REPEAT_EVERY,
-};
-
-function shouldWarnDormantDefer(consecutive: number): boolean {
-  return escalatesAt(consecutive, DORMANT_DEFER_CADENCE);
+/**
+ * Whether THIS observation should page: `consecutive` has reached
+ * `DORMANT_DEFER_ALERT_AFTER` (the race-absorbing grace, poll-count by
+ * design — see that constant's own doc) AND either no alert has fired yet
+ * for this reference (`lastAlertedAtMs === 0`) or at least
+ * `DORMANT_DEFER_ALERT_REPEAT_EVERY_MS` of wall-clock time has passed since
+ * the last one (the pager-facing repeat, time-based by design — see that
+ * constant's own doc).
+ */
+function dueForDormantDeferAlert(
+  consecutive: number,
+  lastAlertedAtMs: number,
+  nowMs: number,
+): boolean {
+  if (consecutive < DORMANT_DEFER_ALERT_AFTER) return false;
+  if (lastAlertedAtMs === 0) return true;
+  return nowMs - lastAlertedAtMs >= DORMANT_DEFER_ALERT_REPEAT_EVERY_MS;
 }
 
 /**
@@ -200,11 +243,19 @@ function shouldWarnDormantDefer(consecutive: number): boolean {
  * without this they announce at the poll cadence; #1383 measured that shape
  * at ~600 identical lines over a 20h soak.
  *
- * The same poll-count repeat `DORMANT_DEFER_ALERT_REPEAT_EVERY` uses, for the
- * same reason. Unlike that one there is NO grace before the first
+ * Its own poll-count-8 warn cadence — the same shape
+ * `ALERT_REPEAT_EVERY_DIAGNOSTICS` uses, for the same reason. Unlike
+ * `DORMANT_DEFER_ALERT_AFTER` there is NO grace before the first
  * announcement: its bound exists to absorb a race between two network calls,
  * where a Uic either is or is not in the resolver's in-memory map on the
  * first look, and a refused fill is a lot that cannot go terminal meanwhile.
+ *
+ * NOT re-derived here. This is a poll count too, and #1426's final section
+ * names only the dormant-legs constant, so it is flagged rather than
+ * changed — whether the `refuseUnresolvedPriceUnit` (fill-sweep) and
+ * `cashOpenPrice` (`getOpenPositions`) paths that read it run at a cadence
+ * that makes 8 a flood, the way it did for the dormant-legs repeat, is
+ * unmeasured.
  */
 export const PRICE_UNIT_ALERT_REPEAT_EVERY = 8;
 
@@ -1042,8 +1093,8 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
    * not resolve — the audit trail silent or non-terminal (`deferKey` is the
    * bare reference), or answering `Filled` where `cancel` then refused
    * (`refusedKey`) — and posts `DormantLegsUnresolvedAlert` once
-   * `shouldWarnDormantDefer` says it is due; see that function's own doc for
-   * the bound and repeat cadence. `masterSeenOpen` is stored here and read
+   * `dueForDormantDeferAlert` says it is due; see that function's own doc for
+   * the grace and repeat bounds. `masterSeenOpen` is stored here and read
    * back by `corroborateDormantLegs`, which is what makes it sticky across a
    * `cancel` followed by `lookup` under the same reference.
    * Fire-and-forget, fully swallowed: same posture as
@@ -1062,12 +1113,15 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     const prior = this.dormantDefer.get(deferKey);
     const consecutive = (prior?.consecutive ?? 0) + 1;
     const firstObservedAt = prior?.firstObservedAt ?? now;
+    const lastAlertedAtMs = prior?.lastAlertedAtMs ?? 0;
+    const due = dueForDormantDeferAlert(consecutive, lastAlertedAtMs, now.getTime());
     this.dormantDefer.set(deferKey, {
       consecutive,
       firstObservedAt,
       masterSeenOpen: masterSeenOpen || prior?.masterSeenOpen === true,
+      lastAlertedAtMs: due ? now.getTime() : lastAlertedAtMs,
     });
-    if (!shouldWarnDormantDefer(consecutive)) return;
+    if (!due) return;
     try {
       await this.dormantLegsAlerts.postDormantLegsUnresolvedAlert({
         client_order_id: externalReference,

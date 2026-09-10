@@ -79,6 +79,7 @@ import {
   makeWiringCostConfig,
   makeWiringExecutionConfig,
   makeWiringRiskConfig,
+  makeWiringVerdictConfig,
 } from './wiring-config-fixtures.js';
 
 /**
@@ -303,9 +304,7 @@ function stubConfig(db: StoreHandle, logger: Logger, broker: BrokerAdapter): Stu
     } as unknown as ProductionConfig['accountState'],
     traderConfig: DEFAULT_TRADER_CONFIG,
     riskConfig: makeWiringRiskConfig(),
-    verdictConfig: {
-      automation_level: { crypto: 'auto', stocks: 'auto' },
-    } as ProductionConfig['verdictConfig'],
+    verdictConfig: makeWiringVerdictConfig(),
     executionConfig: makeWiringExecutionConfig(),
     correlationConfig: makeWiringCorrelationConfig(),
     breakerConfig: {

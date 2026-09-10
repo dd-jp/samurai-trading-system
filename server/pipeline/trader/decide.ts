@@ -52,7 +52,11 @@ import { BookValuationError } from '../risk-manager/index.js';
 import { priceBracket, sideFor, sizeBracket, type TradeDirection } from './build-bracket.js';
 import { NO_PRECEDENT_MULTIPLIER, retrieveCosinePrecedent } from './cosine-precedent.js';
 import { readSignalDecay } from './early-exit.js';
-import { computeIdempotencyKey, intentSideFor } from './idempotency-key.js';
+import {
+  computeFlattenIdempotencyKey,
+  computeIdempotencyKey,
+  intentSideFor,
+} from './idempotency-key.js';
 import { buildSetupVector } from './setup-vector.js';
 import { resolveSubclassBracket } from './subclass-bracket.js';
 import type {
@@ -205,10 +209,26 @@ function atrFor(
  * into a skip and the holding path turns it into an exit intent, so a diagnostic
  * carried on the skip alone would be dropped on exactly the flatten it describes.
  */
-interface FlattenWindowVerdict {
-  within: boolean;
-  diagnostic: TraderDiagnostic | null;
-}
+/**
+ * `enforcing_close` is WHICH session close the tick is enforcing (#1389) —
+ * `sessionEnd` before the bell, the close just gone inside the grace, and the
+ * same instant either side of it.
+ *
+ * It rides on the verdict rather than being re-derived at the builder because
+ * it is the flatten's IDEMPOTENCY COORDINATE
+ * (`computeFlattenIdempotencyKey`), and re-deriving it there would mean a
+ * second calendar read against a second `clock.now()`: a tick that crossed the
+ * bell between the two reads would key its flatten to a different close than
+ * the one it decided against, which is the exact failure this coordinate
+ * exists to remove.
+ *
+ * A DISCRIMINATED union, so "the window is open but I have no close to key on"
+ * is not a state a caller has to handle — or, worse, one it can paper over
+ * with a fallback coordinate.
+ */
+type FlattenWindowVerdict =
+  | { within: true; enforcing_close: Date; diagnostic: TraderDiagnostic | null }
+  | { within: false; enforcing_close: null; diagnostic: TraderDiagnostic | null };
 
 /**
  * Is `now` inside the flat-by-close window for this asset class (#668)?
@@ -227,32 +247,48 @@ interface FlattenWindowVerdict {
  * because the market is closed — does not exist on a 24/7 venue with a live
  * bracket leg.
  *
- * **A past close is stated explicitly, and it changes nothing (#691).** The
- * `remaining < 0` branch below is documentation-as-code, NOT a behaviour
- * change: `remaining <= flatten_before_close_ms` was already true for every
- * negative `remaining`, so a past close has always meant "flatten". The branch
- * exists because that was reached by accident of a comparison rather than by
- * decision.
+ * **THE WINDOW IS NO LONGER FORWARD-ONLY (#1389), and that is the whole of
+ * this function's second branch.**
  *
- * Flattening IS the right answer, which is why the branch only restates it.
- * `sessionEnd <= now` says the session has already ended, and the response to
- * "the market is shut and we are holding" is the same whether the calendar is
- * broken or merely surprising: be flat. On the entry path the same `true` means
- * "inside the window", so nothing new opens. A permanently-wrong calendar
- * therefore parks the book flat and stops trading — a halt, but a safe one.
+ * `TradingCalendar.sessionEnd` is contractually forward — every conforming
+ * implementation returns a close STRICTLY after the instant it is handed
+ * (`trading-calendar.ts`'s port doc). So one instant past the bell it named
+ * TOMORROW's close, `remaining` jumped to ~17.5 hours, `within` went false,
+ * and a held lot fell straight through to the holding branches with no flatten
+ * intent produced at all. Not refused by a gate — never built. On 2026-09-08
+ * seven control lots carried overnight exactly this way: one tick's Trader
+ * arrivals ran 19:58:27 to 20:02:02, and every lot reached after 20:00:00Z hit
+ * a shut window.
  *
- * The two alternatives are both worse. Returning FALSE would decline to
- * flatten while the market is shut, which is the overnight carry #668 exists
- * to prevent. THROWING is also wrong: this check is the FIRST branch of the
- * held-position path, so a throw takes the whole decision down on every
- * tick — including the direction-flip exit two branches below — stranding
- * exposure the system could then neither flatten nor exit.
+ * The window is now `[sessionEnd − flatten_before_close_ms, priorClose +
+ * flatten_after_close_ms]`, resolved through the SAME calendar in two reads
+ * that name the same instant across the boundary: `sessionEnd(now)` while the
+ * session is still open, and `sessionStart(now)` — "the most recent close AT OR
+ * BEFORE `now`", not the open — once it is not. At `now = close − 1ms` the
+ * first names today's close; at `now = close` and after, the second does. There
+ * is no instant at which the coordinate jumps, which is what lets the flatten's
+ * idempotency key dedupe across the bell (`computeFlattenIdempotencyKey`).
+ *
+ * `sessionStart` throws after `MAX_SESSION_SEARCH_DAYS` exactly as `sessionEnd`
+ * does, and is called only on the branch where `sessionEnd` already answered —
+ * same caller, same calendar, same existing exposure. It adds no failure mode
+ * the first read did not already carry.
+ *
+ * **A past close is no longer a diagnostic (#1389 deletes `session_end_in_past`).**
+ * It used to be reported as an alarming condition on the reasoning that a
+ * conforming calendar could not produce one. That reasoning was correct and is
+ * now obsolete: past the bell this function DELIBERATELY works against a close
+ * that has already happened, so a diagnostic for it would fire every session on
+ * every held instrument. The answer it produced — flatten — is unchanged, and
+ * still reached: a broken calendar reporting a close already gone still lands
+ * `remaining <= flatten_before_close_ms` on the first branch and still parks the
+ * book flat. Only the alert is gone, because it would now be noise.
  *
  * **Audibility is what #698 added, and it did not change any answer above.**
- * A calendar this broken should raise an alert, and `TraderInput` still carries
- * no logger to raise one from — so this reports the condition as DATA on the
- * returned verdict, and the adapter that already writes `trader_log` turns it
- * into an alert. Every `within` value below is exactly what it was before.
+ * A calendar that has stopped resolving sessions should raise an alert, and
+ * `TraderInput` still carries no logger to raise one from — so this reports the
+ * condition as DATA on the returned verdict, and the adapter that already
+ * writes `trader_log` turns it into an alert.
  */
 function withinFlattenWindow(
   input: Pick<TraderInput, 'clock' | 'config' | 'sessionCalendars'>,
@@ -288,6 +324,15 @@ function withinFlattenWindow(
         `a non-positive window disables flat-by-close, which ADR-0014 requires`,
     );
   }
+  // #1389, and the same backstop argument one line up: a non-positive grace is
+  // a static misconfiguration that restores the forward-only window this
+  // ticket removed, and cannot become valid at the next tick.
+  if (!(input.config.flatten_after_close_ms > 0)) {
+    throw new Error(
+      `flatten_after_close_ms must be > 0 (got ${input.config.flatten_after_close_ms}); ` +
+        'a non-positive grace restores the forward-only flatten window #1389 removed',
+    );
+  }
 
   const calendar = input.sessionCalendars[assetClass];
   const now = input.clock.now();
@@ -301,6 +346,7 @@ function withinFlattenWindow(
     // ADR-0014 with nothing marking it.
     return {
       within: false,
+      enforcing_close: null,
       diagnostic:
         assetClass === 'crypto'
           ? null
@@ -316,35 +362,25 @@ function withinFlattenWindow(
 
   const remaining = sessionEnd.getTime() - now.getTime();
 
-  // The session has already ended. Be flat — see the docblock for why this is
-  // answered here rather than by throwing, which would take the direction-flip
-  // exit down with it and strand the exposure.
-  //
-  // The answer is unchanged and correct; the DIAGNOSTIC is the new part, and it
-  // is alarming on the FIRST occurrence. `sessionEnd` is resolved from
-  // `now` immediately above, and a calendar's contract is to answer with the
-  // close of the session containing or following that instant — both shipped
-  // implementations enforce `close > instant` — so a conforming calendar cannot
-  // reach this branch. Reaching it means the calendar is broken, overridden, or
-  // has been handed a clock that runs ahead of it. Not "an ordinary tick just
-  // after the bell" — there is no grace threshold here, and the alert must not
-  // have one (#710). The adapter's repeat throttle bounds the NOISE of a
-  // condition that persists; it is not a confidence filter on the first one.
-  if (remaining < 0) {
-    return {
-      within: true,
-      diagnostic: {
-        kind: 'session_end_in_past',
-        asset_class: assetClass,
-        detail:
-          `${assetClass} calendar resolved a session end of ${sessionEnd.toISOString()}, ` +
-          `which is ${Math.round(-remaining / 1_000)}s before now (${now.toISOString()}); ` +
-          'the book is being parked flat as a result',
-      },
-    };
+  // Still before the bell (or a calendar reporting a close already gone, which
+  // this comparison has always swept up and still does — see the docblock).
+  if (remaining <= input.config.flatten_before_close_ms) {
+    return { within: true, enforcing_close: sessionEnd, diagnostic: null };
   }
 
-  return { within: remaining <= input.config.flatten_before_close_ms, diagnostic: null };
+  // Past the bell. `sessionStart` is "the most recent regular or early close
+  // AT OR BEFORE `now`" — the close just gone, which is the one this tick is
+  // still enforcing, NOT the session's open. The `>= 0` bound is that contract
+  // restated rather than trusted: a calendar answering with a FUTURE close
+  // would otherwise produce a negative elapsed that clears the upper bound and
+  // silently widen the grace to the whole session.
+  const priorClose = calendar.sessionStart(now);
+  const elapsed = now.getTime() - priorClose.getTime();
+  if (elapsed >= 0 && elapsed <= input.config.flatten_after_close_ms) {
+    return { within: true, enforcing_close: priorClose, diagnostic: null };
+  }
+
+  return { within: false, enforcing_close: null, diagnostic: null };
 }
 
 /**
@@ -720,7 +756,7 @@ async function buildBracket(
 async function buildExitIntent(
   input: TraderInput,
   positions: OpenPosition[],
-  exitReason: ExitReason,
+  exitKind: ExitKind,
 ): Promise<TraderOutcome> {
   const { debate } = input;
   return buildFlattenExit(
@@ -732,7 +768,7 @@ async function buildExitIntent(
       conviction: debate.confidence,
       converged: debate.converged,
     },
-    exitReason,
+    exitKind,
   );
 }
 
@@ -877,8 +913,66 @@ async function readExitPrice(
 }
 
 /**
+ * WHICH exit is being built, and — for the mandatory flatten alone — the
+ * session close it is enforcing (#1389).
+ *
+ * A discriminated union rather than a bare `ExitReason` plus an optional date,
+ * because the session close is the flatten's IDEMPOTENCY COORDINATE and a
+ * flatten built without one would silently fall back to some other coordinate.
+ * Spelled this way, the compiler refuses a `'flatten'` that does not carry a
+ * close, and refuses to let the two discretionary exits acquire one they must
+ * not use.
+ */
+type ExitKind =
+  | { reason: 'flatten'; session_close: Date }
+  | { reason: 'signal_decay' }
+  | { reason: 'direction_flip' };
+
+/**
+ * Has this arm already SENT a flatten for this instrument that has not
+ * resolved yet (#1389)?
+ *
+ * ## Why the idempotency key is not enough on its own
+ *
+ * The key dedups one COORDINATE. It was never a per-instrument in-flight
+ * guard, and every design #1389's re-analysis discarded failed at exactly that
+ * gap. Between `submitFlatten` and the fill sweep, `getExitFillSizes` still
+ * reports nothing closed, so any second flatten that reaches the builder sizes
+ * itself off the FULL `filled_size` and sells the whole lot again — into a
+ * short, on a 3x leveraged ETP. `executeExit`'s size guard compares the same
+ * two stale numbers and agrees.
+ *
+ * The key stops the same obligation being re-sent under the same coordinate.
+ * This stops a DIFFERENT coordinate — a partially-filled first flatten, a lot
+ * whose key changed across a config edit, a retry that advanced its key — from
+ * arriving while the first one is still open at the venue. Two guards, two
+ * failure modes; neither subsumes the other.
+ *
+ * ## Why a RETURN and never a fall-through
+ *
+ * On the tick path the branch below this one is the decay release, and it
+ * sizes off the same stale held quantities. Falling through would produce the
+ * identical over-sell wearing a different `exit_reason`, which is worse than
+ * the bug it replaces because the row would not even say "flatten".
+ *
+ * ## What this blocks that it should not
+ *
+ * A wedged fill poll leaves rows unresolved forever and makes the instrument
+ * un-flattenable until it is unwedged. Blocking is still the safe direction —
+ * the held quantities really are unknown until the sweep lands — and the
+ * carried-lot alert is what bounds it. That bound is documented, not coded;
+ * see ADR-0014's 2026-09-10 amendment.
+ */
+async function flattenAlreadyInFlight(
+  input: Pick<TraderInput, 'instrument' | 'unresolvedFlattens'>,
+): Promise<boolean> {
+  const unresolved = await input.unresolvedFlattens();
+  return unresolved.some((submission) => submission.instrument === input.instrument);
+}
+
+/**
  * The debate-free core of the flatten (#743): everything an exit needs is a
- * mark, the held quantities and a bar coordinate for the idempotency key.
+ * mark, the held quantities and a coordinate for the idempotency key.
  * `attribution` is metadata only — nothing here branches on it, which is what
  * keeps the exit path safe to run without a debate (orchestrator-spec.md,
  * "The tick/decision split", constraint 4).
@@ -891,8 +985,9 @@ async function buildFlattenExit(
   positions: OpenPosition[],
   decisionBar: Date,
   attribution: ExitAttribution,
-  exitReason: ExitReason,
+  exitKind: ExitKind,
 ): Promise<TraderOutcome> {
+  const exitReason: ExitReason = exitKind.reason;
   // No `marketData` here since #826: the mark read moved into `readExitPrice`,
   // which owns both the healthy answer and the unpriced degradation.
   const { clock, config, exitFillSizes, instrument } = input;
@@ -940,15 +1035,24 @@ async function buildFlattenExit(
 
   return emit(
     {
-      // #748: the early exit takes its OWN key discriminator, so a release and
-      // a later mandatory flatten in the same bar cannot hash to one key and
-      // have the flatten deduped away. See `IntentSide`.
-      idempotency_key: computeIdempotencyKey(
-        instrument,
-        decisionBar,
-        exitReason === 'signal_decay' ? 'early_close' : 'close',
-        arm,
-      ),
+      // #1389: the MANDATORY flatten is keyed on the session close it enforces,
+      // not on a bar — so the same obligation, evaluated on either side of the
+      // bell, produces one key and gate 3 dedups across the boundary. See
+      // `computeFlattenIdempotencyKey`.
+      //
+      // #748: the two DISCRETIONARY exits keep the bar coordinate, and the
+      // early exit keeps its own `'early_close'` discriminator, so a release
+      // and a later mandatory flatten in the same bar cannot hash to one key
+      // and have the flatten deduped away. See `IntentSide`.
+      idempotency_key:
+        exitKind.reason === 'flatten'
+          ? computeFlattenIdempotencyKey(instrument, exitKind.session_close, arm)
+          : computeIdempotencyKey(
+              instrument,
+              decisionBar,
+              exitKind.reason === 'signal_decay' ? 'early_close' : 'close',
+              arm,
+            ),
       instrument,
       asset_class: priced.asset_class,
       side: closingSide,
@@ -980,6 +1084,10 @@ async function buildFlattenExit(
         // same true-or-absent shape as `unpriced_exit`, for the same
         // `exactOptionalPropertyTypes` reason.
         ...(exitReason === 'flatten' ? { mandatory_flatten: true as const } : {}),
+        // #1497: the per-lot breakdown behind `totalSize` — see this field's
+        // doc on `OrderIntentMetadata` for why `executeExit` needs it to catch
+        // a compensating swap the total-only guard cannot see.
+        lot_held_quantities: held,
         conviction: attribution.conviction,
         converged: attribution.converged,
         sizing: {
@@ -1085,6 +1193,10 @@ const SKIP_REASON_CLASS: Record<TraderSkipReason, TraderDecisionClass> = {
   holding_neutral_or_non_converged: 'declined_on_signal',
   exit_no_filled_size: 'input_unusable',
   exit_held_quantity_diverged: 'input_unusable',
+  // The system working, not starving: the close IS in flight. `input_unusable`
+  // would fold it in with the fill-record failures above and make a healthy
+  // dedup look like corrupt data.
+  flatten_in_flight: 'declined_on_signal',
   early_exit_signal_unavailable: 'input_unusable',
   no_position_side: 'input_unusable',
   atr_insufficient_bars: 'input_unusable', // benign warm-up, not corruption — see the class doc above
@@ -1368,7 +1480,18 @@ async function routeDecision(
     // has stopped resolving sessions produces `false` and no exit at all — the
     // second being precisely the silent case #698 was filed for.
     if (flattenWindow.diagnostic !== null) diagnostics.push(flattenWindow.diagnostic);
-    if (flattenWindow.within) return buildExitIntent(input, positions, 'flatten');
+    if (flattenWindow.within) {
+      // #1389's second guard, and it sits HERE rather than inside
+      // `buildFlattenExit` on purpose: that builder also serves the two
+      // discretionary exits, and a guard at its top would silently swallow a
+      // direction-flip or a decay release whenever a flatten happened to be in
+      // flight — refusing exits the in-flight flatten is not the close for.
+      if (await flattenAlreadyInFlight(input)) return skip('flatten_in_flight');
+      return buildExitIntent(input, positions, {
+        reason: 'flatten',
+        session_close: flattenWindow.enforcing_close,
+      });
+    }
   }
 
   if (debate.direction === 'neutral' || !debate.converged) {
@@ -1377,7 +1500,7 @@ async function routeDecision(
 
   const desiredSide = sideFor(debate.direction);
   if (desiredSide !== existingSide) {
-    return buildExitIntent(input, positions, 'direction_flip');
+    return buildExitIntent(input, positions, { reason: 'direction_flip' });
   }
 
   const mostRecentLot = mostRecentOpenLot(positions);
@@ -1413,6 +1536,11 @@ export type ExitCheckInput = Pick<
   | 'sessionCalendars'
   | 'positionState'
   | 'exitFillSizes'
+  // #1389: the tick path is where the mandatory flatten is decided, so the
+  // in-flight guard has to reach THIS entry point — omitting it here would
+  // leave the second flatten unguarded on precisely the path that produces
+  // nearly all of them.
+  | 'unresolvedFlattens'
   // #826: the tick path is where the mandatory flatten is actually decided
   // (`routeExitCheck`'s first branch), so the unpriced-flatten escalation has
   // to reach THIS entry point — omitting it here would leave the degradation
@@ -1528,7 +1656,14 @@ async function routeExitCheck(
   // Below this line, nothing the early exit does can reach the flatten: it has
   // already returned.
   if (flattenWindow.within) {
-    return buildFlattenExit(input, positions, input.bar, attribution, 'flatten');
+    // #1389. RETURNS rather than falling through — see `flattenAlreadyInFlight`
+    // for why continuing to the decay read below would be the same over-sell by
+    // another name.
+    if (await flattenAlreadyInFlight(input)) return skip('flatten_in_flight');
+    return buildFlattenExit(input, positions, input.bar, attribution, {
+      reason: 'flatten',
+      session_close: flattenWindow.enforcing_close,
+    });
   }
 
   // The indicator-based early exit (#748). Reached only when the flatten is not
@@ -1551,5 +1686,5 @@ async function routeExitCheck(
   // second code path agreeing to behave. `buildFlattenExit` sizes to the held
   // quantity, takes the closing side, and emits `intent_type: 'exit'`; there is
   // no argument to it that could produce anything else.
-  return buildFlattenExit(input, positions, input.bar, attribution, 'signal_decay');
+  return buildFlattenExit(input, positions, input.bar, attribution, { reason: 'signal_decay' });
 }

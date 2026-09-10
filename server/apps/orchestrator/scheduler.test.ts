@@ -52,6 +52,9 @@ describe('UniverseScheduler.nextTick', () => {
     const plan = makeScheduler().nextTick(clockAt(MARKET_CLOSED));
 
     expect(plan.instruments).toEqual([]);
+    // #1499: no `postCloseFlattenWindow` configured here, so the empty plan
+    // is not grace-admitted either — absent, never `false`.
+    expect(plan.grace_only).toBeUndefined();
   });
 
   it('fires the full universe when the market is open', () => {
@@ -62,6 +65,9 @@ describe('UniverseScheduler.nextTick', () => {
     // a hardcoded list only re-asserts that someone edited two places.
     expect(assets(plan.instruments)).toEqual(DEFAULT_UNIVERSE.map((row) => row.asset));
     expect(plan.instruments).toHaveLength(20);
+    // #1499: a window tick is never grace-only, regardless of what a
+    // `postCloseFlattenWindow` would separately answer for this instant.
+    expect(plan.grace_only).toBeUndefined();
   });
 
   it('never fires a stock instrument on a holiday', () => {
@@ -192,5 +198,80 @@ describe('UniverseScheduler.nextTick', () => {
 
   it('DEFAULT_UNIVERSE carries no crypto row (#738 — crypto out of the production schedule)', () => {
     expect(DEFAULT_UNIVERSE.every((instrument) => instrument.asset_class !== 'crypto')).toBe(true);
+  });
+
+  /**
+   * #1389. Before this, NO tick existed after the bell at all: `isOpen` gates
+   * the whole plan and `stocksTradingWindow` can only narrow it further, so
+   * ADR-0014's post-close grace had nothing to run on no matter what
+   * `decide.ts` said about it. The grace enters as its own OR'd predicate.
+   */
+  describe('the post-close flatten grace (#1389)', () => {
+    const AFTER_THE_BELL = new Date('2026-07-15T20:00:10Z');
+    const PAST_THE_GRACE = new Date('2026-07-15T20:06:00Z');
+
+    /** The real predicate's shape: inside the grace, and nowhere else. */
+    const graceWindow = (instant: Date): boolean => instant.getTime() === AFTER_THE_BELL.getTime();
+
+    it('plans the universe after the bell when the grace says so', () => {
+      const scheduler = makeScheduler({ postCloseFlattenWindow: graceWindow });
+
+      // The calendar says SHUT at this instant — that is the point. This is the
+      // one predicate here that can put an instrument in the plan on its own.
+      const plan = scheduler.nextTick(clockAt(AFTER_THE_BELL));
+      expect(assets(plan.instruments)).toHaveLength(DEFAULT_UNIVERSE.length);
+    });
+
+    it('stamps grace_only when the plan is admitted ONLY by the grace (#1499)', () => {
+      const scheduler = makeScheduler({ postCloseFlattenWindow: graceWindow });
+
+      // `runTickPlan` reads this to skip the decision-gate claim entirely —
+      // absent this flag, a grace tick pays a full Analysts + Debate pass
+      // before the Trader ever gets to `skip('session_closing')`.
+      expect(scheduler.nextTick(clockAt(AFTER_THE_BELL)).grace_only).toBe(true);
+    });
+
+    it('plans nothing once the grace has expired', () => {
+      const scheduler = makeScheduler({ postCloseFlattenWindow: graceWindow });
+
+      const plan = scheduler.nextTick(clockAt(PAST_THE_GRACE));
+      expect(assets(plan.instruments)).toEqual([]);
+      expect(plan.grace_only).toBeUndefined();
+    });
+
+    it('leaves grace_only absent on a window tick even when the grace predicate ALSO answers true (#1499)', () => {
+      // A window tick takes precedence over the grace when both would
+      // technically admit — this pins that precedence directly, with a grace
+      // predicate that (unrealistically) answers true at MARKET_OPEN too, so
+      // the assertion cannot pass by the grace predicate simply never firing
+      // during open hours. Mutation discriminator: deleting the `marketOpen ?
+      // {} :` guard in `scheduler.ts` stamps `grace_only: true` here instead.
+      const scheduler = makeScheduler({ postCloseFlattenWindow: () => true });
+
+      const plan = scheduler.nextTick(clockAt(MARKET_OPEN));
+      expect(assets(plan.instruments)).toHaveLength(DEFAULT_UNIVERSE.length);
+      expect(plan.grace_only).toBeUndefined();
+    });
+
+    it('does not widen an entry window that a profile deliberately narrowed', () => {
+      // The grace is OR'd with the OPEN test, not with the narrowing: a run
+      // that trades only the LSE/US overlap still gets its post-close ticks,
+      // and a run inside the session still gets none it did not ask for.
+      const scheduler = makeScheduler({
+        postCloseFlattenWindow: graceWindow,
+        stocksTradingWindow: () => false,
+      });
+
+      expect(assets(scheduler.nextTick(clockAt(MARKET_OPEN)).instruments)).toEqual([]);
+      expect(assets(scheduler.nextTick(clockAt(AFTER_THE_BELL)).instruments)).toHaveLength(
+        DEFAULT_UNIVERSE.length,
+      );
+    });
+
+    it('is absent by default — the backtest harness gets no post-close ticks', () => {
+      const scheduler = makeScheduler();
+
+      expect(assets(scheduler.nextTick(clockAt(AFTER_THE_BELL)).instruments)).toEqual([]);
+    });
   });
 });

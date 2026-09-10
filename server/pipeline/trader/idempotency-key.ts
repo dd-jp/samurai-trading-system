@@ -136,3 +136,63 @@ export function computeIdempotencyKey(
 
   return createHash('sha256').update(payload).digest('hex');
 }
+
+/**
+ * **The MANDATORY flatten's key, and its coordinate is the SESSION CLOSE being
+ * enforced — never a bar, never anything derived from the lot (#1389).**
+ *
+ * ## Why the bar coordinate was wrong for this one intent
+ *
+ * The flatten is not a decision taken in a bar; it is the enforcement of ONE
+ * session close, and the same close is enforceable from either side of the
+ * bell. #1389 extended the window `flatten_after_close_ms` past the close, so
+ * a lot missed at `close − 10s` is targeted again at `close + 10s` — and under
+ * the debate-bar coordinate those two ticks straddle a bar boundary whenever
+ * the close sits on one (the US close, 20:00Z, sits exactly on the 1h grid).
+ * Two keys for one obligation means `findByKey`, the `open_positions` PK and
+ * the venue `client_order_id` all wave the second one through, and the lot is
+ * flattened TWICE — sold into a short, since `executeExit` sizes to the held
+ * quantity a still-unswept first flatten has not yet reduced.
+ *
+ * Keyed on the close instead, the two ticks hash identically and gate 3 dedups
+ * across the boundary. `sessionEnd(now)` inside the window and
+ * `sessionStart(now)` past it name that same instant — `withinFlattenWindow`
+ * in `decide.ts` resolves which, and its `enforcing_close` is the only
+ * supported way to produce this argument.
+ *
+ * ## Why not the lot
+ *
+ * Two designs anchored to lot state were built and discarded (#1389's
+ * re-analysis): both admitted a second flatten against a partially-filled
+ * first one, or dedupped a lot that had never been sent at all. The obligation
+ * is per instrument per close, so that is what the coordinate says.
+ *
+ * ## Why this cannot collide with any bar-keyed key
+ *
+ * The payload's second field is named `session_close`, not `bar`. Two distinct
+ * JSON shapes cannot serialize identically, so a flatten's key is in a
+ * different key space from every `computeIdempotencyKey` value — including the
+ * `'close'`-side keys the direction-flip exit still takes on the bar
+ * coordinate, and the `'early_close'` keys #748 gave the decay exit.
+ *
+ * `arm` is omitted for `'live'` for exactly the reason it is above: the live
+ * arm's keys must not be re-derived under a new payload while rows keyed the
+ * old way are still in flight. This is a NEW key space for the flatten in both
+ * arms, so no live row is re-keyed — the flatten of a lot that was already
+ * submitted under a bar-keyed flatten key simply gets a fresh key once, at the
+ * cutover, and gate 3's other two layers (`open_positions` PK, the broker
+ * `client_order_id`) are untouched.
+ */
+export function computeFlattenIdempotencyKey(
+  instrument: string,
+  sessionClose: Date,
+  arm: TradingArm = 'live',
+): string {
+  const session_close = sessionClose.toISOString();
+  const payload =
+    arm === 'live'
+      ? JSON.stringify({ instrument, session_close, side: 'close' })
+      : JSON.stringify({ instrument, session_close, side: 'close', arm });
+
+  return createHash('sha256').update(payload).digest('hex');
+}
