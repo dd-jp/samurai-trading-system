@@ -3785,7 +3785,7 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
 // #1348: `ResidualExposureAlert.trace_id`/`FlattenOverfillWarning.trace_id`
 // must carry the EXECUTION SURFACE's own id, not a literal either producer
 // picked itself — the property that lets a shared, arm-agnostic channel
-// instance (console-channels.ts) tell a control-arm alert from a live one.
+// instance (orchestrator/alert-catalogue.ts) tell a control-arm alert from a live one.
 // These two tests vary only `trace_id` between two otherwise-identical runs
 // and assert the alert follows it — a mutation that hardcodes either
 // producer's `trace_id:` field stays green under every OTHER test in this

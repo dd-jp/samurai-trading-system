@@ -149,7 +149,7 @@ export interface ExecutionInput {
    * #1465: where a fill fee reported outside book currency is escalated —
    * `warnOnNonSterlingFee` (ingest-fills.ts) posts here after writing its own
    * `error`-level `safeLog` line. OPTIONAL, unlike `residualExposureAlerts`
-   * et al. above, and deliberately with no `Logging…Channel` default: that
+   * et al. above, and deliberately with no log-only default: that
    * `safeLog` line already carries this alert's fields at `error`, so a
    * logging implementation behind this port would emit every trip twice —
    * the same reasoning `ThresholdClampAlertChannel`/

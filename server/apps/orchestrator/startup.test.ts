@@ -713,7 +713,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
       // The assertion that actually proves the wiring, rather than proving a
       // log line: drive the composed `Heartbeat` and watch the request leave.
       // A startup log claiming `telegram` while the orchestrator was still
-      // handed `LoggingHeartbeatChannel` would pass every check above and fail
+      // handed the log-only heartbeat would pass every check above and fail
       // this one. Transport stubbed — nothing reaches Telegram.
       const fetchStub = vi.fn().mockResolvedValue({
         ok: true,

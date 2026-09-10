@@ -3,7 +3,8 @@
  * lots' journalled held quantity (#527) — the same shape
  * `ResidualExposureAlertChannel` takes (residual-exposure-alert.ts): declared
  * beside its caller, implemented by `LoggingFlattenOverfillAlertChannel`
- * (orchestrator/console-channels.ts) and wired at the composition root.
+ * (orchestrator/console-channels.ts — log-only by design, so no catalogue
+ * entry) and wired at the composition root.
  *
  * ## Why this exists
  *
@@ -18,7 +19,7 @@
  * would otherwise make quantity vanish from the accounting with no record,
  * unnoticed through a 14-day unattended soak (#238).
  *
- * `warn`, not `error` — the same distinction `LoggingLoosenNotificationChannel`
+ * `warn`, not `error` — the same distinction the `loosenNotices` log line
  * draws: nothing this call does is broken, the split still completes and the
  * poll still succeeds. This is a diagnostic trail for an invariant violation
  * elsewhere, not itself a failure of `ingestFills()`.

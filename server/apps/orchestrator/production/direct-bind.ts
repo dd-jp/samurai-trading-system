@@ -1064,7 +1064,7 @@ export interface RiskStepDeps extends BreakerStateDeps {
    * #766: where the catch below escalates a clamp trip — `resolveRiskConfig`
    * throwing on an out-of-bound `risk_thresholds` row. Absent = log-only,
    * same optionality rationale as `traderDiagnosticAlerts` below (no
-   * `Logging…Channel`: this catch already logs at `error`).
+   * log-only form: this catch already logs at `error`).
    */
   thresholdClampAlerts?: ThresholdClampAlertChannel;
   /**

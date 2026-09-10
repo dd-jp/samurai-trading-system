@@ -32,7 +32,7 @@
  * What an operator has to know is that the book has a dark name in it, which
  * is a feed fault they must act on.
  *
- * ## No `Logging…Channel`, and no latch
+ * ## No log-only form, and no latch
  *
  * Absent = log-only, with no logging implementation standing in behind it —
  * the same call as `TraderDiagnosticAlertChannel` and

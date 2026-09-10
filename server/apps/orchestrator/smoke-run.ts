@@ -269,28 +269,8 @@ import {
   installSupervisorContinueOnFault,
   watchSupervisorStdout,
 } from '../supervisor/fault-guard.js';
+import { loggingAlertChannel } from './alert-catalogue.js';
 import type { AlertChannels } from './alert-transport.js';
-import {
-  LoggingAnalystSkipAlertChannel,
-  LoggingArmDivergenceAlertChannel,
-  LoggingBreachAlertChannel,
-  LoggingCalendarFallbackAlertChannel,
-  LoggingDataFailoverAlertChannel,
-  LoggingDormantLegsUnresolvedAlertChannel,
-  LoggingFlattenReconcileAlertChannel,
-  LoggingHeartbeatChannel,
-  LoggingLegResizeUnverifiedAlertChannel,
-  LoggingLlmFailureRateAlertChannel,
-  LoggingLoosenNotificationChannel,
-  LoggingLseCalendarCoverageAlertChannel,
-  LoggingMiCoverageAlertChannel,
-  LoggingOcoDoubleFillAlertChannel,
-  LoggingOrphanAlertChannel,
-  LoggingPromptTierAlertChannel,
-  LoggingResidualExposureAlertChannel,
-  LoggingUnpricedFillAlertChannel,
-  LoggingUnresolvedPriceUnitAlertChannel,
-} from './console-channels.js';
 import {
   FILL_SYNC_POLL_FAILED,
   FILL_SYNC_RECONCILE_FAILED,
@@ -6436,11 +6416,11 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
     // the reference, not what the limiter permits.
     const llmRateLimiter = new RateLimiter(clock, profile.rateLimiterConfig);
     // #576: the tick loop's own residual-exposure channel, recorded rather
-    // than left at the `LoggingResidualExposureAlertChannel` default — the
+    // than left at the `loggingAlertChannel('residualExposureAlerts')` default — the
     // gate has to see whether the SIX-STAGE run ever posted one too, not
     // only the exit-path harness below.
     const tickLoopResidualAlerts = new RecordingResidualExposureAlertChannel(
-      new LoggingResidualExposureAlertChannel(logger),
+      loggingAlertChannel('residualExposureAlerts', logger),
     );
     // Hoisted out of the config below for `llmRateLimiter`'s reason: the gate
     // has to READ it afterwards to report how many macro rows the run actually
@@ -6463,24 +6443,24 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
     //
     // Log-only throughout: this run is attended and offline by definition.
     // `verdictAlerts`/`traderDiagnosticAlerts` are bare no-ops rather than
-    // `Logging…Channel` stand-ins because their real implementations already
+    // log-only stand-ins because their real implementations already
     // log everything they'd otherwise duplicate (see each field's inline
     // history below `git blame` before #803 folded them into this object).
     const smokeAlertChannels = {
-      heartbeatChannel: new LoggingHeartbeatChannel(logger),
-      orphanAlerts: new LoggingOrphanAlertChannel(logger),
-      unpricedFillAlerts: new LoggingUnpricedFillAlertChannel(logger),
-      ocoDoubleFillAlerts: new LoggingOcoDoubleFillAlertChannel(logger),
-      breachAlerts: new LoggingBreachAlertChannel(logger),
-      loosenNotices: new LoggingLoosenNotificationChannel(logger),
-      analystSkipAlerts: new LoggingAnalystSkipAlertChannel(logger),
+      heartbeatChannel: loggingAlertChannel('heartbeatChannel', logger),
+      orphanAlerts: loggingAlertChannel('orphanAlerts', logger),
+      unpricedFillAlerts: loggingAlertChannel('unpricedFillAlerts', logger),
+      ocoDoubleFillAlerts: loggingAlertChannel('ocoDoubleFillAlerts', logger),
+      breachAlerts: loggingAlertChannel('breachAlerts', logger),
+      loosenNotices: loggingAlertChannel('loosenNotices', logger),
+      analystSkipAlerts: loggingAlertChannel('analystSkipAlerts', logger),
       // #576: recorded, not just logged — see `tickLoopResidualAlerts` above.
       residualExposureAlerts: tickLoopResidualAlerts,
       // The six-stage tick loop above never reaches a flatten (no exit
       // intent is ever driven through it — see `runExitPathScenarios`'s own
       // file doc for why), so there is nothing here for the gate to read
       // back; a plain log-only instance is enough.
-      flattenReconcileAlerts: new LoggingFlattenReconcileAlertChannel(logger),
+      flattenReconcileAlerts: loggingAlertChannel('flattenReconcileAlerts', logger),
       verdictAlerts: { notify: async () => {} },
       // A bare no-op rather than a log-only stand-in, deliberately:
       // `postTraderDiagnosticAlert` (direct-bind.ts) writes every diagnostic
@@ -6494,7 +6474,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // bars ever change.
       traderDiagnosticAlerts: { postTraderDiagnosticAlert: async () => {} },
       // #752 — the twelfth `ALERT_CHANNEL_FIELDS` member.
-      miCoverageAlerts: new LoggingMiCoverageAlertChannel(logger),
+      miCoverageAlerts: loggingAlertChannel('miCoverageAlerts', logger),
       // #766 — the thirteenth `ALERT_CHANNEL_FIELDS` member. A bare no-op,
       // same reason as `traderDiagnosticAlerts` above: both catch sites this
       // port serves already log at `error` before consulting it, so a
@@ -6511,7 +6491,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // composition root builds is never reached with a throwing primary —
       // see production.test.ts's composition-root case for the exercise that
       // does reach it.
-      dataFailoverAlerts: new LoggingDataFailoverAlertChannel(logger),
+      dataFailoverAlerts: loggingAlertChannel('dataFailoverAlerts', logger),
       // #841 — the fifteenth `ALERT_CHANNEL_FIELDS` member. A bare no-op for
       // the same reason as `thresholdClampAlerts` above: both seams that
       // raise it (the risk and verdict binds in direct-bind.ts) write an
@@ -6525,7 +6505,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // `resolveUsEquitySessionCalendar` never runs and this slot is never
       // exercised — a log-only stand-in is enough, same posture as
       // `dataFailoverAlerts` above.
-      calendarFallbackAlerts: new LoggingCalendarFallbackAlertChannel(logger),
+      calendarFallbackAlerts: loggingAlertChannel('calendarFallbackAlerts', logger),
       // #971 — the seventeenth `ALERT_CHANNEL_FIELDS` member. Log-only like the
       // rest of this attended, offline run.
       //
@@ -6547,7 +6527,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // "arm comparison runs on the daily feedback cycle" pair, which drive
       // `buildProductionOrchestrator`'s own timer under fake timers to a
       // divergent outcome — the one thing this offline run cannot guarantee.
-      armDivergenceAlerts: new LoggingArmDivergenceAlertChannel(logger),
+      armDivergenceAlerts: loggingAlertChannel('armDivergenceAlerts', logger),
       // #1084 — the eighteenth `ALERT_CHANNEL_FIELDS` member. A bare no-op,
       // same reason as `traderDiagnosticAlerts` above: overlapping tick
       // passes are unreachable in an offline smoke run — everything here
@@ -6569,17 +6549,17 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // own composition root and its own cold `:memory:` store, the same
       // pattern `runRiskCriticScenario`/`runDataFailoverScenario` use for a
       // mechanism the six-stage tick loop above cannot exercise for real.
-      promptTierAlerts: new LoggingPromptTierAlertChannel(logger),
+      promptTierAlerts: loggingAlertChannel('promptTierAlerts', logger),
       // #1378. This run injects `tradingCalendar: new AlwaysOpenCalendar()`
       // directly (below), so `assertLseCalendarCoverage`'s
       // `LseRegularHoursCalendar` gate never fires and this slot is never
       // exercised — a log-only stand-in is enough, same posture as
       // `calendarFallbackAlerts` above.
-      lseCalendarCoverageAlerts: new LoggingLseCalendarCoverageAlertChannel(logger),
+      lseCalendarCoverageAlerts: loggingAlertChannel('lseCalendarCoverageAlerts', logger),
       // #1396. No debate runs long enough in the smoke fixture to accumulate
       // a real rate — log-only is enough, same posture as the other channels
       // above that this run never exercises.
-      llmFailureRateAlerts: new LoggingLlmFailureRateAlertChannel(logger),
+      llmFailureRateAlerts: loggingAlertChannel('llmFailureRateAlerts', logger),
       // #1400 — the Saxo adapter's three. This run is Alpaca/simulated-broker
       // only (`SAMURAI_BROKER` is never read here, the same posture as
       // `SAMURAI_MODE`), so no Saxo adapter exists to post any of them and
@@ -6587,12 +6567,12 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // `lseCalendarCoverageAlerts` above; the venue's own refusals and
       // wiring are held by `saxo-venue.test.ts` and
       // `saxo-composition-root.test.ts`.
-      legResizeAlerts: new LoggingLegResizeUnverifiedAlertChannel(logger),
-      dormantLegsAlerts: new LoggingDormantLegsUnresolvedAlertChannel(logger),
-      priceUnitAlerts: new LoggingUnresolvedPriceUnitAlertChannel(logger),
+      legResizeAlerts: loggingAlertChannel('legResizeAlerts', logger),
+      dormantLegsAlerts: loggingAlertChannel('dormantLegsAlerts', logger),
+      priceUnitAlerts: loggingAlertChannel('priceUnitAlerts', logger),
       // #1465 — the twenty-fifth `ALERT_CHANNEL_FIELDS` member. A bare no-op,
       // same reason as `traderDiagnosticAlerts`/`thresholdClampAlerts` above:
-      // this port has deliberately no `Logging…Channel` (its caller already
+      // this port has deliberately no log-only form (its caller already
       // writes an `error`-level line first), and the condition itself —
       // a broker reporting a fee outside book currency — cannot be provoked
       // by this offline run's Simulated adapter, which never sets

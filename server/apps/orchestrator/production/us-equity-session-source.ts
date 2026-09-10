@@ -53,7 +53,7 @@ import {
   toCivilDate,
   type ZonedCivilDate,
 } from '../../../providers/market-data-service/trading-calendar.js';
-import { LoggingCalendarFallbackAlertChannel } from '../console-channels.js';
+import { loggingAlertChannel } from '../alert-catalogue.js';
 import type { Logger } from '../types.js';
 import type { CalendarFallbackAlertChannel } from './calendar-fallback-alert.js';
 
@@ -82,7 +82,7 @@ export interface ResolveUsEquitySessionCalendarOptions {
   now: () => Date;
   /** Injected in tests — no real network call otherwise. Defaults to `AlpacaHttpCalendarClient`. */
   client?: AlpacaCalendarClient;
-  /** Defaults to `LoggingCalendarFallbackAlertChannel(logger)`, same posture as `dataFailoverAlerts`. */
+  /** Defaults to `loggingAlertChannel('calendarFallbackAlerts', logger)`, same posture as `dataFailoverAlerts`. */
   alertChannel?: CalendarFallbackAlertChannel;
 }
 
@@ -100,7 +100,8 @@ export async function resolveUsEquitySessionCalendar(
   options: ResolveUsEquitySessionCalendarOptions,
 ): Promise<TradingCalendar> {
   const { logger, now } = options;
-  const alertChannel = options.alertChannel ?? new LoggingCalendarFallbackAlertChannel(logger);
+  const alertChannel =
+    options.alertChannel ?? loggingAlertChannel('calendarFallbackAlerts', logger);
 
   const fallback = (reason: string): TradingCalendar => {
     logger.log({

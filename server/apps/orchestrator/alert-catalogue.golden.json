@@ -1,0 +1,1514 @@
+{
+  "heartbeatChannel": [
+    {
+      "log": {
+        "trace_id": "heartbeat",
+        "stage": "orchestrator",
+        "level": "info",
+        "message": "heartbeat",
+        "payload": {
+          "timestamp": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "logInTrace": {
+        "trace_id": "heartbeat",
+        "stage": "orchestrator",
+        "level": "info",
+        "message": "heartbeat",
+        "payload": {
+          "timestamp": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "text": "Samurai heartbeat: alive at 2026-09-10T08:15:00.000Z",
+      "rejected": "telegram 502",
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    }
+  ],
+  "orphanAlerts": [
+    {
+      "log": {
+        "trace_id": "tick-7",
+        "stage": "orchestrator",
+        "event": "orphan_verdict_found",
+        "level": "error",
+        "message": "orphaned go verdict found at startup — verify against the venue",
+        "payload": {
+          "trace_id": "tick-7",
+          "idempotency_key": "lot-1",
+          "instrument": "SPY",
+          "verdict_timestamp": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "logInTrace": {
+        "trace_id": "tick-7",
+        "stage": "orchestrator",
+        "event": "orphan_verdict_found",
+        "level": "error",
+        "message": "orphaned go verdict found at startup — verify against the venue",
+        "payload": {
+          "trace_id": "tick-7",
+          "idempotency_key": "lot-1",
+          "instrument": "SPY",
+          "verdict_timestamp": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "text": "Samurai ORPHANED GO VERDICT: a 'go' for SPY was recorded at 2026-09-10T08:15:00.000Z with no matching execution record — this process died between Verdict and Execution.\nClient order id lot-1, trace tick-7.\nAn order may or may not have reached the venue, and nothing resubmits or cancels it automatically. Check the venue for that client order id and reconcile it by hand.",
+      "rejected": "telegram 502",
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    }
+  ],
+  "unpricedFillAlerts": [
+    {
+      "log": {
+        "trace_id": "unpriced-fill",
+        "stage": "execution",
+        "event": "unpriced_fill_stuck",
+        "level": "error",
+        "message": "broker reports a filled quantity it will not price — the lot is stuck; check the order on the venue and reconcile it by hand",
+        "payload": {
+          "venue": "alpaca",
+          "client_order_id": "lot-1",
+          "broker_fill_id": "fill-9",
+          "leg": "entry",
+          "instrument": "QQQ",
+          "qty": 3,
+          "first_seen_at": "2026-09-10T08:15:00.000Z",
+          "unpriced_for_ms": 900000,
+          "age_out_ms": 600000
+        }
+      },
+      "logInTrace": {
+        "trace_id": "unpriced-fill",
+        "stage": "execution",
+        "event": "unpriced_fill_stuck",
+        "level": "error",
+        "message": "broker reports a filled quantity it will not price — the lot is stuck; check the order on the venue and reconcile it by hand",
+        "payload": {
+          "venue": "alpaca",
+          "client_order_id": "lot-1",
+          "broker_fill_id": "fill-9",
+          "leg": "entry",
+          "instrument": "QQQ",
+          "qty": 3,
+          "first_seen_at": "2026-09-10T08:15:00.000Z",
+          "unpriced_for_ms": 900000,
+          "age_out_ms": 600000
+        }
+      },
+      "text": "Samurai STUCK LOT: alpaca reports 3 QQQ filled on the entry leg but will not price it (15m unpriced, threshold 10m).\nOrder fill-9, lot lot-1, first seen 2026-09-10T08:15:00.000Z.\nThe fill cannot be booked, so the lot stays under-filled, its stop is sized to the wrong quantity and no closed trade will be emitted. Check the order on the venue and reconcile it by hand.",
+      "rejected": "telegram 502",
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    }
+  ],
+  "residualExposureAlerts": [
+    {
+      "log": {
+        "trace_id": "fill-sync",
+        "stage": "execution",
+        "event": "residual_exposure_unprotected",
+        "level": "error",
+        "message": "a partially-filled flatten left a residual position and re-arming its protective legs failed — the position is unprotected; check the order on the venue by hand",
+        "payload": {
+          "idempotency_key": "lot-2",
+          "instrument": "AAPL",
+          "side": "buy",
+          "residual_qty": 2,
+          "residual_qty_is_upper_bound": false,
+          "rearm_unsupported": false,
+          "stop": 180,
+          "target": 190,
+          "observed_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "logInTrace": {
+        "trace_id": "fill-sync",
+        "stage": "execution",
+        "event": "residual_exposure_unprotected",
+        "level": "error",
+        "message": "a partially-filled flatten left a residual position and re-arming its protective legs failed — the position is unprotected; check the order on the venue by hand",
+        "payload": {
+          "idempotency_key": "lot-2",
+          "instrument": "AAPL",
+          "side": "buy",
+          "residual_qty": 2,
+          "residual_qty_is_upper_bound": false,
+          "rearm_unsupported": false,
+          "stop": 180,
+          "target": 190,
+          "observed_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "text": "Samurai UNPROTECTED RESIDUAL: AAPL has 2 units left open on the buy side with NO protective legs armed, as of 2026-09-10T08:15:00.000Z.\nLot lot-2. Re-arming at stop 180 / target 190 failed.\nCheck the position on the venue and re-arm or close it by hand.",
+      "rejected": "telegram 502",
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    },
+    {
+      "log": {
+        "trace_id": "control-arm-fill-sync",
+        "stage": "execution",
+        "event": "residual_exposure_unprotected",
+        "level": "error",
+        "message": "a residual position is unprotected and this venue cannot arm protective legs at all, so no retry will ever protect it — close or protect the order by hand",
+        "payload": {
+          "idempotency_key": "lot-2",
+          "instrument": "AAPL",
+          "side": "sell",
+          "residual_qty": 5,
+          "residual_qty_is_upper_bound": true,
+          "rearm_unsupported": true,
+          "stop": 180,
+          "target": 190,
+          "observed_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "logInTrace": {
+        "trace_id": "control-arm-fill-sync",
+        "stage": "execution",
+        "event": "residual_exposure_unprotected",
+        "level": "error",
+        "message": "a residual position is unprotected and this venue cannot arm protective legs at all, so no retry will ever protect it — close or protect the order by hand",
+        "payload": {
+          "idempotency_key": "lot-2",
+          "instrument": "AAPL",
+          "side": "sell",
+          "residual_qty": 5,
+          "residual_qty_is_upper_bound": true,
+          "rearm_unsupported": true,
+          "stop": 180,
+          "target": 190,
+          "observed_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "text": "Samurai UNPROTECTED RESIDUAL: AAPL has at most 5 (upper bound — the exact residual could not be read) units left open on the sell side with NO protective legs armed, as of 2026-09-10T08:15:00.000Z.\nLot lot-2. This venue cannot arm protective legs at all (no entry-less stop+target), so NOTHING will retry stop 180 / target 190.\nClose or protect this position by hand.",
+      "rejected": "telegram 502",
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    }
+  ],
+  "ocoDoubleFillAlerts": [
+    {
+      "log": {
+        "trace_id": "oco-double-fill",
+        "stage": "execution",
+        "event": "oco_double_fill",
+        "level": "error",
+        "message": "both protective legs of an emulated crypto OCO filled — the lot is over-closed and a reverse position may be open at the venue; check and unwind it by hand",
+        "payload": {
+          "client_order_id": "lot-3",
+          "instrument": "BTC-USD",
+          "stop_order_id": "stop-1",
+          "target_order_id": "tp-1",
+          "observed_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "logInTrace": {
+        "trace_id": "oco-double-fill",
+        "stage": "execution",
+        "event": "oco_double_fill",
+        "level": "error",
+        "message": "both protective legs of an emulated crypto OCO filled — the lot is over-closed and a reverse position may be open at the venue; check and unwind it by hand",
+        "payload": {
+          "client_order_id": "lot-3",
+          "instrument": "BTC-USD",
+          "stop_order_id": "stop-1",
+          "target_order_id": "tp-1",
+          "observed_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "text": "Samurai OCO DOUBLE FILL: BTC-USD — BOTH emulated protective legs filled (stop stop-1, target tp-1) as of 2026-09-10T08:15:00.000Z.\nLot lot-3. The lot is over-closed and a REVERSE position may now be open at the venue. Nothing was unwound automatically — check the position and close it by hand.",
+      "rejected": "telegram 502",
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    }
+  ],
+  "legResizeAlerts": [
+    {
+      "log": {
+        "trace_id": "leg-resize-unverified",
+        "stage": "execution",
+        "event": "leg_resize_unverified",
+        "level": "error",
+        "message": "a partial entry filled on a venue that cannot confirm its protective legs were resized — the stop may still be sized to the original amount and would over-close into a reversed position; check the legs on the venue by hand",
+        "payload": {
+          "client_order_id": "lot-4",
+          "instrument": "3LUS",
+          "requested_qty": 10,
+          "filled_qty": 4,
+          "observed_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "logInTrace": {
+        "trace_id": "leg-resize-unverified",
+        "stage": "execution",
+        "event": "leg_resize_unverified",
+        "level": "error",
+        "message": "a partial entry filled on a venue that cannot confirm its protective legs were resized — the stop may still be sized to the original amount and would over-close into a reversed position; check the legs on the venue by hand",
+        "payload": {
+          "client_order_id": "lot-4",
+          "instrument": "3LUS",
+          "requested_qty": 10,
+          "filled_qty": 4,
+          "observed_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "text": "Samurai UNVERIFIED STOP SIZE: 3LUS filled 4 of 10 on the entry leg, and this venue cannot confirm the protective legs were resized.\nLot lot-4, observed 2026-09-10T08:15:00.000Z.\nIf the stop is still sized to the original amount it will over-close into a reversed position when it fires. Check the legs on the venue and resize them by hand.",
+      "rejected": "telegram 502",
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    },
+    {
+      "log": {
+        "trace_id": "leg-resize-unverified",
+        "stage": "execution",
+        "event": "leg_resize_unverified",
+        "level": "error",
+        "message": "a partial entry filled on a venue that cannot confirm its protective legs were resized — the stop may still be sized to the original amount and would over-close into a reversed position; check the legs on the venue by hand",
+        "payload": {
+          "client_order_id": "lot-4",
+          "instrument": "3LUS",
+          "requested_qty": null,
+          "filled_qty": 4,
+          "observed_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "logInTrace": {
+        "trace_id": "leg-resize-unverified",
+        "stage": "execution",
+        "event": "leg_resize_unverified",
+        "level": "error",
+        "message": "a partial entry filled on a venue that cannot confirm its protective legs were resized — the stop may still be sized to the original amount and would over-close into a reversed position; check the legs on the venue by hand",
+        "payload": {
+          "client_order_id": "lot-4",
+          "instrument": "3LUS",
+          "requested_qty": null,
+          "filled_qty": 4,
+          "observed_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "text": "Samurai UNVERIFIED STOP SIZE: 3LUS filled 4 of an unjournalled on the entry leg, and this venue cannot confirm the protective legs were resized.\nLot lot-4, observed 2026-09-10T08:15:00.000Z.\nIf the stop is still sized to the original amount it will over-close into a reversed position when it fires. Check the legs on the venue and resize them by hand.",
+      "rejected": "telegram 502",
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    }
+  ],
+  "dormantLegsAlerts": [
+    {
+      "log": {
+        "trace_id": "dormant-legs-unresolved",
+        "stage": "execution",
+        "event": "dormant_legs_unresolved",
+        "level": "error",
+        "message": "a dormant protective-leg pair has no terminal verdict in the venue audit trail — the legs are left standing rather than cancelled on no evidence; resolve the order by hand",
+        "payload": {
+          "client_order_id": "lot-5",
+          "instrument": "QQQ3",
+          "stuck_ms": 1500000,
+          "observed_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "logInTrace": {
+        "trace_id": "dormant-legs-unresolved",
+        "stage": "execution",
+        "event": "dormant_legs_unresolved",
+        "level": "error",
+        "message": "a dormant protective-leg pair has no terminal verdict in the venue audit trail — the legs are left standing rather than cancelled on no evidence; resolve the order by hand",
+        "payload": {
+          "client_order_id": "lot-5",
+          "instrument": "QQQ3",
+          "stuck_ms": 1500000,
+          "observed_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "text": "Samurai WEDGED LEGS: QQQ3 has a dormant protective-leg pair the venue audit trail will not give a verdict on (25m).\nLot lot-5, observed 2026-09-10T08:15:00.000Z.\nThe legs are deliberately NOT cancelled without evidence they are done, so this will not clear itself. Resolve the order on the venue by hand.",
+      "rejected": "telegram 502",
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    }
+  ],
+  "priceUnitAlerts": [
+    {
+      "log": {
+        "trace_id": "unresolved-price-unit",
+        "stage": "execution",
+        "event": "unresolved_price_unit",
+        "level": "error",
+        "message": "a priced fill arrived for a Uic no pool line resolves, so the quote unit is unknown and the fill cannot be expressed as cash — it is refused, and every subsequent poll refuses it again until the pool and the venue agree",
+        "payload": {
+          "client_order_id": "lot-6",
+          "broker_fill_id": "act-12",
+          "uic": 12345,
+          "observed_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "logInTrace": {
+        "trace_id": "unresolved-price-unit",
+        "stage": "execution",
+        "event": "unresolved_price_unit",
+        "level": "error",
+        "message": "a priced fill arrived for a Uic no pool line resolves, so the quote unit is unknown and the fill cannot be expressed as cash — it is refused, and every subsequent poll refuses it again until the pool and the venue agree",
+        "payload": {
+          "client_order_id": "lot-6",
+          "broker_fill_id": "act-12",
+          "uic": 12345,
+          "observed_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "text": "Samurai UNPRICEABLE FILL: a priced fill arrived for Uic 12345, which resolves to no pool line, so its quote unit is unknown and the cash it represents cannot be derived.\nLot lot-6, venue fill act-12, observed 2026-09-10T08:15:00.000Z.\nThe fill is refused rather than booked — on a pence-quoted line an unscaled price is 100x wrong — and every subsequent poll refuses it again, so no lot goes terminal until the pool and the venue agree on this instrument.",
+      "rejected": "telegram 502",
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    }
+  ],
+  "flattenReconcileAlerts": [
+    {
+      "log": {
+        "trace_id": "reconcile",
+        "stage": "execution",
+        "event": "flatten_reconcile_unresolved",
+        "level": "error",
+        "message": "reconcile() could not settle a flatten_submissions row — the flatten's outcome is genuinely unknown; check the order on the venue by hand",
+        "payload": {
+          "idempotency_key": "flatten-1",
+          "instrument": "TSLA",
+          "reason": "venue reports open, journal reports filled",
+          "observed_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "logInTrace": {
+        "trace_id": "reconcile",
+        "stage": "execution",
+        "event": "flatten_reconcile_unresolved",
+        "level": "error",
+        "message": "reconcile() could not settle a flatten_submissions row — the flatten's outcome is genuinely unknown; check the order on the venue by hand",
+        "payload": {
+          "idempotency_key": "flatten-1",
+          "instrument": "TSLA",
+          "reason": "venue reports open, journal reports filled",
+          "observed_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "text": "Samurai UNRESOLVED FLATTEN [reconcile]: TSLA (flatten flatten-1) could not be settled against the venue as of 2026-09-10T08:15:00.000Z.\nvenue reports open, journal reports filled\nWhether this position is still held is genuinely unknown. Check the order and the position on the venue by hand.",
+      "rejected": "telegram 502",
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    },
+    {
+      "log": {
+        "trace_id": "control-arm-reconcile",
+        "stage": "execution",
+        "event": "flatten_reconcile_unresolved",
+        "level": "error",
+        "message": "reconcile() could not settle a flatten_submissions row — the flatten's outcome is genuinely unknown; check the order on the venue by hand",
+        "payload": {
+          "idempotency_key": "flatten-1",
+          "instrument": "TSLA",
+          "reason": "venue reports open, journal reports filled",
+          "observed_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "logInTrace": {
+        "trace_id": "control-arm-reconcile",
+        "stage": "execution",
+        "event": "flatten_reconcile_unresolved",
+        "level": "error",
+        "message": "reconcile() could not settle a flatten_submissions row — the flatten's outcome is genuinely unknown; check the order on the venue by hand",
+        "payload": {
+          "idempotency_key": "flatten-1",
+          "instrument": "TSLA",
+          "reason": "venue reports open, journal reports filled",
+          "observed_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "text": null,
+      "rejected": null,
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    }
+  ],
+  "analystSkipAlerts": [
+    {
+      "log": {
+        "trace_id": "analyst-skip",
+        "stage": "analysts",
+        "event": "analyst_consecutive_skips",
+        "level": "error",
+        "message": "analysts have skipped 3 consecutive ticks for SPY — no decision is being produced for it at all",
+        "payload": {
+          "instrument": "SPY",
+          "consecutive_skips": 3,
+          "failures": [
+            {
+              "analyst_type": "technical",
+              "role": "mandatory",
+              "reason": "no bars",
+              "kind": "transport"
+            },
+            {
+              "analyst_type": "news",
+              "role": "optional",
+              "reason": "rate limited",
+              "kind": "rate_limited"
+            }
+          ],
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "logInTrace": {
+        "trace_id": "analyst-skip",
+        "stage": "analysts",
+        "event": "analyst_consecutive_skips",
+        "level": "error",
+        "message": "analysts have skipped 3 consecutive ticks for SPY — no decision is being produced for it at all",
+        "payload": {
+          "instrument": "SPY",
+          "consecutive_skips": 3,
+          "failures": [
+            {
+              "analyst_type": "technical",
+              "role": "mandatory",
+              "reason": "no bars",
+              "kind": "transport"
+            },
+            {
+              "analyst_type": "news",
+              "role": "optional",
+              "reason": "rate limited",
+              "kind": "rate_limited"
+            }
+          ],
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "text": "Samurai ANALYST STAGE SKIPPING: SPY has skipped 3 consecutive ticks as of 2026-09-10T08:15:00.000Z.\nNo debate, no trade and no decision is being produced for it — the heartbeat keeps beating regardless, so this will not show up as downtime.\nFailures behind the current skip:\n- technical (mandatory): no bars\n- news (optional): rate limited",
+      "rejected": "telegram 502",
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    },
+    {
+      "log": {
+        "trace_id": "analyst-skip",
+        "stage": "analysts",
+        "event": "analyst_consecutive_skips",
+        "level": "error",
+        "message": "analysts have skipped 2 consecutive ticks for QQQ — no decision is being produced for it at all",
+        "payload": {
+          "instrument": "QQQ",
+          "consecutive_skips": 2,
+          "failures": [],
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "logInTrace": {
+        "trace_id": "analyst-skip",
+        "stage": "analysts",
+        "event": "analyst_consecutive_skips",
+        "level": "error",
+        "message": "analysts have skipped 2 consecutive ticks for QQQ — no decision is being produced for it at all",
+        "payload": {
+          "instrument": "QQQ",
+          "consecutive_skips": 2,
+          "failures": [],
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "text": "Samurai ANALYST STAGE SKIPPING: QQQ has skipped 2 consecutive ticks as of 2026-09-10T08:15:00.000Z.\nNo debate, no trade and no decision is being produced for it — the heartbeat keeps beating regardless, so this will not show up as downtime.\nFailures behind the current skip:\n- (none reported)",
+      "rejected": "telegram 502",
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    }
+  ],
+  "breachAlerts": [
+    {
+      "log": {
+        "trace_id": "feedback-cycle",
+        "stage": "feedback-loop",
+        "event": "kill_threshold_breach",
+        "level": "error",
+        "message": "kill-threshold breach — risk thresholds auto-tightened; review the strategy and decide kill or rework (no automatic kill is ever applied)",
+        "payload": {
+          "breaches": ["pbo_over_line", "oos_sharpe_under_line"],
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "logInTrace": {
+        "trace_id": "tick-x",
+        "stage": "feedback-loop",
+        "event": "kill_threshold_breach",
+        "level": "error",
+        "message": "kill-threshold breach — risk thresholds auto-tightened; review the strategy and decide kill or rework (no automatic kill is ever applied)",
+        "payload": {
+          "breaches": ["pbo_over_line", "oos_sharpe_under_line"],
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "text": "Samurai KILL-THRESHOLD BREACH (2): pbo_over_line, oos_sharpe_under_line.\nDetected 2026-09-10T08:15:00.000Z.\nEvery risk threshold has been defensively auto-tightened. No kill has been applied and none will be — kill or rework is your decision. Review the strategy before the next session.",
+      "rejected": null,
+      "sendFailed": {
+        "trace_id": "feedback-cycle",
+        "stage": "feedback-loop",
+        "event": "breach_alert_send_failed",
+        "level": "error",
+        "message": "kill-threshold breach alert failed to send — the breach still stands",
+        "payload": {
+          "breaches": ["pbo_over_line", "oos_sharpe_under_line"],
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "error": "telegram 502"
+        }
+      },
+      "sendFailedInTrace": {
+        "trace_id": "tick-x",
+        "stage": "feedback-loop",
+        "event": "breach_alert_send_failed",
+        "level": "error",
+        "message": "kill-threshold breach alert failed to send — the breach still stands",
+        "payload": {
+          "breaches": ["pbo_over_line", "oos_sharpe_under_line"],
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "error": "telegram 502"
+        }
+      }
+    },
+    {
+      "log": {
+        "trace_id": "feedback-cycle",
+        "stage": "debate",
+        "event": "kill_threshold_breach",
+        "level": "error",
+        "message": "LLM spend-cap breach — further LLM calls refused (debates, market-intelligence refreshes, risk-critic checks); no risk threshold changed. The refusal stands until whatever triggered it is resolved; the refusal log line, where one was written, names which",
+        "payload": {
+          "breaches": ["llm_spend_cap"],
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "logInTrace": {
+        "trace_id": "tick-x",
+        "stage": "debate",
+        "event": "kill_threshold_breach",
+        "level": "error",
+        "message": "LLM spend-cap breach — further LLM calls refused (debates, market-intelligence refreshes, risk-critic checks); no risk threshold changed. The refusal stands until whatever triggered it is resolved; the refusal log line, where one was written, names which",
+        "payload": {
+          "breaches": ["llm_spend_cap"],
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "text": "Samurai LLM SPEND-CAP BREACH (1): llm_spend_cap.\nDetected 2026-09-10T08:15:00.000Z.\nThe LLM spend cap has refused further LLM calls — debates, market-intelligence refreshes and risk-critic checks alike. No risk threshold has changed — a spend-cap refusal is not a kill-line breach and no kill decision applies. The refusal stands until whatever triggered it is resolved; the refusal log line, where one was written, names which.",
+      "rejected": null,
+      "sendFailed": {
+        "trace_id": "feedback-cycle",
+        "stage": "debate",
+        "event": "breach_alert_send_failed",
+        "level": "error",
+        "message": "LLM spend-cap breach alert failed to send — the breach still stands",
+        "payload": {
+          "breaches": ["llm_spend_cap"],
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "error": "telegram 502"
+        }
+      },
+      "sendFailedInTrace": {
+        "trace_id": "tick-x",
+        "stage": "debate",
+        "event": "breach_alert_send_failed",
+        "level": "error",
+        "message": "LLM spend-cap breach alert failed to send — the breach still stands",
+        "payload": {
+          "breaches": ["llm_spend_cap"],
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "error": "telegram 502"
+        }
+      }
+    },
+    {
+      "log": {
+        "trace_id": "feedback-cycle",
+        "stage": "feedback-loop",
+        "event": "kill_threshold_breach",
+        "level": "error",
+        "message": "kill-threshold and LLM spend-cap breach — risk thresholds auto-tightened for the kill-line breach and no automatic kill is ever applied; separately, LLM calls (debates, market-intelligence refreshes, risk-critic checks) are refused until whatever triggered the refusal is resolved; the refusal log line, where one was written, names which",
+        "payload": {
+          "breaches": ["pbo_over_line", "llm_spend_cap"],
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "logInTrace": {
+        "trace_id": "tick-x",
+        "stage": "feedback-loop",
+        "event": "kill_threshold_breach",
+        "level": "error",
+        "message": "kill-threshold and LLM spend-cap breach — risk thresholds auto-tightened for the kill-line breach and no automatic kill is ever applied; separately, LLM calls (debates, market-intelligence refreshes, risk-critic checks) are refused until whatever triggered the refusal is resolved; the refusal log line, where one was written, names which",
+        "payload": {
+          "breaches": ["pbo_over_line", "llm_spend_cap"],
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "text": "Samurai KILL-THRESHOLD BREACH + LLM SPEND-CAP BREACH (2): pbo_over_line, llm_spend_cap.\nDetected 2026-09-10T08:15:00.000Z.\nEvery risk threshold has been defensively auto-tightened for the kill-line breach. No kill has been applied and none will be — kill or rework is your decision. Separately, the LLM spend cap has also refused further LLM calls — debates, market-intelligence refreshes and risk-critic checks alike. The refusal stands until whatever triggered it is resolved; the refusal log line, where one was written, names which.",
+      "rejected": null,
+      "sendFailed": {
+        "trace_id": "feedback-cycle",
+        "stage": "feedback-loop",
+        "event": "breach_alert_send_failed",
+        "level": "error",
+        "message": "kill-threshold and LLM spend-cap breach alert failed to send — the breach still stands",
+        "payload": {
+          "breaches": ["pbo_over_line", "llm_spend_cap"],
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "error": "telegram 502"
+        }
+      },
+      "sendFailedInTrace": {
+        "trace_id": "tick-x",
+        "stage": "feedback-loop",
+        "event": "breach_alert_send_failed",
+        "level": "error",
+        "message": "kill-threshold and LLM spend-cap breach alert failed to send — the breach still stands",
+        "payload": {
+          "breaches": ["pbo_over_line", "llm_spend_cap"],
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "error": "telegram 502"
+        }
+      }
+    },
+    {
+      "log": {
+        "trace_id": "feedback-cycle",
+        "stage": "debate",
+        "event": "kill_threshold_breach",
+        "level": "error",
+        "message": "breach alert with no recognized breach id — no risk threshold changed and no LLM calls were refused",
+        "payload": {
+          "breaches": [],
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "logInTrace": {
+        "trace_id": "tick-x",
+        "stage": "debate",
+        "event": "kill_threshold_breach",
+        "level": "error",
+        "message": "breach alert with no recognized breach id — no risk threshold changed and no LLM calls were refused",
+        "payload": {
+          "breaches": [],
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "text": "Samurai BREACH (0): none.\nDetected 2026-09-10T08:15:00.000Z.\nNo recognized breach id was reported. No risk threshold has changed and no LLM calls have been refused as a result of this alert.",
+      "rejected": null,
+      "sendFailed": {
+        "trace_id": "feedback-cycle",
+        "stage": "debate",
+        "event": "breach_alert_send_failed",
+        "level": "error",
+        "message": "breach alert failed to send — the breach still stands",
+        "payload": {
+          "breaches": [],
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "error": "telegram 502"
+        }
+      },
+      "sendFailedInTrace": {
+        "trace_id": "tick-x",
+        "stage": "debate",
+        "event": "breach_alert_send_failed",
+        "level": "error",
+        "message": "breach alert failed to send — the breach still stands",
+        "payload": {
+          "breaches": [],
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "error": "telegram 502"
+        }
+      }
+    }
+  ],
+  "loosenNotices": [
+    {
+      "log": {
+        "trace_id": "feedback-cycle",
+        "stage": "feedback-loop",
+        "event": "risk_threshold_loosened",
+        "level": "warn",
+        "message": "risk-threshold LOOSENING applied — the Feedback Loop widened its own limit, capped at one step and clamped to the hard bounds (ADR-0013, #736). Nobody was asked and no reply is read; reverse it from the dial_adjustments row if it is wrong.",
+        "payload": {
+          "name": "max_position_pct",
+          "from": 0.2,
+          "to": 0.22,
+          "applied_at": "2026-09-10T08:15:00.000Z",
+          "applied": true
+        }
+      },
+      "logInTrace": {
+        "trace_id": "feedback-cycle",
+        "stage": "feedback-loop",
+        "event": "risk_threshold_loosened",
+        "level": "warn",
+        "message": "risk-threshold LOOSENING applied — the Feedback Loop widened its own limit, capped at one step and clamped to the hard bounds (ADR-0013, #736). Nobody was asked and no reply is read; reverse it from the dial_adjustments row if it is wrong.",
+        "payload": {
+          "name": "max_position_pct",
+          "from": 0.2,
+          "to": 0.22,
+          "applied_at": "2026-09-10T08:15:00.000Z",
+          "applied": true
+        }
+      },
+      "text": "Samurai RISK-THRESHOLD LOOSENED: max_position_pct 0.2 -> 0.22.\nApplied 2026-09-10T08:15:00.000Z — already in force.\nThis is a notification, not a request: the Feedback Loop applies its own bounded dial moves (ADR-0013). The move was capped at one step, clamped to the dial bounds, and logged to dial_adjustments, which is what you reverse it from. No reply is read here.",
+      "rejected": null,
+      "sendFailed": {
+        "trace_id": "feedback-cycle",
+        "stage": "feedback-loop",
+        "event": "loosen_notice_send_failed",
+        "level": "error",
+        "message": "risk-threshold loosening notice failed to send — the threshold WAS loosened and nobody was told",
+        "payload": {
+          "name": "max_position_pct",
+          "from": 0.2,
+          "to": 0.22,
+          "applied_at": "2026-09-10T08:15:00.000Z",
+          "applied": true,
+          "error": "telegram 502"
+        }
+      },
+      "sendFailedInTrace": {
+        "trace_id": "feedback-cycle",
+        "stage": "feedback-loop",
+        "event": "loosen_notice_send_failed",
+        "level": "error",
+        "message": "risk-threshold loosening notice failed to send — the threshold WAS loosened and nobody was told",
+        "payload": {
+          "name": "max_position_pct",
+          "from": 0.2,
+          "to": 0.22,
+          "applied_at": "2026-09-10T08:15:00.000Z",
+          "applied": true,
+          "error": "telegram 502"
+        }
+      }
+    }
+  ],
+  "traderDiagnosticAlerts": [
+    {
+      "log": null,
+      "logInTrace": null,
+      "text": "Samurai TRADER DEGRADED: SPY (stocks) reported session_end_in_past on 4 consecutive tick(s) as of 2026-09-10T08:15:00.000Z.\nThe calendar resolved a close that has already passed, so the book is being parked FLAT and no new position will be opened for this leg while that persists. A run in this state looks identical to a quiet market.\nDetail: close 15:59 already passed\nThe Trader is still running and still returning decisions, so this will not show up as downtime and the heartbeat will keep beating.",
+      "rejected": "telegram 502",
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    },
+    {
+      "log": null,
+      "logInTrace": null,
+      "text": "Samurai TRADER DEGRADED: SPY reported control_arm_valuation_refused on 1 consecutive tick(s) as of 2026-09-10T08:15:00.000Z.\nThe control arm (#753 falsifier arm 2) could not value its shadow book and skipped this pass instead of crashing it. The live arm is unaffected, but a control that keeps skipping cannot answer the debate-beats-indicators question at the end of the soak (#1089).\nDetail: shadow book unvalued\nThe Trader is still running and still returning decisions, so this will not show up as downtime and the heartbeat will keep beating.",
+      "rejected": "telegram 502",
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    },
+    {
+      "log": null,
+      "logInTrace": null,
+      "text": "Samurai TRADER DEGRADED: BTC-USD (crypto) reported atr_not_finite on 2 consecutive tick(s) as of 2026-09-10T08:15:00.000Z.\nATR was not finite on a FULL bar window, which means corrupt market data rather than a warm-up gap. This instrument cannot price a stop and is skipping every tick.\nDetail: ATR NaN\nThe Trader is still running and still returning decisions, so this will not show up as downtime and the heartbeat will keep beating.",
+      "rejected": "telegram 502",
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    },
+    {
+      "log": null,
+      "logInTrace": null,
+      "text": "Samurai TRADER DEGRADED: AAPL (stocks) reported session_end_absent_on_non_crypto on 1 consecutive tick(s) as of 2026-09-10T08:15:00.000Z.\nA non-crypto calendar returned no session end at all, so flat-by-close (ADR-0014) cannot be enforced for this leg — a position opened on it may be carried overnight.\nDetail: calendar returned null\nThe Trader is still running and still returning decisions, so this will not show up as downtime and the heartbeat will keep beating.",
+      "rejected": "telegram 502",
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    }
+  ],
+  "miCoverageAlerts": [
+    {
+      "log": {
+        "trace_id": "tick-9",
+        "stage": "analysts",
+        "event": "mi_coverage_degraded",
+        "level": "warn",
+        "message": "market-intelligence coverage degraded for SPY (subclass=index_etp_3x) — no scored item inside the staleness window. SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.",
+        "payload": {
+          "instrument": "SPY",
+          "asset_class": "stocks",
+          "subclass": "index_etp_3x",
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "logInTrace": {
+        "trace_id": "tick-9",
+        "stage": "analysts",
+        "event": "mi_coverage_degraded",
+        "level": "warn",
+        "message": "market-intelligence coverage degraded for SPY (subclass=index_etp_3x) — no scored item inside the staleness window. SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.",
+        "payload": {
+          "instrument": "SPY",
+          "asset_class": "stocks",
+          "subclass": "index_etp_3x",
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "text": "Samurai MARKET-INTELLIGENCE COVERAGE DEGRADED: SPY (stocks, subclass=index_etp_3x) has no scored intelligence item inside the staleness window as of 2026-09-10T08:15:00.000Z.\nThe debate is still running on this name — coverage is measured, never gated (ADR-0016 D2) — but the desk is narrowed by one analyst's worth of evidence until this clears. This is a PER-TICKER gap: the macro layers (GDELT, Polymarket) file class-wide items under macro series names on purpose, so they never clear it. See the coverage section of docs/specs/market-intelligence-spec.md for which sources can cover a ticker and what to check when one stops.",
+      "rejected": "telegram 502",
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    }
+  ],
+  "thresholdClampAlerts": [
+    {
+      "log": null,
+      "logInTrace": null,
+      "text": "Samurai THRESHOLD CLAMP TRIPPED: the live risk_thresholds read (RiskManagerImpl.evaluate, every tick) — new entries are refused; exits and the flat-by-close flatten do not consult this table and are unaffected.\nDetected 2026-09-10T08:15:00.000Z.\nRefusal: max_position_pct 0.9 above ceiling 0.5\nAn out-of-bound risk threshold was REFUSED rather than applied (#638) — this is fail-closed on trading, not a live risk exposure. Fix the offending risk_thresholds row.",
+      "rejected": null,
+      "sendFailed": {
+        "trace_id": "tick-3",
+        "stage": "risk",
+        "event": "threshold_clamp_alert_send_failed",
+        "level": "error",
+        "message": "threshold-clamp alert failed to send — the clamp trip still stands",
+        "payload": {
+          "where": "live-read",
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "error": "telegram 502"
+        }
+      },
+      "sendFailedInTrace": {
+        "trace_id": "tick-3",
+        "stage": "risk",
+        "event": "threshold_clamp_alert_send_failed",
+        "level": "error",
+        "message": "threshold-clamp alert failed to send — the clamp trip still stands",
+        "payload": {
+          "where": "live-read",
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "error": "telegram 502"
+        }
+      }
+    },
+    {
+      "log": null,
+      "logInTrace": null,
+      "text": "Samurai THRESHOLD CLAMP TRIPPED: the daily feedback cycle's kill-line check (computeMetrics) — the cycle stopped completing; the four kill-lines are unevaluated until the offending row is fixed.\nDetected 2026-09-10T08:15:00.000Z.\nRefusal: max_position_pct 0.9 above ceiling 0.5\nAn out-of-bound risk threshold was REFUSED rather than applied (#638) — this is fail-closed on trading, not a live risk exposure. Fix the offending risk_thresholds row.",
+      "rejected": null,
+      "sendFailed": {
+        "trace_id": "feedback-cycle",
+        "stage": "feedback-loop",
+        "event": "threshold_clamp_alert_send_failed",
+        "level": "error",
+        "message": "threshold-clamp alert failed to send — the clamp trip still stands",
+        "payload": {
+          "where": "daily-kill-line-check",
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "error": "telegram 502"
+        }
+      },
+      "sendFailedInTrace": {
+        "trace_id": "feedback-cycle",
+        "stage": "feedback-loop",
+        "event": "threshold_clamp_alert_send_failed",
+        "level": "error",
+        "message": "threshold-clamp alert failed to send — the clamp trip still stands",
+        "payload": {
+          "where": "daily-kill-line-check",
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "error": "telegram 502"
+        }
+      }
+    }
+  ],
+  "dataFailoverAlerts": [
+    {
+      "log": {
+        "trace_id": "data-failover",
+        "stage": "orchestrator",
+        "event": "ohlcv_failover_engaged",
+        "level": "warn",
+        "message": "OHLCV failover on the equities leg: alpaca failed for SPY 1h (HTTP 503), so polygon is serving those bars. SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.",
+        "payload": {
+          "leg": "equities",
+          "instrument": "SPY",
+          "timeframe": "1h",
+          "primary": "alpaca",
+          "fallback": "polygon",
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "suppressed_since_last": 0
+        }
+      },
+      "logInTrace": {
+        "trace_id": "tick-x",
+        "stage": "orchestrator",
+        "event": "ohlcv_failover_engaged",
+        "level": "warn",
+        "message": "OHLCV failover on the equities leg: alpaca failed for SPY 1h (HTTP 503), so polygon is serving those bars. SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.",
+        "payload": {
+          "leg": "equities",
+          "instrument": "SPY",
+          "timeframe": "1h",
+          "primary": "alpaca",
+          "fallback": "polygon",
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "suppressed_since_last": 0
+        }
+      },
+      "text": "Samurai MARKET-DATA FAILOVER (equities): alpaca failed for SPY 1h at 2026-09-10T08:15:00.000Z — HTTP 503\npolygon is serving those bars instead. The run continues on a DEGRADED data path: fallback bars are stamped with their own source, and their volume convention differs from the primary's, which moves getADV()'s denominator while they sit in the window. Marks are NOT failed over — only bars — so a primary that cannot quote still fails loudly. Check whether the primary vendor is stalled.",
+      "rejected": "telegram 502",
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    },
+    {
+      "log": {
+        "trace_id": "data-failover",
+        "stage": "orchestrator",
+        "event": "ohlcv_failover_engaged",
+        "level": "warn",
+        "message": "OHLCV failover on the crypto leg: coinbase failed for BTC-USD 15m (timeout), so bitstamp is serving those bars. SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.",
+        "payload": {
+          "leg": "crypto",
+          "instrument": "BTC-USD",
+          "timeframe": "15m",
+          "primary": "coinbase",
+          "fallback": "bitstamp",
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "suppressed_since_last": 4
+        }
+      },
+      "logInTrace": {
+        "trace_id": "tick-x",
+        "stage": "orchestrator",
+        "event": "ohlcv_failover_engaged",
+        "level": "warn",
+        "message": "OHLCV failover on the crypto leg: coinbase failed for BTC-USD 15m (timeout), so bitstamp is serving those bars. SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.",
+        "payload": {
+          "leg": "crypto",
+          "instrument": "BTC-USD",
+          "timeframe": "15m",
+          "primary": "coinbase",
+          "fallback": "bitstamp",
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "suppressed_since_last": 4
+        }
+      },
+      "text": "Samurai MARKET-DATA FAILOVER (crypto): coinbase failed for BTC-USD 15m at 2026-09-10T08:15:00.000Z — timeout\n4 further failover(s) for this instrument were suppressed by the alert throttle since the last message — the stall is ongoing, not intermittent.\nbitstamp is serving those bars instead. The run continues on a DEGRADED data path: fallback bars are stamped with their own source, and their volume convention differs from the primary's, which moves getADV()'s denominator while they sit in the window. Marks are NOT failed over — only bars — so a primary that cannot quote still fails loudly. Check whether the primary vendor is stalled.",
+      "rejected": "telegram 502",
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    }
+  ],
+  "exitValuationAlerts": [
+    {
+      "log": null,
+      "logInTrace": null,
+      "text": "Samurai EXIT PRICED ON A PARTLY-VALUED BOOK: SPY at the Risk stage (sizing and recording the exit).\nDetected 2026-09-10T08:15:00.000Z.\nHeld instruments that could NOT be valued: QQQ, AAPL.\nWhy: no mark for QQQ\nThe exit was NOT suppressed (#841, ADR-0014 flat-by-close) — it proceeded, and the portfolio figures in risk_log for this trace exclude the names above, so they understate exposure and drawdown. NEW ENTRIES are still refused while the book cannot be fully valued. Check the market-data feed for the named instruments.",
+      "rejected": null,
+      "sendFailed": {
+        "trace_id": "exit-valuation-degraded",
+        "stage": "risk",
+        "event": "exit_valuation_alert_send_failed",
+        "level": "error",
+        "message": "exit-valuation-degraded alert failed to send — an exit was priced on a partly-valued book (or, on the trader seam, sent with no mark at all) and nobody has been told",
+        "payload": {
+          "instrument": "SPY",
+          "seam": "risk",
+          "unvalued_instruments": ["QQQ", "AAPL"],
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "error": "telegram 502"
+        }
+      },
+      "sendFailedInTrace": {
+        "trace_id": "tick-x",
+        "stage": "risk",
+        "event": "exit_valuation_alert_send_failed",
+        "level": "error",
+        "message": "exit-valuation-degraded alert failed to send — an exit was priced on a partly-valued book (or, on the trader seam, sent with no mark at all) and nobody has been told",
+        "payload": {
+          "instrument": "SPY",
+          "seam": "risk",
+          "unvalued_instruments": ["QQQ", "AAPL"],
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "error": "telegram 502"
+        }
+      }
+    },
+    {
+      "log": null,
+      "logInTrace": null,
+      "text": "Samurai EXIT PRICED ON A PARTLY-VALUED BOOK: SPY at the Verdict stage (the `breaker` gate (5)'s fire-time re-check).\nDetected 2026-09-10T08:15:00.000Z.\nHeld instruments that could NOT be valued: QQQ.\nWhy: no mark for QQQ\nThe exit was NOT suppressed (#841, ADR-0014 flat-by-close) — it proceeded, and the portfolio figures in risk_log for this trace exclude the names above, so they understate exposure and drawdown. NEW ENTRIES are still refused while the book cannot be fully valued. Check the market-data feed for the named instruments.",
+      "rejected": null,
+      "sendFailed": {
+        "trace_id": "exit-valuation-degraded",
+        "stage": "verdict",
+        "event": "exit_valuation_alert_send_failed",
+        "level": "error",
+        "message": "exit-valuation-degraded alert failed to send — an exit was priced on a partly-valued book (or, on the trader seam, sent with no mark at all) and nobody has been told",
+        "payload": {
+          "instrument": "SPY",
+          "seam": "verdict",
+          "unvalued_instruments": ["QQQ"],
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "error": "telegram 502"
+        }
+      },
+      "sendFailedInTrace": {
+        "trace_id": "tick-x",
+        "stage": "verdict",
+        "event": "exit_valuation_alert_send_failed",
+        "level": "error",
+        "message": "exit-valuation-degraded alert failed to send — an exit was priced on a partly-valued book (or, on the trader seam, sent with no mark at all) and nobody has been told",
+        "payload": {
+          "instrument": "SPY",
+          "seam": "verdict",
+          "unvalued_instruments": ["QQQ"],
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "error": "telegram 502"
+        }
+      }
+    },
+    {
+      "log": null,
+      "logInTrace": null,
+      "text": "Samurai MANDATORY FLATTEN SENT WITHOUT A MARK: SPY at the Trader stage (the exited instrument had no mark at all).\nDetected 2026-09-10T08:15:00.000Z.\nInstrument whose mark could NOT be read: SPY.\nWhy: no mark for SPY\nThe flat-by-close exit was NOT suppressed (#826, ADR-0014) — it proceeded as a market flatten sized to the held quantity, which needs no price. Its entry/stop/target are RECORDED AS ZERO and mean nothing; Verdict skipped its drift and stale-feed gates for this intent alone. Only the mandatory flatten degrades this way — every entry and every discretionary exit still fails loudly while the feed is down. Check the market-data feed for the named instrument.",
+      "rejected": null,
+      "sendFailed": {
+        "trace_id": "exit-valuation-degraded",
+        "stage": "trader",
+        "event": "exit_valuation_alert_send_failed",
+        "level": "error",
+        "message": "exit-valuation-degraded alert failed to send — an exit was priced on a partly-valued book (or, on the trader seam, sent with no mark at all) and nobody has been told",
+        "payload": {
+          "instrument": "SPY",
+          "seam": "trader",
+          "unvalued_instruments": ["SPY"],
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "error": "telegram 502"
+        }
+      },
+      "sendFailedInTrace": {
+        "trace_id": "tick-x",
+        "stage": "trader",
+        "event": "exit_valuation_alert_send_failed",
+        "level": "error",
+        "message": "exit-valuation-degraded alert failed to send — an exit was priced on a partly-valued book (or, on the trader seam, sent with no mark at all) and nobody has been told",
+        "payload": {
+          "instrument": "SPY",
+          "seam": "trader",
+          "unvalued_instruments": ["SPY"],
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "error": "telegram 502"
+        }
+      }
+    }
+  ],
+  "calendarFallbackAlerts": [
+    {
+      "log": {
+        "trace_id": "startup",
+        "stage": "orchestrator",
+        "event": "calendar_fallback_engaged",
+        "level": "error",
+        "message": "paper equity leg's Alpaca calendar fetch failed at boot — fell back to the hand-entered US equity session table. SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.",
+        "payload": {
+          "reason": "ECONNREFUSED",
+          "fallback_coverage_end": "2026-12-31",
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "logInTrace": {
+        "trace_id": "startup",
+        "stage": "orchestrator",
+        "event": "calendar_fallback_engaged",
+        "level": "error",
+        "message": "paper equity leg's Alpaca calendar fetch failed at boot — fell back to the hand-entered US equity session table. SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.",
+        "payload": {
+          "reason": "ECONNREFUSED",
+          "fallback_coverage_end": "2026-12-31",
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "text": "Samurai CALENDAR FETCH FAILED: the paper equity leg could not fetch Alpaca's GET /v2/calendar at boot, and fell back to the hand-entered session table.\nDetected 2026-09-10T08:15:00.000Z.\nFetch error: ECONNREFUSED\nFallback table is checked through 2026-12-31 — a date past that will THROW rather than silently assume a normal close (#684). Verify Alpaca connectivity; the run continues on the hand table until a restart re-fetches the live one.",
+      "rejected": null,
+      "sendFailed": {
+        "trace_id": "calendar-fallback",
+        "stage": "orchestrator",
+        "event": "calendar_fallback_alert_send_failed",
+        "level": "error",
+        "message": "calendar-fallback alert failed to send — the fallback still stands",
+        "payload": {
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "error": "telegram 502"
+        }
+      },
+      "sendFailedInTrace": {
+        "trace_id": "calendar-fallback",
+        "stage": "orchestrator",
+        "event": "calendar_fallback_alert_send_failed",
+        "level": "error",
+        "message": "calendar-fallback alert failed to send — the fallback still stands",
+        "payload": {
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "error": "telegram 502"
+        }
+      }
+    }
+  ],
+  "armDivergenceAlerts": [
+    {
+      "log": {
+        "trace_id": "arm-divergence",
+        "stage": "feedback-loop",
+        "event": "arm_divergence_detected",
+        "level": "warn",
+        "message": "ARM DIVERGENCE — the matched control (falsifier arm 2) is out-performing the live arm. SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.",
+        "payload": {
+          "reason": "the control arm is ahead by 2.27% of the book over this window",
+          "live_return_pct": -0.0045,
+          "live_max_drawdown_pct": 0.031,
+          "live_trade_count": 11,
+          "control_return_pct": 0.0182,
+          "control_max_drawdown_pct": 0.019,
+          "control_trade_count": 14,
+          "window_from": "2026-08-02T00:00:00.000Z",
+          "window_to": "2026-09-01T00:00:00.000Z",
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "logInTrace": {
+        "trace_id": "arm-divergence",
+        "stage": "feedback-loop",
+        "event": "arm_divergence_detected",
+        "level": "warn",
+        "message": "ARM DIVERGENCE — the matched control (falsifier arm 2) is out-performing the live arm. SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.",
+        "payload": {
+          "reason": "the control arm is ahead by 2.27% of the book over this window",
+          "live_return_pct": -0.0045,
+          "live_max_drawdown_pct": 0.031,
+          "live_trade_count": 11,
+          "control_return_pct": 0.0182,
+          "control_max_drawdown_pct": 0.019,
+          "control_trade_count": 14,
+          "window_from": "2026-08-02T00:00:00.000Z",
+          "window_to": "2026-09-01T00:00:00.000Z",
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "text": "Samurai ARM DIVERGENCE: the matched control (falsifier arm 2) is out-performing the debate-driven live arm.\nWindow 2026-08-02T00:00:00.000Z → 2026-09-01T00:00:00.000Z, basis $1000.00 (the same denominator for both arms).\nlive:    11 trade(s), return -0.45%, max drawdown 3.10%\ncontrol: 14 trade(s), return 1.82%, max drawdown 1.90%\nWhy this fired: the control arm is ahead by 2.27% of the book over this window.\nRead both columns together — doc 12 D4 rules out a return-only reading against a risk-targeted stream.\nONE KNOWN ASYMMETRY: the control has no debate rounds, so it is always treated as converged. On bars where the live debate did not converge, the live arm takes a size haircut and refuses a scale-in and the control takes neither — a non-converging stretch can produce this reading on its own.\nDetected 2026-09-10T08:15:00.000Z. Nothing was auto-tightened: this is a measurement, not a kill-line breach.",
+      "rejected": null,
+      "sendFailed": {
+        "trace_id": "arm-divergence",
+        "stage": "feedback-loop",
+        "event": "arm_divergence_alert_send_failed",
+        "level": "error",
+        "message": "arm-divergence alert failed to send — the divergence still stands",
+        "payload": {
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "reason": "the control arm is ahead by 2.27% of the book over this window",
+          "error": "telegram 502"
+        }
+      },
+      "sendFailedInTrace": {
+        "trace_id": "arm-divergence",
+        "stage": "feedback-loop",
+        "event": "arm_divergence_alert_send_failed",
+        "level": "error",
+        "message": "arm-divergence alert failed to send — the divergence still stands",
+        "payload": {
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "reason": "the control arm is ahead by 2.27% of the book over this window",
+          "error": "telegram 502"
+        }
+      }
+    }
+  ],
+  "tickSkipAlerts": [
+    {
+      "log": {
+        "trace_id": "tick-skip",
+        "stage": "tick-loop",
+        "event": "tick_pass_degraded",
+        "level": "warn",
+        "message": "tick pass materially degraded: 2 of 4 planned instrument(s) skipped (still running from a previous pass), 1 consecutive tick(s). SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.",
+        "payload": {
+          "skipped": 2,
+          "planned": 4,
+          "skipped_instruments": ["SPY", "QQQ"],
+          "consecutive_ticks": 1,
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "logInTrace": {
+        "trace_id": "tick-skip",
+        "stage": "tick-loop",
+        "event": "tick_pass_degraded",
+        "level": "warn",
+        "message": "tick pass materially degraded: 2 of 4 planned instrument(s) skipped (still running from a previous pass), 1 consecutive tick(s). SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.",
+        "payload": {
+          "skipped": 2,
+          "planned": 4,
+          "skipped_instruments": ["SPY", "QQQ"],
+          "consecutive_ticks": 1,
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "text": "Samurai TICK PASS DEGRADED: 2 of 4 planned instrument(s) skipped this tick — still running from a previous pass.\nConsecutive degraded tick(s): 1.\nSkipped: SPY, QQQ\nAs of 2026-09-10T08:15:00.000Z.\nThe skip mechanism itself is unchanged (#669, #692) — this is an escalation, not a new behaviour. Check whether one instrument is hung or the concurrency cap needs revisiting.",
+      "rejected": "telegram 502",
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    },
+    {
+      "log": {
+        "trace_id": "tick-skip",
+        "stage": "tick-loop",
+        "event": "tick_pass_degraded",
+        "level": "warn",
+        "message": "tick pass materially degraded: 0 of 4 planned instrument(s) skipped (still running from a previous pass), 3 consecutive tick(s). SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.",
+        "payload": {
+          "skipped": 0,
+          "planned": 4,
+          "skipped_instruments": [],
+          "consecutive_ticks": 3,
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "logInTrace": {
+        "trace_id": "tick-skip",
+        "stage": "tick-loop",
+        "event": "tick_pass_degraded",
+        "level": "warn",
+        "message": "tick pass materially degraded: 0 of 4 planned instrument(s) skipped (still running from a previous pass), 3 consecutive tick(s). SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.",
+        "payload": {
+          "skipped": 0,
+          "planned": 4,
+          "skipped_instruments": [],
+          "consecutive_ticks": 3,
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "text": "Samurai TICK PASS DEGRADED: 0 of 4 planned instrument(s) skipped this tick — still running from a previous pass.\nConsecutive degraded tick(s): 3.\nSkipped: (none named)\nAs of 2026-09-10T08:15:00.000Z.\nThe skip mechanism itself is unchanged (#669, #692) — this is an escalation, not a new behaviour. Check whether one instrument is hung or the concurrency cap needs revisiting.",
+      "rejected": "telegram 502",
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    }
+  ],
+  "promptTierAlerts": [
+    {
+      "log": {
+        "trace_id": "tick-5",
+        "stage": "debate",
+        "event": "prompt_tier_crossed",
+        "level": "warn",
+        "message": "prompt-tier crossing: gpt-x priced 40000 prompt tokens, above its 32000-token large-prompt tier (#2 consecutive call). This call priced at the tier rate, a 2.5x unit-cost step against the base rate — see pricing.ts.",
+        "payload": {
+          "model": "gpt-x",
+          "debate_id": "deb-1",
+          "prompt_tokens": 40000,
+          "above_prompt_tokens": 32000,
+          "consecutive_crossings": 2,
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "logInTrace": {
+        "trace_id": "tick-5",
+        "stage": "debate",
+        "event": "prompt_tier_crossed",
+        "level": "warn",
+        "message": "prompt-tier crossing: gpt-x priced 40000 prompt tokens, above its 32000-token large-prompt tier (#2 consecutive call). This call priced at the tier rate, a 2.5x unit-cost step against the base rate — see pricing.ts.",
+        "payload": {
+          "model": "gpt-x",
+          "debate_id": "deb-1",
+          "prompt_tokens": 40000,
+          "above_prompt_tokens": 32000,
+          "consecutive_crossings": 2,
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "text": "Samurai PROMPT-TIER CROSSED: gpt-x priced 40000 prompt tokens, above its 32000-token large-prompt tier (#2 consecutive call as of 2026-09-10T08:15:00.000Z).\nThis call priced at the tier rate — a 2.5x unit-cost step against the base rate, against ADR-0008's $50/14d cap.\nTrace tick-5, stage debate, debate deb-1.",
+      "rejected": null,
+      "sendFailed": {
+        "trace_id": "tick-5",
+        "stage": "debate",
+        "event": "prompt_tier_alert_send_failed",
+        "level": "error",
+        "message": "prompt-tier alert failed to send — the crossing still stands",
+        "payload": {
+          "model": "gpt-x",
+          "consecutive_crossings": 2,
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "error": "telegram 502"
+        }
+      },
+      "sendFailedInTrace": {
+        "trace_id": "tick-5",
+        "stage": "debate",
+        "event": "prompt_tier_alert_send_failed",
+        "level": "error",
+        "message": "prompt-tier alert failed to send — the crossing still stands",
+        "payload": {
+          "model": "gpt-x",
+          "consecutive_crossings": 2,
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "error": "telegram 502"
+        }
+      }
+    },
+    {
+      "log": {
+        "trace_id": "tick-6",
+        "stage": "analysts",
+        "event": "prompt_tier_crossed",
+        "level": "warn",
+        "message": "prompt-tier crossing: gpt-x priced 33000 prompt tokens, above its 32000-token large-prompt tier (#1 consecutive call). This call priced at the tier rate, a 2.5x unit-cost step against the base rate — see pricing.ts.",
+        "payload": {
+          "model": "gpt-x",
+          "prompt_tokens": 33000,
+          "above_prompt_tokens": 32000,
+          "consecutive_crossings": 1,
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "logInTrace": {
+        "trace_id": "tick-6",
+        "stage": "analysts",
+        "event": "prompt_tier_crossed",
+        "level": "warn",
+        "message": "prompt-tier crossing: gpt-x priced 33000 prompt tokens, above its 32000-token large-prompt tier (#1 consecutive call). This call priced at the tier rate, a 2.5x unit-cost step against the base rate — see pricing.ts.",
+        "payload": {
+          "model": "gpt-x",
+          "prompt_tokens": 33000,
+          "above_prompt_tokens": 32000,
+          "consecutive_crossings": 1,
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "text": "Samurai PROMPT-TIER CROSSED: gpt-x priced 33000 prompt tokens, above its 32000-token large-prompt tier (#1 consecutive call as of 2026-09-10T08:15:00.000Z).\nThis call priced at the tier rate — a 2.5x unit-cost step against the base rate, against ADR-0008's $50/14d cap.\nTrace tick-6, stage analysts.",
+      "rejected": null,
+      "sendFailed": {
+        "trace_id": "tick-6",
+        "stage": "analysts",
+        "event": "prompt_tier_alert_send_failed",
+        "level": "error",
+        "message": "prompt-tier alert failed to send — the crossing still stands",
+        "payload": {
+          "model": "gpt-x",
+          "consecutive_crossings": 1,
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "error": "telegram 502"
+        }
+      },
+      "sendFailedInTrace": {
+        "trace_id": "tick-6",
+        "stage": "analysts",
+        "event": "prompt_tier_alert_send_failed",
+        "level": "error",
+        "message": "prompt-tier alert failed to send — the crossing still stands",
+        "payload": {
+          "model": "gpt-x",
+          "consecutive_crossings": 1,
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "error": "telegram 502"
+        }
+      }
+    }
+  ],
+  "lseCalendarCoverageAlerts": [
+    {
+      "log": {
+        "trace_id": "startup",
+        "stage": "orchestrator",
+        "event": "lse_calendar_coverage_horizon",
+        "level": "warn",
+        "message": "the LIVE equity leg's hand-entered LSE session tables are checked only through 2026-12-31 — 12 day(s) remaining. Extend LSE_HOLIDAYS/LSE_HALF_DAYS before that date; boot will refuse the live leg once it passes. SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.",
+        "payload": {
+          "coverage_end": "2026-12-31",
+          "days_remaining": 12,
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "logInTrace": {
+        "trace_id": "startup",
+        "stage": "orchestrator",
+        "event": "lse_calendar_coverage_horizon",
+        "level": "warn",
+        "message": "the LIVE equity leg's hand-entered LSE session tables are checked only through 2026-12-31 — 12 day(s) remaining. Extend LSE_HOLIDAYS/LSE_HALF_DAYS before that date; boot will refuse the live leg once it passes. SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.",
+        "payload": {
+          "coverage_end": "2026-12-31",
+          "days_remaining": 12,
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "text": "Samurai LSE CALENDAR COVERAGE ENDING SOON: the LIVE equity leg runs on LseRegularHoursCalendar's hand-entered tables, checked through 2026-12-31.\n12 day(s) remaining as of 2026-09-10T08:15:00.000Z.\nExtend LSE_HOLIDAYS/LSE_HALF_DAYS (trading-calendar.ts) before that date — boot will REFUSE to start the live leg once it passes, naming the date and what to extend.",
+      "rejected": null,
+      "sendFailed": {
+        "trace_id": "lse-calendar-coverage",
+        "stage": "orchestrator",
+        "event": "lse_calendar_coverage_alert_send_failed",
+        "level": "error",
+        "message": "LSE calendar coverage-horizon alert failed to send — the horizon still stands",
+        "payload": {
+          "coverage_end": "2026-12-31",
+          "days_remaining": 12,
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "error": "telegram 502"
+        }
+      },
+      "sendFailedInTrace": {
+        "trace_id": "lse-calendar-coverage",
+        "stage": "orchestrator",
+        "event": "lse_calendar_coverage_alert_send_failed",
+        "level": "error",
+        "message": "LSE calendar coverage-horizon alert failed to send — the horizon still stands",
+        "payload": {
+          "coverage_end": "2026-12-31",
+          "days_remaining": 12,
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "error": "telegram 502"
+        }
+      }
+    }
+  ],
+  "llmFailureRateAlerts": [
+    {
+      "log": {
+        "trace_id": "llm-failure-rate",
+        "stage": "debate",
+        "event": "llm_failure_rate_elevated",
+        "level": "warn",
+        "message": "llm_failure rate 41.7% over the last 2h (5/12 truncations) — SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.",
+        "payload": {
+          "rate": 0.4167,
+          "llm_failure_count": 5,
+          "total_count": 12,
+          "window_ms": 7200000,
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "logInTrace": {
+        "trace_id": "llm-failure-rate",
+        "stage": "debate",
+        "event": "llm_failure_rate_elevated",
+        "level": "warn",
+        "message": "llm_failure rate 41.7% over the last 2h (5/12 truncations) — SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.",
+        "payload": {
+          "rate": 0.4167,
+          "llm_failure_count": 5,
+          "total_count": 12,
+          "window_ms": 7200000,
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "text": "Samurai LLM FAILURE RATE ELEVATED: 41.7% of truncations over the last 2h (5/12) truncated on an outright LLM call failure, as of 2026-09-10T08:15:00.000Z.\nCheck the LLM provider status and the rate-limited client for sustained 429s/5xxs — a debate log row alone cannot tell live provider trouble from a spend-cap refusal.",
+      "rejected": "telegram 502",
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    }
+  ],
+  "nonSterlingFeeAlerts": [
+    {
+      "log": null,
+      "logInTrace": null,
+      "text": "Samurai NON-STERLING FEE: XYZ (lot lot-7) booked a fill fee of 1.25 USD, not GBP.\nFill fill-3. tradeableUniverse() should have excluded this instrument — check the universe pool and universe-selector wiring for a selection-layer defect.",
+      "rejected": "telegram 502",
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    }
+  ]
+}

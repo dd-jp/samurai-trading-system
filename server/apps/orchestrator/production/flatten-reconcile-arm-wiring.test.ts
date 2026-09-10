@@ -2,7 +2,7 @@
  * The wiring proof for #1331 — an unresolved flatten's alert line names the
  * arm that raised it.
  *
- * `console-channels.test.ts` proves the channel writes whatever `trace_id`
+ * `alert-catalogue.test.ts` proves the channel writes whatever `trace_id`
  * the alert carries, and `reconcile.test.ts` proves the alert fires on both
  * unresolved branches. Neither can prove the property this file exists for:
  * that the ids the ROOT picks for its two arms' reconcile passes are
@@ -229,10 +229,10 @@ describe("an unresolved flatten's alert names the arm that raised it (#1331)", (
    * THE MUTATIONS THIS KILLS:
    *
    * 1. Put the constant back — `trace_id: 'reconcile'` in
-   *    `LoggingFlattenReconcileAlertChannel` (console-channels.ts), or thread
-   *    a fixed string instead of `input.trace_id` in
+   *    the catalogue's `flattenReconcileAlerts` log line (alert-catalogue.ts),
+   *    or thread a fixed string instead of `input.trace_id` in
    *    `postFlattenReconcileAlert` (reconcile.ts). Either leaves both arms'
-   *    lines identical here, and the second leaves `console-channels.test.ts`
+   *    lines identical here, and the second leaves `alert-catalogue.test.ts`
    *    green as well.
    * 2. Mislabel the LIVE arm at the composition root — give the surface
    *    `start()` reconciles on `CONTROL_RECONCILE_TRACE_ID`, or let `start()`

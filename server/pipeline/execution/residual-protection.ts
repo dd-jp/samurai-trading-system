@@ -121,8 +121,8 @@ export async function maybeRearmResidual(
       // possibly-wrong guess: it can only OVER-state what is genuinely at
       // risk, never under-state it, which is the conservative direction
       // for an operator deciding whether to go check the venue by hand.
-      // NOT `Number.NaN` — `LoggingResidualExposureAlertChannel` writes
-      // this alert through `JSON.stringify` (logger.ts), which silently
+      // NOT `Number.NaN` — the log-only form of this alert goes through
+      // `JSON.stringify` (logger.ts), which silently
       // turns `NaN` into `null`, and a `null` quantity is less legible
       // than an honest upper bound. Never rethrown: see this function's
       // "Never throws" doc above.

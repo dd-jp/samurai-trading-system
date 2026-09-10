@@ -73,7 +73,7 @@
  * `paperStartingProfile` (paper-profile.ts) beside the other eight sets, and
  * the loosen-notice channel is a transport, so it is selected from
  * `SAMURAI_ALERTS` (alert-transport.ts) and defaults to
- * `LoggingLoosenNotificationChannel` here. Before that, the 14-day soak (#238)
+ * `loggingAlertChannel('loosenNotices')` here. Before that, the 14-day soak (#238)
  * would have run stage 6 of a 6-stage pipeline dead for the whole window.
  *
  * `computeMetrics` — the kill-line detector — runs in that same timer, after
@@ -226,28 +226,14 @@ import {
   SqliteTraderLogStore,
 } from '../../shared/store/index.js';
 import { CostModelImpl, SqliteStage2SelectionStore } from '../../tools/backtest/index.js';
+import { loggingAlertChannel } from './alert-catalogue.js';
 import { SqliteAlertDeliveryLog } from './alert-delivery-log.js';
 import { AnalystSkipKindRelay } from './analysts-decision.js';
-import { LLM_SPEND_CAP_BREACH } from './breach-alert-channel.js';
+import { LLM_SPEND_CAP_BREACH } from './breach-text.js';
 import {
-  LoggingAnalystSkipAlertChannel,
   LoggingAnalystTelemetry,
-  LoggingArmDivergenceAlertChannel,
-  LoggingBreachAlertChannel,
-  LoggingDataFailoverAlertChannel,
   LoggingFlattenOverfillAlertChannel,
-  LoggingFlattenReconcileAlertChannel,
-  LoggingHeartbeatChannel,
-  LoggingLlmFailureRateAlertChannel,
-  LoggingLoosenNotificationChannel,
-  LoggingMiCoverageAlertChannel,
   LoggingMiCoverageTelemetry,
-  LoggingOcoDoubleFillAlertChannel,
-  LoggingOrphanAlertChannel,
-  LoggingPromptTierAlertChannel,
-  LoggingResidualExposureAlertChannel,
-  LoggingTickSkipAlertChannel,
-  LoggingUnpricedFillAlertChannel,
   ParkedCiiScoreProvider,
   UnwiredApprovalChannel,
 } from './console-channels.js';
@@ -1113,7 +1099,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       // `buildFailoverDataSource` resolves it itself, gated on
       // `equitiesFallbackBarFetcher` being undefined.
       fallbackPacing: config.fallbackPacing,
-      alertChannel: config.dataFailoverAlerts ?? new LoggingDataFailoverAlertChannel(logger),
+      alertChannel: config.dataFailoverAlerts ?? loggingAlertChannel('dataFailoverAlerts', logger),
       logger,
       now: () => clock.now(),
     });
@@ -1301,11 +1287,11 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * channel, and a breach that only reaches the log stream is invisible on an
    * unattended run. It depends on nothing but `logger`, so the move is free.
    */
-  const breachAlerts = config.breachAlerts ?? new LoggingBreachAlertChannel(logger);
+  const breachAlerts = config.breachAlerts ?? loggingAlertChannel('breachAlerts', logger);
 
   /** #971. Resolved beside `breachAlerts`, and never merged with it — see its slot's doc. */
   const armDivergenceAlerts =
-    config.armDivergenceAlerts ?? new LoggingArmDivergenceAlertChannel(logger);
+    config.armDivergenceAlerts ?? loggingAlertChannel('armDivergenceAlerts', logger);
 
   /**
    * #1140: the SAME `config.llmBudgetUsd` the enforcer is built from, recorded
@@ -1436,12 +1422,13 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       // #298: the same store carries the age-out clock for a fill the venue
       // will not price, which is why it must be the durable one here — a
       // restart that reset the clock would age nothing out across a soak.
-      unpricedFillAlerts: config.unpricedFillAlerts ?? new LoggingUnpricedFillAlertChannel(logger),
+      unpricedFillAlerts:
+        config.unpricedFillAlerts ?? loggingAlertChannel('unpricedFillAlerts', logger),
       // #586: the emulated crypto OCO's accepted-risk escalation — required
       // on `AlpacaBrokerAdapterInput` for the same "no silent default"
       // reason `unpricedFillAlerts` is.
       ocoDoubleFillAlerts:
-        config.ocoDoubleFillAlerts ?? new LoggingOcoDoubleFillAlertChannel(logger),
+        config.ocoDoubleFillAlerts ?? loggingAlertChannel('ocoDoubleFillAlerts', logger),
       // #609: `AlpacaBrokerAdapterInput.logger`, required for the same reason
       // `ExecutionInput.logger` is (#573) — a dropped wiring here is now a
       // `tsc` error at every composition root instead of a silent gap a soak
@@ -1586,7 +1573,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // required on `AlpacaBrokerAdapterInput` (#298) — an omitted channel is
     // the #322 bug re-created for a fifth escalation.
     residualExposureAlerts:
-      config.residualExposureAlerts ?? new LoggingResidualExposureAlertChannel(logger),
+      config.residualExposureAlerts ?? loggingAlertChannel('residualExposureAlerts', logger),
     // #527: diagnostic-only for now (see `LoggingFlattenOverfillAlertChannel`'s
     // doc) — no `SAMURAI_ALERTS`/config override yet, unlike the escalations
     // above. A phone-reaching transport is a later ticket if this ever fires.
@@ -1596,7 +1583,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // reason `residualExposureAlerts` above is — an omitted channel would
     // make an unresolved flatten's ambiguity invisible again.
     flattenReconcileAlerts:
-      config.flattenReconcileAlerts ?? new LoggingFlattenReconcileAlertChannel(logger),
+      config.flattenReconcileAlerts ?? loggingAlertChannel('flattenReconcileAlerts', logger),
     // #573: the execution port's own local diagnostic trace — see
     // `ExecutionInput.logger`'s decision doc. Required, so a composition
     // root that forgets it is a `tsc` error rather than a silent gap.
@@ -1695,7 +1682,8 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * pass both bill through it, so there is one spend meter and one config
    * rather than two clients disagreeing about either.
    */
-  const promptTierAlerts = config.promptTierAlerts ?? new LoggingPromptTierAlertChannel(logger);
+  const promptTierAlerts =
+    config.promptTierAlerts ?? loggingAlertChannel('promptTierAlerts', logger);
   /**
    * ONE throttle for the whole root, for the same reason as `promptTierAlerts`
    * above: `NOUS_MODEL` alone can route BOTH the debate stage's default
@@ -2222,7 +2210,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // `logger` here is what makes an analyst failure visible at all — see the
     // adapter's doc comment (issue #358 item 4).
     analysts: buildAnalystsStep(analysts, logger, {
-      skipAlerts: config.analystSkipAlerts ?? new LoggingAnalystSkipAlertChannel(logger),
+      skipAlerts: config.analystSkipAlerts ?? loggingAlertChannel('analystSkipAlerts', logger),
       // #1080: why a skip happened, for the runner to read back below.
       skipKinds: analystSkipKinds,
       // #752: the per-name/per-subclass NO_DATA counter and the
@@ -2235,7 +2223,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
         contextSource: marketIntelligence,
         subclassOf: subclassOfUniverse(universe),
         telemetry: new LoggingMiCoverageTelemetry(logger),
-        alertChannel: config.miCoverageAlerts ?? new LoggingMiCoverageAlertChannel(logger),
+        alertChannel: config.miCoverageAlerts ?? loggingAlertChannel('miCoverageAlerts', logger),
         monitor: miCoverageMonitor,
         logger,
         // #1085: hold the alert (never the counter) for a name MI has not
@@ -2280,7 +2268,8 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       {
         windowSource: debateLogStore,
         monitor: llmFailureRateMonitor,
-        alertChannel: config.llmFailureRateAlerts ?? new LoggingLlmFailureRateAlertChannel(logger),
+        alertChannel:
+          config.llmFailureRateAlerts ?? loggingAlertChannel('llmFailureRateAlerts', logger),
       },
     ),
     // #328: `traderLog`/`riskLog` are what make the two stages that decide WHAT
@@ -2540,7 +2529,7 @@ export function startTickLoop(deps: {
    * Where a materially degraded tick pass is escalated (#1084). Absent = no
    * alerting — the honest default for a caller (a focused unit test) that
    * has not wired one through; `production.ts`'s own composition root always
-   * supplies at least `LoggingTickSkipAlertChannel`. Never changes the skip
+   * supplies at least `loggingAlertChannel('tickSkipAlerts')`. Never changes the skip
    * itself — see `tick-skip-alert.ts`'s file doc.
    */
   tickSkipAlerts?: TickSkipAlertChannel;
@@ -3005,7 +2994,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         }),
   });
   const heartbeat = new Heartbeat(
-    config.heartbeatChannel ?? new LoggingHeartbeatChannel(logger),
+    config.heartbeatChannel ?? loggingAlertChannel('heartbeatChannel', logger),
     logger,
   );
 
@@ -3077,7 +3066,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
   const loosenNotices =
     config.feedback?.loosenNotices ??
     config.loosenNotices ??
-    new LoggingLoosenNotificationChannel(logger);
+    loggingAlertChannel('loosenNotices', logger);
 
   /**
    * The detector's source, built once at construction (#379) — never per cycle,
@@ -3728,7 +3717,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     async start(): Promise<OrphanGoVerdict[]> {
       const orphans = await persistence.orphanScanner.scan(
         config.db,
-        config.orphanAlerts ?? new LoggingOrphanAlertChannel(logger),
+        config.orphanAlerts ?? loggingAlertChannel('orphanAlerts', logger),
         logger,
       );
 
@@ -3970,7 +3959,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         // claims are what turn the 2-minute tick into a once-per-bar decision.
         decisionGate: new DebateBarDecisionGate(),
         // #1084 — the eighteenth `ALERT_CHANNEL_FIELDS` member.
-        tickSkipAlerts: config.tickSkipAlerts ?? new LoggingTickSkipAlertChannel(logger),
+        tickSkipAlerts: config.tickSkipAlerts ?? loggingAlertChannel('tickSkipAlerts', logger),
         // #1390: unions both arms' open positions — see `buildHeldAssetsReader`'s
         // doc for why the live arm's store alone is not enough.
         heldAssets: buildHeldAssetsReader(components),

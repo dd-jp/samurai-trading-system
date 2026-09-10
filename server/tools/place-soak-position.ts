@@ -61,11 +61,7 @@
  * `submitted` while the venue fills, so the restart's reconcile adopts it.
  */
 import { randomUUID } from 'node:crypto';
-import {
-  LoggingOcoDoubleFillAlertChannel,
-  LoggingUnpricedFillAlertChannel,
-} from '../apps/orchestrator/console-channels.js';
-import { assertStorePathMatchesMode } from '../apps/orchestrator/index.js';
+import { assertStorePathMatchesMode, loggingAlertChannel } from '../apps/orchestrator/index.js';
 import { JsonLogger } from '../apps/orchestrator/logger.js';
 import { resolveUsEquitySessionCalendar } from '../apps/orchestrator/production/us-equity-session-source.js';
 import { buildDefaultAlpacaBrokerClient } from '../apps/orchestrator/production.js';
@@ -243,8 +239,8 @@ async function main(): Promise<void> {
   const broker = new AlpacaBrokerAdapter({
     client,
     state: new SqliteBrokerStateStore(db),
-    unpricedFillAlerts: new LoggingUnpricedFillAlertChannel(logger),
-    ocoDoubleFillAlerts: new LoggingOcoDoubleFillAlertChannel(logger),
+    unpricedFillAlerts: loggingAlertChannel('unpricedFillAlerts', logger),
+    ocoDoubleFillAlerts: loggingAlertChannel('ocoDoubleFillAlerts', logger),
     logger,
   });
 

@@ -201,7 +201,7 @@ export class SequentialTickRunner implements TickRunner {
       // decision cleartext, unlike `input_digest`/`output_digest` — from this
       // same call regardless of level, so nothing is lost, only quieted. A
       // human tailing the log for "is the exit check alive" has three surfaces
-      // this does not touch: `LoggingHeartbeatChannel`'s own periodic `info`
+      // this does not touch: the log-only heartbeat's own periodic `info`
       // `heartbeat` line, which lands in this same file whenever it is the
       // selected transport; the once-an-hour `analysts`/`debate` lines every
       // instrument still emits at `info` on its decision cadence

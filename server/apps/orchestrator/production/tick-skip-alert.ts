@@ -40,8 +40,8 @@ export interface TickSkipAlert {
 /**
  * Where the tick-skip escalation goes. Declared beside its caller
  * (`startTickLoop`, production.ts), like `AnalystSkipAlertChannel` beside
- * `buildAnalystsStep`. `LoggingTickSkipAlertChannel` (console-channels.ts)
- * and `TradeChannelTickSkipAlert` (tick-skip-alert-channel.ts) implement it.
+ * `buildAnalystsStep`. The alert catalogue's `tickSkipAlerts` entry
+ * (alert-catalogue.ts) implements it.
  */
 export interface TickSkipAlertChannel {
   postTickSkipAlert(alert: TickSkipAlert): Promise<void>;

@@ -4,7 +4,7 @@
  * live counterparts at the log line, the same property #1331
  * (flatten-reconcile-arm-wiring.test.ts) proved for unresolved flattens.
  *
- * `console-channels.test.ts` proves each channel writes whatever `trace_id`
+ * `alert-catalogue.test.ts`/`console-channels.test.ts` prove each channel writes whatever `trace_id`
  * the alert carries; `ingest-fills.test.ts` proves each producer
  * (`alertResidualExposure`, `redistributeOneFlatten`) threads `input.trace_id`
  * rather than a literal it picked itself. Neither can prove the property this

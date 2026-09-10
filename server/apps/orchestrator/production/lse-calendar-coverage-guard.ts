@@ -71,7 +71,7 @@ import {
   LONDON_ZONE,
   toCivilDate,
 } from '../../../providers/market-data-service/trading-calendar.js';
-import { LoggingLseCalendarCoverageAlertChannel } from '../console-channels.js';
+import { loggingAlertChannel } from '../alert-catalogue.js';
 import type { Logger } from '../types.js';
 import type { LseCalendarCoverageAlertChannel } from './lse-calendar-coverage-alert.js';
 
@@ -106,7 +106,7 @@ export interface AssertLseCalendarCoverageOptions {
   /** The resolved live calendar — the guard defers the boundary decision to its `coversCloseFor`, rather than re-deriving it from `LSE_TABLE_COVERAGE_END` itself. */
   calendar: LseRegularHoursCalendar;
   logger: Logger;
-  /** Defaults to `LoggingLseCalendarCoverageAlertChannel(logger)`, same posture as `calendarFallbackAlerts`. */
+  /** Defaults to `loggingAlertChannel('lseCalendarCoverageAlerts', logger)`, same posture as `calendarFallbackAlerts`. */
   alertChannel?: LseCalendarCoverageAlertChannel | undefined;
 }
 
@@ -141,7 +141,8 @@ export function assertLseCalendarCoverage(options: AssertLseCalendarCoverageOpti
   // `days_remaining`, violating the documented invariant on
   // `LseCalendarCoverageAlert` (lse-calendar-coverage-alert.ts).
   if (daysRemaining >= 0 && daysRemaining <= LSE_COVERAGE_ALERT_HORIZON_DAYS) {
-    const alertChannel = options.alertChannel ?? new LoggingLseCalendarCoverageAlertChannel(logger);
+    const alertChannel =
+      options.alertChannel ?? loggingAlertChannel('lseCalendarCoverageAlerts', logger);
     alertChannel.postLseCalendarCoverageAlert({
       coverage_end: LSE_TABLE_COVERAGE_END,
       days_remaining: daysRemaining,

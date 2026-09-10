@@ -116,9 +116,9 @@ export const TELEGRAM_MAX_MESSAGE_CHARS = 4096;
  *
  * Applied HERE, in the transport, rather than in each alert formatter, for
  * the reason `formatLogLine` gives about redaction: a guarantee that holds
- * only where a formatter remembered it is not a guarantee. Ten channels build
- * bodies (`trader-diagnostic-alert-channel.ts`, `oco-double-fill-channel.ts`,
- * …) and any of them can interpolate an unbounded `detail` — the NFLX failure
+ * only where a formatter remembered it is not a guarantee. Every alert
+ * catalogue entry (orchestrator/alert-catalogue.ts) builds its own body and
+ * any of them can interpolate an unbounded `detail` — the NFLX failure
  * came from `describeThrown` over a multi-member `AggregateError`, whose size
  * scales with the number of open positions.
  *
@@ -185,7 +185,7 @@ const UNKNOWN_TRACE_ID = 'unknown';
  * Write-only view of the orchestrator's `AuditLog` (orchestrator/types.ts),
  * declared here rather than imported so that `verdict/` never depends on
  * `orchestrator/` — the dependency runs the other way everywhere else in this
- * repo (e.g. orchestrator's `TradeChannelHeartbeat` imports `TelegramClient`
+ * repo (e.g. orchestrator's `tradeChannelAlert` imports `TelegramClient`
  * from `verdict/index.js`). `SqliteAuditLog` satisfies this structurally, and
  * a type-level test in telegram-bot-api-client.test.ts pins that.
  */
@@ -723,8 +723,8 @@ export class TelegramBotApiClient implements TelegramClient {
    * ABSENCE is not diagnostic. Nobody can observe a message they never
    * received, so silence is indistinguishable from a healthy channel. That
    * is why the durable count, not this notice, is the surface. There is no
-   * alternative transport to fail over to: every `TradeChannel*` adapter
-   * sends over this one client (`TradeChannelAlert`, trade-channel.ts), and
+   * alternative transport to fail over to: every catalogue alert sends over
+   * this one client (`tradeChannelAlert`, orchestrator/alert-catalogue.ts), and
    * the Discord seam that once existed as a type was deleted for never
    * having an implementation (#1154). Routing this notice to the heartbeat chat instead would
    * not help either: that chat is a different `chat_id` over the identical

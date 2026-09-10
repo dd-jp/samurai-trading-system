@@ -83,9 +83,8 @@ export interface AnalystSkipAlert {
 
 /**
  * Where a consecutive-skip alert goes. Declared beside its caller, like
- * `OrphanAlertChannel` in orphan-verdict-scan.ts; `LoggingAnalystSkipAlertChannel`
- * (console-channels.ts) and `TradeChannelAnalystSkipAlert`
- * (analyst-skip-alert-channel.ts) implement it.
+ * `OrphanAlertChannel` in orphan-verdict-scan.ts; the alert catalogue's
+ * `analystSkipAlerts` entry (alert-catalogue.ts) implements it.
  */
 export interface AnalystSkipAlertChannel {
   postAnalystSkipAlert(alert: AnalystSkipAlert): Promise<void>;
@@ -365,8 +364,8 @@ async function postSkipAlert(
       // The tick's own id, not the `'analyst-skip'` category label (#1280) —
       // the same id `analyst_panel_degraded` above logs under, so the two join.
       //
-      // Deliberately NOT the same call as `LoggingAnalystSkipAlertChannel`
-      // (console-channels.ts), which keeps the constant on purpose: that line
+      // Deliberately NOT the same call as the `analystSkipAlerts` log line
+      // (alert-catalogue.ts), which keeps the constant on purpose: that line
       // reports the CONDITION, a run of consecutive skips spanning many ticks,
       // and so belongs to none of them. This line reports one delivery failing
       // in ONE instrument's analysts step, inside the tick whose id is in

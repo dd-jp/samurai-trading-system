@@ -5,10 +5,10 @@
  * Declared beside its caller (`buildTraderStep`, direct-bind.ts) the same way
  * `AnalystSkipAlertChannel` is declared beside `buildAnalystsStep` and
  * `FlattenReconcileAlertChannel` beside `reconcile()`. Implemented by
- * `TradeChannelTraderDiagnosticAlert` (trader-diagnostic-alert-channel.ts),
+ * the alert catalogue's `traderDiagnosticAlerts` entry (alert-catalogue.ts),
  * which `SAMURAI_ALERTS=telegram` selects at the composition root.
  *
- * There is deliberately NO `Logging…Channel` counterpart, which is where this
+ * There is deliberately NO log-only form (`UNLOGGED_ALERT_IDS`), which is where this
  * departs from the other ten. `buildTraderStep` writes every diagnostic to its
  * own logger at `error` BEFORE it reaches this port, so a log-only
  * implementation would emit each condition twice. An absent channel here means

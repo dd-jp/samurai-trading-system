@@ -23,7 +23,8 @@
  * scale-in; the control takes neither. The arms therefore differ in SIZE on
  * those bars, not only in entry — which means a non-converging stretch can
  * itself PRODUCE a divergence reading. The caveat travels with the alert body
- * (`arm-divergence-alert-channel.ts`) and with the dashboard panel, not only
+ * (`armDivergenceAlerts` in orchestrator/alert-catalogue.ts) and with the
+ * dashboard panel, not only
  * with the spec, because the alert is the surface most likely to be acted on
  * quickly.
  */

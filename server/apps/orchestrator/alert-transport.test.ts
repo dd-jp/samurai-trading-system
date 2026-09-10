@@ -4,6 +4,7 @@
  * a running process whose alerts all go to a log nobody reads.
  */
 import { openSharedStore } from '../../shared/store/index.js';
+import { ALERT_CATALOGUE, ALERT_IDS } from './alert-catalogue.js';
 import {
   ALERT_CHANNEL_FIELDS,
   buildAlertChannels,
@@ -11,16 +12,9 @@ import {
   TELEGRAM_ALERT_ENV_VARS,
   TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR,
 } from './alert-transport.js';
-import { TradeChannelBreachAlert } from './breach-alert-channel.js';
-import { TradeChannelDataFailoverAlert } from './data-failover-alert-channel.js';
 import { Heartbeat } from './heartbeat.js';
-import { TradeChannelHeartbeat } from './heartbeat-channel.js';
-import { TradeChannelOrphanAlert } from './orphan-alert-channel.js';
 import type { ProductionConfig } from './production.js';
-import { TradeChannelResidualExposureAlert } from './residual-exposure-alert-channel.js';
-import { TradeChannelThresholdClampAlert } from './threshold-clamp-alert-channel.js';
 import type { Logger } from './types.js';
-import { TradeChannelUnpricedFillAlert } from './unpriced-fill-channel.js';
 
 /**
  * Saved and restored around EVERY test in the file, for the reason
@@ -236,9 +230,8 @@ describe('TELEGRAM_ALERT_ENV_VARS', () => {
 
 describe('buildAlertChannels — log-only', () => {
   it('supplies nothing, leaving the composition root its own log-only defaults', () => {
-    // Deliberate: `LoggingHeartbeatChannel`/`LoggingOrphanAlertChannel`/
-    // `LoggingUnpricedFillAlertChannel` are already the documented defaults in
-    // production.ts. Constructing a second set here would be two places to
+    // Deliberate: `loggingAlertChannel(id, logger)` is already the documented
+    // default in production.ts. Constructing a second set here would be two places to
     // keep in sync for no behavioural difference.
     const logger = recordingLogger();
 
@@ -277,15 +270,12 @@ describe('buildAlertChannels — telegram', () => {
       logger: recordingLogger(),
     });
 
-    expect(channels.heartbeatChannel).toBeInstanceOf(TradeChannelHeartbeat);
-    expect(channels.orphanAlerts).toBeInstanceOf(TradeChannelOrphanAlert);
-    expect(channels.unpricedFillAlerts).toBeInstanceOf(TradeChannelUnpricedFillAlert);
-    expect(channels.residualExposureAlerts).toBeInstanceOf(TradeChannelResidualExposureAlert);
-    expect(channels.breachAlerts).toBeInstanceOf(TradeChannelBreachAlert);
-    expect(channels.thresholdClampAlerts).toBeInstanceOf(TradeChannelThresholdClampAlert);
-    // #562 — the fourteenth field. The criterion it exists for is that a live
-    // OHLCV failover reaches the phone, not the script output #560 settled for.
-    expect(channels.dataFailoverAlerts).toBeInstanceOf(TradeChannelDataFailoverAlert);
+    // Every catalogue entry, under the port method its stage calls — the
+    // #562 criterion (a live OHLCV failover reaches the phone, not the script
+    // output #560 settled for) generalised to the whole table.
+    for (const id of ALERT_IDS) {
+      expect(Object.keys(channels[id] ?? {}), id).toEqual([ALERT_CATALOGUE[id].method]);
+    }
   });
 
   /**
@@ -325,12 +315,12 @@ describe('buildAlertChannels — telegram', () => {
     });
 
     expect(channels.heartbeatChannel).toBeUndefined();
-    expect(channels.orphanAlerts).toBeInstanceOf(TradeChannelOrphanAlert);
+    expect(channels.orphanAlerts).toBeDefined();
   });
 
   it('posts escalations to the chat id TELEGRAM_CHAT_ID names', async () => {
     // Proves the env var is actually threaded through to the wire, which
-    // `toBeInstanceOf` above cannot. Stubbed transport — no live call.
+    // the shape check above cannot. Stubbed transport — no live call.
     configureTelegramEnv();
     const fetchStub = stubTelegramFetch();
 
@@ -585,15 +575,15 @@ describe('buildAlertChannels — heartbeat destination is separate from escalati
     });
 
     expect(channels.heartbeatChannel).toBeUndefined();
-    expect(channels.orphanAlerts).toBeInstanceOf(TradeChannelOrphanAlert);
+    expect(channels.orphanAlerts).toBeDefined();
   });
 
   it('does not claim the heartbeat chat when the caller supplied its own channel', () => {
     // The startup line is what an operator checks their alerting against
     // before a 14-day soak, so it must not name a destination no beat reaches.
-    // On this path TELEGRAM_HEARTBEAT_CHAT_ID is never read and no
-    // `TradeChannelHeartbeat` is built — the injected channel decides where the
-    // beat goes, and this module cannot know where that is.
+    // On this path TELEGRAM_HEARTBEAT_CHAT_ID is never read and no heartbeat
+    // adapter is built — the injected channel decides where the beat goes,
+    // and this module cannot know where that is.
     configureTelegramEnv();
     delete process.env.TELEGRAM_HEARTBEAT_CHAT_ID;
     const logger = recordingLogger();
