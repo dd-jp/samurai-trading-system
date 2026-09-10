@@ -703,6 +703,45 @@ async function executeExit(
     });
   }
 
+  // #1497: the TOTAL check above cannot see a compensating swap — one lot's
+  // held quantity up, a sibling's down by the same amount, between the
+  // Trader's read (`buildFlattenExit`) and this one — because the two totals
+  // still agree even though the covered lot SET has silently changed underneath
+  // the intent. `lot_held_quantities` is `buildFlattenExit`'s own per-lot
+  // snapshot of what it keyed the exit against (OrderIntentMetadata doc), so
+  // when present it is compared lot by lot against `perLotHeld`, independent of
+  // the total.
+  //
+  // Exact `!==`, for a stronger reason than the total check's: each side of
+  // this comparison is one subtraction (`filled_size` minus that lot's own
+  // exit-fill sum) for ONE lot, so there is no summation order across lots to
+  // differ — unlike the total, which sums every lot's residual and so leans on
+  // the "same derivation, same query order" argument above it.
+  //
+  // Only the intent's NAMED lots are iterated; a lot missing from the snapshot
+  // reads as 0 held then, which is right for a lot that had not opened yet at
+  // decide-time. A lot that appeared AFTER decide-time (not named at all) is
+  // not visible to this loop, but it moves `heldSize`, so the total check
+  // above already refuses it — the two checks are complete between them, and
+  // this one adds nothing that would duplicate that refusal.
+  if (order.metadata.lot_held_quantities !== undefined) {
+    const recordedByKey = new Map(
+      order.metadata.lot_held_quantities.map((lot) => [lot.idempotency_key, lot.held]),
+    );
+    const diverged = perLotHeld.find(
+      (lot) => (recordedByKey.get(lot.idempotency_key) ?? 0) !== lot.held,
+    );
+    if (diverged !== undefined) {
+      const recorded = recordedByKey.get(diverged.idempotency_key) ?? 0;
+      return result('error', idempotencyKey, now, {
+        reason:
+          `exit intent for '${order.instrument}' refused: lot '${diverged.idempotency_key}' ` +
+          `now holds ${diverged.held} but the intent recorded ${recorded} — the covered lot set ` +
+          `has diverged since the Trader keyed this exit`,
+      });
+    }
+  }
+
   // #793: every exit intent carries `metadata.exit_reason` —
   // `buildFlattenExit` (trader/decide.ts) requires the argument, so its
   // absence here means SOME other path constructed an `intent_type: 'exit'`

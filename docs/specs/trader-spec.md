@@ -250,6 +250,12 @@ interface OrderIntentMetadata {
   exit_reason?: ExitReason;      // 'flatten' | 'signal_decay' | 'direction_flip', on exits only
   unpriced_exit?: true;          // #826: this flatten was built without a mark
   mandatory_flatten?: true;      // #894: exempts this exit from Verdict's staleness gate
+  lot_held_quantities?: readonly LotHeldQuantity[]; // #1497: `buildFlattenExit`'s own per-lot
+                                 // breakdown of the exit's `size`, set unconditionally on every
+                                 // exit it builds. `executeExit` compares it lot by lot against
+                                 // its own re-derived held quantities, catching a compensating
+                                 // swap between lots that leaves the TOTAL — and so `size` —
+                                 // unchanged.
   conviction: number;
   converged: boolean;
   sizing: {

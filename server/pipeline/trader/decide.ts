@@ -1193,6 +1193,10 @@ async function buildFlattenExit(
         // same true-or-absent shape as `unpriced_exit`, for the same
         // `exactOptionalPropertyTypes` reason.
         ...(exitReason === 'flatten' ? { mandatory_flatten: true as const } : {}),
+        // #1497: the per-lot breakdown behind `totalSize` — see this field's
+        // doc on `OrderIntentMetadata` for why `executeExit` needs it to catch
+        // a compensating swap the total-only guard cannot see.
+        lot_held_quantities: held,
         conviction: attribution.conviction,
         converged: attribution.converged,
         sizing: {
