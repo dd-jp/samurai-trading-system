@@ -98,6 +98,7 @@
  *    skipped for the life of the process; the file carries the run.
  */
 import type { LogEntry, LogEventCode } from '../../shared/index.js';
+import { maskCredentials } from '../../shared/sanitize-log-text.js';
 import { redactPayload } from './redact-payload.js';
 import {
   type FileSinkConfig,
@@ -150,11 +151,13 @@ export interface ErrorStream {
  * CANNOT throw (#1035).
  *
  * The guard is not defensive habit — it is what keeps `redact-payload.ts` off
- * #714's critical path. `formatLogLine` is what `degradationLine` builds on,
- * and `degradationLine` runs when both sinks are gone, producing the string
- * that goes straight to stderr as the run's last trace. A throw from the
- * walker there would destroy that write and convert a logging degradation into
- * silence. So a redaction failure degrades the PAYLOAD and never the line.
+ * #714's critical path. When both sinks are gone, `log`'s last-resort write
+ * to stderr is still this function's own output for the failing call, not
+ * `degradationLine`'s — `degradationLine` bypasses `formatLogLine` and this
+ * walker entirely for its own, separate wire lines (see its doc comment). A
+ * throw from the walker here would destroy that last-resort write and
+ * convert a logging degradation into silence. So a redaction failure
+ * degrades the PAYLOAD and never the line.
  *
  * `JSON.stringify` runs inside the guard for the same reason it always did: a
  * payload that cannot be serialized at all (a cycle — an uncaught throw here
@@ -183,10 +186,13 @@ function redactedPayloadJson(payload: unknown): string | undefined {
  * sink-failure warn, which has to be written straight to stdout without
  * re-entering the logger.
  *
- * `payload` is redacted centrally here rather than at call sites (#1035).
- * Before this, `sanitizeLogText` was applied only where a caller remembered
- * to — ten sites out of every logging call in the system — so the guarantee
- * was "redacted where someone thought about it", which is not a guarantee.
+ * `payload` is redacted centrally here rather than at call sites (#1035),
+ * and `message` is masked the same way (#1133): `entry.message` is a plain
+ * interpolated string, not a walked object graph, so it gets `maskCredentials`
+ * directly rather than `redactPayload`'s structural walk. Before either of
+ * these, masking was applied only where a caller remembered to — the
+ * guarantee was "redacted where someone thought about it", which is not a
+ * guarantee.
  *
  * Built field-by-field rather than through one outer `JSON.stringify` call,
  * so `redactedPayloadJson`'s already-serialized string can be spliced in as
@@ -210,7 +216,7 @@ export function formatLogLine(entry: LogEntry): string {
   field('stage', entry.stage);
   field('event', entry.event);
   field('level', entry.level);
-  field('message', entry.message);
+  field('message', maskCredentials(entry.message));
   if (payloadJson !== undefined) segments.push(`"payload":${payloadJson}`);
   field('started_at', entry.started_at);
   field('duration_ms', entry.duration_ms);
