@@ -209,11 +209,14 @@ export class UniverseScheduler implements Scheduler {
       // instant, or it does not appear in the plan.
       instruments: marketOpen || inFlattenGrace ? [...this.config.universe] : [],
       tick_time: tickTime,
-      // Absent, not `false`, whenever the venue is open or the plan is empty
-      // (`exactOptionalPropertyTypes`) — `marketOpen` alone decides this,
-      // because a window tick takes precedence over the grace when both would
-      // technically admit (they never do in practice: `postCloseFlattenTail`
-      // answers false while the venue is still open).
+      // Absent, not `false` (`exactOptionalPropertyTypes`), whenever
+      // `marketOpen` is true OR neither predicate admits — `marketOpen` alone
+      // decides this, because a window tick takes precedence over the grace
+      // when both would technically admit (they never do in practice:
+      // `postCloseFlattenTail` answers false while the venue is still open).
+      // Keyed on admission, not on `instruments.length`: a grace-admitted
+      // tick over an EMPTY configured universe still carries `grace_only:
+      // true` alongside `instruments: []`.
       ...(marketOpen ? {} : inFlattenGrace ? { grace_only: true } : {}),
     };
   }

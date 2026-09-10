@@ -72,10 +72,13 @@ export interface TickPlan {
   /** = clock.now() */
   tick_time: Date;
   /**
-   * True when `instruments` is non-empty ONLY because `postCloseFlattenWindow`
-   * admitted it — `isOpen`/`stocksTradingWindow` said shut (#1499). Absent
-   * (never `false`) on every other plan, including an empty one, per this
-   * file's `exactOptionalPropertyTypes` convention.
+   * True when this tick was admitted ONLY because `postCloseFlattenWindow`
+   * said so — `isOpen`/`stocksTradingWindow` said shut (#1499). Keyed on the
+   * ADMISSION, not on `instruments.length`: a grace-admitted tick over an
+   * EMPTY configured universe still carries `grace_only: true`, with
+   * `instruments: []`. Absent (never `false`) on every other plan — a window
+   * tick (`isOpen` true) and a fully-closed tick (neither predicate true)
+   * both omit it, per this file's `exactOptionalPropertyTypes` convention.
    *
    * Consumed by `runTickPlan`, which must not ask the decision gate to claim
    * a bar for a grace-only plan: the US close sits on the 1h debate-bar grid,
