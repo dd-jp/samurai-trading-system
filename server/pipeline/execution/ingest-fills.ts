@@ -65,13 +65,12 @@ import {
   isExitFill,
   isFlat,
   logCaughtFailure,
-  QTY_EPSILON_RELATIVE,
   safeLog,
-  toBrokerFillId,
   totalQty,
   weightedAvgPrice,
 } from '../../shared/index.js';
 import { closedTrade } from './closed-trade.js';
+import { cumulativeIncrement } from './cumulative-feed.js';
 import {
   chargeTopUpTo,
   type ModelledEntryCost,
@@ -1083,28 +1082,12 @@ function nextState(position: OpenPosition, filledSize: number, flat: boolean): O
 }
 
 /**
- * Separates a top-up row's id from the base order id it tops up (#842).
- * `'#'` and not `':'` deliberately: the flatten split in
- * `redistributeFlattenFills` already owns `':'` for its per-lot suffix, and
- * the two schemes must stay decidable from the id alone.
- */
-const TOP_UP_ID_SEPARATOR = '#';
-
-/**
  * #842. One observation of a CUMULATIVE feed (Alpaca's `getOrder`: a running
  * `filled_qty` under a fixed order id — see `NormalizedFill.qty_is_cumulative`)
  * whose id `hasFill` has already seen, turned into the INCREMENT it still owes
- * this lot — or `null` when it owes nothing.
- *
- * Why an extra row rather than amending the existing one: `fills` rows are
- * append-only by construction (`applyLotAdvance` inserts; there is no update
- * path, and the table's PK is `(idempotency_key, broker_fill_id)`), and every
- * derived figure — `filled_size`, `avg_entry_price`, realized PnL, the
- * residual sweep's `heldQuantityFromFills` — is REBUILT from the rows on every
- * poll. Appending the difference therefore repairs all of them at once, with
- * no migration: the base id keeps the exact value it was first written under,
- * so nothing already persisted is re-keyed and no in-flight lot is re-booked
- * across the deploy boundary.
+ * this lot — or `null` when it owes nothing. The arithmetic (and why it is an
+ * extra row rather than an amendment) lives in `cumulativeIncrement`; this
+ * wrapper owns the I/O around it.
  *
  * The top-up's id embeds the cumulative quantity it settles, which makes it
  * DETERMINISTIC and STABLE across polls — the same property
@@ -1118,48 +1101,11 @@ async function cumulativeTopUp(
   fill: NormalizedFill,
   booked: readonly Fill[],
 ): Promise<Fill | null> {
-  const base = fill.broker_fill_id;
-  const prefix = `${base}${TOP_UP_ID_SEPARATOR}`;
-  const priors = booked.filter(
-    (row) => row.broker_fill_id === base || row.broker_fill_id.startsWith(prefix),
-  );
-  // `booked` is THIS lot's own fills (`getFills(position.idempotency_key)`,
-  // already lot-scoped) plus this poll's own new rows — not a `hasFill`
-  // existence check, which even scoped to the full PK (#1320) only answers
-  // "ingested or not", never "by how much". With no prior row here there is
-  // nothing to take a difference against, and inventing the whole cumulative
-  // quantity as this lot's would double-book whichever lot actually holds it.
-  if (priors.length === 0) return null;
+  const increment = cumulativeIncrement(booked, fill);
+  if (increment === null) return null;
 
-  const bookedQty = totalQty(priors);
-  const delta = fill.qty - bookedQty;
-  // The same relative tolerance `coversQty` judges flatness by (ADR-0005) —
-  // a second tolerance for the same float64 noise is how two surfaces come to
-  // disagree about the same lot.
-  //
-  // `delta < 0` — the venue reporting LESS than we have booked — falls out
-  // here too, silently. It is venue/store divergence rather than a lost
-  // increment, it is not the direction that leaves shares naked (protection
-  // would be OVER-sized, not under), and there is no safe repair from here:
-  // fill rows are append-only and un-booking a persisted fill on a venue
-  // hiccup is strictly worse than carrying it. `reconcile()` owns divergence.
-  if (!(delta > Math.abs(fill.qty) * QTY_EPSILON_RELATIVE)) return null;
-
-  // `price` on a cumulative observation is the cumulative AVERAGE, so the
-  // increment's own price is what makes the average true — and a
-  // `weightedAvgPrice` over base + top-up then reproduces the venue's
-  // reported average to within ADR-0005's summation bound, rather than
-  // drifting toward whichever tranche was larger.
-  const bookedNotional = priors.reduce((sum, row) => sum + row.price * row.qty, 0);
-  const derivedPrice = (fill.price * fill.qty - bookedNotional) / delta;
-  const priceIsUsable = Number.isFinite(derivedPrice) && derivedPrice > 0;
-  if (!priceIsUsable) {
-    // Book the QUANTITY anyway, at the venue's cumulative average. When
-    // quantity and price accuracy conflict, quantity wins: unprotected shares
-    // are the failure that costs real money (no stop covers them, no exposure
-    // cap sees them, flat-by-close does not exit them), whereas a last-tranche
-    // price that is off skews `avg_entry_price` and the R-multiple and nothing
-    // else. Logged because a non-positive derived price means the venue's own
+  if (increment.priceDegraded) {
+    // Logged because a non-positive derived price means the venue's own
     // cumulative average and the tranche history disagree, which is worth an
     // operator's attention even though it does not stop the ingest.
     safeLog(input.logger, {
@@ -1172,52 +1118,28 @@ async function cumulativeTopUp(
         "quantity at the venue's cumulative average instead, so avg_entry_price is approximate",
       payload: {
         idempotency_key: position.idempotency_key,
-        broker_fill_id: base,
-        booked_qty: bookedQty,
+        broker_fill_id: fill.broker_fill_id,
+        booked_qty: increment.bookedQty,
         venue_cumulative_qty: fill.qty,
-        derived_price: derivedPrice,
+        derived_price: increment.derivedPrice,
       },
     });
   }
 
-  // #1465: reached only past both early returns above, so only when this
-  // call is about to book a genuinely new increment — a re-poll at the same
-  // cumulative returns `null` before reaching here and pages nothing twice,
-  // the same property `advanceLot`'s own call (below the dedup gate) relies
-  // on for its half of `toFill`'s two call sites.
+  // #1465: reached only past `cumulativeIncrement`'s `null` returns, so only
+  // when this call is about to book a genuinely new increment — a re-poll at
+  // the same cumulative pages nothing twice, the same property `advanceLot`'s
+  // own call (below the dedup gate) relies on for its half of `toFill`'s two
+  // call sites.
   await warnOnNonSterlingFee(input, position, fill);
 
   return toFill(
     {
       ...fill,
-      broker_fill_id: toBrokerFillId(`${prefix}${fill.qty}`),
-      qty: delta,
-      price: priceIsUsable ? derivedPrice : fill.price,
-      // Fees are cumulative on the same observation, so the increment owes
-      // only what has not been booked. Clamped: a venue that reports a
-      // SHRINKING fee total must not credit this lot a negative fee, which
-      // would read as income in realized PnL.
-      //
-      // #1121: subtracted against `priors`' full persisted `fee` — the CHARGED
-      // total, which is what makes this right under `chargeTopUpTo`'s top-up
-      // (not addition) rule. Subtracting only the venue-reported component
-      // instead would be WRONG here: a prior row's `fee`
-      // is `max(venue, modelled)`, so it has already absorbed that row's share
-      // of the venue's running total, and subtracting less than it would
-      // charge the same venue money twice across increments. Worked through:
-      // priors charged 0.5 against a venue cumulative of 0.8 leaves a 0.3
-      // increment, topped up to the modelled 0.5 — 1.0 in total for that
-      // example, not 1.3. Where the venue out-charges the model the same
-      // subtraction returns its real delta untouched.
-      //
-      // "One modelled commission in total" is a property of THAT example, not
-      // of the mechanism (#1121): `max` runs per increment, so a venue whose
-      // per-increment fee crosses the modelled share charges more than the
-      // model once — 0.7 then 0.3 against a
-      // modelled 1.0 split 0.5/0.5 charges 1.2. `chargeTopUpTo`'s doc carries
-      // the per-lot bound. Unreachable on this path today: cumulative feeds
-      // are Alpaca-only and Alpaca reports `fee: 0`.
-      fee: Math.max(0, fill.fee - priors.reduce((sum, row) => sum + row.fee, 0)),
+      broker_fill_id: increment.broker_fill_id,
+      qty: increment.qty,
+      price: increment.price,
+      fee: increment.fee,
     },
     position.idempotency_key,
     // #1001: same fallback `advanceLot`'s own `toFill` call uses — a
