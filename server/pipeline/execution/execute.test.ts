@@ -1286,10 +1286,15 @@ describe('ExecutionImpl.execute', () => {
               kind: 'flatten',
             }),
           );
-          // The reason must not claim proof the venue never gave.
+          // The reason must not claim proof the venue never gave, NOR an
+          // observation history that was never gathered — the bound fires on
+          // one answer past an age, not on a run of denials.
           const row = await store.getFlattenSubmission(REFLATTEN_KEY);
           expect(row?.status).toBe('error');
-          expect(row?.reason).toContain('DECISION on consistent negative evidence, not proof');
+          expect(row?.reason).toContain(
+            'DECISION on one unanswered check against a row that old, not proof',
+          );
+          expect(row?.reason).toContain('not a record of repeated denial');
           expect(await store.getUnresolvedFlattens()).toEqual([]);
 
           // The whole point: the mandatory flat-by-close goes out, for the

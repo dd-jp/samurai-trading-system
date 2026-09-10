@@ -342,6 +342,15 @@ export async function reflattenResidual(
 }
 
 /**
+ * Whether `key` is one of `lotKey`'s own re-flatten attempts — the same key
+ * shape `resolveReflattenKey` walks, asked as a predicate so the advisory read
+ * and `standDown` cannot disagree about what "own" means.
+ */
+function isOwnReflattenKey(key: string, lotKey: string): boolean {
+  return key.startsWith(`${lotKey}:residual-reflatten-`);
+}
+
+/**
  * The next usable re-flatten key for `lotKey`, or `null` once the budget is
  * spent. Mirrors `resolveExitRetryKey` (execute.ts): a durable walk over
  * derived keys, so the bound survives a restart with no new schema and no
@@ -355,15 +364,6 @@ export async function reflattenResidual(
  * `'error'` row, or a `'submitted'` one whose fills are swept — and either way
  * that attempt is spent and the walk moves on.
  */
-/**
- * Whether `key` is one of `lotKey`'s own re-flatten attempts — the same key
- * shape `resolveReflattenKey` walks, asked as a predicate so the advisory read
- * and `standDown` cannot disagree about what "own" means.
- */
-function isOwnReflattenKey(key: string, lotKey: string): boolean {
-  return key.startsWith(`${lotKey}:residual-reflatten-`);
-}
-
 async function resolveReflattenKey(
   input: ResidualReflattenInput,
   lotKey: string,

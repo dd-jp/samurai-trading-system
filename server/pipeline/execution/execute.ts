@@ -867,18 +867,23 @@ async function executeExit(
     // `ExecutionResult['status']` is exhaustively switched by the verdict
     // recorder, the dashboard and the feedback loop, and none of them has a
     // decision to make that differs here — whereas the thing an operator
-    // actually needs is to be able to tell, in the log, a mandatory
-    // flat-by-close that was REFUSED from one that had nothing to do.
+    // actually needs is to be able to tell, in the log, an exit that was
+    // REFUSED from one that had nothing to do. The message stays reason-
+    // agnostic because this path serves every exit reason, not just the
+    // mandatory flatten: `direction_flip` and the decay/early-exit release
+    // reach `executeExit` too, and #1389's Trader-level in-flight guard covers
+    // only the flatten reason. `exit_reason` in the payload names which one.
     safeLog(input.logger, {
       trace_id: input.trace_id,
       stage: 'execution',
       event: 'flatten_refused_in_flight',
       level: 'warn',
       message:
-        'executeExit: the mandatory flat-by-close was refused because another flatten on this ' +
-        'instrument is still unresolved — reported as `deduped`, which is NOT the same as ' +
-        '"already flat": this lot is still held. The next tick in the #826 window retries, and ' +
-        'the blocking row is bounded (reconcile.ts UNRESOLVABLE_FLATTEN_MAX_AGE_MS).',
+        `executeExit: this exit (exit_reason '${order.metadata.exit_reason}') was refused ` +
+        'because another flatten on this instrument is still unresolved — reported as ' +
+        '`deduped`, which is NOT the same as "already flat": this lot is still held. The next ' +
+        'tick in the #826 window retries, and the blocking row is bounded (reconcile.ts ' +
+        'UNRESOLVABLE_FLATTEN_MAX_AGE_MS).',
       payload: {
         idempotency_key: idempotencyKey,
         instrument: order.instrument,

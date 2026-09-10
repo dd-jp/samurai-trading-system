@@ -238,11 +238,12 @@ export interface FlattenJournal {
    *   stayed "in flight" forever and wedged every later flatten on the
    *   instrument. See `reconcileFlatten` for why the zero-fill half of the
    *   condition is load-bearing.
-   * - #1214 review round 2: reconcile has asked the venue about an ACKED
-   *   (`'submitted'`) flatten for longer than `UNRESOLVABLE_FLATTEN_MAX_AGE_MS`
-   *   (reconcile.ts) and the venue has consistently answered that it has no
-   *   such order. This is the one way in that is NOT proof — it is bounded
-   *   consistent negative evidence, forced to a decision because the
+   * - #1214 review round 2: an ACKED (`'submitted'`) flatten row has sat
+   *   unresolved for longer than `UNRESOLVABLE_FLATTEN_MAX_AGE_MS`
+   *   (reconcile.ts) and the venue answers, on the next check past that age,
+   *   that it has no such order. This is the one way in that is NOT proof — it
+   *   is a single negative answer against an aged row, not a tally of repeated
+   *   denials (nothing counts those), forced to a decision because the
    *   alternative is an instrument that can never be flattened again. Read
    *   `reconcileFlatten`'s own doc before reasoning about it; the reason string
    *   it writes says so explicitly so an operator reading the journal is never

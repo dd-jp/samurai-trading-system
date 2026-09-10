@@ -154,18 +154,28 @@ export const TERMINAL_SWEEP_AGE_MS = 24 * 60 * 60 * 1_000;
  * carried-lot alert (orchestrator/production/carried-lot-alert.ts) is what
  * makes it audible — ADR-0014's 2026-09-10 amendment, unchanged.
  *
- * ## Why it is safe to force a row terminal on evidence rather than proof
+ * ## What evidence actually forces the row: one answer, against an aged row
+ *
+ * The bound is on the ROW'S AGE (`now - row.submitted_at`) and nothing on this
+ * path counts observations — no consecutive-negative tally is kept anywhere. So
+ * the forcing fires on the FIRST `resumeFlatten` null that lands once the age
+ * is past: one unanswered check against an old row, not a measured run of
+ * denials. A row that went unpolled for the whole bound (process down, poll
+ * failing) is forced on its very first answer. Every docblock, reason string
+ * and alert on this path has to say that much and no more; "the venue denied it
+ * on every pass" would describe observations that were never made.
+ *
+ * ## Why acting on evidence that thin is still the right trade
  *
  * `getFlattenAttribution` is keyed on `idempotency_key` alone with NO status
  * filter, so a fill that turns up after the row was forced still routes to the
  * lots the flatten named and still reduces held quantity. The residual risk is
  * therefore narrow: a flatten still WORKING at the venue that the venue is
  * simultaneously denying exists. Flattens are market orders under a DayOrder
- * TIF, and this branch is only reached after the venue has failed to name the
- * order on every pass for the whole bound — consistent negative evidence, not
- * one bad answer. Against that residual risk sits an instrument that is
- * otherwise un-flattenable forever, which is #1214's own DECISION applied
- * unchanged: closing the account down imperfectly beats leaving it open.
+ * TIF, so one this old that the venue cannot name is far likelier dead than
+ * working. Against that residual risk sits an instrument that is otherwise
+ * un-flattenable forever, which is #1214's own DECISION applied unchanged:
+ * closing the account down imperfectly beats leaving it open.
  *
  * ## What forcing the row terminal RE-ARMS, and why that is accepted
  *
@@ -180,11 +190,25 @@ export const TERMINAL_SWEEP_AGE_MS = 24 * 60 * 60 * 1_000;
  * still be working at the venue. That is exactly the double-sell #516 forbids,
  * and it is accepted here for the same reason the resolution itself is: both
  * orders are DayOrder market flattens in the same direction on a lot that must
- * end the day flat, the venue has denied the first one exists on every pass
- * across the bound, and both walks stay bounded (three attempts each, durable
- * across restarts). A double flatten is a bad fill; an instrument that can
- * never be flattened again is an open position carried indefinitely against
- * ADR-0014. The bound picks the first.
+ * end the day flat, the row is old enough that the venue's inability to name
+ * the first is likelier death than work in progress, and both walks stay
+ * bounded (three attempts each, durable across restarts).
+ *
+ * The worst case is worse than "one extra fill", and is written down rather
+ * than rounded off. If the FIRST flatten did fill and was merely never
+ * confirmed, and the second one then fills too: the first fill attributes
+ * correctly and closes the lot in the store, and the second fill's
+ * `redistributeOneFlatten` resolves to a lot key `getOpenPositions()` no longer
+ * returns — so `ingestFills`'s per-position loop never reads it, the quantity
+ * is silently DROPPED, and `markFlattenFillsSwept` retires the row regardless.
+ * The store then shows flat while the venue holds a REVERSE position, with no
+ * `ClosedTrade` and no exit fill recorded; the only surface is
+ * `findUnrecordedVenuePositions` at `reconcileDivergenceLevel: 'info'` — not a
+ * warning, not a page. That silent-drop gap is #429/#1122 and pre-dates this
+ * bound; what the bound adds is REACHABILITY, and closing the gap is tracked as
+ * #1506, not here. Weighed against it is an instrument that can never be
+ * flattened again — an open position carried indefinitely against ADR-0014,
+ * with certainty rather than in a narrow race. The bound accepts the race.
  */
 export const UNRESOLVABLE_FLATTEN_MAX_AGE_MS = 5 * 60 * 1_000;
 
@@ -359,25 +383,27 @@ async function reconcileFlatten(
     // else eventually resolves the row, and for this shape nothing did:
     // `fills_swept_at` is the only other thing that ever retires a
     // `'submitted'` row and only `ingestFills()` sets it, only for a flatten
-    // that produced fills — which this one, by the venue's own repeated
-    // account, did not. The row therefore blocked its instrument's mandatory
+    // that produced fills — which this one, on the venue's current account,
+    // did not. The row therefore blocked its instrument's mandatory
     // flat-by-close forever, across restarts and trading days. Past the bound
-    // the system decides rather than freezes: the reason string records that
-    // the decision was made on consistent negative evidence and not on proof,
-    // and the alert is still posted every pass, so forcing the row terminal
-    // silences nothing an operator was being told before.
+    // the system decides rather than freezes: the reason string records the
+    // row's age and the single current answer it acted on — not a denial count,
+    // which nothing here keeps — and the alert is still posted every pass, so
+    // forcing the row terminal silences nothing an operator was being told
+    // before.
     const age = now.getTime() - row.submitted_at.getTime();
     const provenance =
       `flatten '${row.idempotency_key}' was previously acked by the broker (a durable ` +
       "'submitted' journal row exists) but the venue now reports no such order";
     if (age >= UNRESOLVABLE_FLATTEN_MAX_AGE_MS) {
       const reason =
-        `${provenance}, and has answered that way for ${Math.round(age / 1_000)}s — past the ` +
+        `${provenance}. The row has been unresolved for ${Math.round(age / 1_000)}s — past the ` +
         `${UNRESOLVABLE_FLATTEN_MAX_AGE_MS / 1_000}s bound, so the journal row is resolved to ` +
-        'stop it blocking every later flatten on this instrument. This is a DECISION on ' +
-        'consistent negative evidence, not proof the flatten is dead: check the venue by hand, ' +
-        'and note that a fill arriving later is still attributed to the lots this flatten named ' +
-        '(getFlattenAttribution does not filter on status)';
+        'stop it blocking every later flatten on this instrument. This is a DECISION on one ' +
+        'unanswered check against a row that old, not proof the flatten is dead, and not a ' +
+        'record of repeated denial (nothing counts how often the venue was asked): check the ' +
+        'venue by hand, and note that a fill arriving later is still attributed to the lots ' +
+        'this flatten named (getFlattenAttribution does not filter on status)';
       await postFlattenReconcileAlert(input, row, reason, now);
       await store.resolveFlattenError(row.idempotency_key, reason, now);
       return {
