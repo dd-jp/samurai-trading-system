@@ -296,10 +296,9 @@ export interface TraderInput {
    */
   arm?: TradingArm;
   /**
-   * Not on trader-spec.md's `TraderInput`, and `DebateResult` carries no
-   * instrument either — but `OrderIntent.instrument` cannot be constructed
-   * without it. The Orchestrator's tick is per-instrument (orchestrator-spec.md),
-   * so it is threaded in alongside the debate.
+   * `DebateResult` carries no instrument, but `OrderIntent.instrument` cannot
+   * be constructed without one. The Orchestrator's tick is per-instrument
+   * (orchestrator-spec.md), so it is threaded in alongside the debate.
    */
   instrument: string;
   debate: DebateResult;
@@ -407,9 +406,9 @@ export interface UnpricedFlattenReport {
 /** The single test seam. `decide` in ./decide.ts is its implementation. */
 export interface Trader {
   /**
-   * Async, where trader-spec.md writes it synchronously: `getMark`/`getBars`
-   * return promises, so the spec's signature is shorthand rather than a
-   * constraint. null = skip / no-trade.
+   * null = skip / no-trade. A projection of `decideWithReason`, which is what
+   * production calls: this signature drops the skip reason, and nineteen
+   * distinct causes of "no order" collapse into one `null` here.
    */
   decide(input: TraderInput): Promise<OrderIntent | null>;
 }
