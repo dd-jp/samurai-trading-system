@@ -32,6 +32,7 @@ import type {
   ReconcileReport,
   ResidualProtectionSweepResult,
   SharedStore,
+  SubmitInput,
 } from './types.js';
 
 export class ExecutionImpl implements Execution {
@@ -67,169 +68,182 @@ export class ExecutionImpl implements Execution {
     return sweepResidualProtection(this.input);
   }
 
+  /**
+   * Delegated whole like its siblings, so a caller that only submits (the
+   * soak probe, tools/place-soak-position.ts) can hand `executeVerdict` a
+   * `SubmitInput` instead of building the full bag.
+   */
   async execute(verdict: VerdictDecision): Promise<ExecutionResult> {
-    const { clock, broker, store } = this.input;
-    const now = clock.now();
+    return executeVerdict(this.input, verdict);
+  }
+}
 
-    // Acts only on a `go`. A no_go carries no order to place.
-    if (verdict.status !== 'go' || verdict.order === null) {
-      return result('error', verdict.idempotency_key, now, {
-        reason: `Execution.execute requires a 'go' VerdictDecision with a non-null order (got '${verdict.status}')`,
-      });
-    }
+/** Acts only on a `go`; records the submission, does not block until filled. */
+export async function executeVerdict(
+  input: SubmitInput,
+  verdict: VerdictDecision,
+): Promise<ExecutionResult> {
+  const { clock, broker, store } = input;
+  const now = clock.now();
 
-    const order = verdict.order;
-    const idempotencyKey = order.idempotency_key;
-
-    // Dedup layer 1 (local): a key already in the store means this decision
-    // was acted on before — a crash-restart or retry replaying the same bar.
-    // Never reaches the broker. Layer 2 is the client order id below. Checked
-    // ahead of the intent_type branch so entry, scale_in AND exit share one
-    // gate, rather than the exit branch running its own copy of this check.
-    //
-    // #921: an exit is the one intent type that gets a SECOND chance here.
-    // Entry/scale_in dedupe unconditionally — a replayed entry decision must
-    // never re-submit under any key, fresh or otherwise, because the original
-    // bracket (if it landed) is still exactly what was wanted. A mandatory
-    // flatten is different: it is the flat-by-close guarantee, so a prior
-    // attempt that provably never reached the broker (cancel-loop failure,
-    // `resolveFlattenError`'s 'error' status) must not be allowed to stand in
-    // for "the position is closed" forever. `resolveExitRetryKey` walks to a
-    // fresh key ONLY over that provable case; every other case (no row, or a
-    // 'submitting'/'submitted' row whose venue truth is unknown or already
-    // succeeded) falls through to the same unconditional dedup entry/scale_in
-    // gets, because retrying either of those risks the #516 double-flatten /
-    // reverse-position hazard.
-    if (await store.findByKey(idempotencyKey)) {
-      if (order.intent_type !== 'exit') {
-        return result('deduped', idempotencyKey, now, {
-          reason: 'an order or fill already exists for this idempotency_key',
-        });
-      }
-      const retryKey = await resolveExitRetryKey(store, idempotencyKey);
-      if (retryKey === null) {
-        return result('deduped', idempotencyKey, now, {
-          reason: 'an order or fill already exists for this idempotency_key',
-        });
-      }
-      return executeExit(this.input, order, retryKey, now);
-    }
-
-    // An exit closes existing lot(s) via submitFlatten (#429) rather than
-    // opening a bracketed one, so it has neither a bracket to expand nor an
-    // OpenPosition to write ahead — `OpenPosition.intent_type` deliberately
-    // excludes 'exit' ("exits close a lot; they never create one",
-    // shared/types/records.ts). Delegated to its own function: validating
-    // against the store, cancelling the held lot's bracket, journalling the
-    // flatten and submitting it is enough steps that inlining them here
-    // would bury the bracket path below in an unrelated branch. See
-    // `executeExit`'s doc for why each of those steps — cancel-before-flatten,
-    // the store cross-check, and the `flatten_submissions` journal — exists.
-    if (order.intent_type === 'exit') {
-      return executeExit(this.input, order, idempotencyKey, now);
-    }
-
-    const bracket: NativeBracketRequest = {
-      client_order_id: idempotencyKey,
-      instrument: order.instrument,
-      asset_class: order.asset_class,
-      side: order.side,
-      size: order.size,
-      entry: order.entry,
-      stop: order.stop,
-      target: order.target,
-      time_in_force: order.time_in_force,
-    };
-
-    // #1001: best-effort snapshot — see `captureSubmitSnapshot`'s doc. Read
-    // BEFORE the write-ahead so the snapshot lands in the same durable row a
-    // crash-restart would recover, not bolted on after the fact. Deliberately
-    // UNBOUNDED here, unlike the exit path: an entry is not racing the close.
-    const snapshot = await captureSubmitSnapshot(this.input, order, now);
-
-    const position: OpenPosition = {
-      idempotency_key: idempotencyKey,
-      debate_id: order.metadata.debate_id,
-      instrument: order.instrument,
-      asset_class: order.asset_class,
-      side: order.side,
-      intent_type: order.intent_type,
-      requested_size: order.size,
-      filled_size: 0,
-      avg_entry_price: 0,
-      stop: order.stop,
-      target: order.target,
-      order_state: 'pending',
-      broker_order_ids: [],
-      opened_at: now,
-      decision_timestamp: order.decision_timestamp,
-      conviction: order.metadata.conviction,
-      converged: order.metadata.converged,
-      // #1014: omitted (not `null`) when there is none, matching every
-      // other optional snapshot field below. `decisionPriceFor` only ever
-      // returns null on the unpriced-exit path, which never reaches here —
-      // an exit builds no `OpenPosition` — but the type is honest about it
-      // rather than asserting a value the function does not promise.
-      ...(snapshot.decision_price === null ? {} : { decision_price: snapshot.decision_price }),
-      ...(snapshot.quote_bid === null ? {} : { quote_bid: snapshot.quote_bid }),
-      ...(snapshot.quote_ask === null ? {} : { quote_ask: snapshot.quote_ask }),
-      ...(snapshot.quote_mid === null ? {} : { quote_mid: snapshot.quote_mid }),
-      ...(snapshot.quote_observed_at === null
-        ? {}
-        : { quote_observed_at: snapshot.quote_observed_at }),
-      ...(snapshot.modelled_cost_breakdown === null
-        ? {}
-        : { modelled_cost_breakdown: snapshot.modelled_cost_breakdown }),
-    };
-
-    // Write-ahead: `pending` is durable BEFORE the broker call, so a crash in
-    // the gap leaves a record to reconcile against the broker (#86) instead
-    // of an invisible order that a restart would submit a second time.
-    //
-    // The `findByKey` gate above is check-then-act, so two callers replaying
-    // the same decision can both pass it before either has written. The
-    // primary key is what actually settles that race — and it settles it in
-    // the store, meaning the loser learns it lost by catching this. Reporting
-    // that as `error` would be wrong twice over: nothing failed, and a caller
-    // that retries on error would keep re-losing the same race. Only the
-    // typed duplicate is treated as dedup; every other store failure means
-    // the write-ahead did NOT happen, and swallowing it would let the broker
-    // call proceed with no durable record behind it.
-    try {
-      await store.writeAheadPosition(position);
-    } catch (error) {
-      if (error instanceof DuplicatePositionError) {
-        return result('deduped', idempotencyKey, now, {
-          reason: 'an order or fill already exists for this idempotency_key',
-        });
-      }
-      throw error;
-    }
-
-    let ack: Awaited<ReturnType<typeof broker.submitBracket>>;
-    try {
-      ack = await broker.submitBracket(bracket);
-    } catch (error) {
-      // The `pending` record deliberately survives: whether the bracket
-      // landed is unknown here, and only the broker can settle that. #86's
-      // reconciliation adopts broker truth. Marking it terminal on the way
-      // out would be a guess, and the losing guess double-submits.
-      return result('error', idempotencyKey, now, {
-        order_state: 'pending',
-        reason: describeThrownSafely(error),
-      });
-    }
-
-    await store.updatePositionState(idempotencyKey, {
-      order_state: ack.order_state,
-      broker_order_ids: ack.broker_order_ids,
-    });
-
-    return result('submitted', idempotencyKey, now, {
-      order_state: ack.order_state,
-      broker_order_ids: ack.broker_order_ids,
+  // Acts only on a `go`. A no_go carries no order to place.
+  if (verdict.status !== 'go' || verdict.order === null) {
+    return result('error', verdict.idempotency_key, now, {
+      reason: `Execution.execute requires a 'go' VerdictDecision with a non-null order (got '${verdict.status}')`,
     });
   }
+
+  const order = verdict.order;
+  const idempotencyKey = order.idempotency_key;
+
+  // Dedup layer 1 (local): a key already in the store means this decision
+  // was acted on before — a crash-restart or retry replaying the same bar.
+  // Never reaches the broker. Layer 2 is the client order id below. Checked
+  // ahead of the intent_type branch so entry, scale_in AND exit share one
+  // gate, rather than the exit branch running its own copy of this check.
+  //
+  // #921: an exit is the one intent type that gets a SECOND chance here.
+  // Entry/scale_in dedupe unconditionally — a replayed entry decision must
+  // never re-submit under any key, fresh or otherwise, because the original
+  // bracket (if it landed) is still exactly what was wanted. A mandatory
+  // flatten is different: it is the flat-by-close guarantee, so a prior
+  // attempt that provably never reached the broker (cancel-loop failure,
+  // `resolveFlattenError`'s 'error' status) must not be allowed to stand in
+  // for "the position is closed" forever. `resolveExitRetryKey` walks to a
+  // fresh key ONLY over that provable case; every other case (no row, or a
+  // 'submitting'/'submitted' row whose venue truth is unknown or already
+  // succeeded) falls through to the same unconditional dedup entry/scale_in
+  // gets, because retrying either of those risks the #516 double-flatten /
+  // reverse-position hazard.
+  if (await store.findByKey(idempotencyKey)) {
+    if (order.intent_type !== 'exit') {
+      return result('deduped', idempotencyKey, now, {
+        reason: 'an order or fill already exists for this idempotency_key',
+      });
+    }
+    const retryKey = await resolveExitRetryKey(store, idempotencyKey);
+    if (retryKey === null) {
+      return result('deduped', idempotencyKey, now, {
+        reason: 'an order or fill already exists for this idempotency_key',
+      });
+    }
+    return executeExit(input, order, retryKey, now);
+  }
+
+  // An exit closes existing lot(s) via submitFlatten (#429) rather than
+  // opening a bracketed one, so it has neither a bracket to expand nor an
+  // OpenPosition to write ahead — `OpenPosition.intent_type` deliberately
+  // excludes 'exit' ("exits close a lot; they never create one",
+  // shared/types/records.ts). Delegated to its own function: validating
+  // against the store, cancelling the held lot's bracket, journalling the
+  // flatten and submitting it is enough steps that inlining them here
+  // would bury the bracket path below in an unrelated branch. See
+  // `executeExit`'s doc for why each of those steps — cancel-before-flatten,
+  // the store cross-check, and the `flatten_submissions` journal — exists.
+  if (order.intent_type === 'exit') {
+    return executeExit(input, order, idempotencyKey, now);
+  }
+
+  const bracket: NativeBracketRequest = {
+    client_order_id: idempotencyKey,
+    instrument: order.instrument,
+    asset_class: order.asset_class,
+    side: order.side,
+    size: order.size,
+    entry: order.entry,
+    stop: order.stop,
+    target: order.target,
+    time_in_force: order.time_in_force,
+  };
+
+  // #1001: best-effort snapshot — see `captureSubmitSnapshot`'s doc. Read
+  // BEFORE the write-ahead so the snapshot lands in the same durable row a
+  // crash-restart would recover, not bolted on after the fact. Deliberately
+  // UNBOUNDED here, unlike the exit path: an entry is not racing the close.
+  const snapshot = await captureSubmitSnapshot(input, order, now);
+
+  const position: OpenPosition = {
+    idempotency_key: idempotencyKey,
+    debate_id: order.metadata.debate_id,
+    instrument: order.instrument,
+    asset_class: order.asset_class,
+    side: order.side,
+    intent_type: order.intent_type,
+    requested_size: order.size,
+    filled_size: 0,
+    avg_entry_price: 0,
+    stop: order.stop,
+    target: order.target,
+    order_state: 'pending',
+    broker_order_ids: [],
+    opened_at: now,
+    decision_timestamp: order.decision_timestamp,
+    conviction: order.metadata.conviction,
+    converged: order.metadata.converged,
+    // #1014: omitted (not `null`) when there is none, matching every
+    // other optional snapshot field below. `decisionPriceFor` only ever
+    // returns null on the unpriced-exit path, which never reaches here —
+    // an exit builds no `OpenPosition` — but the type is honest about it
+    // rather than asserting a value the function does not promise.
+    ...(snapshot.decision_price === null ? {} : { decision_price: snapshot.decision_price }),
+    ...(snapshot.quote_bid === null ? {} : { quote_bid: snapshot.quote_bid }),
+    ...(snapshot.quote_ask === null ? {} : { quote_ask: snapshot.quote_ask }),
+    ...(snapshot.quote_mid === null ? {} : { quote_mid: snapshot.quote_mid }),
+    ...(snapshot.quote_observed_at === null
+      ? {}
+      : { quote_observed_at: snapshot.quote_observed_at }),
+    ...(snapshot.modelled_cost_breakdown === null
+      ? {}
+      : { modelled_cost_breakdown: snapshot.modelled_cost_breakdown }),
+  };
+
+  // Write-ahead: `pending` is durable BEFORE the broker call, so a crash in
+  // the gap leaves a record to reconcile against the broker (#86) instead
+  // of an invisible order that a restart would submit a second time.
+  //
+  // The `findByKey` gate above is check-then-act, so two callers replaying
+  // the same decision can both pass it before either has written. The
+  // primary key is what actually settles that race — and it settles it in
+  // the store, meaning the loser learns it lost by catching this. Reporting
+  // that as `error` would be wrong twice over: nothing failed, and a caller
+  // that retries on error would keep re-losing the same race. Only the
+  // typed duplicate is treated as dedup; every other store failure means
+  // the write-ahead did NOT happen, and swallowing it would let the broker
+  // call proceed with no durable record behind it.
+  try {
+    await store.writeAheadPosition(position);
+  } catch (error) {
+    if (error instanceof DuplicatePositionError) {
+      return result('deduped', idempotencyKey, now, {
+        reason: 'an order or fill already exists for this idempotency_key',
+      });
+    }
+    throw error;
+  }
+
+  let ack: Awaited<ReturnType<typeof broker.submitBracket>>;
+  try {
+    ack = await broker.submitBracket(bracket);
+  } catch (error) {
+    // The `pending` record deliberately survives: whether the bracket
+    // landed is unknown here, and only the broker can settle that. #86's
+    // reconciliation adopts broker truth. Marking it terminal on the way
+    // out would be a guess, and the losing guess double-submits.
+    return result('error', idempotencyKey, now, {
+      order_state: 'pending',
+      reason: describeThrownSafely(error),
+    });
+  }
+
+  await store.updatePositionState(idempotencyKey, {
+    order_state: ack.order_state,
+    broker_order_ids: ack.broker_order_ids,
+  });
+
+  return result('submitted', idempotencyKey, now, {
+    order_state: ack.order_state,
+    broker_order_ids: ack.broker_order_ids,
+  });
 }
 
 /**
@@ -310,7 +324,7 @@ interface SubmitSnapshot {
  * `AnalystOrchestrator.withTimeout` handles the same situation.
  */
 async function captureSubmitSnapshot(
-  input: ExecutionInput,
+  input: SubmitInput,
   order: OrderIntent,
   now: Date,
   budget_ms?: number,
@@ -391,7 +405,7 @@ function decisionPriceFor(order: OrderIntent): number | null {
 
 /** The unbounded body of `captureSubmitSnapshot` — see there for the contract. */
 async function readSubmitSnapshot(
-  input: ExecutionInput,
+  input: SubmitInput,
   order: OrderIntent,
   now: Date,
   decision_price: number | null,
@@ -626,7 +640,7 @@ async function resolveExitRetryKey(store: SharedStore, baseKey: string): Promise
  * 4. **Submit, then resolve the journal row.**
  */
 async function executeExit(
-  input: ExecutionInput,
+  input: SubmitInput,
   order: OrderIntent,
   idempotencyKey: string,
   now: Date,
@@ -858,7 +872,7 @@ async function executeExit(
  * included).
  */
 async function markLotsUnprotected(
-  input: ExecutionInput,
+  input: SubmitInput,
   cancelledLots: readonly OpenPosition[],
   failedLotKey: string,
   error: unknown,

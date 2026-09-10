@@ -49,7 +49,15 @@ export interface SimulatedAdapterConfig {
   venue?: CostVenue;
 }
 
-/** Injected dependencies (constructor / DI). */
+/**
+ * Every dependency any Execution surface reads — the one bag a composition
+ * root builds (`buildExecutionStep`/`buildExecutionSurface`,
+ * orchestrator/production/direct-bind.ts) and hands to `ExecutionImpl`, which
+ * serves all five surfaces off it. Each surface's own signature names the
+ * `Pick` of this it actually reads (`SubmitInput` et al. below), so a field
+ * only one surface consumes cannot be read by another without widening that
+ * surface's type first.
+ */
 export interface ExecutionInput {
   /** Cross-cutting correlation ID threaded from the Orchestrator's tick — not business data. */
   trace_id: string;
@@ -58,10 +66,16 @@ export interface ExecutionInput {
   broker: BrokerAdapter;
   /** Execution is the sole writer of positions/fills/closed-trades. */
   store: SharedStore;
-  /** Consumed by the Simulated adapter only — real adapters never call it. */
+  /**
+   * Read only by `execute()`'s submit-time snapshot (#1001, `readSubmitSnapshot`,
+   * execute.ts), which prices the modelled cost breakdown the same way the
+   * Simulated adapter prices a fill. The adapter itself holds its own handles
+   * (`SimulatedBrokerAdapterInput`), not these.
+   */
   costModel: CostModel;
-  /** Consumed by the Simulated adapter to assemble `MarketState`. */
+  /** Same single reader as `costModel`: the quote and `MarketState` inputs of the submit snapshot. */
   marketData: MarketDataService;
+  /** `config.simulated` feeds the submit snapshot's `MarketState`, alongside `marketData`. */
   config: ExecutionConfig;
   mode: 'live' | 'paper' | 'backtest';
   /**
@@ -159,6 +173,65 @@ export interface ExecutionInput {
    */
   nonSterlingFeeAlerts?: NonSterlingFeeAlertChannel;
 }
+
+/**
+ * `execute()` (execute.ts): the submit path — dedup, write-ahead, bracket or
+ * flatten submission, plus the #1001 submit-time snapshot that reads
+ * `marketData`/`costModel`/`config`. A refused flatten marks lots through
+ * `markResidualsUnprotected` (store/logger/trace_id); nothing on this path
+ * posts to an alert channel or touches the fill throttle.
+ */
+export type SubmitInput = Pick<
+  ExecutionInput,
+  'trace_id' | 'clock' | 'broker' | 'store' | 'costModel' | 'marketData' | 'config' | 'logger'
+>;
+
+/**
+ * `ingestFills()` (ingest-fills.ts): the fill poll and everything it re-arms
+ * through `maybeRearmResidual` (residual-protection.ts), which is where
+ * `residualExposureAlerts` is read.
+ */
+export type FillIngestInput = Pick<
+  ExecutionInput,
+  | 'trace_id'
+  | 'clock'
+  | 'broker'
+  | 'store'
+  | 'residualExposureAlerts'
+  | 'flattenOverfillAlerts'
+  | 'logger'
+  | 'filledZeroSizeThrottle'
+  | 'nonSterlingFeeAlerts'
+>;
+
+/**
+ * `reconcile()` (reconcile.ts): the startup/periodic settle, which also runs
+ * both sweeps below inside its pass — so this is the union of their inputs
+ * plus its own `flattenReconcileAlerts`.
+ */
+export type ReconcileInput = Pick<
+  ExecutionInput,
+  | 'trace_id'
+  | 'clock'
+  | 'broker'
+  | 'store'
+  | 'residualExposureAlerts'
+  | 'flattenReconcileAlerts'
+  | 'logger'
+>;
+
+/** `sweepResidualProtection()` (residual-protection-sweep.ts): the #549 re-arm retry. */
+export type ResidualSweepInput = Pick<
+  ExecutionInput,
+  'trace_id' | 'clock' | 'broker' | 'store' | 'residualExposureAlerts' | 'logger'
+>;
+
+/**
+ * `sweepWedgedZeroFillLots()` (wedged-zero-fill-sweep.ts): store evidence
+ * only — no `broker` here is the type-level form of that file's "no venue
+ * call, ever" rule.
+ */
+export type WedgedSweepInput = Pick<ExecutionInput, 'trace_id' | 'clock' | 'store' | 'logger'>;
 
 export interface ExecutionResult {
   status: 'submitted' | 'deduped' | 'rejected' | 'error';

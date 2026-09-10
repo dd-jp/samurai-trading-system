@@ -41,10 +41,12 @@
  * Three of the eight never execute on the paper hot path, which is why their
  * values carry less weight than their presence:
  *
- * - `costConfig` and `executionConfig.simulated` — consumed by
- *   `SimulatedBrokerAdapter` only ("Consumed by the Simulated adapter only —
- *   real adapters never call it", execution/types.ts). Paper runs against
- *   `AlpacaBrokerAdapter`.
+ * - `costConfig` and `executionConfig.simulated` — what
+ *   `SimulatedBrokerAdapter` prices fills from, and paper runs against
+ *   `AlpacaBrokerAdapter`. Not wholly inert: `execute()`'s #1001 submit
+ *   snapshot reads both on every venue (`ExecutionInput.costModel`'s doc,
+ *   execution/types/execution.ts), but as best-effort instrumentation that
+ *   nulls out on failure, never as a fill.
  * - `breakerConfig.auto_rearm.max_days_tripped` — backtest-only by
  *   construction (risk-manager/breakers.ts). Its sibling
  *   `recovery_drawdown_pct` is NOT inert and was moved off this list by #634:
@@ -1708,11 +1710,10 @@ export function buildStartingProfileConfigs(
   };
 
   const executionConfig: ExecutionConfig = {
-    // Inert in paper: `SimulatedAdapterConfig` is consumed by
-    // `SimulatedBrokerAdapter` only (execution/types.ts: "Consumed by the
-    // Simulated adapter only — real adapters never call it"). Present because
-    // `ExecutionConfig` requires it; correct so a backtest run over this same
-    // profile is not silently misconfigured.
+    // No fill is priced off this in paper (`AlpacaBrokerAdapter`, not the
+    // Simulated one); only the #1001 submit snapshot reads it, best-effort.
+    // Correct so a backtest run over this same profile is not silently
+    // misconfigured.
     simulated: {
       /**
        * SPEC — the same ATR(14) spec `DEFAULT_VOLATILITY_INDICATOR`

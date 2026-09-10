@@ -66,10 +66,15 @@ export type {
   ExecutionConfig,
   ExecutionInput,
   ExecutionResult,
+  FillIngestInput,
   ReconcileDivergence,
+  ReconcileInput,
   ReconcileReport,
   ResidualProtectionSweepResult,
+  ResidualSweepInput,
   SimulatedAdapterConfig,
+  SubmitInput,
+  WedgedSweepInput,
 } from './types/execution.js';
 export type {
   FlattenAttribution,

@@ -91,8 +91,8 @@ import type { OpenPosition, OrderState } from '../../shared/index.js';
 import { describeThrownSafely, safeLog } from '../../shared/index.js';
 import { sweepResidualProtection } from './residual-protection-sweep.js';
 import type {
-  ExecutionInput,
   ReconcileDivergence,
+  ReconcileInput,
   ReconcileReport,
   UnresolvedFlattenSubmission,
 } from './types.js';
@@ -110,7 +110,7 @@ const IN_FLIGHT: readonly OrderState[] = ['pending', 'submitted'];
  */
 export const TERMINAL_SWEEP_AGE_MS = 24 * 60 * 60 * 1_000;
 
-export async function reconcile(input: ExecutionInput): Promise<ReconcileReport> {
+export async function reconcile(input: ReconcileInput): Promise<ReconcileReport> {
   const { clock, store } = input;
   const now = clock.now();
 
@@ -199,7 +199,7 @@ export async function reconcile(input: ExecutionInput): Promise<ReconcileReport>
  * lot in the first place.
  */
 async function reconcileFlatten(
-  input: ExecutionInput,
+  input: ReconcileInput,
   row: UnresolvedFlattenSubmission,
   now: Date,
 ): Promise<ReconcileDivergence> {
@@ -315,7 +315,7 @@ async function reconcileFlatten(
 
 /** Fire-and-forget, fully swallowed — the alert IS the fallback; see `FlattenReconcileAlertChannel`'s doc. */
 async function postFlattenReconcileAlert(
-  input: ExecutionInput,
+  input: ReconcileInput,
   row: UnresolvedFlattenSubmission,
   reason: string,
   now: Date,
@@ -381,7 +381,7 @@ async function postFlattenReconcileAlert(
  * endpoint was down would be the worse outcome.
  */
 async function findUnrecordedVenuePositions(
-  input: ExecutionInput,
+  input: ReconcileInput,
   storePositions: readonly OpenPosition[],
 ): Promise<ReconcileDivergence[]> {
   const { broker } = input;
@@ -431,7 +431,7 @@ async function findUnrecordedVenuePositions(
 
 /** Settle one lot against the venue. Null when store and broker agree. */
 async function reconcileLot(
-  input: ExecutionInput,
+  input: ReconcileInput,
   position: OpenPosition,
 ): Promise<ReconcileDivergence | null> {
   const { broker, store } = input;

@@ -80,7 +80,7 @@ import {
 } from './fill-cost.js';
 import { splitFlattenFills } from './flatten-attribution.js';
 import { markResidualsUnprotected, maybeRearmResidual } from './residual-protection.js';
-import type { ExecutionInput, NonSterlingFeeAlert, NormalizedFill } from './types.js';
+import type { FillIngestInput, NonSterlingFeeAlert, NormalizedFill } from './types.js';
 
 /**
  * #1087: a lot `reconcile()` adopted as `filled`/`partially_filled` from
@@ -126,7 +126,7 @@ export const FILLED_ZERO_SIZE_CLEARED =
 export const FEE_CURRENCY_NOT_BOOK_CURRENCY =
   'broker reported a fill fee in a currency that is not the book currency' as const;
 
-export async function ingestFills(input: ExecutionInput): Promise<void> {
+export async function ingestFills(input: FillIngestInput): Promise<void> {
   const { clock, broker, store } = input;
 
   const positions = await store.getOpenPositions();
@@ -437,7 +437,7 @@ function throwContainedFailures(failures: readonly ContainedFailure[]): void {
  * `markFlattenFillsSwept` candidate either.
  */
 async function redistributeFlattenFills(
-  input: ExecutionInput,
+  input: FillIngestInput,
   byLot: Map<string, NormalizedFill[]>,
   positions: readonly OpenPosition[],
   failures: ContainedFailure[],
@@ -526,7 +526,7 @@ async function redistributeFlattenFills(
  * `namedLots` is the caller's per-bucket set, discarded on a throw.
  */
 async function redistributeOneFlatten(
-  input: ExecutionInput,
+  input: FillIngestInput,
   byLot: Map<string, NormalizedFill[]>,
   clientOrderId: string,
   /**
@@ -812,7 +812,7 @@ async function redistributeOneFlatten(
  * zero share — the same answer, made explicit.
  */
 async function entryTotalShares(
-  store: ExecutionInput['store'],
+  store: FillIngestInput['store'],
   lotKeys: readonly string[],
 ): Promise<Map<string, number>> {
   const entrySizes = await store.getEntryFillSizes(lotKeys);
@@ -827,7 +827,7 @@ async function entryTotalShares(
  * named with zero share.
  */
 async function advanceLot(
-  input: ExecutionInput,
+  input: FillIngestInput,
   position: OpenPosition,
   fills: readonly NormalizedFill[],
   now: Date,
@@ -1113,7 +1113,7 @@ const TOP_UP_ID_SEPARATOR = '#';
  * zero delta, and returns `null`. Idempotent by arithmetic, not by luck.
  */
 async function cumulativeTopUp(
-  input: ExecutionInput,
+  input: FillIngestInput,
   position: OpenPosition,
   fill: NormalizedFill,
   booked: readonly Fill[],
@@ -1377,7 +1377,7 @@ async function cumulativeTopUp(
  * its failure text.
  */
 async function warnOnNonSterlingFee(
-  input: ExecutionInput,
+  input: FillIngestInput,
   position: OpenPosition,
   fill: NormalizedFill,
 ): Promise<void> {

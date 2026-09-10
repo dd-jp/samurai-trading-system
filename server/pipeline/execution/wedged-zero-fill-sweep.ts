@@ -88,7 +88,7 @@
  */
 
 import { describeThrownSafely, logCaughtFailure } from '../../shared/index.js';
-import type { ExecutionInput, ReconcileDivergence } from './types.js';
+import type { ReconcileDivergence, WedgedSweepInput } from './types.js';
 
 /**
  * How long a lot may sit `filled`/`partially_filled` with `filled_size = 0`
@@ -130,7 +130,7 @@ export interface WedgedZeroFillSweepResult {
  * make every future pass abort identically forever.
  */
 export async function sweepWedgedZeroFillLots(
-  input: ExecutionInput,
+  input: WedgedSweepInput,
 ): Promise<WedgedZeroFillSweepResult> {
   const { store, clock, logger, trace_id } = input;
   const now = clock.now();
