@@ -191,7 +191,7 @@ async function main(): Promise<void> {
 
   // Marker-shaped, never hash-shaped: a probe lot must be greppable in
   // `trader_log`/`closed_trades` and must not be able to collide with a real
-  // decision's hash(instrument + bar) key.
+  // decision's sha256({ instrument, bar, side }[, arm]) key.
   const idempotencyKey = `soak-lifecycle-probe-${now.toISOString().slice(0, 10)}`;
 
   const intent: OrderIntent = {
