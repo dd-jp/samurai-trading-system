@@ -325,6 +325,27 @@ describe('formatLogLine message masking (#1133)', () => {
 
     expect(line).toContain('"message":"decided long AAPL"');
   });
+
+  it.each([
+    'token_bucket_wait: waiting 1200ms before the next Alpaca call',
+    'idempotency key 3f9c2b7a1e6d4f80b2c5a91e7d3f6c48b0a2d4e6f8c1b3a5d7e9f0c2b4a6d8e0 already applied',
+    'computeIndicator: sma(14) needs 14 bars but received 13',
+  ])('leaves near-miss prose %j unchanged, not just bland prose with no pattern to trip', (message) => {
+    const line = formatLogLine({ ...BASE, message });
+
+    expect(line).toContain(`"message":${JSON.stringify(message)}`);
+  });
+
+  it('leaves the sanctioned correlation-token prefix intact — the bareword rule must not eat the field name and the prefix with it (#1133 review)', () => {
+    const line = formatLogLine({
+      ...BASE,
+      message:
+        'rejected a callback_query from a non-allowlisted user (from_id=absent, chat_id=67890, token_prefix=a1b2c3d4…)',
+    });
+
+    expect(line).toContain('token_prefix=a1b2c3d4…)');
+    expect(line).not.toContain('[REDACTED]');
+  });
 });
 
 describe('JsonLogger when stdout fails (#714)', () => {

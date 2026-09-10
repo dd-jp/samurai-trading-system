@@ -333,8 +333,12 @@ export class TelegramBotApiClient implements TelegramClient {
    * accident that `text` does not carry one today. `formatLogLine` masks
    * `message` the same way now too (#1133), so this convention is no
    * longer the only thing standing between a stray token and the log — but
-   * `message` has no length cap, so a long unmasked stretch either side of
-   * a token still costs more log volume than routing it through `payload`.
+   * `redactPayload`'s KEY rule still redacts a value wholesale by field
+   * name (`{ api_key: '<value>' }`, whatever the value looks like), which a
+   * plain interpolated `message` string can never receive; that is what
+   * payload still earns over message. Not a length-cap difference — neither
+   * has one (`redact-payload.ts` is explicit about deliberately not adding
+   * a second cap).
    *
    * Nothing bridges logger output into an alert channel, so this warn cannot
    * re-enter the transport that emitted it.
@@ -616,7 +620,7 @@ export class TelegramBotApiClient implements TelegramClient {
       'warn',
       'telegram_allowlist_rejected',
       `rejected a callback_query from a non-allowlisted user (from_id=${fromId ?? 'absent'}, ` +
-        `chat_id=${chatId ?? 'absent'}, token=${tokenLogPrefix(token)}…)`,
+        `chat_id=${chatId ?? 'absent'}, token_prefix=${tokenLogPrefix(token)}…)`,
     );
 
     if (this.#alertChatId !== undefined && this.#rejectionCount % REJECTION_ALERT_EVERY === 0) {
@@ -772,7 +776,7 @@ export class TelegramBotApiClient implements TelegramClient {
           timestamp: new Date(),
         });
       } catch (recordError) {
-        // Same reason `detail` above is wrapped: `sanitizeLogText` still owns
+        // Same reason `detail` below is wrapped: `sanitizeLogText` still owns
         // the length cap `formatLogLine`'s central message mask (#1133)
         // doesn't apply, for the same token-bearing-`TypeError` threat this
         // module's header documents — e.g. a misconfigured storage

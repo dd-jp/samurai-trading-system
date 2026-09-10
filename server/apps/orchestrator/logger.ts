@@ -98,7 +98,7 @@
  *    skipped for the life of the process; the file carries the run.
  */
 import type { LogEntry, LogEventCode } from '../../shared/index.js';
-import { maskCredentials } from '../../shared/index.js';
+import { maskCredentials } from '../../shared/sanitize-log-text.js';
 import { redactPayload } from './redact-payload.js';
 import {
   type FileSinkConfig,
@@ -151,11 +151,13 @@ export interface ErrorStream {
  * CANNOT throw (#1035).
  *
  * The guard is not defensive habit — it is what keeps `redact-payload.ts` off
- * #714's critical path. `formatLogLine` is what `degradationLine` builds on,
- * and `degradationLine` runs when both sinks are gone, producing the string
- * that goes straight to stderr as the run's last trace. A throw from the
- * walker there would destroy that write and convert a logging degradation into
- * silence. So a redaction failure degrades the PAYLOAD and never the line.
+ * #714's critical path. When both sinks are gone, `log`'s last-resort write
+ * to stderr is still this function's own output for the failing call, not
+ * `degradationLine`'s — `degradationLine` bypasses `formatLogLine` and this
+ * walker entirely for its own, separate wire lines (see its doc comment). A
+ * throw from the walker here would destroy that last-resort write and
+ * convert a logging degradation into silence. So a redaction failure
+ * degrades the PAYLOAD and never the line.
  *
  * `JSON.stringify` runs inside the guard for the same reason it always did: a
  * payload that cannot be serialized at all (a cycle — an uncaught throw here
