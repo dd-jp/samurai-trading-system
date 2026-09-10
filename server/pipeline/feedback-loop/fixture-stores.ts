@@ -140,11 +140,10 @@ export class InMemoryArmComparisonSampleStore implements ArmComparisonSampleStor
 
   /**
    * Most-recently-computed first, `asOf`-bounded — the SQLite store's contract.
-   *
-   * Narrowed to `PersistedArmComparisonSample` even though this store really
-   * does still hold `refused_pass_count` (#1099): a caller that read it back
-   * here would pass a test the SQLite store, which has no column for it, must
-   * fail.
+   * Substitutable with `SqliteArmComparisonSampleStore` (#1483): both return
+   * the real, non-null `refused_pass_count` a fresh `ArmComparisonSample`
+   * carries, since the SQLite store only reads NULL back for a row `append`
+   * itself never wrote — never for one it did.
    */
   getRecent(limit: number, asOf: Date): PersistedArmComparisonSample[] {
     return this.samples

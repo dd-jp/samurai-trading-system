@@ -98,19 +98,28 @@ export interface ArmComparisonSample {
 
 /**
  * What `arm_comparison_samples` can actually give back — every column migration
- * 0034/0035 defines, and nothing else.
+ * 0034/0035/0057 defines, and nothing else.
  *
- * `refused_pass_count` (#1099) has no column and is not persisted, so a sample
- * READ BACK cannot carry it. This type says that rather than letting the row
- * mapper fabricate a `0`, which would assert "no refusals in this window" on
- * every historical row and reproduce, on the durable surface, the exact
- * silence #1099 exists to break. Adding the column is a migration and is
- * deliberately out of #1099's scope.
+ * `refused_pass_count` (#1099) has a column since migration 0057 (#1483), but
+ * a NULLABLE one: every row written before that migration was computed before
+ * the concept of a refused pass existed, and there is no `trader_log` join
+ * this table ever ran to recover the count after the fact for those rows. This
+ * field stays required (unlike `ArmPerformance`, which forbids optionality on
+ * it outright) so a caller cannot forget to handle the historical case, but its
+ * value narrows to `number | null` rather than being omitted the way it was
+ * pre-0057 — `null` means "computed before this column existed", never "zero
+ * refusals". A fabricated `0` here would assert "no refusals in this window"
+ * on every historical row, reproducing on the durable surface the exact
+ * silence #1099/#1483 exist to break.
  *
- * Only the READ side narrows: `append` still takes a whole `ArmComparisonSample`,
- * so the writer keeps computing the field even where the table drops it.
+ * `append` always writes a real, non-null count on both arms — the value the
+ * Feedback Loop passes in is a required `number` on `ArmPerformance` itself,
+ * so a write can never itself be the source of a NULL. Only pre-0057 rows read
+ * back NULL.
  */
-export type PersistedArmPerformance = Omit<ArmPerformance, 'refused_pass_count'>;
+export type PersistedArmPerformance = Omit<ArmPerformance, 'refused_pass_count'> & {
+  refused_pass_count: number | null;
+};
 
 export interface PersistedArmComparison extends Omit<ArmComparison, 'live' | 'control'> {
   live: PersistedArmPerformance;

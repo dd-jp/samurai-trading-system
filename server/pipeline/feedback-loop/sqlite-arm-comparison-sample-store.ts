@@ -24,10 +24,12 @@ interface ArmComparisonSampleRow {
   live_realized_pnl_net: number;
   live_return_pct: number;
   live_max_drawdown_pct: number;
+  live_refused_pass_count: number | null;
   control_trade_count: number;
   control_realized_pnl_net: number;
   control_return_pct: number;
   control_max_drawdown_pct: number;
+  control_refused_pass_count: number | null;
   diverged: number;
   divergence_reason: string | null;
   min_trades_per_arm: number;
@@ -36,12 +38,14 @@ interface ArmComparisonSampleRow {
 const COLUMNS = `computed_at, window_from, window_to, basis,
                  live_trade_count, live_realized_pnl_net, live_return_pct, live_max_drawdown_pct,
                  control_trade_count, control_realized_pnl_net, control_return_pct,
-                 control_max_drawdown_pct, diverged, divergence_reason, min_trades_per_arm`;
+                 control_max_drawdown_pct, diverged, divergence_reason, min_trades_per_arm,
+                 live_refused_pass_count, control_refused_pass_count`;
 
 /**
- * Reads back exactly what the table holds. `refused_pass_count` (#1099) is not
- * a column here, so the sample this produces cannot claim one — see
- * `PersistedArmComparisonSample`.
+ * Reads back exactly what the table holds. `refused_pass_count` (#1099) is a
+ * nullable column since migration 0057 (#1483) — NULL on a row computed before
+ * that migration, a real count on every row after it. See
+ * `PersistedArmPerformance`.
  */
 function fromRow(row: ArmComparisonSampleRow): PersistedArmComparisonSample {
   return {
@@ -56,6 +60,7 @@ function fromRow(row: ArmComparisonSampleRow): PersistedArmComparisonSample {
         realized_pnl_net: row.live_realized_pnl_net,
         return_pct: row.live_return_pct,
         max_drawdown_pct: row.live_max_drawdown_pct,
+        refused_pass_count: row.live_refused_pass_count,
       },
       control: {
         arm: 'control',
@@ -63,6 +68,7 @@ function fromRow(row: ArmComparisonSampleRow): PersistedArmComparisonSample {
         realized_pnl_net: row.control_realized_pnl_net,
         return_pct: row.control_return_pct,
         max_drawdown_pct: row.control_max_drawdown_pct,
+        refused_pass_count: row.control_refused_pass_count,
       },
     },
     divergence: {
@@ -96,7 +102,7 @@ export class SqliteArmComparisonSampleStore implements ArmComparisonSampleStore 
     this.db
       .prepare(
         `INSERT OR REPLACE INTO arm_comparison_samples (${COLUMNS})
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         toStoredTimestamp(sample.computed_at),
@@ -114,6 +120,8 @@ export class SqliteArmComparisonSampleStore implements ArmComparisonSampleStore 
         divergence.diverged ? 1 : 0,
         divergence.reason,
         divergence.min_trades_per_arm,
+        comparison.live.refused_pass_count,
+        comparison.control.refused_pass_count,
       );
   }
 

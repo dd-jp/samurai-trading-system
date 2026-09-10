@@ -703,6 +703,7 @@ describe('buildSnapshot', () => {
           realized_pnl_net: 18.4,
           return_pct: 0.0184,
           max_drawdown_pct: 0.021,
+          refused_pass_count: 0,
         },
         control: {
           arm: 'control' as const,
@@ -710,6 +711,7 @@ describe('buildSnapshot', () => {
           realized_pnl_net: 6.2,
           return_pct: 0.0062,
           max_drawdown_pct: 0.028,
+          refused_pass_count: 4,
         },
       },
       // A non-default floor (7, not `MIN_TRADES_PER_ARM_FOR_DIVERGENCE`'s 5)
@@ -764,6 +766,34 @@ describe('buildSnapshot', () => {
 
       expect(snap.arm_comparison).toEqual([]);
       expect('arm_comparison' in snap).toBe(true);
+    });
+
+    /**
+     * #1483: a sample computed before migration 0057 reads back
+     * `refused_pass_count: null` on both arms — the projection must carry that
+     * `null` onto the wire rather than coercing it to `0`, which would assert
+     * "no refusals" for a quantity this row never measured.
+     */
+    it('projects a pre-migration refused_pass_count as null, not 0', () => {
+      const snap = buildSnapshot(
+        fakeStore({
+          getArmComparisons: () => [
+            {
+              ...SAMPLE,
+              comparison: {
+                ...SAMPLE.comparison,
+                live: { ...SAMPLE.comparison.live, refused_pass_count: null },
+                control: { ...SAMPLE.comparison.control, refused_pass_count: null },
+              },
+            },
+          ],
+        }),
+        AS_OF,
+        'paper',
+      );
+
+      expect(snap.arm_comparison[0]?.live.refused_pass_count).toBeNull();
+      expect(snap.arm_comparison[0]?.control.refused_pass_count).toBeNull();
     });
   });
 

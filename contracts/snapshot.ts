@@ -154,6 +154,14 @@ export interface ArmPerformanceWire {
   return_pct: number;
   /** Fraction of `basis`, peak-to-trough on this arm's realized-PnL series. */
   max_drawdown_pct: number;
+  /**
+   * Passes over this window (#1099) skipped by `control_arm_valuation_refused`
+   * — invisible to `trade_count`, which only counts closed trades. `null` for
+   * a row computed before migration 0057 (#1483) persisted the count, never a
+   * fabricated `0`: `0` asserts "no refusals happened", which is not knowable
+   * for those rows.
+   */
+  refused_pass_count: number | null;
 }
 
 /**

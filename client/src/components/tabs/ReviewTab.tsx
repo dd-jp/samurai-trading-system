@@ -209,6 +209,24 @@ function ArmVerdict({ row }: { row: ArmComparisonRow }) {
   );
 }
 
+/**
+ * `refused_pass_count` (#1099/#1483) has three states, not two: a positive
+ * count is shown, `0` renders nothing (there is nothing to say), and `null`
+ * (a sample from before migration 0057) gets its own muted note rather than
+ * being folded into the `0` case — collapsing them would show "no refusals"
+ * for a window this row never actually measured, the exact silence #1483
+ * exists to break.
+ */
+function RefusedPassCount({ count }: { count: number | null }) {
+  if (count === null) {
+    return <span className="muted"> · refusals not tracked for this cycle</span>;
+  }
+  if (count === 0) {
+    return null;
+  }
+  return <span className="muted"> · {formatCount(count)} refused</span>;
+}
+
 function ArmLine({ arm }: { arm: ArmPerformanceWire }) {
   return (
     <li className="arm-row" data-arm={arm.arm}>
@@ -222,6 +240,7 @@ function ArmLine({ arm }: { arm: ArmPerformanceWire }) {
       <span className="mono muted small">
         return {formatPercent(arm.return_pct, 2)} · drawdown{' '}
         {formatPercent(arm.max_drawdown_pct, 2)} · {formatCount(arm.trade_count)} trades
+        <RefusedPassCount count={arm.refused_pass_count} />
       </span>
     </li>
   );
