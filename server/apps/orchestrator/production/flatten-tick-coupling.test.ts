@@ -216,10 +216,14 @@ describe("UNRESOLVABLE_FLATTEN_MAX_AGE_MS's flatten-window derivation (#1214)", 
   it('leaves a post-bell grace with ticks left in it for the unblocked flatten to be submitted', () => {
     // Resolving the row is not the outcome; SUBMITTING the flatten is, and that
     // happens only on a tick (`withinFlattenWindow`). The post-bell grace is
-    // what remains after the bound expires, and it has to hold ticks —
-    // `assertFlattenWindowCoversTickInterval` guarantees
-    // MIN_TICKS_INSIDE_FLATTEN_WINDOW fit in a span of
-    // `flatten_before_close_ms`, so an equal-or-longer grace holds as many.
+    // what remains after the bound expires, and it has to hold ticks.
+    //
+    // The boot assertion alone does NOT give that: it requires
+    // MIN_TICKS_INSIDE_FLATTEN_WINDOW ticks in `flatten_before_close_ms` but
+    // only ONE in the grace (deliberately — see its own comment). The stronger
+    // property the bound's derivation leans on is `after >= before`, which is
+    // true of `DEFAULT_TRADER_CONFIG` and not enforced anywhere else, so it is
+    // pinned HERE, as a defaults property, before the tick arithmetic uses it.
     expect(DEFAULT_TRADER_CONFIG.flatten_after_close_ms).toBeGreaterThanOrEqual(
       DEFAULT_TRADER_CONFIG.flatten_before_close_ms,
     );

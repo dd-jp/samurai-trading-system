@@ -135,14 +135,18 @@ export const TERMINAL_SWEEP_AGE_MS = 24 * 60 * 60 * 1_000;
  * how long the flatten window is open BEFORE the bell. Picking the same value
  * buys the guarantee that matters: a row that was already blocking when the
  * window opened is forced terminal by the bell at the latest, leaving the
- * whole `flatten_after_close_ms` grace for the daily flatten to go out — and
- * `assertFlattenWindowCoversTickInterval` (#670) guarantees at least
- * `MIN_TICKS_INSIDE_FLATTEN_WINDOW` ticks fit in a span that long. Reconcile
- * runs on every fill-sync poll (#921, 15s by default) and that loop has no
- * calendar gate, so the forcing pass itself lands within a poll of the bound
- * expiring, post-bell included. `reconcile-flatten-bound.test.ts` asserts the
- * equality against the trader default so the two cannot drift apart silently;
- * the value is NOT imported, because execution does not depend on the trader.
+ * whole `flatten_after_close_ms` grace for the daily flatten to go out.
+ * `assertFlattenWindowCoversTickInterval` (#670, #1389) guarantees at least
+ * ONE tick lands in that grace; that it holds
+ * `MIN_TICKS_INSIDE_FLATTEN_WINDOW` follows only from the defaults being equal
+ * on both sides of the bell, which is a property of `DEFAULT_TRADER_CONFIG`
+ * and not an invariant the boot assertion enforces. Reconcile runs on every
+ * fill-sync poll (#921, 15s by default) and that loop has no calendar gate, so
+ * the forcing pass itself lands within a poll of the bound expiring, post-bell
+ * included. `production/flatten-tick-coupling.test.ts` asserts the equality
+ * against the trader default, and the grace relation with it, so neither can
+ * drift silently; the value is NOT imported, because execution does not depend
+ * on the trader.
  *
  * The residual carry this does NOT cover is stated rather than argued away: a
  * row first submitted INSIDE that session's flatten window cannot be aged out
@@ -162,6 +166,25 @@ export const TERMINAL_SWEEP_AGE_MS = 24 * 60 * 60 * 1_000;
  * one bad answer. Against that residual risk sits an instrument that is
  * otherwise un-flattenable forever, which is #1214's own DECISION applied
  * unchanged: closing the account down imperfectly beats leaving it open.
+ *
+ * ## What forcing the row terminal RE-ARMS, and why that is accepted
+ *
+ * Unblocking the instrument is not the only consequence, and the second one is
+ * #516's reverse-position hazard by name. An `'error'` row is a spent attempt
+ * to both durable key walks: `resolveReflattenKey` (residual-reflatten.ts)
+ * sees the key as taken (`findByKey` is status-blind) and hands back the NEXT
+ * `:residual-reflatten-N`, and `resolveExitRetryKey` (execute.ts) reads it as
+ * retryable (`isRetryableFlattenError` is `status === 'error'`) and advances to
+ * the next `:retry-N`. So a second live market order can go out on the same
+ * held quantity while the first may — on the branch this bound exists for —
+ * still be working at the venue. That is exactly the double-sell #516 forbids,
+ * and it is accepted here for the same reason the resolution itself is: both
+ * orders are DayOrder market flattens in the same direction on a lot that must
+ * end the day flat, the venue has denied the first one exists on every pass
+ * across the bound, and both walks stay bounded (three attempts each, durable
+ * across restarts). A double flatten is a bad fill; an instrument that can
+ * never be flattened again is an open position carried indefinitely against
+ * ADR-0014. The bound picks the first.
  */
 export const UNRESOLVABLE_FLATTEN_MAX_AGE_MS = 5 * 60 * 1_000;
 

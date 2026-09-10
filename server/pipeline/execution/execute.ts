@@ -111,14 +111,23 @@ export async function executeVerdict(
   // never re-submit under any key, fresh or otherwise, because the original
   // bracket (if it landed) is still exactly what was wanted. A mandatory
   // flatten is different: it is the flat-by-close guarantee, so a prior
-  // attempt that provably never reached the broker (cancel-loop failure,
-  // `resolveFlattenError`'s 'error' status) must not be allowed to stand in
-  // for "the position is closed" forever. `resolveExitRetryKey` walks to a
-  // fresh key ONLY over that provable case; every other case (no row, or a
+  // attempt the venue will never fill (`resolveFlattenError`'s 'error'
+  // status) must not be allowed to stand in for "the position is closed"
+  // forever. `resolveExitRetryKey` walks to a fresh key ONLY over a row in
+  // that terminal state; every other case (no row, or a
   // 'submitting'/'submitted' row whose venue truth is unknown or already
   // succeeded) falls through to the same unconditional dedup entry/scale_in
   // gets, because retrying either of those risks the #516 double-flatten /
   // reverse-position hazard.
+  //
+  // Two of the three ways into 'error' are proof (the cancel loop failed
+  // before submit; the venue terminally refused it having filled nothing).
+  // #1214 review round 2 added a third that is NOT — a row forced terminal
+  // after `UNRESOLVABLE_FLATTEN_MAX_AGE_MS` of the venue denying the order
+  // exists — so this walk can now re-arm over a flatten that may still be
+  // live. That is argued at the constant (reconcile.ts), not here; what
+  // matters at this call site is that the walk stays bounded by
+  // `MAX_EXIT_RETRY_ATTEMPTS` either way.
   if (await store.findByKey(idempotencyKey)) {
     if (order.intent_type !== 'exit') {
       return result('deduped', idempotencyKey, now, {

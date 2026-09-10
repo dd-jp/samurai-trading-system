@@ -1017,7 +1017,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     expect(report.checked).toBe(0);
   });
 
-  it('does not resolve an "error" row — it provably never reached the broker, nothing left to ask', async () => {
+  it('does not resolve an "error" row — already terminal, nothing left to ask', async () => {
     const { store } = openTestExecutionStore();
     await writeAheadFlatten(store);
     await store.resolveFlattenError(FLATTEN_KEY, 'cancel failed', NOW);

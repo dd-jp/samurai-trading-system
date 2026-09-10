@@ -258,6 +258,14 @@ export interface FlattenJournal {
    * original attempt already succeeded (`'submitted'`) risks a double
    * flatten, the #516 reverse-position hazard. `false` also for a key that
    * names no flatten row at all.
+   *
+   * Since #1214 review round 2 one of `resolveFlattenError`'s three ways in is
+   * NOT proof (the bounded-unresolvable path), so this predicate re-arms the
+   * retry walk over a flatten that may still be working at the venue. That is
+   * a deliberate, argued trade — `UNRESOLVABLE_FLATTEN_MAX_AGE_MS`'s doc in
+   * reconcile.ts carries it — and it is the reason this predicate must stay
+   * `status === 'error'` exactly: widening it to any other status would re-arm
+   * the walk on ambiguity that nothing has decided.
    */
   isRetryableFlattenError(idempotency_key: string): Promise<boolean>;
   /**

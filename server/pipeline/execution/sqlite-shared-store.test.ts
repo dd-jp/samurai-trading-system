@@ -1022,7 +1022,7 @@ describe('SqliteExecutionStore', () => {
       expect(await store.getUnresolvedFlattens()).toEqual([]);
     });
 
-    it('excludes a row resolved to "error" — it provably never reached the broker', async () => {
+    it('excludes a row resolved to "error" — terminal, so it blocks nothing', async () => {
       const { store } = makeStore();
       await store.writeAheadFlatten(makeFlattenWriteAhead({ idempotency_key: 'flatten-error' }));
       await store.resolveFlattenError('flatten-error', 'cancel failed', OPENED_AT);
