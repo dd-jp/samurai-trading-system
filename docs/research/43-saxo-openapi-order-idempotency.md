@@ -34,6 +34,34 @@ Related, verified in the same session and relied on by the adapter:
 - `GET /port/v1/orders/{ClientKey}/{OrderId}` for a cancelled or unknown order answers `200 {"__count":0,"Data":[]}` — it is an *open* orders view, not a lookup.
 - Plain `OrderType: "Stop"` is `OrderTypeNotSupported` on the Etn; the stop leg is `StopIfTraded`. `IsOcoOrderSupported` is `false` on every pool line's instrument details.
 
+## Round 2 — the cancel-vs-fill race, and the first real fills (2026-09-10)
+
+**Status:** MEASURED on the same SIM gateway, 2026-09-10 ~19:12Z, for [#1216](https://github.com/dd-jp/samurai-trading-system/issues/1216). **Venue caveat: not LSE.** `LSE_ETF` was closed at run time (`/ref/v1/exchanges/LSE_ETF`: `Closed`, session 15:35:30Z → 06:50Z), so no pool line could fill. The probe substituted **QQQ on NASDAQ** (`Uic` 4328771, `AssetType` `Etf`, exchange open), 1 unit, IfDone bracket in the exact shape `submitBracket` sends. Everything below is measured on `Etf`/NASDAQ; the shapes are order-handling shapes, not exchange-specific ones, but they have **not** been re-measured on `LSE_ETF`.
+
+**The question.** `cancel()` reads the open-orders list, finds the master, and DELETEs it. If the master fills in between, what does the DELETE answer? The code assumed `404 OrderNotFound` and re-derives the legs on that basis.
+
+**The answer: it holds.** Three trials, each placing a marketable `Limit` master (ask x 1.02) with `StopIfTraded` + `Limit` legs:
+
+| Trial | Master state at DELETE | DELETE response |
+|---|---|---|
+| `fill` | polled until it left the open list, position confirmed | `404 {"Orders":[{"ErrorInfo":{"ErrorCode":"OrderNotFound","Message":"Requested order ID was not found"},"OrderId":"5040156979"}]}` |
+| `0` (true race, DELETE issued immediately after the POST returned) | filled 8 ms after placement | `404 {"Orders":[{"ErrorInfo":{"ErrorCode":"OrderNotFound","Message":"Requested order ID was not found"},"OrderId":"5040156983"}]}` |
+| `rest` (control, master far from market and resting) | `Working` | `200 {"Orders":[{"OrderId":"5040156993"}]}`, and the open list then returned `{"__count":0,"Data":[]}` — the legs went with it |
+
+`isOrderNotFound` matches on `status === 404` **and** on `ErrorCode: "OrderNotFound"`, and `parseSaxoErrorInfo` reads the `Orders[].ErrorInfo` shape above, so `cancel()`'s catch fires. The control also re-confirms finding 33 (master DELETE takes its legs) on `Etf`, where it was first measured on `Etn`.
+
+**What is NOT measured: the sub-round-trip window.** The master's own audit rows are `Placed/Requested` at `19:12:57.581Z` and `FinalFill` at `19:12:57.589Z` — **8 ms**. A DELETE cannot arrive sooner than one HTTP round trip, measured at 127-334 ms in this session. So the venue was never asked to cancel an order in the act of filling; it was asked about one that had been filled for two orders of magnitude longer than the fill took. `404` is the answer for a **settled** filled order. Whether a DELETE landing inside those 8 ms answers differently is unmeasurable over REST and remains unknown — a bound, not a measurement.
+
+**Dormant legs are not top-level order rows.** While the master rests, `GET /port/v1/orders/me` returns **one** row — the master, `OrderRelation: "IfDoneMaster"` — with both legs nested under `RelatedOpenOrders` at `Status: "NotWorking"`. Once the master fills, the legs become **two top-level rows**, `Status: "Working"`, `OrderRelation: "Oco"`, each carrying the other under its own `RelatedOpenOrders`. So the `NotWorking`-as-never-activated reading (#1215) describes a nested sub-row, and a top-level `NotWorking` leg pair with no master — the shape `findOpen`'s dormant branch and `corroborateDormantLegs` exist for — was **never produced by a fill**. Whether a master that *expires* leaves one is still unmeasured.
+
+**Cancelling one activated OCO leg does not kill its sibling.** DELETE on the stop → the target's next audit row is `Status: "Changed"`, `OrderRelation: "StandAlone"`, still working; it needed its own DELETE. `cancelLegs`' per-leg loop is right.
+
+**The venue's full-fill status is `FinalFill`, never `Filled`.** Every fill row in the session — brackets and Market flattens alike — reads `Status: "FinalFill"`, `SubStatus: "Confirmed"`. Over 22 activity rows the observed `(Status, SubStatus)` set was `Placed/Requested`, `Placed/Confirmed`, `FinalFill/Confirmed`, `Cancelled/Confirmed`, `Changed/Confirmed`. `"Filled"` appears nowhere. `activityState` switched only on `'Filled'`, so **every real full fill normalized to `partially_filled`** through the `FillAmount > 0` default — reaching `lookup`'s no-open-rows path, `getOrder`, and adopt-on-409. Fixed in this change by adding a `FinalFill` case to `activityState` and to `toQuotedFill`'s loud-failure guard, which had the same defect — it would have dropped a fill row lacking `FillAmount`/`AveragePrice` silently rather than throwing. `Filled` is kept in both because this measures only that this path does not emit it, not that no path does. A partial fill's own status string is still unmeasured.
+
+**Fill and position fields, previously unverified, now observed.** A fill row: `{"Status":"FinalFill","SubStatus":"Confirmed","FillAmount":1.0,"AveragePrice":709.07,"Amount":1.0,"OrderRelation":"IfDoneMaster","OrderType":"Limit","RelatedOrders":["5040156980","5040156981"],"PositionId":"5027430598","LogId":"252169181"}` — so `FillAmount` and `AveragePrice` are the right names, and the row carries `FilledAmount`, `ExecutionPrice`, `PositionId` and `RelatedOrders` besides, which `SaxoOrderActivity` does not declare. A net-position row: `NetPositionId: "4328771__Share"`, `NetPositionBase: {Amount: 1.0, Uic, AssetType, AmountLong, AmountShort, OpenOrdersCount, ...}`, `NetPositionView: {AverageOpenPrice: 709.07, AverageOpenPriceIncludingCosts: 724.07, ConversionRateCurrent: 0.861319, TradeCostsTotal: -30.01, ...}`. `DisplayAndFormat` was absent, but the probe did not request its field group — the HTTP client does — so its absence proves nothing about it.
+
+**Cleanup.** Every trial tore down in a `finally`: cancel every probe order, market-flatten any position, re-read. Final state after the session: `/port/v1/orders/me`, `/port/v1/netpositions/me` and `/port/v1/positions/me` each returned `{"__count":0,"Data":[]}`.
+
 ## What this means for the adapter
 
 1. **Durable idempotency is ours, not the venue's.** `open_positions.idempotency_key` (local write-ahead) is the only dedup that survives 15 seconds. Story 9's second layer is real for Alpaca and **absent** for Saxo.
@@ -44,8 +72,10 @@ Related, verified in the same session and relied on by the adapter:
 
 ## Not verified
 
-- **Fill fields on the activity feed.** No order could fill on SIM (no market-data entitlement, out of hours), so `FillAmount` / `AveragePrice` on `orderactivities` rows are taken from the reference model and gated in code: a `Filled` row lacking them is thrown, not booked. First fill on SIM must confirm the names.
-- **Position row shapes.** `/port/v1/netpositions/me` and `/positions/me` returned `{"__count":0,"Data":[]}` throughout; `NetPositionBase.Amount`/`Uic`/`NetPositionView.AverageOpenPrice` are documented names validated at the boundary, not observed.
+- ~~**Fill fields on the activity feed.**~~ **Closed 2026-09-10** by round 2 above: `FillAmount` and `AveragePrice` are the right names, observed on real fills.
+- ~~**Position row shapes.**~~ **Closed 2026-09-10** by round 2 above: `NetPositionBase.Amount`/`Uic` and `NetPositionView.AverageOpenPrice` observed on a real open position.
 - **Live gateway.** Every figure is SIM. Saxo documents SIM and live as behaviourally equivalent for order handling, but the 15-second window and the 120/min limit were measured on `/sim/` only.
-- **Behaviour on partial fill of an IfDone master** — whether the related orders resize. Never observed.
-- **FX on USD-quoted lines is unmodelled.** 9 of the 13 Saxo-listed pool lines (3USL included) are quoted in USD inside a GBP GIA. Saxo converts at its own FX rate plus a currency-conversion margin on every fill; that cost is not in `CostConfig.venues.saxo` (8 bps commission only) and is likely larger than the commission. `NormalizedFill.fee_currency` carries the line currency so a USD fee is not summed as GBP, but nothing converts it yet. The GBP-quoted line of the same ISIN (3LUS:xlon, Uic 29049628) exists on Saxo and is recorded as 3USL's `sibling_line`; whether the fallback subset should prefer it is a follow-up, not settled here.
+- **Behaviour on partial fill of an IfDone master** — whether the related orders resize, and what `Status` a partial-fill activity row carries. Never observed; round 2's fills were all 1-unit and instant.
+- **`LSE_ETF` order handling.** Round 2 measured `Etf`/NASDAQ because the LSE session was closed. The fill/cancel shapes above have not been re-measured on a pool line.
+- **A DELETE landing inside the fill itself.** The fill took 8 ms; one HTTP round trip is 127-334 ms. `404` is measured for a settled filled master, not for one mid-fill.
+- **Whether a master that expires (rather than fills) leaves top-level `NotWorking` legs.** The dormant-legs branch's payload shape has never been produced.- **FX on USD-quoted lines is unmodelled.** 9 of the 13 Saxo-listed pool lines (3USL included) are quoted in USD inside a GBP GIA. Saxo converts at its own FX rate plus a currency-conversion margin on every fill; that cost is not in `CostConfig.venues.saxo` (8 bps commission only) and is likely larger than the commission. `NormalizedFill.fee_currency` carries the line currency so a USD fee is not summed as GBP, but nothing converts it yet. The GBP-quoted line of the same ISIN (3LUS:xlon, Uic 29049628) exists on Saxo and is recorded as 3USL's `sibling_line`; whether the fallback subset should prefer it is a follow-up, not settled here.

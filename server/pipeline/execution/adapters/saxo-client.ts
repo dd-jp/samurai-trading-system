@@ -5,12 +5,13 @@
  * interface the adapter is built against so tests can inject a fake.
  *
  * Every field marked VERIFIED was observed on the SIM gateway on 2026-09-05
- * (doc 43 has the probe log). Fields marked UNVERIFIED come from Saxo's
- * reference documentation and could not be observed because the SIM account
- * had no market-data entitlement (`/trade/v1/infoprices` -> `NoAccess`) and
- * therefore no fill ever happened: fill-carrying activity rows and non-empty
- * position rows were never returned. `saxo-http-client.ts` validates those
- * shapes at the boundary and throws rather than guessing.
+ * or 2026-09-10 (doc 43 has both probe logs). Fields marked UNVERIFIED come
+ * from Saxo's reference documentation and have still not been observed;
+ * `saxo-http-client.ts` validates those shapes at the boundary and throws
+ * rather than guessing. Round 2 (2026-09-10, #1216) filled real orders and
+ * closed the fill-row and position-row gaps the 2026-09-05 round could not
+ * reach — but on `Etf`/NASDAQ, the LSE session being closed, so nothing
+ * below is measured on a pool line.
  *
  * The LSE ETP universe (ADR-0016) resolves to AssetType `Etn`/`Etf`/`Etc` on
  * ExchangeId `LSE_ETF` — `LSE` returns nothing (`lse-etp-pool.ts`).
@@ -96,12 +97,13 @@ export interface SaxoOrderPlacement {
 }
 
 /**
- * UNVERIFIED (#1215 round 1) — no probe in doc 43 ever listed a resting
- * IfDone leg row: every probe there was a standalone `DayOrder` `Limit`,
- * always `Working`. `NotWorking` as "never activated" is #1212's own
- * reading, uncited to any observed row. `(string & {})` keeps the type open
- * to whatever else the venue actually sends rather than asserting a closed
- * contract nothing has confirmed.
+ * `Working` and `NotWorking` are both observed (doc 43 round 2), but only in
+ * this arrangement: a resting IfDone master is one TOP-LEVEL `Working` row
+ * whose legs are `NotWorking` sub-rows of `RelatedOpenOrders`; once it fills
+ * the legs become top-level `Working` rows. A top-level `NotWorking` leg —
+ * the shape `isNeverActivated` reads as "never activated" (#1215 round 1) —
+ * has still never been returned. `(string & {})` keeps the type open to
+ * whatever else the venue sends rather than asserting a closed contract.
  */
 export type SaxoOpenOrderStatus = 'Working' | 'NotWorking' | (string & {});
 
@@ -131,12 +133,13 @@ export interface SaxoOpenOrder {
 }
 
 /**
- * One row of `GET /cs/v1/audit/orderactivities`. `LogId`, `OrderId`,
- * `ExternalReference`, `Status` (`Placed`), `SubStatus` (`Rejected`),
- * `ActivityTime`, `Amount`, `Price`, `BuySell`, `Uic`, `AssetType` are
- * VERIFIED. `FillAmount` and `AveragePrice` are UNVERIFIED: they are the
- * documented fill fields, and the adapter books a fill only when both are
- * present and finite — a `Filled` row without them is thrown, not dropped.
+ * One row of `GET /cs/v1/audit/orderactivities`. Every field here is
+ * VERIFIED, `FillAmount`/`AveragePrice` included as of doc 43 round 2
+ * (#1216). Measured `Status` values: `Placed`, `FinalFill`, `Cancelled`,
+ * `Changed`; `SubStatus`: `Requested`, `Confirmed`, `Rejected`. A FULL FILL
+ * reads `FinalFill`, NOT `Filled` — see `activityState`. A real row also
+ * carries `FilledAmount`, `ExecutionPrice`, `PositionId`, `RelatedOrders`
+ * and `OrderRelation`, undeclared here because nothing reads them.
  */
 export interface SaxoOrderActivity {
   readonly ActivityTime: string;
@@ -156,9 +159,11 @@ export interface SaxoOrderActivity {
 
 /**
  * One row of `GET /port/v1/netpositions/me?FieldGroups=NetPositionBase,NetPositionView`.
- * UNVERIFIED end to end — SIM returned `{"__count":0,"Data":[]}` with no
- * position ever opened. Shape from the reference documentation; the HTTP
- * client rejects a row that does not carry a numeric `NetPositionBase.Amount`
+ * VERIFIED on a real open position (doc 43 round 2, #1216):
+ * `NetPositionBase.Amount`/`Uic` and `NetPositionView.AverageOpenPrice` all
+ * observed. `DisplayAndFormat` is still UNVERIFIED: the probe omitted its
+ * field group, which the HTTP client does request, so its absence there says
+ * nothing. The HTTP client rejects a row without a numeric `NetPositionBase.Amount`
  * and `Uic`.
  */
 export interface SaxoNetPosition {

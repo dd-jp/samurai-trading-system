@@ -712,11 +712,13 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
    * `OrderNotFound` on the master's own DELETE is the tell that the snapshot
    * went stale inside this call. Nothing of ours was destroyed by it, so the
    * legs are re-derived from a FRESH read rather than the stale one. That a
-   * master which filled MILLISECONDS earlier answers `404 OrderNotFound`
-   * rather than some other refusal is UNVERIFIED — doc 43:33 measured that
-   * code for a repeat or unknown id, and nothing could fill on SIM. The
-   * unmeasured branch fails safe: every other error rethrows, so the caller
-   * refuses its flatten with the legs untouched.
+   * master which has ALREADY FILLED answers `404 OrderNotFound` is VERIFIED
+   * (doc 43 round 2, #1216: measured twice, `{"Orders":[{"ErrorInfo":
+   * {"ErrorCode":"OrderNotFound"},...}]}`) — but on `Etf`/NASDAQ, and only
+   * for a settled fill: the fill took 8 ms and a round trip is 127-334 ms,
+   * so a DELETE arriving DURING the fill is still unmeasured. That residue
+   * fails safe: every other error rethrows, so the caller refuses its
+   * flatten with the legs untouched.
    */
   async cancel(clientOrderId: string, instrument: string): Promise<void> {
     await this.call('cancel', async () => {
@@ -1035,13 +1037,13 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
       };
     }
     // Only the protective legs still open, no master. `Working` on a leg
-    // means it ACTIVATED on the entry's fill — treated as filled below. A
-    // pair every leg reads `NotWorking` (never activated) SIGNALS
-    // the entry expired unfilled, but that two-value contract is UNVERIFIED
-    // (#1215 round 1: doc 43 never listed a resting IfDone leg row, only
-    // standalone `DayOrder` `Limit`s always `Working` — see
-    // `SaxoOpenOrderStatus`), so it is not proof; `lookup` corroborates it
-    // against the audit trail before cancelling anything.
+    // means it ACTIVATED on the entry's fill — VERIFIED (doc 43 round 2,
+    // #1216: a fill promotes both legs to top-level `Working`/`Oco` rows),
+    // treated as filled below. A pair every leg reads `NotWorking` (never
+    // activated) SIGNALS the entry expired unfilled, but no probe has ever
+    // produced that row — a RESTING master keeps its legs nested inside
+    // `RelatedOpenOrders`, not top-level here — so it is not proof; `lookup`
+    // corroborates it against the audit trail before cancelling anything.
     const legs = legRows(open, externalReference);
     const [first] = legs;
     if (first === undefined) return null;
@@ -1200,7 +1202,8 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
   /**
    * `findOpen`'s dormant-legs signal is never acted on by `Status` alone
    * (UNVERIFIED) — it is corroborated here against the master's own
-   * audit-trail row first (#1215 round 1). A `Filled` row: the entry
+   * audit-trail row first (#1215 round 1). A filled row (`FinalFill` on the
+   * measured venue — see `activityState`): the entry
    * genuinely filled, adopted using the dormant legs' real order ids (better
    * evidence than an activity row, which carries no related-order ids). A
    * `Cancelled`/`Expired`/`Rejected` row: the master is confirmed done and
@@ -1435,7 +1438,11 @@ function legRows(open: readonly SaxoOpenOrder[], externalReference: string): Sax
   );
 }
 
-/** `Status === 'NotWorking'` — UNVERIFIED as "never activated" (see `SaxoOpenOrderStatus`). */
+/**
+ * `Status === 'NotWorking'` — still UNVERIFIED as "never activated" (see
+ * `SaxoOpenOrderStatus`): doc 43 round 2 showed a fill leaves top-level legs
+ * `Working`, so no fill produces the row this reads.
+ */
 function isNeverActivated(order: SaxoOpenOrder): boolean {
   return order.Status === 'NotWorking';
 }
@@ -1482,7 +1489,7 @@ function fromActivity(activity: SaxoOrderActivity, externalReference: string): L
 }
 
 /**
- * A dormant leg pair whose master audit row came back `Filled` (`lookup`) —
+ * A dormant leg pair whose master audit row came back filled (`lookup`) —
  * uses the legs' real order ids, unlike `fromActivity`, which has no
  * related-order ids to offer.
  */
@@ -1577,6 +1584,14 @@ function assertExternalReferenceFits(clientOrderId: string, suffixChars: number)
 function activityState(activity: SaxoOrderActivity): NormalizedOrder['order_state'] {
   if (activity.SubStatus === 'Rejected' || activity.Status === 'Rejected') return 'rejected';
   switch (activity.Status) {
+    // MEASURED on SIM 2026-09-10 (#1216, doc 43): the venue writes
+    // `FinalFill` on a full fill and never `Filled`, so `Filled` alone read
+    // every real fill as `partially_filled` through the default branch.
+    // `Filled` stays because nothing measures its ABSENCE from every venue
+    // path — only that this one does not use it. A partial fill's own
+    // status string is still unmeasured; the default branch below reads it
+    // off `FillAmount`, which is measured.
+    case 'FinalFill':
     case 'Filled':
       return 'filled';
     case 'Cancelled':
@@ -1600,9 +1615,12 @@ interface QuotedFill {
 
 /**
  * A fill is booked only from an activity carrying a positive `FillAmount`
- * AND a finite `AveragePrice` — the two UNVERIFIED fields (saxo-client.ts).
- * A `Filled` row missing either is thrown so the sweep fails loudly and is
+ * AND a finite `AveragePrice` — both VERIFIED on real fills (doc 43 round 2,
+ * #1216). A row missing either is thrown so the sweep fails loudly and is
  * retried, rather than a filled position going unbooked and unprotected.
+ * Both fill statuses gate that throw: the measured venue writes `FinalFill`
+ * (doc 43 round 2), so keying it on `Filled` alone left the real one to be
+ * dropped silently — the exact failure the guard exists to prevent.
  *
  * Deliberately unit-blind: whether the row can be priced at all is decided
  * here, and the instrument's factor is looked up only for a row that clears
@@ -1620,10 +1638,11 @@ function toQuotedFill(
   const hasQty = typeof qty === 'number' && Number.isFinite(qty) && qty > 0;
   const hasPrice = typeof quoted === 'number' && Number.isFinite(quoted);
   if (!hasQty && !hasPrice) {
-    if (activity.Status === 'Filled') {
+    if (activity.Status === 'FinalFill' || activity.Status === 'Filled') {
       throw new Error(
-        `Saxo activity ${activity.LogId} for '${clientOrderId}' (${leg}) reports Status Filled ` +
-          'without FillAmount/AveragePrice — fill fields unverified on SIM; see saxo-client.ts.',
+        `Saxo activity ${activity.LogId} for '${clientOrderId}' (${leg}) reports Status ` +
+          `${activity.Status} without FillAmount/AveragePrice — both are measured on every ` +
+          'real fill row (doc 43 round 2), so this row is unbookable, not empty.',
       );
     }
     return undefined;
