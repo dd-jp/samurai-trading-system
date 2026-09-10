@@ -28,17 +28,9 @@
  * for the whole composition root to share.
  */
 
-import type {
-  FlattenAttribution,
-  FlattenSubmissionWriteAhead,
-  LotAdvance,
-  SharedStore,
-  UnprotectedResidualLot,
-  UnresolvedFlattenSubmission,
-} from '../../../pipeline/execution/index.js';
+import type { LotAdvance, SharedStore } from '../../../pipeline/execution/index.js';
 import type { OnTradeCloseInput } from '../../../pipeline/feedback-loop/index.js';
 import { onTradeClose } from '../../../pipeline/feedback-loop/index.js';
-import type { Fill, OpenPosition, OrderState } from '../../../shared/index.js';
 import type { Logger } from '../types.js';
 
 /**
@@ -65,6 +57,13 @@ import type { Logger } from '../types.js';
  * to thread here — the same substitution `buildExecutionStep` already makes
  * for `ExecutionInput.trace_id` (production/direct-bind.ts: "a per-order
  * identifier already unique to this lot").
+ *
+ * The pass-throughs are spelled out rather than spread: `SqliteExecutionStore`
+ * is a class, so its methods live on the prototype and `{ ...store }` would
+ * copy none of them. The return type is what keeps the table exhaustive — a
+ * role method added to `SharedStore` (pipeline/execution/types/store.ts)
+ * fails `tsc` here until it is forwarded, rather than falling through to a
+ * runtime `undefined`.
  */
 export function withOnTradeClose(
   store: SharedStore,
@@ -72,80 +71,28 @@ export function withOnTradeClose(
   logger: Logger,
 ): SharedStore {
   return {
-    findByKey: (idempotency_key: string): Promise<boolean> => store.findByKey(idempotency_key),
-
-    writeAheadPosition: (position: OpenPosition): Promise<void> =>
-      store.writeAheadPosition(position),
-
-    updatePositionState: (
-      idempotency_key: string,
-      update: { order_state: OrderState; broker_order_ids: string[] },
-    ): Promise<void> => store.updatePositionState(idempotency_key, update),
-
-    getOpenPositions: (): Promise<OpenPosition[]> => store.getOpenPositions(),
-
-    hasFill: (args: Parameters<SharedStore['hasFill']>[0]): Promise<boolean> => store.hasFill(args),
-
-    getFills: (idempotency_key: string): Promise<Fill[]> => store.getFills(idempotency_key),
-
-    getEntryFillSizes: (idempotency_keys: readonly string[]): Promise<Map<string, number>> =>
-      store.getEntryFillSizes(idempotency_keys),
-
-    getExitFillSizes: (idempotency_keys: readonly string[]): Promise<Map<string, number>> =>
-      store.getExitFillSizes(idempotency_keys),
-
-    writeAheadFlatten: (submission: FlattenSubmissionWriteAhead): Promise<void> =>
-      store.writeAheadFlatten(submission),
-
-    resolveFlattenSubmitted: (
-      idempotency_key: string,
-      update: { order_state: OrderState; broker_order_ids: string[] },
-      resolved_at: Date,
-    ): Promise<void> => store.resolveFlattenSubmitted(idempotency_key, update, resolved_at),
-
-    resolveFlattenError: (
-      idempotency_key: string,
-      reason: string,
-      resolved_at: Date,
-    ): Promise<void> => store.resolveFlattenError(idempotency_key, reason, resolved_at),
-
-    // #921: pure pass-through, same as every other read here — this
-    // decorator's whole job is the `onTradeClose` side effect on
-    // `applyLotAdvance`, so every unrelated method (this one included) just
-    // forwards to the wrapped store unchanged.
-    isRetryableFlattenError: (idempotency_key: string): Promise<boolean> =>
-      store.isRetryableFlattenError(idempotency_key),
-
-    getFlattenAttribution: (idempotency_key: string): Promise<FlattenAttribution | null> =>
-      store.getFlattenAttribution(idempotency_key),
-
-    getUnresolvedFlattens: (): Promise<UnresolvedFlattenSubmission[]> =>
-      store.getUnresolvedFlattens(),
-
-    recordFlattenOrderStateObserved: (
-      idempotency_key: string,
-      update: { order_state: OrderState; broker_order_ids: string[] },
-    ): Promise<void> => store.recordFlattenOrderStateObserved(idempotency_key, update),
-
-    markFlattenFillsSwept: (idempotency_key: string, swept_at: Date): Promise<void> =>
-      store.markFlattenFillsSwept(idempotency_key, swept_at),
-
-    markResidualUnprotected: (idempotency_key: string, observed_at: Date): Promise<void> =>
-      store.markResidualUnprotected(idempotency_key, observed_at),
-
-    confirmResidualProtected: (idempotency_key: string): Promise<void> =>
-      store.confirmResidualProtected(idempotency_key),
-
-    markResidualAlerted: (idempotency_key: string, alerted_at: Date): Promise<boolean> =>
-      store.markResidualAlerted(idempotency_key, alerted_at),
-
-    getUnprotectedResidualLots: (): Promise<UnprotectedResidualLot[]> =>
-      store.getUnprotectedResidualLots(),
-
-    sweepTerminalPositions: (cutoff: Date): Promise<number> => store.sweepTerminalPositions(cutoff),
-
-    abandonWedgedZeroFillLot: (idempotency_key: string, reason: string): Promise<boolean> =>
-      store.abandonWedgedZeroFillLot(idempotency_key, reason),
+    findByKey: (...args) => store.findByKey(...args),
+    writeAheadPosition: (...args) => store.writeAheadPosition(...args),
+    updatePositionState: (...args) => store.updatePositionState(...args),
+    getOpenPositions: (...args) => store.getOpenPositions(...args),
+    hasFill: (...args) => store.hasFill(...args),
+    getFills: (...args) => store.getFills(...args),
+    getEntryFillSizes: (...args) => store.getEntryFillSizes(...args),
+    getExitFillSizes: (...args) => store.getExitFillSizes(...args),
+    writeAheadFlatten: (...args) => store.writeAheadFlatten(...args),
+    resolveFlattenSubmitted: (...args) => store.resolveFlattenSubmitted(...args),
+    resolveFlattenError: (...args) => store.resolveFlattenError(...args),
+    isRetryableFlattenError: (...args) => store.isRetryableFlattenError(...args),
+    getFlattenAttribution: (...args) => store.getFlattenAttribution(...args),
+    getUnresolvedFlattens: (...args) => store.getUnresolvedFlattens(...args),
+    recordFlattenOrderStateObserved: (...args) => store.recordFlattenOrderStateObserved(...args),
+    markFlattenFillsSwept: (...args) => store.markFlattenFillsSwept(...args),
+    markResidualUnprotected: (...args) => store.markResidualUnprotected(...args),
+    confirmResidualProtected: (...args) => store.confirmResidualProtected(...args),
+    markResidualAlerted: (...args) => store.markResidualAlerted(...args),
+    getUnprotectedResidualLots: (...args) => store.getUnprotectedResidualLots(...args),
+    sweepTerminalPositions: (...args) => store.sweepTerminalPositions(...args),
+    abandonWedgedZeroFillLot: (...args) => store.abandonWedgedZeroFillLot(...args),
 
     applyLotAdvance: async (advance: LotAdvance): Promise<void> => {
       await store.applyLotAdvance(advance);

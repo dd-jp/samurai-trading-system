@@ -17,7 +17,16 @@ import type { FlattenReconcileAlertChannel } from '../flatten-reconcile-alert.js
 import type { NonSterlingFeeAlertChannel } from '../non-sterling-fee-alert.js';
 import type { ResidualExposureAlertChannel } from '../residual-exposure-alert.js';
 import type { BrokerAdapter } from './broker.js';
-import type { SharedStore } from './store.js';
+import type {
+  FillJournal,
+  FillReader,
+  FlattenJournal,
+  LotJournal,
+  LotRetirement,
+  PositionReader,
+  ResidualMarkers,
+  SharedStore,
+} from './store.js';
 
 /**
  * Cadence/retry/throttle knobs from the spec's full `ExecutionConfig` are
@@ -180,11 +189,17 @@ export interface ExecutionInput {
  * `marketData`/`costModel`/`config`. A refused flatten marks lots through
  * `markResidualsUnprotected` (store/logger/trace_id); nothing on this path
  * posts to an alert channel or touches the fill throttle.
+ *
+ * Each surface's `store` names only the roles (types/store.ts) its own file
+ * and the helpers it calls read, so a method one surface persists through
+ * cannot be reached by another without widening its type here.
  */
 export type SubmitInput = Pick<
   ExecutionInput,
-  'trace_id' | 'clock' | 'broker' | 'store' | 'costModel' | 'marketData' | 'config' | 'logger'
->;
+  'trace_id' | 'clock' | 'broker' | 'costModel' | 'marketData' | 'config' | 'logger'
+> & {
+  store: LotJournal & PositionReader & FlattenJournal & ResidualMarkers;
+};
 
 /**
  * `ingestFills()` (ingest-fills.ts): the fill poll and everything it re-arms
@@ -196,42 +211,50 @@ export type FillIngestInput = Pick<
   | 'trace_id'
   | 'clock'
   | 'broker'
-  | 'store'
   | 'residualExposureAlerts'
   | 'flattenOverfillAlerts'
   | 'logger'
   | 'filledZeroSizeThrottle'
   | 'nonSterlingFeeAlerts'
->;
+> & {
+  store: PositionReader & FillReader & FillJournal & ResidualMarkers;
+};
 
 /**
  * `reconcile()` (reconcile.ts): the startup/periodic settle, which also runs
  * both sweeps below inside its pass — so this is the union of their inputs
- * plus its own `flattenReconcileAlerts`.
+ * plus its own `flattenReconcileAlerts`. Likewise its `store`: its own
+ * `PositionReader & LotJournal & FlattenJournal & LotRetirement`, plus the
+ * two sweeps' roles.
  */
 export type ReconcileInput = Pick<
   ExecutionInput,
-  | 'trace_id'
-  | 'clock'
-  | 'broker'
-  | 'store'
-  | 'residualExposureAlerts'
-  | 'flattenReconcileAlerts'
-  | 'logger'
->;
+  'trace_id' | 'clock' | 'broker' | 'residualExposureAlerts' | 'flattenReconcileAlerts' | 'logger'
+> & {
+  store: PositionReader &
+    LotJournal &
+    FlattenJournal &
+    LotRetirement &
+    FillReader &
+    ResidualMarkers;
+};
 
 /** `sweepResidualProtection()` (residual-protection-sweep.ts): the #549 re-arm retry. */
 export type ResidualSweepInput = Pick<
   ExecutionInput,
-  'trace_id' | 'clock' | 'broker' | 'store' | 'residualExposureAlerts' | 'logger'
->;
+  'trace_id' | 'clock' | 'broker' | 'residualExposureAlerts' | 'logger'
+> & {
+  store: FillReader & ResidualMarkers;
+};
 
 /**
  * `sweepWedgedZeroFillLots()` (wedged-zero-fill-sweep.ts): store evidence
  * only — no `broker` here is the type-level form of that file's "no venue
  * call, ever" rule.
  */
-export type WedgedSweepInput = Pick<ExecutionInput, 'trace_id' | 'clock' | 'store' | 'logger'>;
+export type WedgedSweepInput = Pick<ExecutionInput, 'trace_id' | 'clock' | 'logger'> & {
+  store: PositionReader & LotRetirement;
+};
 
 export interface ExecutionResult {
   status: 'submitted' | 'deduped' | 'rejected' | 'error';

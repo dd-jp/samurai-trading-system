@@ -77,9 +77,16 @@ export type {
   WedgedSweepInput,
 } from './types/execution.js';
 export type {
+  FillJournal,
+  FillReader,
   FlattenAttribution,
+  FlattenJournal,
   FlattenSubmissionWriteAhead,
   LotAdvance,
+  LotJournal,
+  LotRetirement,
+  PositionReader,
+  ResidualMarkers,
   SharedStore,
   UnprotectedResidualLot,
   UnresolvedFlattenSubmission,

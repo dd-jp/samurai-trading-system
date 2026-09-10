@@ -28,10 +28,11 @@ import type {
   Execution,
   ExecutionInput,
   ExecutionResult,
+  FlattenJournal,
+  LotJournal,
   NativeBracketRequest,
   ReconcileReport,
   ResidualProtectionSweepResult,
-  SharedStore,
   SubmitInput,
 } from './types.js';
 
@@ -590,7 +591,10 @@ const MAX_EXIT_RETRY_ATTEMPTS = 3;
  * returns `null` once exhausted, and the caller falls back to `deduped`, the
  * safe default. Never throws, and never loops unbounded.
  */
-async function resolveExitRetryKey(store: SharedStore, baseKey: string): Promise<string | null> {
+async function resolveExitRetryKey(
+  store: LotJournal & FlattenJournal,
+  baseKey: string,
+): Promise<string | null> {
   for (let attempt = 0; attempt <= MAX_EXIT_RETRY_ATTEMPTS; attempt++) {
     const candidate = attempt === 0 ? baseKey : `${baseKey}:retry-${attempt}`;
     const exists = await store.findByKey(candidate);

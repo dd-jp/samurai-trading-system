@@ -20,11 +20,13 @@
 import type { Fill, OpenPosition } from '../../shared/index.js';
 import { heldQuantityFromFills, isFlat, logCaughtFailure, safeLog } from '../../shared/index.js';
 import { isProtectiveRearmUnsupported } from './protective-rearm-unsupported.js';
-import type { ExecutionInput } from './types.js';
+import type { ExecutionInput, FillReader, ResidualMarkers } from './types.js';
 
-type MarkerInput = Pick<ExecutionInput, 'store' | 'logger' | 'trace_id'>;
+type MarkerInput = Pick<ExecutionInput, 'logger' | 'trace_id'> & { store: ResidualMarkers };
 type AlertInput = Pick<ExecutionInput, 'residualExposureAlerts' | 'logger' | 'trace_id'>;
-type RearmInput = MarkerInput & AlertInput & Pick<ExecutionInput, 'broker'>;
+type RearmInput = MarkerInput &
+  AlertInput &
+  Pick<ExecutionInput, 'broker'> & { store: FillReader & ResidualMarkers };
 
 /**
  * Durably marks several lots' residuals as observed-but-unprotected, one
