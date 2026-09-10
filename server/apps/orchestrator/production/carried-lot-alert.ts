@@ -6,8 +6,18 @@
  *
  * #1389 extends ADR-0014's window `flatten_after_close_ms` past the bell, which
  * converts an unbounded silent failure into a bounded one. It does not make the
- * failure impossible: a pass saturated through the whole window AND the whole
- * grace, or a process down across both, still carries the lot — and
+ * failure impossible. Three cases still carry a lot:
+ *
+ * 1. a pass saturated through the whole window AND the whole grace;
+ * 2. a process down across both;
+ * 3. a lot whose ENTRY FILL is ingested after that session's flatten was
+ *    already submitted. There is exactly one flatten key per (instrument,
+ *    session close, arm), so gate 3's `findByKey` finds the resolved row, the
+ *    error is not retryable and `execute.ts` answers `deduped` — that close can
+ *    never flatten this lot, with no saturation and no outage. Not a
+ *    regression (before #1389 the whole window sat inside one debate bar, so
+ *    the same dedup applied), but not an exhaustion case either.
+ *
  * `flatten-tail-priority.ts`'s coverage bound is unchanged. ADR-0014's
  * 2026-08-16 amendment calls flat-by-close "an invariant with no exception
  * case", so the residual failure mode has to be AUDIBLE rather than merely

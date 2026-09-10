@@ -188,9 +188,19 @@ export class UniverseScheduler implements Scheduler {
       (this.config.stocksTradingWindow?.(tickTime) ?? true);
     // #1389: OR'd, and read on the same `tickTime` for the same reason. The
     // grace runs when the venue is already shut, so it cannot be expressed as a
-    // narrowing of an open session — and a tick admitted here can only CLOSE:
-    // the entry path consults `withinFlattenWindow` too and returns
-    // `skip('session_closing')` before any bar is fetched.
+    // narrowing of an open session.
+    //
+    // A tick admitted here can only CLOSE — the entry path consults
+    // `withinFlattenWindow` too and returns `skip('session_closing')` — but it
+    // is NOT free. That skip is inside the Trader (`decide.ts`), and
+    // `tick-runner.ts` runs the analysts and the debate before it on a decision
+    // bar. The US close at 20:00Z sits exactly on the 1h debate-bar grid, so the
+    // first grace tick after it claims a fresh decision bar and pays a full
+    // analyst + debate pass over the universe before the Trader skips: ~1 extra
+    // decision bar/day, ≈+15% on the US paper leg. The live bill is untouched —
+    // LSE closes at 15:30Z, which floors into the 15:00 bar, so no LSE grace
+    // tick claims a new decision bar. Making the grace tick flatten-only is
+    // #1389's filed follow-up, not this change.
     const inFlattenGrace = this.config.postCloseFlattenWindow?.(tickTime) ?? false;
 
     return {
