@@ -96,7 +96,7 @@ interface Bar {
   open_time: Date;     // source-native candle timestamp (period start)
   close_time: Date;    // open_time + timeframe — the point-in-time key
   open: number; high: number; low: number; close: number; volume: number;
-  source: string;      // 'alpaca' | 'lse' ... (audit only; consumers ignore)
+  source: string;      // e.g. 'alpaca' — the vendor that served it (audit only; consumers ignore)
 }
 
 interface IndicatorSpec {
@@ -129,7 +129,7 @@ interface DataSource {
 }
 ```
 
-*(Amendment 2026-09-10 (#1479): the `Bar.source` example and the `DataSource` comment above previously read `'kraken' | 'ibkr'` / "ccxt/IBKR" — both deleted by #1151. Corrected in place since these are illustrative examples, not decisions; the `Bar` and `DataSource` interfaces themselves are unchanged. Current source values are `'alpaca'` and `'lse'`.)*
+*(Amendment 2026-09-10 (#1479): the `Bar.source` example and the `DataSource` comment above previously read `'kraken' | 'ibkr'` / "ccxt/IBKR" — both deleted by #1151. Corrected in place since these are illustrative examples, not decisions; the `Bar` and `DataSource` interfaces themselves are unchanged. Also corrected to drop the false enumeration: `AlpacaDataSource` stamps the literal `'alpaca'` (`alpaca-source.ts`), but `LseMarkDataSource` stamps `client.vendor` — whatever name the injected vendor client reports (`lse-mark-source.ts`), not a literal `'lse'`. `'lse'` names the `DataSourceConfig.kind` discriminant `createDataSource` switches on to select the arm; it is not a `Bar.source` value. `types.ts`'s own doc comment on `Bar.source` gives only the one example — `'alpaca'` — for exactly this reason.)*
 
 ### Module: Point-in-Time Enforcement
 
@@ -285,7 +285,7 @@ Per David's 2026-09-08 ruling on [#1151](https://github.com/dd-jp/samurai-tradin
 
 **The surviving source stack is two arms, not four:**
 
-- **`AlpacaDataSource` (`kind: 'alpaca'`) — production, and today the ONLY reachable `DataSource`.** Serves historical bars and streaming quotes/marks for the MVP execution universe. Constructed via `createDataSource({ kind: 'alpaca', client, ... })` (`source-factory.ts`); `production/defaults.ts` resolves it through that factory as of #1151.
+- **`AlpacaDataSource` (`kind: 'alpaca'`) — production, and today the ONLY reachable `DataSource`.** Serves historical bars and streaming quotes/marks for the MVP execution universe. Constructed via `createDataSource({ kind: 'alpaca', client, ... })` (`server/providers/market-data-service/source-factory.ts`); `server/apps/orchestrator/production/defaults.ts`'s `buildAlpacaDataSource` resolves it through that factory as of #1151, and wires no other vendor arm — `FailoverDataSource` (`sources/failover-data-source.ts`) exists in the tree but is not constructed from the composition root, so it does not change this today.
 - **`LseMarkDataSource` (`kind: 'lse'`) — kept, unreachable in production until a vendor is provisioned.** Serves the LSE-listed leveraged ETPs Samurai actually holds (ADR-0016), normalizing session calendar, pence→GBP conversion, and quote-midpoint marks as described in the (unchanged, still-current) LSE bullet above. The composition root refuses to boot an LSE universe without an injected `LseMarkClient` rather than substituting Alpaca. Two tracking issues remain open: [#895](https://github.com/dd-jp/samurai-trading-system/issues/895) (choose and provision the real-time L1 vendor) and [#1034](https://github.com/dd-jp/samurai-trading-system/issues/1034) (register for LSEG Delayed Market Data) — both are Refs, not Closes, from this document and from #1151/#1481.
 - Both arms are constructed exclusively through `createDataSource` (`server/providers/market-data-service/source-factory.ts`), whose `DataSourceConfig` union now carries only `'alpaca'` and `'lse'` as discriminants. Swapping or adding a vendor arm remains a config change to that union — the property user story 12 (above) describes, narrower than originally written but still true.
 
@@ -296,4 +296,4 @@ Per David's 2026-09-08 ruling on [#1151](https://github.com/dd-jp/samurai-tradin
 - The best-effort spread estimate (Out of Scope, Cost model exception) has no crypto/ccxt arm to source bid/ask from any more; `LseMarkDataSource` is the only implementation of `fetchQuote`, and it is unreachable pending #895/#1034 — so `getSpreadEstimate`/`getQuote` return `null` for every production-reachable instrument today. The cost model's fallback spread model (volatility + per-asset-class model) is therefore load-bearing for every live/paper fill until an LSE vendor lands.
 - Dependencies: the Alpaca market-data API (built, live) and an LSE Level 1 quote vendor (not yet chosen). No crypto or IBKR dependency remains.
 
-**Not touched by this amendment:** `Mark.asset_class: 'crypto' | 'stocks'` (Key Interfaces) and "more crypto exchanges" (Future Extensions) are stale on the same crypto-out-of-scope grounds (ADR-0015's 2026-08-16 amendment) but predate #1151 and are outside this ticket's scope — left for a future pass. `cross-spec-contracts.md`'s GAP-G ("MDS's `DataSource` port only names ccxt/Kraken + IBKR; no Alpaca `DataSource`") is also pre-existing staleness (Alpaca was added well before #1151) and is left unmarked here for the same reason — resolving it means adjudicating whether to mark that gap FIXED, a separate decision from this restatement.
+**Not touched by this amendment:** `Mark.asset_class: 'crypto' | 'stocks'` (Key Interfaces) and "more crypto exchanges" (Future Extensions) are stale on the same crypto-out-of-scope grounds (ADR-0015's 2026-08-16 amendment) but predate #1151 and are outside this ticket's scope — left for a future pass. `cross-spec-contracts.md`'s GAP-G ("MDS's `DataSource` port only names ccxt/Kraken + IBKR; no Alpaca `DataSource`") is also pre-existing staleness (Alpaca was added well before #1151) and is left unmarked here for the same reason — resolving it means adjudicating whether to mark that gap FIXED, a separate decision from this restatement. The "IBKR" in the LSE bullet's vendor-options paragraph above ("Doc 34 recommends IBKR 'LSE UK (L1)' … as the only retail-priced real-time LSE Level 1 feed with bid/ask") is deliberately unmarked and current — it names IBKR as a candidate **market-data vendor** for #895, a live, still-open question, and is unrelated to the deleted `IbkrDataSource` broker-execution arm this amendment is about.
