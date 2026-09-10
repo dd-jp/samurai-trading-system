@@ -85,7 +85,7 @@ CREATE TABLE bars (
   low          REAL NOT NULL,
   close        REAL NOT NULL,
   volume       REAL NOT NULL,
-  source       TEXT NOT NULL,          -- 'kraken' | 'ibkr' | 'alpaca' ... (audit only)
+  source       TEXT NOT NULL,          -- e.g. 'alpaca' — the vendor that served it (audit only)
   PRIMARY KEY (instrument, timeframe, open_time)
 );
 CREATE INDEX idx_bars_close_time ON bars(instrument, timeframe, close_time);
@@ -99,6 +99,8 @@ CREATE TABLE latest_mark (
   source       TEXT NOT NULL
 );
 ```
+
+*(Amendment 2026-09-10 (#1479): the `bars.source` column comment above previously read `'kraken' | 'ibkr' | 'alpaca' ...`, mirroring `Bar.source` in `market-data-service-spec.md`, which named the same deleted vendors. [#1151](https://github.com/dd-jp/samurai-trading-system/issues/1151) deleted `CcxtDataSource`/`IbkrDataSource`; see that spec's "Amendment (2026-09-10): Source Stack After #1151" for the full restatement. Corrected in place since this is an illustrative example, not a decision — the table's `source TEXT NOT NULL` column and its "audit only" posture are unchanged. Current values actually written include `'alpaca'` (`AlpacaDataSource`), `'polygon'` (the Polygon/Massive equities-fallback vendor `server/apps/orchestrator/production/data-failover.ts` wires on every boot — not previously named in either spec's example), and, once #895/#1034 provision an LSE vendor, whatever vendor name `LseMarkDataSource` is given (`client.vendor` — not a literal `'lse'`; `'lse'` is `DataSourceConfig`'s `kind` discriminant, a separate concept from this column).)*
 
 **Market Intelligence** — owner: `docs/specs/market-intelligence-spec.md`
 
