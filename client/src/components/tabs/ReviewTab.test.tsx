@@ -116,12 +116,18 @@ describe('summary cards', () => {
     expect(within(arms).getByText(/4 refused/)).toBeTruthy();
   });
 
-  it('names a pre-migration null refused_pass_count rather than reading it as 0', () => {
+  /**
+   * #1483: `null` is a ROW-level fact (both arms null together, never mixed
+   * — a real pre-0057 row has neither column), so the note must appear
+   * exactly ONCE per row, not once per arm.
+   */
+  it('names a pre-migration null refused_pass_count rather than reading it as 0, once per row', () => {
     const row = makeArmComparison();
     row.live = { ...row.live, refused_pass_count: null };
+    row.control = { ...row.control, refused_pass_count: null };
     renderReview(makeSnapshot({ arm_comparison: [row] }));
     const arms = screen.getByRole('region', { name: 'Arm comparison' });
-    expect(within(arms).getByText(/refusals not tracked for this cycle/)).toBeTruthy();
+    expect(within(arms).getAllByText(/refusals not tracked for this cycle/)).toHaveLength(1);
   });
 
   it('names an unmeasured benchmark rather than drawing it as zero', () => {

@@ -258,6 +258,8 @@ The trend list (below the headline) renders many historical rows at once, and wi
 
 **The convergence asymmetry is stated on the panel.** The control arm always trades; the live arm can decline to when the debate does not converge. A trade-count gap therefore has an innocent explanation, and the panel says so rather than leaving the reader to infer a performance story from a participation difference.
 
+**Refused passes are three states, not two (added 2026-09-10, [#1483](https://github.com/dd-jp/samurai-trading-system/issues/1483)).** `ArmPerformanceWire.refused_pass_count` counts passes over the window skipped by `control_arm_valuation_refused` ([#1099](https://github.com/dd-jp/samurai-trading-system/issues/1099)) — invisible to the trade count beside it, which only counts closed trades. A positive count is shown on the arm it belongs to; `0` renders nothing, because there is nothing to report. `null` — a row computed before migration 0057 persisted the count — is never folded into the `0` case: reading it as zero would assert "no refusals happened" for a window this row never actually measured, the exact silence #1483 exists to break. `null` is a property of the ROW, not of either arm alone (both columns are written together or not written at all, per migration 0057), so the panel states it once per row rather than once per arm.
+
 **Read-only, and computed elsewhere.** The panel projects `arm_comparison_samples` rows the Feedback Loop wrote (`feedback-loop-spec.md`, "The matched-control comparison"). `buildSnapshot` must not compute or re-derive the comparison: the page shows what FL measured and alerted on, or it shows nothing.
 
 ### Outside benchmarks panel — [#981](https://github.com/dd-jp/samurai-trading-system/issues/981), under [#636](https://github.com/dd-jp/samurai-trading-system/issues/636)
@@ -368,6 +370,15 @@ interface ArmPerformanceWire {
    * convention instead of a guarantee.
    */
   max_drawdown_pct: number;
+  /**
+   * Added 2026-09-10 (#1483). Passes over this window (#1099) skipped by
+   * `control_arm_valuation_refused` — invisible to `trade_count`, which only
+   * counts closed trades. `null` for a row computed before migration 0057
+   * persisted the count, never a fabricated `0`: `0` asserts "no refusals
+   * happened", which is not knowable for those rows. See "Arm comparison
+   * panel" below for how the panel renders the three states.
+   */
+  refused_pass_count: number | null;
 }
 
 interface ArmComparisonRow {
@@ -556,7 +567,7 @@ Non-negotiable, and unchanged in spirit from v1 — the screen got more visual, 
 - **Server tests** assert on HTTP status/body for each route (`GET /`, a bundle asset, `GET /api/snapshot`, unknown path, non-`GET` method) and on the **static containment guard** against an injected fake store — no real network dependency beyond binding to an ephemeral port (`port: 0`). Two escapes must both be covered: `..`/percent-encoded-`..` traversal, **and** a sibling directory whose name shares the bundle root's prefix (`dist/client-evil/`). The second is the one a naive `startsWith` passes the first test while remaining open to, so a suite that only tests `..` proves nothing about it. Request-time token verification (#1038) is covered the same way: a real HTTP round trip against a server constructed with a fixture credential, asserting 401 for a missing/wrong/malformed `Authorization` header and 200 for the exact token — including a case that proves an unauthorized request never reaches the store (`request-auth.test.ts`, `server.test.ts`).
 - **`QueryStore` implementation** is tested against a real (test) SQLite instance seeded with rows matching the other components' own fixture patterns — reuses their existing test data shapes, no new schema.
 - **Offline check is part of acceptance:** the built bundle contains no external URL. A grep for `https://` over `dist/client/` is the crude version; the network panel showing zero third-party requests is the real one.
-- **Arm comparison panel:** the D4 rule is tested as a *type* obligation as well as a rendered one — a `@ts-expect-error` case proving an arm without `max_drawdown_pct` does not compile, alongside RTL assertions that both arms, both columns, the window and the trade counts are on screen, that the empty state says nothing has been measured rather than showing zeros, and that a diverged sample renders FL's own reason sentence. Both `min_trades_per_arm` (#982) branches are covered separately: below the floor, the panel names the trade counts against it and makes no dominance claim; at or above the floor, `diverged: false` renders the "control is not ahead … together" claim. The trend list's own marking is covered too: a below-floor historical row renders `arm-trend-below-floor` and the "below floor" word, not the diverged row's class or colour.
+- **Arm comparison panel:** the D4 rule is tested as a *type* obligation as well as a rendered one — a `@ts-expect-error` case proving an arm without `max_drawdown_pct` does not compile, alongside RTL assertions that both arms, both columns, the window and the trade counts are on screen, that the empty state says nothing has been measured rather than showing zeros, and that a diverged sample renders FL's own reason sentence. Both `min_trades_per_arm` (#982) branches are covered separately: below the floor, the panel names the trade counts against it and makes no dominance claim; at or above the floor, `diverged: false` renders the "control is not ahead … together" claim. The trend list's own marking is covered too: a below-floor historical row renders `arm-trend-below-floor` and the "below floor" word, not the diverged row's class or colour. `refused_pass_count`'s three states (added 2026-09-10, [#1483](https://github.com/dd-jp/samurai-trading-system/issues/1483)) are each covered: `0` on both arms renders no "refused" text at all; a positive count renders on the arm it belongs to and not the other; and `null` on both arms renders the "not tracked" note exactly once for the row, not once per arm — the case a naive per-arm rendering would double.
 - No end-to-end trading test needed — this component cannot affect trading outcomes by construction (read-only).
 
 ## Out of Scope
