@@ -220,9 +220,19 @@ export async function runTickPlan(
       // same instant — the same argument `UniverseScheduler.nextTick` makes
       // for reading the calendar once — and in replay the plan time is the
       // deterministic coordinate.
+      //
+      // Not consulted at all when `plan.grace_only` (#1499): the US close
+      // sits exactly on the 1h debate-bar grid, so an unconditional claim
+      // would open a fresh decision bar for a pass whose only possible
+      // outcome is the Trader's `skip('session_closing')`, paying a full
+      // Analysts + Debate pass to reach it. Leaving `decisionBar` undefined
+      // is what routes the runner to the tick path (`exitCheck` only).
       let decisionBar: DecisionBar | undefined;
       try {
-        decisionBar = config.decisionGate.claim(instrument.asset, plan.tick_time);
+        decisionBar =
+          plan.grace_only === true
+            ? undefined
+            : config.decisionGate.claim(instrument.asset, plan.tick_time);
       } catch (error) {
         // The turnstile queue must not be STRANDED if the gate itself throws
         // (#1040). The `finally` below reports this index as settled, but it is
