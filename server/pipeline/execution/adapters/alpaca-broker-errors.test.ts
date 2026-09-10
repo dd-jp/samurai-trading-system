@@ -59,7 +59,7 @@ describe('isRetryableAlpacaBrokerError', () => {
     expect(isRetryableAlpacaBrokerError(undefined)).toBe(false);
   });
 
-  // #1275 review item 1: `isRetrySafeAlpacaMethod` reducing to
+  // #1275 review item 1: `isRetrySafeMethod` reducing to
   // `method !== 'POST'` passed all 165 tests across the three Alpaca files
   // (confirmed by mutation) — every verb this suite exercised (GET/DELETE
   // retry-safe, POST not) reads the same under both forms. What that mutant

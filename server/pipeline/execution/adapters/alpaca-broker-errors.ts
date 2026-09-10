@@ -15,7 +15,10 @@
  * different Alpaca APIs (Trading v2 vs. Market Data v2) and classification
  * must not silently couple across that boundary. The `Retry-After`-parsing
  * and body-truncation helpers underneath carry no such domain coupling, so
- * those are shared (`shared/http/response-errors.js`) rather than duplicated.
+ * those are shared (`shared/http/response-errors.js`) rather than duplicated —
+ * as are the Timeout/RateLimit shapes and the retry-safe verb allowlist this
+ * hierarchy shares with Saxo's (`venue-errors.ts`); the classes themselves
+ * stay Alpaca's own so `instanceof` never crosses venues.
  */
 
 import {
@@ -25,48 +28,25 @@ import {
   parseRetryAfterMs,
   readErrorBody,
 } from '../../../shared/index.js';
+import {
+  type HttpMethod,
+  isRetrySafeMethod,
+  VenueRateLimitError,
+  VenueTimeoutError,
+} from './venue-errors.js';
 
-/**
- * The HTTP verb of the request that failed, as literally passed to
- * `fetch`/`fetchWithTimeout` — `AlpacaHttpBrokerClient.request`'s `init.method`
- * is typed to require one of these, so a new operation cannot omit it and
- * fall through to a default. Every error class below that can be retried
- * carries the verb of the request that produced it, and
- * `isRetryableAlpacaBrokerError` consults it (#1275) — mirrors
- * `saxo-broker-errors.ts`'s `SaxoHttpMethod` (#1273), not shared with it: the
- * two hierarchies stay independent per this module's own doc comment.
- */
-export type AlpacaHttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+/** See `HttpMethod` (venue-errors.ts); `AlpacaHttpBrokerClient.request` types `init.method` as this. */
+export type AlpacaHttpMethod = HttpMethod;
 
-/**
- * `method` (#1275) is the verb of the request that timed out — set at both
- * construction sites, the `fetchWithTimeout` deadline abort
- * (`classifyAlpacaBrokerNetworkError`) and a 408/504 response
- * (`classifyAlpacaBrokerResponse`) — so `isRetryableAlpacaBrokerError` can
- * gate retry on it instead of retrying every timeout unconditionally, which
- * is what let a timed-out placement POST retry before this ticket.
- */
-export class AlpacaBrokerTimeoutError extends Error {
-  readonly method: AlpacaHttpMethod;
-
+export class AlpacaBrokerTimeoutError extends VenueTimeoutError {
   constructor(message: string, method: AlpacaHttpMethod) {
-    super(message);
-    this.name = 'AlpacaBrokerTimeoutError';
-    this.method = method;
+    super('AlpacaBrokerTimeoutError', message, method);
   }
 }
 
-/** `method` (#1275): see `AlpacaBrokerTimeoutError`'s doc comment — same reason, same gate. */
-export class AlpacaBrokerRateLimitError extends Error {
-  /** Provider-supplied hint (from a `Retry-After` header), if one was given. */
-  readonly retryAfterMs: number | undefined;
-  readonly method: AlpacaHttpMethod;
-
+export class AlpacaBrokerRateLimitError extends VenueRateLimitError {
   constructor(message: string, method: AlpacaHttpMethod, retryAfterMs?: number) {
-    super(message);
-    this.name = 'AlpacaBrokerRateLimitError';
-    this.method = method;
-    this.retryAfterMs = retryAfterMs;
+    super('AlpacaBrokerRateLimitError', message, method, retryAfterMs);
   }
 }
 
@@ -131,54 +111,26 @@ export type AlpacaBrokerError =
   | AlpacaBrokerProviderError;
 
 /**
- * Retry-safe verbs for an Alpaca timeout, rate-limit or 5xx (#1275) — GET by
- * HTTP semantics alone (a read cannot mutate venue state, regardless of which
- * read it is); DELETE because `cancelOrder` (`alpaca-http-client.ts`) already
- * normalizes every terminal outcome (`204`/`404`/`422`) to "nothing working
- * under this id any more", so a repeated cancel lands on that same
- * normalization rather than mutating anything a first cancel did not already
- * settle. Neither admission rests on a probed venue guarantee — unlike
- * Saxo's equivalent (`saxo-broker-errors.ts`), where DELETE was measured
- * (doc 43:33), nothing here has been measured against the real venue.
- *
- * POST is excluded on principle, unconditionally — not verb-plus-status-code
- * carve-outs. The "an accidental duplicate is expensive" argument is the
- * TIMEOUT case specifically: a lost response leaves the caller unable to
- * tell whether Alpaca placed the order, and this repo has never probed its
- * response to a duplicate `client_order_id` (see `alpaca-adapter.ts`'s
- * `rearmProtectiveLegs` comments). It does not fit POST's 429: an
- * unambiguous non-acceptance cannot have duplicated anything. POST stays
- * excluded there too, for uniformity — one allowlist gate per verb, not a
- * claim that every excluded case is independently dangerous.
- *
- * PUT/PATCH are in `AlpacaHttpMethod` (no Alpaca client call currently uses
- * either) but are likewise left off this allowlist — not because either is
- * known to be unsafe, but because, like POST, neither has been probed either.
- * Add a verb here only on evidence, never on the absence of a reason to
- * exclude it.
- */
-function isRetrySafeAlpacaMethod(method: AlpacaHttpMethod | undefined): boolean {
-  return method === 'GET' || method === 'DELETE';
-}
-
-/**
  * Retryable set per transport-layer-spec.md's shared-conventions module:
  * Timeout | RateLimit | ProviderError-with-5xx-status. 4xx `ProviderError`s
  * (auth, bad request, and — critically — the 404 `getOrderByClientOrderId`
  * maps to `null` before this predicate is ever consulted) stay non-retryable.
  *
  * Since #1275, Timeout/RateLimit/5xx retryability also carries the request's
- * verb: `isRetrySafeAlpacaMethod` gates all three instead of firing
- * unconditionally, so a placement POST timeout, rate-limit or 5xx is refused
- * retry by this predicate alone, not only by `submitOrder`'s own
- * `maxAttempts: 1` override.
+ * verb: `isRetrySafeMethod` (venue-errors.ts) gates all three instead of
+ * firing unconditionally, so a placement POST timeout, rate-limit or 5xx is
+ * refused retry by this predicate alone, not only by `submitOrder`'s own
+ * `maxAttempts: 1` override. DELETE's admission rests on `cancelOrder`
+ * (`alpaca-http-client.ts`) normalising `204`/`404`/`422` to one terminal
+ * outcome, not on a probed venue guarantee — unlike Saxo's, nothing here has
+ * been measured against the real venue.
  */
 export function isRetryableAlpacaBrokerError(error: unknown): boolean {
   if (error instanceof AlpacaBrokerTimeoutError || error instanceof AlpacaBrokerRateLimitError) {
-    return isRetrySafeAlpacaMethod(error.method);
+    return isRetrySafeMethod(error.method);
   }
   if (error instanceof AlpacaBrokerProviderError) {
-    return isServerErrorStatus(error.status) && isRetrySafeAlpacaMethod(error.method);
+    return isServerErrorStatus(error.status) && isRetrySafeMethod(error.method);
   }
   return false;
 }

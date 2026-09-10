@@ -601,7 +601,7 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
    * `placeOrder`) — the single call site every order-placement method below
    * routes through (#1275 review item 2), instead of each repeating its own
    * `{ ...this.retry, maxAttempts: 1 }` literal. `isRetryableAlpacaBrokerError`
-   * (via `isRetrySafeAlpacaMethod`) already refuses retry for every error
+   * (via `isRetrySafeMethod`) already refuses retry for every error
    * shape `request()` can throw on a POST, so this override no longer carries
    * the guarantee alone — it stays as defense in depth: a future error shape
    * that skips classification, or a classifier edit that stops consulting

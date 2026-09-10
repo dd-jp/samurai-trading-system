@@ -634,7 +634,7 @@ describe('AlpacaHttpBrokerClient', () => {
   // `placeOrder` — the submitOrder test below does NOT by itself catch a
   // classifier regression: `maxAttempts: 1` pins it to one attempt regardless
   // of what `isRetryableAlpacaBrokerError` answers (confirmed by mutation —
-  // reverting `isRetrySafeAlpacaMethod` to always `true` leaves this test
+  // reverting `isRetrySafeMethod` to always `true` leaves this test
   // green). The classification-level guarantee is proven in isolation by
   // `alpaca-broker-errors.test.ts`'s "timeout/rate-limit/5xx retryability is
   // verb-aware" suite, which DOES fail under that same mutation.
