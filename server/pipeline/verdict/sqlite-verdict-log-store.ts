@@ -41,16 +41,16 @@
  * No `getByTraceId` — see verdict-log-store.ts's doc comment for why the
  * port stays write-only and this store doesn't add a read method the port
  * doesn't need: every real reader (the Dashboard's `SqliteQueryStore`,
- * `OrphanVerdictScanner`) queries `verdict_log` directly over `SharedStore`,
+ * `OrphanVerdictScanner`) queries `verdict_log` directly over `StoreHandle`,
  * not through this class.
  */
 
 import type { VerdictLog, VerdictLogStore } from '../../shared/index.js';
-import type { SharedStore } from '../../shared/store/index.js';
+import type { StoreHandle } from '../../shared/store/index.js';
 import { toStoredTimestamp } from '../../shared/store/index.js';
 
 export class SqliteVerdictLogStore implements VerdictLogStore {
-  constructor(private readonly db: SharedStore) {}
+  constructor(private readonly db: StoreHandle) {}
 
   writeLog(entry: VerdictLog): void {
     this.db

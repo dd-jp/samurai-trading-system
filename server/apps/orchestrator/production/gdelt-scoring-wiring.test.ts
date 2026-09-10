@@ -47,7 +47,7 @@ import {
 } from '../../../providers/market-intelligence/index.js';
 import type { LogEntry, Logger } from '../../../shared/index.js';
 import { SimulatedClock } from '../../../shared/index.js';
-import { openSharedStore, type SharedStore } from '../../../shared/store/index.js';
+import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import { buildProductionComponents, type ProductionConfig } from '../production.js';
 import {
   makeWiringCiiConsumerConfig,
@@ -104,7 +104,7 @@ function recordingLogger(): { logger: Logger; entries: LogEntry[] } {
 }
 
 /** The narrowest `ProductionConfig` that builds. Every transport is a stub. */
-function stubConfig(db: SharedStore, overrides: Partial<ProductionConfig>): ProductionConfig {
+function stubConfig(db: StoreHandle, overrides: Partial<ProductionConfig>): ProductionConfig {
   return {
     db,
     clock: new SimulatedClock(NOW),
@@ -160,7 +160,7 @@ function stubConfig(db: SharedStore, overrides: Partial<ProductionConfig>): Prod
 }
 
 describe('GDELT scoring wiring (#1086)', () => {
-  let db: SharedStore;
+  let db: StoreHandle;
 
   beforeEach(() => {
     db = openSharedStore(':memory:');

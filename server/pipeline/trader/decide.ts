@@ -43,8 +43,8 @@ import type { DebateResult } from '../debate-engine/types.js';
 // `DuplicatePositionError` models). `TraderInput.equity` stays an opaque
 // thunk everywhere else in this file; the single call site that inspects
 // what it threw needs to tell a genuine whole-book valuation refusal apart
-// from any OTHER rejection the thunk's implementation might raise (e.g.
-// `sizingEquity`'s #569 non-finite-ceiling guard) — see `buildBracket`.
+// from any OTHER rejection the thunk's implementation might raise (an
+// account-state read failing, say) — see `buildBracket`.
 // `BookValuationError` (#1089), not `StaleMarkError` alone: `readMarks`
 // (portfolio-view.ts) throws it bare on either a stale mark or a failed/
 // omitted mark read, and the base type is what catches both.
@@ -466,8 +466,8 @@ async function buildBracket(
   //     reason's own doc for why the control arm needs this and the live arm
   //     must not get it. Narrowed by TYPE, not just by arm: `input.equity()`
   //     is an opaque thunk that can reject for an unrelated reason
-  //     (`sizingEquity`'s #569 non-finite-ceiling guard, a fail-open refusal
-  //     that must stay a fault on EITHER arm), and only these two shapes
+  //     (an account-state read failing, say — a fault that must stay a fault
+  //     on EITHER arm), and only these two shapes
   //     identify "the book could not be valued" as opposed to "sizing itself
   //     refused". The `AggregateError` check inspects `.errors`, not just the
   //     wrapper type: `readMarks`'s own wrap (portfolio-view.ts) is always

@@ -3,7 +3,7 @@
  * (the parser is the risky half: a false positive here is an orchestrator boot
  * failure in dev, not a test failure, so the hostile cases are the point).
  */
-import { openSharedStore, type SharedStore } from './open-shared-store.js';
+import { openSharedStore, type StoreHandle } from './open-shared-store.js';
 import {
   guardedStore,
   isStoreWriteGuardEnabled,
@@ -214,7 +214,7 @@ describe('guardedStore', () => {
   const SEEN_AT = '2026-09-03T00:00:00.000Z';
 
   /** A minimal write to a table Execution owns, used by the transaction tests. */
-  function insertUnpricedFill(store: SharedStore, fillId: string): void {
+  function insertUnpricedFill(store: StoreHandle, fillId: string): void {
     store
       .prepare(
         `INSERT INTO broker_unpriced_fills

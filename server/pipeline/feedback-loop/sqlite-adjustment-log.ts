@@ -38,7 +38,7 @@
  * Added by migration `0002_dial_adjustments_reason.sql`.
  */
 
-import type { SharedStore } from '../../shared/store/index.js';
+import type { StoreHandle } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';
 import type { Adjustment, AdjustmentLog, PendingApprovalAdjustment } from './types.js';
 
@@ -60,7 +60,7 @@ function cycleDateOf(at: Date): string {
 }
 
 export class SqliteAdjustmentLog implements AdjustmentLog {
-  constructor(private readonly db: SharedStore) {}
+  constructor(private readonly db: StoreHandle) {}
 
   /** Always a new row, status 'applied' — this port method never queues an approval. */
   append(entry: Adjustment): void {

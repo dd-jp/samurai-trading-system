@@ -16,14 +16,14 @@
  *   row) is the same state a crash there would leave, just read back over
  *   the same handle rather than a reopened one.
  */
-import { openSharedStore, type SharedStore } from '../../shared/store/index.js';
+import { openSharedStore, type StoreHandle } from '../../shared/store/index.js';
 import { type OrphanAlertChannel, OrphanVerdictScanner } from './orphan-verdict-scan.js';
 import type { Logger } from './types.js';
 
 const NOOP_LOGGER: Logger = { log: () => {} };
 
 function insertVerdict(
-  db: SharedStore,
+  db: StoreHandle,
   args: { trace_id: string; idempotency_key: string; instrument: string; timestamp: string },
 ): void {
   db.prepare(
@@ -32,7 +32,7 @@ function insertVerdict(
   ).run(args.trace_id, args.idempotency_key, args.instrument, args.timestamp);
 }
 
-function insertAudit(db: SharedStore, trace_id: string, stage: string, timestamp: string): void {
+function insertAudit(db: StoreHandle, trace_id: string, stage: string, timestamp: string): void {
   db.prepare(
     `INSERT INTO audit_log (trace_id, stage, decision, input_digest, output_digest, timestamp)
      VALUES (?, ?, 'proceed', 'in', 'out', ?)`,
@@ -42,7 +42,7 @@ function insertAudit(db: SharedStore, trace_id: string, stage: string, timestamp
 /** Seeds a trace that crashed after Verdict logged `go` but before Execution ran:
  * audit_log has rows up to 'verdict', deliberately no 'execution' row. */
 function seedOrphan(
-  db: SharedStore,
+  db: StoreHandle,
   trace_id: string,
   instrument: string,
   idempotency_key: string,
@@ -56,7 +56,7 @@ function seedOrphan(
 
 /** Seeds a healthy trace that reached Execution — must never be reported as an orphan. */
 function seedHealthy(
-  db: SharedStore,
+  db: StoreHandle,
   trace_id: string,
   instrument: string,
   idempotency_key: string,

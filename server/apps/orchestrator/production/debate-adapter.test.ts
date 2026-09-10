@@ -33,7 +33,7 @@ import type {
   LogEntry,
   Logger,
 } from '../../../shared/index.js';
-import { openSharedStore, type SharedStore } from '../../../shared/store/index.js';
+import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import { buildDebateStep } from './debate-adapter.js';
 
 const NOW = new Date('2026-07-28T14:00:00Z');
@@ -1051,7 +1051,7 @@ describe('buildDebateStep LLM spend attribution (#326)', () => {
     };
   }
 
-  function meteredStep(db: SharedStore, latencyMs = 1_500) {
+  function meteredStep(db: StoreHandle, latencyMs = 1_500) {
     const llm = new AnthropicLlmClient(
       fakeWire(latencyMs),
       { model: 'claude-haiku-4-5', max_tokens: 100, timeoutMs: 60_000, retry: NO_RETRY },
@@ -1060,7 +1060,7 @@ describe('buildDebateStep LLM spend attribution (#326)', () => {
     return buildDebateStep(llm, new SqliteDebateLogStore(db), unlimited(), UNCAPPED_SPEND);
   }
 
-  function spendRows(db: SharedStore): SpendRow[] {
+  function spendRows(db: StoreHandle): SpendRow[] {
     return db
       .prepare('SELECT trace_id, stage, debate_id, latency_ms, cost_usd FROM llm_spend ORDER BY id')
       .all() as SpendRow[];

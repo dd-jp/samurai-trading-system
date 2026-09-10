@@ -16,7 +16,7 @@ import {
   UsEquityRegularHoursCalendar,
 } from '../../../providers/market-data-service/index.js';
 import type { TradingArm } from '../../../shared/index.js';
-import { openSharedStore, type SharedStore } from '../../../shared/store/index.js';
+import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import { CONTROL_BOOK_ANCHOR_KEY, SqliteAccountStateStore } from '../sqlite-account-state-store.js';
 import {
   buildControlBookAnchorResolver,
@@ -30,7 +30,7 @@ const IN_THE_SESSION = new Date('2026-08-01T06:00:00.000Z');
 
 const BOOK = 1_000;
 
-function openStore(): { db: SharedStore; cleanup: () => void } {
+function openStore(): { db: StoreHandle; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), 'samurai-control-account-'));
   const db = openSharedStore(join(dir, 'test.sqlite'));
   return { db, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
@@ -38,7 +38,7 @@ function openStore(): { db: SharedStore; cleanup: () => void } {
 
 /** As `account-state.test.ts`'s helper: `closed_at` normalized through `toISOString()`. */
 function insertClosedTrade(
-  db: SharedStore,
+  db: StoreHandle,
   args: {
     key: string;
     assetClass: 'crypto' | 'stocks';
@@ -74,7 +74,7 @@ function insertClosedTrade(
 
 /** A filled long lot, written straight to the table so `filled_size` is non-zero. */
 function insertOpenLot(
-  db: SharedStore,
+  db: StoreHandle,
   args: { key: string; arm: TradingArm; price: number; size: number },
 ): void {
   db.prepare(
@@ -107,7 +107,7 @@ function insertOpenLot(
 }
 
 function makeProvider(
-  db: SharedStore,
+  db: StoreHandle,
   resolveBook: (asOf: Date) => Promise<number> = async () => BOOK,
 ): ControlArmAccountStateProvider {
   return new ControlArmAccountStateProvider({

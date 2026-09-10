@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
 import type { ClosedTrade, TradingArm } from '../../shared/index.js';
-import { openSharedStore, type SharedStore, toStoredTimestamp } from '../../shared/store/index.js';
+import { openSharedStore, type StoreHandle, toStoredTimestamp } from '../../shared/store/index.js';
 import { listMigrations, MIGRATIONS_DIR, runMigrations } from '../../shared/store/migrate.js';
 import { SqliteArmComparisonSource } from './sqlite-arm-comparison-source.js';
 
@@ -28,7 +28,7 @@ function makeTrade(overrides: Partial<ClosedTrade> = {}): ClosedTrade {
 }
 
 function seed(
-  db: SharedStore,
+  db: StoreHandle,
   trade: ClosedTrade,
   arm: TradingArm,
   sizingCapitalCeiling: number | null,
@@ -156,7 +156,7 @@ describe('SqliteArmComparisonSource.getClosedTradesBetween — #1112 AC5 regime 
       }
       runMigrations(raw, preCutoverDir);
 
-      const db = raw as unknown as SharedStore;
+      const db = raw as unknown as StoreHandle;
       seed(db, makeTrade({ idempotency_key: 'pre-conversion' }), 'live', 1000);
 
       runMigrations(raw, MIGRATIONS_DIR);
@@ -253,7 +253,7 @@ describe('SqliteArmComparisonSource.getClosedTradesBetween — #1121 AC5 cost-ch
 });
 
 function seedTraderLog(
-  db: SharedStore,
+  db: StoreHandle,
   row: { trace_id: string; instrument?: string; skip_reason: string | null; created_at: Date },
 ): void {
   db.prepare(

@@ -221,7 +221,7 @@ import {
   TokenBucket,
 } from '../../shared/index.js';
 import { tryNousCredentials } from '../../shared/llm/index.js';
-import type { SharedStore as SqliteHandle } from '../../shared/store/index.js';
+import type { StoreHandle } from '../../shared/store/index.js';
 import {
   DEFAULT_MAX_LLM_CALL_ROWS,
   guardedStore,
@@ -737,7 +737,7 @@ export function llmCallLogMaxRowsFromEnvironment(
  * take down the daily feedback cycle. Neither trade is worth making for disk.
  */
 function pruneLlmCallLogWithLog(
-  db: SqliteHandle,
+  db: StoreHandle,
   maxRows: number,
   logger: Logger,
   trigger: 'startup' | 'daily',
@@ -940,7 +940,7 @@ export function alertDeliveryFailureRetentionDaysFromEnvironment(
  * so there is no "not configured" case to thread through.
  */
 function pruneAlertDeliveryFailuresWithLog(
-  db: SqliteHandle,
+  db: StoreHandle,
   retentionDays: number,
   clock: Clock,
   logger: Logger,
@@ -1047,35 +1047,18 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // correct reading for paper/backtest — so it cannot also be the live-mode
   // gate; the gate belongs here (#569), before anything below is
   // half-built, the same placement `assertAutomationLevelSupported` above
-  // uses.
-  // Not just `=== undefined` (#569 review): the caller this gate exists for
-  // is one assembling `ProductionConfig` by hand, and such a caller can as
-  // easily pass `NaN` — from a failed parse of an operator-supplied figure —
-  // as omit the field. `sizingEquity` does refuse a non-finite ceiling, so
-  // either way the run fails closed; but it refuses at the FIRST SIZING of
-  // the first tick, after the store, sockets and wire clients below are all
-  // open. Boot is the honest place to say a live config is unusable.
-  // POSITIVE and finite, not merely finite (#569 review, second pass): a
-  // ceiling of `0` is finite, and `sizingEquity`'s `Math.min` would then
-  // clamp every size in the run to zero — a live orchestrator that boots,
-  // debates, bills for LLM calls and can never place a trade. A negative one
-  // is worse: it survives to `decide`'s arithmetic as a negative size. Both
-  // are configuration mistakes with no legitimate reading, and this gate
-  // exists for exactly the hand-assembled config that can make them.
-  //
-  // `assertLiveCapitalCeilingUsd` (live-profile.ts) already refuses these on
-  // the SAMURAI_LIVE_MAX_CAPITAL_USD path; this is the same rule for the
-  // callers that never pass through it.
+  // uses. Only ABSENCE is checked: a `NaN`, zero or negative figure cannot
+  // be typed as `CapitalCeilingUsd` at all (`toCapitalCeilingUsd`,
+  // production/capital-ceiling.ts), which is where #569's positive-and-finite
+  // rule now lives for every caller, hand-assembled configs included.
   const ceiling = config.capitalCeilingUsd;
-  if (config.mode === 'live' && !(Number.isFinite(ceiling) && (ceiling as number) > 0)) {
+  if (config.mode === 'live' && ceiling === undefined) {
     throw new Error(
-      'Orchestrator cannot start: mode "live" requires ProductionConfig.capitalCeilingUsd to be ' +
-        `a finite number greater than zero, and it is ${String(ceiling)}. It is the ceiling ` +
-        'every position size in a live run is derived from (sizingEquity, ' +
-        'production/direct-bind.ts) — build the config through liveStartingProfile() rather ' +
-        'than assembling ProductionConfig by hand, or set the field explicitly. Refusing to ' +
-        'size a live run off unclamped equity, and refusing to start one that could only ever ' +
-        'size to zero.',
+      'Orchestrator cannot start: mode "live" requires ProductionConfig.capitalCeilingUsd, and ' +
+        'it is undefined. It is the ceiling every position size in a live run is derived from ' +
+        '(sizingEquity, production/direct-bind.ts) — build the config through ' +
+        'liveStartingProfile() rather than assembling ProductionConfig by hand, or set the ' +
+        'field explicitly. Refusing to size a live run off unclamped equity.',
     );
   }
 

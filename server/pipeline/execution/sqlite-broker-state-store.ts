@@ -11,7 +11,7 @@
  * to lose an update between a select and an insert.
  */
 
-import type { SharedStore } from '../../shared/store/index.js';
+import type { StoreHandle } from '../../shared/store/index.js';
 import {
   fromStoredTimestamp,
   fromStoredTimestampOrNull,
@@ -60,7 +60,7 @@ interface UnpricedFillRow {
 }
 
 export class SqliteBrokerStateStore implements BrokerStateStore {
-  constructor(private readonly db: SharedStore) {}
+  constructor(private readonly db: StoreHandle) {}
 
   loadBrackets(venue: BrokerVenue): BrokerBracketRecord[] {
     const rows = this.db

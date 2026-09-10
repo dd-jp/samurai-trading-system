@@ -58,7 +58,7 @@ import {
 } from '../../../providers/market-intelligence/index.js';
 import type { LogEntry, Logger } from '../../../shared/index.js';
 import { SimulatedClock, TokenBucket } from '../../../shared/index.js';
-import { openSharedStore, type SharedStore } from '../../../shared/store/index.js';
+import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import {
   DEFAULT_ALERT_DELIVERY_FAILURE_RETENTION_DAYS,
   SqliteAlertDeliveryLog,
@@ -108,7 +108,7 @@ function recordingLogger(): { logger: Logger; entries: LogEntry[] } {
 
 /** The narrowest `ProductionConfig` that both composition roots accept. Every transport is a stub. */
 function stubConfig(
-  db: SharedStore,
+  db: StoreHandle,
   archive: MiArchiveStore,
   overrides: Partial<ProductionConfig> = {},
 ): ProductionConfig {
@@ -208,7 +208,7 @@ describe('the composition root RUNS its retention sweeps (#1313)', () => {
     ENV_MI_ARCHIVE_RETENTION_DAYS,
   ] as const;
   const previous: Record<string, string | undefined> = {};
-  let db: SharedStore;
+  let db: StoreHandle;
   let archive: MiArchiveStore;
 
   beforeEach(() => {

@@ -3,7 +3,7 @@ import {
   assertNoStaleKeyScheme,
   findStaleKeySchemeLots,
   openSharedStore,
-  type SharedStore,
+  type StoreHandle,
   TERMINAL_ORDER_STATES,
 } from './index.js';
 
@@ -13,7 +13,7 @@ import {
  * migration's default so each test states which side of the cutover it means.
  */
 function insertLot(
-  db: SharedStore,
+  db: StoreHandle,
   lot: {
     key: string;
     instrument?: string;

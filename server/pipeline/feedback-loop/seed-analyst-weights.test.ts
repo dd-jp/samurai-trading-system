@@ -12,7 +12,7 @@
  */
 import type { TuningStore } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
-import { openSharedStore, type SharedStore } from '../../shared/store/index.js';
+import { openSharedStore, type StoreHandle } from '../../shared/store/index.js';
 import { seedAnalystWeights } from './seed-analyst-weights.js';
 import { SqliteTuningStore } from './sqlite-tuning-store.js';
 import type { TunableDial } from './types.js';
@@ -27,12 +27,12 @@ const BAND: TunableDial = {
   tighten_is: 'decrease',
 };
 
-function openStore(db: SharedStore): SqliteTuningStore {
+function openStore(db: StoreHandle): SqliteTuningStore {
   return new SqliteTuningStore(db, new SimulatedClock(START));
 }
 
 describe('seedAnalystWeights', () => {
-  let db: SharedStore;
+  let db: StoreHandle;
 
   beforeEach(() => {
     db = openSharedStore(':memory:');

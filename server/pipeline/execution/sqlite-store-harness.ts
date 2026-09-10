@@ -22,9 +22,9 @@
 import type { ClosedTrade, OpenPosition, OrderState, TradingArm } from '../../shared/index.js';
 import {
   type ClosedTradeRow,
-  type SharedStore as Db,
   fromClosedTradeRow,
   openSharedStore,
+  type StoreHandle,
 } from '../../shared/store/index.js';
 import {
   fromPositionRow,
@@ -72,7 +72,7 @@ export class TestExecutionStore extends SqliteExecutionStore {
   // 'live' one already writes to, to compare the two arms' closed_trades
   // rows from one shared table the way `SqliteArmComparisonSource` does.
   constructor(
-    private readonly testDb: Db,
+    private readonly testDb: StoreHandle,
     arm: TradingArm = 'live',
   ) {
     super(testDb, arm);
@@ -235,7 +235,7 @@ export class TestExecutionStore extends SqliteExecutionStore {
   }
 }
 
-export function openTestExecutionStore(): { db: Db; store: TestExecutionStore } {
+export function openTestExecutionStore(): { db: StoreHandle; store: TestExecutionStore } {
   const db = openSharedStore(':memory:');
   return { db, store: new TestExecutionStore(db) };
 }

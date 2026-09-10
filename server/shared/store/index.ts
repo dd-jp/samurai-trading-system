@@ -15,8 +15,8 @@ export {
   legacyStorePath,
   openSharedStore,
   resolveStoreMode,
-  type SharedStore,
   STORE_MODES,
+  type StoreHandle,
   type StoreMode,
   sharedStorePath,
 } from './open-shared-store.js';

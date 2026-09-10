@@ -22,7 +22,7 @@ import type {
 import { AlpacaBrokerAdapter, SaxoBrokerAdapter } from '../../pipeline/execution/index.js';
 import type { LseMarkClient } from '../../providers/market-data-service/index.js';
 import { MiArchiveStore } from '../../providers/market-intelligence/index.js';
-import type { SharedStore } from '../../shared/store/index.js';
+import type { StoreHandle } from '../../shared/store/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { startFromEnvironment, startingProfileForMode } from './index.js';
 import { LIVE_BOOK_GBP, LIVE_BOOK_SIZING_USD, paperStartingProfile } from './paper-profile.js';
@@ -102,7 +102,7 @@ function fixtureLseMarkClient(): LseMarkClient {
   };
 }
 
-function offlineInjections(db: SharedStore): Partial<ProductionConfig> {
+function offlineInjections(db: StoreHandle): Partial<ProductionConfig> {
   return {
     db,
     logger: { log: () => undefined },
@@ -148,7 +148,7 @@ describe('startFromEnvironment (broker venue selection, #1400)', () => {
   const savedVenue = process.env[BROKER_VENUE_ENV_VAR];
   const savedAlerts = process.env.SAMURAI_ALERTS;
   const savedMode = process.env.SAMURAI_MODE;
-  let db: SharedStore;
+  let db: StoreHandle;
   let started: ProductionOrchestrator | undefined;
 
   beforeEach(() => {

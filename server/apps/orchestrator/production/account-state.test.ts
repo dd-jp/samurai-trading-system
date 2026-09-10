@@ -8,7 +8,7 @@ import {
   UsEquityRegularHoursCalendar,
 } from '../../../providers/market-data-service/index.js';
 import { type ClosedTrade, runWithTraceId, type TradingArm } from '../../../shared/index.js';
-import { openSharedStore, type SharedStore } from '../../../shared/store/index.js';
+import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import { SqliteAccountStateStore } from '../sqlite-account-state-store.js';
 import { SqliteDailyEquityStore } from '../sqlite-daily-equity-store.js';
 import { SqliteSessionEquityStore } from '../sqlite-session-equity-store.js';
@@ -36,7 +36,7 @@ interface Harness {
   store: SqliteAccountStateStore;
   sessionEquity: SqliteSessionEquityStore;
   dailyEquity: SqliteDailyEquityStore;
-  db: SharedStore;
+  db: StoreHandle;
   cleanup: () => void;
 }
 
@@ -110,7 +110,7 @@ function makeTradeReader(trades: ClosedTrade[]): ClosedTradeReader {
  * `SqliteSessionEquityStore.put` both go through `toISOString()`.
  */
 function insertClosedTrade(
-  db: SharedStore,
+  db: StoreHandle,
   args: {
     key: string;
     assetClass: 'crypto' | 'stocks';

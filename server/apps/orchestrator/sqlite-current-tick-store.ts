@@ -13,7 +13,7 @@
  * not a bug to guard against.
  */
 
-import type { SharedStore } from '../../shared/store/index.js';
+import type { StoreHandle } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';
 import type { AssetClass, CurrentTick, CurrentTickStore, TickStage } from './types.js';
 
@@ -26,7 +26,7 @@ interface CurrentTickRow {
 }
 
 export class SqliteCurrentTickStore implements CurrentTickStore {
-  constructor(private readonly db: SharedStore) {}
+  constructor(private readonly db: StoreHandle) {}
 
   upsert(row: CurrentTick): void {
     this.db

@@ -12,7 +12,7 @@ import type { ClosedTrade, ClosedTradeStore, TradingArm } from '../../shared/ind
 import {
   type ClosedTradeRow,
   fromClosedTradeRow,
-  type SharedStore,
+  type StoreHandle,
   toStoredTimestamp,
 } from '../../shared/store/index.js';
 
@@ -30,7 +30,7 @@ export class SqliteClosedTradeStore implements ClosedTradeStore {
    * `'control'`.
    */
   constructor(
-    private readonly db: SharedStore,
+    private readonly db: StoreHandle,
     private readonly arm: TradingArm = 'live',
   ) {}
 

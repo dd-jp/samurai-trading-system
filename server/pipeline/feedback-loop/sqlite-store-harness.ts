@@ -22,7 +22,7 @@
  */
 
 import type { ClosedTrade } from '../../shared/index.js';
-import { openSharedStore, type SharedStore, toStoredTimestamp } from '../../shared/store/index.js';
+import { openSharedStore, type StoreHandle, toStoredTimestamp } from '../../shared/store/index.js';
 import { SqliteAdjustmentLog } from './sqlite-adjustment-log.js';
 import { SqliteClosedTradeStore } from './sqlite-closed-trade-store.js';
 import { SqliteTuningStore } from './sqlite-tuning-store.js';
@@ -60,7 +60,7 @@ export function openAdjustmentLog(): SqliteAdjustmentLog {
   return new SqliteAdjustmentLog(openSharedStore(':memory:'));
 }
 
-function seedClosedTrade(db: SharedStore, trade: ClosedTrade): void {
+function seedClosedTrade(db: StoreHandle, trade: ClosedTrade): void {
   db.prepare(
     `INSERT INTO closed_trades (
        idempotency_key, debate_id, instrument, asset_class, side,

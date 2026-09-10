@@ -5,13 +5,13 @@
  * throw away.
  */
 import { describe, expect, it } from 'vitest';
-import { openSharedStore, type SharedStore } from './open-shared-store.js';
+import { openSharedStore, type StoreHandle } from './open-shared-store.js';
 import { SqliteLlmSpendCapStore } from './sqlite-llm-spend-cap-store.js';
 import { toStoredTimestamp } from './sqlite-utils.js';
 
 const ARMED_AT = new Date('2026-08-05T14:00:00Z');
 
-function makeDb(): SharedStore {
+function makeDb(): StoreHandle {
   return openSharedStore(':memory:');
 }
 

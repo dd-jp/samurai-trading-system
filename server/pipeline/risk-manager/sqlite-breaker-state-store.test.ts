@@ -1,9 +1,9 @@
-import { openSharedStore, type SharedStore } from '../../shared/store/index.js';
+import { openSharedStore, type StoreHandle } from '../../shared/store/index.js';
 import { type BreakerConfig, CircuitBreakers } from './breakers.js';
 import { SqliteBreakerStateStore } from './sqlite-breaker-state-store.js';
 import type { PersistedBreakerState } from './types.js';
 
-function makeDb(): SharedStore {
+function makeDb(): StoreHandle {
   return openSharedStore(':memory:');
 }
 

@@ -20,16 +20,16 @@ import type { ClosedTrade, DebateLog, Fill, OpenPosition } from '../../shared/in
 import { toBrokerFillId } from '../../shared/index.js';
 import {
   openSharedStore,
-  type SharedStore,
   SqliteLlmSpendCapStore,
   SqliteRiskLogStore,
   SqliteTraderLogStore,
+  type StoreHandle,
 } from '../../shared/store/index.js';
 import { percentile, SqliteQueryStore } from './sqlite-query-store.js';
 
 const NOW = new Date('2026-07-27T12:00:00Z');
 
-function makeDb(): SharedStore {
+function makeDb(): StoreHandle {
   return openSharedStore(':memory:');
 }
 
@@ -568,7 +568,7 @@ describe('SqliteQueryStore', () => {
 
 describe('SqliteQueryStore.getLlmSpend', () => {
   /** Writes straight to `llm_spend`; `SqliteLlmSpendStore` has its own suite. */
-  function seedSpend(db: SharedStore, cost: number | null, at: Date): void {
+  function seedSpend(db: StoreHandle, cost: number | null, at: Date): void {
     db.prepare(
       `INSERT INTO llm_spend (
          trace_id, stage, model, input_tokens, output_tokens,
@@ -707,7 +707,7 @@ describe('SqliteQueryStore.getLlmSpend', () => {
  */
 describe('SqliteQueryStore.getLlmSpend per-debate percentiles', () => {
   function seedCall(
-    db: SharedStore,
+    db: StoreHandle,
     call: { debate_id: string | null; cost: number | null; latency: number | null; at: Date },
   ): void {
     db.prepare(
@@ -722,7 +722,7 @@ describe('SqliteQueryStore.getLlmSpend per-debate percentiles', () => {
 
   /** n debates, each of `calls` identical calls — so a per-debate total is calls x each. */
   function seedDebates(
-    db: SharedStore,
+    db: StoreHandle,
     debates: Array<{ id: string; cost: number; latency: number; calls?: number }>,
   ): void {
     for (const debate of debates) {
@@ -855,7 +855,7 @@ describe('SqliteQueryStore.getAlertDeliveryFailureCount (#1108)', () => {
     vi.unstubAllGlobals();
   });
 
-  function seedFailure(db: SharedStore, at: Date, chatId: string = ALERT_CHAT_ID): void {
+  function seedFailure(db: StoreHandle, at: Date, chatId: string = ALERT_CHAT_ID): void {
     db.prepare(
       `INSERT INTO alert_delivery_failures (chat_id, method, body, error, timestamp)
        VALUES (?, 'sendMessage', 'body', 'fetch failed', ?)`,
@@ -1016,7 +1016,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
     return new Date(NOW.getTime() - minutes * 60 * 1_000).toISOString();
   }
 
-  function seedMark(db: SharedStore, instrument: string, asset_class: string): void {
+  function seedMark(db: StoreHandle, instrument: string, asset_class: string): void {
     db.prepare(
       `INSERT INTO latest_mark (instrument, price, observed_at, asset_class, source)
        VALUES (?, 100, ?, ?, 'alpaca')`,
@@ -1024,7 +1024,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
   }
 
   function seedTick(
-    db: SharedStore,
+    db: StoreHandle,
     tick: { instrument: string; asset_class: string; stage: string; trace_id: string; at: string },
   ): void {
     db.prepare(
@@ -1034,7 +1034,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
   }
 
   function seedVerdict(
-    db: SharedStore,
+    db: StoreHandle,
     verdict: { trace_id: string; instrument: string; status: string; at: string },
   ): void {
     db.prepare(
@@ -1057,7 +1057,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
    * unattributable cases (pre-migration rows, and the HITL callback path).
    */
   function seedAudit(
-    db: SharedStore,
+    db: StoreHandle,
     row: {
       trace_id: string;
       stage: string;
@@ -1731,7 +1731,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
  */
 describe('SqliteQueryStore.getRiskCritics', () => {
   function seedRisk(
-    db: SharedStore,
+    db: StoreHandle,
     spec: { trace_id: string; instrument: string; binding_constraint: string | null; at: Date },
   ): void {
     new SqliteRiskLogStore(db).write({
@@ -1764,7 +1764,7 @@ describe('SqliteQueryStore.getRiskCritics', () => {
   }
 
   function seedTrader(
-    db: SharedStore,
+    db: StoreHandle,
     spec: { trace_id: string; instrument: string; debate_id: string; at: Date },
   ): void {
     new SqliteTraderLogStore(db).write({
@@ -1786,7 +1786,7 @@ describe('SqliteQueryStore.getRiskCritics', () => {
     });
   }
 
-  function seedCritic(db: SharedStore, debate_id: string, verdict: RiskCriticVerdict): void {
+  function seedCritic(db: StoreHandle, debate_id: string, verdict: RiskCriticVerdict): void {
     new SqliteRiskCriticStore(db).writeVerdict({ debate_id, verdict, created_at: NOW });
   }
 

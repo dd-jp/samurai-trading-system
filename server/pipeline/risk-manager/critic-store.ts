@@ -21,7 +21,7 @@
  */
 
 import { currentTraceId, type Logger } from '../../shared/index.js';
-import type { SharedStore as Db } from '../../shared/store/index.js';
+import type { StoreHandle } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';
 import { readPersistedConditions, readPersistedDroppedConditions } from './invalidation.js';
 import type {
@@ -159,7 +159,7 @@ function writeJsonList(list: readonly unknown[] | undefined): string | null {
 
 export class SqliteRiskCriticStore implements RiskCriticStore {
   constructor(
-    private readonly db: Db,
+    private readonly db: StoreHandle,
     private readonly logger?: Logger,
   ) {}
 

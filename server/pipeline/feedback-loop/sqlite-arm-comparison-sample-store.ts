@@ -7,7 +7,7 @@
  * query store in the OTHER process. That split is the reason this is persisted
  * at all — see the migration's own comment.
  */
-import type { SharedStore } from '../../shared/store/index.js';
+import type { StoreHandle } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';
 import type {
   ArmComparisonSample,
@@ -88,7 +88,7 @@ function fromRow(row: ArmComparisonSampleRow): PersistedArmComparisonSample {
 }
 
 export class SqliteArmComparisonSampleStore implements ArmComparisonSampleStore {
-  constructor(private readonly db: SharedStore) {}
+  constructor(private readonly db: StoreHandle) {}
 
   /**
    * One row per cycle. `INSERT OR REPLACE` rather than a plain insert: a

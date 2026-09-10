@@ -1,5 +1,5 @@
 import { runWithTraceId } from '../../../shared/index.js';
-import { openSharedStore, type SharedStore } from '../../../shared/store/index.js';
+import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import type { LogEntry, Logger } from '../../../shared/types.js';
 import {
   BUDGET_REMEDY,
@@ -24,7 +24,7 @@ function assertRefused(
 }
 
 /** One priced call, straight into the table `SqliteLlmSpendStore` writes. */
-function spend(db: SharedStore, costUsd: number, id: string): void {
+function spend(db: StoreHandle, costUsd: number, id: string): void {
   db.prepare(
     `INSERT INTO llm_spend (
        trace_id, stage, debate_id, model,
@@ -40,7 +40,7 @@ function spend(db: SharedStore, costUsd: number, id: string): void {
  * succeeds — a lock contended for one tick, then gone. Only `prepare` is
  * stubbed because that is the whole of the cap's contact with the store.
  */
-function lockedOnce(db: SharedStore): SharedStore {
+function lockedOnce(db: StoreHandle): StoreHandle {
   let locked = true;
   return {
     prepare(sql: string) {
@@ -50,7 +50,7 @@ function lockedOnce(db: SharedStore): SharedStore {
       }
       return db.prepare(sql);
     },
-  } as unknown as SharedStore;
+  } as unknown as StoreHandle;
 }
 
 /**
@@ -58,10 +58,10 @@ function lockedOnce(db: SharedStore): SharedStore {
  * `cost_usd` row case `check()`'s second guard exists for, which no ordinary
  * INSERT can reach through the real `llm_spend` schema.
  */
-function nonFiniteSum(): SharedStore {
+function nonFiniteSum(): StoreHandle {
   return {
     prepare: () => ({ get: () => ({ total: Number.NaN }) }),
-  } as unknown as SharedStore;
+  } as unknown as StoreHandle;
 }
 
 /**
@@ -70,7 +70,7 @@ function nonFiniteSum(): SharedStore {
  * two DIFFERENT fault kinds from the same store, to pin that `#faultAnnounced`
  * is one latch across both, not one per kind.
  */
-function readFaultThenCorruptLedger(): SharedStore {
+function readFaultThenCorruptLedger(): StoreHandle {
   let threw = false;
   return {
     prepare() {
@@ -80,11 +80,11 @@ function readFaultThenCorruptLedger(): SharedStore {
       }
       return { get: () => ({ total: Number.NaN }) };
     },
-  } as unknown as SharedStore;
+  } as unknown as StoreHandle;
 }
 
 describe('SqliteSpendCap', () => {
-  let db: SharedStore;
+  let db: StoreHandle;
 
   beforeEach(() => {
     db = openSharedStore(':memory:');

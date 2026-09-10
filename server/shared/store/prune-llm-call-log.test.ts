@@ -13,11 +13,11 @@
  * on the trading path. A prune that reached across the join would let the
  * system trade past ADR-0008's cap while every dashboard looked normal.
  */
-import { openSharedStore, type SharedStore } from './open-shared-store.js';
+import { openSharedStore, type StoreHandle } from './open-shared-store.js';
 import { DEFAULT_MAX_LLM_CALL_ROWS, pruneLlmCallLog } from './prune-llm-call-log.js';
 import { guardedStore } from './write-guard.js';
 
-function insertCalls(db: SharedStore, count: number): void {
+function insertCalls(db: StoreHandle, count: number): void {
   const insert = db.prepare(
     `INSERT INTO llm_call_log (spend_id, trace_id, stage, debate_id, model, prompt, response, timestamp)
      VALUES (?, ?, 'debate', ?, 'anthropic/claude-haiku-4.5', ?, 'answer', ?)`,
@@ -33,7 +33,7 @@ function insertCalls(db: SharedStore, count: number): void {
   }
 }
 
-function remainingTraceIds(db: SharedStore): string[] {
+function remainingTraceIds(db: StoreHandle): string[] {
   return (
     db.prepare('SELECT trace_id FROM llm_call_log ORDER BY id').all() as { trace_id: string }[]
   ).map((row) => row.trace_id);

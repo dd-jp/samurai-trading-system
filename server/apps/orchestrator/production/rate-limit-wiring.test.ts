@@ -28,8 +28,8 @@ import {
 } from '../../../shared/index.js';
 import {
   openSharedStore,
-  type SharedStore,
   SqliteLlmSpendCapStore,
+  type StoreHandle,
 } from '../../../shared/store/index.js';
 import { DebateBarDecisionGate } from '../decision-bar-gate.js';
 import { paperStartingProfile } from '../paper-profile.js';
@@ -105,7 +105,7 @@ function recordingLogger(): { logger: Logger; entries: LogEntry[] } {
 }
 
 describe('the LLM rate limiter is in the production path (#388)', () => {
-  let db: SharedStore;
+  let db: StoreHandle;
 
   beforeEach(() => {
     db = openSharedStore(':memory:');
@@ -486,7 +486,7 @@ describe('the reserved worst case matches what a debate can actually spend', () 
 });
 
 describe('the composition root paces the broker from ops config (#299)', () => {
-  let db: SharedStore;
+  let db: StoreHandle;
 
   beforeEach(() => {
     db = openSharedStore(':memory:');
@@ -555,7 +555,7 @@ describe('the composition root paces the broker from ops config (#299)', () => {
  * exported, but never actually wired at the root).
  */
 describe('the composition root wires wait telemetry onto the shared Alpaca bucket (#1083)', () => {
-  let db: SharedStore;
+  let db: StoreHandle;
 
   beforeEach(() => {
     db = openSharedStore(':memory:');
@@ -625,7 +625,7 @@ describe('the composition root wires wait telemetry onto the shared Alpaca bucke
  * assertion rather than a documented exclusion.
  */
 describe('the composition root wires market-data fetch telemetry (#1082)', () => {
-  let db: SharedStore;
+  let db: StoreHandle;
 
   beforeEach(() => {
     db = openSharedStore(':memory:');
@@ -800,7 +800,7 @@ describe('paperStartingProfile supplies the budget (#388)', () => {
  * The mutation each of these kills is stated at the test.
  */
 describe('the LLM spend cap is in the production path (ADR-0008)', () => {
-  let db: SharedStore;
+  let db: StoreHandle;
 
   beforeEach(() => {
     db = openSharedStore(':memory:');
@@ -1040,7 +1040,7 @@ function noopCurrentTickStore(): CurrentTickStore {
  *  assertions can read them without a non-null assertion at every call site. */
 type StubConfig = ProductionConfig & Required<Pick<ProductionConfig, 'alpacaBrokerClient'>>;
 
-function stubConfig(db: SharedStore, overrides: Partial<ProductionConfig>): StubConfig {
+function stubConfig(db: StoreHandle, overrides: Partial<ProductionConfig>): StubConfig {
   return {
     db,
     clock: new SimulatedClock(NOW),

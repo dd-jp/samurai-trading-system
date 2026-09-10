@@ -112,7 +112,7 @@
  * its log-only defaults, which is what `log-only` mode resolves to.
  */
 import { TelegramBotApiClient, TelegramChannel } from '../../pipeline/verdict/index.js';
-import type { SharedStore as SqliteHandle } from '../../shared/store/index.js';
+import type { StoreHandle } from '../../shared/store/index.js';
 import { SqliteAlertDeliveryLog } from './alert-delivery-log.js';
 import { TradeChannelAnalystSkipAlert } from './analyst-skip-alert-channel.js';
 import { TradeChannelArmDivergenceAlert } from './arm-divergence-alert-channel.js';
@@ -417,7 +417,7 @@ export function resolveAlertsMode(injected: Partial<ProductionConfig>): AlertsMo
 export function buildAlertChannels(deps: {
   alertsMode: AlertsMode;
   injected: Partial<ProductionConfig>;
-  db: SqliteHandle;
+  db: StoreHandle;
   logger: Logger;
 }): AlertChannels {
   if (deps.alertsMode === 'log-only') {

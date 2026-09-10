@@ -107,13 +107,14 @@ import {
 // to dodge the collision (kimi-3-review/deepseek-review on #302's PR: that
 // form only surfaces a shape mismatch at the `new SqliteVerdictLogStore(...)`
 // call site, not here at the interface).
-import type { SharedStore as VerdictLogDb } from '../../../shared/store/index.js';
+import type { StoreHandle } from '../../../shared/store/index.js';
 import { guardedStore } from '../../../shared/store/index.js';
 import type { CostModel } from '../../../tools/backtest/index.js';
 import { OrphanVerdictScanner } from '../orphan-verdict-scan.js';
 import { SqliteAuditLog } from '../sqlite-audit-log.js';
 import { SqliteCurrentTickStore } from '../sqlite-current-tick-store.js';
 import type { TickSteps } from '../types.js';
+import type { CapitalCeilingUsd } from './capital-ceiling.js';
 import { ExitSkipWriteThrottle } from './exit-skip-write-throttle.js';
 import type {
   ExitValuationDegradedAlert,
@@ -222,7 +223,7 @@ export interface TraderStepDeps extends BreakerStateDeps {
    * Absent means "no ceiling declared", never "a ceiling of zero". See
    * `sizingEquity`.
    */
-  capitalCeilingUsd?: number;
+  capitalCeilingUsd?: CapitalCeilingUsd;
   /**
    * #698: where a degraded-but-continuing Trader condition is escalated.
    *
@@ -274,26 +275,20 @@ export interface TraderStepDeps extends BreakerStateDeps {
  * larger than the ceiling — quietly disarming the breakers in order to bound
  * position size. The observation stays true; only the sizing inlet is bounded.
  *
- * A non-finite ceiling cannot arrive here through the shipped entrypoint
- * (`assertLiveCapitalCeilingUsd` refuses one at boot, and
- * `buildProductionComponents` separately refuses `mode: 'live'` with no
- * ceiling declared at all) — but `Math.min` would propagate a `NaN` silently
- * if one somehow did, which is a fail-OPEN outcome on the money path: a
- * `NaN` ceiling reads as "no bound" all the way through `decide`'s sizing
- * arithmetic. So a DEFINED, non-finite ceiling throws here (#569) rather
- * than falling back to unclamped equity — `undefined` is unaffected and
- * still means "no ceiling declared", the correct reading for every paper/
- * backtest run and every test that leaves this field unset.
+ * `Math.min` would propagate a `NaN` ceiling silently — a fail-OPEN outcome
+ * on the money path, since `NaN` reads as "no bound" all the way through
+ * `decide`'s sizing arithmetic (#569). That is why the parameter is the
+ * `CapitalCeilingUsd` brand and not a `number`: `toCapitalCeilingUsd`
+ * (capital-ceiling.ts) is the only way to mint one, and it refuses anything
+ * that is not positive and finite. `undefined` still means "no ceiling
+ * declared", the correct reading for every paper/backtest run and every test
+ * that leaves this field unset.
  */
-export function sizingEquity(equity: number, capitalCeilingUsd: number | undefined): number {
-  if (capitalCeilingUsd === undefined) return equity;
-  if (!Number.isFinite(capitalCeilingUsd)) {
-    throw new Error(
-      `sizingEquity: capitalCeilingUsd must be a finite number when declared, but it is ` +
-        `${String(capitalCeilingUsd)}. Refusing to size against unclamped equity.`,
-    );
-  }
-  return Math.min(equity, capitalCeilingUsd);
+export function sizingEquity(
+  equity: number,
+  capitalCeilingUsd: CapitalCeilingUsd | undefined,
+): number {
+  return capitalCeilingUsd === undefined ? equity : Math.min(equity, capitalCeilingUsd);
 }
 
 export function buildTraderStep(deps: TraderStepDeps): TickSteps['trader'] {
@@ -1388,7 +1383,7 @@ export interface VerdictStepDeps extends BreakerStateDeps {
    * file's own import alias for `shared/store/index.js`'s `SharedStore`
    * (see the import above for why it's aliased, not the bare name).
    */
-  store: VerdictLogDb;
+  store: StoreHandle;
 }
 
 /**

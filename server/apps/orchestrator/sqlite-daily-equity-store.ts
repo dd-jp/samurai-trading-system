@@ -11,7 +11,7 @@
  * definition of "a day" than the breaker uses.
  */
 
-import type { SharedStore } from '../../shared/store/index.js';
+import type { StoreHandle } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';
 
 /** One day's equity observation, anchored to the portfolio session it opens. */
@@ -39,7 +39,7 @@ interface DailyEquityRow {
 }
 
 export class SqliteDailyEquityStore {
-  constructor(private readonly db: SharedStore) {}
+  constructor(private readonly db: StoreHandle) {}
 
   /**
    * Records `equity` as the observation for the session opening at

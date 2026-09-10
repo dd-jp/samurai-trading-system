@@ -5,7 +5,7 @@
  */
 
 import { sanitizeLogText } from '../../shared/sanitize-log-text.js';
-import type { SharedStore } from '../../shared/store/index.js';
+import type { StoreHandle } from '../../shared/store/index.js';
 import { toStoredTimestamp } from '../../shared/store/index.js';
 
 export interface AlertDeliveryFailure {
@@ -49,7 +49,7 @@ export const ALERT_DELIVERY_FAILURE_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_ALERT_DELIVERY_FAILURE_RETENTION_DAYS = 30;
 
 export class SqliteAlertDeliveryLog {
-  constructor(private readonly db: SharedStore) {}
+  constructor(private readonly db: StoreHandle) {}
 
   /**
    * `body`/`error` are attacker/upstream-influenced free text (an alert's

@@ -89,6 +89,7 @@ import {
   LIVE_BOOK_SIZING_USD,
   RISK_CAP_EQUITY_FRACTIONS,
 } from './paper-profile.js';
+import { type CapitalCeilingUsd, toCapitalCeilingUsd } from './production/capital-ceiling.js';
 import type { ProductionConfig } from './production.js';
 
 /**
@@ -210,17 +211,11 @@ export function resolveLiveCapitalCeilingUsd(
  * or an argument name — never a credential, and the ceiling itself is not
  * secret, so quoting it back is what makes a typo visible.
  */
-export function assertLiveCapitalCeilingUsd(value: number, source: string): number {
-  if (!Number.isFinite(value) || value <= 0) {
-    throw new Error(
-      `Orchestrator cannot start: ${source} must be a positive, finite number of US dollars, ` +
-        `but it is ${String(value)}. Refusing to fall back to a default ceiling — this is the ` +
-        'one figure a live run may not guess at.',
-    );
-  }
+export function assertLiveCapitalCeilingUsd(value: number, source: string): CapitalCeilingUsd {
+  const ceiling = toCapitalCeilingUsd(value, source);
 
   const floor = minLiveCapitalCeilingUsd();
-  if (value < floor) {
+  if (ceiling < floor) {
     throw new Error(
       `Orchestrator cannot start: ${source} is below ${floor}. Below that, ` +
         `\`sizingEquity\` (direct-bind.ts) clamps the Trader's ask to the ceiling itself, and a ` +
@@ -231,7 +226,7 @@ export function assertLiveCapitalCeilingUsd(value: number, source: string): numb
     );
   }
 
-  return value;
+  return ceiling;
 }
 
 /**

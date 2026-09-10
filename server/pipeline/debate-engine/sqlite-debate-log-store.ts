@@ -23,7 +23,7 @@ import type {
 import {
   fromStoredTimestamp,
   isUniqueConstraintError,
-  type SharedStore,
+  type StoreHandle,
   toStoredTimestamp,
 } from '../../shared/store/index.js';
 import type { AnalystContribution, Direction } from './types.js';
@@ -56,7 +56,7 @@ interface DebateLogRow {
 }
 
 export class SqliteDebateLogStore implements DebateLogStore {
-  constructor(private readonly db: SharedStore) {}
+  constructor(private readonly db: StoreHandle) {}
 
   writeLog(entry: DebateLog): void {
     try {

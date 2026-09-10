@@ -8,7 +8,7 @@
  * for an accounting detail.
  */
 
-import { openSharedStore, type SharedStore } from '../../../shared/store/index.js';
+import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import type { LogEntry } from '../../../shared/types.js';
 import type { PromptTierAlert, PromptTierAlertChannel } from './prompt-tier-alert.js';
 import { PromptTierCrossingThrottle } from './prompt-tier-alert.js';
@@ -32,7 +32,7 @@ interface SpendRow {
   timestamp: string;
 }
 
-function rows(db: SharedStore): SpendRow[] {
+function rows(db: StoreHandle): SpendRow[] {
   return db.prepare('SELECT * FROM llm_spend ORDER BY id').all() as SpendRow[];
 }
 
