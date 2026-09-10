@@ -15,8 +15,8 @@
  * alert, because the fallback alert lives inside the attempt that never runs
  * again. The recorded #525 decision rejected a retry LOOP on the
  * order-submitting poll path; this sweep is the accepted alternative — a
- * durable marker (migration 0024, written by `ingest-fills.ts` the moment
- * the residual is first known) checked idempotently on an ongoing basis.
+ * durable marker (migration 0024, written by `residual-protection.ts` the
+ * moment the residual is first known) checked idempotently on an ongoing basis.
  *
  * ## When it runs
  *
@@ -182,7 +182,7 @@ async function sweepOne(
   let filledSize: number;
   let exitQty: number;
   try {
-    ({ filledSize, exitQty } = heldQuantityFromFills(key, await store.getFills(key)));
+    ({ filledSize, exitQty } = heldQuantityFromFills(await store.getFills(key)));
   } catch (error) {
     // The exact residual is unknowable without this read — the same
     // upper-bound escalation `maybeRearmResidual`'s own store-read catch
@@ -243,7 +243,7 @@ async function sweepOne(
   const residual = filledSize - exitQty;
 
   // Fail-closed, `maybeRearmResidual`'s own guard verbatim: a garbage
-  // residual while `coversQty` says "not flat" is a store divergence to
+  // residual while `isFlat` says "not flat" is a store divergence to
   // surface, never a quantity to hand the broker — and never a quantity to
   // hand the OPERATOR either (#549 review, round 3): NaN serializes to null
   // in the page payload and a negative reads as nonsense, so the alert

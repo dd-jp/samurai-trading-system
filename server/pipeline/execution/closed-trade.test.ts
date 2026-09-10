@@ -18,15 +18,25 @@ function exitFill(overrides: Partial<ExitFill> & { qty: number; price: number })
   return { ...fill({ leg: 'exit', ...overrides }), leg: overrides.leg ?? 'exit' } as ExitFill;
 }
 
-const position = {
+const position: OpenPosition = {
   idempotency_key: 'lot',
   debate_id: 'debate',
   instrument: 'AAPL',
   asset_class: 'stocks',
   side: 'buy',
+  intent_type: 'entry',
+  requested_size: 10,
+  filled_size: 10,
+  avg_entry_price: 100,
   stop: 95,
+  target: 110,
+  order_state: 'filled',
+  broker_order_ids: ['broker-1'],
   opened_at: new Date(1_000),
-} as OpenPosition;
+  decision_timestamp: new Date(1_000),
+  conviction: 0.6,
+  converged: true,
+};
 
 describe('closedTrade', () => {
   const entryFills = [fill({ leg: 'entry', qty: 10, price: 100, fee: 1 })];

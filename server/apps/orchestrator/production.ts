@@ -630,8 +630,8 @@ export interface ProductionComponents {
    */
   debateLog: SqliteDebateLogStore;
   /**
-   * Every `process.env` read this root made, resolved once at the top of
-   * `buildProductionComponents` (production/environment.ts).
+   * Every `process.env` read this root made, resolved once in
+   * `buildProductionComponents` after its config gates (production/environment.ts).
    * `buildProductionOrchestrator`'s daily sweeps take their retention values
    * from here rather than reading the environment a second time, so the two
    * roots cannot disagree and a test that overrides one variable overrides it
@@ -1635,7 +1635,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   const captureLlmText = environment.captureLlmText;
 
   /**
-   * #1045. The row ceiling is read and APPLIED here, at boot, and again on the
+   * #1045. The row ceiling is APPLIED here, at boot, and again on the
    * daily timer below — two call sites, both at this composition root.
    *
    * Both, not one. Startup alone would fire once and then never again for the

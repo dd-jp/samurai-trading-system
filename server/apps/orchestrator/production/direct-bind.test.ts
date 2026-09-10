@@ -688,6 +688,49 @@ describe('buildTraderStep capital ceiling (#511)', () => {
       10,
     );
   });
+
+  it('rejects instead of skipping when the CONTROL arm cannot read the account (#1089)', async () => {
+    // #1089's `control_arm_valuation_refused` skip is narrowed by error TYPE
+    // (`BookValuationError`/`AggregateError`), not merely by `arm === 'control'`.
+    // A plain account-read failure must stay a FAULT on either arm; were the
+    // catch in `buildBracket` to check only `arm`, it would be downgraded to a
+    // skip and a broken control-arm read would go unnoticed for the soak.
+    const step = buildTraderStep({
+      marketData: FAKE_MARKET_DATA,
+      circuitBreakers: new CircuitBreakers({
+        daily_loss_pct: 0.05,
+        daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
+        max_drawdown_pct: 0.2,
+        max_consecutive_losses: 5,
+        volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
+        auto_rearm: { recovery_drawdown_pct: 0.05, max_days_tripped: 5 },
+      }),
+      accountState: {
+        getAccountState: async () => {
+          throw new Error('account read failed');
+        },
+      },
+      volatility: FAKE_VOLATILITY,
+      getOpenPositions: async () => NO_POSITIONS,
+      maxMarkAge: TEST_MAX_MARK_AGE,
+      mode: 'paper',
+      breakerState: NOOP_BREAKER_STATE,
+      portfolioSnapshots: new Map(),
+      config: CEILING_CONFIG,
+      setupStore: new FixtureSetupStore(),
+      getExitFillSizes: async () => new Map<string, number>(),
+      sessionCalendars: {
+        crypto: new AlwaysOpenCalendar(),
+        stocks: new UsEquityRegularHoursCalendar(),
+      },
+      capitalCeilingUsd: toCapitalCeilingUsd(1_000, 'test'),
+      arm: 'control',
+    });
+
+    await expect(
+      step({ trace_id: TRACE_ID, instrument: 'AAPL', debate: makeDebate(), clock: CLOCK }),
+    ).rejects.toThrow(/account read failed/);
+  });
 });
 
 /**

@@ -13,9 +13,8 @@
  * bracket and no protective leg, the hazard #516/#525 exist to prevent.
  *
  * Held quantity is therefore `filled_size − Σ exit-leg fill quantity`, derived
- * from the fill record (`leg !== 'entry'` — the same discriminator
- * `ingest-fills.ts`'s `isExitFill` uses) rather than from a persisted running
- * total. The fills stay the single source of truth: a lot already partially
+ * from the fill record (`isExitFill`, below) rather than from a persisted
+ * running total. The fills stay the single source of truth: a lot already partially
  * flattened before this code shipped reads correctly on its first evaluation,
  * with nothing to backfill.
  *
@@ -138,20 +137,18 @@ export function coversQty(actual: number, target: number): boolean {
  * two agree while `filled_size` is the sum of the entry fills, which is
  * exactly what `ingestFills()` writes into it.
  */
-export interface RecordedHeldQuantity extends LotHeldQuantity {
+export interface RecordedHeldQuantity {
   /** Σ entry-leg fill quantity. */
   filledSize: number;
   /** Σ closing-leg fill quantity. */
   exitQty: number;
+  held: number;
 }
 
-export function heldQuantityFromFills(
-  idempotency_key: string,
-  fills: readonly Fill[],
-): RecordedHeldQuantity {
+export function heldQuantityFromFills(fills: readonly Fill[]): RecordedHeldQuantity {
   const filledSize = totalQty(fills.filter((fill) => fill.leg === 'entry'));
   const exitQty = totalQty(fills.filter(isExitFill));
-  return { idempotency_key, filledSize, exitQty, held: filledSize - exitQty };
+  return { filledSize, exitQty, held: filledSize - exitQty };
 }
 
 /** Round-tripped to flat under the one tolerance — nothing left at the venue. */

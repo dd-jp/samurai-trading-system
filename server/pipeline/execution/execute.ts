@@ -659,7 +659,7 @@ async function executeExit(
   //
   // A bare `< 0`, not ADR-0005's `coversQty` tolerance (shared/held-quantity.ts), and that is not an
   // oversight: a lot whose exit fills merely APPROACH its filled size is
-  // marked `closed` by `ingestFills()` (`coversQty(exitQty, filledSize)`) and
+  // marked `closed` by `ingestFills()` (`isFlat`) and
   // so has already left `getOpenPositions()`. Every lot reaching this line
   // therefore holds a residual comfortably outside that epsilon, and a
   // negative here is a real contradiction rather than summation noise.

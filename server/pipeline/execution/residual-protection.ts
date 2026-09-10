@@ -150,7 +150,7 @@ export async function maybeRearmResidual(
       }
       return;
     }
-    ({ filledSize, exitQty } = heldQuantityFromFills(position.idempotency_key, recorded));
+    ({ filledSize, exitQty } = heldQuantityFromFills(recorded));
   } else {
     ({ filledSize, exitQty } = known);
   }

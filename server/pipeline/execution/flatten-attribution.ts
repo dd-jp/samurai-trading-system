@@ -104,9 +104,9 @@ export function splitFlattenFills(input: FlattenSplitInput): FlattenSplit {
         // flatten submitted from here forward always carries one
         // (`executeExit` refuses to write ahead without it).
         ...(attribution.exit_reason === null ? {} : { exit_reason: attribution.exit_reason }),
-        // #1001: the flatten's OWN key — `clientOrderId` is this function's
-        // lookup key for `getFlattenAttribution`, i.e. exactly the
-        // `flatten_submissions.idempotency_key` that produced this raw fill,
+        // #1001: the flatten's OWN key — `clientOrderId` is the
+        // `flatten_submissions.idempotency_key` the caller looked this
+        // attribution up by, i.e. the one that produced this raw fill,
         // before the split below re-keys the row to the LOT. Carried
         // through so the persisted row can be joined back to the specific
         // flatten submission that priced it — see `Fill.flatten_idempotency_key`.

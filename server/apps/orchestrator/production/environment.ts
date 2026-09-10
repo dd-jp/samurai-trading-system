@@ -88,13 +88,11 @@ const X_MAX_SEARCH_RESULTS_PURPOSE =
   "the number of X posts each sentiment call retrieves, the soak's main LLM cost lever after " +
   'the debate itself (#969)';
 
-export type ProductionEnvironmentOverrides = Pick<
-  ProductionConfig,
-  'processEnv' | 'sentimentEnabled' | 'sentimentRetrieval' | 'xMaxSearchResults'
->;
-
 export function readProductionEnvironment(
-  config: ProductionEnvironmentOverrides,
+  config: Pick<
+    ProductionConfig,
+    'processEnv' | 'sentimentEnabled' | 'sentimentRetrieval' | 'xMaxSearchResults'
+  >,
 ): ProductionEnvironment {
   const env = config.processEnv ?? process.env;
   return {
