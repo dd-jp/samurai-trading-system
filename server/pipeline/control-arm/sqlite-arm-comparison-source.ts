@@ -23,9 +23,38 @@ import {
   type SharedStore,
   toStoredTimestamp,
 } from '../../shared/store/index.js';
+import type { ArmRefusedPassCounts } from './arm-comparison.js';
 
 /** A closed trade plus the arm that produced it (migration 0033). */
 export type ArmedClosedTrade = ClosedTrade & { arm: TradingArm };
+
+/**
+ * The `trader_log.skip_reason` values that mean "this arm could not even
+ * attempt the pass", by the arm that can produce them (#1099).
+ *
+ * `trader_log` carries no `arm` column — migration 0033 added one to
+ * `closed_trades`, `open_positions` and (0050) `flatten_submissions`, never
+ * here — so attribution runs through the reason itself. That is sound rather
+ * than a workaround: `buildBracket` (decide.ts) converts a `BookValuationError`
+ * into `control_arm_valuation_refused` only under `arm === 'control'` and
+ * rethrows on the live arm, so the string identifies the arm by construction.
+ *
+ * The live arm's list is empty and that is the true count, not a placeholder: a
+ * live-arm valuation failure stays a fault that aborts the tick (decide.ts's
+ * `throw error`), so it never reaches `trader_log` as a skip at all. Adding a
+ * live-arm reason here is the whole change needed if that ever stops being
+ * true.
+ */
+const REFUSED_PASS_SKIP_REASONS: Readonly<Record<TradingArm, readonly string[]>> = {
+  live: [],
+  control: ['control_arm_valuation_refused'],
+};
+
+const REFUSED_PASS_ARM_BY_SKIP_REASON = new Map<string, TradingArm>(
+  Object.entries(REFUSED_PASS_SKIP_REASONS).flatMap(([arm, reasons]) =>
+    reasons.map((reason) => [reason, arm as TradingArm] as const),
+  ),
+);
 
 export class SqliteArmComparisonSource {
   constructor(private readonly db: SharedStore) {}
@@ -56,6 +85,51 @@ export class SqliteArmComparisonSource {
       ...fromClosedTradeRow(row),
       arm: row.arm,
     }));
+  }
+
+  /**
+   * Passes each arm REFUSED in the same window — one instrument-pass per row,
+   * not one per tick (#1099).
+   *
+   * `trader_log`'s primary key is `(trace_id, instrument)` and the decision
+   * path writes unconditionally with `ON CONFLICT DO NOTHING`
+   * (sqlite-decision-record-stores.ts), so a tick that refused six instruments
+   * contributes six — which is the granularity #1089's six dead passes were
+   * counted at.
+   *
+   * The same half-open window as `getClosedTradesBetween`, over a column
+   * written through the same `toStoredTimestamp`, so consecutive windows
+   * partition refusals exactly as they partition trades.
+   *
+   * These counts are NOT commensurable with `ArmPerformance.trade_count` as a
+   * ratio: `modelledCostCharged` and `oneSizingRegime` above drop closed trades
+   * this query has no analogue for, so a window can report refusals against a
+   * `trade_count` those filters gutted. They answer "was the arm able to act",
+   * not "what fraction of its passes traded".
+   */
+  getRefusedPassCountsBetween(from: Date, to: Date): ArmRefusedPassCounts {
+    const reasons = [...REFUSED_PASS_ARM_BY_SKIP_REASON.keys()];
+    const counts: Record<TradingArm, number> = { live: 0, control: 0 };
+    if (reasons.length === 0) return counts;
+
+    const rows = this.db
+      .prepare(
+        `SELECT skip_reason, COUNT(*) AS refused_pass_count
+           FROM trader_log
+          WHERE skip_reason IN (${reasons.map(() => '?').join(', ')})
+            AND created_at > ? AND created_at <= ?
+          GROUP BY skip_reason`,
+      )
+      .all(...reasons, toStoredTimestamp(from), toStoredTimestamp(to)) as {
+      skip_reason: string;
+      refused_pass_count: number;
+    }[];
+
+    for (const row of rows) {
+      const arm = REFUSED_PASS_ARM_BY_SKIP_REASON.get(row.skip_reason);
+      if (arm !== undefined) counts[arm] += row.refused_pass_count;
+    }
+    return counts;
   }
 }
 

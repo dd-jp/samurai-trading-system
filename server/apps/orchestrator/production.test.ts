@@ -8420,6 +8420,7 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
     // was wrong).
     const preFixPnl = 0.135 * LIVE_BOOK_GBP;
     const preFix = buildArmComparison({
+      refused_passes: { live: 0, control: 0 },
       trades: [tradeWith(preFixPnl)],
       ...window,
       basis: LIVE_BOOK_GBP,
@@ -8428,6 +8429,7 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
     // produces is smaller by the same ratio the notional is.
     const postFixPnl = preFixPnl / SIZING_INFLATION;
     const postFix = buildArmComparison({
+      refused_passes: { live: 0, control: 0 },
       trades: [tradeWith(postFixPnl)],
       ...window,
       basis: LIVE_BOOK_GBP,

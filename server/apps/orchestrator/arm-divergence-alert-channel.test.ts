@@ -17,6 +17,7 @@ const ALERT: ArmDivergenceAlert = {
       realized_pnl_net: -4.5,
       return_pct: -0.0045,
       max_drawdown_pct: 0.031,
+      refused_pass_count: 0,
     },
     control: {
       arm: 'control',
@@ -24,6 +25,7 @@ const ALERT: ArmDivergenceAlert = {
       realized_pnl_net: 18.2,
       return_pct: 0.0182,
       max_drawdown_pct: 0.019,
+      refused_pass_count: 0,
     },
   },
   reason: 'the control arm is ahead by 2.27% of the book over this window',

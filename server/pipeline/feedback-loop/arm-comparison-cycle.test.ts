@@ -1,4 +1,4 @@
-import type { ArmedClosedTrade } from '../control-arm/index.js';
+import type { ArmedClosedTrade, ArmRefusedPassCounts } from '../control-arm/index.js';
 import {
   ARM_DIVERGENCE_RETURN_GAP_PCT,
   DEFAULT_ARM_COMPARISON_WINDOW_MS,
@@ -44,12 +44,21 @@ function trade(overrides: {
 
 class FakeSource implements ArmComparisonSource {
   readonly windows: { from: Date; to: Date }[] = [];
+  readonly refusalWindows: { from: Date; to: Date }[] = [];
 
-  constructor(private readonly trades: ArmedClosedTrade[]) {}
+  constructor(
+    private readonly trades: ArmedClosedTrade[],
+    private readonly refusals: ArmRefusedPassCounts = { live: 0, control: 0 },
+  ) {}
 
   getClosedTradesBetween(from: Date, to: Date): ArmedClosedTrade[] {
     this.windows.push({ from, to });
     return this.trades.filter((row) => row.closed_at > from && row.closed_at <= to);
+  }
+
+  getRefusedPassCountsBetween(from: Date, to: Date): ArmRefusedPassCounts {
+    this.refusalWindows.push({ from, to });
+    return this.refusals;
   }
 }
 
@@ -96,6 +105,7 @@ describe('evaluateArmDivergence', () => {
         realized_pnl_net: input.liveReturn * BASIS,
         return_pct: input.liveReturn,
         max_drawdown_pct: input.liveDrawdown,
+        refused_pass_count: 0,
       },
       control: {
         arm: 'control' as const,
@@ -103,6 +113,7 @@ describe('evaluateArmDivergence', () => {
         realized_pnl_net: input.controlReturn * BASIS,
         return_pct: input.controlReturn,
         max_drawdown_pct: input.controlDrawdown,
+        refused_pass_count: 0,
       },
     };
   }
@@ -231,8 +242,8 @@ describe('evaluateArmDivergence', () => {
 });
 
 describe('runArmComparisonCycle', () => {
-  function cycleInput(trades: ArmedClosedTrade[]) {
-    const source = new FakeSource(trades);
+  function cycleInput(trades: ArmedClosedTrade[], refusals?: ArmRefusedPassCounts) {
+    const source = new FakeSource(trades, refusals);
     const samples = new InMemoryArmComparisonSampleStore();
     const alerts = new RecordingAlerts();
     return {
@@ -314,5 +325,31 @@ describe('runArmComparisonCycle', () => {
     expect(sample.comparison.control.trade_count).toBe(0);
     expect(samples.getRecent(10, NOW)).toHaveLength(1);
     expect(alerts.posted).toHaveLength(0);
+  });
+
+  /**
+   * #1099. A window of pure refusals used to be indistinguishable from an empty
+   * one: both produced `trade_count: 0` and nothing else.
+   */
+  it('carries the refusal counts, over the same window it read trades for', () => {
+    const { source, input } = cycleInput([], { live: 0, control: 6 });
+
+    const sample = runArmComparisonCycle(input);
+
+    expect(sample.comparison.control.trade_count).toBe(0);
+    expect(sample.comparison.control.refused_pass_count).toBe(6);
+    expect(sample.comparison.live.refused_pass_count).toBe(0);
+    expect(source.refusalWindows).toEqual(source.windows);
+  });
+
+  it('does not let refusals move the divergence verdict', () => {
+    const trades = [
+      ...armTrades('live', [10, 10, 10, 10, 10]),
+      ...armTrades('control', [1, 1, 1, 1, 1]),
+    ];
+    const quiet = runArmComparisonCycle(cycleInput(trades).input);
+    const refused = runArmComparisonCycle(cycleInput(trades, { live: 0, control: 40 }).input);
+
+    expect(refused.divergence).toEqual(quiet.divergence);
   });
 });

@@ -378,6 +378,7 @@ function healthyArmComparison(
     realized_pnl_net: 0,
     return_pct: 0,
     max_drawdown_pct: 0,
+    refused_pass_count: 0,
   });
   return {
     live: arm('live'),

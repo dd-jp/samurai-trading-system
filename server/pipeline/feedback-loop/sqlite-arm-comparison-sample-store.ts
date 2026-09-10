@@ -9,7 +9,11 @@
  */
 import type { SharedStore } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';
-import type { ArmComparisonSample, ArmComparisonSampleStore } from './types.js';
+import type {
+  ArmComparisonSample,
+  ArmComparisonSampleStore,
+  PersistedArmComparisonSample,
+} from './types.js';
 
 interface ArmComparisonSampleRow {
   computed_at: string;
@@ -34,7 +38,12 @@ const COLUMNS = `computed_at, window_from, window_to, basis,
                  control_trade_count, control_realized_pnl_net, control_return_pct,
                  control_max_drawdown_pct, diverged, divergence_reason, min_trades_per_arm`;
 
-function fromRow(row: ArmComparisonSampleRow): ArmComparisonSample {
+/**
+ * Reads back exactly what the table holds. `refused_pass_count` (#1099) is not
+ * a column here, so the sample this produces cannot claim one — see
+ * `PersistedArmComparisonSample`.
+ */
+function fromRow(row: ArmComparisonSampleRow): PersistedArmComparisonSample {
   return {
     computed_at: fromStoredTimestamp(row.computed_at),
     comparison: {
@@ -113,7 +122,7 @@ export class SqliteArmComparisonSampleStore implements ArmComparisonSampleStore 
    * read — a snapshot must never show a sample computed after the instant it
    * claims to describe.
    */
-  getRecent(limit: number, asOf: Date): ArmComparisonSample[] {
+  getRecent(limit: number, asOf: Date): PersistedArmComparisonSample[] {
     const rows = this.db
       .prepare(
         `SELECT ${COLUMNS}

@@ -25,8 +25,8 @@ import type { PipelineStage } from '../../../contracts/index.js';
 import { computeInfluenceScore } from '../../pipeline/debate-engine/analyst-contribution.js';
 import type { AnalystContribution } from '../../pipeline/debate-engine/index.js';
 import {
-  type ArmComparisonSample,
   MIN_TRADES_PER_ARM_FOR_DIVERGENCE,
+  type PersistedArmComparisonSample,
 } from '../../pipeline/feedback-loop/index.js';
 import type { OutsideBenchmarkSample } from '../../pipeline/outside-benchmark/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
@@ -656,7 +656,7 @@ const OUTSIDE_BENCHMARKS: OutsideBenchmarkSample[] = [
   },
 ];
 
-const ARM_COMPARISONS: ArmComparisonSample[] = [
+const ARM_COMPARISONS: PersistedArmComparisonSample[] = [
   {
     computed_at: NOW,
     comparison: {
@@ -887,7 +887,7 @@ export class InMemoryQueryStore implements DashboardQueryStore {
    * populated branch instead, or the panel ships never having been drawn.
    * `limit` is honoured for `getPipelineActivity`'s reason.
    */
-  getArmComparisons(limit: number, _asOf: Date): ArmComparisonSample[] {
+  getArmComparisons(limit: number, _asOf: Date): PersistedArmComparisonSample[] {
     return ARM_COMPARISONS.slice(0, limit).map((sample) => ({ ...sample }));
   }
 

@@ -17,7 +17,12 @@
  * `ArmPerformance` values rather than picking columns off them.
  */
 import type { Clock } from '../../../shared/index.js';
-import type { ArmComparison, ArmedClosedTrade } from '../../control-arm/index.js';
+import type {
+  ArmComparison,
+  ArmedClosedTrade,
+  ArmPerformance,
+  ArmRefusedPassCounts,
+} from '../../control-arm/index.js';
 
 /**
  * Both arms' closed trades over ONE window, in one query — the property doc 12
@@ -34,6 +39,17 @@ import type { ArmComparison, ArmedClosedTrade } from '../../control-arm/index.js
  */
 export interface ArmComparisonSource {
   getClosedTradesBetween(from: Date, to: Date): ArmedClosedTrade[];
+  /**
+   * Passes each arm refused over the SAME window (#1099) — a second read
+   * against `trader_log`, because a refusal writes no `closed_trades` row and
+   * is therefore invisible to the query above.
+   *
+   * On the port rather than only on the SQLite class so the cycle cannot be
+   * wired to a source that has no refusal reading: the count is a required
+   * field on `ArmPerformance`, and a fake that could omit the method would
+   * force the cycle to invent a zero.
+   */
+  getRefusedPassCountsBetween(from: Date, to: Date): ArmRefusedPassCounts;
 }
 
 /**
@@ -81,6 +97,31 @@ export interface ArmComparisonSample {
 }
 
 /**
+ * What `arm_comparison_samples` can actually give back — every column migration
+ * 0034/0035 defines, and nothing else.
+ *
+ * `refused_pass_count` (#1099) has no column and is not persisted, so a sample
+ * READ BACK cannot carry it. This type says that rather than letting the row
+ * mapper fabricate a `0`, which would assert "no refusals in this window" on
+ * every historical row and reproduce, on the durable surface, the exact
+ * silence #1099 exists to break. Adding the column is a migration and is
+ * deliberately out of #1099's scope.
+ *
+ * Only the READ side narrows: `append` still takes a whole `ArmComparisonSample`,
+ * so the writer keeps computing the field even where the table drops it.
+ */
+export type PersistedArmPerformance = Omit<ArmPerformance, 'refused_pass_count'>;
+
+export interface PersistedArmComparison extends Omit<ArmComparison, 'live' | 'control'> {
+  live: PersistedArmPerformance;
+  control: PersistedArmPerformance;
+}
+
+export interface PersistedArmComparisonSample extends Omit<ArmComparisonSample, 'comparison'> {
+  comparison: PersistedArmComparison;
+}
+
+/**
  * Where each cycle's sample is written, and read back from.
  *
  * The dashboard panel (#913 surface 2) reads FL's persisted samples rather than
@@ -92,7 +133,7 @@ export interface ArmComparisonSample {
 export interface ArmComparisonSampleStore {
   append(sample: ArmComparisonSample): void;
   /** Most-recently-computed first. Empty means no cycle has computed one yet. */
-  getRecent(limit: number, asOf: Date): ArmComparisonSample[];
+  getRecent(limit: number, asOf: Date): PersistedArmComparisonSample[];
 }
 
 /**

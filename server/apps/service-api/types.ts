@@ -24,7 +24,7 @@ import type {
   StoreMode,
   TickStatus,
 } from '../../../contracts/index.js';
-import type { ArmComparisonSample } from '../../pipeline/feedback-loop/index.js';
+import type { PersistedArmComparisonSample } from '../../pipeline/feedback-loop/index.js';
 import type { OutsideBenchmarkSample } from '../../pipeline/outside-benchmark/index.js';
 import type { RiskCriticVerdict } from '../../pipeline/risk-manager/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
@@ -238,14 +238,19 @@ export interface DashboardQueryStore {
    * The Feedback Loop's persisted matched-control comparisons (#971),
    * most-recently-computed first — the panel's whole data source.
    *
-   * Returns FL's own `ArmComparisonSample`, not a dashboard-local shape: this
-   * store "defines no competing shapes for data owned elsewhere", and the
-   * comparison is owned by the Feedback Loop (#636). It is read here rather
-   * than recomputed at snapshot time because recomputing would move the
+   * Returns FL's own `PersistedArmComparisonSample`, not a dashboard-local
+   * shape: this store "defines no competing shapes for data owned elsewhere",
+   * and the comparison is owned by the Feedback Loop (#636). It is read here
+   * rather than recomputed at snapshot time because recomputing would move the
    * computation out of FL and show a number FL never saw and never alerted on
    * — see migration 0034's own comment.
+   *
+   * The PERSISTED shape, so what this returns is bounded by what
+   * `arm_comparison_samples` holds: `ArmPerformance.refused_pass_count` (#1099)
+   * has no column there and is absent here rather than read back as a `0` the
+   * table never stored.
    */
-  getArmComparisons(limit: number, asOf: Date): ArmComparisonSample[];
+  getArmComparisons(limit: number, asOf: Date): PersistedArmComparisonSample[];
   /**
    * The Feedback Loop's outside benchmarks (#981), newest first, bounded by
    * `asOf`. `limit` counts ROWS, not cycles — two benchmarks per cycle.

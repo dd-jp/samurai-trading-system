@@ -81,7 +81,7 @@ export function formatArmComparison(comparison: ArmComparison): string {
     `  window: ${comparison.from.toISOString()} → ${comparison.to.toISOString()}`,
     `  basis:  $${comparison.basis.toFixed(2)} (the same denominator for both arms)`,
     '',
-    '  arm      trades   realized      return   max drawdown',
+    '  arm      trades   realized      return   max drawdown   refused passes',
   ];
 
   for (const arm of [comparison.live, comparison.control]) {
@@ -89,7 +89,8 @@ export function formatArmComparison(comparison: ArmComparison): string {
       `  ${arm.arm.padEnd(9)}${String(arm.trade_count).padStart(5)}` +
         `${arm.realized_pnl_net.toFixed(2).padStart(12)}` +
         `${pct(arm.return_pct).padStart(12)}` +
-        `${pct(arm.max_drawdown_pct).padStart(15)}`,
+        `${pct(arm.max_drawdown_pct).padStart(15)}` +
+        `${String(arm.refused_pass_count).padStart(17)}`,
     );
   }
 
@@ -110,12 +111,38 @@ export function formatArmComparison(comparison: ArmComparison): string {
     '  non-converging stretch with that in mind.',
   );
 
+  // #1099. Printed BEFORE the zero-trade note below, which reads differently
+  // once a refusal count is on the page: a refused pass is positive evidence
+  // the arm ran and could not act, which is the one thing that note otherwise
+  // tells the operator to go and check by hand.
+  const refusedPasses = comparison.live.refused_pass_count + comparison.control.refused_pass_count;
+  if (refusedPasses > 0) {
+    lines.push(
+      '',
+      `  NOTE: ${refusedPasses} pass(es) in this window were REFUSED rather than declined —`,
+      '  the arm could not value its book at all (a dark or stale mark), so it never',
+      '  reached a trading decision. Refused passes write `trader_log` rows and no',
+      '  `closed_trades` row, so without this column a stretch of them reads exactly',
+      '  like a quiet market (#1089, #1099). A long stretch means the comparison is',
+      '  measuring fewer opportunities than the window suggests, on that arm only.',
+      '',
+      '  Do NOT read `refused / trades` as a rate. The trade counts above are filtered',
+      '  (`modelled_cost_charged`, the #1112 sizing regime) and this count is not, so',
+      '  the two have different denominators by construction.',
+    );
+  }
+
   if (comparison.control.trade_count === 0) {
     lines.push(
       '',
-      '  NOTE: the control arm closed no trades in this window. That is not evidence',
-      '  of anything until you have checked the control arm actually ran — an unbound',
-      '  `TickSteps.controlArm` produces the identical row.',
+      '  NOTE: the control arm closed no trades in this window.',
+      comparison.control.refused_pass_count > 0
+        ? '  It DID run — the refused-pass count above is proof — but on those passes it\n' +
+            '  could not value its book. Check the mark source before reading this row as a\n' +
+            '  control arm that found no setup.'
+        : '  That is not evidence of anything until you have checked the control arm actually ran\n' +
+            '  — an unbound `TickSteps.controlArm` produces the identical row, and so does a\n' +
+            '  control arm that simply found no setup.',
     );
   }
 
@@ -187,11 +214,17 @@ if (isMain) {
 
   const to = new Date();
   const from = new Date(to.getTime() - days * 24 * 60 * 60 * 1000);
+  const source = new SqliteArmComparisonSource(db);
 
   console.log(
     formatArmComparison(
       buildArmComparison({
-        trades: new SqliteArmComparisonSource(db).getClosedTradesBetween(from, to),
+        trades: source.getClosedTradesBetween(from, to),
+        // #1099: the same window, from the same reader, in the same expression
+        // — a refusal count taken over a different window would be a second
+        // window to get wrong, which is what `SqliteArmComparisonSource`'s
+        // header exists to prevent.
+        refused_passes: source.getRefusedPassCountsBetween(from, to),
         from,
         to,
         // The declared book, not live equity: both arms must be divided by the
