@@ -57,6 +57,7 @@ import {
   SMOKE_LLM_RESPONSE,
   SMOKE_LSE_VENDOR,
   SMOKE_RUN_INSTANT,
+  type SmokeEvidence,
   type SmokeObservations,
   type ThresholdClampEvidence,
   UnreachableAlpacaClient,
@@ -299,6 +300,7 @@ function healthyCryptoEmulation(
 function healthyGateOptions(
   overrides: {
     minTicks?: number;
+    alpacaWireClientReached?: boolean;
     exitPath?: ExitPathEvidence;
     cryptoEmulation?: CryptoEmulationEvidence;
     loggerResilience?: LoggerResilienceEvidence;
@@ -322,7 +324,7 @@ function healthyGateOptions(
     configuredLlmBudgetUsd?: number | undefined;
     publishedLlmCapArmedAt?: string | null;
   } = {},
-) {
+): SmokeEvidence {
   return {
     fillSync: overrides.fillSync ?? healthyFillSync(),
     marketDataFetch: overrides.marketDataFetch ?? healthyMarketDataFetch(),
@@ -335,7 +337,10 @@ function healthyGateOptions(
       allMatchConfiguredCeiling: true,
       ...overrides.sizingCeiling,
     },
-    minTicks: overrides.minTicks ?? 2,
+    tickLoop: {
+      minTicks: overrides.minTicks ?? 2,
+      alpacaWireClientReached: overrides.alpacaWireClientReached ?? false,
+    },
     llmRateLimiterSnapshot: meteredSnapshot(),
     exitPath: overrides.exitPath ?? healthyExitPath(),
     cryptoEmulation: overrides.cryptoEmulation ?? healthyCryptoEmulation(),
@@ -350,16 +355,18 @@ function healthyGateOptions(
     promptTierWarning: overrides.promptTierWarning ?? healthyPromptTierWarning(),
     analystFailureCause: overrides.analystFailureCause ?? healthyAnalystFailureCause(),
     filledZeroSizeWedge: overrides.filledZeroSizeWedge ?? healthyFilledZeroSizeWedge(),
-    // #1140: healthy means the published cap IS the run's configured budget.
-    publishedLlmCapUsd:
-      'publishedLlmCapUsd' in overrides ? (overrides.publishedLlmCapUsd ?? null) : 50,
-    configuredLlmBudgetUsd:
-      'configuredLlmBudgetUsd' in overrides ? overrides.configuredLlmBudgetUsd : 50,
-    // #1196: healthy means a real run armed, so `armed_at` is non-null.
-    publishedLlmCapArmedAt:
-      'publishedLlmCapArmedAt' in overrides
-        ? (overrides.publishedLlmCapArmedAt ?? null)
-        : '2026-08-05T14:00:00.000Z',
+    llmSpendCap: {
+      // #1140: healthy means the published cap IS the run's configured budget.
+      publishedCapUsd:
+        'publishedLlmCapUsd' in overrides ? (overrides.publishedLlmCapUsd ?? null) : 50,
+      configuredBudgetUsd:
+        'configuredLlmBudgetUsd' in overrides ? overrides.configuredLlmBudgetUsd : 50,
+      // #1196: healthy means a real run armed, so `armed_at` is non-null.
+      capArmedAt:
+        'publishedLlmCapArmedAt' in overrides
+          ? (overrides.publishedLlmCapArmedAt ?? null)
+          : '2026-08-05T14:00:00.000Z',
+    },
   };
 }
 
@@ -1408,10 +1415,10 @@ describe('evaluateSmokeGate', () => {
    * name the cause. This turns it into its own named failure.
    */
   it('fails when anything reached the Alpaca wire client, even if everything else transacted', () => {
-    const gate = evaluateSmokeGate(transactedObservations(), {
-      ...healthyGateOptions(),
-      alpacaWireClientReached: true,
-    });
+    const gate = evaluateSmokeGate(
+      transactedObservations(),
+      healthyGateOptions({ alpacaWireClientReached: true }),
+    );
 
     expect(gate.passed).toBe(false);
     expect(gate.failures).toHaveLength(1);
@@ -1658,9 +1665,11 @@ describe('FillSyncFailureRecorder (#1049)', () => {
 describe('formatSmokeReport', () => {
   it('states the reached stages, the verdict, the lot and the fill', () => {
     const observations = transactedObservations();
+    const evidence = healthyGateOptions();
     const report = formatSmokeReport(
       observations,
-      evaluateSmokeGate(observations, healthyGateOptions()),
+      evidence,
+      evaluateSmokeGate(observations, evidence),
     ).join('\n');
 
     expect(report).toContain(
@@ -1697,9 +1706,11 @@ describe('formatSmokeReport', () => {
       breakerStates: BOTH_TIERS,
       riskDecisions: [],
     };
+    const evidence = healthyGateOptions({ minTicks: 3 });
     const report = formatSmokeReport(
       observations,
-      evaluateSmokeGate(observations, healthyGateOptions({ minTicks: 3 })),
+      evidence,
+      evaluateSmokeGate(observations, evidence),
     ).join('\n');
 
     expect(report).toContain('GATE: FAIL');

@@ -35,8 +35,8 @@
  * helper the tick loop itself uses) and driving three scenarios — a full
  * exit, a partial flatten, and a two-lot flatten — against a deterministic
  * offline broker. See that function's own doc for why it does not go through
- * `startFromEnvironment`, and `evaluateSmokeGate`'s "The exit path" section
- * for what it now requires.
+ * `startFromEnvironment`, and `exitPathProbe`'s verdict for what it now
+ * requires.
  *
  * ## What this is for
  *
@@ -1102,6 +1102,30 @@ export class FillSyncFailureRecorder implements Logger {
   }
 }
 
+const fillSyncProbe: Probe<'fillSync'> = {
+  run({ fillSyncFailures }) {
+    return fillSyncFailures.evidence();
+  },
+  verdict(evidence) {
+    const failures: string[] = [];
+    // #1049 — the fill-sync loop must never have rejected a poll. It logs and
+    // keeps polling by design (fill-sync.ts `runOnce`), so this is the only
+    // place a run whose `ingestFills` fails on every call is visible at all.
+    const untolerated = untoleratedFillSyncFailures(evidence.failures);
+    if (untolerated.length > 0) {
+      const distinct = [
+        ...new Set(untolerated.map((failure) => `${failure.message}: ${failure.error}`)),
+      ];
+      failures.push(
+        `${untolerated.length} fill-sync poll failure(s) were logged and survived — the loop keeps ` +
+          'polling by design, so nothing else in this gate sees a reconcile/ingestFills/sweep path that ' +
+          `rejects on every call (#1049). Distinct: ${distinct.join(' | ')}`,
+      );
+    }
+    return failures;
+  },
+};
+
 /** What `evaluateSmokeGate` needs from the market-data fetch path (#1082). */
 export interface MarketDataFetchEvidence {
   /** How many `market_data_fetch` lines the run recorded — see `MarketDataFetchRecorder`. */
@@ -1128,8 +1152,8 @@ export interface MarketDataFetchEvidence {
  * `market_data_fetch`, the convention #1115 made compulsory for every
  * `warn`/`error` line — is the one fixed field every line carries.
  *
- * Unlike #1083's `token_bucket_wait` (deliberately given NO evidence field —
- * see the comment on `evaluateSmokeGate`'s options), a cache-miss line here
+ * Unlike #1083's `token_bucket_wait` (deliberately given NO probe — see
+ * `SmokeEvidence`), a cache-miss line here
  * fires for free on the FIRST bar fetch any fixture-driven run makes against
  * a cold `:memory:` store — no artificial real-time wait needed — which is
  * what makes a real (non-vacuous) assertion on this mechanism's DURABLE
@@ -1153,6 +1177,57 @@ export class MarketDataFetchRecorder implements Logger {
     return { fetchCount: this.fetchCount, traceIds: [...this.traceIds] };
   }
 }
+
+const marketDataFetchProbe: Probe<'marketDataFetch'> = {
+  run({ marketDataFetch }) {
+    return marketDataFetch.evidence();
+  },
+  verdict(evidence, { observations }) {
+    const failures: string[] = [];
+    // #1082 — the market-data fetch path must have logged at least one
+    // `market_data_fetch` line. `MarketDataServiceImpl`'s store starts cold
+    // (`:memory:`), so the run's very first bar fetch through the composition
+    // root's PRIMARY `marketData` instance is a guaranteed cache miss; zero
+    // lines means the `telemetry` argument was dropped from `production.ts`'s
+    // `new MarketDataServiceImpl(...)` call, returning the bar/indicator path
+    // to the undiagnosable-silence state #1082 was filed against.
+    if (evidence.fetchCount === 0) {
+      failures.push(
+        'zero market_data_fetch lines were recorded over the run — the store starts cold, so at ' +
+          'least one venue-reaching bar fetch (and therefore one recorded miss) is guaranteed on a ' +
+          'correctly wired composition root; a zero count means the `telemetry` argument was dropped ' +
+          "from production.ts's primary `MarketDataServiceImpl` construction, and the market-data " +
+          'path is back to emitting no telemetry at all (#1082)',
+      );
+    }
+
+    // The fetch telemetry must be JOINABLE to the tick that caused it, which is
+    // the whole point of putting the tick's `trace_id` in ambient context: a
+    // fetch inside a tick carries that tick's id, and `'market-data'` is the
+    // fallback for one with no enclosing tick.
+    //
+    // A run with no ticks at all is not this check's business — `tickLoopProbe`
+    // owns that, and piling on would report a trace defect
+    // for a run that never got far enough to have one.
+    //
+    // Asserted here because nothing else can. Deleting the `runWithTraceId`
+    // wrapper from `SequentialTickRunner.runInstrument` leaves every fetch
+    // byte-identical, every unit test green (each site's fallback is a legal
+    // return), and every other check in this gate green — the lines just
+    // quietly revert to the category label and join to nothing.
+    const tickTraces = new Set(observations.ticks.map((tick) => tick.trace_id));
+    const joined = evidence.traceIds.some((trace_id) => tickTraces.has(trace_id));
+    if (tickTraces.size > 0 && evidence.fetchCount > 0 && !joined) {
+      failures.push(
+        'no market_data_fetch line carried a tick trace_id — every recorded fetch fell back to ' +
+          "the 'market-data' category label, so the bar path's telemetry joins to no tick in " +
+          'audit_log. Either `runWithTraceId` has been dropped from ' +
+          'SequentialTickRunner.runInstrument, or the fetch no longer runs inside the tick',
+      );
+    }
+    return failures;
+  },
+};
 
 /** The `error` string `startFillSync` puts in its rejection payloads, or `''` if absent. */
 function payloadError(payload: unknown): string {
@@ -1794,6 +1869,350 @@ async function runExitPathScenarios(input: {
   };
 }
 
+/**
+ * #576. Runs after the tick loop has stopped and drained: it shares `db` and
+ * `clock` with the six-stage run but drives its own instruments
+ * (`EXIT_PATH_INSTRUMENTS`), so the two cannot contend for the same lots or
+ * the same `heldLots` filter (execute.ts). Residual alerts are gathered from
+ * BOTH the tick loop and the harness — one is a defect wherever it fires.
+ */
+const exitPathProbe: Probe<'exitPath'> = {
+  async run({ db, clock, profile, logger, tickLoopResidualAlerts }) {
+    const harness = await runExitPathScenarios({
+      db,
+      clock,
+      costConfig: profile.costConfig,
+      executionConfig: profile.executionConfig,
+      logger,
+    });
+    return {
+      ...harness,
+      residualAlerts: [...tickLoopResidualAlerts.alerts, ...harness.residualAlerts],
+    };
+  },
+  verdict(evidence, { observations }) {
+    const failures: string[] = [];
+    const { positions } = observations;
+    // #576 — the exit path, unconditional: `runExitPathScenarios` always runs,
+    // so every one of these is expected on every healthy smoke run, the same
+    // way `tickLoopProbe`'s `positions`/`fills` checks are.
+
+    // #508/#516: the write-ahead journal must exist and every row must have
+    // resolved — an unresolved row means an exit was journalled and then the
+    // broker call was refused or left ambiguous.
+    if (observations.flattenSubmissions.length === 0) {
+      failures.push(
+        "no row in flatten_submissions — no exit ever reached executeExit()'s write-ahead journal " +
+          "(#508), so #516's cancel-before-flatten guard was never exercised",
+      );
+    } else {
+      const unresolved = observations.flattenSubmissions.filter(
+        (row) => row.status !== 'submitted',
+      );
+      if (unresolved.length > 0) {
+        failures.push(
+          `flatten_submissions has ${unresolved.length} row(s) not resolved to 'submitted' ` +
+            `(${unresolved.map((row) => `${row.idempotency_key}:${row.status}`).join(', ')}) — an ` +
+            'exit was journalled but its flatten never reached, or was refused by, the broker',
+        );
+      }
+    }
+
+    // #516 — ORDERING, not merely that both calls happened: every `submitFlatten`
+    // must have a `cancel` recorded FRESH since the previous `submitFlatten` (or
+    // the start of the run), not merely "somewhere earlier in the sequence" —
+    // that weaker form would report the FIRST flatten's own missing cancel and
+    // then stop, because every later flatten's window contains SOME earlier
+    // cancel and (wrongly) reads as satisfied.
+    //
+    // What this window scoping does NOT do: verify the cancel it finds belongs
+    // to the SAME lot the flatten is closing. A resting bracket leg cancelled
+    // after the flatten (or never) can fire into the now-flat position and open
+    // a reverse one, and this check catches that for the FIRST flatten a
+    // regression touches — sufficient in practice because `executeExit` cancels
+    // and flattens through one uniform code path applied to every exit, so a
+    // real regression of #516's ordering shows up on the first flatten, not
+    // selectively on a later one.
+    const { brokerCallSequence } = evidence;
+    let sincePreviousFlatten = 0;
+    const flattensWithoutPriorCancel: string[] = [];
+    for (const [index, call] of brokerCallSequence.entries()) {
+      if (!call.startsWith('submitFlatten:')) continue;
+      const window = brokerCallSequence.slice(sincePreviousFlatten, index);
+      if (!window.some((entry) => entry.startsWith('cancel:'))) {
+        flattensWithoutPriorCancel.push(call);
+      }
+      sincePreviousFlatten = index + 1;
+    }
+    if (flattensWithoutPriorCancel.length > 0) {
+      failures.push(
+        `broker call(s) ${flattensWithoutPriorCancel.join(', ')} have no 'cancel' call recorded ` +
+          `before them (full sequence: ${brokerCallSequence.join(' -> ') || '(empty)'}) — a resting ` +
+          'bracket leg cancelled after the flatten (or never) can fire into the now-flat position ' +
+          'and open a reverse one (#516)',
+      );
+    }
+    if (!brokerCallSequence.some((call) => call.startsWith('submitFlatten:'))) {
+      failures.push(
+        'the exit-path harness recorded no submitFlatten call at all — exits never reached ' +
+          'submitFlatten (#508)',
+      );
+    }
+
+    // #508/#517: every exit must eventually round-trip a lot to `closed` with
+    // a `ClosedTrade` — see `SmokeObservations.closedTrades`'s doc for why this
+    // was NOT required before #576.
+    if (observations.closedTrades.length === 0) {
+      failures.push(
+        'no row in closed_trades — the exit-path scenarios never round-tripped a lot to flat, so ' +
+          "either a flatten's fill was never attributed back to the lot it closed (#517) or " +
+          'ingestFills() never reached its round-trip-to-flat branch at all',
+      );
+    }
+
+    // Scoped to scenario 1's OWN lot, not just the aggregate above: scenario 3
+    // alone closes two lots, so an aggregate-only check stays green if
+    // scenario 1 regresses in isolation (e.g. a reintroduced #517
+    // misattribution confined to its instrument) while scenario 3 still
+    // closes normally. Same pattern the #571 check below uses for its own lots.
+    const fullExitLot = positions.find(
+      (position) => position.idempotency_key === evidence.fullExit.lotKey,
+    );
+    if (fullExitLot === undefined || fullExitLot.order_state !== 'closed') {
+      failures.push(
+        `lot '${evidence.fullExit.lotKey}' (scenario 1's full exit) never reached ` +
+          `order_state 'closed' (${
+            fullExitLot === undefined
+              ? 'no row in open_positions'
+              : `state=${fullExitLot.order_state}`
+          }) — the #508/#517 exit path did not round-trip it to flat`,
+      );
+    }
+
+    // #525 — the residual left by a partial flatten must be RE-ARMED (not left
+    // naked), and re-arming must not have needed the fallback alert: a
+    // successful re-arm posts nothing (residual-exposure-alert.ts).
+    const { partialFlatten, residualAlerts } = evidence;
+    if (partialFlatten.protectedQty === null) {
+      failures.push(
+        `lot '${partialFlatten.idempotencyKey}' has no protective legs armed after its partial ` +
+          "flatten — the #525 residual re-arm never ran, leaving the lot's residual naked",
+      );
+    } else if (partialFlatten.protectedQty !== partialFlatten.expectedResidual) {
+      failures.push(
+        `lot '${partialFlatten.idempotencyKey}' has ${partialFlatten.protectedQty} protected after ` +
+          `its partial flatten, expected the residual ${partialFlatten.expectedResidual} — the ` +
+          're-arm (#525) sized the wrong quantity',
+      );
+    }
+    // Scoped since #549: scenario 5 DELIBERATELY fails one re-arm, so exactly
+    // its one inline alert is expected — any OTHER lot alerting still means a
+    // re-arm failed on a deterministic offline broker.
+    const { residualSweep } = evidence;
+    const strayResidualAlerts = residualAlerts.filter(
+      (alert) => alert.idempotency_key !== residualSweep.lotKey,
+    );
+    if (strayResidualAlerts.length > 0) {
+      failures.push(
+        `${strayResidualAlerts.length} residual-exposure alert(s) fired during the smoke run ` +
+          `(lot(s): ${strayResidualAlerts.map((alert) => alert.idempotency_key).join(', ')}) — a ` +
+          'successful re-arm posts nothing (residual-exposure-alert.ts); an alert here means the ' +
+          '#525 re-arm failed on a deterministic offline broker',
+      );
+    }
+
+    // #549 — the residual-protection sweep's ENFORCEMENT assertions (#430's
+    // convention, mirroring #519/#526's above): scenario 5's observing-poll
+    // re-arm was scripted to fail, so ONLY the durable marker + the restarted
+    // reconcile()'s sweep can have re-established protection. Each check below
+    // catches a real way the #549 mechanism can regress on its OWN terms — the
+    // dedup breaking, the sweep settling on the wrong action, the marker
+    // surviving, the qty coming out wrong — but they are not four independent
+    // witnesses to the SAME failure. Measured (#1228/#1285): an extra
+    // `ingestFills()` ahead of the restart heals the deliberately-failed re-arm
+    // in-process, through `maybeRearmResidual`'s mark-unprotected ->
+    // rearmProtectiveLegs -> confirm-protected path (ingest-fills.ts). A
+    // GENUINE restart-sweep heal takes a different path — `sweepOne`
+    // (residual-protection-sweep.ts), which never writes mark-unprotected (the
+    // marker is already set) and clears via `store.confirmResidualProtected`
+    // directly. What makes the two indistinguishable to the other three checks
+    // is not a shared code path but `sweepOne`'s own doc'd choice to recompute
+    // off the SAME `heldQuantityFromFills`/`isFlat` expressions
+    // `maybeRearmResidual` uses, so both leave an identical marker/qty/alert
+    // footprint. The `scenario5Alerts` count check below, and the
+    // `markerCleared`/`protectedQty` checks further below, all read a healed-
+    // in-process residual as indistinguishable from a genuinely swept one.
+    // `sweepDivergenceAction === undefined` (`findSweepDivergence`, above
+    // `runExitPathScenarios`) sees that the restarted sweep itself found
+    // nothing left to do — positive evidence the RESTARTED sweep, not an
+    // earlier poll, did the healing. `.action` alone is not sufficient,
+    // though (#1285 B2, round-1 review): a wrong-key mutation at the
+    // `findSweepDivergence` call site can read a DIFFERENT scenario's
+    // divergence whose `.action` also happens to be `'adopted'` — measured
+    // concretely by substituting scenario 4's `crashRestartLot.exitKey` for
+    // this lot's key, which reads scenario 4's flatten-reconcile divergence
+    // (`reconcileFlatten`, reconcile.ts) instead, itself `'adopted'`.
+    // `sweepDivergenceReason` is the same lookup's `reason` text, so it cannot
+    // silently disagree with `sweepDivergenceAction` about which divergence was
+    // found — and only `sweepOne`'s own re-arm reason
+    // (`'... for residual N by the #549 sweep …'`, residual-protection-sweep.ts)
+    // can produce the text this check requires. That excludes more than
+    // flatten-reconcile divergences: `sweepOne` itself has a SECOND
+    // `action: 'adopted'` return — the `coversQty` flat-path no-op, taken when
+    // the persisted fill record already reads flat, whose reason ("marked lot
+    // reads flat on the persisted fill record…") never names the #549 sweep
+    // either. So this check discriminates WITHIN `sweepOne`, not only against
+    // other mechanisms: only its own re-arm branch — the one that actually
+    // retried `broker.rearmProtectiveLegs` — satisfies it. Since #1285 N3
+    // (round-2 review), the matched text is also bound to THIS lot's own
+    // `expectedResidual`, not just the literal `'by the #549 sweep'` suffix —
+    // narrowing the aperture the B2 fix left open: a future scenario adding a
+    // second lot through `sweepOne`'s real re-arm branch would otherwise also
+    // produce `'adopted'` text naming the #549 sweep, and a wrong-key lookup
+    // landing on THAT lot's divergence would pass B2's check without also
+    // matching this lot's own residual quantity.
+    const scenario5Alerts = residualAlerts.filter(
+      (alert) => alert.idempotency_key === residualSweep.lotKey,
+    );
+    if (scenario5Alerts.length !== 1) {
+      failures.push(
+        `scenario 5's residual episode alerted ${scenario5Alerts.length} time(s), expected exactly 1 ` +
+          "(the observing poll's inline #525 alert) — 0 means the failed re-arm no longer pages at " +
+          'all; more than 1 means the once-per-episode dedup (#549/#342, ' +
+          'open_positions.residual_rearm_alerted_at) regressed and the sweep re-pages every pass',
+      );
+    }
+    if (residualSweep.sweepDivergenceAction === undefined) {
+      failures.push(
+        `the restarted Execution's reconcile() report named no divergence for scenario 5's lot ` +
+          `'${residualSweep.lotKey}' — the durable residual-protection marker (migration 0024) was ` +
+          'never written by the observing poll, or SharedStore.getUnprotectedResidualLots() found ' +
+          'nothing, so the #549 sweep either never ran or had nothing to find',
+      );
+    } else if (residualSweep.sweepDivergenceAction !== 'adopted') {
+      failures.push(
+        `the restarted Execution's residual-protection sweep settled scenario 5's lot with action ` +
+          `'${residualSweep.sweepDivergenceAction}', not 'adopted' — the retry against a healthy ` +
+          'deterministic broker should have re-armed and confirmed; anything else means the sweep ' +
+          'could not settle a marker it should have (#549)',
+      );
+    } else if (
+      !residualSweep.sweepDivergenceReason?.includes(
+        `for residual ${residualSweep.expectedResidual} by the #549 sweep`,
+      )
+    ) {
+      failures.push(
+        `the lookup keyed on scenario 5's lot '${residualSweep.lotKey}' returned a divergence ` +
+          `reading 'adopted', but its reason ('${residualSweep.sweepDivergenceReason}') does not ` +
+          `name the #549 sweep re-arming this lot's OWN residual ` +
+          `(${residualSweep.expectedResidual}) — this is the #1285 ` +
+          'B2/N3 case: a lookup keyed on the WRONG lot could still land on a divergence reading ' +
+          "'adopted' (another scenario's flatten-reconcile, or sweepOne's own coversQty flat-path " +
+          "no-op), and binding the match to this lot's own residual quantity closes that even for a " +
+          "future scenario adding a second lot through sweepOne's real re-arm branch; only " +
+          "sweepOne's re-arm of THIS residual (residual-protection-sweep.ts) can satisfy this text",
+      );
+    }
+    if (!residualSweep.markerCleared) {
+      failures.push(
+        `scenario 5's residual-protection marker (open_positions.residual_unprotected_since, lot ` +
+          `'${residualSweep.lotKey}') is still set after the restarted reconcile() — protection was ` +
+          'never CONFIRMED, so the lot would be re-swept forever (#549)',
+      );
+    }
+    if (residualSweep.protectedQty !== residualSweep.expectedResidual) {
+      failures.push(
+        `lot '${residualSweep.lotKey}' has ${residualSweep.protectedQty ?? 'no'} protected after ` +
+          `the #549 sweep's retry, expected the residual ${residualSweep.expectedResidual} — the ` +
+          'sweep either never re-armed (the lot is naked) or sized the wrong quantity',
+      );
+    }
+
+    // #571 — neither lot named by a multi-lot flatten may be left phantom-open:
+    // both must have reached `order_state: 'closed'` in `open_positions`.
+    const phantomOpen = evidence.twoLotFlatten.lotKeys.filter((key) => {
+      const row = positions.find((position) => position.idempotency_key === key);
+      return row === undefined || row.order_state !== 'closed';
+    });
+    if (phantomOpen.length > 0) {
+      failures.push(
+        `lot(s) ${phantomOpen.join(', ')} were named by a two-lot flatten but never reached ` +
+          "order_state 'closed' — the #571 fill split left quantity unaccounted for on at least " +
+          'one sibling lot',
+      );
+    }
+
+    // #519/#526 — the ENFORCEMENT assertions for the flatten-journal sweep
+    // (#430's convention: a durable EFFECT only the new mechanism produces,
+    // not that an object was constructed). A regression that deletes
+    // `reconcile()`'s flatten sweep, or reverts `resumeFlatten` to a no-op,
+    // leaves scenario 4's lot open forever — `ingestFills()` alone never polls
+    // an order the process-local `flattens` map has forgotten, so nothing
+    // short of the sweep itself can close it.
+    const { crashRestart, flattenReconcileAlerts: flattenReconcileAlertsFired } = evidence;
+    const crashRestartDivergence = crashRestart.reconcileReport.divergences.find(
+      (divergence) => divergence.idempotency_key === crashRestart.flattenKey,
+    );
+    if (crashRestartDivergence === undefined) {
+      failures.push(
+        `the restarted Execution's reconcile() report named no divergence for scenario 4's ` +
+          `flatten '${crashRestart.flattenKey}' (lot '${crashRestart.lotKey}') — ` +
+          'SharedStore.getUnresolvedFlattens() found nothing to resolve, so the journal sweep ' +
+          '(#519) either never ran or the row was not recognised as unresolved ' +
+          `(checked=${crashRestart.reconcileReport.checked}, ` +
+          `divergences=${crashRestart.reconcileReport.divergences.length})`,
+      );
+    } else if (crashRestartDivergence.action !== 'adopted') {
+      failures.push(
+        `the restarted Execution's reconcile() settled scenario 4's flatten with action ` +
+          `'${crashRestartDivergence.action}', not 'adopted' (reason: ` +
+          `${crashRestartDivergence.reason}) — the venue genuinely acked this flatten, so anything ` +
+          "other than 'adopted' means reconcile() mis-settled a row it should have resolved cleanly",
+      );
+    }
+    const crashRestartLot = positions.find(
+      (position) => position.idempotency_key === crashRestart.lotKey,
+    );
+    if (crashRestartLot === undefined || crashRestartLot.order_state !== 'closed') {
+      failures.push(
+        `lot '${crashRestart.lotKey}' (scenario 4's crash-restart flatten) never reached ` +
+          `order_state 'closed' after the restarted Execution's reconcile() + ingestFills() ` +
+          `(${crashRestartLot === undefined ? 'no row in open_positions' : `state=${crashRestartLot.order_state}`}) ` +
+          "— reconcile()'s flatten sweep did not re-establish the fill-sweep worklist the way " +
+          '#519/#526 require',
+      );
+    }
+    if (flattenReconcileAlertsFired.length > 0) {
+      failures.push(
+        `${flattenReconcileAlertsFired.length} flatten-reconcile alert(s) fired during the smoke ` +
+          `run (flatten(s): ${flattenReconcileAlertsFired.map((alert) => alert.idempotency_key).join(', ')}) ` +
+          "— scenario 4's flatten resolves cleanly against a deterministic offline broker; an " +
+          'alert here means reconcile() could not settle a row it should have',
+      );
+    }
+
+    // #1088 — the terminal-row sweep's ENFORCEMENT assertion (#430's
+    // convention again): scenario 6 seeded a `rejected`, `filled_size = 0`
+    // `open_positions` row already older than `TERMINAL_SWEEP_AGE_MS`. Nothing
+    // else in this run ever reads or clears that row — `getOpenPositions()`
+    // already excluded it from every other check above by virtue of being
+    // terminal — so its continued presence after the restarted `reconcile()`
+    // can only mean `sweepTerminalPositions` was deleted, stopped being
+    // called from `reconcile()`, or regressed its own predicate.
+    const { terminalSweep } = evidence;
+    if (terminalSweep.rowPresentAfterSweep) {
+      failures.push(
+        `open_positions row '${terminalSweep.seededKey}' (seeded 'rejected', filled_size 0, ` +
+          `decision_timestamp past TERMINAL_SWEEP_AGE_MS) is STILL present after the restarted ` +
+          `reconcile() (swept=${terminalSweep.swept}) — the #1088 terminal-row sweep either never ` +
+          'ran or no longer deletes what it should; a table this leaves growing forever is the ' +
+          'exact defect #1088 closed',
+      );
+    }
+    return failures;
+  },
+};
+
 /** Everything the extracted exit-path scenarios below share and mutate in sequence. */
 interface ExitPathScenarioContext {
   readonly db: StoreHandle;
@@ -2405,6 +2824,76 @@ async function runCryptoEmulationScenario(
 }
 
 /**
+ * #586. The REAL AlpacaBrokerAdapter over the same db, on its own lot key and
+ * its own scripted client — the six-stage run and the exit-path harness both
+ * override the broker with `SimulatedBrokerAdapter`, so nothing else here can
+ * see the emulation at all.
+ */
+const cryptoEmulationProbe: Probe<'cryptoEmulation'> = {
+  run({ db, logger }) {
+    return runCryptoEmulationScenario(db, logger);
+  },
+  verdict(evidence) {
+    const failures: string[] = [];
+    // #586 — the emulated crypto protective legs, unconditional for #430's
+    // reason: `runCryptoEmulationScenario` always runs, the smoke universe is
+    // crypto, and no other check in this gate can see the emulation at all
+    // (the six-stage run and the exit-path harness both override the broker
+    // with `SimulatedBrokerAdapter`). Each check names a different way the
+    // mechanism can silently stop being wired.
+    const emulation = evidence;
+    if (emulation.journalRow === undefined || emulation.journalRow.asset_class !== 'crypto') {
+      failures.push(
+        "the emulated-leg journal (broker_brackets, venue 'alpaca') has no crypto row for the " +
+          "crypto-emulation scenario's lot — submitBracket stopped journalling the emulated " +
+          'bracket (#586), so a crash between the entry and its protective legs leaves a live ' +
+          'crypto position nothing knows to protect',
+      );
+    } else {
+      if (
+        emulation.journalRow.stop_order_id == null ||
+        emulation.journalRow.target_order_id == null
+      ) {
+        failures.push(
+          "the crypto-emulation scenario's journal row is missing protective-leg order ids after " +
+            'the entry filled — the legs were never submitted as plain crypto orders (#586), so ' +
+            'the filled lot sat naked',
+        );
+      }
+      if (emulation.journalRow.phase !== 'resolved') {
+        failures.push(
+          `the crypto-emulation scenario's journal row ended in phase ` +
+            `'${emulation.journalRow.phase}', expected 'resolved' — the emulated OCO edge ` +
+            '(leg fill -> sibling cancel) did not complete (#586)',
+        );
+      }
+    }
+    if (!emulation.entryFillSeen) {
+      failures.push(
+        "the crypto-emulation scenario's entry fill never came back through fetchNewFills — the " +
+          'emulation sweep is not polling its plain entry order (#586), so ingestFills would ' +
+          'never learn a crypto entry filled',
+      );
+    }
+    if (!emulation.stopFillSeen) {
+      failures.push(
+        "the crypto-emulation scenario's stop-leg fill never came back through fetchNewFills — " +
+          'the emulation sweep is not polling its resting legs (#586), so a stop-out would go ' +
+          'unbooked',
+      );
+    }
+    if (!emulation.siblingCancelled) {
+      failures.push(
+        'the surviving take-profit leg was never cancelled after the stop leg filled — the ' +
+          'emulated one-cancels-other edge is not firing (#586), leaving a resting order that ' +
+          'can fire into a flat position and open a reverse one',
+      );
+    }
+    return failures;
+  },
+};
+
+/**
  * What the logging-fault scenario (#714) observed. Every field is an EFFECT —
  * a line on disk, a chosen exit code — not "an object was constructed".
  */
@@ -2552,6 +3041,61 @@ function runLoggerResilienceScenario(): LoggerResilienceEvidence {
 }
 
 /**
+ * #714. A real file sink in a temp directory, independent of the store and the
+ * clock. What it gates is a soak that dies on day three because someone closed
+ * its terminal: no unit test exercises the entrypoint's stdout `'error'`
+ * subscription or its fault net.
+ */
+const loggerResilienceProbe: Probe<'loggerResilience'> = {
+  run() {
+    return runLoggerResilienceScenario();
+  },
+  verdict(evidence) {
+    const failures: string[] = [];
+    // #714 — the logging-fault mechanisms, asserted on their durable effects.
+    const logging = evidence;
+    if (!logging.stdoutRetired || logging.linesAfterStdoutDeath === 0) {
+      failures.push(
+        'a dead stdout pipe did not leave the logger degraded-but-running — stdout was not ' +
+          `retired (${logging.stdoutRetired}) or nothing reached the file afterwards ` +
+          `(${logging.linesAfterStdoutDeath} lines). An unattended soak (#238) dies the moment ` +
+          'its terminal closes, which is #714 exactly',
+      );
+    }
+    if (!logging.degradationRecordedInFile) {
+      failures.push(
+        'stdout failed and nothing recorded it on the surviving sink — the run would continue ' +
+          'blind, and a sink that silently stopped working is indistinguishable from a quiet ' +
+          'system (#714)',
+      );
+    }
+    if (!logging.escalatedWhenNothingCouldRecord) {
+      failures.push(
+        'a logger with no sink left to record on swallowed its failure instead of throwing — ' +
+          'the degrade in #714 is only honest because it stops when the failure can no longer ' +
+          'be written down anywhere',
+      );
+    }
+    if (!logging.lastResortTraceOnStderr) {
+      failures.push(
+        'a logger with no sink left threw but wrote nothing to stderr — and that throw is raised ' +
+          "inside a tick, where tick-loop's catch and safeLog swallow it by design (#573). " +
+          'Without the stderr line the run would keep trading with no trace on any stream (#714)',
+      );
+    }
+    if (!logging.fatalRecordedInFile || logging.fatalExitCode !== 1) {
+      failures.push(
+        'an unhandled fault was not recorded durably and exited with ' +
+          `${logging.fatalExitCode ?? 'no code'} rather than 1 — the fault net must record where ` +
+          'a soak can find it and STOP. A live-money process that keeps running in an unknown ' +
+          'state with open positions is worse than one that dies (#714)',
+      );
+    }
+    return failures;
+  },
+};
+
+/**
  * What the #1116 retention sweep observed. Every field is an EFFECT of
  * driving the REAL `runEntrypointLogRetention` against files on disk — not
  * "the function exists".
@@ -2668,6 +3212,70 @@ function runLogRetentionScenario(): LogRetentionEvidence {
   }
 }
 
+/** #1116. Real files in its own temp directory; nothing else drives `sweepStaleLogs` against disk. */
+const logRetentionProbe: Probe<'logRetention'> = {
+  run() {
+    return runLogRetentionScenario();
+  },
+  verdict(evidence) {
+    const failures: string[] = [];
+    // #1116 — the logs/ retention sweep, asserted on its durable effects: a
+    // stale file actually gone, a fresh one and an explicitly protected one
+    // actually surviving. `bytesReclaimed` is aspirational rather than exact
+    // when another process still holds a removed file open, but it is not
+    // aspirational here — the fixture is single-process — so a mutation that
+    // drops the byte accounting on an otherwise-correct removal is caught too.
+    const retention = evidence;
+    if (!retention.staleFileRemoved) {
+      failures.push(
+        'the logs/ retention sweep did not remove a file well outside its retention window — ' +
+          'unbounded growth in logs/ on an always-on host is exactly what #1116 exists to bound',
+      );
+    }
+    if (!retention.freshFileKept) {
+      failures.push(
+        'the logs/ retention sweep removed a file inside its retention window — deleting a ' +
+          'file this recent risks deleting evidence of a run still in progress (#1116)',
+      );
+    }
+    if (!retention.protectedFileKeptDespiteAge) {
+      failures.push(
+        'the logs/ retention sweep removed a path passed as protected despite it being old — ' +
+          "the active sink's own rotation set must survive regardless of mtime (#1116)",
+      );
+    }
+    if (!retention.liveShapedFileKeptDespiteAge) {
+      failures.push(
+        'the logs/ retention sweep removed an undated bare name (the service-api.log shape) — ' +
+          'a writer still holding that file open keeps appending to the unlinked inode, so the ' +
+          'space is never reclaimed and the content is unrecoverable (#1116)',
+      );
+    }
+    if (!retention.nonLogFileKeptDespiteAge) {
+      failures.push(
+        'the logs/ retention sweep removed a non-log file — pointed at a directory that is not ' +
+          'logs/ this is how it reaches .env.local, and no age window can make that recoverable ' +
+          '(#1116)',
+      );
+    }
+    if (!retention.oversizedSoakBootTruncatedByDefault) {
+      failures.push(
+        'the logs/ retention sweep left an oversized soak-boot.out untouched with no ' +
+          'configuration at all — #1206 is supposed to bound it by default (bareTruncateBytes and ' +
+          'bareTruncateNames both default on, #1281 review round 2), so an operator who sets ' +
+          'nothing is left with the exact unbounded growth this ticket exists to close',
+      );
+    }
+    if (retention.staleFileRemoved && retention.bytesReclaimed <= 0) {
+      failures.push(
+        'the logs/ retention sweep removed a file but reported 0 bytes reclaimed — the byte ' +
+          "accounting a soak's own artefact depends on (#1116) is not tracking what was deleted",
+      );
+    }
+    return failures;
+  },
+};
+
 /**
  * What the #764 entrypoint fault guards observed, per entrypoint. Every field
  * is an EFFECT of driving the REAL exported guard functions
@@ -2782,6 +3390,44 @@ function runEntrypointFaultGuardScenario(): EntrypointFaultGuardEvidence {
     ],
   };
 }
+
+/**
+ * #764. #714 fixed the unguarded-stdout class for the orchestrator only;
+ * nothing else drives the service-api and supervisor guards against the
+ * actual async `'error'` event a destroyed pipe delivers.
+ */
+const entrypointFaultGuardsProbe: Probe<'entrypointFaultGuards'> = {
+  run() {
+    return runEntrypointFaultGuardScenario();
+  },
+  verdict(evidence) {
+    const failures: string[] = [];
+    // #764 — the same stdout-write class #714 fixed for the orchestrator,
+    // decided separately for the service-api and supervisor entrypoints.
+    // There is no `stdoutErrorHandled` field here to check: an entrypoint that
+    // stopped subscribing to stdout's error event makes
+    // `runEntrypointFaultGuardScenario`'s `pipe.breakPipe(name)` throw, which
+    // aborts this whole run (`GATE: FAIL`, exit 1) before this loop is ever
+    // reached — a boolean that could only ever read `true` on the path that
+    // reaches it would be the vacuous-backstop shape `SmokeEvidence` warns about.
+    for (const guard of evidence.entries) {
+      if (guard.faultReportedOnStderr !== true) {
+        failures.push(
+          `${guard.name} stdout fault was not reported on stderr — a degrade that is not recorded ` +
+            'anywhere is indistinguishable from a quiet failure (#764)',
+        );
+      }
+      if (!guard.continuesOnArbitraryFault) {
+        failures.push(
+          `${guard.name} arbitrary-fault handler did not continue the process — this entrypoint ` +
+            'decided CONTINUE, not the orchestrator STOP: exiting takes the other half of the ' +
+            'system down through the supervisor rule that either child dying stops the other (#764)',
+        );
+      }
+    }
+    return failures;
+  },
+};
 
 function readLogLines(filePath: string): { message: string; payload?: unknown }[] {
   return readFileSync(filePath, 'utf8')
@@ -3086,52 +3732,10 @@ export function readSmokeObservations(
 
 export interface SmokeGateResult {
   passed: boolean;
-  /** One line per unmet requirement, in the order they are checked. Empty on a pass. */
+  /** One line per unmet requirement, in `PROBE_VERDICT_ORDER`. Empty on a pass. */
   failures: string[];
 }
 
-/**
- * The gate. Pure over observations so every branch is unit-testable without
- * starting a process — a gate that passes when nothing transacted is worse
- * than no gate.
- *
- * "Transacted" is deliberately a conjunction of independently-observable
- * effects rather than one summary flag, because each is a different wiring
- * defect:
- *
- * 1. the loop ran at all (timers, scheduler, shutdown);
- * 2. some tick got past Analysts — the literal condition #350 names, and the
- *    one a credentialed run against a 401ing data feed fails;
- * 3. a resolved debate reached `debate_log` (#364 — the store was constructed
- *    and never called, so a whole paper run of converged debates left the
- *    Feedback Loop's attribution input at zero rows);
- * 4. a `go` reached `verdict_log` (Verdict's gates, the HITL path, and the row
- *    `OrphanVerdictScanner` reads at restart);
- * 5. Execution accepted the `go` and reported `submitted`;
- * 6. a lot was written ahead to `open_positions` and reached the broker;
- * 7. a fill came back through the fill-sync poll — the only thing that proves
- *    `ingestFills()` is actually scheduled and draining.
- *
- * Requirement 3 asks for at least ONE row, not one per tick: the smoke clock
- * is frozen at `SMOKE_RUN_INSTANT` and the fixture views are identical every
- * tick, so all three ticks hash to the same `debate_id` and the writer's
- * first-write-wins guard (debate-adapter.ts) correctly collapses them to one
- * row rather than duplicating that debate's analysts in attribution.
- *
- * ## The exit path (#576)
- *
- * A `ClosedTrade` IS now required — see `options.exitPath` and
- * `runExitPathScenarios`. Six merged fixes (#508/#516/#517/#525/#568/#571)
- * live entirely in `Execution`'s exit path and none of them were reachable
- * from anything above; this gate could pass with every one of them
- * regressed, which was #576's entire finding. The checks below are a
- * conjunction for the same reason requirements 1-7 above are: each names a
- * different one of the six.
- */
-/**
- * What the threshold-clamp probe (#638) observed. Every field records a
- * REFUSAL that actually happened at a real seam, not that a validator exists.
- */
 /**
  * A minimal `RiskInput` for the #766 exit-bypass probe below — same shape
  * `risk-manager/index.test.ts`'s own fixtures use, trimmed to what
@@ -3232,6 +3836,10 @@ function probeExitBypassesLiveClamp(riskConfig: RiskConfig): boolean {
   return exitApproved && entryStillRefused;
 }
 
+/**
+ * What the threshold-clamp probe (#638) observed. Every field records a
+ * REFUSAL that actually happened at a real seam, not that a validator exists.
+ */
 export interface ThresholdClampEvidence {
   /**
    * The guarded names this probe drove. Compared against
@@ -3359,6 +3967,83 @@ function runThresholdClampScenario(
   }
 }
 
+/**
+ * #638. Negative probes through every seam that can put a risk threshold into
+ * force, against the SHIPPED paper values, on its own in-memory store. What it
+ * gates is the only stop ADR-0013 leaves standing: with no human gate
+ * anywhere, a config edit (or, after #736, the Feedback Loop by itself) is the
+ * entire distance between the running system and an arbitrary risk limit.
+ */
+const thresholdClampProbe: Probe<'thresholdClamp'> = {
+  run({ profile }) {
+    return runThresholdClampScenario(profile.breakerConfig, profile.riskConfig);
+  },
+  verdict(evidence) {
+    const failures: string[] = [];
+    // #638 — the in-code clamp on the last stop ADR-0013 leaves standing.
+    const clamp = evidence;
+    const missingFromProbe = GUARDED_THRESHOLD_NAMES.filter(
+      (name) => !clamp.probedNames.includes(name),
+    );
+    if (
+      missingFromProbe.length > 0 ||
+      clamp.probedNames.length !== GUARDED_THRESHOLD_NAMES.length
+    ) {
+      failures.push(
+        `the threshold-clamp probe covered ${clamp.probedNames.length} of ` +
+          `${GUARDED_THRESHOLD_NAMES.length} guarded thresholds (missing: ` +
+          `${missingFromProbe.join(', ') || 'none'}) — a bounds-table entry that nothing probes ` +
+          'is a limit nobody has seen enforced (#638)',
+      );
+    }
+    if (clamp.liveReadAccepted.length > 0) {
+      failures.push(
+        `the LIVE risk_thresholds read accepted out-of-bound values for ` +
+          `${clamp.liveReadAccepted.join(', ')} — RiskManagerImpl.evaluate() re-resolves its ` +
+          'config from that table on every call, so this is the path the Feedback Loop moves a ' +
+          'dial on between two ticks, with no boot in between (#638/ADR-0013)',
+      );
+    }
+    if (clamp.writeDoorAccepted.length > 0) {
+      failures.push(
+        `the Feedback Loop write door accepted out-of-bound values for ` +
+          `${clamp.writeDoorAccepted.join(', ')} — ADR-0013 requires every dial change to be ` +
+          'rejected in code if it would cross a hard bound, and after #736 there is nobody in ' +
+          'the path at all (#638)',
+      );
+    }
+    if (!clamp.breakerConstructionRefused) {
+      failures.push(
+        'the breaker constructor accepted a 0.95/0.90 drawdown pair — the pre-existing check is ' +
+          'a relative ordering test only, so this boots a system whose hard drawdown breaker ' +
+          'can never fire (#638)',
+      );
+    }
+    if (!clamp.killLineCheckRefused) {
+      failures.push(
+        'the kill-line boot check accepted a PBO threshold of 0.5 — CONTEXT.md states 0.05 as a ' +
+          'bright line and the Feedback Loop holds the only mutable copy of it (#638)',
+      );
+    }
+    if (!clamp.shippedConfigAccepted) {
+      failures.push(
+        'the shipped paper breaker configuration is itself refused by the clamp — the bound is ' +
+          'wrong, not the config, and every negative probe above would still pass (#638)',
+      );
+    }
+    if (!clamp.exitBypassesLiveClamp) {
+      failures.push(
+        'with a live risk_thresholds row out of bounds, an exit intent did not reach ' +
+          "RiskManagerImpl.evaluate()'s approved bypass while an entry intent was still refused — " +
+          "either the exit/flatten path is stranded behind #638's clamp (a materially worse " +
+          "defect than #766 was filed for: ADR-0014's flat-by-close invariant has no session-end " +
+          'job to catch a missed flatten) or the clamp stopped refusing entries at all (#766)',
+      );
+    }
+    return failures;
+  },
+};
+
 /** What `evaluateSmokeGate` needs from the approvals-fallback probe (#1152). */
 export interface ApprovalFallbackEvidence {
   /** Whether calling `requestApproval` on the uninjected fallback rejected instead of answering. */
@@ -3420,6 +4105,37 @@ async function runApprovalFallbackScenario(
     };
   }
 }
+
+/**
+ * #1152. Reads `orchestrator.approvals` — never a second
+ * `resolveApprovalsChannel` call — so a composition-root wiring regression is
+ * what this detects; see `runApprovalFallbackScenario`.
+ */
+const approvalFallbackProbe: Probe<'approvalFallback'> = {
+  run({ approvals }) {
+    return runApprovalFallbackScenario(approvals);
+  },
+  verdict(approvalFallback) {
+    const failures: string[] = [];
+    // #1152 — the composition root's approvals fallback must refuse rather
+    // than fabricate consent if Verdict's HITL gate (6) is ever reached: no
+    // auto-approving default may ever be wired here.
+    if (!approvalFallback.refusedFabricatedConsent) {
+      failures.push(
+        "the composition root's approvals fallback did NOT refuse Verdict's HITL gate (6) — it " +
+          'answered instead of throwing, which is the auto-approving shape this fallback must ' +
+          'never take (#1152)',
+      );
+    } else if (!(approvalFallback.message ?? '').includes('no ApprovalChannel is wired')) {
+      failures.push(
+        'the approvals fallback rejected, but not with the expected refusal (got: ' +
+          `${approvalFallback.message}) — a different exception could be masking a fallback that ` +
+          'no longer refuses on purpose (#1152)',
+      );
+    }
+    return failures;
+  },
+};
 
 /**
  * What `evaluateSmokeGate` needs from the arm-comparison surface (#971).
@@ -3489,7 +4205,40 @@ function feedbackCycleScheduleWasWritten(db: StoreHandle): boolean {
 }
 
 /**
- * #1112 AC5 — see the `sizingCeiling` branches in `evaluateSmokeGate`.
+ * #1110. Neither `armComparison` nor `outsideBenchmarks` covers this: both
+ * call the shipped cycles DIRECTLY, never through `scheduleFeedbackCycle`.
+ * This is the one piece of evidence in the gate that only the composition
+ * root's OWN timer can produce.
+ */
+const feedbackCycleScheduleWrittenProbe: Probe<'feedbackCycleScheduleWritten'> = {
+  run({ db }) {
+    return feedbackCycleScheduleWasWritten(db);
+  },
+  verdict(evidence) {
+    const failures: string[] = [];
+    // #1110 — the daily cycle's restart-durable schedule must have a row after
+    // a real `start()`/`stop()` through the composition root. `armComparisonProbe`
+    // proves nothing about this: `runArmComparisonProbe` calls
+    // `runArmComparisonCycle` DIRECTLY, never through `scheduleFeedbackCycle`,
+    // so it stays green even if the scheduler is deleted entirely. This is the
+    // one check in the gate that can only pass if the composition root's own
+    // timer actually ran.
+    if (!evidence) {
+      failures.push(
+        'no row in `feedback_cycle_schedule` after the run — either `scheduleFeedbackCycle` was ' +
+          "dropped from production.ts's composition root, or `paperStartingProfile`'s `feedback` " +
+          "block stopped reaching `start()`. This is exactly #1110's defect: a mechanism that " +
+          'every unit test exercises directly but the real composition root never calls, so a ' +
+          'soak restarted more often than once a day would go back to accumulating zero ' +
+          '`arm_comparison_samples` rows for its whole life',
+      );
+    }
+    return failures;
+  },
+};
+
+/**
+ * #1112 AC5 — see `sizingCeilingProbe`'s verdict.
  *
  * Filtered to `BTC-USD`, `SMOKE_TEST_UNIVERSE`'s only instrument: the exit
  * scenarios below trade five OTHER underlyings through their own
@@ -3537,6 +4286,64 @@ function readSizingCeilingStamps(
 }
 
 /**
+ * #1112 AC5. `SqliteExecutionStore`'s stamp is unit-tested and
+ * `capitalCeilingUsd` reaching the Trader is proven at the composition root;
+ * neither proves the ONE-LINE wire from `config.capitalCeilingUsd` into
+ * `new SqliteExecutionStore(...)` in `production.ts`. AC3 (#1180) additionally
+ * needs the arm comparison's basis, hence `after`.
+ */
+const sizingCeilingProbe: Probe<'sizingCeiling', 'armComparison'> = {
+  after: ['armComparison'],
+  run({ db, profile }) {
+    return readSizingCeilingStamps(db, profile.capitalCeilingUsd);
+  },
+  verdict(evidence, { prior }) {
+    const failures: string[] = [];
+    // #1112 AC5 (migration 0045) — see `SizingCeilingEvidence`. Three
+    // distinct failures, named separately: a gate that reports "the wire is
+    // broken" for a run that produced no row at all is a misdiagnosis.
+    const { configuredCeiling, rows, allMatchConfiguredCeiling } = evidence;
+    if (configuredCeiling === undefined) {
+      failures.push(
+        "`paperStartingProfile('paper')` no longer sets `capitalCeilingUsd` — the Trader is back " +
+          "to sizing off the paper broker's funded equity rather than the declared book (#1112)",
+      );
+    } else if (rows === 0) {
+      failures.push(
+        'no BTC-USD row in `open_positions` or `closed_trades` after the run, so the ' +
+          '`sizing_capital_ceiling` stamp has no evidence either way — the six-stage tick loop ' +
+          'took no position at all (#1112)',
+      );
+    } else if (!allMatchConfiguredCeiling) {
+      failures.push(
+        `a BTC-USD row carries a \`sizing_capital_ceiling\` other than this run's configured ` +
+          `${configuredCeiling} — \`production.ts\` stopped passing \`config.capitalCeilingUsd\` ` +
+          'into `new SqliteExecutionStore(...)`, so a `closed_trades` window could once again ' +
+          'silently mix rows sized under two different equity bases (#1112)',
+      );
+    }
+
+    // #1112 AC3, and #1180's conversion with it: the comparison's denominator
+    // and the Trader's sizing denominator are ONE value. Split them and
+    // `return_pct` is a return on capital nothing was sized against — the
+    // reading that made both figures wrong when the ceiling became a converted
+    // USD figure and the basis stayed at the raw GBP book.
+    if (
+      configuredCeiling !== undefined &&
+      prior.armComparison.comparison.basis !== configuredCeiling
+    ) {
+      failures.push(
+        `the arm comparison divided both arms by ${prior.armComparison.comparison.basis} while this run sized ` +
+          `against ${configuredCeiling} — the Feedback Loop's basis and the Trader's capital ` +
+          'ceiling have come apart, so every persisted `return_pct` is measured against capital ' +
+          'the arms were never sized on (#1112 AC3, #1180)',
+      );
+    }
+    return failures;
+  },
+};
+
+/**
  * #1140 — what the DASHBOARD would read as this run's LLM cap.
  *
  * Read through `SqliteQueryStore.getLlmSpend`, the shipped read that fills
@@ -3559,6 +4366,49 @@ function readPublishedLlmCap(db: StoreHandle): {
   const spend = new SqliteQueryStore(db).getLlmSpend(SMOKE_RUN_INSTANT);
   return { capUsd: spend.cap_usd, capArmedAt: spend.cap_armed_at };
 }
+
+/**
+ * #1140 / #1196. Both halves come from this run: the published cap off the
+ * dashboard's own read, the expected one off the profile the orchestrator
+ * booted on — never a literal 50, which would pass on a wire that had stopped
+ * carrying anything from the config at all.
+ */
+const llmSpendCapProbe: Probe<'llmSpendCap'> = {
+  run({ db, profile }) {
+    const published = readPublishedLlmCap(db);
+    return {
+      publishedCapUsd: published.capUsd,
+      configuredBudgetUsd: profile.llmBudgetUsd,
+      capArmedAt: published.capArmedAt,
+    };
+  },
+  verdict(evidence) {
+    const failures: string[] = [];
+    // #1140 — the meter's denominator on the wire is the enforcer's own budget.
+    if (evidence.publishedCapUsd !== (evidence.configuredBudgetUsd ?? null)) {
+      failures.push(
+        `the dashboard's LLM cap reads ${evidence.publishedCapUsd ?? 'null'} while this run ` +
+          `armed its spend cap at ${evidence.configuredBudgetUsd ?? 'null'} — ` +
+          '`publishedSpendCap.arm(...)` is no longer beside the `SqliteSpendCap` construction in ' +
+          'production.ts, so the rail measures spend against a cap nobody is enforcing (#1140)',
+      );
+    }
+
+    // #1196 — this process manifestly booted, so a null `cap_armed_at` here
+    // means `SqliteQueryStore.getLlmSpend` stopped reading `armed_at` off the
+    // row `SqliteLlmSpendCapStore.arm(...)` wrote, and the wire is telling the
+    // rail "never armed" while an enforcer is, in fact, live.
+    if (evidence.capArmedAt === null) {
+      failures.push(
+        "the dashboard's LLM cap reports `cap_armed_at: null` on a run that booted and armed its " +
+          'spend cap — `SqliteQueryStore.getLlmSpend` (or `SqliteLlmSpendCapStore.read`) stopped ' +
+          'reading `armed_at`, so the rail cannot tell this run apart from one where nothing ever ' +
+          'armed (#1196)',
+      );
+    }
+    return failures;
+  },
+};
 
 /** Drives the shipped arm-comparison cycle over the smoke run's own store. */
 export function runArmComparisonProbe(db: StoreHandle): ArmComparisonEvidence {
@@ -3593,6 +4443,60 @@ export function runArmComparisonProbe(db: StoreHandle): ArmComparisonEvidence {
     comparison: sample.comparison,
   };
 }
+
+/**
+ * #971. Runs against the same store the observations are read from, after
+ * `orchestrator.stop()`: the tape has to be complete before the comparison is
+ * taken over it. The FL timer is 24h, so without this the whole path could be
+ * deleted from `production.ts` and every unit test — and `yarn smoke` — would
+ * stay green.
+ */
+const armComparisonProbe: Probe<'armComparison'> = {
+  run({ db }) {
+    return runArmComparisonProbe(db);
+  },
+  verdict(evidence) {
+    const failures: string[] = [];
+    // #971 — falsifier arm 2's comparison reaches a surface, not just a report.
+    //
+    // Stands alone rather than hanging off a tick having reached Execution: the comparison is
+    // computable over an empty window (a zero-trade sample is a real, honest
+    // measurement), so the properties below hold on every run. What they enforce
+    // is the WIRING — that the shipped cycle produces both arms, persists them,
+    // and alerts exactly when it says it diverged.
+    const arms = evidence;
+    if (arms.live === null || arms.control === null) {
+      failures.push(
+        'the arm-comparison cycle produced no comparison — `runArmComparisonCycle` (#971) could ' +
+          'not derive both arms from `closed_trades`, so the Feedback Loop has nothing to persist ' +
+          'and the dashboard panel has nothing to show',
+      );
+    }
+    if (arms.persistedRows === 0) {
+      failures.push(
+        'the arm-comparison cycle wrote no row to `arm_comparison_samples` — either migration 0034 ' +
+          'did not apply or `SqliteArmComparisonSampleStore.append` stopped being called. The ' +
+          'dashboard panel (#913 surface 2) reads FL persisted samples and nothing else, so a soak ' +
+          'in this state shows "no comparison computed yet" for its whole duration',
+      );
+    }
+    if (!arms.persistedBothDrawdowns) {
+      failures.push(
+        'an `arm_comparison_samples` row came back without a finite drawdown on both arms — ' +
+          'the persisted comparison has become a return-only view, which is exactly what doc 12 D4 ' +
+          'rules out and what `ArmPerformance.max_drawdown_pct` being required exists to prevent',
+      );
+    }
+    if (arms.diverged !== arms.alerts > 0) {
+      failures.push(
+        `the arm comparison reported diverged=${String(arms.diverged)} but posted ${arms.alerts} ` +
+          'alert(s) — the divergence verdict and the escalation have come apart, so either a ' +
+          'divergence reaches nobody or an alert fires on a comparison that did not diverge (#971)',
+      );
+    }
+    return failures;
+  },
+};
 
 /**
  * A deterministic, offline stand-in for the benchmark vendor (#981).
@@ -3664,6 +4568,59 @@ async function runOutsideBenchmarkProbe(
     unmeasured: result.unmeasured.map((entry) => `${entry.benchmark}: ${entry.reason}`),
   };
 }
+
+/**
+ * #981. Handed the arm comparison's own `ArmComparison`, which is the shipped
+ * ordering: the benchmark's window is the matched control's, never one of its
+ * own.
+ */
+const outsideBenchmarksProbe: Probe<'outsideBenchmarks', 'armComparison'> = {
+  after: ['armComparison'],
+  run({ db }, prior) {
+    return runOutsideBenchmarkProbe(db, prior.armComparison.comparison);
+  },
+  verdict(evidence) {
+    const failures: string[] = [];
+    // #981 — the risk-adjusted OUTSIDE benchmarks reach a surface too, and reach
+    // it over the arm comparison's own window.
+    //
+    // Stands alone for `arms`' reason: a benchmark is computable regardless of
+    // what the tape did, so these properties hold on every run. They assert the
+    // WIRING and the two invariants that would rot silently — D4's paired columns
+    // and the inherited window.
+    const benchmarks = evidence;
+    if (benchmarks.measured === 0) {
+      failures.push(
+        'the outside-benchmark cycle measured nothing — `runOutsideBenchmarkCycle` (#981) produced ' +
+          'no benchmark at all, so the dashboard has no market context beside the arm comparison. ' +
+          `Reasons given: ${benchmarks.unmeasured.join('; ') || '(none reported)'}`,
+      );
+    }
+    if (benchmarks.persistedRows === 0) {
+      failures.push(
+        'the outside-benchmark cycle wrote no row to `outside_benchmark_samples` — either migration ' +
+          '0036 did not apply or `SqliteOutsideBenchmarkSampleStore.append` stopped being called, ' +
+          'and the panel reads FL persisted samples and nothing else (#981)',
+      );
+    }
+    if (!benchmarks.persistedBothColumns) {
+      failures.push(
+        'an `outside_benchmark_samples` row came back without BOTH a finite return and a finite ' +
+          'drawdown — the persisted benchmark has become a return-only view, which is what doc 12 ' +
+          'D4 rules out and what the two NOT NULL columns exist to prevent (#981)',
+      );
+    }
+    if (!benchmarks.windowsMatchArmComparison) {
+      failures.push(
+        'a persisted outside benchmark does not cover the SAME window the arm comparison was ' +
+          'measured over — #636: a benchmark on an approximate window is not a risk-adjusted ' +
+          'comparison, it is noise. The window is meant to be inherited from the `ArmComparison`, ' +
+          'so this means it stopped being (#981)',
+      );
+    }
+    return failures;
+  },
+};
 
 /** What `evaluateSmokeGate` needs from the OHLCV failover scenario (#562). */
 export interface DataFailoverEvidence {
@@ -3784,6 +4741,66 @@ async function runDataFailoverScenario(logger: Logger): Promise<DataFailoverEvid
     db.close();
   }
 }
+
+/**
+ * #562. Its own composition root and cold in-memory store: the main run
+ * injects a fixture data source, so the root's `config.dataSource ??` seam
+ * short-circuits the failover there, and deleting the entire
+ * `buildFailoverDataSource` call site would otherwise leave `yarn smoke` green.
+ */
+const dataFailoverProbe: Probe<'dataFailover'> = {
+  run({ logger }) {
+    return runDataFailoverScenario(logger);
+  },
+  verdict(evidence) {
+    const failures: string[] = [];
+    // #562 — the live orchestrator's OHLCV failover, asserted on its DURABLE
+    // effect: a bar the fallback served, in the store, with the fallback's own
+    // provenance and the primary's session semantics.
+    const failover = evidence;
+    if (failover.readError !== null) {
+      failures.push(
+        `the composition root's equities bar read threw instead of failing over: ` +
+          `${failover.readError} — a stalled primary must degrade to the fallback vendor, not ` +
+          'stop the tick. The root is not building a FailoverDataSource at all (#562)',
+      );
+    }
+    if (!failover.storedSources.every((source) => source === 'polygon')) {
+      failures.push(
+        `the bars the fallback served were stamped [${failover.storedSources.join(', ')}] in the ` +
+          "store rather than all 'polygon' — provenance is the only thing that makes a " +
+          'fallback-sourced row detectable after the stall, and nothing re-derives it (#562)',
+      );
+    }
+    if (failover.storedSources.length === 0) {
+      failures.push(
+        'no bars row landed from the fallback vendor — the failover produced nothing durable, so ' +
+          'a stage reading bars on the next tick still has no data (#562)',
+      );
+    }
+    if (
+      failover.storedOpenTimes.length !== FAILOVER_IN_SESSION_OPEN_TIMES.length ||
+      !failover.storedOpenTimes.every(
+        (openTime, i) => openTime === FAILOVER_IN_SESSION_OPEN_TIMES[i],
+      )
+    ) {
+      failures.push(
+        `the fallback persisted bars at [${failover.storedOpenTimes.join(', ')}] where the ` +
+          `session-normalized set is [${FAILOVER_IN_SESSION_OPEN_TIMES.join(', ')}] — the primary ` +
+          'is a NormalizingDataSource and drops out-of-session candles, so a raw fallback puts a ' +
+          'different window behind the same lookback and an ATR spans extended hours instead of ' +
+          'regular sessions, permanently (#562)',
+      );
+    }
+    if (failover.alerts.length === 0) {
+      failures.push(
+        'the failover served bars but raised nothing on the DataFailoverAlertChannel — an ' +
+          'unattended soak that silently switched vendors is a stall nobody learns about (#562)',
+      );
+    }
+    return failures;
+  },
+};
 
 /** What `evaluateSmokeGate` needs from the source-factory scenario (#1151). */
 export interface DataSourceFactoryEvidence {
@@ -3922,6 +4939,55 @@ async function runDataSourceFactoryScenario(logger: Logger): Promise<DataSourceF
   };
 }
 
+/**
+ * #1151. `createDataSource` had ZERO production call sites while claiming to
+ * be the single place a source name resolves to an implementation. No unit
+ * test can tell construction-through-the-factory from construction-beside-it
+ * (the object built is identical), and the main run's injected fixture source
+ * means no arm is resolved there at all.
+ */
+const dataSourceFactoryProbe: Probe<'dataSourceFactory'> = {
+  run({ logger }) {
+    return runDataSourceFactoryScenario(logger);
+  },
+  verdict(evidence) {
+    const failures: string[] = [];
+    // #1151 — `createDataSource` reached from the composition root, asserted on
+    // the DURABLE effect of each surviving arm. See `runDataSourceFactoryScenario`.
+    const factory = evidence;
+    if (factory.error !== null) {
+      failures.push(
+        `a factory-resolved market-data source refused to build or read: ${factory.error} — ` +
+          '`production/defaults.ts` resolves both surviving arms through `createDataSource`, so a ' +
+          'broken arm takes the whole market-data path down at boot (#1151)',
+      );
+    }
+    if (
+      factory.alpacaStoredSources.length === 0 ||
+      !factory.alpacaStoredSources.every((source) => source === 'alpaca')
+    ) {
+      failures.push(
+        `the Alpaca arm persisted [${factory.alpacaStoredSources.join(', ')}] rather than a ` +
+          "non-empty run of 'alpaca' — `createDataSource({ kind: 'alpaca' })` is what " +
+          '`buildAlpacaDataSource` resolves every non-LSE universe through, so nothing durable ' +
+          'here means the tick loop has no bars at all (#1151)',
+      );
+    }
+    if (
+      factory.lseStoredSources.length === 0 ||
+      !factory.lseStoredSources.every((source) => source === SMOKE_LSE_VENDOR)
+    ) {
+      failures.push(
+        `the LSE arm persisted [${factory.lseStoredSources.join(', ')}] rather than a non-empty ` +
+          `run of '${SMOKE_LSE_VENDOR}' — the live equity leg's only mark path is ` +
+          "`createDataSource({ kind: 'lse' })`, and it is kept precisely so #895/#1034 can land " +
+          'as a config change; unreached, it is the unwired arm this ticket deleted two of (#1151)',
+      );
+    }
+    return failures;
+  },
+};
+
 /** What `evaluateSmokeGate` needs from the analyst failure-cause scenario (#1114). */
 export interface AnalystFailureCauseEvidence {
   /** Every `stage: 'analysts', level: 'debug'` payload the run's own `AnalystOrchestrator` recorded. */
@@ -4034,6 +5100,61 @@ async function runAnalystFailureCauseScenario(
     db.close();
   }
 }
+
+/**
+ * #1114. `production.ts`'s `new AnalystOrchestrator({ ..., logger })` has
+ * exactly one durable effect an unattended run can show for it: the `debug`
+ * lines this scenario reads back.
+ */
+const analystFailureCauseProbe: Probe<'analystFailureCause'> = {
+  run({ logger }) {
+    return runAnalystFailureCauseScenario(logger);
+  },
+  verdict(evidence) {
+    const failures: string[] = [];
+    // #1114 — the analyst failure-cause logging's enforcement assertion, on its
+    // DURABLE effect through the real composition root. See
+    // `runAnalystFailureCauseScenario`'s own doc for why this proves the
+    // non-timeout half of the ticket rather than waiting out a real deadline.
+    const failureCause = evidence;
+    // `other`, not `error`, since #1394 widened `AnalystFailureKind` onto the
+    // shared cause taxonomy: the probe's two dead legs are combined by
+    // `withOhlcvFailover` into a plain `Error`, which the classifier reports as
+    // unclassified rather than guessing a transport fault.
+    if (!failureCause.failureKinds.includes('other')) {
+      failures.push(
+        "the analyst failure-cause probe's double-failed data source did not produce a genuine " +
+          `(non-timeout) analyst rejection (kinds observed: ${JSON.stringify(failureCause.failureKinds)}) ` +
+          '— the probe itself is broken, not the mechanism it exists to gate (#1114/#1394)',
+      );
+    } else if (failureCause.debugPayloads.length === 0) {
+      failures.push(
+        'a genuine analyst rejection happened and no `stage: "analysts", level: "debug"` line was ' +
+          'recorded for it — `production.ts` is not wiring its `logger` into `new ' +
+          'AnalystOrchestrator({...})` (or the orchestrator fell back to its internal NOOP_LOGGER), ' +
+          'so the cause behind a stage failure is back to the verdict-only line #1114 was filed ' +
+          'against',
+      );
+    } else {
+      const withCause = failureCause.debugPayloads.find(
+        (payload) =>
+          payload.analyst_type === 'technical' &&
+          typeof payload.cause === 'string' &&
+          typeof payload.name === 'string' &&
+          typeof payload.message === 'string',
+      );
+      if (withCause === undefined) {
+        failures.push(
+          `debug lines were recorded (${JSON.stringify(failureCause.debugPayloads)}) but none carried ` +
+            'the rendered name/message/cause a non-timeout rejection is supposed to keep — ' +
+            '`renderErrorDetail` (pipeline/analysts/orchestrator.ts) stopped rendering the caught ' +
+            'error, or stopped being called (#1114)',
+        );
+      }
+    }
+    return failures;
+  },
+};
 
 /** What `evaluateSmokeGate` needs from the FILLED_WITH_ZERO_SIZE wedge scenario (#1125). */
 export interface FilledZeroSizeWedgeEvidence {
@@ -4273,6 +5394,66 @@ async function runFilledZeroSizeWedgeScenario(
   }
 }
 
+/**
+ * #1125. The second broker/harness surface #1096's review deferred, so a
+ * genuinely wedged lot drives the real gate instead of only
+ * `filled-zero-size-wiring.test.ts`'s unit proof.
+ */
+const filledZeroSizeWedgeProbe: Probe<'filledZeroSizeWedge'> = {
+  run({ logger }) {
+    return runFilledZeroSizeWedgeScenario(logger);
+  },
+  verdict(evidence) {
+    const failures: string[] = [];
+    // #1125 — the FILLED_WITH_ZERO_SIZE wedge scenario's enforcement assertion,
+    // on its DURABLE effect (the warning payload) through the real
+    // `buildExecutionSurface` binding. See `runFilledZeroSizeWedgeScenario`.
+    const wedge = evidence;
+    if (wedge.warnings.length !== 1) {
+      failures.push(
+        `the FILLED_WITH_ZERO_SIZE wedge scenario produced ${wedge.warnings.length} warning(s), ` +
+          "expected exactly 1 — either the scenario's wedged lot never reached the throttle's " +
+          'first-warning threshold (ALERT_AFTER_CONSECUTIVE_ZERO_SIZE consecutive zero-filled-size ' +
+          "polls), ingest-fills.ts's own no-new-fills zero-filled-size warning branch has been " +
+          "removed or stopped firing, or execution.reconcile() no longer adopts the broker's " +
+          "'filled' order_state onto this lot (that branch is guarded on " +
+          "order_state === 'filled' || 'partially_filled' — if reconcile's adopt semantics change " +
+          "so the lot stays 'submitted', this branch is never reached and zero warnings fire even " +
+          'though it is fully intact) (#1125)',
+      );
+    } else {
+      const [warning] = wedge.warnings;
+      if (
+        warning === undefined ||
+        warning.idempotency_key !== FILLED_ZERO_SIZE_WEDGE_LOT_KEY ||
+        warning.instrument !== FILLED_ZERO_SIZE_WEDGE_INSTRUMENT ||
+        warning.order_state !== 'filled' ||
+        warning.consecutive !== ALERT_AFTER_CONSECUTIVE_ZERO_SIZE ||
+        // Exact, not `> 0` (#1125 review round 2, finding 1): under
+        // `SimulatedClock`, `stuck_ms` is `now - position.opened_at` computed
+        // at a FIXED clock reading (no poll advances it), so it is
+        // deterministic — `FILLED_ZERO_SIZE_WEDGE_OPENED_BEFORE_MS` exactly.
+        // A `> 0` check cannot catch `ingest-fills.ts` reading
+        // `decision_timestamp` instead of `opened_at`: the two are only 5s
+        // apart against a 1h `stuck_ms`, so the wrong field still passes
+        // `> 0`. Measured: swapping that field yields `stuck_ms: 3605000`
+        // and this exact equality check catches it (`3605000 !==
+        // 3600000`), where `> 0` did not.
+        warning.stuck_ms !== FILLED_ZERO_SIZE_WEDGE_OPENED_BEFORE_MS
+      ) {
+        failures.push(
+          `the FILLED_WITH_ZERO_SIZE warning fired with an unexpected shape ` +
+            `(${JSON.stringify(warning)}) — expected idempotency_key ` +
+            `'${FILLED_ZERO_SIZE_WEDGE_LOT_KEY}', instrument '${FILLED_ZERO_SIZE_WEDGE_INSTRUMENT}', ` +
+            `order_state 'filled', consecutive ${ALERT_AFTER_CONSECUTIVE_ZERO_SIZE} and stuck_ms ` +
+            `${FILLED_ZERO_SIZE_WEDGE_OPENED_BEFORE_MS} (#1125)`,
+        );
+      }
+    }
+    return failures;
+  },
+};
+
 /** What `evaluateSmokeGate` needs from the risk-critic scenario (#957, extended by the invalidation fold #994). */
 export interface RiskCriticEvidence {
   /** `risk_critic_log.verdict` values the run's own composition root wrote, in insertion order. */
@@ -4435,6 +5616,63 @@ async function runRiskCriticScenario(logger: Logger): Promise<RiskCriticEvidence
   }
 }
 
+/**
+ * #957. The six-stage run cannot stand in for this — it has produced zero
+ * approved entries historically (#625), so a critic that never fired would be
+ * indistinguishable from one never wired. Deleting the one `critic:` line in
+ * `production.ts` returns step 7 to the never-run state with every unit test
+ * green; only this notices.
+ */
+const riskCriticProbe: Probe<'riskCritic'> = {
+  run({ logger }) {
+    return runRiskCriticScenario(logger);
+  },
+  verdict(evidence) {
+    const failures: string[] = [];
+    // #957 — check-pipeline step 7's producer, asserted on its DURABLE effect
+    // through the real composition root. See `runRiskCriticScenario`.
+    const critic = evidence;
+    if (critic.stepError !== null) {
+      failures.push(
+        `the risk step threw while consulting the critic: ${critic.stepError} — step 7 is ` +
+          'specified to FAIL OPEN (a decision proceeds on the mechanical steps with ' +
+          'risk_critic: skipped), so a throw here turns an unreachable model into a dead tick ' +
+          'in front of an order (#957, ADR-0003)',
+      );
+    }
+    if (critic.loggedVerdicts.length === 0) {
+      failures.push(
+        'a viable entry reached the risk stage through the real composition root and no ' +
+          'risk_critic_log row was written — the critic producer is not wired at all, so ' +
+          'check-pipeline step 7 is back to the never-run state review F-5 recorded, and every ' +
+          'decision silently records risk_critic: skipped while looking healthy (#957)',
+      );
+    }
+
+    // #994: the fold's own enforcement assertion. The fixture pins the outcome
+    // — a mark of SMOKE_MARK_PRICE against a threshold one unit above it — so a
+    // measured `breached` and the reject that follows are the ONLY correct
+    // result. Delete the `marketData:` line from `buildRiskCriticProducer`, or
+    // the `breachedConditions` block from `evaluate()`, and this fails.
+    if (!critic.conditionStates.includes('breached')) {
+      failures.push(
+        'the risk critic emitted a well-formed invalidation condition and no persisted ' +
+          `condition measured \`breached\` (states: ${JSON.stringify(critic.conditionStates)}) — ` +
+          'the deterministic evaluator did not run over the fixture feed, so the typed ' +
+          'invalidation half is emitted and measured by nothing (#994)',
+      );
+    } else if (critic.bindingConstraint !== 'risk_critic:invalidated') {
+      failures.push(
+        'a measured BREACHED invalidation condition did not reject the intent (binding ' +
+          `constraint: ${critic.bindingConstraint ?? 'none'}) — \`evaluate()\` holds that ` +
+          'authority (#997 Q2b), so a breach that only gets logged is a checklist with no ' +
+          'teeth (#994)',
+      );
+    }
+    return failures;
+  },
+};
+
 /** What `evaluateSmokeGate` needs from the prompt-tier-crossing scenario (#1155). */
 export interface PromptTierWarningEvidence {
   /** `postPromptTierAlert` calls the real channel observed — should be exactly 1 (see the scenario's own doc). */
@@ -4517,6 +5755,44 @@ function runPromptTierWarningScenario(): PromptTierWarningEvidence {
   }
 }
 
+/**
+ * #1155. `crossesPromptTier` (pricing.ts) had a test and no production caller;
+ * no metered call this run's own LLM clients make carries a `usage` field, so
+ * nothing else here could ever exercise `SqliteLlmSpendStore.record`'s dispatch.
+ */
+const promptTierWarningProbe: Probe<'promptTierWarning'> = {
+  run() {
+    return runPromptTierWarningScenario();
+  },
+  verdict(promptTierWarning) {
+    const failures: string[] = [];
+    // #1155 — the prompt-tier crossing warning, asserted on its DURABLE effect
+    // through the real `SqliteLlmSpendStore`. See `runPromptTierWarningScenario`.
+    if (promptTierWarning.spendRows !== 2) {
+      failures.push(
+        `the prompt-tier scenario's two metered calls wrote ${promptTierWarning.spendRows} ` +
+          '`llm_spend` row(s), not 2 — the scenario itself is broken, not the mechanism it exists ' +
+          'to gate (#1155)',
+      );
+    } else if (promptTierWarning.costUsd === null || promptTierWarning.costUsd < 0.8) {
+      failures.push(
+        `the crossing call priced at $${String(promptTierWarning.costUsd)}, not at x-ai/grok-4.5's ` +
+          "large-prompt TIER rate (~$0.812) — the scenario's own fixture usage does not actually " +
+          'cross the tier, so its alert count proves nothing about #1155',
+      );
+    } else if (promptTierWarning.alertsFired !== 1) {
+      failures.push(
+        `two consecutive calls that cross the SAME model's prompt tier produced ` +
+          `${promptTierWarning.alertsFired} alert(s), not exactly 1 — either \`crossesPromptTier\` ` +
+          '(pricing.ts) is not being consulted inside `SqliteLlmSpendStore.record` at all (0 ' +
+          'alerts: the exact silent-2.5x-step #1155 was filed against), or the crossing is not ' +
+          'throttled (2 alerts: a retrieval-heavy model would page on every single call)',
+      );
+    }
+    return failures;
+  },
+};
+
 /** Reads persisted condition states for the gate, tolerating a NULL or unreadable column exactly as the replay path does. */
 function readSmokeConditionStates(stored: string | null): string[] {
   if (stored === null) return [];
@@ -4529,1657 +5805,111 @@ function readSmokeConditionStates(stored: string | null): string[] {
   }
 }
 
-export function evaluateSmokeGate(
-  observations: SmokeObservations,
-  options: {
-    minTicks: number;
-    /**
-     * Whether anything reached `UnreachableAlpacaClient`. Checked here rather
-     * than left to the throw, because `startTickLoop` catches everything a tick
-     * throws and logs it — so a run that tried to reach the network would
-     * otherwise fail the gate for a downstream symptom (no verdict, no fill)
-     * and never name the cause.
-     */
-    alpacaWireClientReached?: boolean;
-    /**
-     * `RateLimiter.snapshot()` after the run — how many LLM calls the process's
-     * limiter actually metered (#388).
-     *
-     * Checked here, alongside `alpacaWireClientReached`, and for the same
-     * reason: it is an effect of the run that no table records. #388 WAS a
-     * fully-implemented, fully-unit-tested component with no production
-     * caller, and every one of 1800+ unit tests passed throughout — the same
-     * shape as #364, whose `debate_log` assertion in this gate is the only
-     * check that has ever caught it. A limiter that metered nothing while
-     * debates were resolving is that defect, exactly.
-     *
-     * **REQUIRED, unlike `alpacaWireClientReached` above.** That asymmetry is
-     * the point and was found by mutation: with this optional, deleting the
-     * one line in `runSmoke` that passes it left the check vacuously true —
-     * `yarn smoke` exited 0 and the entire suite stayed green. A backstop that
-     * can be switched off by omitting an argument is #388's own defect class
-     * reproduced inside the fix for #388. Required makes forgetting it a
-     * COMPILE error, the same structural argument that makes `RateLimiter` a
-     * required positional on `buildDebateStep`.
-     */
-    llmRateLimiterSnapshot: RateLimiterSnapshot;
-    /**
-     * The exit-path harness's evidence (#576) — required for the same
-     * "compile error, not a silent no-op" reason `llmRateLimiterSnapshot`
-     * above is: `runExitPathScenarios` always runs as part of `runSmoke`, so
-     * an omitted argument here would be a caller that stopped wiring it in,
-     * not a run that legitimately has nothing to report.
-     */
-    exitPath: ExitPathEvidence;
-    /**
-     * The crypto-emulation scenario's evidence (#586) — required for the
-     * same "compile error, not a silent no-op" reason the two above are:
-     * `runCryptoEmulationScenario` always runs as part of `runSmoke`, and
-     * the smoke universe is crypto, so the soak's entire bracket path runs
-     * on the mechanism this gates.
-     */
-    cryptoEmulation: CryptoEmulationEvidence;
-    /**
-     * The logging-fault scenario's evidence (#714) — required for the same
-     * "compile error, not a silent no-op" reason the three above are. What it
-     * gates is a soak that dies on day three because someone closed its
-     * terminal: nothing else in this gate, and no unit test, exercises the
-     * entrypoint's stdout `'error'` subscription or its fault net.
-     */
-    loggerResilience: LoggerResilienceEvidence;
-    /**
-     * The logs/ retention sweep's evidence (#1116) — required for the same
-     * "compile error, not a silent no-op" reason the mechanism above is:
-     * `runLogRetentionScenario` always runs as part of `runSmoke`, and
-     * nothing else in this gate, and no unit test, drives the real
-     * `sweepStaleLogs` against files on disk.
-     */
-    logRetention: LogRetentionEvidence;
-    /**
-     * The threshold-clamp probe's evidence (#638) — required, not optional,
-     * for the same "compile error, not a silent no-op" reason the four above
-     * are. What it gates is the only stop ADR-0013 leaves standing: with no
-     * human gate anywhere, a config edit (or, after #736, the Feedback Loop by
-     * itself) is the entire distance between the running system and an
-     * arbitrary risk limit.
-     */
-    thresholdClamp: ThresholdClampEvidence;
-    /**
-     * The service-api/supervisor stdout + arbitrary-fault guards' evidence
-     * (#764) — required for the same "compile error, not a silent no-op"
-     * reason the mechanisms above are. #714 fixed the unguarded-stdout class
-     * for the orchestrator only; nothing else in this gate, and no unit test,
-     * drives the two other entrypoints' guards against the actual async
-     * `'error'` event a destroyed pipe delivers.
-     */
-    entrypointFaultGuards: EntrypointFaultGuardEvidence;
-    /**
-     * The OHLCV failover's evidence (#562) — required, not optional, for the
-     * same "compile error, not a silent no-op" reason the mechanisms above
-     * are. The composition root's `config.dataSource ??` seam short-circuits
-     * the failover for the main run (which injects a fixture source), so
-     * without this probe deleting the entire `buildFailoverDataSource` call
-     * site would leave `yarn smoke` green — #430's defect class exactly.
-     */
-    dataFailover: DataFailoverEvidence;
-    /**
-     * `createDataSource`'s evidence (#1151) — required, not optional, for the
-     * same "compile error, not a silent no-op" reason the mechanisms above
-     * are. The factory had ZERO production call sites while claiming in its
-     * own header to be the single place a source name resolves to an
-     * implementation, so breaking any arm of it changed nothing observable.
-     * `production/defaults.ts` now resolves both surviving arms through it,
-     * and this is what makes that reachable-or-not visible: no unit test can
-     * tell construction-through-the-factory from construction-beside-it,
-     * because the object built is identical either way.
-     */
-    dataSourceFactory: DataSourceFactoryEvidence;
-    /**
-     * The risk critic's evidence (#957) — required, not optional, for the same
-     * "compile error, not a silent no-op" reason the mechanisms above are.
-     * Check-pipeline step 7 has a producer for the first time; deleting the one
-     * `critic:` line in `production.ts` would return it to the never-run state
-     * with every unit test still green, and nothing else here would notice.
-     */
-    riskCritic: RiskCriticEvidence;
-    /**
-     * The prompt-tier-crossing warning's evidence (#1155) — required, not
-     * optional, for the same "compile error, not a silent no-op" reason the
-     * mechanisms above are. `crossesPromptTier` (pricing.ts) had a test but no
-     * production caller at all; deleting the `crossesPromptTier(...)` call or
-     * the `postPromptTierAlert(...)` dispatch inside `SqliteLlmSpendStore.record`
-     * (spend-sink.ts) would return it to that never-called state with every
-     * other unit test still green, and nothing else here would notice.
-     */
-    promptTierWarning: PromptTierWarningEvidence;
-    /**
-     * The analyst failure-cause scenario's evidence (#1114) — required, not
-     * optional, for the same "compile error, not a silent no-op" reason the
-     * mechanisms above are (coding-standards.md's `llmRateLimiterSnapshot`
-     * precedent). `production.ts`'s `new AnalystOrchestrator({ ..., logger })`
-     * has exactly one durable effect an unattended run can show for it: the
-     * `debug` lines this scenario reads back. An optional field here would
-     * let a future edit drop that one argument and leave `yarn smoke` green.
-     */
-    analystFailureCause: AnalystFailureCauseEvidence;
-    /**
-     * The FILLED_WITH_ZERO_SIZE wedge scenario's evidence (#1125) — required,
-     * not optional, for the same "compile error, not a silent no-op" reason
-     * the mechanisms above are. #1096's review deferred smoke coverage of
-     * this warning for want of a second broker/harness surface;
-     * `runFilledZeroSizeWedgeScenario` is that surface, and an optional field
-     * here would let a future edit drop the call that wires it in and leave
-     * `yarn smoke` green regardless.
-     */
-    filledZeroSizeWedge: FilledZeroSizeWedgeEvidence;
-    /**
-     * The arm-comparison surface's evidence (#971) — required, not optional,
-     * for the same "compile error, not a silent no-op" reason the mechanisms
-     * above are. #636/#913 put the matched control's comparison on the Feedback
-     * Loop's cadence and on the operator's surfaces; the FL timer is 24h, so
-     * without this probe the whole path could be deleted from `production.ts`
-     * and every unit test — and `yarn smoke` — would stay green.
-     */
-    armComparison: ArmComparisonEvidence;
-    /**
-     * The outside benchmarks' evidence (#981) — required, not optional, for the
-     * same reason every mechanism above is: deleting the benchmark cycle from
-     * the composition root must break the build here, not quietly leave
-     * `yarn smoke` green with a dashboard panel that says nothing was measured.
-     */
-    outsideBenchmarks: OutsideBenchmarkEvidence;
-    /**
-     * The daily feedback cycle's restart-durable schedule (#1110) — required,
-     * not optional, for the same reason every mechanism above is. Neither
-     * `armComparison` nor `outsideBenchmarks` above cover this: both are
-     * evidence from `runArmComparisonProbe`/`runOutsideBenchmarkProbe`, which
-     * call `runArmComparisonCycle`/`runOutsideBenchmarkCycle` DIRECTLY, never
-     * through `scheduleFeedbackCycle`. This is the one piece of evidence in
-     * the whole gate that only the composition root's OWN timer — not a
-     * probe standing in for it — can produce, so deleting
-     * `SqliteFeedbackCycleScheduleStore`/`scheduleFeedbackCycle` from
-     * `production.ts` and leaving both probes in place would leave every
-     * other check here green.
-     */
-    feedbackCycleScheduleWritten: boolean;
-    /**
-     * #1112 AC5 (migration 0045) — required, not optional, for the same
-     * "compile error, not a silent no-op" reason every mechanism above is.
-     * `SqliteExecutionStore`'s stamp is unit-tested directly
-     * (sqlite-shared-store.test.ts) and `capitalCeilingUsd` reaching the
-     * Trader's sizing is proven at the composition root
-     * (production.test.ts's #1112 cases) — neither proves the ONE-LINE
-     * wire from `config.capitalCeilingUsd` into `new SqliteExecutionStore(
-     * ..., config.capitalCeilingUsd)` in `production.ts` itself. This is
-     * checked against `open_positions` rows for `BTC-USD` specifically —
-     * the smoke universe's only instrument driven through
-     * `startFromEnvironment`, as opposed to the exit-path scenarios' own
-     * directly-constructed `SqliteExecutionStore` instances (#576), which
-     * share this run's database but not its config and so are not evidence
-     * either way — and against `closed_trades` as well as `open_positions`,
-     * so a lot that closed inside the run is evidence rather than a spurious
-     * failure. The stamped value is compared to this run's OWN
-     * `paperStartingProfile('paper').capitalCeilingUsd`, not merely
-     * null-checked: a wire stamping some other non-null number is the same
-     * broken wire.
-     */
-    sizingCeiling: SizingCeilingEvidence;
-    /**
-     * #1140 — required, not optional, for the same "compile error, not a
-     * silent no-op" reason every mechanism above is. The cap the dashboard
-     * would draw its meter against, compared to the budget THIS run armed its
-     * enforcer with: a published cap that is merely non-null, or one that
-     * matches by having been retyped somewhere, is the defect the field
-     * exists to end.
-     */
-    publishedLlmCapUsd: number | null;
-    /** The budget THIS run's profile armed the enforcer with — the expected value above. */
-    configuredLlmBudgetUsd: number | undefined;
-    /**
-     * #1196 — a real booted run always arms (`production.ts`'s `if/else` has
-     * no third branch), so `null` here on an actual smoke run means the wire
-     * is reporting "never armed" for a process that manifestly did boot —
-     * `armed_at` stopped being read on the path that fills `DashboardSnapshot`.
-     */
-    publishedLlmCapArmedAt: string | null;
-    /**
-     * The fill-sync loop's rejections (#1049) — required, not optional, for the
-     * same "compile error, not a silent no-op" reason every mechanism above is.
-     * This is the only check in the gate that reads the poll loop's own
-     * failure channel; without it `ingestFills` can reject on every poll with
-     * the gate green.
-     */
-    fillSync: FillSyncFailureEvidence;
-    /**
-     * The market-data fetch telemetry's evidence (#1082) — required, not
-     * optional, for the same "compile error, not a silent no-op" reason
-     * every mechanism above is. Unlike #1083's `token_bucket_wait` just
-     * below (deliberately given NO evidence field), a cache-miss
-     * `market_data_fetch` line fires for free on the first bar fetch any
-     * fixture-driven run makes against a cold `:memory:` store — no
-     * artificial wait needed — so this check is a real, non-vacuous
-     * assertion on the mechanism's DURABLE effect: deleting `{ logger }`
-     * from the primary `new MarketDataServiceImpl(...)` call in
-     * `production.ts` leaves every fetch identical and every other check
-     * here green, and only this one would notice.
-     */
-    marketDataFetch: MarketDataFetchEvidence;
-    /**
-     * The approvals-fallback probe's evidence (#1152) — required, not
-     * optional, for the same "compile error, not a silent no-op" reason
-     * `thresholdClamp` above is. See `runApprovalFallbackScenario`'s doc
-     * comment for what this checks and why it must read the real composition
-     * root rather than reconstruct the fallback itself.
-     */
-    approvalFallback: ApprovalFallbackEvidence;
-    // #1083's wait telemetry has DELIBERATELY no evidence field here, unlike
-    // every mechanism above — the standard's "wiring a mechanism means
-    // asserting it here" still applies, but this mechanism does not fit the
-    // shape this gate checks:
-    //
-    // - Every field above reads back a DURABLE effect a fixture-driven run
-    //   produces for free (a risk_critic_log row, a RateLimiterSnapshot,
-    //   persisted bars). #1083 is a log line with no row — there is nothing
-    //   to read back once the run ends.
-    // - Producing that line requires a REAL wait past
-    //   TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS: `delay()` (shared/http/delay.ts)
-    //   is real `setTimeout` by design ("every caller is a backoff or a
-    //   pacing wait that vitest drives with fake timers") — `yarn smoke` has
-    //   no fake-timer escape hatch, so asserting the line's PRESENCE would
-    //   spend real wall-clock seconds pacing this gate for a scenario built
-    //   only to trigger it, and asserting its ABSENCE is vacuously green:
-    //   the smoke universe's own call volume never drains a healthy-sized
-    //   bucket, so the line does not fire whether the wiring is correct or
-    //   deleted — precisely the `llmRateLimiterSnapshot` comment's warning
-    //   above, reproduced.
-    //
-    // Enforcement instead lives in
-    // `server/apps/orchestrator/production/rate-limit-wiring.test.ts`, describe
-    // block "the composition root wires wait telemetry onto the shared Alpaca
-    // bucket (#1083)" — driven through the same real `buildProductionComponents`
-    // this gate uses, with fake timers standing in for the real wait, and
-    // mutation-killed (drop `{ logger, name: 'alpaca' }` from `production.ts`'s
-    // `new TokenBucket(...)` and that test fails; nothing here would notice
-    // either way).
-  },
-): SmokeGateResult {
-  const failures: string[] = [];
-  const { ticks, debates, verdicts, positions, fills } = observations;
+/** What the six-stage run was asked to do, and whether it stayed offline while doing it. */
+export interface TickLoopEvidence {
+  minTicks: number;
+  alpacaWireClientReached: boolean;
+}
 
-  if (options.alpacaWireClientReached === true) {
-    failures.push(
-      'the Alpaca wire client was reached during an offline run — this run is credential-free ' +
-        'and must make no network call. The composition root now needs the wire client for ' +
-        'something the smoke run overrides; see UnreachableAlpacaClient',
-    );
-  }
+/** #1140 / #1196 — the LLM cap as the dashboard reads it, beside the budget this run armed. */
+export interface LlmSpendCapEvidence {
+  publishedCapUsd: number | null;
+  configuredBudgetUsd: number | undefined;
+  capArmedAt: string | null;
+}
 
-  if (ticks.length < options.minTicks) {
-    failures.push(
-      `the tick loop completed ${ticks.length} of ${options.minTicks} expected ticks — the ` +
-        'loop, the scheduler or the shutdown drain did not behave over repeated ticks',
-    );
-  }
+/**
+ * One entry per probe, every one required.
+ *
+ * Found by mutation, not by argument: with the rate-limiter snapshot optional,
+ * deleting the one line in `runSmoke` that passed it left its check vacuously
+ * true — `yarn smoke` exited 0 and the whole suite stayed green. A backstop
+ * that can be switched off by omitting an argument is the no-caller defect
+ * class (#327, #364, #366, #371, #374, #379, #388, #432, #433 — each a
+ * complete, tested mechanism with no production caller, invisible to unit
+ * tests by construction) reproduced inside the gate. So: wiring a new
+ * mechanism means adding a probe here, and `PROBES` (a mapped type over these
+ * keys) then refuses to compile until it has a run and a verdict and appears
+ * in both orders.
+ *
+ * #1083's token-bucket wait telemetry has deliberately NO probe. Every entry
+ * here reads back a DURABLE effect a fixture-driven run produces for free;
+ * #1083 is a log line with no row, and producing it needs a real wait past
+ * `TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS` (`delay()` is real `setTimeout` by
+ * design), so asserting its presence would spend wall-clock seconds pacing
+ * this gate and asserting its absence is vacuously green. It is enforced in
+ * `production/rate-limit-wiring.test.ts` under fake timers instead.
+ */
+export interface SmokeEvidence {
+  tickLoop: TickLoopEvidence;
+  llmRateLimiterSnapshot: RateLimiterSnapshot;
+  exitPath: ExitPathEvidence;
+  cryptoEmulation: CryptoEmulationEvidence;
+  loggerResilience: LoggerResilienceEvidence;
+  logRetention: LogRetentionEvidence;
+  entrypointFaultGuards: EntrypointFaultGuardEvidence;
+  thresholdClamp: ThresholdClampEvidence;
+  approvalFallback: ApprovalFallbackEvidence;
+  dataFailover: DataFailoverEvidence;
+  dataSourceFactory: DataSourceFactoryEvidence;
+  riskCritic: RiskCriticEvidence;
+  promptTierWarning: PromptTierWarningEvidence;
+  analystFailureCause: AnalystFailureCauseEvidence;
+  filledZeroSizeWedge: FilledZeroSizeWedgeEvidence;
+  armComparison: ArmComparisonEvidence;
+  outsideBenchmarks: OutsideBenchmarkEvidence;
+  feedbackCycleScheduleWritten: boolean;
+  sizingCeiling: SizingCeilingEvidence;
+  llmSpendCap: LlmSpendCapEvidence;
+  fillSync: FillSyncFailureEvidence;
+  marketDataFetch: MarketDataFetchEvidence;
+}
 
-  const pastAnalysts = ticks.filter((tick) =>
-    tick.stages.some((entry) => entry.stage !== 'analysts'),
-  );
-  if (pastAnalysts.length === 0) {
-    failures.push(
-      'no tick got past Analysts — every pass short-circuited at the quorum gate, so Debate, ' +
-        'Trader, Risk, Verdict and Execution were never exercised at all (this is exactly what ' +
-        'a credential-less real run does today, and the reason #350 exists)',
-    );
-  }
+export type ProbeId = keyof SmokeEvidence;
 
-  if (debates.length === 0) {
-    failures.push(
-      'no row in debate_log — a tick got past Analysts but no resolved debate was persisted, so ' +
-        "the Feedback Loop's weight attribution (attribution.ts joins closed_trades.debate_id " +
-        'against debate_log) has no input and the debate itself is unreconstructable after the ' +
-        'fact (audit_log holds digests only). This is the #364 defect exactly',
-    );
-  }
+/** What `runSmoke` has in hand once the tick loop has stopped and drained. */
+export interface ProbeRunContext {
+  db: StoreHandle;
+  clock: SimulatedClock;
+  profile: ReturnType<typeof paperStartingProfile>;
+  logger: Logger;
+  targetTicks: number;
+  approvals: ApprovalChannel;
+  alpacaBrokerClient: UnreachableAlpacaClient;
+  llmRateLimiter: RateLimiter;
+  tickLoopResidualAlerts: RecordingResidualExposureAlertChannel;
+  fillSyncFailures: FillSyncFailureRecorder;
+  marketDataFetch: MarketDataFetchRecorder;
+}
 
-  // #1081: every row `buildDebateLog` writes must classify itself — the whole
-  // point of the fix is that no `debate_log` row can be silently ambiguous
-  // between a converged/non-converged debate and one the latency budget cut
-  // short. Hung off `debates.length` for the same reason as 3b above: a run
-  // with no rows at all fails on the check above, naming the real cause.
-  const unclassified = debates.filter((debate) => debate.termination == null);
-  if (debates.length > 0 && unclassified.length > 0) {
-    failures.push(
-      `${unclassified.length} of ${debates.length} debate_log row(s) have a NULL termination — ` +
-        'buildDebateLog (debate-log-store.ts) stopped setting it. That reopens #1081: a debate ' +
-        'the latency budget truncated becomes indistinguishable, in the stored record, from one ' +
-        'the analysts genuinely could not agree on.',
-    );
-  }
+export interface VerdictContext<After extends ProbeId> {
+  /** The six-stage run's readback — the substrate every probe's verdict may read against. */
+  observations: SmokeObservations;
+  prior: Pick<SmokeEvidence, After>;
+}
 
-  // Requirement 3b (#388): the debate that produced that row went through the
-  // rate limiter. Hung off `debates.length` rather than standing alone so that
-  // a run which never debated fails on the check above, naming the real cause.
-  if (debates.length > 0) {
-    const totals = Object.values(options.llmRateLimiterSnapshot);
-    const llmCallsUsed = totals.reduce((sum, entry) => sum + entry.llmCallsUsed, 0);
-    const debatesUsed = totals.reduce((sum, entry) => sum + entry.debatesUsed, 0);
-    if (debatesUsed === 0 || llmCallsUsed === 0) {
-      failures.push(
-        `debates resolved (${debates.length} row(s) in debate_log) but the LLM RateLimiter ` +
-          `metered ${debatesUsed} debate(s) and ${llmCallsUsed} call(s) — so it is constructed ` +
-          'beside the LLM path rather than in it. This is the #388 defect exactly: the ' +
-          'component was implemented, tested and exported while nothing in production ever ' +
-          'called it, and the whole unit suite passed the entire time',
-      );
-    }
-  }
-
-  // #753 — falsifier arm 2 has a production caller.
-  //
-  // Hung off "a tick reached Execution" rather than standing alone, so a run
-  // that never traded at all fails on the checks above naming the real cause.
-  // Given that the live arm transacted over this tape, the control arm saw the
-  // same tape on the same tick and must have left its own row: the arms are
-  // matched by construction on name, bracket, stop and conviction floor, and
-  // the control's entry is the same deterministic axis vote the live arm's
-  // Analysts stage produced.
-  //
-  // This is the ONLY check anywhere that the control arm has a caller. Every
-  // one of its units can pass while `TickSteps.controlArm` is unbound in
-  // `production.ts` — the member is optional, so unbinding it is not even a
-  // compile error — and the soak would then run for its whole duration with no
-  // matched control, which is the exact thing ADR-0014 amendment 2 forbids and
-  // the repo's dominant defect class (a tested mechanism nothing calls).
-  const transactedThisRun = ticks.some((tick) =>
-    tick.stages.some((entry) => entry.stage === 'execution'),
-  );
-  if (transactedThisRun) {
-    const controlLots = positions.filter((position) => position.arm === 'control');
-    if (controlLots.length === 0) {
-      failures.push(
-        "a tick reached Execution but not one `open_positions` row carries `arm = 'control'` — " +
-          'falsifier arm 2 (#753) did not run against the tape the live arm just traded. Either ' +
-          '`TickSteps.controlArm` is unbound in the composition root or the control arm threw ' +
-          'and was swallowed; a soak in this state produces a live track with no matched ' +
-          'control, which ADR-0014 amendment 2 and ADR-0017 both require',
-      );
-    }
-    const liveKeys = new Set(
-      positions.filter((position) => position.arm === 'live').map((row) => row.idempotency_key),
-    );
-    const collided = controlLots.filter((row) => liveKeys.has(row.idempotency_key));
-    if (collided.length > 0) {
-      failures.push(
-        `${collided.length} control lot(s) share an idempotency key with a live lot — \`arm\` has ` +
-          'stopped being a hash input to `computeIdempotencyKey`, so on every bar the two arms ' +
-          "agree on, Execution's `findByKey` gate silently drops the control order. The " +
-          'comparison would then be biased on exactly the subset it is most sensitive to',
-      );
-    }
-  }
-
-  // #971 — falsifier arm 2's comparison reaches a surface, not just a report.
-  //
-  // Stands alone rather than hanging off `transactedThisRun`: the comparison is
-  // computable over an empty window (a zero-trade sample is a real, honest
-  // measurement), so the properties below hold on every run. What they enforce
-  // is the WIRING — that the shipped cycle produces both arms, persists them,
-  // and alerts exactly when it says it diverged.
-  const arms = options.armComparison;
-  if (arms.live === null || arms.control === null) {
-    failures.push(
-      'the arm-comparison cycle produced no comparison — `runArmComparisonCycle` (#971) could ' +
-        'not derive both arms from `closed_trades`, so the Feedback Loop has nothing to persist ' +
-        'and the dashboard panel has nothing to show',
-    );
-  }
-  if (arms.persistedRows === 0) {
-    failures.push(
-      'the arm-comparison cycle wrote no row to `arm_comparison_samples` — either migration 0034 ' +
-        'did not apply or `SqliteArmComparisonSampleStore.append` stopped being called. The ' +
-        'dashboard panel (#913 surface 2) reads FL persisted samples and nothing else, so a soak ' +
-        'in this state shows "no comparison computed yet" for its whole duration',
-    );
-  }
-  if (!arms.persistedBothDrawdowns) {
-    failures.push(
-      'an `arm_comparison_samples` row came back without a finite drawdown on both arms — ' +
-        'the persisted comparison has become a return-only view, which is exactly what doc 12 D4 ' +
-        'rules out and what `ArmPerformance.max_drawdown_pct` being required exists to prevent',
-    );
-  }
-  if (arms.diverged !== arms.alerts > 0) {
-    failures.push(
-      `the arm comparison reported diverged=${String(arms.diverged)} but posted ${arms.alerts} ` +
-        'alert(s) — the divergence verdict and the escalation have come apart, so either a ' +
-        'divergence reaches nobody or an alert fires on a comparison that did not diverge (#971)',
-    );
-  }
-
-  // #1110 — the daily cycle's restart-durable schedule must have a row after
-  // a real `start()`/`stop()` through the composition root. `arms` above
-  // proves nothing about this: `runArmComparisonProbe` calls
-  // `runArmComparisonCycle` DIRECTLY, never through `scheduleFeedbackCycle`,
-  // so it stays green even if the scheduler is deleted entirely. This is the
-  // one check in the gate that can only pass if the composition root's own
-  // timer actually ran.
-  if (!options.feedbackCycleScheduleWritten) {
-    failures.push(
-      'no row in `feedback_cycle_schedule` after the run — either `scheduleFeedbackCycle` was ' +
-        "dropped from production.ts's composition root, or `paperStartingProfile`'s `feedback` " +
-        "block stopped reaching `start()`. This is exactly #1110's defect: a mechanism that " +
-        'every unit test exercises directly but the real composition root never calls, so a ' +
-        'soak restarted more often than once a day would go back to accumulating zero ' +
-        '`arm_comparison_samples` rows for its whole life',
-    );
-  }
-
-  // #1112 AC5 (migration 0045) — see `sizingCeiling`'s own doc. Three
-  // distinct failures, named separately: a gate that reports "the wire is
-  // broken" for a run that produced no row at all is a misdiagnosis.
-  const { configuredCeiling, rows, allMatchConfiguredCeiling } = options.sizingCeiling;
-  if (configuredCeiling === undefined) {
-    failures.push(
-      "`paperStartingProfile('paper')` no longer sets `capitalCeilingUsd` — the Trader is back " +
-        "to sizing off the paper broker's funded equity rather than the declared book (#1112)",
-    );
-  } else if (rows === 0) {
-    failures.push(
-      'no BTC-USD row in `open_positions` or `closed_trades` after the run, so the ' +
-        '`sizing_capital_ceiling` stamp has no evidence either way — the six-stage tick loop ' +
-        'took no position at all (#1112)',
-    );
-  } else if (!allMatchConfiguredCeiling) {
-    failures.push(
-      `a BTC-USD row carries a \`sizing_capital_ceiling\` other than this run's configured ` +
-        `${configuredCeiling} — \`production.ts\` stopped passing \`config.capitalCeilingUsd\` ` +
-        'into `new SqliteExecutionStore(...)`, so a `closed_trades` window could once again ' +
-        'silently mix rows sized under two different equity bases (#1112)',
-    );
-  }
-
-  // #1112 AC3, and #1180's conversion with it: the comparison's denominator
-  // and the Trader's sizing denominator are ONE value. Split them and
-  // `return_pct` is a return on capital nothing was sized against — the
-  // reading that made both figures wrong when the ceiling became a converted
-  // USD figure and the basis stayed at the raw GBP book.
-  if (configuredCeiling !== undefined && arms.comparison.basis !== configuredCeiling) {
-    failures.push(
-      `the arm comparison divided both arms by ${arms.comparison.basis} while this run sized ` +
-        `against ${configuredCeiling} — the Feedback Loop's basis and the Trader's capital ` +
-        'ceiling have come apart, so every persisted `return_pct` is measured against capital ' +
-        'the arms were never sized on (#1112 AC3, #1180)',
-    );
-  }
-
-  // #1140 — the meter's denominator on the wire is the enforcer's own budget.
-  if (options.publishedLlmCapUsd !== (options.configuredLlmBudgetUsd ?? null)) {
-    failures.push(
-      `the dashboard's LLM cap reads ${options.publishedLlmCapUsd ?? 'null'} while this run ` +
-        `armed its spend cap at ${options.configuredLlmBudgetUsd ?? 'null'} — ` +
-        '`publishedSpendCap.arm(...)` is no longer beside the `SqliteSpendCap` construction in ' +
-        'production.ts, so the rail measures spend against a cap nobody is enforcing (#1140)',
-    );
-  }
-
-  // #1196 — this process manifestly booted, so a null `cap_armed_at` here
-  // means `SqliteQueryStore.getLlmSpend` stopped reading `armed_at` off the
-  // row `SqliteLlmSpendCapStore.arm(...)` wrote, and the wire is telling the
-  // rail "never armed" while an enforcer is, in fact, live.
-  if (options.publishedLlmCapArmedAt === null) {
-    failures.push(
-      "the dashboard's LLM cap reports `cap_armed_at: null` on a run that booted and armed its " +
-        'spend cap — `SqliteQueryStore.getLlmSpend` (or `SqliteLlmSpendCapStore.read`) stopped ' +
-        'reading `armed_at`, so the rail cannot tell this run apart from one where nothing ever ' +
-        'armed (#1196)',
-    );
-  }
-
-  // #981 — the risk-adjusted OUTSIDE benchmarks reach a surface too, and reach
-  // it over the arm comparison's own window.
-  //
-  // Stands alone for `arms`' reason: a benchmark is computable regardless of
-  // what the tape did, so these properties hold on every run. They assert the
-  // WIRING and the two invariants that would rot silently — D4's paired columns
-  // and the inherited window.
-  const benchmarks = options.outsideBenchmarks;
-  if (benchmarks.measured === 0) {
-    failures.push(
-      'the outside-benchmark cycle measured nothing — `runOutsideBenchmarkCycle` (#981) produced ' +
-        'no benchmark at all, so the dashboard has no market context beside the arm comparison. ' +
-        `Reasons given: ${benchmarks.unmeasured.join('; ') || '(none reported)'}`,
-    );
-  }
-  if (benchmarks.persistedRows === 0) {
-    failures.push(
-      'the outside-benchmark cycle wrote no row to `outside_benchmark_samples` — either migration ' +
-        '0036 did not apply or `SqliteOutsideBenchmarkSampleStore.append` stopped being called, ' +
-        'and the panel reads FL persisted samples and nothing else (#981)',
-    );
-  }
-  if (!benchmarks.persistedBothColumns) {
-    failures.push(
-      'an `outside_benchmark_samples` row came back without BOTH a finite return and a finite ' +
-        'drawdown — the persisted benchmark has become a return-only view, which is what doc 12 ' +
-        'D4 rules out and what the two NOT NULL columns exist to prevent (#981)',
-    );
-  }
-  if (!benchmarks.windowsMatchArmComparison) {
-    failures.push(
-      'a persisted outside benchmark does not cover the SAME window the arm comparison was ' +
-        'measured over — #636: a benchmark on an approximate window is not a risk-adjusted ' +
-        'comparison, it is noise. The window is meant to be inherited from the `ArmComparison`, ' +
-        'so this means it stopped being (#981)',
-    );
-  }
-
-  // #581 — the per-asset-class round cap is wired through the composition
-  // root. Each `debate_log` row is checked against ITS instrument's cap
-  // (looked up through `SMOKE_TEST_UNIVERSE`, so widening the smoke universe
-  // to stocks keeps healthy 3-round debates passing); a row above its cap
-  // means `buildDebateStep` stopped threading the cap into `runDebate`.
-  // Paired with a per-class call-accounting bound that is TIGHT under the
-  // stub (a converged crypto debate spends exactly its worst case: 3 persona
-  // calls + 1 disagreement call), so one extra LLM call per debate — an
-  // unwired cap, a second disagreement pass — fails the gate rather than
-  // passing unseen.
-  const smokeAssetClass = new Map<string, AssetClass>(
-    SMOKE_TEST_UNIVERSE.map((entry) => [entry.asset, entry.asset_class]),
-  );
-  const overCap = debates.filter((debate) => {
-    const assetClass = smokeAssetClass.get(debate.instrument) ?? 'crypto';
-    return debate.rounds > MAX_ROUNDS_BY_ASSET_CLASS[assetClass];
-  });
-  if (overCap.length > 0) {
-    failures.push(
-      `${overCap.length} debate_log row(s) ran more rounds than their asset class's cap ` +
-        '(#581) — the per-asset-class round cap is no longer reaching `runDebate` from the ' +
-        'composition root, so live crypto debates are back to blowing their latency budget ' +
-        'on every tick',
-    );
-  }
-  // Iterated over the closed AssetClass set rather than Object.entries, so a
-  // malformed snapshot key can never produce an undefined cap (whose NaN
-  // bound would compare false everywhere and silently pass the gate).
-  for (const assetClass of ['crypto', 'stocks'] as const satisfies readonly AssetClass[]) {
-    const entry = options.llmRateLimiterSnapshot[assetClass];
-    if (entry === undefined) continue;
-    const perDebateBound = worstCaseLlmCallsForAssetClass(assetClass);
-    if (entry.debatesUsed > 0 && entry.llmCallsUsed > entry.debatesUsed * perDebateBound) {
-      failures.push(
-        `the ${assetClass} limiter metered ${entry.llmCallsUsed} LLM call(s) across ` +
-          `${entry.debatesUsed} debate(s), above the per-debate worst case of ` +
-          `${perDebateBound} (#581) — a debate is spending calls its reservation never ` +
-          'booked, so admission control is under-reserving',
-      );
-    }
-  }
-
-  // #430 — one assertion per wired mechanism, aimed at ENFORCEMENT.
-  //
-  // The repo's dominant defect class is a complete, tested mechanism with no
-  // production caller: #327, #364, #366, #371, #374, #379, #388, #432, #433 —
-  // at least nine times. Each instance is individually correct code, the gap is
-  // always at the composition root, and unit tests cannot see it by
-  // construction. These checks are the convention that answer: WIRING A NEW
-  // MECHANISM MEANS ADDING ITS ENFORCEMENT ASSERTION HERE.
-  //
-  // "Aimed at enforcement" is the part that matters. Each check asserts the
-  // mechanism's own durable EFFECT — a row only that mechanism writes — not
-  // that an object was constructed and not that a log line was emitted. A
-  // check on construction passes for a component nothing calls, which is the
-  // defect itself.
-  // #714 — the logging-fault mechanisms, asserted on their durable effects.
-  const logging = options.loggerResilience;
-  if (!logging.stdoutRetired || logging.linesAfterStdoutDeath === 0) {
-    failures.push(
-      'a dead stdout pipe did not leave the logger degraded-but-running — stdout was not ' +
-        `retired (${logging.stdoutRetired}) or nothing reached the file afterwards ` +
-        `(${logging.linesAfterStdoutDeath} lines). An unattended soak (#238) dies the moment ` +
-        'its terminal closes, which is #714 exactly',
-    );
-  }
-  if (!logging.degradationRecordedInFile) {
-    failures.push(
-      'stdout failed and nothing recorded it on the surviving sink — the run would continue ' +
-        'blind, and a sink that silently stopped working is indistinguishable from a quiet ' +
-        'system (#714)',
-    );
-  }
-  if (!logging.escalatedWhenNothingCouldRecord) {
-    failures.push(
-      'a logger with no sink left to record on swallowed its failure instead of throwing — ' +
-        'the degrade in #714 is only honest because it stops when the failure can no longer ' +
-        'be written down anywhere',
-    );
-  }
-  if (!logging.lastResortTraceOnStderr) {
-    failures.push(
-      'a logger with no sink left threw but wrote nothing to stderr — and that throw is raised ' +
-        "inside a tick, where tick-loop's catch and safeLog swallow it by design (#573). " +
-        'Without the stderr line the run would keep trading with no trace on any stream (#714)',
-    );
-  }
-  if (!logging.fatalRecordedInFile || logging.fatalExitCode !== 1) {
-    failures.push(
-      'an unhandled fault was not recorded durably and exited with ' +
-        `${logging.fatalExitCode ?? 'no code'} rather than 1 — the fault net must record where ` +
-        'a soak can find it and STOP. A live-money process that keeps running in an unknown ' +
-        'state with open positions is worse than one that dies (#714)',
-    );
-  }
-
-  // #1116 — the logs/ retention sweep, asserted on its durable effects: a
-  // stale file actually gone, a fresh one and an explicitly protected one
-  // actually surviving. `bytesReclaimed` is aspirational rather than exact
-  // when another process still holds a removed file open, but it is not
-  // aspirational here — the fixture is single-process — so a mutation that
-  // drops the byte accounting on an otherwise-correct removal is caught too.
-  const retention = options.logRetention;
-  if (!retention.staleFileRemoved) {
-    failures.push(
-      'the logs/ retention sweep did not remove a file well outside its retention window — ' +
-        'unbounded growth in logs/ on an always-on host is exactly what #1116 exists to bound',
-    );
-  }
-  if (!retention.freshFileKept) {
-    failures.push(
-      'the logs/ retention sweep removed a file inside its retention window — deleting a ' +
-        'file this recent risks deleting evidence of a run still in progress (#1116)',
-    );
-  }
-  if (!retention.protectedFileKeptDespiteAge) {
-    failures.push(
-      'the logs/ retention sweep removed a path passed as protected despite it being old — ' +
-        "the active sink's own rotation set must survive regardless of mtime (#1116)",
-    );
-  }
-  if (!retention.liveShapedFileKeptDespiteAge) {
-    failures.push(
-      'the logs/ retention sweep removed an undated bare name (the service-api.log shape) — ' +
-        'a writer still holding that file open keeps appending to the unlinked inode, so the ' +
-        'space is never reclaimed and the content is unrecoverable (#1116)',
-    );
-  }
-  if (!retention.nonLogFileKeptDespiteAge) {
-    failures.push(
-      'the logs/ retention sweep removed a non-log file — pointed at a directory that is not ' +
-        'logs/ this is how it reaches .env.local, and no age window can make that recoverable ' +
-        '(#1116)',
-    );
-  }
-  if (!retention.oversizedSoakBootTruncatedByDefault) {
-    failures.push(
-      'the logs/ retention sweep left an oversized soak-boot.out untouched with no ' +
-        'configuration at all — #1206 is supposed to bound it by default (bareTruncateBytes and ' +
-        'bareTruncateNames both default on, #1281 review round 2), so an operator who sets ' +
-        'nothing is left with the exact unbounded growth this ticket exists to close',
-    );
-  }
-  if (retention.staleFileRemoved && retention.bytesReclaimed <= 0) {
-    failures.push(
-      'the logs/ retention sweep removed a file but reported 0 bytes reclaimed — the byte ' +
-        "accounting a soak's own artefact depends on (#1116) is not tracking what was deleted",
-    );
-  }
-
-  // #764 — the same stdout-write class #714 fixed for the orchestrator,
-  // decided separately for the service-api and supervisor entrypoints.
-  // There is no `stdoutErrorHandled` field here to check: an entrypoint that
-  // stopped subscribing to stdout's error event makes
-  // `runEntrypointFaultGuardScenario`'s `pipe.breakPipe(name)` throw, which
-  // aborts this whole run (`GATE: FAIL`, exit 1) before this loop is ever
-  // reached — a boolean that could only ever read `true` on the path that
-  // reaches it would be the vacuous-backstop shape #388 warns about above.
-  for (const guard of options.entrypointFaultGuards.entries) {
-    if (guard.faultReportedOnStderr !== true) {
-      failures.push(
-        `${guard.name} stdout fault was not reported on stderr — a degrade that is not recorded ` +
-          'anywhere is indistinguishable from a quiet failure (#764)',
-      );
-    }
-    if (!guard.continuesOnArbitraryFault) {
-      failures.push(
-        `${guard.name} arbitrary-fault handler did not continue the process — this entrypoint ` +
-          'decided CONTINUE, not the orchestrator STOP: exiting takes the other half of the ' +
-          'system down through the supervisor rule that either child dying stops the other (#764)',
-      );
-    }
-  }
-
-  // #638 — the in-code clamp on the last stop ADR-0013 leaves standing.
-  const clamp = options.thresholdClamp;
-  const missingFromProbe = GUARDED_THRESHOLD_NAMES.filter(
-    (name) => !clamp.probedNames.includes(name),
-  );
-  if (missingFromProbe.length > 0 || clamp.probedNames.length !== GUARDED_THRESHOLD_NAMES.length) {
-    failures.push(
-      `the threshold-clamp probe covered ${clamp.probedNames.length} of ` +
-        `${GUARDED_THRESHOLD_NAMES.length} guarded thresholds (missing: ` +
-        `${missingFromProbe.join(', ') || 'none'}) — a bounds-table entry that nothing probes ` +
-        'is a limit nobody has seen enforced (#638)',
-    );
-  }
-  if (clamp.liveReadAccepted.length > 0) {
-    failures.push(
-      `the LIVE risk_thresholds read accepted out-of-bound values for ` +
-        `${clamp.liveReadAccepted.join(', ')} — RiskManagerImpl.evaluate() re-resolves its ` +
-        'config from that table on every call, so this is the path the Feedback Loop moves a ' +
-        'dial on between two ticks, with no boot in between (#638/ADR-0013)',
-    );
-  }
-  if (clamp.writeDoorAccepted.length > 0) {
-    failures.push(
-      `the Feedback Loop write door accepted out-of-bound values for ` +
-        `${clamp.writeDoorAccepted.join(', ')} — ADR-0013 requires every dial change to be ` +
-        'rejected in code if it would cross a hard bound, and after #736 there is nobody in ' +
-        'the path at all (#638)',
-    );
-  }
-  if (!clamp.breakerConstructionRefused) {
-    failures.push(
-      'the breaker constructor accepted a 0.95/0.90 drawdown pair — the pre-existing check is ' +
-        'a relative ordering test only, so this boots a system whose hard drawdown breaker ' +
-        'can never fire (#638)',
-    );
-  }
-  if (!clamp.killLineCheckRefused) {
-    failures.push(
-      'the kill-line boot check accepted a PBO threshold of 0.5 — CONTEXT.md states 0.05 as a ' +
-        'bright line and the Feedback Loop holds the only mutable copy of it (#638)',
-    );
-  }
-  if (!clamp.shippedConfigAccepted) {
-    failures.push(
-      'the shipped paper breaker configuration is itself refused by the clamp — the bound is ' +
-        'wrong, not the config, and every negative probe above would still pass (#638)',
-    );
-  }
-  if (!clamp.exitBypassesLiveClamp) {
-    failures.push(
-      'with a live risk_thresholds row out of bounds, an exit intent did not reach ' +
-        "RiskManagerImpl.evaluate()'s approved bypass while an entry intent was still refused — " +
-        "either the exit/flatten path is stranded behind #638's clamp (a materially worse " +
-        "defect than #766 was filed for: ADR-0014's flat-by-close invariant has no session-end " +
-        'job to catch a missed flatten) or the clamp stopped refusing entries at all (#766)',
-    );
-  }
-
-  // #1152 — the composition root's approvals fallback must refuse rather
-  // than fabricate consent if Verdict's HITL gate (6) is ever reached: no
-  // auto-approving default may ever be wired here.
-  const approvalFallback = options.approvalFallback;
-  if (!approvalFallback.refusedFabricatedConsent) {
-    failures.push(
-      "the composition root's approvals fallback did NOT refuse Verdict's HITL gate (6) — it " +
-        'answered instead of throwing, which is the auto-approving shape this fallback must ' +
-        'never take (#1152)',
-    );
-  } else if (!(approvalFallback.message ?? '').includes('no ApprovalChannel is wired')) {
-    failures.push(
-      'the approvals fallback rejected, but not with the expected refusal (got: ' +
-        `${approvalFallback.message}) — a different exception could be masking a fallback that ` +
-        'no longer refuses on purpose (#1152)',
-    );
-  }
-
-  // #562 — the live orchestrator's OHLCV failover, asserted on its DURABLE
-  // effect: a bar the fallback served, in the store, with the fallback's own
-  // provenance and the primary's session semantics.
-  const failover = options.dataFailover;
-  if (failover.readError !== null) {
-    failures.push(
-      `the composition root's equities bar read threw instead of failing over: ` +
-        `${failover.readError} — a stalled primary must degrade to the fallback vendor, not ` +
-        'stop the tick. The root is not building a FailoverDataSource at all (#562)',
-    );
-  }
-  if (!failover.storedSources.every((source) => source === 'polygon')) {
-    failures.push(
-      `the bars the fallback served were stamped [${failover.storedSources.join(', ')}] in the ` +
-        "store rather than all 'polygon' — provenance is the only thing that makes a " +
-        'fallback-sourced row detectable after the stall, and nothing re-derives it (#562)',
-    );
-  }
-  if (failover.storedSources.length === 0) {
-    failures.push(
-      'no bars row landed from the fallback vendor — the failover produced nothing durable, so ' +
-        'a stage reading bars on the next tick still has no data (#562)',
-    );
-  }
-  if (
-    failover.storedOpenTimes.length !== FAILOVER_IN_SESSION_OPEN_TIMES.length ||
-    !failover.storedOpenTimes.every((openTime, i) => openTime === FAILOVER_IN_SESSION_OPEN_TIMES[i])
-  ) {
-    failures.push(
-      `the fallback persisted bars at [${failover.storedOpenTimes.join(', ')}] where the ` +
-        `session-normalized set is [${FAILOVER_IN_SESSION_OPEN_TIMES.join(', ')}] — the primary ` +
-        'is a NormalizingDataSource and drops out-of-session candles, so a raw fallback puts a ' +
-        'different window behind the same lookback and an ATR spans extended hours instead of ' +
-        'regular sessions, permanently (#562)',
-    );
-  }
-  if (failover.alerts.length === 0) {
-    failures.push(
-      'the failover served bars but raised nothing on the DataFailoverAlertChannel — an ' +
-        'unattended soak that silently switched vendors is a stall nobody learns about (#562)',
-    );
-  }
-
-  // #1151 — `createDataSource` reached from the composition root, asserted on
-  // the DURABLE effect of each surviving arm. See `runDataSourceFactoryScenario`.
-  const factory = options.dataSourceFactory;
-  if (factory.error !== null) {
-    failures.push(
-      `a factory-resolved market-data source refused to build or read: ${factory.error} — ` +
-        '`production/defaults.ts` resolves both surviving arms through `createDataSource`, so a ' +
-        'broken arm takes the whole market-data path down at boot (#1151)',
-    );
-  }
-  if (
-    factory.alpacaStoredSources.length === 0 ||
-    !factory.alpacaStoredSources.every((source) => source === 'alpaca')
-  ) {
-    failures.push(
-      `the Alpaca arm persisted [${factory.alpacaStoredSources.join(', ')}] rather than a ` +
-        "non-empty run of 'alpaca' — `createDataSource({ kind: 'alpaca' })` is what " +
-        '`buildAlpacaDataSource` resolves every non-LSE universe through, so nothing durable ' +
-        'here means the tick loop has no bars at all (#1151)',
-    );
-  }
-  if (
-    factory.lseStoredSources.length === 0 ||
-    !factory.lseStoredSources.every((source) => source === SMOKE_LSE_VENDOR)
-  ) {
-    failures.push(
-      `the LSE arm persisted [${factory.lseStoredSources.join(', ')}] rather than a non-empty ` +
-        `run of '${SMOKE_LSE_VENDOR}' — the live equity leg's only mark path is ` +
-        "`createDataSource({ kind: 'lse' })`, and it is kept precisely so #895/#1034 can land " +
-        'as a config change; unreached, it is the unwired arm this ticket deleted two of (#1151)',
-    );
-  }
-
-  // #957 — check-pipeline step 7's producer, asserted on its DURABLE effect
-  // through the real composition root. See `runRiskCriticScenario`.
-  const critic = options.riskCritic;
-  if (critic.stepError !== null) {
-    failures.push(
-      `the risk step threw while consulting the critic: ${critic.stepError} — step 7 is ` +
-        'specified to FAIL OPEN (a decision proceeds on the mechanical steps with ' +
-        'risk_critic: skipped), so a throw here turns an unreachable model into a dead tick ' +
-        'in front of an order (#957, ADR-0003)',
-    );
-  }
-  if (critic.loggedVerdicts.length === 0) {
-    failures.push(
-      'a viable entry reached the risk stage through the real composition root and no ' +
-        'risk_critic_log row was written — the critic producer is not wired at all, so ' +
-        'check-pipeline step 7 is back to the never-run state review F-5 recorded, and every ' +
-        'decision silently records risk_critic: skipped while looking healthy (#957)',
-    );
-  }
-
-  // #994: the fold's own enforcement assertion. The fixture pins the outcome
-  // — a mark of SMOKE_MARK_PRICE against a threshold one unit above it — so a
-  // measured `breached` and the reject that follows are the ONLY correct
-  // result. Delete the `marketData:` line from `buildRiskCriticProducer`, or
-  // the `breachedConditions` block from `evaluate()`, and this fails.
-  if (!critic.conditionStates.includes('breached')) {
-    failures.push(
-      'the risk critic emitted a well-formed invalidation condition and no persisted ' +
-        `condition measured \`breached\` (states: ${JSON.stringify(critic.conditionStates)}) — ` +
-        'the deterministic evaluator did not run over the fixture feed, so the typed ' +
-        'invalidation half is emitted and measured by nothing (#994)',
-    );
-  } else if (critic.bindingConstraint !== 'risk_critic:invalidated') {
-    failures.push(
-      'a measured BREACHED invalidation condition did not reject the intent (binding ' +
-        `constraint: ${critic.bindingConstraint ?? 'none'}) — \`evaluate()\` holds that ` +
-        'authority (#997 Q2b), so a breach that only gets logged is a checklist with no ' +
-        'teeth (#994)',
-    );
-  }
-
-  // #1155 — the prompt-tier crossing warning, asserted on its DURABLE effect
-  // through the real `SqliteLlmSpendStore`. See `runPromptTierWarningScenario`.
-  const promptTierWarning = options.promptTierWarning;
-  if (promptTierWarning.spendRows !== 2) {
-    failures.push(
-      `the prompt-tier scenario's two metered calls wrote ${promptTierWarning.spendRows} ` +
-        '`llm_spend` row(s), not 2 — the scenario itself is broken, not the mechanism it exists ' +
-        'to gate (#1155)',
-    );
-  } else if (promptTierWarning.costUsd === null || promptTierWarning.costUsd < 0.8) {
-    failures.push(
-      `the crossing call priced at $${String(promptTierWarning.costUsd)}, not at x-ai/grok-4.5's ` +
-        "large-prompt TIER rate (~$0.812) — the scenario's own fixture usage does not actually " +
-        'cross the tier, so its alert count proves nothing about #1155',
-    );
-  } else if (promptTierWarning.alertsFired !== 1) {
-    failures.push(
-      `two consecutive calls that cross the SAME model's prompt tier produced ` +
-        `${promptTierWarning.alertsFired} alert(s), not exactly 1 — either \`crossesPromptTier\` ` +
-        '(pricing.ts) is not being consulted inside `SqliteLlmSpendStore.record` at all (0 ' +
-        'alerts: the exact silent-2.5x-step #1155 was filed against), or the crossing is not ' +
-        'throttled (2 alerts: a retrieval-heavy model would page on every single call)',
-    );
-  }
-
-  // #1114 — the analyst failure-cause logging's enforcement assertion, on its
-  // DURABLE effect through the real composition root. See
-  // `runAnalystFailureCauseScenario`'s own doc for why this proves the
-  // non-timeout half of the ticket rather than waiting out a real deadline.
-  const failureCause = options.analystFailureCause;
-  // `other`, not `error`, since #1394 widened `AnalystFailureKind` onto the
-  // shared cause taxonomy: the probe's two dead legs are combined by
-  // `withOhlcvFailover` into a plain `Error`, which the classifier reports as
-  // unclassified rather than guessing a transport fault.
-  if (!failureCause.failureKinds.includes('other')) {
-    failures.push(
-      "the analyst failure-cause probe's double-failed data source did not produce a genuine " +
-        `(non-timeout) analyst rejection (kinds observed: ${JSON.stringify(failureCause.failureKinds)}) ` +
-        '— the probe itself is broken, not the mechanism it exists to gate (#1114/#1394)',
-    );
-  } else if (failureCause.debugPayloads.length === 0) {
-    failures.push(
-      'a genuine analyst rejection happened and no `stage: "analysts", level: "debug"` line was ' +
-        'recorded for it — `production.ts` is not wiring its `logger` into `new ' +
-        'AnalystOrchestrator({...})` (or the orchestrator fell back to its internal NOOP_LOGGER), ' +
-        'so the cause behind a stage failure is back to the verdict-only line #1114 was filed ' +
-        'against',
-    );
-  } else {
-    const withCause = failureCause.debugPayloads.find(
-      (payload) =>
-        payload.analyst_type === 'technical' &&
-        typeof payload.cause === 'string' &&
-        typeof payload.name === 'string' &&
-        typeof payload.message === 'string',
-    );
-    if (withCause === undefined) {
-      failures.push(
-        `debug lines were recorded (${JSON.stringify(failureCause.debugPayloads)}) but none carried ` +
-          'the rendered name/message/cause a non-timeout rejection is supposed to keep — ' +
-          '`renderErrorDetail` (pipeline/analysts/orchestrator.ts) stopped rendering the caught ' +
-          'error, or stopped being called (#1114)',
-      );
-    }
-  }
-
-  // #1125 — the FILLED_WITH_ZERO_SIZE wedge scenario's enforcement assertion,
-  // on its DURABLE effect (the warning payload) through the real
-  // `buildExecutionSurface` binding. See `runFilledZeroSizeWedgeScenario`.
-  const wedge = options.filledZeroSizeWedge;
-  if (wedge.warnings.length !== 1) {
-    failures.push(
-      `the FILLED_WITH_ZERO_SIZE wedge scenario produced ${wedge.warnings.length} warning(s), ` +
-        "expected exactly 1 — either the scenario's wedged lot never reached the throttle's " +
-        'first-warning threshold (ALERT_AFTER_CONSECUTIVE_ZERO_SIZE consecutive zero-filled-size ' +
-        "polls), ingest-fills.ts's own no-new-fills zero-filled-size warning branch has been " +
-        "removed or stopped firing, or execution.reconcile() no longer adopts the broker's " +
-        "'filled' order_state onto this lot (that branch is guarded on " +
-        "order_state === 'filled' || 'partially_filled' — if reconcile's adopt semantics change " +
-        "so the lot stays 'submitted', this branch is never reached and zero warnings fire even " +
-        'though it is fully intact) (#1125)',
-    );
-  } else {
-    const [warning] = wedge.warnings;
-    if (
-      warning === undefined ||
-      warning.idempotency_key !== FILLED_ZERO_SIZE_WEDGE_LOT_KEY ||
-      warning.instrument !== FILLED_ZERO_SIZE_WEDGE_INSTRUMENT ||
-      warning.order_state !== 'filled' ||
-      warning.consecutive !== ALERT_AFTER_CONSECUTIVE_ZERO_SIZE ||
-      // Exact, not `> 0` (#1125 review round 2, finding 1): under
-      // `SimulatedClock`, `stuck_ms` is `now - position.opened_at` computed
-      // at a FIXED clock reading (no poll advances it), so it is
-      // deterministic — `FILLED_ZERO_SIZE_WEDGE_OPENED_BEFORE_MS` exactly.
-      // A `> 0` check cannot catch `ingest-fills.ts` reading
-      // `decision_timestamp` instead of `opened_at`: the two are only 5s
-      // apart against a 1h `stuck_ms`, so the wrong field still passes
-      // `> 0`. Measured: swapping that field yields `stuck_ms: 3605000`
-      // and this exact equality check catches it (`3605000 !==
-      // 3600000`), where `> 0` did not.
-      warning.stuck_ms !== FILLED_ZERO_SIZE_WEDGE_OPENED_BEFORE_MS
-    ) {
-      failures.push(
-        `the FILLED_WITH_ZERO_SIZE warning fired with an unexpected shape ` +
-          `(${JSON.stringify(warning)}) — expected idempotency_key ` +
-          `'${FILLED_ZERO_SIZE_WEDGE_LOT_KEY}', instrument '${FILLED_ZERO_SIZE_WEDGE_INSTRUMENT}', ` +
-          `order_state 'filled', consecutive ${ALERT_AFTER_CONSECUTIVE_ZERO_SIZE} and stuck_ms ` +
-          `${FILLED_ZERO_SIZE_WEDGE_OPENED_BEFORE_MS} (#1125)`,
-      );
-    }
-  }
-
-  if (debates.length > 0 && observations.cosineSetups.length === 0) {
-    failures.push(
-      'a debate resolved and reached the Trader, but no row in cosine_setups — `decide()` did ' +
-        'not write the setup it embedded, so cosine retrieval has nothing to find and every ' +
-        'position takes the permanent 0.75x no-precedent haircut. This is the #432 defect ' +
-        'exactly: retrieval (#75) and the store (#198) both existed and `decide()` called ' +
-        'neither, while the whole unit suite passed',
-    );
-  }
-
-  if (observations.riskThresholds.length === 0) {
-    failures.push(
-      'no row in risk_thresholds — the composition root did not seed the dials, so ' +
-        "`autoTighten` has no current value to step from and the Feedback Loop's defensive " +
-        'response to a kill-line breach tightens nothing. This is the #433 defect: the write ' +
-        'end existed and the read end did not, and nothing failed',
-    );
-  }
-
-  // #328. Anchored on `debates.length > 0` for the same reason the
-  // cosine_setups check is: a run where no debate resolved never reached the
-  // Trader, and demanding a row then would fail for a reason that is not this
-  // one. Once a debate HAS resolved, a row is unconditional — the Trader
-  // writes on a skip and Risk on a rejection, so "nothing traded" is not an
-  // explanation for an empty table.
-  if (debates.length > 0 && observations.traderDecisions.length === 0) {
-    failures.push(
-      'a debate resolved and reached the Trader, but no row in trader_log — the decision ' +
-        'record is not wired, so why a size came out at N (or why nothing traded at all) is ' +
-        'reconstructable only from an `audit_log` digest and ephemeral stdout. Note the ' +
-        'Trader writes on a SKIP too, so this cannot be explained by a quiet tick',
-    );
-  }
-
-  if (observations.traderDecisions.length > 0 && observations.riskDecisions.length === 0) {
-    failures.push(
-      'the Trader produced an intent but no row in risk_log — Risk evaluated it and left no ' +
-        'record of what portfolio state it sized against or which gate bound. A rejected ' +
-        'intent never reaches Verdict, so with this unwired a rejection has no durable ' +
-        'record anywhere in the system',
-    );
-  }
-
-  if (observations.analystWeights.length === 0) {
-    failures.push(
-      'no row in analyst_weights — the startup seeder did not run, so `runDailyCycle` skips ' +
-        'every analyst it cannot find a row for and the loop attributes nothing while reporting ' +
-        'a clean run. This is the #371 defect',
-    );
-  }
-
-  const breakerTiers = new Set(observations.breakerStates.map((row) => row.tier));
-  if (!breakerTiers.has('portfolio_drawdown') || !breakerTiers.has('kill_switch')) {
-    failures.push(
-      'breaker_state is missing a tier row — the tick path never persisted the sticky ' +
-        "breakers' state, so a tripped hard-drawdown breaker or kill switch re-arms itself on " +
-        'restart. Under ADR-0007 the breakers are the only remaining stop; this table sat ' +
-        'unwritten behind a doc comment claiming "the caller persists this" (review 2026-08-06 B1)',
-    );
-  }
-
-  // #1111: the two gates whose refusal is a number against a bound must write
-  // that number. A column written by `buildVerdictLog` and never read back is
-  // the same defect one table over — the reason a `staleness` row could not be
-  // diagnosed without joining to `debate_log` in the first place.
-  //
-  // This is the only #1111 assertion this gate carries. It does not, and
-  // cannot, assert on the `readAt` coordinate itself: a smoke run's fixture
-  // marks stay fresh by construction. The six-stage run's fixture mark is
-  // frozen at `SMOKE_RUN_INSTANT`, and the run's total wall-clock span
-  // (default 3 ticks at 250ms, see `tickIntervalMs`'s own doc, which sizes
-  // that gap against `max_signal_age`) stays far below `max_mark_age` too —
-  // its smaller value here is 2 minutes (paper-profile.ts, crypto); the
-  // exit-path harness instead overrides `max_mark_age` to 24h because it
-  // advances its own clock between phases. Either way, no staleness/
-  // stale_feed verdict is ever produced here to check the detail on. The
-  // one structural guard on `readAt` reaching a real caller is
-  // `PortfolioAccountingInput.clock` being a required (non-optional) field —
-  // a compile-time check, not a runtime one — so a caller that regresses to
-  // threading `asOf` through both parameters would still type-check and this
-  // gate would not see it.
-  const undetailedStaleness = verdicts.filter(
-    (verdict) =>
-      (verdict.no_go_reason === 'staleness' || verdict.no_go_reason === 'stale_feed') &&
-      (verdict.no_go_detail_measured_ms == null || verdict.no_go_detail_bound_ms == null),
-  );
-  if (undetailedStaleness.length > 0) {
-    failures.push(
-      `${undetailedStaleness.length} verdict_log row(s) refused on staleness/stale_feed without ` +
-        `recording what was measured (${undetailedStaleness
-          .map((verdict) => `${verdict.instrument}:${verdict.no_go_reason}`)
-          .join(', ')}) — the cause is unrecoverable from the row, which is what #1111 fixed`,
-    );
-  }
-
-  if (!verdicts.some((verdict) => verdict.status === 'go')) {
-    failures.push(
-      `no GO verdict was recorded in verdict_log (${verdicts.length} verdict row(s): ` +
-        `${summariseVerdicts(verdicts)}) — the pipeline never authorised a trade`,
-    );
-  }
-
-  const submitted = ticks.flatMap((tick) =>
-    tick.stages.filter((entry) => entry.stage === 'execution' && entry.decision === 'submitted'),
-  );
-  if (submitted.length === 0) {
-    failures.push(
-      'no tick reached Execution with a `submitted` result — nothing was ever handed to the ' +
-        'broker adapter',
-    );
-  }
-
-  if (positions.length === 0) {
-    failures.push(
-      'no row in open_positions — Execution never wrote a lot ahead of the broker call, so ' +
-        'there is nothing for reconcile() or the fill poll to advance',
-    );
-  }
-
-  if (!fills.some((fill) => fill.leg === 'entry')) {
-    failures.push(
-      'no entry fill in fills — the order was submitted but no fill was ever ingested, so the ' +
-        'fill-sync poll (ingestFills) is not draining the venue feed',
-    );
-  }
-
-  // #576 — the exit path, unconditional: `runExitPathScenarios` always runs,
-  // so every one of these is expected on every healthy smoke run, the same
-  // way `positions`/`fills` above are.
-
-  // #508/#516: the write-ahead journal must exist and every row must have
-  // resolved — an unresolved row means an exit was journalled and then the
-  // broker call was refused or left ambiguous.
-  if (observations.flattenSubmissions.length === 0) {
-    failures.push(
-      "no row in flatten_submissions — no exit ever reached executeExit()'s write-ahead journal " +
-        "(#508), so #516's cancel-before-flatten guard was never exercised",
-    );
-  } else {
-    const unresolved = observations.flattenSubmissions.filter((row) => row.status !== 'submitted');
-    if (unresolved.length > 0) {
-      failures.push(
-        `flatten_submissions has ${unresolved.length} row(s) not resolved to 'submitted' ` +
-          `(${unresolved.map((row) => `${row.idempotency_key}:${row.status}`).join(', ')}) — an ` +
-          'exit was journalled but its flatten never reached, or was refused by, the broker',
-      );
-    }
-  }
-
-  // #516 — ORDERING, not merely that both calls happened: every `submitFlatten`
-  // must have a `cancel` recorded FRESH since the previous `submitFlatten` (or
-  // the start of the run), not merely "somewhere earlier in the sequence" —
-  // that weaker form would report the FIRST flatten's own missing cancel and
-  // then stop, because every later flatten's window contains SOME earlier
-  // cancel and (wrongly) reads as satisfied.
-  //
-  // What this window scoping does NOT do: verify the cancel it finds belongs
-  // to the SAME lot the flatten is closing. A resting bracket leg cancelled
-  // after the flatten (or never) can fire into the now-flat position and open
-  // a reverse one, and this check catches that for the FIRST flatten a
-  // regression touches — sufficient in practice because `executeExit` cancels
-  // and flattens through one uniform code path applied to every exit, so a
-  // real regression of #516's ordering shows up on the first flatten, not
-  // selectively on a later one.
-  const { brokerCallSequence } = options.exitPath;
-  let sincePreviousFlatten = 0;
-  const flattensWithoutPriorCancel: string[] = [];
-  for (const [index, call] of brokerCallSequence.entries()) {
-    if (!call.startsWith('submitFlatten:')) continue;
-    const window = brokerCallSequence.slice(sincePreviousFlatten, index);
-    if (!window.some((entry) => entry.startsWith('cancel:'))) {
-      flattensWithoutPriorCancel.push(call);
-    }
-    sincePreviousFlatten = index + 1;
-  }
-  if (flattensWithoutPriorCancel.length > 0) {
-    failures.push(
-      `broker call(s) ${flattensWithoutPriorCancel.join(', ')} have no 'cancel' call recorded ` +
-        `before them (full sequence: ${brokerCallSequence.join(' -> ') || '(empty)'}) — a resting ` +
-        'bracket leg cancelled after the flatten (or never) can fire into the now-flat position ' +
-        'and open a reverse one (#516)',
-    );
-  }
-  if (!brokerCallSequence.some((call) => call.startsWith('submitFlatten:'))) {
-    failures.push(
-      'the exit-path harness recorded no submitFlatten call at all — exits never reached ' +
-        'submitFlatten (#508)',
-    );
-  }
-
-  // #508/#517: every exit must eventually round-trip a lot to `closed` with
-  // a `ClosedTrade` — see `SmokeObservations.closedTrades`'s doc for why this
-  // was NOT required before #576.
-  if (observations.closedTrades.length === 0) {
-    failures.push(
-      'no row in closed_trades — the exit-path scenarios never round-tripped a lot to flat, so ' +
-        "either a flatten's fill was never attributed back to the lot it closed (#517) or " +
-        'ingestFills() never reached its round-trip-to-flat branch at all',
-    );
-  }
-
-  // Scoped to scenario 1's OWN lot, not just the aggregate above: scenario 3
-  // alone closes two lots, so an aggregate-only check stays green if
-  // scenario 1 regresses in isolation (e.g. a reintroduced #517
-  // misattribution confined to its instrument) while scenario 3 still
-  // closes normally. Same pattern the #571 check below uses for its own lots.
-  const fullExitLot = positions.find(
-    (position) => position.idempotency_key === options.exitPath.fullExit.lotKey,
-  );
-  if (fullExitLot === undefined || fullExitLot.order_state !== 'closed') {
-    failures.push(
-      `lot '${options.exitPath.fullExit.lotKey}' (scenario 1's full exit) never reached ` +
-        `order_state 'closed' (${
-          fullExitLot === undefined
-            ? 'no row in open_positions'
-            : `state=${fullExitLot.order_state}`
-        }) — the #508/#517 exit path did not round-trip it to flat`,
-    );
-  }
-
-  // #525 — the residual left by a partial flatten must be RE-ARMED (not left
-  // naked), and re-arming must not have needed the fallback alert: a
-  // successful re-arm posts nothing (residual-exposure-alert.ts).
-  const { partialFlatten, residualAlerts } = options.exitPath;
-  if (partialFlatten.protectedQty === null) {
-    failures.push(
-      `lot '${partialFlatten.idempotencyKey}' has no protective legs armed after its partial ` +
-        "flatten — the #525 residual re-arm never ran, leaving the lot's residual naked",
-    );
-  } else if (partialFlatten.protectedQty !== partialFlatten.expectedResidual) {
-    failures.push(
-      `lot '${partialFlatten.idempotencyKey}' has ${partialFlatten.protectedQty} protected after ` +
-        `its partial flatten, expected the residual ${partialFlatten.expectedResidual} — the ` +
-        're-arm (#525) sized the wrong quantity',
-    );
-  }
-  // Scoped since #549: scenario 5 DELIBERATELY fails one re-arm, so exactly
-  // its one inline alert is expected — any OTHER lot alerting still means a
-  // re-arm failed on a deterministic offline broker.
-  const { residualSweep } = options.exitPath;
-  const strayResidualAlerts = residualAlerts.filter(
-    (alert) => alert.idempotency_key !== residualSweep.lotKey,
-  );
-  if (strayResidualAlerts.length > 0) {
-    failures.push(
-      `${strayResidualAlerts.length} residual-exposure alert(s) fired during the smoke run ` +
-        `(lot(s): ${strayResidualAlerts.map((alert) => alert.idempotency_key).join(', ')}) — a ` +
-        'successful re-arm posts nothing (residual-exposure-alert.ts); an alert here means the ' +
-        '#525 re-arm failed on a deterministic offline broker',
-    );
-  }
-
-  // #549 — the residual-protection sweep's ENFORCEMENT assertions (#430's
-  // convention, mirroring #519/#526's above): scenario 5's observing-poll
-  // re-arm was scripted to fail, so ONLY the durable marker + the restarted
-  // reconcile()'s sweep can have re-established protection. Each check below
-  // catches a real way the #549 mechanism can regress on its OWN terms — the
-  // dedup breaking, the sweep settling on the wrong action, the marker
-  // surviving, the qty coming out wrong — but they are not four independent
-  // witnesses to the SAME failure. Measured (#1228/#1285): an extra
-  // `ingestFills()` ahead of the restart heals the deliberately-failed re-arm
-  // in-process, through `maybeRearmResidual`'s mark-unprotected ->
-  // rearmProtectiveLegs -> confirm-protected path (ingest-fills.ts). A
-  // GENUINE restart-sweep heal takes a different path — `sweepOne`
-  // (residual-protection-sweep.ts), which never writes mark-unprotected (the
-  // marker is already set) and clears via `store.confirmResidualProtected`
-  // directly. What makes the two indistinguishable to the other three checks
-  // is not a shared code path but `sweepOne`'s own doc'd choice to recompute
-  // off the SAME `heldQuantityFromFills`/`isFlat` expressions
-  // `maybeRearmResidual` uses, so both leave an identical marker/qty/alert
-  // footprint. The `scenario5Alerts` count check below, and the
-  // `markerCleared`/`protectedQty` checks further below, all read a healed-
-  // in-process residual as indistinguishable from a genuinely swept one.
-  // `sweepDivergenceAction === undefined` (`findSweepDivergence`, above
-  // `runExitPathScenarios`) sees that the restarted sweep itself found
-  // nothing left to do — positive evidence the RESTARTED sweep, not an
-  // earlier poll, did the healing. `.action` alone is not sufficient,
-  // though (#1285 B2, round-1 review): a wrong-key mutation at the
-  // `findSweepDivergence` call site can read a DIFFERENT scenario's
-  // divergence whose `.action` also happens to be `'adopted'` — measured
-  // concretely by substituting scenario 4's `crashRestartLot.exitKey` for
-  // this lot's key, which reads scenario 4's flatten-reconcile divergence
-  // (`reconcileFlatten`, reconcile.ts) instead, itself `'adopted'`.
-  // `sweepDivergenceReason` is the same lookup's `reason` text, so it cannot
-  // silently disagree with `sweepDivergenceAction` about which divergence was
-  // found — and only `sweepOne`'s own re-arm reason
-  // (`'... for residual N by the #549 sweep …'`, residual-protection-sweep.ts)
-  // can produce the text this check requires. That excludes more than
-  // flatten-reconcile divergences: `sweepOne` itself has a SECOND
-  // `action: 'adopted'` return — the `coversQty` flat-path no-op, taken when
-  // the persisted fill record already reads flat, whose reason ("marked lot
-  // reads flat on the persisted fill record…") never names the #549 sweep
-  // either. So this check discriminates WITHIN `sweepOne`, not only against
-  // other mechanisms: only its own re-arm branch — the one that actually
-  // retried `broker.rearmProtectiveLegs` — satisfies it. Since #1285 N3
-  // (round-2 review), the matched text is also bound to THIS lot's own
-  // `expectedResidual`, not just the literal `'by the #549 sweep'` suffix —
-  // narrowing the aperture the B2 fix left open: a future scenario adding a
-  // second lot through `sweepOne`'s real re-arm branch would otherwise also
-  // produce `'adopted'` text naming the #549 sweep, and a wrong-key lookup
-  // landing on THAT lot's divergence would pass B2's check without also
-  // matching this lot's own residual quantity.
-  const scenario5Alerts = residualAlerts.filter(
-    (alert) => alert.idempotency_key === residualSweep.lotKey,
-  );
-  if (scenario5Alerts.length !== 1) {
-    failures.push(
-      `scenario 5's residual episode alerted ${scenario5Alerts.length} time(s), expected exactly 1 ` +
-        "(the observing poll's inline #525 alert) — 0 means the failed re-arm no longer pages at " +
-        'all; more than 1 means the once-per-episode dedup (#549/#342, ' +
-        'open_positions.residual_rearm_alerted_at) regressed and the sweep re-pages every pass',
-    );
-  }
-  if (residualSweep.sweepDivergenceAction === undefined) {
-    failures.push(
-      `the restarted Execution's reconcile() report named no divergence for scenario 5's lot ` +
-        `'${residualSweep.lotKey}' — the durable residual-protection marker (migration 0024) was ` +
-        'never written by the observing poll, or SharedStore.getUnprotectedResidualLots() found ' +
-        'nothing, so the #549 sweep either never ran or had nothing to find',
-    );
-  } else if (residualSweep.sweepDivergenceAction !== 'adopted') {
-    failures.push(
-      `the restarted Execution's residual-protection sweep settled scenario 5's lot with action ` +
-        `'${residualSweep.sweepDivergenceAction}', not 'adopted' — the retry against a healthy ` +
-        'deterministic broker should have re-armed and confirmed; anything else means the sweep ' +
-        'could not settle a marker it should have (#549)',
-    );
-  } else if (
-    !residualSweep.sweepDivergenceReason?.includes(
-      `for residual ${residualSweep.expectedResidual} by the #549 sweep`,
-    )
-  ) {
-    failures.push(
-      `the lookup keyed on scenario 5's lot '${residualSweep.lotKey}' returned a divergence ` +
-        `reading 'adopted', but its reason ('${residualSweep.sweepDivergenceReason}') does not ` +
-        `name the #549 sweep re-arming this lot's OWN residual ` +
-        `(${residualSweep.expectedResidual}) — this is the #1285 ` +
-        'B2/N3 case: a lookup keyed on the WRONG lot could still land on a divergence reading ' +
-        "'adopted' (another scenario's flatten-reconcile, or sweepOne's own coversQty flat-path " +
-        "no-op), and binding the match to this lot's own residual quantity closes that even for a " +
-        "future scenario adding a second lot through sweepOne's real re-arm branch; only " +
-        "sweepOne's re-arm of THIS residual (residual-protection-sweep.ts) can satisfy this text",
-    );
-  }
-  if (!residualSweep.markerCleared) {
-    failures.push(
-      `scenario 5's residual-protection marker (open_positions.residual_unprotected_since, lot ` +
-        `'${residualSweep.lotKey}') is still set after the restarted reconcile() — protection was ` +
-        'never CONFIRMED, so the lot would be re-swept forever (#549)',
-    );
-  }
-  if (residualSweep.protectedQty !== residualSweep.expectedResidual) {
-    failures.push(
-      `lot '${residualSweep.lotKey}' has ${residualSweep.protectedQty ?? 'no'} protected after ` +
-        `the #549 sweep's retry, expected the residual ${residualSweep.expectedResidual} — the ` +
-        'sweep either never re-armed (the lot is naked) or sized the wrong quantity',
-    );
-  }
-
-  // #571 — neither lot named by a multi-lot flatten may be left phantom-open:
-  // both must have reached `order_state: 'closed'` in `open_positions`.
-  const phantomOpen = options.exitPath.twoLotFlatten.lotKeys.filter((key) => {
-    const row = positions.find((position) => position.idempotency_key === key);
-    return row === undefined || row.order_state !== 'closed';
-  });
-  if (phantomOpen.length > 0) {
-    failures.push(
-      `lot(s) ${phantomOpen.join(', ')} were named by a two-lot flatten but never reached ` +
-        "order_state 'closed' — the #571 fill split left quantity unaccounted for on at least " +
-        'one sibling lot',
-    );
-  }
-
-  // #519/#526 — the ENFORCEMENT assertions for the flatten-journal sweep
-  // (#430's convention: a durable EFFECT only the new mechanism produces,
-  // not that an object was constructed). A regression that deletes
-  // `reconcile()`'s flatten sweep, or reverts `resumeFlatten` to a no-op,
-  // leaves scenario 4's lot open forever — `ingestFills()` alone never polls
-  // an order the process-local `flattens` map has forgotten, so nothing
-  // short of the sweep itself can close it.
-  const { crashRestart, flattenReconcileAlerts: flattenReconcileAlertsFired } = options.exitPath;
-  const crashRestartDivergence = crashRestart.reconcileReport.divergences.find(
-    (divergence) => divergence.idempotency_key === crashRestart.flattenKey,
-  );
-  if (crashRestartDivergence === undefined) {
-    failures.push(
-      `the restarted Execution's reconcile() report named no divergence for scenario 4's ` +
-        `flatten '${crashRestart.flattenKey}' (lot '${crashRestart.lotKey}') — ` +
-        'SharedStore.getUnresolvedFlattens() found nothing to resolve, so the journal sweep ' +
-        '(#519) either never ran or the row was not recognised as unresolved ' +
-        `(checked=${crashRestart.reconcileReport.checked}, ` +
-        `divergences=${crashRestart.reconcileReport.divergences.length})`,
-    );
-  } else if (crashRestartDivergence.action !== 'adopted') {
-    failures.push(
-      `the restarted Execution's reconcile() settled scenario 4's flatten with action ` +
-        `'${crashRestartDivergence.action}', not 'adopted' (reason: ` +
-        `${crashRestartDivergence.reason}) — the venue genuinely acked this flatten, so anything ` +
-        "other than 'adopted' means reconcile() mis-settled a row it should have resolved cleanly",
-    );
-  }
-  const crashRestartLot = positions.find(
-    (position) => position.idempotency_key === crashRestart.lotKey,
-  );
-  if (crashRestartLot === undefined || crashRestartLot.order_state !== 'closed') {
-    failures.push(
-      `lot '${crashRestart.lotKey}' (scenario 4's crash-restart flatten) never reached ` +
-        `order_state 'closed' after the restarted Execution's reconcile() + ingestFills() ` +
-        `(${crashRestartLot === undefined ? 'no row in open_positions' : `state=${crashRestartLot.order_state}`}) ` +
-        "— reconcile()'s flatten sweep did not re-establish the fill-sweep worklist the way " +
-        '#519/#526 require',
-    );
-  }
-  if (flattenReconcileAlertsFired.length > 0) {
-    failures.push(
-      `${flattenReconcileAlertsFired.length} flatten-reconcile alert(s) fired during the smoke ` +
-        `run (flatten(s): ${flattenReconcileAlertsFired.map((alert) => alert.idempotency_key).join(', ')}) ` +
-        "— scenario 4's flatten resolves cleanly against a deterministic offline broker; an " +
-        'alert here means reconcile() could not settle a row it should have',
-    );
-  }
-
-  // #1088 — the terminal-row sweep's ENFORCEMENT assertion (#430's
-  // convention again): scenario 6 seeded a `rejected`, `filled_size = 0`
-  // `open_positions` row already older than `TERMINAL_SWEEP_AGE_MS`. Nothing
-  // else in this run ever reads or clears that row — `getOpenPositions()`
-  // already excluded it from every other check above by virtue of being
-  // terminal — so its continued presence after the restarted `reconcile()`
-  // can only mean `sweepTerminalPositions` was deleted, stopped being
-  // called from `reconcile()`, or regressed its own predicate.
-  const { terminalSweep } = options.exitPath;
-  if (terminalSweep.rowPresentAfterSweep) {
-    failures.push(
-      `open_positions row '${terminalSweep.seededKey}' (seeded 'rejected', filled_size 0, ` +
-        `decision_timestamp past TERMINAL_SWEEP_AGE_MS) is STILL present after the restarted ` +
-        `reconcile() (swept=${terminalSweep.swept}) — the #1088 terminal-row sweep either never ` +
-        'ran or no longer deletes what it should; a table this leaves growing forever is the ' +
-        'exact defect #1088 closed',
-    );
-  }
-
-  // #586 — the emulated crypto protective legs, unconditional for #430's
-  // reason: `runCryptoEmulationScenario` always runs, the smoke universe is
-  // crypto, and no other check in this gate can see the emulation at all
-  // (the six-stage run and the exit-path harness both override the broker
-  // with `SimulatedBrokerAdapter`). Each check names a different way the
-  // mechanism can silently stop being wired.
-  const emulation = options.cryptoEmulation;
-  if (emulation.journalRow === undefined || emulation.journalRow.asset_class !== 'crypto') {
-    failures.push(
-      "the emulated-leg journal (broker_brackets, venue 'alpaca') has no crypto row for the " +
-        "crypto-emulation scenario's lot — submitBracket stopped journalling the emulated " +
-        'bracket (#586), so a crash between the entry and its protective legs leaves a live ' +
-        'crypto position nothing knows to protect',
-    );
-  } else {
-    if (
-      emulation.journalRow.stop_order_id == null ||
-      emulation.journalRow.target_order_id == null
-    ) {
-      failures.push(
-        "the crypto-emulation scenario's journal row is missing protective-leg order ids after " +
-          'the entry filled — the legs were never submitted as plain crypto orders (#586), so ' +
-          'the filled lot sat naked',
-      );
-    }
-    if (emulation.journalRow.phase !== 'resolved') {
-      failures.push(
-        `the crypto-emulation scenario's journal row ended in phase ` +
-          `'${emulation.journalRow.phase}', expected 'resolved' — the emulated OCO edge ` +
-          '(leg fill -> sibling cancel) did not complete (#586)',
-      );
-    }
-  }
-  if (!emulation.entryFillSeen) {
-    failures.push(
-      "the crypto-emulation scenario's entry fill never came back through fetchNewFills — the " +
-        'emulation sweep is not polling its plain entry order (#586), so ingestFills would ' +
-        'never learn a crypto entry filled',
-    );
-  }
-  if (!emulation.stopFillSeen) {
-    failures.push(
-      "the crypto-emulation scenario's stop-leg fill never came back through fetchNewFills — " +
-        'the emulation sweep is not polling its resting legs (#586), so a stop-out would go ' +
-        'unbooked',
-    );
-  }
-  if (!emulation.siblingCancelled) {
-    failures.push(
-      'the surviving take-profit leg was never cancelled after the stop leg filled — the ' +
-        'emulated one-cancels-other edge is not firing (#586), leaving a resting order that ' +
-        'can fire into a flat position and open a reverse one',
-    );
-  }
-
-  // The seeded 25h baseline plus the canned batch's one row on a watched
-  // theme (the batch carries two, one off-watchlist). Asserted rather than
-  // merely printed, because the two ways this can be wrong are the two this
-  // observation exists to catch and neither shows up anywhere else: the seed
-  // count alone means the poller never fired from the composition root (the
-  // no-caller defect this repo keeps producing), and one more than expected
-  // means the theme filter stopped filtering and the archive is taking the
-  // whole world's news.
-  if (observations.gdeltRowsArchived !== SMOKE_GDELT_EXPECTED_ROWS) {
-    failures.push(
-      `GDELT archived ${observations.gdeltRowsArchived} macro rows, expected exactly ` +
-        `${SMOKE_GDELT_EXPECTED_ROWS} — ` +
-        `${SMOKE_GDELT_SEEDED_ROWS} means the poller never ran from the composition root, ` +
-        `${SMOKE_GDELT_EXPECTED_ROWS + 1} means the theme filter matched both canned rows and ` +
-        'is no longer filtering (#556)',
-    );
-  }
-
-  // #1086, and the half the line above cannot see: bytes in the archive are
-  // not intelligence until something derives them. This is the scoring pass
-  // observed through the store the analysts read, on the real composition
-  // root — 0 means it is built and never called, which is the state #556's
-  // archive half shipped in.
-  if (observations.gdeltAggregateItems !== SMOKE_GDELT_EXPECTED_AGGREGATES) {
-    failures.push(
-      `GDELT scoring derived ${observations.gdeltAggregateItems} macro aggregates, expected ` +
-        `exactly ${SMOKE_GDELT_EXPECTED_AGGREGATES} (one per asset class) — 0 means the ` +
-        'scoring pass never ran from the composition root, or refused on a baseline the seed ' +
-        'was supposed to have filled (#1086)',
-    );
-  }
-
-  // #504/#430. Two counts, because they answer different questions: the
-  // archive row says a fetch reached the vendor path, the store item says the
-  // fundamental analyst could actually see the result. A mechanism that
-  // fetches and stores nothing readable is the shape this repo keeps shipping.
-  //
-  // What these two cover is the STARTUP refresh only — `start()` fires
-  // `void polymarketAgent.refresh('startup')` once, and the repeating
-  // `setInterval` behind it runs at DEFAULT_POLYMARKET_POLL_INTERVAL_MS
-  // (15 minutes) against a smoke run that finishes in seconds, so it provably
-  // never fires here. The recurring poll is UNCOVERED by this gate; only the
-  // composition-root wiring of the first refresh is.
-  if (observations.polymarketRowsArchived !== SMOKE_POLYMARKET_EXPECTED_ITEMS) {
-    failures.push(
-      `Polymarket archived ${observations.polymarketRowsArchived} macro rows, expected exactly ` +
-        `${SMOKE_POLYMARKET_EXPECTED_ITEMS} — 0 means the startup refresh never ran from the ` +
-        'composition root, more means the fail-closed guard stopped refusing the thin-volume ' +
-        'market the fixture serves (#504)',
-    );
-  }
-  if (observations.polymarketItemsArchived !== SMOKE_POLYMARKET_EXPECTED_ITEMS) {
-    failures.push(
-      `Polymarket archived ${observations.polymarketItemsArchived} items in mi_items, expected ` +
-        `exactly ${SMOKE_POLYMARKET_EXPECTED_ITEMS} — 0 with rows archived means the source is ` +
-        'back to writing raw bytes with no items, which makes it unreplayable as items (#835)',
-    );
-  }
-  if (observations.polymarketIntelItems !== SMOKE_POLYMARKET_EXPECTED_ITEMS) {
-    failures.push(
-      `Polymarket put ${observations.polymarketIntelItems} items in the intel bucket, expected ` +
-        `exactly ${SMOKE_POLYMARKET_EXPECTED_ITEMS} — 0 with rows archived means the items ` +
-        'never reached MarketIntelligenceStore, were dropped by the entity filter, or were ' +
-        'stamped outside the debate bar the analysts query. This read is ENTITY-SCOPED like ' +
-        "every analyst read, so an item that lost `scope: 'asset_class'` reads 0 here with " +
-        'a row archived: filed under a macro series name, it matches no ticker (#914/#960), ' +
-        "and #1164's routing (`scope: 'asset_class'` -> `intel`, not `news`) would also read " +
-        '0 here if that predicate broke. Items also carry the INGEST INSTANT (#782), and ' +
-        'getContext floors its window to the hour, so this count depends on SMOKE_RUN_INSTANT ' +
-        'being exactly hour-aligned — a smoke clock that drifts off the hour before the ' +
-        'startup refresh lands would read 0 here with a row archived (#504, #782)',
-    );
-  }
-
-  // #1049 — the fill-sync loop must never have rejected a poll. It logs and
-  // keeps polling by design (fill-sync.ts `runOnce`), so this is the only
-  // place a run whose `ingestFills` fails on every call is visible at all.
-  const untolerated = untoleratedFillSyncFailures(options.fillSync.failures);
-  if (untolerated.length > 0) {
-    const distinct = [
-      ...new Set(untolerated.map((failure) => `${failure.message}: ${failure.error}`)),
-    ];
-    failures.push(
-      `${untolerated.length} fill-sync poll failure(s) were logged and survived — the loop keeps ` +
-        'polling by design, so nothing else in this gate sees a reconcile/ingestFills/sweep path that ' +
-        `rejects on every call (#1049). Distinct: ${distinct.join(' | ')}`,
-    );
-  }
-
-  // #1082 — the market-data fetch path must have logged at least one
-  // `market_data_fetch` line. `MarketDataServiceImpl`'s store starts cold
-  // (`:memory:`), so the run's very first bar fetch through the composition
-  // root's PRIMARY `marketData` instance is a guaranteed cache miss; zero
-  // lines means the `telemetry` argument was dropped from `production.ts`'s
-  // `new MarketDataServiceImpl(...)` call, returning the bar/indicator path
-  // to the undiagnosable-silence state #1082 was filed against.
-  if (options.marketDataFetch.fetchCount === 0) {
-    failures.push(
-      'zero market_data_fetch lines were recorded over the run — the store starts cold, so at ' +
-        'least one venue-reaching bar fetch (and therefore one recorded miss) is guaranteed on a ' +
-        'correctly wired composition root; a zero count means the `telemetry` argument was dropped ' +
-        "from production.ts's primary `MarketDataServiceImpl` construction, and the market-data " +
-        'path is back to emitting no telemetry at all (#1082)',
-    );
-  }
-
-  // The fetch telemetry must be JOINABLE to the tick that caused it, which is
-  // the whole point of putting the tick's `trace_id` in ambient context: a
-  // fetch inside a tick carries that tick's id, and `'market-data'` is the
-  // fallback for one with no enclosing tick.
-  //
-  // A run with no ticks at all is not this check's business — the tick and
-  // minTicks checks above own that, and piling on would report a trace defect
-  // for a run that never got far enough to have one.
-  //
-  // Asserted here because nothing else can. Deleting the `runWithTraceId`
-  // wrapper from `SequentialTickRunner.runInstrument` leaves every fetch
-  // byte-identical, every unit test green (each site's fallback is a legal
-  // return), and every other check in this gate green — the lines just
-  // quietly revert to the category label and join to nothing.
-  const tickTraces = new Set(observations.ticks.map((tick) => tick.trace_id));
-  const joined = options.marketDataFetch.traceIds.some((trace_id) => tickTraces.has(trace_id));
-  if (tickTraces.size > 0 && options.marketDataFetch.fetchCount > 0 && !joined) {
-    failures.push(
-      'no market_data_fetch line carried a tick trace_id — every recorded fetch fell back to ' +
-        "the 'market-data' category label, so the bar path's telemetry joins to no tick in " +
-        'audit_log. Either `runWithTraceId` has been dropped from ' +
-        'SequentialTickRunner.runInstrument, or the fetch no longer runs inside the tick',
-    );
-  }
-
-  return { passed: failures.length === 0, failures };
+/**
+ * A probe owns one mechanism end to end: producing its evidence, judging it,
+ * and (optionally) printing it.
+ *
+ * Verdicts are aimed at ENFORCEMENT: each asserts the mechanism's own durable
+ * EFFECT — a row only that mechanism writes — not that an object was
+ * constructed and not that a log line was emitted. A check on construction
+ * passes for a component nothing calls, which is the defect itself. Returned
+ * lines are gate failures; there are no warnings.
+ *
+ * `After` names the probes whose evidence this one reads, in `run` or in
+ * `verdict`; they must precede it in `PROBE_RUN_ORDER`, which `runProbes`
+ * checks before calling `run`.
+ */
+export interface Probe<Id extends ProbeId, After extends ProbeId = never> {
+  after?: readonly After[];
+  run(
+    ctx: ProbeRunContext,
+    prior: Pick<SmokeEvidence, After>,
+  ): SmokeEvidence[Id] | Promise<SmokeEvidence[Id]>;
+  verdict(evidence: SmokeEvidence[Id], ctx: VerdictContext<After>): string[];
+  report?(evidence: SmokeEvidence[Id], observations: SmokeObservations): string[];
 }
 
 function summariseVerdicts(verdicts: SmokeObservations['verdicts']): string {
@@ -6190,12 +5920,632 @@ function summariseVerdicts(verdicts: SmokeObservations['verdicts']): string {
 }
 
 /**
+ * The six-stage run itself, read back from the shared store. "Transacted" is a
+ * conjunction of independently-observable effects rather than one summary
+ * flag, because each is a different wiring defect: the loop ran at all
+ * (timers, scheduler, shutdown); some tick got past Analysts — the literal
+ * condition #350 names, and the one a credentialed run against a 401ing feed
+ * fails; a resolved debate reached `debate_log` (#364); a `go` reached
+ * `verdict_log`; Execution reported `submitted`; a lot was written ahead to
+ * `open_positions`; a fill came back through the fill-sync poll — the only
+ * thing that proves `ingestFills()` is scheduled and draining.
+ *
+ * One `debate_log` row is required, not one per tick: the clock is frozen and
+ * the fixture views identical every tick, so all ticks hash to the same
+ * `debate_id` and the writer's first-write-wins guard collapses them.
+ *
+ * Whether anything reached `UnreachableAlpacaClient` is checked here rather
+ * than left to the throw: `startTickLoop` catches everything a tick throws
+ * and logs it, so a run that tried to reach the network would otherwise fail
+ * for a downstream symptom and never name the cause.
+ */
+const tickLoopProbe: Probe<'tickLoop'> = {
+  run({ targetTicks, alpacaBrokerClient }) {
+    return { minTicks: targetTicks, alpacaWireClientReached: alpacaBrokerClient.reached };
+  },
+  verdict(evidence, { observations }) {
+    const failures: string[] = [];
+    const { ticks, debates, verdicts, positions, fills } = observations;
+    if (evidence.alpacaWireClientReached) {
+      failures.push(
+        'the Alpaca wire client was reached during an offline run — this run is credential-free ' +
+          'and must make no network call. The composition root now needs the wire client for ' +
+          'something the smoke run overrides; see UnreachableAlpacaClient',
+      );
+    }
+
+    if (ticks.length < evidence.minTicks) {
+      failures.push(
+        `the tick loop completed ${ticks.length} of ${evidence.minTicks} expected ticks — the ` +
+          'loop, the scheduler or the shutdown drain did not behave over repeated ticks',
+      );
+    }
+
+    const pastAnalysts = ticks.filter((tick) =>
+      tick.stages.some((entry) => entry.stage !== 'analysts'),
+    );
+    if (pastAnalysts.length === 0) {
+      failures.push(
+        'no tick got past Analysts — every pass short-circuited at the quorum gate, so Debate, ' +
+          'Trader, Risk, Verdict and Execution were never exercised at all (this is exactly what ' +
+          'a credential-less real run does today, and the reason #350 exists)',
+      );
+    }
+
+    if (debates.length === 0) {
+      failures.push(
+        'no row in debate_log — a tick got past Analysts but no resolved debate was persisted, so ' +
+          "the Feedback Loop's weight attribution (attribution.ts joins closed_trades.debate_id " +
+          'against debate_log) has no input and the debate itself is unreconstructable after the ' +
+          'fact (audit_log holds digests only). This is the #364 defect exactly',
+      );
+    }
+
+    // #1081: every row `buildDebateLog` writes must classify itself — the whole
+    // point of the fix is that no `debate_log` row can be silently ambiguous
+    // between a converged/non-converged debate and one the latency budget cut
+    // short. Hung off `debates.length` for the same reason as 3b above: a run
+    // with no rows at all fails on the check above, naming the real cause.
+    const unclassified = debates.filter((debate) => debate.termination == null);
+    if (debates.length > 0 && unclassified.length > 0) {
+      failures.push(
+        `${unclassified.length} of ${debates.length} debate_log row(s) have a NULL termination — ` +
+          'buildDebateLog (debate-log-store.ts) stopped setting it. That reopens #1081: a debate ' +
+          'the latency budget truncated becomes indistinguishable, in the stored record, from one ' +
+          'the analysts genuinely could not agree on.',
+      );
+    }
+
+    // #753 — falsifier arm 2 has a production caller.
+    //
+    // Hung off "a tick reached Execution" rather than standing alone, so a run
+    // that never traded at all fails on the checks above naming the real cause.
+    // Given that the live arm transacted over this tape, the control arm saw the
+    // same tape on the same tick and must have left its own row: the arms are
+    // matched by construction on name, bracket, stop and conviction floor, and
+    // the control's entry is the same deterministic axis vote the live arm's
+    // Analysts stage produced.
+    //
+    // This is the ONLY check anywhere that the control arm has a caller. Every
+    // one of its units can pass while `TickSteps.controlArm` is unbound in
+    // `production.ts` — the member is optional, so unbinding it is not even a
+    // compile error — and the soak would then run for its whole duration with no
+    // matched control, which is the exact thing ADR-0014 amendment 2 forbids and
+    // the repo's dominant defect class (a tested mechanism nothing calls).
+    const transactedThisRun = ticks.some((tick) =>
+      tick.stages.some((entry) => entry.stage === 'execution'),
+    );
+    if (transactedThisRun) {
+      const controlLots = positions.filter((position) => position.arm === 'control');
+      if (controlLots.length === 0) {
+        failures.push(
+          "a tick reached Execution but not one `open_positions` row carries `arm = 'control'` — " +
+            'falsifier arm 2 (#753) did not run against the tape the live arm just traded. Either ' +
+            '`TickSteps.controlArm` is unbound in the composition root or the control arm threw ' +
+            'and was swallowed; a soak in this state produces a live track with no matched ' +
+            'control, which ADR-0014 amendment 2 and ADR-0017 both require',
+        );
+      }
+      const liveKeys = new Set(
+        positions.filter((position) => position.arm === 'live').map((row) => row.idempotency_key),
+      );
+      const collided = controlLots.filter((row) => liveKeys.has(row.idempotency_key));
+      if (collided.length > 0) {
+        failures.push(
+          `${collided.length} control lot(s) share an idempotency key with a live lot — \`arm\` has ` +
+            'stopped being a hash input to `computeIdempotencyKey`, so on every bar the two arms ' +
+            "agree on, Execution's `findByKey` gate silently drops the control order. The " +
+            'comparison would then be biased on exactly the subset it is most sensitive to',
+        );
+      }
+    }
+
+    if (debates.length > 0 && observations.cosineSetups.length === 0) {
+      failures.push(
+        'a debate resolved and reached the Trader, but no row in cosine_setups — `decide()` did ' +
+          'not write the setup it embedded, so cosine retrieval has nothing to find and every ' +
+          'position takes the permanent 0.75x no-precedent haircut. This is the #432 defect ' +
+          'exactly: retrieval (#75) and the store (#198) both existed and `decide()` called ' +
+          'neither, while the whole unit suite passed',
+      );
+    }
+
+    if (observations.riskThresholds.length === 0) {
+      failures.push(
+        'no row in risk_thresholds — the composition root did not seed the dials, so ' +
+          "`autoTighten` has no current value to step from and the Feedback Loop's defensive " +
+          'response to a kill-line breach tightens nothing. This is the #433 defect: the write ' +
+          'end existed and the read end did not, and nothing failed',
+      );
+    }
+
+    // #328. Anchored on `debates.length > 0` for the same reason the
+    // cosine_setups check is: a run where no debate resolved never reached the
+    // Trader, and demanding a row then would fail for a reason that is not this
+    // one. Once a debate HAS resolved, a row is unconditional — the Trader
+    // writes on a skip and Risk on a rejection, so "nothing traded" is not an
+    // explanation for an empty table.
+    if (debates.length > 0 && observations.traderDecisions.length === 0) {
+      failures.push(
+        'a debate resolved and reached the Trader, but no row in trader_log — the decision ' +
+          'record is not wired, so why a size came out at N (or why nothing traded at all) is ' +
+          'reconstructable only from an `audit_log` digest and ephemeral stdout. Note the ' +
+          'Trader writes on a SKIP too, so this cannot be explained by a quiet tick',
+      );
+    }
+
+    if (observations.traderDecisions.length > 0 && observations.riskDecisions.length === 0) {
+      failures.push(
+        'the Trader produced an intent but no row in risk_log — Risk evaluated it and left no ' +
+          'record of what portfolio state it sized against or which gate bound. A rejected ' +
+          'intent never reaches Verdict, so with this unwired a rejection has no durable ' +
+          'record anywhere in the system',
+      );
+    }
+
+    if (observations.analystWeights.length === 0) {
+      failures.push(
+        'no row in analyst_weights — the startup seeder did not run, so `runDailyCycle` skips ' +
+          'every analyst it cannot find a row for and the loop attributes nothing while reporting ' +
+          'a clean run. This is the #371 defect',
+      );
+    }
+
+    const breakerTiers = new Set(observations.breakerStates.map((row) => row.tier));
+    if (!breakerTiers.has('portfolio_drawdown') || !breakerTiers.has('kill_switch')) {
+      failures.push(
+        'breaker_state is missing a tier row — the tick path never persisted the sticky ' +
+          "breakers' state, so a tripped hard-drawdown breaker or kill switch re-arms itself on " +
+          'restart. Under ADR-0007 the breakers are the only remaining stop; this table sat ' +
+          'unwritten behind a doc comment claiming "the caller persists this" (review 2026-08-06 B1)',
+      );
+    }
+
+    // #1111: the two gates whose refusal is a number against a bound must write
+    // that number. A column written by `buildVerdictLog` and never read back is
+    // the same defect one table over — the reason a `staleness` row could not be
+    // diagnosed without joining to `debate_log` in the first place.
+    //
+    // This is the only #1111 assertion this gate carries. It does not, and
+    // cannot, assert on the `readAt` coordinate itself: a smoke run's fixture
+    // marks stay fresh by construction. The six-stage run's fixture mark is
+    // frozen at `SMOKE_RUN_INSTANT`, and the run's total wall-clock span
+    // (default 3 ticks at 250ms, see `tickIntervalMs`'s own doc, which sizes
+    // that gap against `max_signal_age`) stays far below `max_mark_age` too —
+    // its smaller value here is 2 minutes (paper-profile.ts, crypto); the
+    // exit-path harness instead overrides `max_mark_age` to 24h because it
+    // advances its own clock between phases. Either way, no staleness/
+    // stale_feed verdict is ever produced here to check the detail on. The
+    // one structural guard on `readAt` reaching a real caller is
+    // `PortfolioAccountingInput.clock` being a required (non-optional) field —
+    // a compile-time check, not a runtime one — so a caller that regresses to
+    // threading `asOf` through both parameters would still type-check and this
+    // gate would not see it.
+    const undetailedStaleness = verdicts.filter(
+      (verdict) =>
+        (verdict.no_go_reason === 'staleness' || verdict.no_go_reason === 'stale_feed') &&
+        (verdict.no_go_detail_measured_ms == null || verdict.no_go_detail_bound_ms == null),
+    );
+    if (undetailedStaleness.length > 0) {
+      failures.push(
+        `${undetailedStaleness.length} verdict_log row(s) refused on staleness/stale_feed without ` +
+          `recording what was measured (${undetailedStaleness
+            .map((verdict) => `${verdict.instrument}:${verdict.no_go_reason}`)
+            .join(', ')}) — the cause is unrecoverable from the row, which is what #1111 fixed`,
+      );
+    }
+
+    if (!verdicts.some((verdict) => verdict.status === 'go')) {
+      failures.push(
+        `no GO verdict was recorded in verdict_log (${verdicts.length} verdict row(s): ` +
+          `${summariseVerdicts(verdicts)}) — the pipeline never authorised a trade`,
+      );
+    }
+
+    const submitted = ticks.flatMap((tick) =>
+      tick.stages.filter((entry) => entry.stage === 'execution' && entry.decision === 'submitted'),
+    );
+    if (submitted.length === 0) {
+      failures.push(
+        'no tick reached Execution with a `submitted` result — nothing was ever handed to the ' +
+          'broker adapter',
+      );
+    }
+
+    if (positions.length === 0) {
+      failures.push(
+        'no row in open_positions — Execution never wrote a lot ahead of the broker call, so ' +
+          'there is nothing for reconcile() or the fill poll to advance',
+      );
+    }
+
+    if (!fills.some((fill) => fill.leg === 'entry')) {
+      failures.push(
+        'no entry fill in fills — the order was submitted but no fill was ever ingested, so the ' +
+          'fill-sync poll (ingestFills) is not draining the venue feed',
+      );
+    }
+
+    // The seeded 25h baseline plus the canned batch's one row on a watched
+    // theme (the batch carries two, one off-watchlist). Asserted rather than
+    // merely printed, because the two ways this can be wrong are the two this
+    // observation exists to catch and neither shows up anywhere else: the seed
+    // count alone means the poller never fired from the composition root (the
+    // no-caller defect this repo keeps producing), and one more than expected
+    // means the theme filter stopped filtering and the archive is taking the
+    // whole world's news.
+    if (observations.gdeltRowsArchived !== SMOKE_GDELT_EXPECTED_ROWS) {
+      failures.push(
+        `GDELT archived ${observations.gdeltRowsArchived} macro rows, expected exactly ` +
+          `${SMOKE_GDELT_EXPECTED_ROWS} — ` +
+          `${SMOKE_GDELT_SEEDED_ROWS} means the poller never ran from the composition root, ` +
+          `${SMOKE_GDELT_EXPECTED_ROWS + 1} means the theme filter matched both canned rows and ` +
+          'is no longer filtering (#556)',
+      );
+    }
+
+    // #1086, and the half the line above cannot see: bytes in the archive are
+    // not intelligence until something derives them. This is the scoring pass
+    // observed through the store the analysts read, on the real composition
+    // root — 0 means it is built and never called, which is the state #556's
+    // archive half shipped in.
+    if (observations.gdeltAggregateItems !== SMOKE_GDELT_EXPECTED_AGGREGATES) {
+      failures.push(
+        `GDELT scoring derived ${observations.gdeltAggregateItems} macro aggregates, expected ` +
+          `exactly ${SMOKE_GDELT_EXPECTED_AGGREGATES} (one per asset class) — 0 means the ` +
+          'scoring pass never ran from the composition root, or refused on a baseline the seed ' +
+          'was supposed to have filled (#1086)',
+      );
+    }
+
+    // #504/#430. Two counts, because they answer different questions: the
+    // archive row says a fetch reached the vendor path, the store item says the
+    // fundamental analyst could actually see the result. A mechanism that
+    // fetches and stores nothing readable is the shape this repo keeps shipping.
+    //
+    // What these two cover is the STARTUP refresh only — `start()` fires
+    // `void polymarketAgent.refresh('startup')` once, and the repeating
+    // `setInterval` behind it runs at DEFAULT_POLYMARKET_POLL_INTERVAL_MS
+    // (15 minutes) against a smoke run that finishes in seconds, so it provably
+    // never fires here. The recurring poll is UNCOVERED by this gate; only the
+    // composition-root wiring of the first refresh is.
+    if (observations.polymarketRowsArchived !== SMOKE_POLYMARKET_EXPECTED_ITEMS) {
+      failures.push(
+        `Polymarket archived ${observations.polymarketRowsArchived} macro rows, expected exactly ` +
+          `${SMOKE_POLYMARKET_EXPECTED_ITEMS} — 0 means the startup refresh never ran from the ` +
+          'composition root, more means the fail-closed guard stopped refusing the thin-volume ' +
+          'market the fixture serves (#504)',
+      );
+    }
+    if (observations.polymarketItemsArchived !== SMOKE_POLYMARKET_EXPECTED_ITEMS) {
+      failures.push(
+        `Polymarket archived ${observations.polymarketItemsArchived} items in mi_items, expected ` +
+          `exactly ${SMOKE_POLYMARKET_EXPECTED_ITEMS} — 0 with rows archived means the source is ` +
+          'back to writing raw bytes with no items, which makes it unreplayable as items (#835)',
+      );
+    }
+    if (observations.polymarketIntelItems !== SMOKE_POLYMARKET_EXPECTED_ITEMS) {
+      failures.push(
+        `Polymarket put ${observations.polymarketIntelItems} items in the intel bucket, expected ` +
+          `exactly ${SMOKE_POLYMARKET_EXPECTED_ITEMS} — 0 with rows archived means the items ` +
+          'never reached MarketIntelligenceStore, were dropped by the entity filter, or were ' +
+          'stamped outside the debate bar the analysts query. This read is ENTITY-SCOPED like ' +
+          "every analyst read, so an item that lost `scope: 'asset_class'` reads 0 here with " +
+          'a row archived: filed under a macro series name, it matches no ticker (#914/#960), ' +
+          "and #1164's routing (`scope: 'asset_class'` -> `intel`, not `news`) would also read " +
+          '0 here if that predicate broke. Items also carry the INGEST INSTANT (#782), and ' +
+          'getContext floors its window to the hour, so this count depends on SMOKE_RUN_INSTANT ' +
+          'being exactly hour-aligned — a smoke clock that drifts off the hour before the ' +
+          'startup refresh lands would read 0 here with a row archived (#504, #782)',
+      );
+    }
+    return failures;
+  },
+  report(_evidence, observations) {
+    const lines: string[] = [`ticks completed: ${observations.ticks.length}`];
+
+    for (const [index, tick] of observations.ticks.entries()) {
+      const reached = tick.stages.map((entry) => `${entry.stage}:${entry.decision}`).join(' -> ');
+      lines.push(`  tick ${index + 1} [${tick.trace_id}] ${reached}`);
+    }
+
+    lines.push('', `debates logged: ${observations.debates.length}`);
+    for (const debate of observations.debates) {
+      lines.push(
+        `  ${debate.instrument} ${debate.direction} rounds=${debate.rounds} [${debate.debate_id}]`,
+      );
+    }
+
+    lines.push('', `verdicts recorded: ${observations.verdicts.length}`);
+    for (const verdict of observations.verdicts) {
+      lines.push(
+        `  ${verdict.instrument} ${verdict.status}${
+          verdict.no_go_reason ? ` (${verdict.no_go_reason})` : ''
+        } [${verdict.trace_id}]`,
+      );
+    }
+
+    lines.push('', `lots submitted to the broker: ${observations.positions.length}`);
+    for (const position of observations.positions) {
+      lines.push(
+        `  ${position.instrument} ${position.side} requested=${position.requested_size} ` +
+          `filled=${position.filled_size} @ ${position.avg_entry_price} ` +
+          `state=${position.order_state} [${position.idempotency_key}]`,
+      );
+    }
+
+    lines.push('', `fills ingested: ${observations.fills.length}`);
+    for (const fill of observations.fills) {
+      lines.push(
+        `  ${fill.leg} qty=${fill.qty} @ ${fill.price} fee=${fill.fee} [${fill.idempotency_key}]`,
+      );
+    }
+
+    lines.push('', `closed trades: ${observations.closedTrades.length}`);
+    for (const trade of observations.closedTrades) {
+      lines.push(
+        `  ${trade.close_reason} realized_pnl_net=${trade.realized_pnl_net} [${trade.idempotency_key}]`,
+      );
+    }
+
+    lines.push('', `flatten submissions journalled: ${observations.flattenSubmissions.length}`);
+    for (const row of observations.flattenSubmissions) {
+      lines.push(`  ${row.instrument} status=${row.status} [${row.idempotency_key}]`);
+    }
+
+    // `SMOKE_GDELT_EXPECTED_ROWS`: the seeded 25h baseline plus the ONE row of
+    // the canned two-row batch that carries a watched theme. One row more than
+    // expected means the theme filter has stopped filtering.
+    lines.push('', `GDELT macro rows archived: ${observations.gdeltRowsArchived}`);
+    lines.push(`GDELT macro aggregates derived: ${observations.gdeltAggregateItems}`);
+    // One healthy market, one refused on thin volume, the rest served as rotted
+    // slugs — so 1 and 1 is correct and anything else is a wiring or guard
+    // change.
+    lines.push(
+      `Polymarket macro rows archived: ${observations.polymarketRowsArchived}, ` +
+        `items archived: ${observations.polymarketItemsArchived}, ` +
+        `intel items served: ${observations.polymarketIntelItems}`,
+    );
+
+    return lines;
+  },
+};
+
+/**
+ * #388. `RateLimiter.snapshot()` after the run — how many LLM calls the
+ * process's limiter actually metered. An effect of the run that no table
+ * records: #388 WAS a fully-implemented, fully-unit-tested component with no
+ * production caller, and every one of 1800+ unit tests passed throughout —
+ * the same shape as #364, whose `debate_log` assertion is the only check that
+ * has ever caught it.
+ */
+const llmRateLimiterSnapshotProbe: Probe<'llmRateLimiterSnapshot'> = {
+  run({ llmRateLimiter }) {
+    return llmRateLimiter.snapshot();
+  },
+  verdict(evidence, { observations }) {
+    const failures: string[] = [];
+    const { debates } = observations;
+    // Requirement 3b (#388): the debate that produced that row went through the
+    // rate limiter. Hung off `debates.length` rather than standing alone so that
+    // a run which never debated fails on the check above, naming the real cause.
+    if (debates.length > 0) {
+      const totals = Object.values(evidence);
+      const llmCallsUsed = totals.reduce((sum, entry) => sum + entry.llmCallsUsed, 0);
+      const debatesUsed = totals.reduce((sum, entry) => sum + entry.debatesUsed, 0);
+      if (debatesUsed === 0 || llmCallsUsed === 0) {
+        failures.push(
+          `debates resolved (${debates.length} row(s) in debate_log) but the LLM RateLimiter ` +
+            `metered ${debatesUsed} debate(s) and ${llmCallsUsed} call(s) — so it is constructed ` +
+            'beside the LLM path rather than in it. This is the #388 defect exactly: the ' +
+            'component was implemented, tested and exported while nothing in production ever ' +
+            'called it, and the whole unit suite passed the entire time',
+        );
+      }
+    }
+
+    // #581 — the per-asset-class round cap is wired through the composition
+    // root. Each `debate_log` row is checked against ITS instrument's cap
+    // (looked up through `SMOKE_TEST_UNIVERSE`, so widening the smoke universe
+    // to stocks keeps healthy 3-round debates passing); a row above its cap
+    // means `buildDebateStep` stopped threading the cap into `runDebate`.
+    // Paired with a per-class call-accounting bound that is TIGHT under the
+    // stub (a converged crypto debate spends exactly its worst case: 3 persona
+    // calls + 1 disagreement call), so one extra LLM call per debate — an
+    // unwired cap, a second disagreement pass — fails the gate rather than
+    // passing unseen.
+    const smokeAssetClass = new Map<string, AssetClass>(
+      SMOKE_TEST_UNIVERSE.map((entry) => [entry.asset, entry.asset_class]),
+    );
+    const overCap = debates.filter((debate) => {
+      const assetClass = smokeAssetClass.get(debate.instrument) ?? 'crypto';
+      return debate.rounds > MAX_ROUNDS_BY_ASSET_CLASS[assetClass];
+    });
+    if (overCap.length > 0) {
+      failures.push(
+        `${overCap.length} debate_log row(s) ran more rounds than their asset class's cap ` +
+          '(#581) — the per-asset-class round cap is no longer reaching `runDebate` from the ' +
+          'composition root, so live crypto debates are back to blowing their latency budget ' +
+          'on every tick',
+      );
+    }
+    // Iterated over the closed AssetClass set rather than Object.entries, so a
+    // malformed snapshot key can never produce an undefined cap (whose NaN
+    // bound would compare false everywhere and silently pass the gate).
+    for (const assetClass of ['crypto', 'stocks'] as const satisfies readonly AssetClass[]) {
+      const entry = evidence[assetClass];
+      if (entry === undefined) continue;
+      const perDebateBound = worstCaseLlmCallsForAssetClass(assetClass);
+      if (entry.debatesUsed > 0 && entry.llmCallsUsed > entry.debatesUsed * perDebateBound) {
+        failures.push(
+          `the ${assetClass} limiter metered ${entry.llmCallsUsed} LLM call(s) across ` +
+            `${entry.debatesUsed} debate(s), above the per-debate worst case of ` +
+            `${perDebateBound} (#581) — a debate is spending calls its reservation never ` +
+            'booked, so admission control is under-reserving',
+        );
+      }
+    }
+    return failures;
+  },
+};
+
+const PROBES: { [K in ProbeId]: Probe<K, ProbeId> } = {
+  tickLoop: tickLoopProbe,
+  llmRateLimiterSnapshot: llmRateLimiterSnapshotProbe,
+  exitPath: exitPathProbe,
+  cryptoEmulation: cryptoEmulationProbe,
+  loggerResilience: loggerResilienceProbe,
+  logRetention: logRetentionProbe,
+  entrypointFaultGuards: entrypointFaultGuardsProbe,
+  thresholdClamp: thresholdClampProbe,
+  approvalFallback: approvalFallbackProbe,
+  dataFailover: dataFailoverProbe,
+  dataSourceFactory: dataSourceFactoryProbe,
+  riskCritic: riskCriticProbe,
+  promptTierWarning: promptTierWarningProbe,
+  analystFailureCause: analystFailureCauseProbe,
+  filledZeroSizeWedge: filledZeroSizeWedgeProbe,
+  armComparison: armComparisonProbe,
+  outsideBenchmarks: outsideBenchmarksProbe,
+  feedbackCycleScheduleWritten: feedbackCycleScheduleWrittenProbe,
+  sizingCeiling: sizingCeilingProbe,
+  llmSpendCap: llmSpendCapProbe,
+  fillSync: fillSyncProbe,
+  marketDataFetch: marketDataFetchProbe,
+};
+
+type MissingFrom<Order extends readonly ProbeId[]> = Exclude<ProbeId, Order[number]>;
+
+/**
+ * Pins an order over every probe. Omitting one fails to compile with
+ * `missing: '<id>'` in the type mismatch; listing one twice throws at load.
+ */
+function everyProbeOnce<const Order extends readonly ProbeId[]>(
+  order: Order & ([MissingFrom<Order>] extends [never] ? unknown : { missing: MissingFrom<Order> }),
+): Order {
+  if (new Set(order).size !== order.length) {
+    throw new Error(`a probe is listed twice in [${order.join(', ')}]`);
+  }
+  return order;
+}
+
+/**
+ * Side-effect order over the shared store and clock. The exit path and the
+ * crypto emulation write the tape the arm comparison is then taken over; the
+ * two recorders at the end count every line the probes before them logged.
+ */
+const PROBE_RUN_ORDER = everyProbeOnce([
+  'tickLoop',
+  'exitPath',
+  'cryptoEmulation',
+  'loggerResilience',
+  'logRetention',
+  'entrypointFaultGuards',
+  'thresholdClamp',
+  'approvalFallback',
+  'dataFailover',
+  'dataSourceFactory',
+  'riskCritic',
+  'promptTierWarning',
+  'analystFailureCause',
+  'filledZeroSizeWedge',
+  'armComparison',
+  'outsideBenchmarks',
+  'llmRateLimiterSnapshot',
+  'feedbackCycleScheduleWritten',
+  'sizingCeiling',
+  'llmSpendCap',
+  'fillSync',
+  'marketDataFetch',
+]);
+
+/**
+ * Readout order: cause before symptom, so a run that never debated is
+ * reported as such before every check that hangs off a debate having
+ * happened. The report prints failures in this order.
+ */
+const PROBE_VERDICT_ORDER = everyProbeOnce([
+  'tickLoop',
+  'llmRateLimiterSnapshot',
+  'armComparison',
+  'feedbackCycleScheduleWritten',
+  'sizingCeiling',
+  'llmSpendCap',
+  'outsideBenchmarks',
+  'loggerResilience',
+  'logRetention',
+  'entrypointFaultGuards',
+  'thresholdClamp',
+  'approvalFallback',
+  'dataFailover',
+  'dataSourceFactory',
+  'riskCritic',
+  'promptTierWarning',
+  'analystFailureCause',
+  'filledZeroSizeWedge',
+  'exitPath',
+  'cryptoEmulation',
+  'fillSync',
+  'marketDataFetch',
+]);
+
+/** Runs every probe in `PROBE_RUN_ORDER`, handing each the evidence of the probes it declared `after`. */
+async function runProbes(ctx: ProbeRunContext): Promise<SmokeEvidence> {
+  const gathered: Partial<SmokeEvidence> = {};
+  const runOne = async <Id extends ProbeId>(id: Id): Promise<void> => {
+    const probe = PROBES[id];
+    for (const dependency of probe.after ?? []) {
+      if (gathered[dependency] === undefined) {
+        throw new Error(
+          `probe '${id}' runs after '${dependency}', which comes later in PROBE_RUN_ORDER`,
+        );
+      }
+    }
+    // The loop above is what makes this narrowing sound for every key the
+    // probe declared; it reads nothing else.
+    gathered[id] = await probe.run(ctx, gathered as SmokeEvidence);
+  };
+  for (const id of PROBE_RUN_ORDER) await runOne(id);
+  return gathered as SmokeEvidence;
+}
+
+function probeVerdict<Id extends ProbeId>(
+  id: Id,
+  evidence: SmokeEvidence,
+  observations: SmokeObservations,
+): string[] {
+  return PROBES[id].verdict(evidence[id], { observations, prior: evidence });
+}
+
+function probeReport<Id extends ProbeId>(
+  id: Id,
+  evidence: SmokeEvidence,
+  observations: SmokeObservations,
+): string[] {
+  return PROBES[id].report?.(evidence[id], observations) ?? [];
+}
+
+/**
+ * The gate. Pure over observations and evidence, so every branch is
+ * unit-testable without starting a process — a gate that passes when nothing
+ * transacted is worse than no gate.
+ */
+export function evaluateSmokeGate(
+  observations: SmokeObservations,
+  evidence: SmokeEvidence,
+): SmokeGateResult {
+  const failures = PROBE_VERDICT_ORDER.flatMap((id) => probeVerdict(id, evidence, observations));
+  return { passed: failures.length === 0, failures };
+}
+
+/**
  * The human-readable run report — the thing a person reads to believe the
  * pipeline transacted rather than skipped. Returned as lines so tests can
  * assert on it without capturing stdout.
  */
 export function formatSmokeReport(
   observations: SmokeObservations,
+  evidence: SmokeEvidence,
   gate: SmokeGateResult,
 ): string[] {
   const lines: string[] = [
@@ -6204,71 +6554,8 @@ export function formatSmokeReport(
     'mode=paper  broker=SimulatedBrokerAdapter  data=FixtureDataSource  llm=ConstantResponseLlmClient',
     `no credentials, no network, no money. Clock frozen at ${SMOKE_RUN_INSTANT.toISOString()}`,
     '',
-    `ticks completed: ${observations.ticks.length}`,
   ];
-
-  for (const [index, tick] of observations.ticks.entries()) {
-    const reached = tick.stages.map((entry) => `${entry.stage}:${entry.decision}`).join(' -> ');
-    lines.push(`  tick ${index + 1} [${tick.trace_id}] ${reached}`);
-  }
-
-  lines.push('', `debates logged: ${observations.debates.length}`);
-  for (const debate of observations.debates) {
-    lines.push(
-      `  ${debate.instrument} ${debate.direction} rounds=${debate.rounds} [${debate.debate_id}]`,
-    );
-  }
-
-  lines.push('', `verdicts recorded: ${observations.verdicts.length}`);
-  for (const verdict of observations.verdicts) {
-    lines.push(
-      `  ${verdict.instrument} ${verdict.status}${
-        verdict.no_go_reason ? ` (${verdict.no_go_reason})` : ''
-      } [${verdict.trace_id}]`,
-    );
-  }
-
-  lines.push('', `lots submitted to the broker: ${observations.positions.length}`);
-  for (const position of observations.positions) {
-    lines.push(
-      `  ${position.instrument} ${position.side} requested=${position.requested_size} ` +
-        `filled=${position.filled_size} @ ${position.avg_entry_price} ` +
-        `state=${position.order_state} [${position.idempotency_key}]`,
-    );
-  }
-
-  lines.push('', `fills ingested: ${observations.fills.length}`);
-  for (const fill of observations.fills) {
-    lines.push(
-      `  ${fill.leg} qty=${fill.qty} @ ${fill.price} fee=${fill.fee} [${fill.idempotency_key}]`,
-    );
-  }
-
-  lines.push('', `closed trades: ${observations.closedTrades.length}`);
-  for (const trade of observations.closedTrades) {
-    lines.push(
-      `  ${trade.close_reason} realized_pnl_net=${trade.realized_pnl_net} [${trade.idempotency_key}]`,
-    );
-  }
-
-  lines.push('', `flatten submissions journalled: ${observations.flattenSubmissions.length}`);
-  for (const row of observations.flattenSubmissions) {
-    lines.push(`  ${row.instrument} status=${row.status} [${row.idempotency_key}]`);
-  }
-
-  // `SMOKE_GDELT_EXPECTED_ROWS`: the seeded 25h baseline plus the ONE row of
-  // the canned two-row batch that carries a watched theme. One row more than
-  // expected means the theme filter has stopped filtering.
-  lines.push('', `GDELT macro rows archived: ${observations.gdeltRowsArchived}`);
-  lines.push(`GDELT macro aggregates derived: ${observations.gdeltAggregateItems}`);
-  // One healthy market, one refused on thin volume, the rest served as rotted
-  // slugs — so 1 and 1 is correct and anything else is a wiring or guard
-  // change.
-  lines.push(
-    `Polymarket macro rows archived: ${observations.polymarketRowsArchived}, ` +
-      `items archived: ${observations.polymarketItemsArchived}, ` +
-      `intel items served: ${observations.polymarketIntelItems}`,
-  );
+  for (const id of PROBE_VERDICT_ORDER) lines.push(...probeReport(id, evidence, observations));
 
   lines.push('');
   if (gate.passed) {
@@ -6514,8 +6801,8 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // `start()` (see `paperStartingProfile('paper')`'s `feedback` block
       // above), so the real daily cycle — and therefore this channel, if the
       // arms diverge — runs during this run, not just seconds-long-and-never.
-      // The gate's `feedback_cycle_schedule.last_boundary` assertion below
-      // (`evaluateSmokeGate`) is what proves that reach on every run,
+      // `feedbackCycleScheduleWrittenProbe`'s `feedback_cycle_schedule.last_boundary`
+      // assertion is what proves that reach on every run,
       // regardless of whether this run's fixtures happen to diverge.
       //
       // What this run's short fixture window does NOT reliably exercise is
@@ -6755,145 +7042,34 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       await orchestrator.stop();
     }
 
-    // #576: the exit path. Run AFTER the tick loop has stopped and drained —
-    // it shares `db` and `clock` with the six-stage run above, but drives its
-    // own instruments (`EXIT_PATH_INSTRUMENTS`), so the two cannot contend
-    // for the same lots or the same `heldLots` filter (execute.ts).
-    const exitPathHarnessResult = await runExitPathScenarios({
+    const evidence = await runProbes({
       db,
       clock,
-      costConfig: profile.costConfig,
-      executionConfig: profile.executionConfig,
+      profile,
       logger,
+      targetTicks,
+      approvals: orchestrator.approvals,
+      alpacaBrokerClient,
+      llmRateLimiter,
+      tickLoopResidualAlerts,
+      fillSyncFailures,
+      marketDataFetch,
     });
-
-    // #586: the emulated crypto protective legs, on the REAL AlpacaBrokerAdapter
-    // over the same db — its own lot key and its own scripted client, so it
-    // contends with nothing above.
-    const cryptoEmulation = await runCryptoEmulationScenario(db, logger);
-
-    // #714: the entrypoint's logging-fault mechanisms, on a real file sink in
-    // a temp directory. Independent of the store and the clock, so it runs
-    // beside the three scenarios above rather than inside any of them.
-    const loggerResilience = runLoggerResilienceScenario();
-
-    // #1116: the logs/ retention sweep, on real files in its own temp
-    // directory. Independent of the store and the clock, so it runs beside
-    // the scenarios above rather than inside any of them.
-    const logRetention = runLogRetentionScenario();
-
-    // #764: the service-api and supervisor entrypoints' own stdout + fault
-    // guards, driven for real — see runEntrypointFaultGuardScenario's doc.
-    const entrypointFaultGuards = runEntrypointFaultGuardScenario();
-
-    // #638: negative probes through every seam that can put a risk threshold
-    // into force, against the SHIPPED paper values. Its own in-memory store, so
-    // it writes nothing the observations below read back.
-    const thresholdClamp = runThresholdClampScenario(profile.breakerConfig, profile.riskConfig);
-
-    // #1152: the surviving approvals-fallback probe, off the tick loop for the
-    // same reason `thresholdClamp` above is. See `runApprovalFallbackScenario`'s
-    // doc comment for why `orchestrator.approvals` (not a second
-    // `resolveApprovalsChannel` call) is what makes this detect a
-    // composition-root wiring regression.
-    const approvalFallback = await runApprovalFallbackScenario(orchestrator.approvals);
-
-    // #562: the OHLCV failover, on its own composition root and its own cold
-    // in-memory store — the main run above injects a fixture data source, so
-    // the root's `config.dataSource ??` seam short-circuits the failover there.
-    const dataFailover = await runDataFailoverScenario(logger);
-
-    // #1151: `createDataSource` reached from the composition root, on its own
-    // roots and cold in-memory stores — same reason as `dataFailover` above,
-    // and one more: the main run's injected fixture source means no arm of
-    // the factory is resolved there at all.
-    const dataSourceFactory = await runDataSourceFactoryScenario(logger);
-
-    // #957: check-pipeline step 7's producer, on its own composition root and
-    // its own cold in-memory store. The six-stage run above cannot stand in
-    // for it — it has produced zero approved entries historically (#625), so
-    // a critic that never fired would be indistinguishable from one that was
-    // never wired.
-    const riskCritic = await runRiskCriticScenario(logger);
-
-    // #1155: the prompt-tier-crossing warning, on its own real
-    // `SqliteLlmSpendStore` and its own cold in-memory store — no metered call
-    // this run's own `ConstantResponseLlmClient`/`SmokeLlmClient` make carries
-    // a `usage` field at all, so nothing else here could ever exercise it.
-    const promptTierWarning = runPromptTierWarningScenario();
-
-    // #1114: the analyst failure-cause logging's enforcement assertion, on
-    // its own composition root and its own cold in-memory store, same
-    // pattern as `dataFailover`/`riskCritic` above.
-    const analystFailureCause = await runAnalystFailureCauseScenario(logger);
-
-    // #1125: the FILLED_WITH_ZERO_SIZE wedge, on its own composition root and
-    // its own cold in-memory store — the second broker/harness surface
-    // #1096's review deferred, so a genuinely wedged lot can drive the real
-    // gate instead of only `filled-zero-size-wiring.test.ts`'s unit proof.
-    const filledZeroSizeWedge = await runFilledZeroSizeWedgeScenario(logger);
 
     // Safe to read the Polymarket counts here, and only here: `start()` fires
     // the first refresh as `void polymarketAgent.refresh('startup')`, so its
-    // store write is in flight after `start()` resolves — but `stop()` (line
-    // above, in the `finally`) awaits `polymarketAgent.whenIdle()` in its
+    // store write is in flight after `start()` resolves — but `stop()` (in the
+    // `finally` above) awaits `polymarketAgent.whenIdle()` in its
     // `Promise.allSettled`, which drains it. Moving this read ABOVE the
     // `orchestrator.stop()` call would race that write. The two earlier
     // `readSmokeObservations(db)` calls pass no store, so they observe ticks
-    // and fills only and are unaffected.
+    // and fills only and are unaffected. Nothing in `runProbes` writes a
+    // table this reads: the exit path and the crypto emulation are part of
+    // the tape by design, and the cycles the feedback probes drive write only
+    // their own sample tables.
     const observations = readSmokeObservations(db, smokeMiArchive, orchestrator.marketIntelligence);
-    // #981. Runs AFTER the arm comparison and is handed its `ArmComparison`,
-    // which is the shipped ordering: the benchmark's window is the matched
-    // control's, never one of its own.
-    const armComparison = runArmComparisonProbe(db);
-    const outsideBenchmarks = await runOutsideBenchmarkProbe(db, armComparison.comparison);
-    // #1140 / #1196: one read, both halves of the LLM-cap evidence below.
-    const publishedLlmCap = readPublishedLlmCap(db);
-    const gate = evaluateSmokeGate(observations, {
-      minTicks: targetTicks,
-      alpacaWireClientReached: alpacaBrokerClient.reached,
-      llmRateLimiterSnapshot: llmRateLimiter.snapshot(),
-      cryptoEmulation,
-      loggerResilience,
-      logRetention,
-      entrypointFaultGuards,
-      thresholdClamp,
-      approvalFallback,
-      dataFailover,
-      dataSourceFactory,
-      riskCritic,
-      promptTierWarning,
-      analystFailureCause,
-      filledZeroSizeWedge,
-      // #971. Run against the same store the observations were read from, and
-      // AFTER `orchestrator.stop()` for `readSmokeObservations`' reason: the
-      // tape has to be complete before the comparison is taken over it.
-      armComparison,
-      outsideBenchmarks,
-      // #1110. Read after `orchestrator.stop()`, same as `armComparison`
-      // above and for the same reason — though unlike `armComparison`, this
-      // one is unaffected by tape completeness; it only needs `start()` to
-      // have run at all.
-      feedbackCycleScheduleWritten: feedbackCycleScheduleWasWritten(db),
-      sizingCeiling: readSizingCeilingStamps(db, profile.capitalCeilingUsd),
-      // #1140. Both halves come from this run: the published cap off the
-      // dashboard's own read, the expected one off the profile the
-      // orchestrator booted on — never a literal 50, which would pass on a
-      // wire that had stopped carrying anything from the config at all.
-      // `capArmedAt` (#1196) rides the same read — see `readPublishedLlmCap`.
-      publishedLlmCapUsd: publishedLlmCap.capUsd,
-      configuredLlmBudgetUsd: profile.llmBudgetUsd,
-      publishedLlmCapArmedAt: publishedLlmCap.capArmedAt,
-      fillSync: fillSyncFailures.evidence(),
-      marketDataFetch: marketDataFetch.evidence(),
-      exitPath: {
-        ...exitPathHarnessResult,
-        // Alerts from BOTH the six-stage tick loop and the exit-path harness —
-        // a residual alert is a defect wherever it fires during a smoke run.
-        residualAlerts: [...tickLoopResidualAlerts.alerts, ...exitPathHarnessResult.residualAlerts],
-      },
-    });
-    return { observations, gate, report: formatSmokeReport(observations, gate) };
+    const gate = evaluateSmokeGate(observations, evidence);
+    return { observations, gate, report: formatSmokeReport(observations, evidence, gate) };
   } finally {
     db.close();
   }
