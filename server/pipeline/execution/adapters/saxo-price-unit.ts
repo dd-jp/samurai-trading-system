@@ -57,7 +57,7 @@ export function saxoCashPerShare(unit: SaxoQuoteUnit, quotedPrice: number): numb
  *
  * A SECOND assumption rides on the first and is still UNVERIFIED, on SIM as
  * well as live — nothing above touches it: that
- * `saxo-adapter.ts`'s `ORDER_DECIMALS` (2, from the line's `OrderDecimals`)
+ * `saxo-adapter.ts`'s `ORDER_DECIMALS` (2, from the line's `Format.OrderDecimals`)
  * is a legal rounding for the number this returns. Applied to pence that is
  * 0.0001 GBP granularity, and `OrderDecimals` states precision rather than
  * the tick grid — a correctly scaled pence price can still be off-grid.

@@ -167,7 +167,7 @@ Both series are linear in `OrderPrice` to within €0.01 across the sweep, and b
 
 > `EstimatedCashRequired` = fixed + `Amount` × `OrderPrice` × `PriceToContractFactor` × FX
 
-Fitted on each line's endpoints: LQQ3 slope **0.0116374** EUR per unit of `OrderPrice`, intercept
+Fitted on each line's endpoints: LQQ3 slope **0.0116368** EUR per unit of `OrderPrice`, intercept
 **€18.616**; 3USL slope **0.85990**, intercept **€18.621**. Two things carry the argument. The
 intercepts agree to within €0.005 on instruments in different currencies, which isolates the slope
 as the whole price-dependent term. And the slope ratio, 0.013533, matches
