@@ -1823,7 +1823,7 @@ describe('ExecutionImpl.ingestFills', () => {
           timestamp: new Date('2026-07-20T15:30:00Z'),
         }),
       ]);
-      // A Telegram/Discord transport failure quotes the request it failed
+      // A Telegram transport failure quotes the request it failed
       // on, which can carry a bot token (`escalateAgedUnpricedFills`'s
       // precedent, alpaca-adapter.ts) — this error's text must never reach
       // the log.

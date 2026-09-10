@@ -100,7 +100,7 @@ export async function maybeRearmResidual(
       // store's own error text IS the deliverable here, unlike the alert/
       // channel failures elsewhere in this file (`ResidualExposureAlert`'s
       // CREDENTIALS note is about what a downstream ALERT TRANSPORT can leak
-      // — Telegram/Discord quoting the failed request — not about a local
+      // — Telegram quoting the failed request — not about a local
       // store-driver error, which carries no such transport detail; #297's
       // H1 precedent `reconcileLot` (reconcile.ts) already cites applies the
       // same way here).
@@ -409,7 +409,7 @@ export async function alertResidualExposure(
     // even locally. Traced with a FIXED, self-authored message rather than
     // the channel's own error (same CREDENTIALS posture as the
     // flatten-overfill channel catch above, `escalateAgedUnpricedFills`'s
-    // precedent in alpaca-adapter.ts): a Telegram/Discord transport failure
+    // precedent in alpaca-adapter.ts): a Telegram transport failure
     // quotes the request it failed on, which can carry a bot token.
     safeLog(input.logger, {
       trace_id: input.trace_id,

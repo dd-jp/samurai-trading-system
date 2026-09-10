@@ -16,16 +16,13 @@
  * (console-channels.ts), which writes the same facts to the log at `error` —
  * fine for a supervised run, and not an alert at all at 3am.
  *
- * Discord is optional and mirrors the other two adapters' shape: both are
- * attempted together, so a Telegram outage does not silence the Discord copy.
- *
  * A failed post rejects rather than being swallowed. `OrphanVerdictScanner.scan`
  * catches per orphan and logs the failure (orphan-verdict-scan.ts), so the
  * scan still reports the rest — swallowing here would delete that record and
  * leave an orphan that looks alerted-on when it was not.
  */
-import type { DiscordClient, TelegramClient } from '../../pipeline/verdict/index.js';
 import type { OrphanAlertChannel, OrphanGoVerdict } from './orphan-verdict-scan.js';
+import { TradeChannelAlert } from './trade-channel.js';
 
 /**
  * Composed from the orphan's own four fields, all of which the recipient needs:
@@ -44,31 +41,9 @@ function formatOrphanAlert(orphan: OrphanGoVerdict): string {
   );
 }
 
-export class TradeChannelOrphanAlert implements OrphanAlertChannel {
-  readonly #telegram: TelegramClient;
-  readonly #telegramChatId: string;
-  readonly #discord: DiscordClient | undefined;
-  readonly #discordChannelId: string | undefined;
-
-  constructor(
-    telegram: TelegramClient,
-    telegramChatId: string,
-    discord?: DiscordClient,
-    discordChannelId?: string,
-  ) {
-    this.#telegram = telegram;
-    this.#telegramChatId = telegramChatId;
-    this.#discord = discord;
-    this.#discordChannelId = discordChannelId;
-  }
-
+export class TradeChannelOrphanAlert extends TradeChannelAlert implements OrphanAlertChannel {
   async postOrphanAlert(orphan: OrphanGoVerdict): Promise<void> {
     const text = formatOrphanAlert(orphan);
-    await Promise.all([
-      this.#telegram.sendMessage(this.#telegramChatId, text),
-      this.#discord && this.#discordChannelId
-        ? this.#discord.sendMessage(this.#discordChannelId, text)
-        : Promise.resolve(),
-    ]);
+    await this.send(text);
   }
 }

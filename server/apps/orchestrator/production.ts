@@ -17,7 +17,7 @@
  * ## Injected leaves — why `ProductionConfig` is large
  *
  * Every transport this system talks to (Alpaca REST for orders and for bars,
- * the Telegram/Discord trade channel, WorldMonitor's CII feed) once existed in
+ * the Telegram trade channel, WorldMonitor's CII feed) once existed in
  * the codebase as an *interface only*, and writing them here would have been
  * implementing three or four components under a wiring ticket. So they became
  * optional `ProductionConfig` fields instead: this module composes everything

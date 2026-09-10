@@ -543,7 +543,6 @@ export { TelegramChannel } from './notifications/telegram-channel.js';
 export type {
   ApprovalButtonTarget,
   ApprovalCallback,
-  DiscordClient,
   TelegramClient,
   TradeChannelNotifier,
 } from './notifications/types.js';

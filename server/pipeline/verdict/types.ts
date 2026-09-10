@@ -36,7 +36,7 @@ export interface ApprovalRequest {
 export type ApprovalOutcome = 'approved' | 'rejected' | 'timeout';
 
 /**
- * Telegram/Discord trade-channel gate (docs/specs/verdict-spec.md "Module:
+ * Telegram trade-channel gate (docs/specs/verdict-spec.md "Module:
  * Human-in-the-Loop"). The channel owns timeout mechanics itself (real
  * timers live) so `Verdict.decide` stays a plain await — deterministic and
  * clock-injectable. Backtest mode does not skip the call or auto-approve;

@@ -69,8 +69,3 @@ export interface TelegramClient {
    */
   onApprovalCallback(handler: (callback: ApprovalCallback) => void): void;
 }
-
-/** Minimal transport surface for posting a message to a Discord channel. */
-export interface DiscordClient {
-  sendMessage(channelId: string, text: string): Promise<void>;
-}

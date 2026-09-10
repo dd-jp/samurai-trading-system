@@ -11,6 +11,7 @@ import type {
   LseCalendarCoverageAlert,
   LseCalendarCoverageAlertChannel,
 } from './production/lse-calendar-coverage-alert.js';
+import { TradeChannelAlert } from './trade-channel.js';
 import type { Logger } from './types.js';
 
 function formatLseCalendarCoverageAlert(alert: LseCalendarCoverageAlert): string {
@@ -23,20 +24,20 @@ function formatLseCalendarCoverageAlert(alert: LseCalendarCoverageAlert): string
   );
 }
 
-export class TradeChannelLseCalendarCoverageAlert implements LseCalendarCoverageAlertChannel {
-  readonly #telegram: TelegramClient;
-  readonly #chatId: string;
+export class TradeChannelLseCalendarCoverageAlert
+  extends TradeChannelAlert
+  implements LseCalendarCoverageAlertChannel
+{
   readonly #logger: Logger;
 
   constructor(telegram: TelegramClient, chatId: string, logger: Logger) {
-    this.#telegram = telegram;
-    this.#chatId = chatId;
+    super(telegram, chatId);
     this.#logger = logger;
   }
 
   postLseCalendarCoverageAlert(alert: LseCalendarCoverageAlert): void {
     const text = formatLseCalendarCoverageAlert(alert);
-    void this.#telegram.sendMessage(this.#chatId, text).catch((error: unknown) => {
+    this.sendDetached(text, (error: unknown) => {
       // The one alert whose failure to send must itself stay visible — see
       // `TradeChannelCalendarFallbackAlert`'s identical reasoning.
       this.#logger.log({

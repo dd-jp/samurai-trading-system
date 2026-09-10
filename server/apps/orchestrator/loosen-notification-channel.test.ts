@@ -12,7 +12,7 @@
  * that the dial in the store really did move.
  */
 import type { LoosenAppliedNotice } from '../../pipeline/feedback-loop/index.js';
-import type { DiscordClient, TelegramClient } from '../../pipeline/verdict/index.js';
+import type { TelegramClient } from '../../pipeline/verdict/index.js';
 import { LoggingLoosenNotificationChannel } from './console-channels.js';
 import { TradeChannelLoosenNotice } from './loosen-notification-channel.js';
 import type { Logger } from './types.js';
@@ -165,21 +165,5 @@ describe('TradeChannelLoosenNotice', () => {
     }
 
     expect(unhandled).not.toHaveBeenCalled();
-  });
-
-  it('still reaches Discord when Telegram is down', async () => {
-    const discordSend = vi.fn(async () => undefined);
-    const discord = { sendMessage: discordSend } as unknown as DiscordClient;
-
-    new TradeChannelLoosenNotice(
-      telegramStub(vi.fn(async () => Promise.reject(new Error('telegram down'))) as never),
-      'escalation-chat',
-      recordingLogger(),
-      discord,
-      'discord-channel',
-    ).notifyLoosenApplied(NOTICE);
-    await flush();
-
-    expect(discordSend).toHaveBeenCalledTimes(1);
   });
 });

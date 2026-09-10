@@ -872,7 +872,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     await writeAheadFlatten(store);
     const broker = makeBroker();
     broker.failFlattenLookup = 'venue unreachable';
-    // A Telegram/Discord transport failure quotes the request it failed on,
+    // A Telegram transport failure quotes the request it failed on,
     // which can carry a bot token — this text must never reach the log.
     const failingFlattenReconcileAlerts: FlattenReconcileAlertChannel = {
       postFlattenReconcileAlert: async () => {

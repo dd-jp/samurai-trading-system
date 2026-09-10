@@ -14,16 +14,12 @@
  * posts to the ESCALATION chat, never the heartbeat chat (#342) — an
  * unprotected position sitting at the venue is a decision waiting on the
  * operator, not a beat.
- *
- * Discord is optional and mirrors the shape every other adapter here takes:
- * both are attempted together, so a Telegram outage does not silence the
- * Discord copy.
  */
 import type {
   ResidualExposureAlert,
   ResidualExposureAlertChannel,
 } from '../../pipeline/execution/index.js';
-import type { DiscordClient, TelegramClient } from '../../pipeline/verdict/index.js';
+import { TradeChannelAlert } from './trade-channel.js';
 
 /**
  * Composed only from the alert's own curated fields — no broker error, no
@@ -54,31 +50,12 @@ function formatResidualExposureAlert(alert: ResidualExposureAlert): string {
   );
 }
 
-export class TradeChannelResidualExposureAlert implements ResidualExposureAlertChannel {
-  readonly #telegram: TelegramClient;
-  readonly #telegramChatId: string;
-  readonly #discord: DiscordClient | undefined;
-  readonly #discordChannelId: string | undefined;
-
-  constructor(
-    telegram: TelegramClient,
-    telegramChatId: string,
-    discord?: DiscordClient,
-    discordChannelId?: string,
-  ) {
-    this.#telegram = telegram;
-    this.#telegramChatId = telegramChatId;
-    this.#discord = discord;
-    this.#discordChannelId = discordChannelId;
-  }
-
+export class TradeChannelResidualExposureAlert
+  extends TradeChannelAlert
+  implements ResidualExposureAlertChannel
+{
   async postResidualExposureAlert(alert: ResidualExposureAlert): Promise<void> {
     const text = formatResidualExposureAlert(alert);
-    await Promise.all([
-      this.#telegram.sendMessage(this.#telegramChatId, text),
-      this.#discord && this.#discordChannelId
-        ? this.#discord.sendMessage(this.#discordChannelId, text)
-        : Promise.resolve(),
-    ]);
+    await this.send(text);
   }
 }

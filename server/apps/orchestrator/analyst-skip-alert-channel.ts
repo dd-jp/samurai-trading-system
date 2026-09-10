@@ -4,7 +4,7 @@
  * specified and no ticket had built.
  *
  * Same shape as `TradeChannelOrphanAlert` / `TradeChannelUnpricedFillAlert`:
- * wrap the already-provisioned Telegram (and optional Discord) client rather
+ * wrap the already-provisioned Telegram client rather
  * than introduce a second integration, and post to the ESCALATION chat, never
  * the heartbeat chat (#342) — a stage producing no decisions is a decision
  * waiting on the operator, not a beat.
@@ -17,8 +17,8 @@
  * catches and logs it, so the tick still returns its (empty) answer and the
  * undelivered alert is on the record.
  */
-import type { DiscordClient, TelegramClient } from '../../pipeline/verdict/index.js';
 import type { AnalystSkipAlert, AnalystSkipAlertChannel } from './production/analysts-adapter.js';
+import { TradeChannelAlert } from './trade-channel.js';
 
 /**
  * Names the instrument, the length of the run, and every mandatory failure
@@ -41,31 +41,12 @@ function formatAnalystSkipAlert(alert: AnalystSkipAlert): string {
   );
 }
 
-export class TradeChannelAnalystSkipAlert implements AnalystSkipAlertChannel {
-  readonly #telegram: TelegramClient;
-  readonly #telegramChatId: string;
-  readonly #discord: DiscordClient | undefined;
-  readonly #discordChannelId: string | undefined;
-
-  constructor(
-    telegram: TelegramClient,
-    telegramChatId: string,
-    discord?: DiscordClient,
-    discordChannelId?: string,
-  ) {
-    this.#telegram = telegram;
-    this.#telegramChatId = telegramChatId;
-    this.#discord = discord;
-    this.#discordChannelId = discordChannelId;
-  }
-
+export class TradeChannelAnalystSkipAlert
+  extends TradeChannelAlert
+  implements AnalystSkipAlertChannel
+{
   async postAnalystSkipAlert(alert: AnalystSkipAlert): Promise<void> {
     const text = formatAnalystSkipAlert(alert);
-    await Promise.all([
-      this.#telegram.sendMessage(this.#telegramChatId, text),
-      this.#discord && this.#discordChannelId
-        ? this.#discord.sendMessage(this.#discordChannelId, text)
-        : Promise.resolve(),
-    ]);
+    await this.send(text);
   }
 }

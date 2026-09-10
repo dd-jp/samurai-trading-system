@@ -18,8 +18,8 @@
  * (production/tick-skip-alert.ts) catches and logs it, so the tick still
  * proceeds and the undelivered alert is on the record.
  */
-import type { TelegramClient } from '../../pipeline/verdict/index.js';
 import type { TickSkipAlert, TickSkipAlertChannel } from './production/tick-skip-alert.js';
+import { TradeChannelAlert } from './trade-channel.js';
 
 /**
  * Names how many instruments were dropped, out of how many, and which ones —
@@ -39,16 +39,8 @@ export function formatTickSkipAlert(alert: TickSkipAlert): string {
   );
 }
 
-export class TradeChannelTickSkipAlert implements TickSkipAlertChannel {
-  readonly #telegram: TelegramClient;
-  readonly #telegramChatId: string;
-
-  constructor(telegram: TelegramClient, telegramChatId: string) {
-    this.#telegram = telegram;
-    this.#telegramChatId = telegramChatId;
-  }
-
+export class TradeChannelTickSkipAlert extends TradeChannelAlert implements TickSkipAlertChannel {
   async postTickSkipAlert(alert: TickSkipAlert): Promise<void> {
-    await this.#telegram.sendMessage(this.#telegramChatId, formatTickSkipAlert(alert));
+    await this.send(formatTickSkipAlert(alert));
   }
 }

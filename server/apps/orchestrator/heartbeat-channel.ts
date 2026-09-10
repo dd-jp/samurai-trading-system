@@ -3,8 +3,8 @@
  * docs/specs/orchestrator-spec.md (Module: Heartbeat): "reuses Verdict's
  * already-provisioned Telegram transport (verdict-spec story 14) — a
  * different message type over the same client, not a new integration." Wraps
- * a `TelegramClient`/`DiscordClient` transport directly — the same
- * `TelegramClient` verdict/notifications' `TelegramChannel` wraps — rather
+ * a `TelegramClient` directly — the same one verdict/notifications'
+ * `TelegramChannel` wraps — rather
  * than routing through `TradeChannelNotifier.notify` (which is shaped for a
  * `VerdictDecision`, not a liveness ping).
  *
@@ -15,38 +15,16 @@
  * muted. The chat id is a constructor argument precisely so that decision
  * stays at the composition root; see alert-transport.ts.
  */
-import type { DiscordClient, TelegramClient } from '../../pipeline/verdict/index.js';
 import type { HeartbeatChannel } from './heartbeat.js';
+import { TradeChannelAlert } from './trade-channel.js';
 
 function formatHeartbeat(timestamp: Date): string {
   return `Samurai heartbeat: alive at ${timestamp.toISOString()}`;
 }
 
-export class TradeChannelHeartbeat implements HeartbeatChannel {
-  readonly #telegram: TelegramClient;
-  readonly #telegramChatId: string;
-  readonly #discord: DiscordClient | undefined;
-  readonly #discordChannelId: string | undefined;
-
-  constructor(
-    telegram: TelegramClient,
-    telegramChatId: string,
-    discord?: DiscordClient,
-    discordChannelId?: string,
-  ) {
-    this.#telegram = telegram;
-    this.#telegramChatId = telegramChatId;
-    this.#discord = discord;
-    this.#discordChannelId = discordChannelId;
-  }
-
+export class TradeChannelHeartbeat extends TradeChannelAlert implements HeartbeatChannel {
   async postHeartbeat(timestamp: Date): Promise<void> {
     const text = formatHeartbeat(timestamp);
-    await Promise.all([
-      this.#telegram.sendMessage(this.#telegramChatId, text),
-      this.#discord && this.#discordChannelId
-        ? this.#discord.sendMessage(this.#discordChannelId, text)
-        : Promise.resolve(),
-    ]);
+    await this.send(text);
   }
 }

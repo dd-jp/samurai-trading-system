@@ -1,5 +1,5 @@
 import type { UnpricedFillAlert } from '../../pipeline/execution/index.js';
-import type { DiscordClient, TelegramClient } from '../../pipeline/verdict/index.js';
+import type { TelegramClient } from '../../pipeline/verdict/index.js';
 import { TradeChannelUnpricedFillAlert } from './unpriced-fill-channel.js';
 
 const ALERT: UnpricedFillAlert = {
@@ -22,10 +22,6 @@ function makeTelegram(): TelegramClient {
   };
 }
 
-function makeDiscord(): DiscordClient {
-  return { sendMessage: vi.fn().mockResolvedValue(undefined) };
-}
-
 describe('TradeChannelUnpricedFillAlert.postUnpricedFillAlert', () => {
   it('posts the venue order id, symbol and quantity an operator needs to act', async () => {
     const telegram = makeTelegram();
@@ -42,21 +38,6 @@ describe('TradeChannelUnpricedFillAlert.postUnpricedFillAlert', () => {
     expect(text).toContain('alpaca-entry-1');
     expect(text).toContain('AAPL');
     expect(text).toContain('key-aapl-1355');
-  });
-
-  it('fans out to Discord as well when one is configured', async () => {
-    const telegram = makeTelegram();
-    const discord = makeDiscord();
-
-    await new TradeChannelUnpricedFillAlert(
-      telegram,
-      'chat-1',
-      discord,
-      'channel-1',
-    ).postUnpricedFillAlert(ALERT);
-
-    expect(telegram.sendMessage).toHaveBeenCalledTimes(1);
-    expect(discord.sendMessage).toHaveBeenCalledTimes(1);
   });
 
   it('rejects when the transport fails, so the adapter does not record it as delivered', async () => {

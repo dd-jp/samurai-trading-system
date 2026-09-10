@@ -106,7 +106,7 @@ export interface AlertChannelSlots {
    * variable with no default — and passes `TradeChannelHeartbeat` over a real
    * `TelegramBotApiClient` (#275) under `telegram`, or nothing at all under an
    * explicitly-named `log-only`. This field stays the port rather than a
-   * Telegram/Discord client, so a programmatic caller can still inject its
+   * Telegram client, so a programmatic caller can still inject its
    * own; see alert-transport.ts.
    *
    * Under `telegram` the beat goes to `TELEGRAM_HEARTBEAT_CHAT_ID` — a chat of

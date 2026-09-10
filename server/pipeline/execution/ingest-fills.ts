@@ -732,7 +732,7 @@ async function redistributeOneFlatten(
           // traced locally with a FIXED, self-authored message rather than
           // the channel's own error — `alpaca-adapter.ts`'s
           // `escalateAgedUnpricedFills` sets the precedent this follows: a
-          // Telegram/Discord transport failure quotes the request it failed
+          // Telegram transport failure quotes the request it failed
           // on, and that URL can carry a bot token, so the channel's error is
           // read and discarded, never logged.
           safeLog(input.logger, {

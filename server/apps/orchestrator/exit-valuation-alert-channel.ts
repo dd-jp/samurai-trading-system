@@ -15,6 +15,7 @@ import type {
   ExitValuationDegradedAlert,
   ExitValuationDegradedAlertChannel,
 } from './production/exit-valuation-alert.js';
+import { TradeChannelAlert } from './trade-channel.js';
 import type { Logger } from './types.js';
 
 const SEAM_LABEL: Record<ExitValuationDegradedAlert['seam'], string> = {
@@ -79,20 +80,20 @@ function formatExitValuationDegradedAlert(alert: ExitValuationDegradedAlert): st
   );
 }
 
-export class TradeChannelExitValuationDegradedAlert implements ExitValuationDegradedAlertChannel {
-  readonly #telegram: TelegramClient;
-  readonly #chatId: string;
+export class TradeChannelExitValuationDegradedAlert
+  extends TradeChannelAlert
+  implements ExitValuationDegradedAlertChannel
+{
   readonly #logger: Logger;
 
   constructor(telegram: TelegramClient, chatId: string, logger: Logger) {
-    this.#telegram = telegram;
-    this.#chatId = chatId;
+    super(telegram, chatId);
     this.#logger = logger;
   }
 
   postExitValuationDegradedAlert(alert: ExitValuationDegradedAlert): void {
     const text = formatExitValuationDegradedAlert(alert);
-    void this.#telegram.sendMessage(this.#chatId, text).catch((error: unknown) => {
+    this.sendDetached(text, (error: unknown) => {
       // A failed send must itself stay visible — see `TradeChannelBreachAlert`
       // and `TradeChannelThresholdClampAlert` for the identical reasoning.
       this.#logger.log({

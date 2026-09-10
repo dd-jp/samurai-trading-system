@@ -15,11 +15,7 @@
  * the heartbeat chat (#342) — a flatten stuck in genuine ambiguity about
  * whether it is still held is a decision waiting on the operator, not a beat.
  *
- * Discord is optional and mirrors the shape every other adapter here takes:
- * both are attempted together, so a Telegram outage does not silence the
- * Discord copy.
- *
- * Control-arm alerts are dropped before either transport is touched
+ * Control-arm alerts are dropped before the transport is touched
  * (#1349, `isControlArmTraceId` below). The log line is the caller's
  * (fill-sync.ts: every divergence at startup, deduped per lot and action on
  * the poll) and is untouched, so this only removes the page.
@@ -28,7 +24,7 @@ import type {
   FlattenReconcileAlert,
   FlattenReconcileAlertChannel,
 } from '../../pipeline/execution/index.js';
-import type { DiscordClient, TelegramClient } from '../../pipeline/verdict/index.js';
+import { TradeChannelAlert } from './trade-channel.js';
 
 /**
  * Composed only from the alert's own curated fields — see
@@ -67,33 +63,14 @@ function isControlArmTraceId(traceId: string): boolean {
   return traceId.startsWith('control-arm-');
 }
 
-export class TradeChannelFlattenReconcileAlert implements FlattenReconcileAlertChannel {
-  readonly #telegram: TelegramClient;
-  readonly #telegramChatId: string;
-  readonly #discord: DiscordClient | undefined;
-  readonly #discordChannelId: string | undefined;
-
-  constructor(
-    telegram: TelegramClient,
-    telegramChatId: string,
-    discord?: DiscordClient,
-    discordChannelId?: string,
-  ) {
-    this.#telegram = telegram;
-    this.#telegramChatId = telegramChatId;
-    this.#discord = discord;
-    this.#discordChannelId = discordChannelId;
-  }
-
+export class TradeChannelFlattenReconcileAlert
+  extends TradeChannelAlert
+  implements FlattenReconcileAlertChannel
+{
   async postFlattenReconcileAlert(alert: FlattenReconcileAlert): Promise<void> {
     if (isControlArmTraceId(alert.trace_id)) return;
 
     const text = formatFlattenReconcileAlert(alert);
-    await Promise.all([
-      this.#telegram.sendMessage(this.#telegramChatId, text),
-      this.#discord && this.#discordChannelId
-        ? this.#discord.sendMessage(this.#discordChannelId, text)
-        : Promise.resolve(),
-    ]);
+    await this.send(text);
   }
 }

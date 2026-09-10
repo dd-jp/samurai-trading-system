@@ -15,6 +15,7 @@ import type {
   ThresholdClampAlert,
   ThresholdClampAlertChannel,
 } from './production/threshold-clamp-alert.js';
+import { TradeChannelAlert } from './trade-channel.js';
 import type { Logger } from './types.js';
 
 const WHERE_LABEL: Record<ThresholdClampAlert['where'], string> = {
@@ -48,20 +49,20 @@ function formatThresholdClampAlert(alert: ThresholdClampAlert): string {
   );
 }
 
-export class TradeChannelThresholdClampAlert implements ThresholdClampAlertChannel {
-  readonly #telegram: TelegramClient;
-  readonly #chatId: string;
+export class TradeChannelThresholdClampAlert
+  extends TradeChannelAlert
+  implements ThresholdClampAlertChannel
+{
   readonly #logger: Logger;
 
   constructor(telegram: TelegramClient, chatId: string, logger: Logger) {
-    this.#telegram = telegram;
-    this.#chatId = chatId;
+    super(telegram, chatId);
     this.#logger = logger;
   }
 
   postThresholdClampAlert(alert: ThresholdClampAlert): void {
     const text = formatThresholdClampAlert(alert);
-    void this.#telegram.sendMessage(this.#chatId, text).catch((error: unknown) => {
+    this.sendDetached(text, (error: unknown) => {
       // The one alert whose failure to send must itself stay visible — see
       // `TradeChannelBreachAlert`'s identical reasoning.
       this.#logger.log({

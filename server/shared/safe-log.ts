@@ -131,7 +131,7 @@ export type CaughtFailureLogTemplate = LogEntryTemplate;
  * transport error whose message explains what actually went wrong, as
  * opposed to a downstream alert channel's error (execution's
  * `ResidualExposureAlert`/`FlattenOverfillWarning`/`FlattenReconcileAlert`
- * channels all carry a CREDENTIALS note: a Telegram/Discord transport failure
+ * channels all carry a CREDENTIALS note: a Telegram transport failure
  * quotes the request it failed on, which can carry a bot token — that shape
  * gets a fixed, self-authored message via `safeLog` instead, never this
  * function).
