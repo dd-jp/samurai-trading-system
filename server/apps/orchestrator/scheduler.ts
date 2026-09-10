@@ -191,16 +191,16 @@ export class UniverseScheduler implements Scheduler {
     // narrowing of an open session.
     //
     // A tick admitted here can only CLOSE — the entry path consults
-    // `withinFlattenWindow` too and returns `skip('session_closing')` — but it
-    // is NOT free. That skip is inside the Trader (`decide.ts`), and
-    // `tick-runner.ts` runs the analysts and the debate before it on a decision
-    // bar. The US close at 20:00Z sits exactly on the 1h debate-bar grid, so the
-    // first grace tick after it claims a fresh decision bar and pays a full
-    // analyst + debate pass over the universe before the Trader skips: ~1 extra
-    // decision bar/day, ≈+15% on the US paper leg. The live bill is untouched —
-    // LSE closes at 15:30Z, which floors into the 15:00 bar, so no LSE grace
-    // tick claims a new decision bar. Making the grace tick flatten-only is
-    // deliberately out of scope here — see #1389's PR body for the follow-up.
+    // `withinFlattenWindow` too and returns `skip('session_closing')`. `grace_only`
+    // below (#1499) is what keeps that CHEAP: `runTickPlan` reads it to skip the
+    // decision-gate claim entirely, so a grace tick never opens a fresh decision
+    // bar and never pays an Analysts + Debate pass — it runs `exitCheck` only,
+    // same as any other tick-path pass. Before #1499 the claim was unconditional,
+    // and the US close at 20:00Z sits exactly on the 1h debate-bar grid, so the
+    // first grace tick after it claimed a fresh bar and paid the full pass before
+    // the Trader skipped: ~1 extra decision bar/day, ≈+15% on the US paper leg.
+    // The LSE leg was never exposed — its 15:30Z close floors into the 15:00 bar,
+    // so no LSE grace tick ever claimed a new one.
     const inFlattenGrace = this.config.postCloseFlattenWindow?.(tickTime) ?? false;
 
     return {
@@ -209,6 +209,12 @@ export class UniverseScheduler implements Scheduler {
       // instant, or it does not appear in the plan.
       instruments: marketOpen || inFlattenGrace ? [...this.config.universe] : [],
       tick_time: tickTime,
+      // Absent, not `false`, whenever the venue is open or the plan is empty
+      // (`exactOptionalPropertyTypes`) — `marketOpen` alone decides this,
+      // because a window tick takes precedence over the grace when both would
+      // technically admit (they never do in practice: `postCloseFlattenTail`
+      // answers false while the venue is still open).
+      ...(marketOpen ? {} : inFlattenGrace ? { grace_only: true } : {}),
     };
   }
 }

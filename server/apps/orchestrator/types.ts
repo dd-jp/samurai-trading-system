@@ -71,6 +71,19 @@ export interface TickPlan {
   instruments: UniverseInstrument[];
   /** = clock.now() */
   tick_time: Date;
+  /**
+   * True when `instruments` is non-empty ONLY because `postCloseFlattenWindow`
+   * admitted it — `isOpen`/`stocksTradingWindow` said shut (#1499). Absent
+   * (never `false`) on every other plan, including an empty one, per this
+   * file's `exactOptionalPropertyTypes` convention.
+   *
+   * Consumed by `runTickPlan`, which must not ask the decision gate to claim
+   * a bar for a grace-only plan: the US close sits on the 1h debate-bar grid,
+   * so an unconditional claim would open a fresh decision bar and run a full
+   * Analysts + Debate pass after the venue is already shut, for a pass whose
+   * only possible outcome is the Trader's `skip('session_closing')`.
+   */
+  grace_only?: boolean;
 }
 
 /** The Scheduler seam: given a clock and a universe, decide what fires. */

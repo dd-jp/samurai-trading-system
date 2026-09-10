@@ -9,7 +9,11 @@
  *     Trader's exit-only entry point (positions, mark, flatten window), then
  *     Risk -> Verdict -> Execution if it produced an exit intent. No
  *     analysts, no debate: the exit path is reachable without either, by
- *     construction (`TickSteps.exitCheck`'s input carries neither).
+ *     construction (`TickSteps.exitCheck`'s input carries neither). This is
+ *     also the ONLY path a post-close flatten-grace tick takes (#1499): a
+ *     `TickPlan.grace_only` plan never reaches `runInstrument` with
+ *     `ctx.decision_bar` set at all — `tick-loop.ts` skips the decision-gate
+ *     claim for it — so this branch needs no grace-specific logic of its own.
  *
  *   decision pass (ctx.decision_bar set — once per debate bar): Analysts ->
  *     Debate -> Trader -> Risk -> Verdict -> (on `go`) Execution. A
