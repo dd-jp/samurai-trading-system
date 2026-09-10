@@ -20,9 +20,8 @@ export interface TradeChannelNotifier {
 }
 
 /**
- * Outbound transport surface for a Telegram bot. Nothing is received: the
- * inbound approval half (buttons, polling, callbacks) was retired with the
- * human gate — ADR-0007, ADR-0013.
+ * Outbound transport surface for a Telegram bot. Nothing is received: there
+ * is no human gate (ADR-0007, ADR-0013), so no inbound polling.
  */
 export interface TelegramClient {
   sendMessage(chatId: string, text: string): Promise<void>;

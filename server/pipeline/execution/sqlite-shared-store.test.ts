@@ -473,7 +473,7 @@ describe('SqliteExecutionStore', () => {
           expect(attribution?.modelled_cost_breakdown).toBeNull();
         });
 
-        it(`fromPositionRow leaves modelled_cost_breakdown absent for ${label}`, async () => {
+        it(`fromOpenPositionRow leaves modelled_cost_breakdown absent for ${label}`, async () => {
           const { db, store } = makeStore();
           await store.writeAheadPosition(
             makePosition({

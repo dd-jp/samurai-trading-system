@@ -107,15 +107,7 @@ import type {
 } from './types.js';
 
 /**
- * Terminal `order_state`s — excluded from `getOpenPositions()`
- * (execution-spec.md). Defined in `shared/store/key-scheme-guard.ts`, which the
- * #686 rollout guard reads too; aliased here so the SQL below keeps its
- * original name.
- */
-const TERMINAL_STATES: readonly OrderState[] = TERMINAL_ORDER_STATES;
-
-/**
- * The subset of `TERMINAL_STATES` `sweepTerminalPositions` deletes —
+ * The subset of `TERMINAL_ORDER_STATES` `sweepTerminalPositions` deletes —
  * `TERMINAL_ORDER_STATES` minus `closed` and `abandoned` (#1088, amended
  * #1186). See that method's doc (types/store.ts) and this file's "row
  * lifecycle" section above for why `closed` is excluded.
@@ -361,7 +353,7 @@ export class SqliteExecutionStore implements SharedStore {
 
   /** Non-terminal lots only (execution-spec.md) — deterministic order for callers that iterate. */
   async getOpenPositions(): Promise<OpenPosition[]> {
-    const placeholders = TERMINAL_STATES.map(() => '?').join(', ');
+    const placeholders = TERMINAL_ORDER_STATES.map(() => '?').join(', ');
     const rows = this.db
       .prepare(
         // #753: arm-scoped. This is the read the Trader's position awareness,
@@ -373,7 +365,7 @@ export class SqliteExecutionStore implements SharedStore {
           WHERE arm = ? AND order_state NOT IN (${placeholders})
           ORDER BY opened_at`,
       )
-      .all(this.arm, ...TERMINAL_STATES) as OpenPositionRow[];
+      .all(this.arm, ...TERMINAL_ORDER_STATES) as OpenPositionRow[];
     return rows.map(fromOpenPositionRow);
   }
 
@@ -1038,7 +1030,7 @@ export class SqliteExecutionStore implements SharedStore {
    * its own iterating callers.
    */
   async getUnprotectedResidualLots(): Promise<UnprotectedResidualLot[]> {
-    const placeholders = TERMINAL_STATES.map(() => '?').join(', ');
+    const placeholders = TERMINAL_ORDER_STATES.map(() => '?').join(', ');
     const rows = this.db
       .prepare(
         // #753: arm-scoped, for the reason `getOpenPositions()` is — the #549
@@ -1050,7 +1042,7 @@ export class SqliteExecutionStore implements SharedStore {
             AND order_state NOT IN (${placeholders})
           ORDER BY opened_at`,
       )
-      .all(this.arm, ...TERMINAL_STATES) as OpenPositionRow[];
+      .all(this.arm, ...TERMINAL_ORDER_STATES) as OpenPositionRow[];
 
     return rows.map((row) => {
       // Non-null by the WHERE clause — a null here means the row (or the

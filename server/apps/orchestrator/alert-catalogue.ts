@@ -143,6 +143,16 @@ const EXIT_VALUATION_SEAM_LABEL: Record<ExitValuationDegradedAlert['seam'], stri
   trader: 'the Trader stage (the exited instrument had no mark at all)',
 };
 
+const PARTLY_VALUED_BOOK_COPY = {
+  headline: 'EXIT PRICED ON A PARTLY-VALUED BOOK',
+  namesLabel: 'Held instruments that could NOT be valued',
+  consequence:
+    'The exit was NOT suppressed (#841, ADR-0014 flat-by-close) — it proceeded, and the ' +
+    'portfolio figures in risk_log for this trace exclude the names above, so they understate ' +
+    'exposure and drawdown. NEW ENTRIES are still refused while the book cannot be fully ' +
+    'valued. Check the market-data feed for the named instruments.',
+};
+
 /**
  * Varied per seam because the two conditions cost different things: #841's
  * seams leave `risk_log`'s portfolio figures understated, while #826's leaves
@@ -152,24 +162,8 @@ const EXIT_VALUATION_SEAM_COPY: Record<
   ExitValuationDegradedAlert['seam'],
   { headline: string; namesLabel: string; consequence: string }
 > = {
-  risk: {
-    headline: 'EXIT PRICED ON A PARTLY-VALUED BOOK',
-    namesLabel: 'Held instruments that could NOT be valued',
-    consequence:
-      'The exit was NOT suppressed (#841, ADR-0014 flat-by-close) — it proceeded, and the ' +
-      'portfolio figures in risk_log for this trace exclude the names above, so they understate ' +
-      'exposure and drawdown. NEW ENTRIES are still refused while the book cannot be fully ' +
-      'valued. Check the market-data feed for the named instruments.',
-  },
-  verdict: {
-    headline: 'EXIT PRICED ON A PARTLY-VALUED BOOK',
-    namesLabel: 'Held instruments that could NOT be valued',
-    consequence:
-      'The exit was NOT suppressed (#841, ADR-0014 flat-by-close) — it proceeded, and the ' +
-      'portfolio figures in risk_log for this trace exclude the names above, so they understate ' +
-      'exposure and drawdown. NEW ENTRIES are still refused while the book cannot be fully ' +
-      'valued. Check the market-data feed for the named instruments.',
-  },
+  risk: PARTLY_VALUED_BOOK_COPY,
+  verdict: PARTLY_VALUED_BOOK_COPY,
   trader: {
     headline: 'MANDATORY FLATTEN SENT WITHOUT A MARK',
     namesLabel: 'Instrument whose mark could NOT be read',
@@ -740,8 +734,8 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
       message:
         `OHLCV failover on the ${alert.leg} leg: ${alert.primaryName} failed for ` +
         `${alert.symbol} ${alert.timeframe} (${alert.primaryError}), so ${alert.fallbackName} ` +
-        'is serving those bars. SAMURAI_ALERTS=log-only cannot page anyone about this; use ' +
-        'SAMURAI_ALERTS=telegram for an unattended run.',
+        'is serving those bars. ' +
+        LOG_ONLY_CANNOT_PAGE,
       payload: {
         leg: alert.leg,
         instrument: alert.symbol,
@@ -818,8 +812,8 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
       level: 'error',
       message:
         "paper equity leg's Alpaca calendar fetch failed at boot — fell back to the " +
-        'hand-entered US equity session table. SAMURAI_ALERTS=log-only cannot page anyone ' +
-        'about this; use SAMURAI_ALERTS=telegram for an unattended run.',
+        'hand-entered US equity session table. ' +
+        LOG_ONLY_CANNOT_PAGE,
       payload: {
         reason: alert.reason,
         fallback_coverage_end: alert.fallback_coverage_end,
@@ -861,8 +855,8 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
         level: 'warn',
         message:
           'ARM DIVERGENCE — the matched control (falsifier arm 2) is out-performing the live ' +
-          'arm. SAMURAI_ALERTS=log-only cannot page anyone about this; use ' +
-          'SAMURAI_ALERTS=telegram for an unattended run.',
+          'arm. ' +
+          LOG_ONLY_CANNOT_PAGE,
         payload: {
           reason: alert.reason,
           // Both columns for both arms, never a return on its own (doc 12 D4).
@@ -1015,8 +1009,8 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
         `the LIVE equity leg's hand-entered LSE session tables are checked only through ` +
         `${alert.coverage_end} — ${alert.days_remaining} day(s) remaining. Extend ` +
         'LSE_HOLIDAYS/LSE_HALF_DAYS before that date; boot will refuse the live leg once it ' +
-        'passes. SAMURAI_ALERTS=log-only cannot page anyone about this; use ' +
-        'SAMURAI_ALERTS=telegram for an unattended run.',
+        'passes. ' +
+        LOG_ONLY_CANNOT_PAGE,
       payload: {
         coverage_end: alert.coverage_end,
         days_remaining: alert.days_remaining,

@@ -263,7 +263,6 @@ function makeInput(
     costModel: {} as CostModel,
     marketData: {} as MarketDataService,
     config,
-    mode: 'backtest',
     residualExposureAlerts,
     flattenOverfillAlerts,
     ...(nonSterlingFeeAlerts === undefined ? {} : { nonSterlingFeeAlerts }),

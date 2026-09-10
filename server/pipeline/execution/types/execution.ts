@@ -86,7 +86,6 @@ export interface ExecutionInput {
   marketData: MarketDataService;
   /** `config.simulated` feeds the submit snapshot's `MarketState`, alongside `marketData`. */
   config: ExecutionConfig;
-  mode: 'live' | 'paper' | 'backtest';
   /**
    * The #525 fallback — posted only when `ingestFills()` fails to re-arm a
    * partially-flattened lot's protective legs. Required, not optional: an

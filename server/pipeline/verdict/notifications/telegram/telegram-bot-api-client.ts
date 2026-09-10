@@ -2,12 +2,9 @@
  * Real `TelegramClient` over the Telegram Bot API (ticket #275) — see
  * docs/specs/transport-layer-spec.md ("Module: TelegramClient").
  *
- * Outbound only. This client once carried the inbound half of a human
- * approval round trip as well — inline approve/reject buttons, a `getUpdates`
- * long-poll loop, a `from.id` allowlist and correlation tokens. ADR-0007 and
- * ADR-0013 removed every human gate, so that half was retired; what remains
- * is `sendMessage`, which the heartbeat, the operator escalations and the
- * verdict notifier all post through.
+ * Outbound only: `sendMessage`, which the heartbeat, the operator escalations
+ * and the verdict notifier all post through. No inbound polling — there is no
+ * human gate (ADR-0007, ADR-0013).
  *
  * ## Secret handling
  *

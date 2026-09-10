@@ -278,7 +278,6 @@ async function driveFlatten(venue: Venue, opts: DriveFlattenOptions = {}) {
     costModel: {} as never,
     marketData,
     config: PROFILE.executionConfig,
-    mode: 'paper',
     residualExposureAlerts: { postResidualExposureAlert: async () => {} },
     flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
     flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },

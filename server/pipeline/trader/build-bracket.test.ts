@@ -8,7 +8,6 @@
  *   risk fraction  = 0.005 x 1 (converged) x 0.75 (no precedent) = 0.00375
  *   size           = 100_000 x 0.00375 / 4                       = 93.75
  */
-import { describe, expect, it } from 'vitest';
 import {
   type PricedBracket,
   priceBracket,
@@ -106,8 +105,9 @@ describe('priceBracket', () => {
     },
   ] as const)('$name', ({ direction, entry, atr, bracket, expected }) => {
     const result = priceBracket({ direction, entry, atr, bracket, config: DEFAULT_TRADER_CONFIG });
-    expect(result.skip).toBeNull();
-    const priced = result.priced as PricedBracket;
+    if (result.priced === null)
+      throw new Error(`expected a priced bracket, got skip=${result.skip}`);
+    const priced = result.priced;
     expect(priced.side).toBe(expected.side);
     expect(priced.stop).toBeCloseTo(expected.stop, 10);
     expect(priced.target).toBeCloseTo(expected.target, 10);

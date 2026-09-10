@@ -13,6 +13,7 @@ import type {
   OpenPosition,
   OrderState,
 } from '../../../shared/index.js';
+import type { ModelledCostBreakdown } from '../../../shared/store/index.js';
 
 /**
  * The open book: every lot still in flight and how much of each is already
@@ -466,12 +467,7 @@ export interface FlattenAttribution {
    * reports no breakdown of its own. `null` for a flatten row written before
    * migration 0037, or whose submit-time capture failed.
    */
-  modelled_cost_breakdown: {
-    spread_cost: number;
-    commission: number;
-    slippage: number;
-    market_impact: number;
-  } | null;
+  modelled_cost_breakdown: ModelledCostBreakdown | null;
   /**
    * #1014 review, finding 3: the quantity the flatten was SUBMITTED for —
    * `flatten_submissions.size`, the denominator `modelled_cost_breakdown` was
@@ -556,10 +552,5 @@ export interface FlattenSubmissionWriteAhead {
   quote_ask: number | null;
   quote_mid: number | null;
   quote_observed_at: Date | null;
-  modelled_cost_breakdown: {
-    spread_cost: number;
-    commission: number;
-    slippage: number;
-    market_impact: number;
-  } | null;
+  modelled_cost_breakdown: ModelledCostBreakdown | null;
 }

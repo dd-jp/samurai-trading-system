@@ -1452,7 +1452,6 @@ export interface ExecutionStepDeps {
   costModel: CostModel;
   marketData: MarketDataService;
   config: ExecutionConfig;
-  mode: 'live' | 'paper' | 'backtest';
   /** The #525 fallback alert — see `ExecutionInput.residualExposureAlerts`. */
   residualExposureAlerts: ResidualExposureAlertChannel;
   /** The #527 over-fill warning — see `ExecutionInput.flattenOverfillAlerts`. */
@@ -1487,7 +1486,6 @@ export function buildExecutionStep(deps: ExecutionStepDeps): TickSteps['executio
       costModel: deps.costModel,
       marketData: deps.marketData,
       config: deps.config,
-      mode: deps.mode,
       residualExposureAlerts: deps.residualExposureAlerts,
       flattenOverfillAlerts: deps.flattenOverfillAlerts,
       flattenReconcileAlerts: deps.flattenReconcileAlerts,
@@ -1526,7 +1524,6 @@ export function buildExecutionSurface(deps: ExecutionStepDeps, traceId: string):
     costModel: deps.costModel,
     marketData: deps.marketData,
     config: deps.config,
-    mode: deps.mode,
     residualExposureAlerts: deps.residualExposureAlerts,
     flattenOverfillAlerts: deps.flattenOverfillAlerts,
     flattenReconcileAlerts: deps.flattenReconcileAlerts,

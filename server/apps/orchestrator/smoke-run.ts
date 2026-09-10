@@ -1731,7 +1731,6 @@ async function runExitPathScenarios(input: {
       costModel,
       marketData,
       config: executionConfig,
-      mode: 'paper',
       residualExposureAlerts: residualAlerts,
       // #527: not recorded/gated like `residualAlerts` above — no scenario
       // here is expected to over-fill a flatten, and wiring a gate check for
@@ -2568,7 +2567,6 @@ async function restartExecutionAndReconcile(ctx: PostSweepScenarioContext): Prom
       costModel: ctx.costModel,
       marketData: ctx.marketData,
       config: ctx.executionConfig,
-      mode: 'paper',
       residualExposureAlerts: ctx.residualAlerts,
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
       flattenReconcileAlerts: ctx.flattenReconcileAlerts,
@@ -5361,7 +5359,6 @@ async function runFilledZeroSizeWedgeScenario(
         costModel: {} as unknown as CostModel,
         marketData: {} as unknown as MarketDataService,
         config: paperStartingProfile('paper').executionConfig,
-        mode: 'paper',
         residualExposureAlerts: {
           postResidualExposureAlert: async () => {
             throw new Error('SmokeWedgedLotBroker: this scenario never partially flattens');
@@ -6506,6 +6503,7 @@ async function runProbes(ctx: ProbeRunContext): Promise<SmokeEvidence> {
     gathered[id] = await probe.run(ctx, gathered as SmokeEvidence);
   };
   for (const id of PROBE_RUN_ORDER) await runOne(id);
+  // Sound because `everyProbeOnce` makes PROBE_RUN_ORDER exhaustive: every key is set above.
   return gathered as SmokeEvidence;
 }
 

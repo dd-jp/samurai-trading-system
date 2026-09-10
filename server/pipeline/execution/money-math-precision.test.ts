@@ -311,7 +311,6 @@ function makeInput(broker: BrokerAdapter, store: TestExecutionStore): ExecutionI
     costModel: {} as CostModel,
     marketData: {} as MarketDataService,
     config,
-    mode: 'backtest',
     residualExposureAlerts: { postResidualExposureAlert: async () => {} },
     flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
     flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },

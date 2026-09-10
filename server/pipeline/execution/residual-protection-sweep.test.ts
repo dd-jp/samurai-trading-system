@@ -167,7 +167,6 @@ function makeInput(
     costModel: {} as CostModel,
     marketData: {} as MarketDataService,
     config,
-    mode: 'backtest',
     residualExposureAlerts,
     flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
     flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },

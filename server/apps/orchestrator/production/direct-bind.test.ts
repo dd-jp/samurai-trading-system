@@ -3033,7 +3033,6 @@ describe('buildExecutionStep', () => {
       costModel: {} as never,
       marketData: FAKE_MARKET_DATA,
       config: EXECUTION_CONFIG,
-      mode: 'paper',
       residualExposureAlerts: { postResidualExposureAlert: async () => {} },
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
       flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },

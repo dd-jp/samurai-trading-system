@@ -1566,7 +1566,6 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     costModel: new CostModelImpl(config.costConfig),
     marketData,
     config: config.executionConfig,
-    mode: config.mode,
     // #525: the fallback alert for a residual `ingestFills()` failed to
     // re-arm after a partial flatten. Required on `ExecutionInput`, for the
     // same "no silent default" reason `unpricedFillAlerts` above is

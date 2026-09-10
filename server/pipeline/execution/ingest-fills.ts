@@ -670,7 +670,7 @@ async function redistributeOneFlatten(
       // but this function has no adapter-specific knowledge and must not
       // assume every `BrokerAdapter` does the same — the Simulated adapter's
       // `fetchNewFills` re-offers everything past `since` forever, which is
-      // exactly the shape a `mode: 'backtest'` run drives this through.
+      // exactly the shape a backtest run drives this through.
       // Un-deduped, that floods the very trace #527 exists to create — the
       // "line repeated daily is a line nobody reads" failure #342 already
       // named for a different channel.
