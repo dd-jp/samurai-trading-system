@@ -15,7 +15,8 @@ market sentiment or intelligence"*.
 ## 1. Method, and what the evidence is worth
 
 Every figure below was pulled from the **SIM gateway** (`gateway.saxobank.com/sim/openapi`)
-on 2026-09-07/08 with a 24-hour developer token, against `ClientId 22690838`. Three
+on 2026-09-07/08 with a 24-hour developer token, against `ClientId 22690838` — except §2.1a, which
+was measured on the same gateway and client on **2026-09-10** and says so in place. Three
 qualifications bound this survey; a fourth is now resolved:
 
 - **The SIM account is a trial account, not the UK GIA.** `port/v1/accounts/me` reports
@@ -74,6 +75,125 @@ LQQ3's quote of 31151 is 31151 GBX = **£311.51**, not £31,151.00 and not £311
 This turns #1302 from "we must hand-maintain a GBX flag on 17 pool rows" into "read one field at
 resolve time, and never trust `CurrencyCode` or `DisplayAndFormat.Currency` alone." Hand-
 maintained flags would have gone stale the moment a row was added; this does not.
+
+### 2.1a The details envelope, the fields around the factor, and the ORDER-price unit
+
+Measured on SIM 2026-09-10 for
+[#1444](https://github.com/dd-jp/samurai-trading-system/issues/1444), against the same
+`ClientId 22690838` and a token refreshed that day. §2.1 above tabulates field *values*; this
+records the *shape* they arrive in, which fields are present at all, and — new — the unit Saxo
+**reads an order price in**, which §2.1 never touched.
+
+**The envelope is a BARE object, not `{ "Data": [ … ] }`.** `GET
+/ref/v1/instruments/details/29391797/Etn` returns HTTP 200 with 43 top-level keys and no `Data`
+member. `validateInstrumentDetails` in `server/pipeline/execution/adapters/saxo-http-client.ts`
+parses bare while every other endpoint in that file goes through `readData` for the wrapper; the
+bare parse is **correct as shipped**, and `readData` here would fail the resolver on its first
+line. Same shape on the USD control (`3347273/Etn`).
+
+**Every field the resolver and the validator depend on is present, on both lines:**
+
+| field | `29391797` (LQQ3, GBX) | `3347273` (3USL, USD) |
+| --- | --- | --- |
+| `Uic` | `29391797` | `3347273` |
+| `AssetType` | `"Etn"` | `"Etn"` |
+| `CurrencyCode` | `"GBP"` | `"USD"` |
+| `PriceCurrency` | `"GBX"` — **present** | `"USD"` — **present** |
+| `PriceToContractFactor` | `0.01` | `1.0` |
+| `TickSize` | **absent** | **absent** |
+| `TickSizeScheme` | present (below) | present, identical |
+| `Format` | `{ "Decimals": 2, "OrderDecimals": 2 }` | same |
+| top-level `OrderDecimals` | **absent** — it is nested under `Format` | **absent** |
+| `AmountDecimals` / `MinimumLotSize` / `LotSizeType` | `0` / `1.0` / `OddLotsNotAllowed` | same |
+
+So `assertUnitIsSelfConsistent`'s refusal branch — a factor other than 1 with `PriceCurrency`
+absent — is not triggered by SIM on either measured line, and the validator's `optionalString`
+treatment of `PriceCurrency` is not being leaned on. The 2026-09-08 values in §2.1 reproduced
+exactly, two days on.
+
+`TickSizeScheme` is `{ "DefaultTickSize": 0.01, "Elements": [ {0.0995 → 0.0005}, {4.999 → 0.001},
+{9.9975 → 0.0025}, {24.995 → 0.005} ] }` (`HighPrice → TickSize`), byte-identical on the GBX and
+the USD line. **Which unit the `HighPrice` bands are denominated in is NOT settled by this
+measurement**, and it matters: read as pence, all four Elements are dead on any GBX line trading
+above 25p and the grid is `DefaultTickSize` 0.01 pence = 0.0001 GBP everywhere; read as pounds,
+they are the familiar sub-£25 bands and LQQ3 at ~£300 still falls to the 0.01 default. Both
+readings put LQQ3 on the default tick today, so today's grid is not in doubt — the *denomination*
+is, and a cheaper line in the pool could land inside the bands. Recorded as open; `ORDER_DECIMALS`
+(2) in `saxo-adapter.ts` remains an assumption about precision, not a measured grid.
+
+#### The order-price unit — the marketability probe did NOT run, and why
+
+#1444's SIM item 3 asks for the marketability form of AC3's probe: a `Buy Limit` at `OrderPrice:
+1000` against a ~30000-pence market, which **rests** if Saxo reads pence (£10) and **fills at
+once** if it reads pounds (£1,000). It was not placed, because the LSE ETF session had already
+closed when the token ran:
+
+- `GET /ref/v1/exchanges/LSE_ETF` at 15:37Z: `AutomatedTrading` 07:00–15:30Z,
+  `CallAuctionTrading` 15:30–15:35:30Z, then **`Closed` until 2026-09-11T06:50Z**.
+- `GET /trade/v1/infoprices?Uic=29391797&AssetType=Etn` at 15:36Z: `MarketState:
+  "ClosingAuction"`, `IsMarketOpen: false`, `PriceTypeAsk/Bid: "OldIndicative"`,
+  `DelayedByMinutes: 15`, `Bid 30007 / Ask 30076 / Mid 30041.5`, `LastClose 30551`.
+
+Outside continuous trading the probe loses its discriminating power in one direction: a fill is
+impossible, so "it rested" no longer means "Saxo read pence" — it means only that nothing was
+trading. Per #1444's own *Ambiguous* guidance the probe is re-run in session rather than inferred
+from; a queued `DayOrder` would also have sat open overnight against the ticket's own
+leave-nothing-resting rule.
+
+(The ticket's premise line quotes ~£311.51 / 31151 from §2.1's 2026-09-08 reading. The measured
+level on 2026-09-10 is ~£300.4 / 30041.5 mid. The probe design is unaffected — 1000 is far below
+the market as pence and far above it as pounds under either level.)
+
+#### What settled the unit instead: `precheck`'s cash requirement, in the ACCOUNT currency
+
+`POST /trade/v2/orders/precheck` places nothing, works with the market closed, and returns
+`EstimatedCashRequired` in the **account** currency (EUR here) — which is exactly the
+account-currency observable #1444 names as AC3's fallback when a read-back cannot discriminate,
+except that it costs no order at all. Sweeping `OrderPrice` with `Amount: 1`, `BuySell: "Buy"`,
+`OrderType: "Limit"`, `DayOrder`:
+
+| Uic | `OrderPrice` | `EstimatedCashRequired` (EUR) | `InstrumentToAccountConversionRate` |
+| --- | --- | --- | --- |
+| 29391797 (GBX, factor `0.01`) | 100 | 19.78 | 1.16377 |
+| 29391797 | 280 | 21.88 | 1.16378 |
+| 29391797 | 1000 | 30.25 | 1.16379 |
+| 29391797 | 2000 | 41.89 | 1.16379 |
+| 29391797 | 30000 | 367.72 | 1.16387 |
+| 3347273 (USD, factor `1.0`) | 10 | 27.22 | 0.86000 |
+| 3347273 | 100 | 104.61 | 0.85998 |
+| 3347273 | 200 | 190.60 | 0.85999 |
+
+Both series are linear in `OrderPrice` to within €0.01 across the sweep, and both fit one model:
+
+> `EstimatedCashRequired` = fixed + `Amount` × `OrderPrice` × `PriceToContractFactor` × FX
+
+Fitted on each line's endpoints: LQQ3 slope **0.0116374** EUR per unit of `OrderPrice`, intercept
+**€18.616**; 3USL slope **0.85990**, intercept **€18.621**. Two things carry the argument. The
+intercepts agree to within €0.005 on instruments in different currencies, which isolates the slope
+as the whole price-dependent term. And the slope ratio, 0.013533, matches
+`(0.01 × 1.16378) / (1.0 × 0.86)` = 0.013532 — i.e. the two lines differ by exactly the ratio of
+their `PriceToContractFactor`s once the reported `InstrumentToAccountConversionRate`s are divided
+out. (The fitted per-unit rate sits a shade below the reported conversion rate; the rates above are
+as reported, the slopes as fitted.)
+
+**So Saxo reads `OrderPrice` in the QUOTED unit and multiplies by `PriceToContractFactor` to get
+cash** — the same invariant §2.1 records for the read direction, applied symmetrically to the
+write direction. On the GBX line `OrderPrice: 1000` commits €11.64 ≈ £10, not €1,164 ≈ £1,000; and
+`OrderPrice: 30000` — today's market in pence — commits £300, which is what one LQQ3 share costs.
+`saxoQuotedPrice` in `server/pipeline/execution/adapters/saxo-price-unit.ts` divides cash by the
+factor to reach the venue's number, and that is **confirmed, not corrected**. EUR cannot be
+confused with either GBX or GBP, so the 100× question cannot hide in the units here the way it
+hides in a `Price` read back off `/port/v1/orders/me`.
+
+What this does **not** settle, and what keeps AC3 open: it is `precheck`'s cash arithmetic, not
+the matching engine's marketability test. The two agreeing is the only coherent reading — the cash
+committed *is* the order's value — but the in-session marketability probe is still the direct
+measurement, and the tick-grid half of the question (whether two decimals of pence is a legal
+price) is untouched by any of this. Both are the live/in-session follow-ups #1444 carries.
+
+The €18.62 intercept is **account-shaped** — a trial EUR account's fixed cost, per §1's split —
+and is *not* evidence about the live UK GIA's tariff or about ADR-0015's "no per-order minimum".
+It is recorded here only because it is the constant the slope fit had to subtract.
 
 ### 2.2 Intraday LSE bars on the tradeable line **do** exist — but not at Stage 2's depth
 
@@ -857,7 +977,9 @@ editorial, not machine-consumable feeds.
 | 8 | Doc 53 `CostModelImpl`: 1 bp rate floor, no spread input | Per-instrument spread now available (§2.5); its tight core is stable but it spiked 2.4x on one measured intraday excursion (§2.5a) | folds into 6 |
 | 9 | #895 + doc 53: market data assumed free and real-time | Opt-in, **delayed** by default (quotes *and* chart bars), **£7/mo** for LSE Level 1 real time, refunded at 4 trades/month (§2.9). The delay is read as an entitlement tier on four circumstantial strands, and the confirming in-session read is now **RUN and CONFIRMED** — 15-min lag measured against a demonstrably trading market, 2026-09-08 (§2.9a). **And the delayed feed is outside LSE's Non-Display Usage regime, which real time is inside (§2.9b)** | comment on #895 |
 
-Items 1, 2 and 4 are evidence for tickets that already exist and should not be re-filed. Items 3, 5, 6 and 7 are genuine
+| 10 | #1302 AC3 / `saxoQuotedPrice`: the WRITE-direction unit was UNVERIFIED on SIM as well as live | `precheck`'s `EstimatedCashRequired` scales as `OrderPrice × PriceToContractFactor` on both a GBX and a USD line, in the account currency — Saxo reads order prices in the QUOTED unit (§2.1a). The in-session marketability probe and the tick grid are still owed | comment on [#1444](https://github.com/dd-jp/samurai-trading-system/issues/1444) |
+
+Items 1, 2, 4 and 10 are evidence for tickets that already exist and should not be re-filed. Items 3, 5, 6 and 7 are genuine
 reopenable spec decisions and want a wayfinder map.
 
 **The one that gates the live ramp is 6.** It is cheap, it is decidable with a single call, and
