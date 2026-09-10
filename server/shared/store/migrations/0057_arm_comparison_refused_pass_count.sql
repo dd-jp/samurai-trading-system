@@ -1,0 +1,49 @@
+-- Persists #1099's per-arm refused_pass_count on arm_comparison_samples (#1483).
+--
+-- #1099 added `ArmPerformance.refused_pass_count` to the LIVE comparison
+-- (`SqliteArmComparisonSource`) but shipped no column here, so the persisted
+-- read-back path was typed `PersistedArmPerformance` — `Omit<ArmPerformance,
+-- 'refused_pass_count'>` — specifically so the row mapper could not fabricate
+-- a `0` for a count the table never stored. This migration adds the column so
+-- the dashboard panel, not just the on-demand report tool, stops reading a
+-- stretch of refusals as silence.
+--
+-- ## Nullable, not `NOT NULL DEFAULT 0` — the same rule migration 0045 states
+--
+-- Migrations 0033 and 0035 default to the value every existing row actually
+-- had (`arm = 'live'`, `min_trades_per_arm = 5`) — true for every row because
+-- no other value had ever existed. This column does not qualify: every row
+-- already in this table was computed before #1099's concept of a refused
+-- pass existed at all, so `0` would not be "the value the row actually had",
+-- it would assert "no refusals happened in this cycle's window" for a
+-- quantity this migration does not backfill. NULL is the honest record of
+-- "not measured for this cycle" — the same reading migration 0045 gives its
+-- own pre-cutover `sizing_capital_ceiling` NULLs. This migration is additive
+-- only: `trader_log.skip_reason` may still hold the rows a backfill would
+-- need, but computing and writing that history is a separate change, not
+-- a reason to fabricate `0` here in the meantime.
+--
+-- Every row appended after this migration ships carries the real, non-null
+-- count on both columns: `SqliteArmComparisonSampleStore.append` always
+-- writes it, because `ArmComparisonSample.comparison.{live,control}.
+-- refused_pass_count` is a required field on the value the Feedback Loop
+-- gives it (`buildArmComparison` never omits it). NULL therefore narrows
+-- over time to rows computed before this migration, and ages out of the
+-- dashboard's `getRecent` window exactly as those rows do.
+--
+-- ## Two columns, matching the `live_*`/`control_*` naming already on this table
+--
+-- Not one merged count: `ArmPerformance.refused_pass_count` is per-arm, and
+-- today only the control arm can be non-zero (`REFUSED_PASS_ARM_BY_SKIP_REASON`,
+-- sqlite-arm-comparison-source.ts, maps each skip reason to the one arm it
+-- attributes to) — but that is a property of the writer, not of this table,
+-- which stores whatever both arms reported exactly as
+-- `live_trade_count`/`control_trade_count` already do.
+--
+-- ## ALTER TABLE, not a rebuild
+--
+-- Adds two columns with no CHECK, so SQLite's `ALTER TABLE ... ADD COLUMN`
+-- applies without a table rebuild, as 0033/0035/0045 did before it.
+
+ALTER TABLE arm_comparison_samples ADD COLUMN live_refused_pass_count INTEGER;
+ALTER TABLE arm_comparison_samples ADD COLUMN control_refused_pass_count INTEGER;

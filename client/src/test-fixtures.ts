@@ -254,6 +254,7 @@ export function makeArmComparison(overrides: Partial<ArmComparisonRow> = {}): Ar
       realized_pnl_net: 18.4,
       return_pct: 0.0184,
       max_drawdown_pct: 0.021,
+      refused_pass_count: 0,
     },
     control: {
       arm: 'control',
@@ -261,6 +262,7 @@ export function makeArmComparison(overrides: Partial<ArmComparisonRow> = {}): Ar
       realized_pnl_net: 6.2,
       return_pct: 0.0062,
       max_drawdown_pct: 0.028,
+      refused_pass_count: 0,
     },
     diverged: false,
     divergence_reason: null,

@@ -705,6 +705,19 @@ comparison even by accident. `divergence_reason` is nullable and is NULL exactly
 
 **`min_trades_per_arm` (migration `0035`, [#982](https://github.com/dd-jp/samurai-trading-system/issues/982)) is the per-arm closed-trade floor THIS row's verdict was actually tested against** — stored per row rather than read live off `MIN_TRADES_PER_ARM_FOR_DIVERGENCE`, the same choice `basis` already makes on this table and for the same reason: a row must stay interpretable against the policy value it was measured with even after that constant later changes. `ALTER TABLE ... ADD COLUMN ... DEFAULT 5` needed no rebuild, and `5` is not a placeholder for the backfilled rows — it is the only value the constant has held since this table was created in `0034`.
 
+**`live_refused_pass_count`/`control_refused_pass_count` (migration `0057`,
+[#1099](https://github.com/dd-jp/samurai-trading-system/issues/1099),
+[#1483](https://github.com/dd-jp/samurai-trading-system/issues/1483)) are nullable, with no
+`DEFAULT`.** `ArmPerformance.refused_pass_count` (#1099) is a REQUIRED field on the live-computed
+comparison, but every row already in this table when 0057 shipped was computed before that concept
+existed — there is no `trader_log` join this table ever ran to recover the count after the fact. A
+`NOT NULL DEFAULT 0` would assert "no refusals occurred in this window" on every one of those rows,
+which is the exact silence #1099/#1483 exist to break, not a neutral placeholder — the same reasoning
+migration `0045`'s `sizing_capital_ceiling` gives its own pre-cutover NULLs. Every row `INSERT`ed by
+`SqliteArmComparisonSampleStore.append` after 0057 carries a real, non-null count on both columns;
+NULL only ever describes a row computed before this migration, and ages out of the dashboard's
+`getRecent` window exactly as those rows do.
+
 ```sql
 CREATE TABLE arm_comparison_samples (
   computed_at             TEXT PRIMARY KEY,
@@ -725,6 +738,8 @@ CREATE TABLE arm_comparison_samples (
   diverged                 INTEGER NOT NULL CHECK(diverged IN (0, 1)),
   divergence_reason        TEXT,
   min_trades_per_arm       INTEGER NOT NULL DEFAULT 5,
+  live_refused_pass_count    INTEGER,
+  control_refused_pass_count INTEGER,
 
   -- `divergence_reason` is non-NULL if and only if `diverged = 1` -- the same
   -- invariant `ArmDivergenceVerdict` documents and `evaluateArmDivergence`

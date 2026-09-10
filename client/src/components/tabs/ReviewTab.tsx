@@ -209,6 +209,36 @@ function ArmVerdict({ row }: { row: ArmComparisonRow }) {
   );
 }
 
+/**
+ * Per arm: a positive count is shown, `0` renders nothing (there is nothing
+ * to say). `null` also renders nothing here — it is a ROW-level fact, not a
+ * per-arm one (`RefusedPassNotTracked` below states it once), so folding it
+ * into this per-arm span would print the same note under both arms.
+ */
+function RefusedPassCount({ count }: { count: number | null }) {
+  if (!count) {
+    return null;
+  }
+  return <span className="muted"> · {formatCount(count)} refused</span>;
+}
+
+/**
+ * `refused_pass_count` is `null` on both arms or neither, never mixed
+ * (#1099/#1483): `append` always writes both counts from one
+ * `ArmComparisonSample`, whose `refused_pass_count` is a required `number`
+ * on `ArmPerformance` — the only way either column reads back `null` is a
+ * row from before migration 0057, which wrote neither. Checking `live` alone
+ * is therefore checking the whole row, stated once rather than once per arm
+ * — collapsing this into a `0` reading would show "no refusals" for a window
+ * this row never actually measured, the exact silence #1483 exists to break.
+ */
+function RefusedPassNotTracked({ row }: { row: ArmComparisonRow }) {
+  if (row.live.refused_pass_count !== null) {
+    return null;
+  }
+  return <p className="muted small">refusals not tracked for this cycle</p>;
+}
+
 function ArmLine({ arm }: { arm: ArmPerformanceWire }) {
   return (
     <li className="arm-row" data-arm={arm.arm}>
@@ -222,6 +252,7 @@ function ArmLine({ arm }: { arm: ArmPerformanceWire }) {
       <span className="mono muted small">
         return {formatPercent(arm.return_pct, 2)} · drawdown{' '}
         {formatPercent(arm.max_drawdown_pct, 2)} · {formatCount(arm.trade_count)} trades
+        <RefusedPassCount count={arm.refused_pass_count} />
       </span>
     </li>
   );
@@ -243,6 +274,7 @@ function ArmCard({ comparisons }: { comparisons: readonly ArmComparisonRow[] }) 
             <ArmLine arm={latest.live} />
             <ArmLine arm={latest.control} />
           </ul>
+          <RefusedPassNotTracked row={latest} />
           <p className="muted small">
             {formatDateUtc(latest.window_from)} to {formatDateUtc(latest.window_to)} · one window,
             both arms · basis {formatUsd(latest.basis)}

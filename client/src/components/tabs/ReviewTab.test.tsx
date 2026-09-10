@@ -95,6 +95,41 @@ describe('summary cards', () => {
     expect(screen.queryByText(/Did not diverge/)).toBeNull();
   });
 
+  /**
+   * #1099/#1483: a `0` refused count renders nothing (there is nothing to
+   * report), a positive count is shown, and `null` (a sample from before
+   * migration 0057) gets its own note — collapsing `null` into `0` would read
+   * as "no refusals" for a window this row never actually measured.
+   */
+  it('renders nothing for a refused_pass_count of 0', () => {
+    const row = makeArmComparison();
+    renderReview(makeSnapshot({ arm_comparison: [row] }));
+    const arms = screen.getByRole('region', { name: 'Arm comparison' });
+    expect(within(arms).queryByText(/refused/)).toBeNull();
+  });
+
+  it('shows a positive refused_pass_count on the arm it belongs to', () => {
+    const row = makeArmComparison();
+    row.control = { ...row.control, refused_pass_count: 4 };
+    renderReview(makeSnapshot({ arm_comparison: [row] }));
+    const arms = screen.getByRole('region', { name: 'Arm comparison' });
+    expect(within(arms).getByText(/4 refused/)).toBeTruthy();
+  });
+
+  /**
+   * #1483: `null` is a ROW-level fact (both arms null together, never mixed
+   * — a real pre-0057 row has neither column), so the note must appear
+   * exactly ONCE per row, not once per arm.
+   */
+  it('names a pre-migration null refused_pass_count rather than reading it as 0, once per row', () => {
+    const row = makeArmComparison();
+    row.live = { ...row.live, refused_pass_count: null };
+    row.control = { ...row.control, refused_pass_count: null };
+    renderReview(makeSnapshot({ arm_comparison: [row] }));
+    const arms = screen.getByRole('region', { name: 'Arm comparison' });
+    expect(within(arms).getAllByText(/refusals not tracked for this cycle/)).toHaveLength(1);
+  });
+
   it('names an unmeasured benchmark rather than drawing it as zero', () => {
     renderReview(makeSnapshot({ outside_benchmarks: [makeOutsideBenchmark()] }));
     expect(screen.getByText(/Not measured this cycle: 60\/40/)).toBeTruthy();

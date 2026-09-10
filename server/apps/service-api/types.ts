@@ -247,8 +247,9 @@ export interface DashboardQueryStore {
    *
    * The PERSISTED shape, so what this returns is bounded by what
    * `arm_comparison_samples` holds: `ArmPerformance.refused_pass_count` (#1099)
-   * has no column there and is absent here rather than read back as a `0` the
-   * table never stored.
+   * has a nullable column since migration 0057 (#1483) — `null` on a row
+   * computed before that migration, a real count on every row after it, never
+   * a fabricated `0` the table never actually measured.
    */
   getArmComparisons(limit: number, asOf: Date): PersistedArmComparisonSample[];
   /**

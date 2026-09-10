@@ -1,11 +1,7 @@
 import { openSharedStore } from '../../shared/store/index.js';
-import type { ArmPerformance } from '../control-arm/index.js';
+import { InMemoryArmComparisonSampleStore } from './fixture-stores.js';
 import { SqliteArmComparisonSampleStore } from './sqlite-arm-comparison-sample-store.js';
-import type {
-  ArmComparisonSample,
-  PersistedArmComparisonSample,
-  PersistedArmPerformance,
-} from './types.js';
+import type { ArmComparisonSample, ArmComparisonSampleStore } from './types.js';
 
 const COMPUTED_AT = new Date('2026-09-01T12:00:00.000Z');
 const WINDOW_FROM = new Date('2026-08-02T12:00:00.000Z');
@@ -39,22 +35,6 @@ function makeSample(overrides: Partial<ArmComparisonSample> = {}): ArmComparison
   };
 }
 
-/** The columns migration 0034/0035 actually define — see `PersistedArmComparisonSample`. */
-function persisted(sample: ArmComparisonSample): PersistedArmComparisonSample {
-  const strip = ({
-    refused_pass_count: _dropped,
-    ...rest
-  }: ArmPerformance): PersistedArmPerformance => rest;
-  return {
-    ...sample,
-    comparison: {
-      ...sample.comparison,
-      live: strip(sample.comparison.live),
-      control: strip(sample.comparison.control),
-    },
-  };
-}
-
 describe('SqliteArmComparisonSampleStore', () => {
   it('round-trips a sample with both arms complete', () => {
     const db = openSharedStore(':memory:');
@@ -63,25 +43,61 @@ describe('SqliteArmComparisonSampleStore', () => {
     store.append(makeSample());
 
     const [read] = store.getRecent(10, COMPUTED_AT);
-    expect(read).toEqual(persisted(makeSample()));
+    expect(read).toEqual(makeSample());
   });
 
   /**
-   * #1099. `arm_comparison_samples` has no `refused_pass_count` column, so a
-   * read-back must not carry one — a fabricated `0` would assert "no refusals
-   * in this window" on every historical row, which is exactly the silence the
-   * field exists to break. Adding the column is a migration, and out of #1099's
-   * scope.
+   * #1099/#1483. `append` must persist each arm's `refused_pass_count`, not
+   * just carry it in memory — this is the mutation the migration exists to
+   * catch: drop either bound parameter from `append`'s `.run(...)` call and
+   * this fails (`toBe(3)`/`toBe(9)` reads back `null` instead).
    */
-  it('does not read back a refusal count the table never stored', () => {
+  it('round-trips each arm refused_pass_count independently', () => {
     const db = openSharedStore(':memory:');
     const store = new SqliteArmComparisonSampleStore(db);
 
     store.append(makeSample());
 
     const [read] = store.getRecent(10, COMPUTED_AT);
-    expect(read?.comparison.live).not.toHaveProperty('refused_pass_count');
-    expect(read?.comparison.control).not.toHaveProperty('refused_pass_count');
+    expect(read?.comparison.live.refused_pass_count).toBe(3);
+    expect(read?.comparison.control.refused_pass_count).toBe(9);
+  });
+
+  /**
+   * A row written before migration 0057 has no value in either column — a raw
+   * `INSERT` that omits them, simulating that legacy row exactly as it exists
+   * on disk today. Reading it back must produce `null`, never a fabricated
+   * `0`: `0` would assert "no refusals in this window" for a quantity this row
+   * never measured, which is the silence #1099/#1483 exist to break.
+   */
+  it('reads back null, not 0, for a pre-migration row that never stored the count', () => {
+    const db = openSharedStore(':memory:');
+    db.prepare(
+      `INSERT INTO arm_comparison_samples (
+         computed_at, window_from, window_to, basis,
+         live_trade_count, live_realized_pnl_net, live_return_pct, live_max_drawdown_pct,
+         control_trade_count, control_realized_pnl_net, control_return_pct,
+         control_max_drawdown_pct, diverged, divergence_reason
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)`,
+    ).run(
+      COMPUTED_AT.toISOString(),
+      WINDOW_FROM.toISOString(),
+      COMPUTED_AT.toISOString(),
+      1_000,
+      7,
+      21.5,
+      0.0215,
+      0.04,
+      6,
+      4,
+      0.004,
+      0.02,
+    );
+    const store = new SqliteArmComparisonSampleStore(db);
+
+    const [read] = store.getRecent(10, COMPUTED_AT);
+    expect(read?.comparison.live.refused_pass_count).toBeNull();
+    expect(read?.comparison.control.refused_pass_count).toBeNull();
   });
 
   /**
@@ -226,5 +242,48 @@ describe('SqliteArmComparisonSampleStore', () => {
       expect(insertDivergence(0, null)).not.toThrow();
       expect(insertDivergence(1, 'the control arm is ahead')).not.toThrow();
     });
+  });
+});
+
+/**
+ * #1483: `InMemoryArmComparisonSampleStore` and `SqliteArmComparisonSampleStore`
+ * must return the SAME shape for the same input, including `refused_pass_count`
+ * — a caller that passed against one and failed against the other would be
+ * exactly the substitutability gap this ticket closes. Both stores under
+ * test, one assertion body, run against each. A sibling of, not nested inside,
+ * `describe('SqliteArmComparisonSampleStore', ...)` above — this exercises two
+ * implementations, not one.
+ */
+describe.each<[string, () => ArmComparisonSampleStore]>([
+  [
+    'SqliteArmComparisonSampleStore',
+    () => new SqliteArmComparisonSampleStore(openSharedStore(':memory:')),
+  ],
+  ['InMemoryArmComparisonSampleStore', () => new InMemoryArmComparisonSampleStore()],
+])('%s (substitutability, #1483)', (_name, makeStore) => {
+  it('round-trips both arms refused_pass_count as real numbers', () => {
+    const store = makeStore();
+
+    store.append(makeSample());
+
+    const [read] = store.getRecent(10, COMPUTED_AT);
+    expect(read?.comparison.live.refused_pass_count).toBe(3);
+    expect(read?.comparison.control.refused_pass_count).toBe(9);
+  });
+
+  it('returns most-recently-computed first, bounded by asOf and limit', () => {
+    const store = makeStore();
+    const day = 24 * 60 * 60 * 1000;
+    for (let i = 0; i < 3; i += 1) {
+      store.append(makeSample({ computed_at: new Date(COMPUTED_AT.getTime() + i * day) }));
+    }
+
+    const bounded = store.getRecent(10, new Date(COMPUTED_AT.getTime() + day));
+    expect(bounded.map((sample) => sample.computed_at.toISOString())).toEqual([
+      new Date(COMPUTED_AT.getTime() + day).toISOString(),
+      COMPUTED_AT.toISOString(),
+    ]);
+
+    expect(store.getRecent(1, new Date(COMPUTED_AT.getTime() + 5 * day))).toHaveLength(1);
   });
 });
