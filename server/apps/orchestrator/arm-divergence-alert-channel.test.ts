@@ -17,6 +17,7 @@ const ALERT: ArmDivergenceAlert = {
       realized_pnl_net: -4.5,
       return_pct: -0.0045,
       max_drawdown_pct: 0.031,
+      refused_pass_count: 0,
     },
     control: {
       arm: 'control',
@@ -24,6 +25,7 @@ const ALERT: ArmDivergenceAlert = {
       realized_pnl_net: 18.2,
       return_pct: 0.0182,
       max_drawdown_pct: 0.019,
+      refused_pass_count: 0,
     },
   },
   reason: 'the control arm is ahead by 2.27% of the book over this window',
@@ -56,6 +58,26 @@ describe('formatArmDivergenceAlert', () => {
     }
     expect(text).toContain('live:    11 trade(s), return -0.45%, max drawdown 3.10%');
     expect(text).toContain('control: 14 trade(s), return 1.82%, max drawdown 1.90%');
+  });
+
+  /**
+   * #1099 added `refused_pass_count` to `ArmPerformance`, which this alert
+   * carries whole. The ruling kept refusals OUT of alerting, so the message an
+   * operator's phone shows must not move — this formatter picks its fields
+   * explicitly and reads no refusal count, and that is asserted rather than
+   * left to review.
+   */
+  it('renders the identical message whether or not the window carried refusals', () => {
+    const refused: ArmDivergenceAlert = {
+      ...ALERT,
+      comparison: {
+        ...ALERT.comparison,
+        live: { ...ALERT.comparison.live, refused_pass_count: 3 },
+        control: { ...ALERT.comparison.control, refused_pass_count: 27 },
+      },
+    };
+
+    expect(formatArmDivergenceAlert(refused)).toBe(formatArmDivergenceAlert(ALERT));
   });
 
   it('states the ONE window and the shared basis, so two-window misreading is impossible', () => {

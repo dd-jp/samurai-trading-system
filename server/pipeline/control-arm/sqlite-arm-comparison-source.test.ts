@@ -251,3 +251,88 @@ describe('SqliteArmComparisonSource.getClosedTradesBetween — #1121 AC5 cost-ch
     ]);
   });
 });
+
+function seedTraderLog(
+  db: SharedStore,
+  row: { trace_id: string; instrument?: string; skip_reason: string | null; created_at: Date },
+): void {
+  db.prepare(
+    `INSERT INTO trader_log (trace_id, instrument, debate_id, intent_type, skip_reason, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(
+    row.trace_id,
+    row.instrument ?? 'AAPL',
+    'debate-1',
+    null,
+    row.skip_reason,
+    toStoredTimestamp(row.created_at),
+  );
+}
+
+describe('SqliteArmComparisonSource.getRefusedPassCountsBetween — #1099', () => {
+  it("counts the control arm's valuation-refusal passes in the window", () => {
+    const db = openSharedStore(':memory:');
+    seedTraderLog(db, {
+      trace_id: 'trace-1:control',
+      instrument: 'AAPL',
+      skip_reason: 'control_arm_valuation_refused',
+      created_at: new Date('2026-07-18T10:00:00Z'),
+    });
+    seedTraderLog(db, {
+      trace_id: 'trace-1:control',
+      instrument: 'NFLX',
+      skip_reason: 'control_arm_valuation_refused',
+      created_at: new Date('2026-07-18T10:00:00Z'),
+    });
+    const source = new SqliteArmComparisonSource(db);
+
+    expect(source.getRefusedPassCountsBetween(from, to)).toEqual({ live: 0, control: 2 });
+  });
+
+  it('ignores skips that are not refusals', () => {
+    const db = openSharedStore(':memory:');
+    seedTraderLog(db, {
+      trace_id: 'trace-1:control',
+      skip_reason: 'below_conviction_floor',
+      created_at: new Date('2026-07-18T10:00:00Z'),
+    });
+    seedTraderLog(db, {
+      trace_id: 'trace-2:control',
+      skip_reason: null,
+      created_at: new Date('2026-07-18T11:00:00Z'),
+    });
+    const source = new SqliteArmComparisonSource(db);
+
+    expect(source.getRefusedPassCountsBetween(from, to)).toEqual({ live: 0, control: 0 });
+  });
+
+  it('excludes a refusal outside the window, on both ends, half-open at the start', () => {
+    const db = openSharedStore(':memory:');
+    seedTraderLog(db, {
+      trace_id: 'before:control',
+      skip_reason: 'control_arm_valuation_refused',
+      created_at: new Date('2026-07-17T23:59:59.999Z'),
+    });
+    // Exactly `from`: excluded, so consecutive windows partition the timeline
+    // exactly as `getClosedTradesBetween` does.
+    seedTraderLog(db, {
+      trace_id: 'at-from:control',
+      skip_reason: 'control_arm_valuation_refused',
+      created_at: from,
+    });
+    // Exactly `to`: included, same half-open rule.
+    seedTraderLog(db, {
+      trace_id: 'at-to:control',
+      skip_reason: 'control_arm_valuation_refused',
+      created_at: to,
+    });
+    seedTraderLog(db, {
+      trace_id: 'after:control',
+      skip_reason: 'control_arm_valuation_refused',
+      created_at: new Date('2026-07-19T00:00:00.001Z'),
+    });
+    const source = new SqliteArmComparisonSource(db);
+
+    expect(source.getRefusedPassCountsBetween(from, to)).toEqual({ live: 0, control: 1 });
+  });
+});

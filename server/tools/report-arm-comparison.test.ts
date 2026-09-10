@@ -43,6 +43,7 @@ function report(): string {
   return formatArmComparison(
     buildArmComparison({
       basis: 1_000,
+      refused_passes: { live: 0, control: 0 },
       from: FROM,
       to: TO,
       trades: [
@@ -104,6 +105,7 @@ describe('formatArmComparison (#753 AC4/AC5)', () => {
     const text = formatArmComparison(
       buildArmComparison({
         basis: 1_000,
+        refused_passes: { live: 0, control: 0 },
         from: FROM,
         to: TO,
         trades: [trade('live', 40, '2026-09-02T00:00:00.000Z')],
@@ -133,6 +135,7 @@ describe('formatArmComparison (#753 AC4/AC5)', () => {
     const text = formatArmComparison(
       buildArmComparison({
         basis: 1_000,
+        refused_passes: { live: 0, control: 0 },
         from: FROM,
         to: TO,
         trades: [trade('control', 40, '2026-09-02T00:00:00.000Z')],
@@ -160,6 +163,74 @@ describe('formatArmComparison (#753 AC4/AC5)', () => {
 
   it('says nothing about the exclusion when the live arm has trades', () => {
     expect(report()).not.toContain('modelled_cost_charged = 0');
+  });
+
+  /**
+   * #1099. A stretch of `control_arm_valuation_refused` skips writes no
+   * `closed_trades` row, so before this the report printed the identical page
+   * for "the control found no setup" and "the control could not value its
+   * book".
+   */
+  it('prints the refused-pass count per arm', () => {
+    const text = formatArmComparison(
+      buildArmComparison({
+        basis: 1_000,
+        refused_passes: { live: 0, control: 6 },
+        from: FROM,
+        to: TO,
+        trades: [trade('live', 40, '2026-09-02T00:00:00.000Z')],
+      }),
+    );
+
+    expect(text).toContain('refused passes');
+    expect(text).toMatch(/control\s+0\s+0\.00\s+0\.00%\s+0\.00%\s+6/);
+    expect(text).toMatch(/live\s+1\s+40\.00\s+4\.00%\s+0\.00%\s+0/);
+    expect(text).toContain('REFUSED rather than declined — control: 6 pass(es)');
+  });
+
+  /**
+   * The count is per arm on `ArmPerformance`, and the note must stay per arm
+   * too. Only the control can refuse today (`REFUSED_PASS_SKIP_REASONS.live` is
+   * empty), so a summed figure would read correctly right up to the day a
+   * live-arm reason lands and the page names no arm at all.
+   */
+  it('attributes refused passes to each arm rather than printing a merged total', () => {
+    const text = formatArmComparison(
+      buildArmComparison({
+        basis: 1_000,
+        refused_passes: { live: 2, control: 5 },
+        from: FROM,
+        to: TO,
+        trades: [trade('live', 40, '2026-09-02T00:00:00.000Z')],
+      }),
+    );
+
+    expect(text).toContain('REFUSED rather than declined — live: 2 pass(es), control: 5 pass(es)');
+    expect(text).not.toContain('7 pass(es)');
+    expect(text).toMatch(/live\s+1\s+40\.00\s+4\.00%\s+0\.00%\s+2/);
+    expect(text).toMatch(/control\s+0\s+0\.00\s+0\.00%\s+0\.00%\s+5/);
+  });
+
+  it('reads a zero control count as a refusal, not as an unbound control arm, when refusals exist', () => {
+    const text = formatArmComparison(
+      buildArmComparison({
+        basis: 1_000,
+        refused_passes: { live: 0, control: 4 },
+        from: FROM,
+        to: TO,
+        trades: [trade('live', 40, '2026-09-02T00:00:00.000Z')],
+      }),
+    );
+
+    expect(text).toContain('It DID run');
+    expect(text).not.toContain('the control arm actually ran');
+  });
+
+  it('says nothing about refusals when there were none', () => {
+    const text = report();
+
+    expect(text).not.toContain('REFUSED rather than declined');
+    expect(text).toMatch(/live\s+2\s+30\.00\s+3\.00%\s+1\.00%\s+0/);
   });
 });
 

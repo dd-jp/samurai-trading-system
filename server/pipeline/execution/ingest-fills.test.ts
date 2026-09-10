@@ -2966,7 +2966,13 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
     const trades = new SqliteArmComparisonSource(db).getClosedTradesBetween(from, to);
     expect(trades.map((t) => t.idempotency_key).sort()).toEqual(['control-key', 'live-key']);
 
-    const comparison = buildArmComparison({ trades, from, to, basis: 1000 });
+    const comparison = buildArmComparison({
+      trades,
+      refused_passes: { live: 0, control: 0 },
+      from,
+      to,
+      basis: 1000,
+    });
 
     // Same gross (100 → 110, size 10) and — the property #1121 exists to
     // establish — the same modelled commission on both legs, so the two

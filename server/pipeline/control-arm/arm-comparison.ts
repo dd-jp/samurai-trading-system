@@ -78,11 +78,47 @@ export interface ArmPerformance {
    * comparison that hides that is precisely the one D4 rules out.
    */
   max_drawdown_pct: number;
+  /**
+   * Passes in the window this arm could not attempt at all (#1099).
+   *
+   * REQUIRED, for the same structural reason `max_drawdown_pct` is. A stretch
+   * of `control_arm_valuation_refused` skips writes `trader_log` rows and no
+   * `closed_trades` row, so before this field the report could not tell "the
+   * control produced no signal on these bars" from "the control could not value
+   * its book on these bars" — both read as `trade_count: 0`. An optional field
+   * would leave that ambiguity intact wherever a caller omitted it, which is
+   * the same failure the field exists to remove.
+   *
+   * Only the control arm can currently be non-zero, and that is a property of
+   * the writer rather than of this report: `buildBracket` (decide.ts) converts
+   * a `BookValuationError` into a skip only under `arm === 'control'` and
+   * rethrows on the live arm, where a valuation failure stays a tick-aborting
+   * fault. Read `live: 0 refusals` as "no live-arm refusal exists as a
+   * concept", not as evidence the live arm's book valued cleanly.
+   *
+   * NOT a denominator for `trade_count`. See
+   * `SqliteArmComparisonSource.getRefusedPassCountsBetween` for why the two
+   * counts survive different filters.
+   */
+  refused_pass_count: number;
 }
+
+/**
+ * Refused passes per arm over one window — the second half of the #1099 read,
+ * carried as its own value because it comes from a different table
+ * (`trader_log`) than the trades do.
+ */
+export type ArmRefusedPassCounts = Readonly<Record<TradingArm, number>>;
 
 /** Both arms, over one window, always together. */
 export interface ArmComparison {
-  /** Half-open at the start: `closed_at > from AND closed_at <= to`. */
+  /**
+   * Half-open at the start, on BOTH reads behind this comparison:
+   * `closed_at > from AND closed_at <= to` for trades, and the same bounds on
+   * `trader_log.created_at` for `refused_pass_count` (#1099). Consecutive
+   * windows therefore partition the timeline for refusals as well as trades —
+   * no pass is counted twice, none is dropped.
+   */
   from: Date;
   to: Date;
   /**
@@ -108,6 +144,13 @@ export interface ArmComparison {
  */
 export function buildArmComparison(input: {
   trades: readonly (ClosedTrade & { arm?: TradingArm })[];
+  /**
+   * Refused passes per arm over the SAME window (#1099). Required rather than
+   * defaulted to zero: a caller that cannot supply this has no refusal reading,
+   * and silently publishing `0` for it is the exact "refusals read as silence"
+   * result the field exists to end.
+   */
+  refused_passes: ArmRefusedPassCounts;
   from: Date;
   to: Date;
   /**
@@ -135,8 +178,8 @@ export function buildArmComparison(input: {
     from: input.from,
     to: input.to,
     basis: input.basis,
-    live: performanceFor('live', inWindow, input.basis),
-    control: performanceFor('control', inWindow, input.basis),
+    live: performanceFor('live', inWindow, input.basis, input.refused_passes.live),
+    control: performanceFor('control', inWindow, input.basis, input.refused_passes.control),
   };
 }
 
@@ -153,6 +196,7 @@ function performanceFor(
   arm: TradingArm,
   trades: readonly (ClosedTrade & { arm?: TradingArm })[],
   basis: number,
+  refusedPassCount: number,
 ): ArmPerformance {
   const mine = trades
     .filter((trade) => (trade.arm ?? 'live') === arm)
@@ -181,5 +225,6 @@ function performanceFor(
     realized_pnl_net: cumulative,
     return_pct: cumulative / basis,
     max_drawdown_pct: maxDrawdown / basis,
+    refused_pass_count: refusedPassCount,
   };
 }

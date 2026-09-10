@@ -18,6 +18,9 @@ export type {
   ArmDivergenceAlertChannel,
   ArmDivergenceThresholds,
   ArmDivergenceVerdict,
+  PersistedArmComparison,
+  PersistedArmComparisonSample,
+  PersistedArmPerformance,
 } from './types/arm-comparison.js';
 export type {
   DailyCycleInput,

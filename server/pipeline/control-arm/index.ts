@@ -15,6 +15,7 @@
 export {
   type ArmComparison,
   type ArmPerformance,
+  type ArmRefusedPassCounts,
   buildArmComparison,
 } from './arm-comparison.js';
 export {

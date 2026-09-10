@@ -1,6 +1,11 @@
 import { openSharedStore } from '../../shared/store/index.js';
+import type { ArmPerformance } from '../control-arm/index.js';
 import { SqliteArmComparisonSampleStore } from './sqlite-arm-comparison-sample-store.js';
-import type { ArmComparisonSample } from './types.js';
+import type {
+  ArmComparisonSample,
+  PersistedArmComparisonSample,
+  PersistedArmPerformance,
+} from './types.js';
 
 const COMPUTED_AT = new Date('2026-09-01T12:00:00.000Z');
 const WINDOW_FROM = new Date('2026-08-02T12:00:00.000Z');
@@ -18,6 +23,7 @@ function makeSample(overrides: Partial<ArmComparisonSample> = {}): ArmComparison
         realized_pnl_net: 21.5,
         return_pct: 0.0215,
         max_drawdown_pct: 0.04,
+        refused_pass_count: 3,
       },
       control: {
         arm: 'control',
@@ -25,10 +31,27 @@ function makeSample(overrides: Partial<ArmComparisonSample> = {}): ArmComparison
         realized_pnl_net: 4,
         return_pct: 0.004,
         max_drawdown_pct: 0.02,
+        refused_pass_count: 9,
       },
     },
     divergence: { diverged: false, reason: null, min_trades_per_arm: 5 },
     ...overrides,
+  };
+}
+
+/** The columns migration 0034/0035 actually define — see `PersistedArmComparisonSample`. */
+function persisted(sample: ArmComparisonSample): PersistedArmComparisonSample {
+  const strip = ({
+    refused_pass_count: _dropped,
+    ...rest
+  }: ArmPerformance): PersistedArmPerformance => rest;
+  return {
+    ...sample,
+    comparison: {
+      ...sample.comparison,
+      live: strip(sample.comparison.live),
+      control: strip(sample.comparison.control),
+    },
   };
 }
 
@@ -40,7 +63,25 @@ describe('SqliteArmComparisonSampleStore', () => {
     store.append(makeSample());
 
     const [read] = store.getRecent(10, COMPUTED_AT);
-    expect(read).toEqual(makeSample());
+    expect(read).toEqual(persisted(makeSample()));
+  });
+
+  /**
+   * #1099. `arm_comparison_samples` has no `refused_pass_count` column, so a
+   * read-back must not carry one — a fabricated `0` would assert "no refusals
+   * in this window" on every historical row, which is exactly the silence the
+   * field exists to break. Adding the column is a migration, and out of #1099's
+   * scope.
+   */
+  it('does not read back a refusal count the table never stored', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteArmComparisonSampleStore(db);
+
+    store.append(makeSample());
+
+    const [read] = store.getRecent(10, COMPUTED_AT);
+    expect(read?.comparison.live).not.toHaveProperty('refused_pass_count');
+    expect(read?.comparison.control).not.toHaveProperty('refused_pass_count');
   });
 
   /**

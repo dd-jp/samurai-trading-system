@@ -169,6 +169,9 @@ export function runArmComparisonCycle(input: ArmComparisonCycleInput): ArmCompar
   const comparison = buildArmComparison({
     // ONE call, both arms — see `ArmComparisonSource`.
     trades: input.trades.getClosedTradesBetween(from, now),
+    // #1099. The same `from`/`now` pair, so the refusal count and the trade
+    // count are the same window by construction rather than by review.
+    refused_passes: input.trades.getRefusedPassCountsBetween(from, now),
     from,
     to: now,
     basis: input.basis,

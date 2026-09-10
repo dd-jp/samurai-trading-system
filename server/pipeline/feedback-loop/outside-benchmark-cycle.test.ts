@@ -33,6 +33,7 @@ const COMPARISON: ArmComparison = {
     realized_pnl_net: 21.5,
     return_pct: 0.0215,
     max_drawdown_pct: 0.04,
+    refused_pass_count: 0,
   },
   control: {
     arm: 'control',
@@ -40,6 +41,7 @@ const COMPARISON: ArmComparison = {
     realized_pnl_net: 4,
     return_pct: 0.004,
     max_drawdown_pct: 0.02,
+    refused_pass_count: 0,
   },
 };
 

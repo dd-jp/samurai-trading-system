@@ -34,7 +34,7 @@ import {
   CONTROL_TRACE_SUFFIX,
 } from '../../pipeline/control-arm/index.js';
 import type { AnalystContribution, Direction } from '../../pipeline/debate-engine/index.js';
-import type { ArmComparisonSample } from '../../pipeline/feedback-loop/index.js';
+import type { PersistedArmComparisonSample } from '../../pipeline/feedback-loop/index.js';
 import {
   creditForContribution,
   realizedR,
@@ -653,7 +653,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * hand-written copies of the same row mapping is exactly how a column gets
    * dropped on one side. Built once per query store, not per request.
    */
-  getArmComparisons(limit: number, asOf: Date): ArmComparisonSample[] {
+  getArmComparisons(limit: number, asOf: Date): PersistedArmComparisonSample[] {
     return this.armComparisons.getRecent(limit, asOf);
   }
 

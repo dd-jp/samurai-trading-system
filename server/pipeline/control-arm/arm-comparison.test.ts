@@ -40,6 +40,7 @@ function trade(
 describe('buildArmComparison (#753 — the two-arm report)', () => {
   it('reports return AND drawdown for BOTH arms over one shared window', () => {
     const comparison = buildArmComparison({
+      refused_passes: { live: 0, control: 0 },
       basis: 1_000,
       from: WINDOW_FROM,
       to: WINDOW_TO,
@@ -70,6 +71,7 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
       realized_pnl_net: 50,
       return_pct: 0.05,
       max_drawdown_pct: 0.01,
+      refused_pass_count: 0,
     });
     expect(comparison.control).toEqual<ArmPerformance>({
       arm: 'control',
@@ -77,6 +79,7 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
       realized_pnl_net: 60,
       return_pct: 0.06,
       max_drawdown_pct: 0.03,
+      refused_pass_count: 0,
     });
 
     // The same window and the same denominator for both — which is what makes
@@ -92,6 +95,7 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
    */
   it('cannot express a per-arm result without a drawdown', () => {
     const comparison = buildArmComparison({
+      refused_passes: { live: 0, control: 0 },
       basis: 1_000,
       from: WINDOW_FROM,
       to: WINDOW_TO,
@@ -103,6 +107,7 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
         'arm',
         'max_drawdown_pct',
         'realized_pnl_net',
+        'refused_pass_count',
         'return_pct',
         'trade_count',
       ]);
@@ -123,6 +128,7 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
 
   it('measures both arms over the identical window — a trade outside it counts for neither', () => {
     const comparison = buildArmComparison({
+      refused_passes: { live: 0, control: 0 },
       basis: 500,
       from: WINDOW_FROM,
       to: WINDOW_TO,
@@ -146,8 +152,49 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
     expect(comparison.control.return_pct).toBeCloseTo(0.05, 12);
   });
 
+  /**
+   * #1099. Before this, a window of nothing but refused control passes was
+   * `trade_count: 0` on both arms — the same row an idle control arm writes.
+   */
+  it('reports refused passes per arm, so a refusal stretch is not silence', () => {
+    const comparison = buildArmComparison({
+      refused_passes: { live: 0, control: 6 },
+      basis: 1_000,
+      from: WINDOW_FROM,
+      to: WINDOW_TO,
+      trades: [],
+    });
+
+    expect(comparison.control.trade_count).toBe(0);
+    expect(comparison.control.refused_pass_count).toBe(6);
+    expect(comparison.live.refused_pass_count).toBe(0);
+  });
+
+  it('leaves return and drawdown untouched by the refusal count', () => {
+    const trades = [trade({ arm: 'control', closed_at: WINDOW_TO, realized_pnl_net: -50 })];
+    const quiet = buildArmComparison({
+      refused_passes: { live: 0, control: 0 },
+      basis: 1_000,
+      from: WINDOW_FROM,
+      to: WINDOW_TO,
+      trades,
+    });
+    const refused = buildArmComparison({
+      refused_passes: { live: 0, control: 12 },
+      basis: 1_000,
+      from: WINDOW_FROM,
+      to: WINDOW_TO,
+      trades,
+    });
+
+    expect(refused.control.return_pct).toBe(quiet.control.return_pct);
+    expect(refused.control.max_drawdown_pct).toBe(quiet.control.max_drawdown_pct);
+    expect(refused.control.trade_count).toBe(quiet.control.trade_count);
+  });
+
   it('counts an arm-less row as live — every pre-#753 row was the live arm', () => {
     const comparison = buildArmComparison({
+      refused_passes: { live: 0, control: 0 },
       basis: 1_000,
       from: WINDOW_FROM,
       to: WINDOW_TO,
@@ -164,6 +211,7 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
    */
   it('measures drawdown from the starting capital, not from the first peak', () => {
     const comparison = buildArmComparison({
+      refused_passes: { live: 0, control: 0 },
       basis: 1_000,
       from: WINDOW_FROM,
       to: WINDOW_TO,
@@ -198,12 +246,14 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
       },
     ];
     const forward = buildArmComparison({
+      refused_passes: { live: 0, control: 0 },
       basis: 1_000,
       from: WINDOW_FROM,
       to: WINDOW_TO,
       trades: rows,
     });
     const reversed = buildArmComparison({
+      refused_passes: { live: 0, control: 0 },
       basis: 1_000,
       from: WINDOW_FROM,
       to: WINDOW_TO,
@@ -218,7 +268,13 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
   it('refuses a basis that would make every percentage meaningless', () => {
     for (const basis of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(() =>
-        buildArmComparison({ basis, from: WINDOW_FROM, to: WINDOW_TO, trades: [] }),
+        buildArmComparison({
+          basis,
+          refused_passes: { live: 0, control: 0 },
+          from: WINDOW_FROM,
+          to: WINDOW_TO,
+          trades: [],
+        }),
       ).toThrow(/basis must be a positive, finite number/);
     }
   });

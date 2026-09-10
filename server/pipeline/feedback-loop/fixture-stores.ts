@@ -19,6 +19,7 @@ import type {
   BreachAlert,
   BreachAlertChannel,
   OutsideBenchmarkSampleStore,
+  PersistedArmComparisonSample,
 } from './types.js';
 
 export class InMemoryClosedTradeStore implements ClosedTradeStore {
@@ -137,8 +138,15 @@ export class InMemoryArmComparisonSampleStore implements ArmComparisonSampleStor
     this.samples.push(sample);
   }
 
-  /** Most-recently-computed first, `asOf`-bounded — the SQLite store's contract. */
-  getRecent(limit: number, asOf: Date): ArmComparisonSample[] {
+  /**
+   * Most-recently-computed first, `asOf`-bounded — the SQLite store's contract.
+   *
+   * Narrowed to `PersistedArmComparisonSample` even though this store really
+   * does still hold `refused_pass_count` (#1099): a caller that read it back
+   * here would pass a test the SQLite store, which has no column for it, must
+   * fail.
+   */
+  getRecent(limit: number, asOf: Date): PersistedArmComparisonSample[] {
     return this.samples
       .filter((sample) => sample.computed_at.getTime() <= asOf.getTime())
       .sort((a, b) => b.computed_at.getTime() - a.computed_at.getTime())
