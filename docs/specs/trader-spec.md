@@ -463,7 +463,7 @@ The Trader consumes `DebateResult` and, being mechanical (no LLM), needs two fie
 
 ### Module: Skip reasons *(2026-09-10, [#1171](https://github.com/dd-jp/samurai-trading-system/issues/1171))*
 
-**A skip is a typed reason, not a bare `null`.** `decideWithReason` returns `skip_reason` and a `decision_class` alongside the (null) intent, because "nothing traded" has nineteen causes and only some of them are the system working as designed. The class is what a reader triages on: `declined_on_signal` is a decision, `input_unusable` is an input that could not be priced or reconciled, `could_not_decide` is neither.
+**A skip is a typed reason, not a bare `null`.** `decideWithReason` returns `skip_reason` and a `decision_class` alongside the (null) intent, because "nothing traded" has nineteen causes and only some of them are the system working as designed. The class is what a reader triages on: `declined_on_signal` is a decision, `input_unusable` is an input that could not be priced or reconciled, `could_not_decide` is neither — declared on the union, but no reason currently maps to it in `SKIP_REASON_CLASS`.
 
 `declined_on_signal` (9) — the Trader looked and said no:
 
@@ -499,7 +499,7 @@ Routing against `positionState`, producing `intent_type`:
 - **`converged: true`, `rounds_completed: 0`, `latency_ms: 0`, empty `contributions`** on the synthesized debate. `converged: true` states that a single deterministic vote has no disagreement left to resolve; `false` would hand the control a `non_converged_haircut` and a different position-awareness routing, which is a difference in sizing and exits that a matched control may not have. The consequence is stated rather than hidden: on a bar where the LIVE debate fails to converge, the live arm takes the haircut and refuses a scale-in while the control does neither, so the two arms' sizing diverges on exactly those bars.
 - **Four things are per-arm below this stage** — the execution store (`arm: 'control'`), the broker (a `SimulatedBrokerAdapter`, never the live venue), the circuit breakers with their own state, and the account-state provider. Control decisions are namespaced by a `'control:'` `debate_id` prefix and a `':control'` `trace_id` suffix so `trader_log`/`risk_log`/`verdict_log` stay separable; control TRADES are distinguished by the real `arm` column on `open_positions`/`closed_trades` (migration 0033) rather than by a string prefix.
 
-**The comparison this arm exists to feed** is `formatArmComparison` (`server/pipeline/control-arm/arm-comparison.ts`), which reports the two arms side by side with their asymmetries named. Surfacing the control's refused passes in that report is in flight on [#1099](https://github.com/dd-jp/samurai-trading-system/issues/1099) at the time of this amendment — cited as direction, not as shipped behaviour.
+**The comparison this arm exists to feed** is `buildArmComparison` (`server/pipeline/control-arm/arm-comparison.ts`), which reports the two arms side by side with their asymmetries named. Surfacing the control's refused passes in that report is in flight on [#1099](https://github.com/dd-jp/samurai-trading-system/issues/1099) at the time of this amendment — cited as direction, not as shipped behaviour.
 
 ### Module: Determinism & Replay
 
