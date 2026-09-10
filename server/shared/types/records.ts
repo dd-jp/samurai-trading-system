@@ -15,11 +15,13 @@ import type { AssetClass, TradingArm } from './primitives.js';
  */
 export interface OrderIntent {
   /**
-   * hash(instrument + bar/timestamp) — the market decision coordinate.
+   * sha256 over `{ instrument, bar, side }`, plus `arm` when the arm is not
+   * `'live'` — the market decision coordinate (docs/specs/trader-spec.md,
+   * "The idempotency key, and why the arm is in the hash"; #1171).
    * Deliberately NOT keyed on debate_id: the Debate Engine re-runs debates
    * from scratch on crash (no persistence), so a debate id is volatile;
-   * keying on (instrument + bar) keeps the key stable across re-runs so
-   * Execution dedupes to one fill (CONTEXT.md idempotency invariant).
+   * keying on the bar keeps the key stable across re-runs so Execution
+   * dedupes to one fill (CONTEXT.md idempotency invariant).
    */
   idempotency_key: string;
   instrument: string;

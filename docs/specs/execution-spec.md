@@ -23,7 +23,7 @@ Key architectural decisions:
 - **Thin actor, gate-vs-actor split** — Verdict decides, Execution acts; no LLM, no re-evaluation.
 - **Two surfaces** — `execute()` (submit + record) and `ingestFills()/reconcile()` (advance state, close trades) — because exit legs fill asynchronously, days later for stocks.
 - **`BrokerAdapter` over a normalized bracket** — atomic bracket with one-cancels-other exit semantics guaranteed at the boundary; native on Alpaca's bracket order and, on Saxo, via an IfDone master + related orders whose OCO cancel-on-fill is venue-verified — what the venue does to the related legs when the master `DayOrder` *expires* unfilled rather than being cancelled is UNVERIFIED (#1215).
-- **Double idempotency** — local store dedup + broker client-order-id, keyed on `hash(instrument + bar/timestamp)`.
+- **Double idempotency** — local store dedup + broker client-order-id, keyed on ~~`hash(instrument + bar/timestamp)`~~ **sha256 over `{ instrument, bar, side }`, plus `arm` when the arm is not `'live'`** *(Amended 2026-09-10, [#1171](https://github.com/dd-jp/samurai-trading-system/issues/1171) — see `docs/specs/trader-spec.md`'s "The idempotency key, and why the arm is in the hash", the authority; `server/pipeline/trader/idempotency-key.ts` is the implementation)*.
 - **Write-ahead + broker-source-of-truth reconciliation** — crash-restart never double-submits and never loses a position.
 - **Partial fills first-class** — protective legs size to filled qty; persist requested AND filled.
 - **Three record types** — `OpenPosition`, `Fill`, `ClosedTrade` — Execution is their sole writer.
@@ -46,7 +46,7 @@ Key architectural decisions:
 
 ### Idempotency & Crash-Restart
 
-8. As Execution, I want to dedup on the Trader-assigned `idempotency_key = hash(instrument + bar/timestamp)` against the shared store before submitting, so that a re-entry (crash-restart, retry) never opens a second order for the same instrument+bar.
+8. As Execution, I want to dedup on the Trader-assigned `idempotency_key` ~~`= hash(instrument + bar/timestamp)`~~ **(= sha256 over `{ instrument, bar, side }`, plus `arm` when the arm is not `'live'` — amended 2026-09-10, [#1171](https://github.com/dd-jp/samurai-trading-system/issues/1171), see `trader-spec.md`'s "The idempotency key, and why the arm is in the hash")** against the shared store before submitting, so that a re-entry (crash-restart, retry) never opens a second order for the same instrument+bar(+side/+arm).
 9. As Execution, I want to pass the idempotency key as the broker client-order-id, so that even a duplicate submit the local check missed is deduped by the venue itself.
 10. As Execution, I want to write the intended order to the store (state `pending`) BEFORE calling the broker, so that a crash between decision and broker-ack is recoverable.
 11. As Execution, I want on restart to reconcile in-flight (`pending`/`submitted`) orders against the broker by client-order-id, correcting the store to match the broker (source of truth) and logging any mismatch, so that open positions are never lost or double-counted (CONTEXT.md crash-restart invariant).
@@ -304,7 +304,7 @@ Broker ── source of truth ──> reconcile() corrects the store
 
 Per CONTEXT.md:
 - **Broker Abstraction Layer**: "hides which broker the strategy is talking to … Strategy sees orders/fills/positions. Broker code sees API calls. Never mix them." — the `BrokerAdapter` boundary.
-- **Idempotent Order**: "submitted multiple times … results in exactly one fill." — two-layer dedup on `hash(instrument + bar/timestamp)`.
+- **Idempotent Order**: "submitted multiple times … results in exactly one fill." — two-layer dedup on ~~`hash(instrument + bar/timestamp)`~~ **sha256 over `{ instrument, bar, side }`, plus `arm` when the arm is not `'live'`** *(amended 2026-09-10, [#1171](https://github.com/dd-jp/samurai-trading-system/issues/1171) — see `trader-spec.md`'s "The idempotency key, and why the arm is in the hash")*.
 - **Shared State Store**: "open positions (reconciled against the broker as source of truth) … Execution writes fills." — this spec is that writer + reconciler.
 - Invariants satisfied: #4 (every fill logged — `Fill` rows), #5 (crash-restart must not lose positions — write-ahead + reconcile).
 
@@ -335,7 +335,7 @@ Wayfinder decisions live in [docs/wayfinder/execution-map.md](../wayfinder/execu
 
 - **Role & surfaces** — thin actor, gate-vs-actor split; `execute()` primary seam + `ingestFills()/reconcile()` secondary surface for the async bracket lifecycle.
 - **Broker abstraction** — `BrokerAdapter` over a normalized bracket; Alpaca (paper), Saxo (designated live equities, ADR-0015, built but not yet wired at the composition root), Simulated; atomic OCO bracket guaranteed at the boundary — native on Alpaca; native on Saxo for the explicit-cancel path, unverified for the master-expiry path (#1215).
-- **Idempotency & crash-restart** — two-layer dedup on `hash(instrument + bar/timestamp)`; write-ahead + broker-source-of-truth reconciliation.
+- **Idempotency & crash-restart** — two-layer dedup on ~~`hash(instrument + bar/timestamp)`~~ **sha256 over `{ instrument, bar, side }`, plus `arm` when the arm is not `'live'`** *(amended 2026-09-10, [#1171](https://github.com/dd-jp/samurai-trading-system/issues/1171) — see `trader-spec.md`'s "The idempotency key, and why the arm is in the hash")*; write-ahead + broker-source-of-truth reconciliation.
 - **State machine & partial fills** — explicit persisted states; protective legs sized to filled qty; requested AND filled persisted.
 - **Resilience** — retry classifier + backoff; token-bucket throttle; broker rate-limit ≠ LLM hard stop.
 - **Trade records** — `OpenPosition` / `Fill` / `ClosedTrade`; Execution sole writer.

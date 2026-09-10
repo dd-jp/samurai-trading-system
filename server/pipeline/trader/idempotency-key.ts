@@ -1,13 +1,14 @@
 /**
  * Deterministic idempotency-key computation — see docs/specs/trader-spec.md
- * ("Key Interfaces" → OrderIntent.idempotency_key) and
- * docs/specs/cross-spec-contracts.md §7.
+ * ("The idempotency key, and why the arm is in the hash") — the authority,
+ * per docs/specs/cross-spec-contracts.md §7's 2026-09-10 amendment.
  *
- * Keyed on (instrument + bar), deliberately NOT on debate_id: the Debate
- * Engine re-runs debates from scratch on crash (no persistence, decision
- * #10), so a debate id is volatile. The market decision coordinate is stable
- * across a re-run, so Execution dedupes a replayed decision to exactly one
- * fill (CONTEXT.md idempotency invariant).
+ * Keyed on `{ instrument, bar, side }`, plus `arm` off the live arm —
+ * deliberately NOT on debate_id: the Debate Engine re-runs debates from
+ * scratch on crash (no persistence, decision #10), so a debate id is
+ * volatile. The market decision coordinate is stable across a re-run, so
+ * Execution dedupes a replayed decision to exactly one fill (CONTEXT.md
+ * idempotency invariant).
  *
  * Mirrors the hashing convention of server/pipeline/debate-engine/debate-id.ts: sha256
  * over a canonical JSON payload.
