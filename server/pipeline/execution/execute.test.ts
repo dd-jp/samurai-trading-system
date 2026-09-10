@@ -2018,7 +2018,7 @@ describe('ExecutionImpl.execute', () => {
         // a flatten submitted before this code shipped whose fill had not been
         // ingested yet.
         it('falls back to the entry-total split for a flatten journalled before migration 0021', async () => {
-          const { db, store } = openTestExecutionStore();
+          const { store } = openTestExecutionStore();
           let now = NOW;
           const steppingClock: Clock = { now: () => now };
           const costModel: CostModel = {
@@ -2064,9 +2064,7 @@ describe('ExecutionImpl.execute', () => {
           await execution.execute(makeExitGo({ idempotency_key: 'key-exit-1', size: 15 }));
           // Ages the journal row back to its pre-0021 shape, BEFORE the fill
           // is ingested — the only window in which such a row can be read.
-          db.prepare(
-            'UPDATE flatten_submissions SET lot_held_quantities = NULL WHERE idempotency_key = ?',
-          ).run('key-exit-1');
+          store.ageFlattenHeldQuantities('key-exit-1');
 
           await execution.ingestFills();
 
@@ -2465,7 +2463,7 @@ describe('ExecutionImpl.execute', () => {
             // which is what widened this call site from two throw paths to
             // five — rather than a fake store that rejects, so the actual
             // `JSON.parse` path is the thing being contained.
-            const { db, store } = openTestExecutionStore();
+            const { store } = openTestExecutionStore();
             let now = NOW;
             const steppingClock: Clock = { now: () => now };
             const costModel: CostModel = {
@@ -2549,9 +2547,7 @@ describe('ExecutionImpl.execute', () => {
             await execution.execute(makeExitGo({ size: 25 }));
             // Corrupted AFTER the write-ahead, before the fill is read back —
             // the only window in which this row is ever consulted.
-            db.prepare(
-              'UPDATE flatten_submissions SET lot_held_quantities = ? WHERE idempotency_key = ?',
-            ).run('{not json', 'key-aapl-1355');
+            store.ageFlattenHeldQuantities('key-aapl-1355', '{not json');
 
             // Fail-CLOSED and VISIBLE, not silent: the poll still reports the
             // failure, and the message names the offending row's own

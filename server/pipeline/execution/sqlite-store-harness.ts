@@ -127,6 +127,19 @@ export class TestExecutionStore extends SqliteExecutionStore {
     return super.markFlattenFillsSwept(idempotency_key, swept_at);
   }
 
+  /**
+   * Rewrites a journal row's `lot_held_quantities` column after the write-ahead
+   * — `null` ages it to its pre-migration-0021 shape (the only one that still
+   * routes the split through `getEntryFillSizes`); any other string is what a
+   * corrupted row would read back as. Tests reach the column through this so
+   * the raw SQL lives in one place next to the store it targets.
+   */
+  ageFlattenHeldQuantities(idempotency_key: string, raw: string | null = null): void {
+    this.testDb
+      .prepare('UPDATE flatten_submissions SET lot_held_quantities = ? WHERE idempotency_key = ?')
+      .run(raw, idempotency_key);
+  }
+
   override async markResidualUnprotected(
     idempotency_key: string,
     observed_at: Date,

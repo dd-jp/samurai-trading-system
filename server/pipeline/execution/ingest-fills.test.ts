@@ -1026,9 +1026,7 @@ describe('ExecutionImpl.ingestFills', () => {
       // NULLed to a pre-migration-0021 row, which is the one shape that still
       // routes the split through `getEntryFillSizes` — the only `await`
       // between reading the lot keys and the (pure, unthrowable) split.
-      db.prepare(
-        'UPDATE flatten_submissions SET lot_held_quantities = NULL WHERE idempotency_key = ?',
-      ).run('flatten-1');
+      store.ageFlattenHeldQuantities('flatten-1');
 
       const withFlatten = new ScriptedBroker([
         fill({
@@ -1147,9 +1145,7 @@ describe('ExecutionImpl.ingestFills', () => {
       // NULLed to a pre-migration-0021 row — the one shape that routes the
       // split through `getEntryFillSizes`, the only `await` between reading
       // the lot keys and the (pure, unthrowable) split.
-      db.prepare(
-        'UPDATE flatten_submissions SET lot_held_quantities = NULL WHERE idempotency_key = ?',
-      ).run('flatten-1');
+      store.ageFlattenHeldQuantities('flatten-1');
 
       const withFlatten = new ScriptedBroker([
         fill({
@@ -1347,9 +1343,7 @@ describe('ExecutionImpl.ingestFills', () => {
       // NULLed to a pre-migration-0021 row, routing the split through the
       // now-flaky `getEntryFillSizes` fallback — same technique the existing
       // #575 containment test above uses.
-      db.prepare(
-        'UPDATE flatten_submissions SET lot_held_quantities = NULL WHERE idempotency_key = ?',
-      ).run('flatten-1');
+      store.ageFlattenHeldQuantities('flatten-1');
       const withFlatten = new ScriptedBroker([
         fill({
           client_order_id: 'key-1',

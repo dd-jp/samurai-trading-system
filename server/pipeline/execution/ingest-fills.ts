@@ -57,17 +57,10 @@
  * `throwContainedFailures`'s own doc).
  */
 
-import type {
-  BrokerFillId,
-  ClosedTrade,
-  Fill,
-  OpenPosition,
-  OrderState,
-} from '../../shared/index.js';
+import type { Fill, OpenPosition, OrderState } from '../../shared/index.js';
 import {
   BOOK_CURRENCY,
   coversQty,
-  type ExitFill,
   isBookCurrency,
   isExitFill,
   logCaughtFailure,
@@ -76,6 +69,14 @@ import {
   toBrokerFillId,
   totalQty,
 } from '../../shared/index.js';
+import { closedTrade, weightedAvgPrice } from './closed-trade.js';
+import {
+  chargeTopUpTo,
+  type ModelledEntryCost,
+  modelledEntryCostFor,
+  prorateCostBreakdown,
+} from './fill-cost.js';
+import { splitFlattenFills } from './flatten-attribution.js';
 import { markResidualsUnprotected, maybeRearmResidual } from './residual-protection.js';
 import type { ExecutionInput, NonSterlingFeeAlert, NormalizedFill } from './types.js';
 
@@ -626,162 +627,13 @@ async function redistributeOneFlatten(
       ? await entryTotalShares(store, lotKeys)
       : new Map(journalledHeld.map((lot) => [lot.idempotency_key, lot.held]));
 
-  // Processed in the feed's own order, decrementing an IN-MEMORY copy of
-  // `totalShare` across `rawFills` — a flatten is modelled/observed as one
-  // fill in practice (an IOC market order does not rest, so there is
-  // normally exactly one raw fill per flatten to allocate), but this stays
-  // general instead of assuming that: if the feed ever legitimately offers
-  // more than one raw fill for the same flatten in one poll, an EARLIER
-  // one in this SAME pass must still count against a lot's fixed share
-  // before a LATER one is allocated, or the two would double-book it.
-  const remaining = new Map(totalShare);
-  for (const rawFill of rawFills) {
-    let leftover = rawFill.qty;
-    // #527: every id this rawFill actually attributes THIS pass — the
-    // dedup key for the warning below. `broker_fill_id` is deterministic
-    // per (rawFill, lotKey) (see the comment on `splitFill` below), so if any
-    // of these already exist in `fills`, this exact rawFill's split already
-    // ran to completion in an earlier poll and its leftover was warned about
-    // then — a re-offered fill (this module's own `hasFill` dedup contract)
-    // must not re-fire the same warning forever.
-    const attributedIdsThisRawFill: { idempotency_key: string; broker_fill_id: BrokerFillId }[] =
-      [];
-    for (const lotKey of lotKeys) {
-      if (leftover <= 0) break;
-      const need = remaining.get(lotKey) ?? 0;
-      if (need <= 0) continue;
-
-      const take = Math.min(need, leftover);
-      const share = take / rawFill.qty;
-      // #1121: computed ahead of the object literal below because it feeds
-      // BOTH `fee` (the charge) and `cost_breakdown` (the record of it) —
-      // see `toFill`'s doc for why the modelled commission is charged rather
-      // than left as an unspent estimate.
-      const flattenCostBreakdown =
-        rawFill.cost_breakdown === undefined &&
-        attribution.modelled_cost_breakdown !== null &&
-        attribution.size > 0
-          ? prorateCostBreakdown(attribution.modelled_cost_breakdown, take / attribution.size)
-          : undefined;
-      const splitFill: NormalizedFill = {
-        ...rawFill,
-        // Forced regardless of what the adapter tagged the raw fill — see
-        // `redistributeFlattenFills`'s docstring. This is the fill-MECHANICS
-        // leg ("a market order that closed the position"), not the reason it
-        // was submitted — `fills.leg` keeps its four-value CHECK unchanged.
-        leg: 'exit',
-        // #793: the REASON leg — WHY this flatten was submitted, journalled
-        // on write-ahead (`FlattenSubmissionWriteAhead.exit_reason`,
-        // migration 0031) and read back here so `closedTrade()` can name a
-        // flatten and an early release differently in `close_reason` instead
-        // of collapsing both into `leg`'s generic `'exit'`. Omitted (not set
-        // to `undefined` — `exactOptionalPropertyTypes`) only for a flatten
-        // row written before 0031 (legacy, reason never recorded); every
-        // flatten submitted from here forward always carries one
-        // (`executeExit` refuses to write ahead without it).
-        ...(attribution.exit_reason === null ? {} : { exit_reason: attribution.exit_reason }),
-        // #1001: the flatten's OWN key — `clientOrderId` is this function's
-        // lookup key for `getFlattenAttribution`, i.e. exactly the
-        // `flatten_submissions.idempotency_key` that produced this raw fill,
-        // before the split below re-keys the row to the LOT. Carried
-        // through so the persisted row can be joined back to the specific
-        // flatten submission that priced it — see `Fill.flatten_idempotency_key`.
-        flatten_idempotency_key: clientOrderId,
-        // `fills`' row identity is `(idempotency_key, broker_fill_id)` — the
-        // table's PK — so the SAME venue fill id can legitimately hold ONE
-        // ROW PER LOT it is split across. That is the right scope here: a
-        // multi-lot flatten's raw fill deliberately becomes several
-        // accounting rows, one per named lot, so uniqueness has to be judged
-        // per (lot, id) pair, not by id alone across every lot — a blanket
-        // "this broker_fill_id exists somewhere, so skip it" rule would read
-        // lot B's rightful share as a duplicate of lot A's the moment lot
-        // A's is persisted.
-        //
-        // `hasFill` itself now takes `idempotency_key` and scopes on the
-        // full PK (#1320), so this suffix is no longer the ONLY thing
-        // keeping one lot's split from shadowing another's dedup — but the
-        // id shape stays as-is anyway: changing it would re-key rows this
-        // system has already persisted under the suffixed form. Stable
-        // across polls for the reason `totalShare` above is: the SAME
-        // (id, qty) pair recomputes every time, so a repeat poll dedupes
-        // cleanly instead of colliding with a differently-sized earlier
-        // attempt.
-        broker_fill_id: toBrokerFillId(`${rawFill.broker_fill_id}:${lotKey}`),
-        qty: take,
-        // #1121: the venue-reported share (`rawFill.fee * share`) TOPPED UP
-        // to the modelled commission share, when the flatten carries one —
-        // the same per-fill "top up, never stack" rule `toFill` applies to an
-        // entry fill, and for the same reason: Saxo reports a fee computed
-        // from the SAME constant this fallback's estimate came from, so adding
-        // rather than topping up would charge that flatten twice over.
-        //
-        // Per fill, not per lot (#1121). A flatten the venue splits into
-        // several raw fills applies `max` to each slice, and `Σ max ≥ max(Σ,
-        // Σ)`, so the lot's total lands in `[max(Σvenue, Σmodelled), Σvenue +
-        // Σmodelled]` rather than on the modelled figure exactly — see
-        // `chargeTopUpTo`'s doc for the bound and why the overshoot is bps of
-        // bps here. It is bounded on both
-        // sides because the two per-slice inputs each sum to the lot's own
-        // share: `share` is `take / rawFill.qty` (sums to 1 per raw fill) and
-        // `flattenCostBreakdown` is prorated by `take / attribution.size`
-        // (sums to the lot's fraction of the submission), so neither side is
-        // re-counted across slices.
-        fee: chargeTopUpTo(rawFill.fee * share, flattenCostBreakdown?.commission),
-        // #1001: FALLBACK only — `rawFill.cost_breakdown` is already set (and
-        // left untouched by this spread) on the Simulated adapter's own
-        // flatten fill, which is priced by `CostModel.fill` directly and
-        // needs no modelled estimate substituted for it. On a real-broker
-        // fill (`rawFill.cost_breakdown === undefined`, always, on that
-        // path), this attaches the flatten's OWN submit-time modelled cost
-        // breakdown instead — the venue reports no breakdown of its own.
-        //
-        // #1014: prorated against the SUBMISSION's `size`,
-        // NOT against `share`. The two denominators differ and the difference
-        // is a double-count. `share` is `take / rawFill.qty` — this lot's
-        // slice of THIS RAW FILL, which sums to 1.0 per raw fill, and that is
-        // exactly right for the venue-reported input to `fee` above (a
-        // per-raw-fill actual the venue reported) and wrong here:
-        // `modelled_cost_breakdown` was priced ONCE against the whole
-        // submitted `size` (`captureSubmitSnapshot` passes `order.size`). A
-        // flatten the venue splits into two partial raw fills would then
-        // distribute the entire snapshot across the first one's shares and
-        // the entire snapshot AGAIN across the second's, so the summed
-        // modelled cost over the flatten's fills would come to twice the
-        // single estimate it is supposed to reconstruct — and, since #1121,
-        // twice the amount actually charged.
-        //
-        // `take / attribution.size` makes every slice a fraction of the one
-        // submission instead, so the shares sum to 1.0 across the flatten
-        // however many raw fills it arrives in — and to LESS than 1.0 if the
-        // venue under-fills, which is the honest reading: the unfilled
-        // remainder was never traded and cost nothing.
-        //
-        // `attribution.size > 0` is guarded rather than assumed: `executeExit`
-        // never writes a zero-size flatten (it refuses when the held quantity
-        // is not positive), so this is a corrupted-row guard, and dividing by
-        // it would silently write `Infinity`/`NaN` money onto a fill row.
-        ...(flattenCostBreakdown !== undefined ? { cost_breakdown: flattenCostBreakdown } : {}),
-        // #842: CLEARED, not inherited from `...rawFill`. `take` is this
-        // lot's ALLOCATION of the raw fill, not the venue's cumulative
-        // quantity for the order, and the id it is written under is
-        // lot-scoped rather than the bare order id — so neither half of
-        // `qty_is_cumulative`'s contract holds any more, and leaving it set
-        // would invite `advanceLot`'s top-up to take a difference against a
-        // number that was never a cumulative total.
-        qty_is_cumulative: false,
-      };
-
-      const bucket = byLot.get(lotKey);
-      if (bucket === undefined) byLot.set(lotKey, [splitFill]);
-      else bucket.push(splitFill);
-
-      attributedIdsThisRawFill.push({
-        idempotency_key: lotKey,
-        broker_fill_id: splitFill.broker_fill_id,
-      });
-      remaining.set(lotKey, need - take);
-      leftover -= take;
-    }
+  const split = splitFlattenFills({ clientOrderId, rawFills, lotKeys, totalShare, attribution });
+  for (const [lotKey, splitFills] of split.splits) {
+    const bucket = byLot.get(lotKey);
+    if (bucket === undefined) byLot.set(lotKey, [...splitFills]);
+    else bucket.push(...splitFills);
+  }
+  for (const { attributed, leftover } of split.outcomes) {
     // `leftover > 0` here means the flatten filled more than the named lots
     // HELD when it was submitted (#571 — before that, more than their
     // ENTRIES ever covered, which a lot with prior exits could exceed
@@ -824,8 +676,9 @@ async function redistributeOneFlatten(
       // "line repeated daily is a line nobody reads" failure #342 already
       // named for a different channel.
       //
-      // `attributedIdsThisRawFill` are this rawFill's OWN derived ids
-      // (deterministic per (rawFill, lotKey) — see `splitFill` above): if any
+      // `attributed` are this rawFill's OWN derived ids
+      // (deterministic per (rawFill, lotKey) — see `splitFill` in
+      // flatten-attribution.ts): if any
       // is already in `fills`, this exact rawFill's split already ran to
       // completion — and so was already warned about — in an earlier poll.
       // Empty only when EVERY named lot was already fully satisfied before
@@ -834,7 +687,7 @@ async function redistributeOneFlatten(
       // narrow case still warns every poll; named, not solved, here.
       let alreadyWarned = false;
       try {
-        for (const { idempotency_key, broker_fill_id } of attributedIdsThisRawFill) {
+        for (const { idempotency_key, broker_fill_id } of attributed) {
           if (await store.hasFill({ idempotency_key, broker_fill_id })) {
             alreadyWarned = true;
             break;
@@ -919,7 +772,7 @@ async function redistributeOneFlatten(
   // window, and says so in the log.
   await markResidualsUnprotected(
     input,
-    [...remaining].filter(([, unclosed]) => unclosed > 0).map(([lotKey]) => lotKey),
+    [...split.remaining].filter(([, unclosed]) => unclosed > 0).map(([lotKey]) => lotKey),
     input.clock.now(),
     {
       level: 'warn',
@@ -1228,86 +1081,6 @@ function nextState(position: OpenPosition, filledSize: number, flat: boolean): O
   return coversQty(filledSize, position.requested_size) ? 'filled' : 'partially_filled';
 }
 
-function closedTrade(
-  position: OpenPosition,
-  lot: {
-    filledSize: number;
-    avgEntryPrice: number;
-    entryFills: readonly Fill[];
-    exitFills: readonly ExitFill[];
-  },
-): ClosedTrade {
-  const { filledSize, avgEntryPrice, entryFills, exitFills } = lot;
-
-  // The fill that took the lot flat — it names how the trade ended and when.
-  const closing = exitFills[exitFills.length - 1] as ExitFill;
-  const avgExitPrice = weightedAvgPrice(exitFills);
-
-  // Signed against the direction of the lot: a short earns the fall.
-  const gross =
-    position.side === 'buy'
-      ? (avgExitPrice - avgEntryPrice) * filledSize
-      : (avgEntryPrice - avgExitPrice) * filledSize;
-  const feesTotal = [...entryFills, ...exitFills].reduce((sum, fill) => sum + fill.fee, 0);
-
-  return {
-    idempotency_key: position.idempotency_key,
-    debate_id: position.debate_id,
-    instrument: position.instrument,
-    asset_class: position.asset_class,
-    side: position.side,
-    entry: avgEntryPrice,
-    // The lot's INITIAL stop, carried from the bracket — R's denominator is
-    // the risk taken at open.
-    stop: position.stop,
-    filled_size: filledSize,
-    realized_pnl_net: gross - feesTotal,
-    fees_total: feesTotal,
-    opened_at: position.opened_at,
-    closed_at: closing.timestamp,
-    // #793: 'stop'/'target' already name a bracket hit precisely — left as
-    // `closing.leg`. A flatten-originated close (`closing.leg === 'exit'`)
-    // additionally carries `exit_reason` (migration 0031) naming WHICH of
-    // the three in-process reasons it was; that is the more specific answer
-    // and wins whenever it is present. Falls back to the bare `'exit'` leg
-    // only for a row this system genuinely never recorded a reason for — the
-    // pre-0031 legacy case (see the migration's own doc; not invented here).
-    close_reason: closing.exit_reason ?? closing.leg,
-    modelled_cost_charged: modelledCostCharged(entryFills, exitFills),
-  };
-}
-
-/**
- * #1121 AC5: whether every leg of this round trip that the modelled-cost
- * mechanism COVERS carries the `cost_breakdown` the charge is taken from —
- * which, since `chargeTopUpTo` only ever fires alongside setting it, is the
- * same question as "was this lot charged the modelled cost on every leg it
- * could be".
- *
- * Derived from the fills, not stamped as a literal, because going through
- * `toFill` is not the same as being charged by it: `modelledEntryCostFor` is
- * nullable (no submit-time snapshot) and `redistributeOneFlatten`'s is too, so
- * a live lot can close having paid nothing. Stamping `1` on those said the
- * opposite of what happened — worse than the pre-fix state, since the row then
- * certifies a cost basis it is not on.
- *
- * COVERAGE, and why `'stop'`/`'target'` legs do not veto: no modelled estimate
- * exists for a protective leg on either arm (see `toFill`'s "What this still
- * does not cover", #1301). Vetoing on them would drop live trades BECAUSE they
- * exited on a stop — selection on outcome, since stops are the losers, which is
- * a worse and far less visible bias than the exit-leg under-charge it would be
- * papering over. So coverage is the entry legs plus flatten (`'exit'`) legs,
- * which is exactly the set both arms price.
- *
- * The control arm always answers `true`: `SimulatedBrokerAdapter` prices its
- * own fills and stamps `cost_breakdown` on every one of them.
- */
-function modelledCostCharged(entryFills: readonly Fill[], exitFills: readonly ExitFill[]): boolean {
-  return [...entryFills, ...exitFills.filter((fill) => fill.leg === 'exit')].every(
-    (fill) => fill.cost_breakdown !== undefined,
-  );
-}
-
 /**
  * Separates a top-up row's id from the base order id it tops up (#842).
  * `'#'` and not `':'` deliberately: the flatten split in
@@ -1451,101 +1224,6 @@ async function cumulativeTopUp(
     // cumulative feed), just a later increment of it.
     modelledEntryCostFor(position),
   );
-}
-
-/**
- * #1121: the charge a real-broker fill carries — the venue's own reported fee
- * TOPPED UP to the modelled commission, never stacked on top of it.
- *
- * `venueFee + max(0, modelled − venueFee)`, i.e. `max(venueFee, modelled)`,
- * never `venueFee + modelled` — the two numbers are the same commission.
- * `venueFee + modelled` is correct only for a commission-free venue, which is
- * an Alpaca-paper accident, not a property of the mechanism: `saxo-adapter.ts`
- * reports `price * qty * SAXO_COMMISSION_RATE` and `paper-profile.ts` prices
- * the modelled estimate from the SAME `SAXO_COMMISSION_RATE` constant, so
- * adding them would charge the live arm 2x — with no venue check, no
- * `fee === 0` precondition, and no test that could see it.
- *
- * `max` rather than "defer to the venue whenever it reports anything": a venue
- * that reports a small NON-commission fee (a regulatory or exchange charge)
- * would otherwise suppress the whole modelled commission and put the arms back
- * on different cost bases, which is the defect this ticket exists to close.
- *
- * WHAT `max` COSTS (#1121). `max` treats the venue's report and the model's estimate
- * as two measurements of ONE commission. Where a venue charge is genuinely
- * ADDITIONAL to commission, `max` absorbs it instead of adding it: a levy
- * smaller than the modelled commission is charged nothing extra, and a levy
- * LARGER than it displaces the modelled commission entirely. The alternative
- * (`venueFee + modelled`) has the mirror failure and a worse one — it
- * double-charges the commission itself on every Saxo fill, which is this
- * ticket's whole defect. `max` is chosen on the venues actually in play, not
- * as a general truth: Alpaca paper reports `fee: 0`; `saxo-adapter.ts`'s
- * reported `fee` is commission-only; ADR-0015 records no per-order minimum;
- * SDRT is structurally exempt on the ETFs/ETCs this book trades; and the PTM
- * levy's £10,000 order threshold is unreachable at a £1,000 book. Add a venue
- * with an additive levy and this function is the place that has to change.
- *
- * SCOPE OF "CHARGED ONCE". This is a PER-FILL rule, and it does not aggregate
- * to a per-lot equality, because `max` is applied to each slice separately and
- * `Σ max(aᵢ, bᵢ) ≥ max(Σa, Σb)`. Over a lot's fills the total charge is
- * bounded by `[max(Σvenue, Σmodelled), Σvenue + Σmodelled]`, hitting the lower
- * bound only when one side dominates slice by slice. Both bounds follow from
- * `max(a, b) ≥ a, b` and `max(a, b) ≤ a + b` on non-negative inputs, which the
- * two call sites guarantee (`Math.max(0, …)` on the cumulative top-up;
- * `rawFill.fee * share` with a non-negative venue fee on the flatten split).
- * The gap is real, not hypothetical, wherever the venue's per-increment fee
- * crosses the modelled share: 100 shares filled 50/50 against a modelled 1.0
- * with venue increments 0.7 then 0.3 charges `0.7 + 0.5 = 1.2`, not 1.0. On
- * the cumulative path that is synthetic today (it is Alpaca-only and Alpaca
- * reports 0); on `redistributeOneFlatten`'s multi-raw-fill split it is
- * reachable under Saxo, whose fee tracks each execution's fill price while the
- * modelled share tracks quantity alone. The magnitude there is bps of bps, so
- * the money is negligible — it is the invariant that has to be stated
- * honestly, not the arithmetic that has to change.
- */
-function chargeTopUpTo(venueFee: number, modelledCommission: number | undefined): number {
-  return modelledCommission === undefined ? venueFee : Math.max(venueFee, modelledCommission);
-}
-
-/**
- * #1001: scales every component of a modelled cost breakdown by `share` — the
- * same linear approximation `redistributeOneFlatten`'s `fee: rawFill.fee *
- * share` already makes for the flatten split, extended to the OTHER money
- * this snapshot carries. Not physically exact for `market_impact` (the
- * cost model's own √-law term is nonlinear in size), but consistent with the
- * existing precedent rather than inventing a second approximation scheme, and
- * still strictly better than attaching the UNSCALED snapshot to every fill a
- * single modelled estimate happens to cover.
- */
-function prorateCostBreakdown(
-  breakdown: NonNullable<Fill['cost_breakdown']>,
-  share: number,
-): NonNullable<Fill['cost_breakdown']> {
-  return {
-    spread_cost: breakdown.spread_cost * share,
-    commission: breakdown.commission * share,
-    slippage: breakdown.slippage * share,
-    market_impact: breakdown.market_impact * share,
-  };
-}
-
-/**
- * #1001's fallback source for an `'entry'` leg's modelled cost breakdown —
- * `OpenPosition.modelled_cost_breakdown`, captured once at submit time
- * (`execute.ts`'s `captureSubmitSnapshot`) against the lot's whole
- * `requested_size`. `null` when the lot carries none (pre-migration-0037 row,
- * or the submit-time capture failed) — `toFill`'s caller then leaves
- * `cost_breakdown` unset, exactly as before this ticket.
- */
-interface ModelledEntryCost {
-  breakdown: NonNullable<Fill['cost_breakdown']>;
-  requestedSize: number;
-}
-
-function modelledEntryCostFor(position: OpenPosition): ModelledEntryCost | null {
-  return position.modelled_cost_breakdown === undefined
-    ? null
-    : { breakdown: position.modelled_cost_breakdown, requestedSize: position.requested_size };
 }
 
 /**
@@ -1783,13 +1461,6 @@ function toFill(
     // closed the `cumulativeTopUp` gap — see that function's own call).
     ...(fill.fee_currency === undefined ? {} : { fee_currency: fill.fee_currency }),
   };
-}
-
-/** Size-weighted, so two unequal partials give the true average. */
-function weightedAvgPrice(fills: readonly Fill[]): number {
-  const qty = totalQty(fills);
-  if (qty === 0) return 0;
-  return fills.reduce((sum, fill) => sum + fill.price * fill.qty, 0) / qty;
 }
 
 function earliest(dates: readonly Date[]): Date {
