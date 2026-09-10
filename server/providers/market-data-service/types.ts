@@ -8,7 +8,7 @@
  */
 
 /**
- * A single OHLCV candle. Sources (ccxt/IBKR/Alpaca) timestamp candles at
+ * A single OHLCV candle. Vendor sources timestamp candles at
  * their open; ingestion computes and stores `close_time`, which is the
  * point-in-time key every read is filtered on.
  */
@@ -24,7 +24,7 @@ export interface Bar {
   low: number;
   close: number;
   volume: number;
-  /** 'kraken' | 'ibkr' | 'alpaca' ... — audit only; consumers ignore. */
+  /** The vendor that served it, e.g. 'alpaca' — audit only; consumers ignore. */
   source: string;
 }
 
@@ -144,7 +144,7 @@ export interface IndicatorValue {
 
 /**
  * A best-effort bid/ask observation. Only sources that quote a live order
- * book (e.g. crypto ccxt) can produce one; `DataSource.fetchQuote` is
+ * book can produce one; `DataSource.fetchQuote` is
  * therefore optional, and its absence (or a `null` return) is how MDS
  * signals "no bid/ask available" rather than fabricating a spread.
  */
@@ -173,15 +173,16 @@ export interface MarketDataStore {
 }
 
 /**
- * Source abstraction — the ONLY place that knows ccxt/IBKR/Alpaca specifics,
- * and the ONLY place that branches live vs backtest for marks. The serving
- * layer and all consumers stay source-blind; #66 supplies the real
- * ccxt/IBKR/Alpaca implementations of this port.
+ * Source abstraction — the ONLY place that knows a vendor's specifics, and
+ * the ONLY place that branches live vs backtest for marks. The serving layer
+ * and all consumers stay source-blind; #66 supplies the implementations of
+ * this port and `createDataSource` (`./source-factory.ts`) resolves a config
+ * to one.
  */
 export interface DataSource {
   fetchBars(instrument: string, window: BarWindow, asOf: Date): Promise<Bar[]>;
   fetchMark(instrument: string, asOf: Date, mode: 'live' | 'backtest'): Promise<Mark>;
-  /** Optional: only implemented by sources that quote bid/ask (e.g. crypto ccxt). */
+  /** Optional: only implemented by sources that quote bid/ask. */
   fetchQuote?(instrument: string, asOf: Date): Promise<Quote | null>;
 }
 

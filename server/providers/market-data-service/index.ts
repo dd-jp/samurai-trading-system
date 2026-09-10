@@ -72,13 +72,6 @@ export type {
 export { AlpacaDataSource } from './sources/alpaca-source.js';
 export type { AssetClassRoutingSourceConfig } from './sources/asset-class-routing-source.js';
 export { AssetClassRoutingDataSource } from './sources/asset-class-routing-source.js';
-export type {
-  CcxtClient,
-  CcxtOhlcv,
-  CcxtSourceOptions,
-  CcxtTicker,
-} from './sources/ccxt-source.js';
-export { CcxtDataSource } from './sources/ccxt-source.js';
 // #562 — the live orchestrator's OHLCV failover. `withOhlcvFailover` itself
 // stays off the barrel (the backfill script imports it directly, as it always
 // has); what the composition root needs is the `DataSource`-shaped wrapper
@@ -94,13 +87,6 @@ export {
   FailoverDataSource,
   PrimaryCircuitOpenError,
 } from './sources/failover-data-source.js';
-export type {
-  IbkrClient,
-  IbkrHistoricalBar,
-  IbkrLastTrade,
-  IbkrSourceOptions,
-} from './sources/ibkr-source.js';
-export { IbkrDataSource } from './sources/ibkr-source.js';
 // #734 — the LSE leveraged-ETP mark source, the producer that finally writes
 // `latest_mark` rows keyed by `lse_ticker`. The VENDOR is not decided (see
 // docs/research/34-lse-mark-source-options.md); the port, the GBP/pence

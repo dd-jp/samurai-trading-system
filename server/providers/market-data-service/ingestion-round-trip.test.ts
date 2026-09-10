@@ -1,6 +1,6 @@
 /**
- * Integration coverage for #66: one crypto and one stock instrument round-trip
- * from a source's native payload, through ingestion normalization, out of
+ * Integration coverage for #66: an instrument round-trips from a source's
+ * native payload, through ingestion normalization, out of
  * `MarketDataServiceImpl.getBars` — the path a real consumer takes.
  */
 import type { Clock } from '../../shared/index.js';
@@ -14,10 +14,8 @@ import {
   AlpacaDataSource,
   type AlpacaMarketDataClient,
 } from './sources/alpaca-source.js';
-import type { CcxtClient, CcxtOhlcv } from './sources/ccxt-source.js';
-import type { IbkrClient, IbkrHistoricalBar } from './sources/ibkr-source.js';
+import type { LseMarkClient } from './sources/lse-mark-source.js';
 import { SqliteMarketDataStore } from './sqlite-market-data-store.js';
-import type { BarWindow } from './types.js';
 
 class ManualClock implements Clock {
   constructor(private readonly time: Date) {}
@@ -29,24 +27,12 @@ class ManualClock implements Clock {
 
 const ASOF = new Date('2026-07-15T18:00:00Z'); // Wednesday, 14:00 ET — mid-session
 
-/** BTC on Kraken, including candles no equity session would allow. */
-const KRAKEN_ROWS: CcxtOhlcv[] = [
-  [Date.parse('2026-07-15T02:00:00Z'), 60_000, 60_500, 59_900, 60_400, 3],
-  [Date.parse('2026-07-15T14:00:00Z'), 60_400, 61_000, 60_300, 60_900, 4],
-  [Date.parse('2026-07-15T18:00:00Z'), 60_900, 61_200, 60_800, 61_100, 5], // forming at asOf
-];
-
 /** AAPL on Alpaca, including pre-market and after-hours bars. */
 const ALPACA_ROWS: AlpacaBar[] = [
   { t: '2026-07-15T12:00:00Z', o: 190, h: 191, l: 189, c: 190.5, v: 100 }, // 08:00 ET pre-market
   { t: '2026-07-15T14:00:00Z', o: 190.5, h: 193, l: 190, c: 192, v: 900 }, // 10:00 ET in session
   { t: '2026-07-15T22:00:00Z', o: 192, h: 194, l: 191, c: 193, v: 50 }, // 18:00 ET after hours
 ];
-
-const krakenClient: CcxtClient = {
-  fetchOHLCV: async () => KRAKEN_ROWS,
-  fetchTicker: async () => ({ last: 61_050, timestamp: Date.parse('2026-07-15T17:59:45Z') }),
-};
 
 const alpacaClient: AlpacaMarketDataClient = {
   getBars: async () => ALPACA_ROWS,
@@ -61,68 +47,6 @@ function serviceFor(config: DataSourceConfig, mode: 'live' | 'backtest' = 'backt
     new SqliteMarketDataStore(openSharedStore(':memory:')),
   );
 }
-
-describe('crypto round-trip: ccxt payload -> ingestion -> getBars', () => {
-  const service = serviceFor({ kind: 'ccxt', client: krakenClient, source: 'kraken' });
-
-  /**
-   * `KRAKEN_ROWS` is three candles and these assertions are about
-   * NORMALIZATION, not window sufficiency — so the read is deliberately short
-   * and has to say so since #497 gave `CcxtDataSource` its own loud short-read
-   * guard. Without the opt-in these reads now throw `CcxtDataUnderfetchError`,
-   * which is the correct answer for a real venue and the wrong one for a
-   * fixture asserting field shape.
-   */
-  const SHORT: BarWindow = { timeframe: '1h', lookback: 10, partial: 'allow' };
-
-  it('serves normalized 24/7 bars, excluding only the forming candle', async () => {
-    const bars = await service.getBars('BTC/USD', SHORT, ASOF);
-
-    expect(bars).toEqual([
-      {
-        instrument: 'BTC/USD',
-        timeframe: '1h',
-        open_time: new Date('2026-07-15T02:00:00Z'),
-        close_time: new Date('2026-07-15T03:00:00Z'),
-        open: 60_000,
-        high: 60_500,
-        low: 59_900,
-        close: 60_400,
-        volume: 3,
-        source: 'kraken',
-      },
-      {
-        instrument: 'BTC/USD',
-        timeframe: '1h',
-        open_time: new Date('2026-07-15T14:00:00Z'),
-        close_time: new Date('2026-07-15T15:00:00Z'),
-        open: 60_400,
-        high: 61_000,
-        low: 60_300,
-        close: 60_900,
-        volume: 4,
-        source: 'kraken',
-      },
-    ]);
-  });
-
-  it('keeps the 02:00 UTC bar — crypto has no session to fall outside of', async () => {
-    const bars = await service.getBars('BTC/USD', SHORT, ASOF);
-
-    expect(bars.some((b) => b.open_time.toISOString() === '2026-07-15T02:00:00.000Z')).toBe(true);
-  });
-
-  it('derives a backtest mark from the last completed bar', async () => {
-    const mark = await serviceFor(
-      { kind: 'ccxt', client: krakenClient, source: 'kraken', markTimeframe: '1h' },
-      'backtest',
-    ).getMark('BTC/USD', ASOF);
-
-    expect(mark.price).toBe(60_900); // not the live 61_050
-    expect(mark.observed_at).toEqual(new Date('2026-07-15T15:00:00Z'));
-    expect(mark.asset_class).toBe('crypto');
-  });
-});
 
 describe('stock round-trip: Alpaca payload -> ingestion -> getBars', () => {
   const service = serviceFor({ kind: 'alpaca', client: alpacaClient, asset_class: 'stocks' });
@@ -161,34 +85,60 @@ describe('stock round-trip: Alpaca payload -> ingestion -> getBars', () => {
 });
 
 describe('swapping DataSource is a config change, not a code change', () => {
-  const ibkrClient: IbkrClient = {
-    getHistoricalBars: async (): Promise<IbkrHistoricalBar[]> => [
-      { time: '2026-07-15T14:00:00Z', open: 190.5, high: 193, low: 190, close: 192, volume: 900 },
-    ],
-    getLastTrade: async () => ({ price: 192.5, time: '2026-07-15T17:59:45Z' }),
+  /**
+   * The same AAPL session bar as `ALPACA_ROWS`, quoted in GBX so the LSE
+   * source's pence conversion has something to do — 19_200 GBX is 192 GBP,
+   * which is what a consumer must see whichever arm served it.
+   */
+  const lseClient: LseMarkClient = {
+    vendor: 'fake-lse-vendor',
+    getBars: async () => ({
+      currency: 'GBX',
+      candles: [
+        {
+          open_time: new Date('2026-07-15T14:00:00Z'),
+          open: 19_050,
+          high: 19_300,
+          low: 19_000,
+          close: 19_200,
+          volume: 900,
+        },
+      ],
+    }),
+    getLatestQuote: async () => ({
+      price: 19_250,
+      currency: 'GBX',
+      observed_at: new Date('2026-07-15T15:59:45Z'),
+    }),
+  };
+
+  const LSE_CONFIG: DataSourceConfig = {
+    kind: 'lse',
+    client: lseClient,
+    tradeable: new Set(['LQQ3']),
   };
 
   /** The consumer: depends on the port only, and never names a source. */
-  async function readCloses(service: MarketDataServiceImpl): Promise<number[]> {
-    const bars = await service.getBars('AAPL', { timeframe: '1h', lookback: 10 }, ASOF);
+  async function readCloses(service: MarketDataServiceImpl, instrument: string): Promise<number[]> {
+    const bars = await service.getBars(instrument, { timeframe: '1h', lookback: 10 }, ASOF);
     return bars.map((bar) => bar.close);
   }
 
-  it('serves the same consumer result from Alpaca and IBKR configs', async () => {
+  it('serves the same consumer result from the Alpaca and LSE configs', async () => {
     const fromAlpaca = await readCloses(
       serviceFor({ kind: 'alpaca', client: alpacaClient, asset_class: 'stocks' }),
+      'AAPL',
     );
-    const fromIbkr = await readCloses(serviceFor({ kind: 'ibkr', client: ibkrClient }));
+    const fromLse = await readCloses(serviceFor(LSE_CONFIG), 'LQQ3');
 
     expect(fromAlpaca).toEqual([192]);
-    expect(fromIbkr).toEqual(fromAlpaca);
+    expect(fromLse).toEqual(fromAlpaca);
   });
 
   it('builds every supported source from config alone', async () => {
     const configs: DataSourceConfig[] = [
-      { kind: 'ccxt', client: krakenClient, source: 'kraken' },
       { kind: 'alpaca', client: alpacaClient, asset_class: 'stocks' },
-      { kind: 'ibkr', client: ibkrClient },
+      LSE_CONFIG,
     ];
 
     for (const config of configs) {
@@ -196,12 +146,15 @@ describe('swapping DataSource is a config change, not a code change', () => {
     }
   });
 
-  it('routes ccxt provenance by config, so Kraken->Coinbase is config', async () => {
-    const coinbase = serviceFor({ kind: 'ccxt', client: krakenClient, source: 'coinbase' });
+  it('stamps provenance with the vendor the config named, so swapping vendor is config', async () => {
+    const service = serviceFor({
+      ...LSE_CONFIG,
+      client: { ...lseClient, vendor: 'another-lse-vendor' },
+    });
 
-    const bars = await coinbase.getBars('BTC/USD', { timeframe: '1h', lookback: 1 }, ASOF);
+    const bars = await service.getBars('LQQ3', { timeframe: '1h', lookback: 1 }, ASOF);
 
-    expect(bars[0]?.source).toBe('coinbase');
+    expect(bars[0]?.source).toBe('another-lse-vendor');
   });
 });
 

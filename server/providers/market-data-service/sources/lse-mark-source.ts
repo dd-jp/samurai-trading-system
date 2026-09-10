@@ -5,7 +5,9 @@
  * ## The hole this fills
  *
  * `market-data-service-spec.md` specs three `DataSource` implementations —
- * ccxt/Kraken, IBKR and Alpaca — and **none of them serves the LSE**. Under
+ * ccxt/Kraken, IBKR and Alpaca — and **none of them serves the LSE**. #1151
+ * deleted the first two as unwired (both vendors are out of scope), leaving
+ * Alpaca the only vendor source in the tree; it serves the LSE no better. Under
  * [ADR-0016](../../../../docs/adr/0016-universe-leveraged-etps-ungated.md) the
  * live equity universe is GBP LSE-listed leveraged ETPs held in a Saxo
  * Capital Markets UK GIA (ADR-0015's 2026-08-30 amendment; this comment said

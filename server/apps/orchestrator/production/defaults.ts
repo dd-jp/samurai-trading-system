@@ -27,10 +27,9 @@ import type {
   Mark,
 } from '../../../providers/market-data-service/index.js';
 import {
-  AlpacaDataSource,
   AlpacaHttpDataClient,
   AssetClassRoutingDataSource,
-  LseMarkDataSource,
+  createDataSource,
   recommendedWarmupFor,
   type TradingCalendar,
 } from '../../../providers/market-data-service/index.js';
@@ -603,7 +602,9 @@ function buildLseMarkSourceIfNeeded(
     );
   }
 
-  return new LseMarkDataSource(config.lseMarkClient, {
+  return createDataSource({
+    kind: 'lse',
+    client: config.lseMarkClient,
     tradeable: LSE_TICKERS,
     screeningInstruments: LSE_SCREENING_INSTRUMENTS,
     // Only the HELD lines, not the whole pool: a USD-quoted row nobody is
@@ -662,17 +663,16 @@ export function buildAlpacaDataSource(
   const classes: AssetClass[] =
     present.length > 0 ? present : [config.dataSourceAssetClass ?? 'crypto'];
 
-  const sourceFor = (assetClass: AssetClass): AlpacaDataSource =>
-    new AlpacaDataSource(
-      config.alpacaDataClient ?? buildDefaultAlpacaDataClient(assetClass, rateLimiter),
-      {
-        asset_class: assetClass,
-        // Authoritative for equities only: `AlpacaDataSource` substitutes
-        // `AlwaysOpenCalendar` for a crypto source regardless of what is passed
-        // (alpaca-source.ts), because a 24/7 venue has no session to gate on.
-        calendar: tradingCalendar,
-      },
-    );
+  const sourceFor = (assetClass: AssetClass): DataSource =>
+    createDataSource({
+      kind: 'alpaca',
+      client: config.alpacaDataClient ?? buildDefaultAlpacaDataClient(assetClass, rateLimiter),
+      asset_class: assetClass,
+      // Authoritative for equities only: `AlpacaDataSource` substitutes
+      // `AlwaysOpenCalendar` for a crypto source regardless of what is passed
+      // (alpaca-source.ts), because a 24/7 venue has no session to gate on.
+      calendar: tradingCalendar,
+    });
 
   const single = classes.length === 1 ? classes[0] : undefined;
   if (single !== undefined) {
@@ -801,30 +801,30 @@ export function buildBenchmarkDataSource(options: {
    */
   dataClient?: AlpacaMarketDataClient;
 }): DataSource {
-  return new LazyDataSource(
-    () =>
-      new AlpacaDataSource(
-        options.dataClient ?? buildDefaultAlpacaDataClient('stocks', options.rateLimiter),
-        // NO `calendar`, deliberately — `AlpacaDataSource` then defaults to
-        // `UsEquityRegularHoursCalendar`, the session SPY and AGG actually
-        // trade in. The live path's calendar is `equityCalendarFor(config)`,
-        // which returns `LseRegularHoursCalendar` in live mode, so accepting
-        // one would re-couple this builder to the live configuration through
-        // the back door — the independence would hold for the signature only.
-        // `NormalizingDataSource` resolves session boundaries and holidays
-        // against whatever calendar it is handed, and `LSE_HOLIDAYS` is not the
-        // US table, so US bars normalized on a London session is simply the
-        // wrong normalization for these instruments — and this is not merely
-        // theoretical: `LSE_HOLIDAYS` and `US_HOLIDAYS` (trading-calendar.ts)
-        // disagree on several civil dates (MLK Day, Washington's Birthday,
-        // Juneteenth, Independence Day, Labor Day and Thanksgiving are
-        // US-only; Easter Monday, the Early May and Summer bank holidays and
-        // the Boxing Day substitute are LSE-only), each one a `daily` bar
-        // `isTradingDay` would keep under one calendar and drop under the
-        // other. The signature simply has no `calendar` parameter
-        // to pass, so this coupling cannot recur no matter which calendar the
-        // live path is on — closed structurally, not by empirical agreement.
-        { asset_class: 'stocks' },
-      ),
+  return new LazyDataSource(() =>
+    createDataSource({
+      kind: 'alpaca',
+      client: options.dataClient ?? buildDefaultAlpacaDataClient('stocks', options.rateLimiter),
+      // NO `calendar`, deliberately — `AlpacaDataSource` then defaults to
+      // `UsEquityRegularHoursCalendar`, the session SPY and AGG actually
+      // trade in. The live path's calendar is `equityCalendarFor(config)`,
+      // which returns `LseRegularHoursCalendar` in live mode, so accepting
+      // one would re-couple this builder to the live configuration through
+      // the back door — the independence would hold for the signature only.
+      // `NormalizingDataSource` resolves session boundaries and holidays
+      // against whatever calendar it is handed, and `LSE_HOLIDAYS` is not the
+      // US table, so US bars normalized on a London session is simply the
+      // wrong normalization for these instruments — and this is not merely
+      // theoretical: `LSE_HOLIDAYS` and `US_HOLIDAYS` (trading-calendar.ts)
+      // disagree on several civil dates (MLK Day, Washington's Birthday,
+      // Juneteenth, Independence Day, Labor Day and Thanksgiving are
+      // US-only; Easter Monday, the Early May and Summer bank holidays and
+      // the Boxing Day substitute are LSE-only), each one a `daily` bar
+      // `isTradingDay` would keep under one calendar and drop under the
+      // other. The signature simply has no `calendar` parameter
+      // to pass, so this coupling cannot recur no matter which calendar the
+      // live path is on — closed structurally, not by empirical agreement.
+      asset_class: 'stocks',
+    }),
   );
 }

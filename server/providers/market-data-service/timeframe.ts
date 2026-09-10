@@ -1,7 +1,7 @@
 /**
  * Timeframe parsing and close-time derivation (ticket #66).
  * See docs/specs/market-data-service-spec.md (Module: Point-in-Time
- * Enforcement): ccxt, IBKR and Alpaca all timestamp candles at their *open*,
+ * Enforcement): vendor sources timestamp candles at their *open*,
  * so ingestion — not the source — computes `close_time = open_time + timeframe`.
  * This module is the single place that conversion happens.
  */

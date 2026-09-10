@@ -3,8 +3,8 @@
  * ("Module: Human-in-the-Loop", stories 12/14). Transport clients are injected
  * rather than constructed from credentials here — connection/bot provisioning
  * is an ops/setup task (verdict-spec.md "Out of Scope: Channel provisioning"),
- * mirroring market-data-service/sources' AlpacaMarketDataClient/CcxtClient/
- * IbkrClient pattern.
+ * mirroring market-data-service/sources' AlpacaMarketDataClient/LseMarkClient
+ * pattern.
  */
 import type { RiskDecision } from '../../risk-manager/index.js';
 import type { VerdictDecision } from '../types.js';
