@@ -1366,7 +1366,10 @@ describe('ExecutionImpl.execute', () => {
         /**
          * Two lots, 20 held each, so the TOTAL (40) matches `makeExitGo`'s
          * default `size: 40` either way — the compensating swap below only
-         * shows up per lot, never in the sum.
+         * shows up per lot, never in the sum. Distinct `opened_at` (not both
+         * `NOW`): `getOpenPositions()` is `ORDER BY opened_at` with no
+         * tiebreak, and the test below asserts which lot's key the refusal
+         * names — a tie would leave that assertion's ordering unspecified.
          */
         async function seedTwoHeldLots(
           store: ReturnType<typeof openTestExecutionStore>['store'],
@@ -1376,6 +1379,7 @@ describe('ExecutionImpl.execute', () => {
             idempotency_key: 'key-aapl-entry-2',
             requested_size: 20,
             filled_size: 20,
+            opened_at: new Date(NOW.getTime() + 1000),
             broker_order_ids: ['seed:entry-2', 'seed:stop-2', 'seed:target-2'],
           });
         }

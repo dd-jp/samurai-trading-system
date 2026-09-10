@@ -182,10 +182,12 @@ export interface OrderIntentMetadata {
    * Optional in the TYPE and set unconditionally by `buildFlattenExit`, the
    * only production Trader site that builds an exit intent — matching
    * `unpriced_exit`/`mandatory_flatten` above: a reader checks presence, not
-   * a sentinel value. Left absent by any other producer (`smoke-run.ts`'s
-   * `exitPathOrder`, `replay-driver.ts`) — `executeExit` skips the per-lot
-   * comparison when absent rather than refusing, so those paths are
-   * unaffected; the total-only guard still covers them.
+   * a sentinel value. Left absent by the one other producer of an exit
+   * intent this stage sees, `smoke-run.ts`'s `exitPathOrder` (`replay-driver.ts`
+   * builds no `OrderIntent` at all — its `closeLot` goes straight
+   * `costModel.fill` → `records.record`, never reaching `ExecutionImpl.execute`) —
+   * `executeExit` skips the per-lot comparison when absent rather than
+   * refusing, so that path is unaffected; the total-only guard still covers it.
    */
   lot_held_quantities?: readonly LotHeldQuantity[];
   conviction: number;
