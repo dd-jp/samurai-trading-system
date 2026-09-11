@@ -1133,12 +1133,52 @@ Two arm-level facts belong with the trace. The arm that reached Verdict is the *
 latency, not a venue fact. And `risk` approved carrying `risk_critic: skipped — no critic verdict
 was supplied for this evaluation`, which is the #957/#994 fold, not this measurement.
 
-### 6.8 What AC3 still lacks, and what it does not
+### 6.8 The refusal one stage past where SIM could look
+
+`stale_feed` stops the SIM tick at Verdict, so the SIM run never executed the Execution stage and
+could not observe what that stage does. Driving the **same shipped composition root** offline,
+with the mark age supplied as a fixture input rather than read from a delayed feed, reaches it —
+and Execution refuses:
+
+```
+Saxo ExternalReference '<64-char sha256 hex>' exceeds 50 chars once the leg suffix is
+appended (71).
+```
+
+`computeIdempotencyKey` returns a 64-character sha256 hex digest; `SaxoBrokerAdapter.submitBracket`
+asserts that the whole `ExternalReference` plus the longest leg suffix fits Saxo's
+`EXTERNAL_REFERENCE_MAX_CHARS = 50`. The arithmetic never clears. **No bracket the shipped Saxo
+composition root produces can leave the process** — the assert precedes `placeIdempotently`, so
+nothing reaches the venue at all.
+
+Three things make this a live defect rather than a curiosity:
+
+- The adapter's own docblock already states it, and states why it was not fixed: "latent rather
+  than live only because `SaxoBrokerAdapter` has no production construction site yet". **#1400
+  built that construction site.** The condition the docblock names as keeping it latent no longer
+  holds.
+- It is not an entry-only problem. `submitFlatten` asserts the same limit at suffix 0, so
+  **ADR-0014's mandatory flat-by-close exit is refused on the same arithmetic** — a position
+  opened by any other route could not be closed through this adapter.
+- It is not an artifact of the offline fixture. Every path to a `go` produces the same 64-character
+  key; nothing about the fixture's prices, series or conviction floor changes the key's length.
+
+**It is not a wiring fix, and deliberately was not made here.** The venue reference and the stored
+idempotency key have to be the *same string*: the adapter's venue-enumeration paths read
+`client_order_id` back off `ExternalReference` and match it against stored keys, so adapter-side
+truncation would desynchronise reconcile and fill-sync silently — the #1215 audited-paths hazard.
+Any real fix changes `computeIdempotencyKey`'s own output, or makes it venue-aware. That key is a
+documented invariant restated across CONTEXT.md and the specs by #1487, so it is an owner decision
+with a decision record behind it, not a patch. **It is pinned instead**, by a case in
+`server/apps/orchestrator/saxo-composition-root.test.ts` that drives `startFromEnvironment` to the
+sixth stage and asserts both the refusal and that the venue received nothing.
+
+### 6.9 What AC3 still lacks, and what it does not
 
 The wiring is proven end to end: venue selection, adapter construction, per-line unit resolution
 from the venue, the LSE calendar, the scheduler, the store, the startup reconcile and — §6.7 —
-five of the six pipeline stages on a real pool line all ran against the real SIM gateway. One
-blocker stands between that and the sixth stage, and it is not wiring:
+five of the six pipeline stages on a real pool line all ran against the real SIM gateway. **Two
+blockers stand between that and a completed sixth stage, and the second one IS wiring:**
 
 1. **No real-time LSE entitlement**, which is what `stale_feed` refused on: the SIM feed is
    15-minutes-delayed by tier, and on these thin lines it is far worse — 0 of 65 sampled
@@ -1146,9 +1186,17 @@ blocker stands between that and the sixth stage, and it is not wiring:
    gate cannot pass on it at any tick time, so **Execution is unreachable on SIM by
    construction**, not by a defect. #895 (vendor choice and provisioning) carries that, under
    map #1308.
+2. **The `ExternalReference` overrun** (§6.8): the sixth stage is reachable offline, and refuses
+   there. Newly live because this ticket built the construction site the adapter's docblock named
+   as the thing keeping it latent. Unowned by any open issue as of 2026-09-11 — a search of the
+   backlog found only #1215 (audited paths), #1426 and closed #1216 in the neighbourhood.
 
-A second gap does not block the tick but does keep the boot from being unattended:
+A third gap does not block the tick but does keep the boot from being unattended:
 
 - **No GBP-native account read** — the run injects `accountState` by hand, and no open issue
   owns building one (§6.3). The boot refuses without it rather than inheriting a USD or EUR
   balance, which is the correct behaviour and a real hole at the same time.
+
+Order of operations follows from this: fixing #895 alone does not make the Saxo path able to
+trade. Both blockers have to clear, and the second is the cheaper of the two to discover and the
+more expensive to get wrong.

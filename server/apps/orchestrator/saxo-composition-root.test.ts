@@ -17,6 +17,7 @@
  * `lseMarkClient`, neither of which is missing wiring.
  */
 
+import { DEBATE_BAR_TIMEFRAME_MS, floorToBar } from '../../pipeline/debate-engine/index.js';
 import type {
   SaxoAssetType,
   SaxoInstrumentDetails,
@@ -24,7 +25,6 @@ import type {
   SaxoOrderRequest,
 } from '../../pipeline/execution/index.js';
 import { AlpacaBrokerAdapter, SaxoBrokerAdapter } from '../../pipeline/execution/index.js';
-import { DEBATE_BAR_TIMEFRAME_MS, floorToBar } from '../../pipeline/debate-engine/index.js';
 import type { LseMarkClient } from '../../providers/market-data-service/index.js';
 import { timeframeToMs } from '../../providers/market-data-service/index.js';
 import { MiArchiveStore } from '../../providers/market-intelligence/index.js';
