@@ -130,8 +130,9 @@ export function resolveBrokerVenue(env: NodeJS.ProcessEnv = process.env): Broker
  * promised.
  *
  * `subclass` comes from `liveSizingSubclassFor`, so a row whose envelope has
- * not been MEASURED carries none and sizes on the generic ATR path rather
- * than on a D5 bracket nobody has calibrated for it.
+ * not been MEASURED carries none. That is NOT a generic-ATR fallback:
+ * `resolveSubclassBracket` only falls back when `subclass_of` is empty, and
+ * throws for a missing name once any row carries one (3KOR/3KWE today).
  *
  * WIDTH IS NOT THIS TICKET'S. #1310 ruled the live ramp widens to the 94
  * sterling Etn/Etc lines gated on burst-sampled p25 spread and ranked on
@@ -243,10 +244,12 @@ function logResolvedUnits(deps: SaxoVenueDeps, instruments: SaxoInstrumentResolv
     stage: 'orchestrator',
     event: 'saxo_venue_built',
     level: 'info',
-    message: `Saxo broker adapter built against the sim gateway for ${deps.universe.length} LSE ETP lines`,
+    message: `Saxo broker adapter built for ${deps.universe.length} LSE ETP lines`,
     payload: {
       venue: 'saxo',
       mode: deps.mode,
+      // 'sim' is asserted, not observed: buildSaxoBroker refuses live, and an
+      // injected client is not inspected for its gateway.
       environment: 'sim',
       // Every asset resolves — the caller threw otherwise — so the empty
       // branch drops nothing.

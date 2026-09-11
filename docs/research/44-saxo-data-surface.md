@@ -1026,7 +1026,7 @@ endpoint" and pointed at **#946** for the GBP-native account read. Both halves n
   `Currency: "EUR"`. Sizing the GBP book off it would ship #949's currency mismatch in a second
   currency rather than lift it.
 - **#946 never carried an account read.** It shipped the venue-change docs and the T212-named
-  code, and closed 2026-09-01. **No open issue owns the GBP-native account read** — the pointer
+  code, and closed 2026-09-02. **No open issue owns the GBP-native account read** — the pointer
   was to a ticket that was never going to deliver it.
 
 ### 6.4 What the boot proves
@@ -1054,7 +1054,7 @@ happens in `LseMarkDataSource`, and the marks came back in pounds.
 
 A single reading cannot separate "the feed is 15 minutes behind" from "this line has not
 printed today", so the mark age was sampled **13 times at 30-minute intervals, 07:39Z to
-13:09Z** — the whole LSE morning plus the run-up to the #706 entry window. 65 readings, every
+13:39Z** — the whole LSE morning plus the run-up to the #706 entry window. 65 readings, every
 one with `MarketState: "Open"`, `DelayedByMinutes: 15`, `PriceSource: "LSE_ETF"`. Against
 `max_mark_age.stocks` of 900 s:
 
@@ -1090,8 +1090,10 @@ At ADR-0018 D5 against the £1,000 book, with `MinimumLotSize 1.0`, `OddLotsNotA
 | 3LUS | `index_etp_3x` | £350 | £135.52 | 2 |
 | LQQ3 | `index_etp_3x` | £350 | £300.95 | **1** |
 | LCO3 | `single_stock_etp_3x` | £250 | £0.075 | ~3,300 |
-| 3KOR | (none — generic ATR) | — | £20.49 | — |
-| 3KWE | (none — generic ATR) | — | £3.90 | — |
+| 3KOR | (none — **unsizeable**, see below) | — | £20.49 | — |
+| 3KWE | (none — **unsizeable**, see below) | — | £3.90 | — |
+
+3KOR and 3KWE carry no subclass, and that does NOT fall back to the generic ATR path: `resolveSubclassBracket` (`server/pipeline/trader/subclass-bracket.ts`) uses generic ATR only when `subclass_of` is empty and otherwise throws `SubclassBracketUnresolvableError` for an instrument the map lacks (`lse-etp-pool.test.ts` pins that throw for 3KOR/3KWE). With three of five lines populated, the map is non-empty, so a `go` on either line throws at sizing. Where that throw surfaces at tick time was not traced in this run; it is a third AC3 blocker, recorded in §6.9.
 
 LQQ3 admits exactly one share and has no room for a partial-fill resize. Were it ever
 reclassified to the £250 single-stock bracket it would become **unenterable at any conviction**.
@@ -1188,8 +1190,11 @@ blockers stand between that and a completed sixth stage, and the second one IS w
    map #1308.
 2. **The `ExternalReference` overrun** (§6.8): the sixth stage is reachable offline, and refuses
    there. Newly live because this ticket built the construction site the adapter's docblock named
-   as the thing keeping it latent. Unowned by any open issue as of 2026-09-11 — a search of the
-   backlog found only #1215 (audited paths), #1426 and closed #1216 in the neighbourhood.
+   as the thing keeping it latent. Owned by #1510 (needs-decision) since 2026-09-11; the earlier
+   backlog search found only #1215 (audited paths), #1426 and #1216 (already CLOSED) nearby.
+3. **Two of the five lines cannot be sized** (§6.6): 3KOR and 3KWE carry no subclass while the
+   map is non-empty, so `resolveSubclassBracket` throws rather than falling back to generic ATR.
+   Not observed in this run (the tick decided on 3LUS); read off the code and its pool test.
 
 A third gap does not block the tick but does keep the boot from being unattended:
 

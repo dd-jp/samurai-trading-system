@@ -114,7 +114,7 @@ function fixtureLseMarkClient(): LseMarkClient {
 /**
  * The smoke gate's series is expressed in abstract units; this is what one of
  * them is worth in pence, chosen so the mark lands at £32 — the order of
- * magnitude the pool actually quotes at (3LUS was £31.42 on SIM, doc 44 §6).
+ * magnitude the pool quotes at (3KOR was £20.49 on SIM, doc 44 §6.6).
  *
  * It is load-bearing, not cosmetic. Sizing is risk-budget-over-stop-distance
  * and then floored to whole shares (#1216), and the stop distance is
