@@ -984,3 +984,224 @@ reopenable spec decisions and want a wayfinder map.
 
 **The one that gates the live ramp is 6.** It is cheap, it is decidable with a single call, and
 it is the only item on this list where being wrong costs money rather than time.
+
+---
+
+## 6. The real SIM orchestrator boot — measured 2026-09-11 (#1400 AC3)
+
+Everything above reads the gateway directly. This section runs the **shipped orchestrator** at
+it: `SAMURAI_BROKER=saxo`, `SAMURAI_MODE=paper`, the SIM gateway, a 24-hour developer token, and
+a store path outside the checkout so no soak database is touched. Credentials are named by
+variable only; no value appears here or in any log line the run produced.
+
+### 6.1 Method
+
+`startFromEnvironment` (`server/apps/orchestrator/index.ts`) with the shipped Saxo profile and
+**two injections**, each standing in for a seam this repo deliberately leaves unwired —
+`accountState` (§6.3) and `lseMarkClient` (#895). Nothing else was stubbed: the broker adapter,
+the instrument resolver, the calendar, the scheduler, the store and the startup reconcile are
+the shipped ones, and the instrument resolution below is the venue's own answer.
+
+### 6.2 The boot refusal chain, in order
+
+| Order | Refusal, verbatim (first sentence) | Is it missing wiring? |
+| --- | --- | --- |
+| 1 | `Orchestrator cannot start: SAMURAI_BROKER=saxo requires ProductionConfig.accountState to be supplied.` | **No** — §6.3 |
+| 2 | `Orchestrator cannot start: the universe holds LSE leveraged ETPs (3LUS, LQQ3, LCO3, 3KOR, 3KWE) but no ProductionConfig.lseMarkClient was supplied, so nothing can produce a mark for them.` | **No** — #895 is an open owner decision |
+| — | (with both supplied) boots clean | — |
+
+Both were observed on the `SAMURAI_BROKER=saxo` path, not read off the throw site. That
+distinction is load-bearing: **`.env.local` carries no `SAMURAI_BROKER`**, so `resolveBrokerVenue()`
+returns its `alpaca` default and a probe that forgets to set it measures the Alpaca composition
+root while appearing to measure Saxo. Set it explicitly on the command line.
+
+### 6.3 `GET /port/v1/balances/me` exists — and answers in EUR
+
+`saxo-venue.ts` claimed "Saxo's OpenAPI surface in this repo (saxo-client.ts) has no balances
+endpoint" and pointed at **#946** for the GBP-native account read. Both halves needed correcting:
+
+- The **venue** serves `/port/v1/balances/me`. What is true is narrower — this repo's
+  `SaxoOpenApiClient` does not call it.
+- On the SIM **trial** account (`IsTrialAccount: true`, `DefaultCurrency: "EUR"`, §1) it reports
+  `Currency: "EUR"`. Sizing the GBP book off it would ship #949's currency mismatch in a second
+  currency rather than lift it.
+- **#946 never carried an account read.** It shipped the venue-change docs and the T212-named
+  code, and closed 2026-09-02. **No open issue owns the GBP-native account read** — the pointer
+  was to a ticket that was never going to deliver it.
+
+### 6.4 What the boot proves
+
+The venue now records its resolved units at construction (`saxo_venue_built`), which is how the
+run below is checkable after the fact. Verbatim from the SIM run, `payload.lines`:
+
+| Line | Uic | AssetType | CurrencyCode | PriceCurrency | PriceToContractFactor |
+| --- | --- | --- | --- | --- | --- |
+| 3LUS | 29049628 | Etn | GBP | GBX | 0.01 |
+| LQQ3 | 29391797 | Etn | GBP | GBX | 0.01 |
+| LCO3 | 42347700 | Etn | GBP | GBX | 0.01 |
+| 3KOR | 55762873 | Etn | GBP | GBX | 0.01 |
+| 3KWE | 31532726 | Etn | GBP | GBX | 0.01 |
+
+`sizing_capital_ceiling_resolved` reported `1000, declared in the account currency — no FX
+conversion applied`; both startup reconciles completed; `orchestrator_started` followed. No
+Alpaca broker client is built on this path.
+
+### 6.5 The mark path against the live feed
+
+`GET /chart/v3/charts` (`Mode=UpTo`, `Horizon` in minutes) and `GET /trade/v1/infoprices`
+(`FieldGroups=Quote,PriceInfoDetails,DisplayAndFormat`) both serve every line. GBX→GBP conversion
+happens in `LseMarkDataSource`, and the marks came back in pounds.
+
+A single reading cannot separate "the feed is 15 minutes behind" from "this line has not
+printed today", so the mark age was sampled **13 times at 30-minute intervals, 07:39Z to
+13:39Z** — the whole LSE morning plus the run-up to the #706 entry window. 65 readings, every
+one with `MarketState: "Open"`, `DelayedByMinutes: 15`, `PriceSource: "LSE_ETF"`. Against
+`max_mark_age.stocks` of 900 s:
+
+| Line | Distinct `LastUpdated` in 5.5 h | Best age seen | Worst age seen | Readings under 900 s |
+| --- | --- | --- | --- | --- |
+| 3LUS | 2 | 1,467 s | 20,620 s | 0 / 13 |
+| LQQ3 | 6 | 1,058 s | 33,202 s | 0 / 13 |
+| LCO3 | 1 | 29,591 s | 49,411 s | 0 / 13 |
+| 3KOR | 10 | 996 s | 29,643 s | 0 / 13 |
+| 3KWE | 5 | 1,307 s | 29,643 s | 0 / 13 |
+
+**Zero of 65 readings cleared the bound, and the best case across the whole morning was 996 s —
+16.6 minutes.** That is the decisive number: the shortfall is not a scheduling accident that a
+better-timed tick could dodge.
+
+This corrects an earlier, over-broad reading of the 07:00Z snapshot alone, which said SIM's
+`infoprices` does not refresh a thin line at the open *at all*. It does refresh — but per line
+and sparsely, and never inside 15 minutes. The refresh rate tracks how thin the line is: 3KOR
+moved ten times, **LCO3 once — it carried the previous evening's 23:26Z stamp through the entire
+session**, and 3LUS last printed at 07:26Z and was 5h43m stale by the entry window.
+
+Both facts are account-shaped (§1's split), so neither carries to a live entitled account. What
+they do settle is that a SIM run **cannot** produce a fresh-feed `go`: the stale_feed gate is
+correct to refuse, and refusing is the only behaviour available to it on this data.
+
+### 6.6 Sizing arithmetic the prices force
+
+At ADR-0018 D5 against the £1,000 book, with `MinimumLotSize 1.0`, `OddLotsNotAllowed` and
+`AmountDecimals 0` on these lines:
+
+| Line | Subclass | Per-position cash | Price | Whole shares |
+| --- | --- | --- | --- | --- |
+| 3LUS | `index_etp_3x` | £350 | £135.52 | 2 |
+| LQQ3 | `index_etp_3x` | £350 | £300.95 | **1** |
+| LCO3 | `single_stock_etp_3x` | £250 | £0.075 | ~3,300 |
+| 3KOR | (none — **unsizeable**, see below) | — | £20.49 | — |
+| 3KWE | (none — **unsizeable**, see below) | — | £3.90 | — |
+
+3KOR and 3KWE carry no subclass, and that does NOT fall back to the generic ATR path: `resolveSubclassBracket` (`server/pipeline/trader/subclass-bracket.ts`) uses generic ATR only when `subclass_of` is empty and otherwise throws `SubclassBracketUnresolvableError` for an instrument the map lacks (`lse-etp-pool.test.ts` pins that throw for 3KOR/3KWE). With three of five lines populated, the map is non-empty, so a `go` on either line throws at sizing. Where that throw surfaces at tick time was not traced in this run; it is a third AC3 blocker, recorded in §6.9.
+
+LQQ3 admits exactly one share and has no room for a partial-fill resize. Were it ever
+reclassified to the £250 single-stock bracket it would become **unenterable at any conviction**.
+Same class as the whole-share ceiling already recorded against the pool, noted here because this
+is the first run to price these five lines together.
+
+### 6.7 The tick, inside the real #706 entry window
+
+`londonEntryWindow()`'s shipped defaults were left untouched — 14:30–15:45 London, 13:30–14:45Z
+under BST. Outside it the Scheduler plans zero instruments, so **no stage runs at all**: that
+silence is the window, not a crash, and it is why a boot-time probe cannot stand in for a tick.
+
+The first in-window tick fired **2026-09-11T13:31:41Z** and planned all five pool lines. The line
+that went furthest was **3LUS**, trace `7bfdf0a9-baa3-4d80-ac91-5093a8cce33d:control`:
+
+| Stage | Timestamp | Decision |
+| --- | --- | --- |
+| analysts | 13:31:41.704Z | `quorum_met` |
+| debate | 13:31:41.704Z | `bearish` |
+| trader | 13:31:41.838Z | `entry` — sell, size 1, entry 137.395, stop 140.363, target 134.647 |
+| risk | 13:31:41.902Z | `approved`, `binding_constraint: null` |
+| verdict | 13:31:41.903Z | `no_go` |
+| execution | — | not reached |
+
+The verdict payload, verbatim:
+
+```json
+{"status":"no_go","order":null,"no_go_reason":"stale_feed",
+ "no_go_detail":{"measured_ms":21935836,"bound_ms":900000}}
+```
+
+**The gate is `stale_feed` (#641)** — 6.09 hours of mark age against a 15-minute bound, which is
+§6.5's finding arriving through the pipeline rather than through a probe. Execution is reached
+only behind a `go`, so five of six stages ran. Nothing in the chain refused for want of wiring.
+
+Two arm-level facts belong with the trace. The arm that reached Verdict is the **control** arm
+(#636's no-LLM falsifier); every treatment arm stopped at `debate` with `timed_out_partial` or
+`budget_exhausted` after a live LLM attempt ran 28,011 ms and was retried — machine-local LLM
+latency, not a venue fact. And `risk` approved carrying `risk_critic: skipped — no critic verdict
+was supplied for this evaluation`, which is the #957/#994 fold, not this measurement.
+
+### 6.8 The refusal one stage past where SIM could look
+
+`stale_feed` stops the SIM tick at Verdict, so the SIM run never executed the Execution stage and
+could not observe what that stage does. Driving the **same shipped composition root** offline,
+with the mark age supplied as a fixture input rather than read from a delayed feed, reaches it —
+and Execution refuses:
+
+```
+Saxo ExternalReference '<64-char sha256 hex>' exceeds 50 chars once the leg suffix is
+appended (71).
+```
+
+`computeIdempotencyKey` returns a 64-character sha256 hex digest; `SaxoBrokerAdapter.submitBracket`
+asserts that the whole `ExternalReference` plus the longest leg suffix fits Saxo's
+`EXTERNAL_REFERENCE_MAX_CHARS = 50`. The arithmetic never clears. **No bracket the shipped Saxo
+composition root produces can leave the process** — the assert precedes `placeIdempotently`, so
+nothing reaches the venue at all.
+
+Three things make this a live defect rather than a curiosity:
+
+- The adapter's own docblock already states it, and states why it was not fixed: "latent rather
+  than live only because `SaxoBrokerAdapter` has no production construction site yet". **#1400
+  built that construction site.** The condition the docblock names as keeping it latent no longer
+  holds.
+- It is not an entry-only problem. `submitFlatten` asserts the same limit at suffix 0, so
+  **ADR-0014's mandatory flat-by-close exit is refused on the same arithmetic** — a position
+  opened by any other route could not be closed through this adapter.
+- It is not an artifact of the offline fixture. Every path to a `go` produces the same 64-character
+  key; nothing about the fixture's prices, series or conviction floor changes the key's length.
+
+**It is not a wiring fix, and deliberately was not made here.** The venue reference and the stored
+idempotency key have to be the *same string*: the adapter's venue-enumeration paths read
+`client_order_id` back off `ExternalReference` and match it against stored keys, so adapter-side
+truncation would desynchronise reconcile and fill-sync silently — the #1215 audited-paths hazard.
+Any real fix changes `computeIdempotencyKey`'s own output, or makes it venue-aware. That key is a
+documented invariant restated across CONTEXT.md and the specs by #1487, so it is an owner decision
+with a decision record behind it, not a patch. **It is pinned instead**, by a case in
+`server/apps/orchestrator/saxo-composition-root.test.ts` that drives `startFromEnvironment` to the
+sixth stage and asserts both the refusal and that the venue received nothing.
+
+### 6.9 What AC3 still lacks, and what it does not
+
+The wiring is proven end to end: venue selection, adapter construction, per-line unit resolution
+from the venue, the LSE calendar, the scheduler, the store, the startup reconcile and — §6.7 —
+five of the six pipeline stages on a real pool line all ran against the real SIM gateway. **Two
+blockers stand between that and a completed sixth stage, and the second one IS wiring:**
+
+1. **No real-time LSE entitlement**, which is what `stale_feed` refused on: the SIM feed is
+   15-minutes-delayed by tier, and on these thin lines it is far worse — 0 of 65 sampled
+   readings cleared the 900 s bound and the best case all morning was 996 s (§6.5). A fresh-mark
+   gate cannot pass on it at any tick time, so **Execution is unreachable on SIM by
+   construction**, not by a defect. #895 (vendor choice and provisioning) carries that, under
+   map #1308.
+2. **The `ExternalReference` overrun** (§6.8): the sixth stage is reachable offline, and refuses
+   there. Newly live because this ticket built the construction site the adapter's docblock named
+   as the thing keeping it latent. Owned by #1510 (needs-decision) since 2026-09-11; the earlier
+   backlog search found only #1215 (audited paths), #1426 and #1216 (already CLOSED) nearby.
+3. **Two of the five lines cannot be sized** (§6.6): 3KOR and 3KWE carry no subclass while the
+   map is non-empty, so `resolveSubclassBracket` throws rather than falling back to generic ATR.
+   Not observed in this run (the tick decided on 3LUS); read off the code and its pool test.
+
+A third gap does not block the tick but does keep the boot from being unattended:
+
+- **No GBP-native account read** — the run injects `accountState` by hand, and no open issue
+  owns building one (§6.3). The boot refuses without it rather than inheriting a USD or EUR
+  balance, which is the correct behaviour and a real hole at the same time.
+
+Order of operations follows from this: fixing #895 alone does not make the Saxo path able to
+trade. Both blockers have to clear, and the second is the cheaper of the two to discover and the
+more expensive to get wrong.

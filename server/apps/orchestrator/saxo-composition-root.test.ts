@@ -8,11 +8,16 @@
  * ticket reports: `SaxoBrokerAdapter` was built, tested, and constructed by
  * nothing.
  *
- * There are NO Saxo credentials on this host, so the venue is driven against a
- * fixture gateway shaped by docs/research/43-saxo-openapi-order-idempotency.md
- * and docs/research/44-saxo-data-surface.md. A real SIM boot is unproven.
+ * The venue is driven against a fixture gateway shaped by
+ * docs/research/43-saxo-openapi-order-idempotency.md and
+ * docs/research/44-saxo-data-surface.md, so this suite reaches no network. The
+ * SAME path was run against the real SIM gateway on 2026-09-11 (doc 44 §6):
+ * the resolver, the adapter and the startup reconcile all completed, and the
+ * only seams an operator still supplies by hand are `accountState` and
+ * `lseMarkClient`, neither of which is missing wiring.
  */
 
+import { DEBATE_BAR_TIMEFRAME_MS, floorToBar } from '../../pipeline/debate-engine/index.js';
 import type {
   SaxoAssetType,
   SaxoInstrumentDetails,
@@ -21,13 +26,17 @@ import type {
 } from '../../pipeline/execution/index.js';
 import { AlpacaBrokerAdapter, SaxoBrokerAdapter } from '../../pipeline/execution/index.js';
 import type { LseMarkClient } from '../../providers/market-data-service/index.js';
+import { timeframeToMs } from '../../providers/market-data-service/index.js';
 import { MiArchiveStore } from '../../providers/market-intelligence/index.js';
+import type { LogEntry } from '../../shared/index.js';
+import { SimulatedClock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { startFromEnvironment, startingProfileForMode } from './index.js';
 import { LIVE_BOOK_GBP, LIVE_BOOK_SIZING_USD, paperStartingProfile } from './paper-profile.js';
 import { BROKER_VENUE_ENV_VAR, saxoTradeableUniverse } from './production/saxo-venue.js';
 import type { ProductionConfig, ProductionOrchestrator } from './production.js';
+import { buildTrendingCloses, ConstantResponseLlmClient } from './smoke-run.js';
 
 const NOW = new Date('2026-09-09T10:00:00.000Z');
 
@@ -102,6 +111,60 @@ function fixtureLseMarkClient(): LseMarkClient {
   };
 }
 
+/**
+ * The smoke gate's series is expressed in abstract units; this is what one of
+ * them is worth in pence, chosen so the mark lands at £32 — the order of
+ * magnitude the pool quotes at (3KOR was £20.49 on SIM, doc 44 §6.6).
+ *
+ * It is load-bearing, not cosmetic. Sizing is risk-budget-over-stop-distance
+ * and then floored to whole shares (#1216), and the stop distance is
+ * `atr_k x ATR`, which scales WITH the price. At the smoke fixture's own £159
+ * the same series sizes to 0 shares and the Trader skips on
+ * `below_min_notional` — a £32 line clears it with room.
+ */
+const PENCE_PER_SERIES_UNIT = 20;
+
+/** The mark the tick trades against, in the series' own units. */
+const MARK_PRICE_UNITS = 160;
+
+/**
+ * The same pence-quoting seam, carrying the series the offline smoke gate
+ * already proves reaches a `go` (`buildTrendingCloses`) — scaled x100 into
+ * GBX, so the GBX->GBP conversion runs on every bar of it.
+ *
+ * A flat series is not an oversight to fix by tuning: `fixtureLseMarkClient`'s
+ * constant 3115 short-circuits at `trader: no_trade`, and a MONOTONIC ramp
+ * pins RSI at 100 and makes the technical analyst read neutral (#625), so the
+ * only `go` reachable from one is the mediator-override branch. Rising WITH
+ * pullbacks is what makes the desk agree.
+ */
+function trendingLseMarkClient(now: Date): LseMarkClient {
+  return {
+    vendor: 'fixture-lse-trending',
+    getBars: async (_symbol, timeframe, asOf, limit) => {
+      const stepMs = timeframeToMs(timeframe);
+      return {
+        currency: 'GBX',
+        candles: buildTrendingCloses(limit, MARK_PRICE_UNITS - 1).map((close, index) => ({
+          open_time: new Date(asOf.getTime() - (limit - index) * stepMs),
+          open: close * PENCE_PER_SERIES_UNIT,
+          high: (close + 2) * PENCE_PER_SERIES_UNIT,
+          low: (close - 2) * PENCE_PER_SERIES_UNIT,
+          close: close * PENCE_PER_SERIES_UNIT,
+          volume: 10_000,
+        })),
+      };
+    },
+    getLatestQuote: async () => ({
+      currency: 'GBX',
+      price: MARK_PRICE_UNITS * PENCE_PER_SERIES_UNIT,
+      bid: MARK_PRICE_UNITS * PENCE_PER_SERIES_UNIT - 5,
+      ask: MARK_PRICE_UNITS * PENCE_PER_SERIES_UNIT + 5,
+      observed_at: now,
+    }),
+  };
+}
+
 function offlineInjections(db: StoreHandle): Partial<ProductionConfig> {
   return {
     db,
@@ -121,9 +184,11 @@ function offlineInjections(db: StoreHandle): Partial<ProductionConfig> {
       fetchPriceHistory: async () => [],
     },
     /**
-     * REQUIRED by the Saxo venue, not a convenience: Saxo's OpenAPI surface
-     * carries no balances endpoint, so without this the venue refuses rather
-     * than size a GBP book off Alpaca's USD account (#949).
+     * REQUIRED by the Saxo venue, not a convenience: this repo's Saxo client
+     * calls no balances endpoint, and the venue's own
+     * `GET /port/v1/balances/me` answers in EUR on the SIM trial account
+     * (doc 44 §6), so without this the venue refuses rather than size a GBP
+     * book off a foreign-currency account (#949).
      *
      * The REAL `AccountStateProvider` shape, uncast: a cast fixture here hid
      * the ceiling defect round 1 found, because an invented `equity`/
@@ -169,13 +234,19 @@ describe('startFromEnvironment (broker venue selection, #1400)', () => {
     else process.env.SAMURAI_MODE = savedMode;
   });
 
-  async function bootSaxo(gateway: SaxoOpenApiClient): Promise<ProductionOrchestrator> {
+  async function bootSaxo(
+    gateway: SaxoOpenApiClient,
+    logs?: LogEntry[],
+    overrides: Partial<ProductionConfig> = {},
+  ): Promise<ProductionOrchestrator> {
     process.env[BROKER_VENUE_ENV_VAR] = 'saxo';
     return await startFromEnvironment({
       ...startingProfileForMode('paper', undefined, 'saxo'),
       ...offlineInjections(db),
+      ...(logs === undefined ? {} : { logger: { log: (entry: LogEntry) => logs.push(entry) } }),
       lseMarkClient: fixtureLseMarkClient(),
       saxoBrokerClient: gateway,
+      ...overrides,
     });
   }
 
@@ -239,6 +310,110 @@ describe('startFromEnvironment (broker venue selection, #1400)', () => {
   });
 
   /**
+   * #1400 AC3's sixth stage, which SIM could not show — and what Execution
+   * does once it is reached.
+   *
+   * The real SIM run (doc 44 section 6.7) stopped one stage earlier, at
+   * Verdict's `stale_feed` gate. That is a real gate, not a wiring refusal,
+   * and no tick time clears it while the LSE real-time mark vendor is
+   * unprovisioned (#895): 0 of 65 `infoprices` readings across a whole
+   * morning came in under the 900 s bound. So SIM never reached Execution,
+   * and never reached the line this case reaches.
+   *
+   * Driving the SHIPPED composition root with the mark age as a fixture input
+   * gets there, and Execution refuses: `computeIdempotencyKey` returns a
+   * 64-character sha256 hex digest, and `submitBracket` asserts the whole
+   * `ExternalReference` fits Saxo's 50 (saxo-adapter.ts:521, limit at :110).
+   * The adapter's own docblock calls that overrun "latent rather than live
+   * only because `SaxoBrokerAdapter` has no production construction site yet"
+   * — #1400 BUILT that construction site, so it is live now, and no bracket
+   * this composition root produces can leave the process.
+   *
+   * It is not an artifact of the conviction floor moved below: every path to
+   * a `go` produces the same 64-character key. Nor is it entries only —
+   * `submitFlatten` asserts the same limit at suffix 0 (:686), so ADR-0014's
+   * mandatory flat-by-close exit is refused on the same arithmetic.
+   *
+   * Fixing it is NOT wiring, and so not this ticket's. The venue reference
+   * and the stored key must be the SAME string: the venue-enumeration paths
+   * (:1032, :1061, :1145, :1483, :1513) read `client_order_id` back off
+   * `ExternalReference` and match it against stored keys, so adapter-side
+   * truncation desynchronises reconcile and fill-sync silently (#1215's
+   * audited-paths rule). Any real fix changes `computeIdempotencyKey`'s own
+   * output or makes it venue-aware — a documented invariant restated in
+   * CONTEXT.md and the specs by #1487, which is an owner decision with a
+   * decision record behind it.
+   */
+  it('reaches the sixth stage, where Saxo refuses the 64-character idempotency key', async () => {
+    const clock = new SimulatedClock(NOW);
+    const gateway = fixtureSaxoGateway();
+    const profile = startingProfileForMode('paper', undefined, 'saxo');
+    const orchestrator = await bootSaxo(gateway, undefined, {
+      clock,
+      llmClient: new ConstantResponseLlmClient(),
+      lseMarkClient: trendingLseMarkClient(NOW),
+      /**
+       * The ONE tuning value this fixture moves, and the reason it has to.
+       *
+       * No MI vendor is configured offline, so two of the three equity
+       * analysts read `NO DATA` and land neutral; the mediator and the
+       * technical analyst carry the whole lean, and `computeConvictionScore`
+       * puts the debate at exactly the shipped floor (0.55). The Trader's
+       * conviction ramp is ZERO AT THE FLOOR by design (#625), so a debate
+       * that only equals it sizes 0 shares and skips on `below_min_notional`
+       * — a property of an offline desk, not of the Saxo venue. Lowering the
+       * floor gives the ramp somewhere to start.
+       *
+       * It does not weaken what this case asserts: the floor decides WHETHER
+       * a bracket is produced, never what the Execution stage does with one,
+       * and nothing in `saxo-venue.ts` or the adapter reads it.
+       */
+      traderConfig: { ...profile.traderConfig, conviction_floor: 0.45 },
+    });
+    // `startFromEnvironment` arms the tick loop, and `afterEach` closes the
+    // in-memory store under it. Nothing races today only because NOW sits
+    // outside #706's entry window, so the scheduler plans zero instruments —
+    // moving NOW without this would make the suite flaky rather than fail.
+    started = orchestrator;
+    const instrument = orchestrator.universe[0]?.asset ?? '';
+    const bar = floorToBar(NOW, DEBATE_BAR_TIMEFRAME_MS);
+
+    const outcome = await orchestrator.tickRunner.runInstrument(
+      { asset: instrument, asset_class: 'stocks' },
+      {
+        clock,
+        trace_id: 'trace-1400-saxo',
+        logger: { log: () => undefined },
+        auditLog: orchestrator.persistence.auditLog,
+        currentTickStore: orchestrator.persistence.currentTickStore,
+        decision_bar: {
+          id: `${bar.toISOString()}@${DEBATE_BAR_TIMEFRAME_MS}`,
+          open_time: bar,
+          timeframe_ms: DEBATE_BAR_TIMEFRAME_MS,
+        },
+      },
+    );
+
+    expect(
+      orchestrator.persistence.auditLog.getByTraceId('trace-1400-saxo').map((row) => row.stage),
+    ).toEqual(['analysts', 'debate', 'trader', 'risk', 'verdict', 'execution']);
+    expect(outcome.final_stage).toBe('execution');
+    expect(outcome.verdict_status).toBe('go');
+
+    // The refusal, and where it lands. A substring rather than the whole
+    // message: the character count in it is incidental to the constraint.
+    expect(outcome.execution_result?.status).toBe('error');
+    expect(outcome.execution_result?.reason).toContain('ExternalReference');
+    expect(outcome.execution_result?.reason).toContain('exceeds 50 chars');
+
+    // The load-bearing one: the assert precedes `placeIdempotently`, so
+    // nothing reached the venue. Read off the SAXO gateway itself, because
+    // the control arm executes on a `SimulatedBrokerAdapter` by design
+    // (control-arm-wiring.ts) — "an order was placed" proves nothing.
+    expect(gateway.placed).toHaveLength(0);
+  });
+
+  /**
    * The LSE closes at 16:30 London and `flatten_before_close_ms` is 5 minutes,
    * so the flatten tail is 16:25-16:30 London. The US cash close is 21:00
    * London, so the US tail is 20:55-21:00. Either instant alone would pass
@@ -248,6 +423,41 @@ describe('startFromEnvironment (broker venue selection, #1400)', () => {
    */
   const LSE_FLATTEN_TAIL = new Date('2026-09-09T15:27:00.000Z'); // 16:27 London
   const US_FLATTEN_TAIL = new Date('2026-09-09T19:57:00.000Z'); // 20:57 London
+
+  /**
+   * #1400 AC3's evidence requirement, and the reason it is a test rather than
+   * a log-tidying preference: a run's `PriceToContractFactor` per line decides
+   * whether an order goes out in pence or in pounds (#1302), and before this
+   * line the resolved value survived nowhere an operator could read it after
+   * the fact. The real SIM run this ticket records is only checkable against
+   * the units it traded on because this entry exists.
+   */
+  it('records each line’s resolved quote unit at boot, so a 100x factor is auditable', async () => {
+    const logs: LogEntry[] = [];
+    await bootSaxo(fixtureSaxoGateway(), logs);
+
+    const built = logs.find((entry) => entry.event === 'saxo_venue_built');
+    expect(built).toBeDefined();
+    expect(built?.payload).toMatchObject({ venue: 'saxo', mode: 'paper', environment: 'sim' });
+    const lines = (built?.payload as { lines?: unknown[] } | undefined)?.lines;
+    expect(lines).toHaveLength(saxoTradeableUniverse().length);
+    expect(lines?.[0]).toMatchObject({
+      asset: '3LUS',
+      asset_type: 'Etn',
+      currency: 'GBP',
+      price_currency: 'GBX',
+      price_to_contract_factor: 0.01,
+    });
+    for (const line of lines ?? []) {
+      expect(typeof (line as { uic?: unknown }).uic).toBe('number');
+      expect((line as { price_to_contract_factor?: unknown }).price_to_contract_factor).toBe(0.01);
+    }
+    // The gateway is selected by name, never by URL, and no credential is
+    // reachable from a log line.
+    const rendered = JSON.stringify(built);
+    expect(rendered).not.toContain('gateway.saxobank.com');
+    expect(rendered.toLowerCase()).not.toContain('token');
+  });
 
   it('gates and flattens the Saxo run on the LSE close, not the US close', async () => {
     const orchestrator = await bootSaxo(fixtureSaxoGateway());

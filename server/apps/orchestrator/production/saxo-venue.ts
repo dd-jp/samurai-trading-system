@@ -26,12 +26,16 @@
  *   that a GBP-native adapter does not by itself lift. Refusing here also
  *   means no live Saxo token is ever read: `SaxoHttpBrokerClient` is built
  *   against the `sim` gateway unconditionally.
- * - **No injected `accountState`.** `SaxoOpenApiClient` exposes no balances
- *   endpoint at all (saxo-client.ts), so the only funding read this repo has
- *   is `AlpacaAccountStateProvider`'s USD `GET /v2/account`. Sizing a GBP book
+ * - **No injected `accountState`.** `SaxoOpenApiClient` calls no balances
+ *   endpoint (saxo-client.ts), so the only funding read this repo has is
+ *   `AlpacaAccountStateProvider`'s USD `GET /v2/account`. Sizing a GBP book
  *   off a USD account is the #949 mismatch, so the venue refuses to boot
- *   rather than sizing off the wrong currency. #946 carries the GBP-native
- *   account read.
+ *   rather than sizing off the wrong currency. The venue itself DOES serve
+ *   `GET /port/v1/balances/me` — measured against SIM 2026-09-11, doc 44
+ *   §6 — but on the SIM trial account it answers `Currency: "EUR"`, so
+ *   calling it would ship the #949 mismatch in a second currency rather than
+ *   lift it. What is missing is a GBP-denominated account read, and NO OPEN
+ *   ISSUE OWNS IT.
  * - **A universe this venue does not trade.** The adapter routes by
  *   `lse_ticker`; anything else has no Uic, and an instrument that silently
  *   drops out of the resolver reads as a pool gap rather than a wiring one.
@@ -39,16 +43,26 @@
  * ## NOT REACHABLE FROM `main()` TODAY, and that is deliberate
  *
  * The entrypoint supplies no `accountState` — no GBP-native account read
- * exists in this repo (#946 owns it) — so an operator setting
- * `SAMURAI_BROKER=saxo` gets the `accountState` refusal above, by design and
- * not by omission. Everything below is reachable from a PROGRAMMATIC config
- * that injects one, which is what this branch's tests drive. Do not read the
- * venue's tests as evidence of an operator boot.
+ * exists in this repo, and no open issue owns building one — so an operator
+ * setting `SAMURAI_BROKER=saxo` gets the `accountState` refusal above, by
+ * design and not by omission. Everything below is reachable from a
+ * PROGRAMMATIC config that injects one, which is what this branch's tests
+ * drive. Do not read the venue's tests as evidence of an operator boot.
+ *
+ * ## What a real SIM boot measured (#1400 AC3, 2026-09-11)
+ *
+ * Everything below this module's two refusals works against the live SIM
+ * gateway: the resolver reads `/ref/v1/instruments/details` for all five
+ * tradeable lines, the adapter constructs, and the orchestrator reaches its
+ * startup reconcile. The two seams an operator still has to supply by hand
+ * are `accountState` (above) and `lseMarkClient` (#895, still an open owner
+ * decision), and NEITHER is missing wiring. Doc 44 §6 carries the run.
  */
 import type {
   BrokerAdapter,
   DormantLegsUnresolvedAlertChannel,
   LegResizeUnverifiedAlertChannel,
+  SaxoInstrumentResolver,
   SaxoOpenApiClient,
   UnresolvedPriceUnitAlertChannel,
 } from '../../../pipeline/execution/index.js';
@@ -116,8 +130,9 @@ export function resolveBrokerVenue(env: NodeJS.ProcessEnv = process.env): Broker
  * promised.
  *
  * `subclass` comes from `liveSizingSubclassFor`, so a row whose envelope has
- * not been MEASURED carries none and sizes on the generic ATR path rather
- * than on a D5 bracket nobody has calibrated for it.
+ * not been MEASURED carries none. That is NOT a generic-ATR fallback:
+ * `resolveSubclassBracket` only falls back when `subclass_of` is empty, and
+ * throws for a missing name once any row carries one (3KOR/3KWE today).
  *
  * WIDTH IS NOT THIS TICKET'S. #1310 ruled the live ramp widens to the 94
  * sterling Etn/Etc lines gated on burst-sampled p25 spread and ranked on
@@ -197,6 +212,8 @@ export async function buildSaxoBroker(deps: SaxoVenueDeps): Promise<BrokerAdapte
     );
   }
 
+  logResolvedUnits(deps, instruments);
+
   return new SaxoBrokerAdapter({
     client,
     instruments,
@@ -206,6 +223,52 @@ export async function buildSaxoBroker(deps: SaxoVenueDeps): Promise<BrokerAdapte
     priceUnitAlerts: deps.priceUnitAlerts,
     logger: deps.logger,
     ...(deps.clock === undefined ? {} : { clock: deps.clock }),
+  });
+}
+
+/**
+ * The quote unit each line resolved to, recorded at boot.
+ *
+ * `PriceToContractFactor` is read once per line from the venue and then used
+ * to turn every price this adapter sends or receives into cash
+ * (saxo-price-unit.ts). A wrong factor is a 100x order (#1302), and until
+ * this line existed the resolved value was held only in memory and appeared
+ * in no log, no audit row and no alert — so a run could not be checked after
+ * the fact against the units it actually traded on. The token and the
+ * gateway URL are deliberately absent: `environment` names which gateway
+ * without quoting a credential.
+ */
+function logResolvedUnits(deps: SaxoVenueDeps, instruments: SaxoInstrumentResolver): void {
+  deps.logger.log({
+    trace_id: 'startup',
+    stage: 'orchestrator',
+    event: 'saxo_venue_built',
+    level: 'info',
+    message: `Saxo broker adapter built for ${deps.universe.length} LSE ETP lines`,
+    payload: {
+      venue: 'saxo',
+      mode: deps.mode,
+      // 'sim' is asserted, not observed: buildSaxoBroker refuses live, and an
+      // injected client is not inspected for its gateway.
+      environment: 'sim',
+      // Every asset resolves — the caller threw otherwise — so the empty
+      // branch drops nothing.
+      lines: deps.universe.flatMap((instrument) => {
+        const ref = instruments.resolve(instrument.asset);
+        return ref === undefined
+          ? []
+          : [
+              {
+                asset: instrument.asset,
+                uic: ref.uic,
+                asset_type: ref.asset_type,
+                currency: ref.currency,
+                price_currency: ref.price_currency,
+                price_to_contract_factor: ref.price_to_contract_factor,
+              },
+            ];
+      }),
+    },
   });
 }
 
@@ -227,20 +290,24 @@ function assertSaxoVenueBootable(deps: SaxoVenueDeps): void {
       `Orchestrator cannot start: ${BROKER_VENUE_ENV_VAR}=saxo was selected with ` +
         'SAMURAI_MODE=live. The Saxo venue is wired against the SIM gateway only: the ' +
         "live-money gates (yarn check:live-gates) are open, and #949's currency-mismatch " +
-        'refusal stands until a same-currency GBP-native account read exists (#946). Run it ' +
-        'with SAMURAI_MODE=paper, or leave the venue unset to run the Alpaca path.',
+        'refusal stands until a same-currency GBP-native account read exists — no open issue ' +
+        'owns building one. Run it with SAMURAI_MODE=paper, or leave the venue unset to run ' +
+        'the Alpaca path.',
     );
   }
 
   if (deps.accountState === undefined) {
     throw new Error(
       `Orchestrator cannot start: ${BROKER_VENUE_ENV_VAR}=saxo requires ` +
-        "ProductionConfig.accountState to be supplied. Saxo's OpenAPI surface in this repo " +
-        '(saxo-client.ts) has no balances endpoint, so the only funding read available is ' +
+        "ProductionConfig.accountState to be supplied. This repo's Saxo client " +
+        '(saxo-client.ts) calls no balances endpoint, so the only funding read available is ' +
         "AlpacaAccountStateProvider's USD GET /v2/account — and sizing a GBP LSE book off a " +
         'USD account balance is exactly the currency mismatch #949 refuses every live entry ' +
-        'on. #946 carries the GBP-native account read; until it lands the equity this venue ' +
-        'sizes against has to be supplied deliberately, not inherited from another venue.',
+        "on. The venue's own GET /port/v1/balances/me answers Currency: EUR on the SIM trial " +
+        'account (measured 2026-09-11, doc 44 §6), so calling it would re-ship that mismatch ' +
+        'rather than lift it. No open issue owns the GBP-native account read, so until one ' +
+        'exists the equity this venue sizes against has to be supplied deliberately, not ' +
+        'inherited from another venue.',
     );
   }
 }
