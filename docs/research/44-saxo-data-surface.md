@@ -984,3 +984,111 @@ reopenable spec decisions and want a wayfinder map.
 
 **The one that gates the live ramp is 6.** It is cheap, it is decidable with a single call, and
 it is the only item on this list where being wrong costs money rather than time.
+
+---
+
+## 6. The real SIM orchestrator boot — measured 2026-09-11 (#1400 AC3)
+
+Everything above reads the gateway directly. This section runs the **shipped orchestrator** at
+it: `SAMURAI_BROKER=saxo`, `SAMURAI_MODE=paper`, the SIM gateway, a 24-hour developer token, and
+a store path outside the checkout so no soak database is touched. Credentials are named by
+variable only; no value appears here or in any log line the run produced.
+
+### 6.1 Method
+
+`startFromEnvironment` (`server/apps/orchestrator/index.ts`) with the shipped Saxo profile and
+**two injections**, each standing in for a seam this repo deliberately leaves unwired —
+`accountState` (§6.3) and `lseMarkClient` (#895). Nothing else was stubbed: the broker adapter,
+the instrument resolver, the calendar, the scheduler, the store and the startup reconcile are
+the shipped ones, and the instrument resolution below is the venue's own answer.
+
+### 6.2 The boot refusal chain, in order
+
+| Order | Refusal | Is it missing wiring? |
+| --- | --- | --- |
+| 1 | `SAMURAI_BROKER=saxo requires ProductionConfig.accountState to be supplied` | **No** — §6.3 |
+| 2 | `buildLseMarkSourceIfNeeded`: an LSE universe with no `config.lseMarkClient` | **No** — #895 is an open owner decision |
+| — | (with both supplied) boots clean | — |
+
+### 6.3 `GET /port/v1/balances/me` exists — and answers in EUR
+
+`saxo-venue.ts` claimed "Saxo's OpenAPI surface in this repo (saxo-client.ts) has no balances
+endpoint" and pointed at **#946** for the GBP-native account read. Both halves needed correcting:
+
+- The **venue** serves `/port/v1/balances/me`. What is true is narrower — this repo's
+  `SaxoOpenApiClient` does not call it.
+- On the SIM **trial** account (`IsTrialAccount: true`, `DefaultCurrency: "EUR"`, §1) it reports
+  `Currency: "EUR"`. Sizing the GBP book off it would ship #949's currency mismatch in a second
+  currency rather than lift it.
+- **#946 never carried an account read.** It shipped the venue-change docs and the T212-named
+  code, and closed 2026-09-01. **No open issue owns the GBP-native account read** — the pointer
+  was to a ticket that was never going to deliver it.
+
+### 6.4 What the boot proves
+
+The venue now records its resolved units at construction (`saxo_venue_built`), which is how the
+run below is checkable after the fact. Verbatim from the SIM run, `payload.lines`:
+
+| Line | Uic | AssetType | CurrencyCode | PriceCurrency | PriceToContractFactor |
+| --- | --- | --- | --- | --- | --- |
+| 3LUS | 29049628 | Etn | GBP | GBX | 0.01 |
+| LQQ3 | 29391797 | Etn | GBP | GBX | 0.01 |
+| LCO3 | 42347700 | Etn | GBP | GBX | 0.01 |
+| 3KOR | 55762873 | Etn | GBP | GBX | 0.01 |
+| 3KWE | 31532726 | Etn | GBP | GBX | 0.01 |
+
+`sizing_capital_ceiling_resolved` reported `1000, declared in the account currency — no FX
+conversion applied`; both startup reconciles completed; `orchestrator_started` followed. No
+Alpaca broker client is built on this path.
+
+### 6.5 The mark path against the live feed
+
+`GET /chart/v3/charts` (`Mode=UpTo`, `Horizon` in minutes) and `GET /trade/v1/infoprices`
+(`FieldGroups=Quote,PriceInfoDetails,DisplayAndFormat`) both serve every line. GBX→GBP conversion
+happens in `LseMarkDataSource`, and the marks came back in pounds. Measured mark ages at
+07:00Z, against `max_mark_age.stocks` of 15 minutes:
+
+| Line | Mark (GBP) | `LastUpdated` age | Passes a 15-min bound? |
+| --- | --- | --- | --- |
+| 3LUS | 135.515 | 1,250 s | no |
+| LQQ3 | 302.02 | 28,477 s | no |
+| LCO3 | 0.075 | 28,479 s | no |
+| 3KOR | 21.445 | 28,521 s | no |
+| 3KWE | 3.9335 | 28,520 s | no |
+
+Four of the five carried the **previous evening's** `LastUpdated` while `MarketState` read
+`Open`. That is a stronger statement than the 15-minute tier of §2.9a: SIM's `infoprices` does
+not refresh a thin line at the open at all. It is an account-shaped fact (doc 44 §1's split), so
+it does not carry to a live entitled account — but it does mean a SIM run cannot produce a
+fresh-feed `go`.
+
+### 6.6 Sizing arithmetic the prices force
+
+At ADR-0018 D5 against the £1,000 book, with `MinimumLotSize 1.0`, `OddLotsNotAllowed` and
+`AmountDecimals 0` on these lines:
+
+| Line | Subclass | Per-position cash | Price | Whole shares |
+| --- | --- | --- | --- | --- |
+| 3LUS | `index_etp_3x` | £350 | £135.52 | 2 |
+| LQQ3 | `index_etp_3x` | £350 | £300.95 | **1** |
+| LCO3 | `single_stock_etp_3x` | £250 | £0.075 | ~3,300 |
+| 3KOR | (none — generic ATR) | — | £20.49 | — |
+| 3KWE | (none — generic ATR) | — | £3.90 | — |
+
+LQQ3 admits exactly one share and has no room for a partial-fill resize. Were it ever
+reclassified to the £250 single-stock bracket it would become **unenterable at any conviction**.
+Same class as the whole-share ceiling already recorded against the pool, noted here because this
+is the first run to price these five lines together.
+
+### 6.7 What AC3 still lacks, and what it does not
+
+The wiring is proven end to end: venue selection, adapter construction, per-line unit resolution
+from the venue, the LSE calendar, the scheduler, the store and the startup reconcile all ran
+against the real SIM gateway. Two blockers stand between that and a six-stage tick, and neither
+is wiring:
+
+1. **No GBP-native account read** — the run injects `accountState` by hand, and no open issue
+   owns building one (§6.3).
+2. **No real-time LSE entitlement** — the SIM feed is 15-minutes-delayed by tier and does not
+   refresh thin lines at all (§6.5), so a fresh-mark gate cannot pass on it. #895 (vendor choice
+   and provisioning) carries that, under map #1308.

@@ -8,9 +8,13 @@
  * ticket reports: `SaxoBrokerAdapter` was built, tested, and constructed by
  * nothing.
  *
- * There are NO Saxo credentials on this host, so the venue is driven against a
- * fixture gateway shaped by docs/research/43-saxo-openapi-order-idempotency.md
- * and docs/research/44-saxo-data-surface.md. A real SIM boot is unproven.
+ * The venue is driven against a fixture gateway shaped by
+ * docs/research/43-saxo-openapi-order-idempotency.md and
+ * docs/research/44-saxo-data-surface.md, so this suite reaches no network. The
+ * SAME path was run against the real SIM gateway on 2026-09-11 (doc 44 §6):
+ * the resolver, the adapter and the startup reconcile all completed, and the
+ * only seams an operator still supplies by hand are `accountState` and
+ * `lseMarkClient`, neither of which is missing wiring.
  */
 
 import type {
@@ -22,6 +26,7 @@ import type {
 import { AlpacaBrokerAdapter, SaxoBrokerAdapter } from '../../pipeline/execution/index.js';
 import type { LseMarkClient } from '../../providers/market-data-service/index.js';
 import { MiArchiveStore } from '../../providers/market-intelligence/index.js';
+import type { LogEntry } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { startFromEnvironment, startingProfileForMode } from './index.js';
@@ -121,9 +126,11 @@ function offlineInjections(db: StoreHandle): Partial<ProductionConfig> {
       fetchPriceHistory: async () => [],
     },
     /**
-     * REQUIRED by the Saxo venue, not a convenience: Saxo's OpenAPI surface
-     * carries no balances endpoint, so without this the venue refuses rather
-     * than size a GBP book off Alpaca's USD account (#949).
+     * REQUIRED by the Saxo venue, not a convenience: this repo's Saxo client
+     * calls no balances endpoint, and the venue's own
+     * `GET /port/v1/balances/me` answers in EUR on the SIM trial account
+     * (doc 44 §6), so without this the venue refuses rather than size a GBP
+     * book off a foreign-currency account (#949).
      *
      * The REAL `AccountStateProvider` shape, uncast: a cast fixture here hid
      * the ceiling defect round 1 found, because an invented `equity`/
@@ -169,11 +176,15 @@ describe('startFromEnvironment (broker venue selection, #1400)', () => {
     else process.env.SAMURAI_MODE = savedMode;
   });
 
-  async function bootSaxo(gateway: SaxoOpenApiClient): Promise<ProductionOrchestrator> {
+  async function bootSaxo(
+    gateway: SaxoOpenApiClient,
+    logs?: LogEntry[],
+  ): Promise<ProductionOrchestrator> {
     process.env[BROKER_VENUE_ENV_VAR] = 'saxo';
     return await startFromEnvironment({
       ...startingProfileForMode('paper', undefined, 'saxo'),
       ...offlineInjections(db),
+      ...(logs === undefined ? {} : { logger: { log: (entry: LogEntry) => logs.push(entry) } }),
       lseMarkClient: fixtureLseMarkClient(),
       saxoBrokerClient: gateway,
     });
@@ -248,6 +259,41 @@ describe('startFromEnvironment (broker venue selection, #1400)', () => {
    */
   const LSE_FLATTEN_TAIL = new Date('2026-09-09T15:27:00.000Z'); // 16:27 London
   const US_FLATTEN_TAIL = new Date('2026-09-09T19:57:00.000Z'); // 20:57 London
+
+  /**
+   * #1400 AC3's evidence requirement, and the reason it is a test rather than
+   * a log-tidying preference: a run's `PriceToContractFactor` per line decides
+   * whether an order goes out in pence or in pounds (#1302), and before this
+   * line the resolved value survived nowhere an operator could read it after
+   * the fact. The real SIM run this ticket records is only checkable against
+   * the units it traded on because this entry exists.
+   */
+  it('records each line’s resolved quote unit at boot, so a 100x factor is auditable', async () => {
+    const logs: LogEntry[] = [];
+    await bootSaxo(fixtureSaxoGateway(), logs);
+
+    const built = logs.find((entry) => entry.event === 'saxo_venue_built');
+    expect(built).toBeDefined();
+    expect(built?.payload).toMatchObject({ venue: 'saxo', mode: 'paper', environment: 'sim' });
+    const lines = (built?.payload as { lines?: unknown[] } | undefined)?.lines;
+    expect(lines).toHaveLength(saxoTradeableUniverse().length);
+    expect(lines?.[0]).toMatchObject({
+      asset: '3LUS',
+      asset_type: 'Etn',
+      currency: 'GBP',
+      price_currency: 'GBX',
+      price_to_contract_factor: 0.01,
+    });
+    for (const line of lines ?? []) {
+      expect(typeof (line as { uic?: unknown }).uic).toBe('number');
+      expect((line as { price_to_contract_factor?: unknown }).price_to_contract_factor).toBe(0.01);
+    }
+    // The gateway is selected by name, never by URL, and no credential is
+    // reachable from a log line.
+    const rendered = JSON.stringify(built);
+    expect(rendered).not.toContain('gateway.saxobank.com');
+    expect(rendered.toLowerCase()).not.toContain('token');
+  });
 
   it('gates and flattens the Saxo run on the LSE close, not the US close', async () => {
     const orchestrator = await bootSaxo(fixtureSaxoGateway());
