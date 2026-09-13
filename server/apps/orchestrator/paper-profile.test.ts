@@ -191,14 +191,22 @@ describe('paperStartingProfile', () => {
     });
 
     it('leaves the stocks staleness bound well clear of one debate latency budget', () => {
-      // `LATENCY_BUDGET_MS.stocks` is 60s and gate 1 measures age from
-      // `decided_at` (#1190) — `clock.now()` read at Trader intent-build
-      // time, bounded by that same debate latency budget, not the quote's own
-      // `observed_at`. If it ever approached this bound, every equity order
-      // would no-go on staleness and the soak would silently trade crypto only.
+      // Gate 1 measures age from `decided_at` (#1190) — `clock.now()` read at
+      // Trader intent-build time, bounded by the debate latency budget, not by
+      // the quote's own `observed_at`. If it ever approached this bound, every
+      // equity order would no-go on staleness and the soak would silently trade
+      // crypto only.
+      //
+      // The multiple was 10x against a 60,000ms budget until #1080 (2026-09-14)
+      // sized the budget against the calls a debate actually issues. At
+      // 112,000ms the ratio is 8x, so a debate that spends its ENTIRE budget
+      // still hands Verdict an intent at an eighth of the staleness bound —
+      // still well clear, and the property this asserts is unchanged. 5x is the
+      // floor below which it would stop being: the gate has to have room for
+      // the rest of the pass (Trader, Risk, Verdict) on top of the debate.
       const { verdictConfig } = paperStartingProfile('paper');
 
-      expect(verdictConfig.max_signal_age.stocks).toBeGreaterThan(10 * LATENCY_BUDGET_MS.stocks);
+      expect(verdictConfig.max_signal_age.stocks).toBeGreaterThan(5 * LATENCY_BUDGET_MS.stocks);
     });
 
     it('correlates over a window Alpaca can serve on tick 1, so #303 is not reachable here', () => {

@@ -237,6 +237,36 @@ describe('AnthropicLlmClient', () => {
     expect(wire.createMessage).toHaveBeenCalledTimes(2);
   });
 
+  /**
+   * #1080. A timeout is the one retryable class whose failing attempt costs
+   * the FULL per-attempt deadline, and the caller that issues it is racing a
+   * latency budget the retry was never counted against. Measured over three
+   * soak sessions: 22 of 22 retried attempts in the 2026-09-03 sample reported
+   * `elapsed_ms` between 28,002 and 28,007 — every one of them the deadline
+   * itself — and none contributed a success. Rate limit and malformed response
+   * keep their retry: a 429 fails in milliseconds and carries `Retry-After`,
+   * and a malformed draw is reparseable on a fresh sample.
+   *
+   * The assertion that matters is the ATTEMPT COUNT, not the thrown class.
+   */
+  it('does not retry a timeout, whose failed attempt spends the whole deadline (#1080)', async () => {
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi.fn().mockImplementation(() => new Promise(() => {})),
+    };
+    const client = new AnthropicLlmClient(wire, {
+      model: 'anthropic/claude-sonnet-5',
+      max_tokens: 1024,
+      timeoutMs: 1_000,
+      retry: { maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 1_000 },
+    });
+
+    const rejection = expect(client.complete(request())).rejects.toBeInstanceOf(LlmTimeoutError);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await rejection;
+
+    expect(wire.createMessage).toHaveBeenCalledTimes(1);
+  });
+
   it('does not retry an unclassified LlmProviderError (isRetryable closure, #271)', async () => {
     const wire: AnthropicMessagesClient = {
       createMessage: vi.fn().mockRejectedValue(new Error('server exploded')),

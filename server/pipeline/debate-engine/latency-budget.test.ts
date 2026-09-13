@@ -3,6 +3,9 @@ import {
   DebateBudgetExceededError,
   enforceLatencyBudget,
   LATENCY_BUDGET_MS,
+  llmCallsPerDebate,
+  MAX_ROUNDS_BY_ASSET_CLASS,
+  MEASURED_DEBATE_CALL_CEILING_MS,
   type PartialDebateState,
 } from './latency-budget.js';
 import {
@@ -129,7 +132,7 @@ describe('enforceLatencyBudget', () => {
     expect(result.timed_out?.budget_ms).toBe(30_000);
   });
 
-  it('enforces the 60s hard cap for stocks', async () => {
+  it('enforces the 112s hard cap for stocks', async () => {
     const logger = makeLogger();
 
     const promise = enforceLatencyBudget({
@@ -153,7 +156,7 @@ describe('enforceLatencyBudget', () => {
     await vi.advanceTimersByTimeAsync(1);
     const result = await promise;
     expect(result.converged).toBe(false);
-    expect(result.timed_out?.budget_ms).toBe(60_000);
+    expect(result.timed_out?.budget_ms).toBe(112_000);
   });
 
   it('differentiates budgets by asset class (crypto times out before stocks would)', async () => {
@@ -264,8 +267,8 @@ describe('enforceLatencyBudget', () => {
       expect.objectContaining({
         trace_id: 'trace-9',
         debate_id: 'debate-9',
-        elapsed_ms: 60_000,
-        budget_ms: 60_000,
+        elapsed_ms: 112_000,
+        budget_ms: 112_000,
       }),
     );
   });
@@ -748,5 +751,32 @@ describe('enforceLatencyBudget', () => {
     await promise;
 
     expect(logger.logTimeout).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * #1080. The budget and the round cap are one decision (the `MAX_ROUNDS_BY_ASSET_CLASS`
+ * comment says so for crypto); this pins the arithmetic that joins them, so a
+ * budget can no longer be set to a number the debate it bounds cannot finish in.
+ *
+ * Both sides are literals rather than the shipped constants: comparing
+ * `LATENCY_BUDGET_MS.stocks` against a value derived from `LATENCY_BUDGET_MS.stocks`
+ * is an identity that holds for any budget, including one nobody chose.
+ */
+describe('the stocks debate budget against the calls the debate issues (#1080)', () => {
+  it('counts three persona calls per round plus one disagreement detection per debate', () => {
+    expect(llmCallsPerDebate(1)).toBe(4);
+    expect(llmCallsPerDebate(3)).toBe(10);
+  });
+
+  it('affords every sequential call a stocks debate issues at the measured per-call ceiling', () => {
+    expect(MEASURED_DEBATE_CALL_CEILING_MS).toBe(28_000);
+    expect(MAX_ROUNDS_BY_ASSET_CLASS.stocks).toBe(1);
+
+    const worstCaseDebateMs =
+      llmCallsPerDebate(MAX_ROUNDS_BY_ASSET_CLASS.stocks) * MEASURED_DEBATE_CALL_CEILING_MS;
+
+    expect(worstCaseDebateMs).toBeLessThanOrEqual(LATENCY_BUDGET_MS.stocks);
+    expect(LATENCY_BUDGET_MS.stocks).toBe(112_000);
   });
 });

@@ -164,6 +164,97 @@ describe('MarketDataServiceImpl.getBars — per-bar-interval caching (#391)', ()
     expect(second).toEqual(first);
   });
 
+  /**
+   * #1080. The cache above writes on COMPLETION, so it cannot see a request
+   * that is still in flight: N concurrent callers asking for the same window
+   * all miss, all queue on the venue token bucket, and all pay for the same
+   * bytes. Measured in the 2026-09-10 19:56 soak burst — 133 `market_data_fetch`
+   * lines over 34 distinct `(instrument, timeframe, lookback)` triples, every
+   * one logged `cache: "miss"`, with `(NFLX, 1d, 30)` fetched seven times in
+   * one tick. 74% of the burst's venue tokens bought nothing.
+   *
+   * Concurrency is the trigger, so the assertion has to be concurrent: awaiting
+   * the calls in sequence would be satisfied by the completion cache alone and
+   * would pass before this fix.
+   */
+  it('coalesces concurrent callers asking for the same window into one fetch (#1080)', async () => {
+    const { service, source } = buildCounting('live');
+    const window = { timeframe: TIMEFRAME, lookback: 2 };
+
+    const results = await Promise.all(
+      Array.from({ length: 7 }, () => service.getBars(INSTRUMENT, window, ASOF)),
+    );
+
+    expect(source.fetches).toBe(1);
+    for (const result of results) {
+      expect(result).toEqual(results[0]);
+    }
+  });
+
+  it('does not coalesce concurrent callers asking for DIFFERENT windows (#1080)', async () => {
+    const { service, source } = buildCounting('live');
+
+    await Promise.all([
+      service.getBars(INSTRUMENT, { timeframe: TIMEFRAME, lookback: 1 }, ASOF),
+      service.getBars(INSTRUMENT, { timeframe: TIMEFRAME, lookback: 2 }, ASOF),
+    ]);
+
+    expect(source.fetches).toBe(2);
+  });
+
+  it('releases the in-flight entry so a later interval still re-fetches (#1080)', async () => {
+    const { service, source } = buildCounting('live');
+    const window = { timeframe: TIMEFRAME, lookback: 2 };
+
+    await Promise.all([
+      service.getBars(INSTRUMENT, window, ASOF),
+      service.getBars(INSTRUMENT, window, ASOF),
+    ]);
+    await service.getBars(INSTRUMENT, window, new Date(ASOF.getTime() + 60 * 60_000));
+
+    expect(source.fetches).toBe(2);
+  });
+
+  /**
+   * A shared in-flight promise must not turn one caller's failure into a
+   * permanently poisoned key: the entry has to be dropped when it rejects, or
+   * every later caller replays a stale error instead of retrying.
+   */
+  it('drops a rejected in-flight entry rather than replaying it (#1080)', async () => {
+    const source = new CountingDataSource(
+      new FixtureDataSource(
+        BARS,
+        { price: 999, observed_at: new Date('2026-07-15T10:59:59Z'), source: 'fixture-live' },
+        'crypto',
+      ),
+    );
+    let failNext = true;
+    const inner = source.fetchBars.bind(source);
+    source.fetchBars = async (instrument, window, asOf) => {
+      if (failNext) {
+        failNext = false;
+        throw new Error('venue refused');
+      }
+      return inner(instrument, window, asOf);
+    };
+    const service = new MarketDataServiceImpl(
+      source,
+      new ManualClock(ASOF),
+      'live',
+      new SqliteMarketDataStore(openSharedStore(':memory:')),
+    );
+    const window = { timeframe: TIMEFRAME, lookback: 2 };
+
+    const [first, second] = await Promise.allSettled([
+      service.getBars(INSTRUMENT, window, ASOF),
+      service.getBars(INSTRUMENT, window, ASOF),
+    ]);
+    expect(first.status).toBe('rejected');
+    expect(second.status).toBe('rejected');
+
+    await expect(service.getBars(INSTRUMENT, window, ASOF)).resolves.toHaveLength(2);
+  });
+
   it('re-fetches once the bar interval rolls over', async () => {
     const { service, source } = buildCounting('live');
     const window = { timeframe: TIMEFRAME, lookback: 2 };

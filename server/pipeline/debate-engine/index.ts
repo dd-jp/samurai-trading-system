@@ -43,7 +43,10 @@ export {
   DebateBudgetExceededError,
   enforceLatencyBudget,
   LATENCY_BUDGET_MS,
+  LLM_CALLS_PER_ROUND,
+  llmCallsPerDebate,
   MAX_ROUNDS_BY_ASSET_CLASS,
+  MEASURED_DEBATE_CALL_CEILING_MS,
 } from './latency-budget.js';
 export type {
   AnthropicLlmClientConfig,

@@ -19,6 +19,8 @@ import { buildArmComparison } from '../../pipeline/control-arm/index.js';
 import {
   AnthropicLlmClient,
   LATENCY_BUDGET_MS,
+  llmCallsPerDebate,
+  MAX_ROUNDS_BY_ASSET_CLASS,
   MockLlmClient,
   SqliteDebateLogStore,
   SqliteSpendCap,
@@ -2046,31 +2048,48 @@ describe('buildProductionComponents (default llmClient fallback)', () => {
   });
 
   /**
-   * #1080: the previous retry schedule let ONE logical LLM call occupy
-   * `2 * (30,000 + 2,000)` = 64,000ms, more than the whole budget the debate
-   * issuing it was racing. See `LOGICAL_LLM_CALL_BUDGET_MS` (defaults.ts) for
-   * the arithmetic and for why the crypto budget is knowingly out of bounds.
+   * #1080. Two things had to hold and only one did.
    *
-   * The BUDGET side is a literal here on purpose. `DEFAULT_LLM_TIMEOUT_MS` is
+   * The old assertion was that ONE logical call fits the budget:
+   * `2 * (30,000 + 2,000)` = 64,000ms against 60,000ms failed it, and
+   * 28,000ms fixed it. What it explicitly did NOT check — and said so — is that
+   * the budget fits the DEBATE, which is `llmCallsPerDebate(maxRounds)`
+   * sequential calls, not one. At three rounds that was ten calls against a
+   * 60s budget, and the measurement is what it produced: 46 of 58 debates
+   * recorded `rounds = 0`. The whole-debate side is now asserted here.
+   *
+   * Both budget figures are literals on purpose. `DEFAULT_LLM_TIMEOUT_MS` is
    * derived from `LATENCY_BUDGET_MS.stocks`, so comparing the shipped config
    * against that same constant is an identity — it holds for any budget,
-   * including one nobody chose, and would keep passing if the derivation were
-   * replaced by a hand-picked wider timeout. Pinning 60,000 makes both sides
+   * including one nobody chose. Pinning the numbers makes the sides
    * independent: a hand-edited `timeoutMs` fails the inequality, and a moved
-   * latency budget fails the literal and has to be re-read here.
-   *
-   * What this is NOT: an allocation of the budget across a debate's calls. A
-   * three-round debate issues nine of them sequentially, so a per-attempt
-   * ceiling cannot make the budget reachable — that is the open question #1080
-   * leaves to a session that can measure it.
+   * latency budget or round cap fails a literal and has to be re-read here.
    */
   it('cannot let one logical LLM call outlast the latency budget it runs inside', () => {
-    expect(LATENCY_BUDGET_MS.stocks).toBe(60_000);
+    expect(LATENCY_BUDGET_MS.stocks).toBe(112_000);
 
     const { maxAttempts, maxDelayMs } = DEFAULT_LLM_CLIENT_CONFIG.retry;
-    const worstCaseLogicalCallMs = maxAttempts * (DEFAULT_LLM_CLIENT_CONFIG.timeoutMs + maxDelayMs);
+    const worstCaseLogicalCallMs =
+      maxAttempts * DEFAULT_LLM_CLIENT_CONFIG.timeoutMs + (maxAttempts - 1) * maxDelayMs;
 
-    expect(worstCaseLogicalCallMs).toBeLessThanOrEqual(60_000);
+    expect(worstCaseLogicalCallMs).toBeLessThanOrEqual(112_000);
+  });
+
+  /**
+   * #1080's own acceptance criterion, as an invariant: the budget must afford
+   * every call the debate it bounds issues, at the per-attempt ceiling. A
+   * timeout is the only failure mode that can consume a full deadline and is no
+   * longer retried (`isRetryable`, anthropic-client.ts), so the per-call cost
+   * here is `timeoutMs` rather than the whole retry schedule.
+   */
+  it('affords every sequential call a stocks debate issues (#1080)', () => {
+    expect(MAX_ROUNDS_BY_ASSET_CLASS.stocks).toBe(1);
+    expect(DEFAULT_LLM_CLIENT_CONFIG.timeoutMs).toBe(28_000);
+
+    const worstCaseDebateMs =
+      llmCallsPerDebate(MAX_ROUNDS_BY_ASSET_CLASS.stocks) * DEFAULT_LLM_CLIENT_CONFIG.timeoutMs;
+
+    expect(worstCaseDebateMs).toBeLessThanOrEqual(112_000);
   });
 
   /**

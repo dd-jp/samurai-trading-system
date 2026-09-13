@@ -56,7 +56,7 @@ Key architectural decisions:
 ### Failure Handling & Resilience
 
 18. As the Analysts layer, I want to enforce a role-dependent quorum (Technical + Fundamental mandatory, Sentiment optional) by skipping the tick when a mandatory lens is missing, so that I only emit views when the essential lenses are present.
-19. As the Analysts layer, I want to retry a failing analyst exactly once with a short timeout before giving up, so that transient blips are absorbed without retry storms.
+19. As the Analysts layer, I want to retry a failing analyst exactly once with a short timeout before giving up, so that transient blips are absorbed without retry storms. (The timeout is 30,000ms since 2026-09-14, [#1080](https://github.com/dd-jp/samurai-trading-system/issues/1080) — see "Module: Failure Handling".)
 20. As the Analysts layer, I want to treat malformed/unparseable analyst output identically to a timeout or error, so that I maintain one failure path (differing only in the logged reason).
 21. As the Analysts layer, I want to skip the entire tick when a mandatory analyst fails even after retry, so that I never feed the Debate Engine a stale or missing essential lens.
 22. As the Analysts layer, I want to proceed with the reduced set when an optional analyst fails, so that a flaky sentiment feed never blocks a trade.
@@ -196,6 +196,20 @@ Fundamental and Sentiment analysts consume free text sourced from Market Intelli
    - **Mandatory analyst** (Technical, Fundamental) → hard-block: **skip the entire tick**. No stale-view fallback, no partial debate.
    - **Optional analyst** (Sentiment) → proceed with the reduced set; the debate runs without it.
 3. Every failure is logged with its reason. An active alert fires only after **2 consecutive skipped ticks**; a single isolated skip is log-only.
+
+**The "short timeout", as a number — amended 2026-09-14 ([#1080](https://github.com/dd-jp/samurai-trading-system/issues/1080))**
+
+`DEFAULT_ANALYST_TIMEOUT_MS` is **30,000ms** (was 10,000ms). It is not a guess at how long an HTTP fetch takes; it is the queue that fetch waits in.
+
+The mandatory `technical` analyst issues no LLM call — it fetches bars and computes indicators locally. Those fetches take `acquireBackground()` on the Alpaca token bucket shared with the order path (`server/shared/http/venue-pacing.ts`), which holds `capacity - reserveForPriority` = 20 tokens above the order path's reserve and refills at 2.0/s. One sweep of the 20-instrument universe asks for up to four distinct bar windows per instrument (`5m/260`, `1h/57`, `1h/20`, `1d/30` — measured shapes in a single soak tick), so the sweep's drain is `(20 × 4 − 20) / 2.0` = **30 seconds**. A fetch that cannot get a token has not started, so at a 10s deadline the instruments at the back of every sweep timed out by construction.
+
+That is #1080's instance 2, measured rather than inferred: in the 2026-09-10 19:56 burst, 91 of 133 `market_data_fetch` lines exceeded 10,000ms with a median of 21,338ms, and the ticket reports 57% of main-arm runs missing quorum on `technical did not answer within 10000ms` with no fault logged anywhere — because there was none.
+
+The other half of the fix is upstream of this deadline: concurrent callers asking for the SAME window no longer each spend a venue token (`MarketDataServiceImpl` single-flight coalescing), which removed 74% of the measured burst (133 fetches over 34 distinct windows, one window fetched seven times in one tick, every line logged `cache: "miss"` because the cache writes on completion and could not see a request still in flight). This deadline covers what remains.
+
+The derivation is pinned from the pacing side by `server/apps/orchestrator/production/rate-limit-wiring.test.ts`, where the bucket's constants live. 30s is a quarter of the two-minute tick cadence, so a hung upstream still costs freshness rather than wedging the scheduler — the property the old figure claimed against ADR-0008's since-superseded 15-minute cadence.
+
+**Legibility is unchanged and already sufficient**: a quorum miss caused by this deadline writes `quorum_skip_timeout` (not `quorum_skip`) to `audit_log.decision` and lifts the tick line to `warn`, so a budget-starved no-trade stays distinguishable from a genuine no-signal (#1103).
 
 **Rationale** — a stale mandatory view risks a confidently-wrong technical/fundamental read, a worse failure than missing one cycle; this matches the project's safety-over-uptime posture for live money.
 

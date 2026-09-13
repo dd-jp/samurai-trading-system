@@ -8,9 +8,12 @@
  * component: `RateLimiter` was implemented, unit-tested and exported, and
  * constructed nowhere in production, while every unit test passed.
  */
+
+import { DEFAULT_ANALYST_TIMEOUT_MS } from '../../../pipeline/analysts/index.js';
 import type { AnalystView, LlmClient, LlmRequest } from '../../../pipeline/debate-engine/index.js';
 import {
   InMemoryDebateLogStore,
+  LLM_CALLS_PER_ROUND,
   MAX_ROUNDS,
   MAX_ROUNDS_BY_ASSET_CLASS,
   RateLimiter,
@@ -40,7 +43,6 @@ import { SequentialTickRunner } from '../tick-runner.js';
 import type { AuditLog, CurrentTickStore, TickPlan, TickSteps } from '../types.js';
 import {
   buildDebateStep,
-  LLM_CALLS_PER_ROUND,
   WORST_CASE_LLM_CALLS_PER_DEBATE,
   worstCaseLlmCallsForAssetClass,
 } from './debate-adapter.js';
@@ -424,8 +426,10 @@ describe('the reserved worst case matches what a debate can actually spend', () 
   it('is not exceeded by a debate that runs to the hard round cap', async () => {
     // The assertion that makes the constant more than arithmetic: run the real
     // personas to the cap and count. Under-reserving would let a debate blow
-    // the budget it was admitted under. Stocks, since #581 capped crypto at
-    // one round — the crypto counterpart is the test below.
+    // the budget it was admitted under. Stocks, which #1080 capped at one round
+    // alongside crypto — the crypto counterpart is the test below, and this one
+    // now asserts the PER-CLASS cap rather than `MAX_ROUNDS`, which remains the
+    // structural ceiling `runDebate` validates against.
     const llmClient = countingLlmClient({ converged: false });
     const rateLimiter = new RateLimiter(CLOCK, budget());
     const step = buildDebateStep(
@@ -444,7 +448,8 @@ describe('the reserved worst case matches what a debate can actually spend', () 
       bar: NOW,
     });
 
-    expect(result.rounds_completed).toBe(MAX_ROUNDS);
+    expect(result.rounds_completed).toBe(MAX_ROUNDS_BY_ASSET_CLASS.stocks);
+    expect(llmClient.calls).toBeLessThanOrEqual(worstCaseLlmCallsForAssetClass('stocks'));
     expect(llmClient.calls).toBeLessThanOrEqual(WORST_CASE_LLM_CALLS_PER_DEBATE);
     expect(rateLimiter.snapshot().stocks?.llmCallsUsed).toBe(llmClient.calls);
   });
@@ -482,7 +487,14 @@ describe('the reserved worst case matches what a debate can actually spend', () 
     expect(worstCaseLlmCallsForAssetClass('crypto')).toBe(
       MAX_ROUNDS_BY_ASSET_CLASS.crypto * LLM_CALLS_PER_ROUND + 1,
     );
-    expect(worstCaseLlmCallsForAssetClass('stocks')).toBe(WORST_CASE_LLM_CALLS_PER_DEBATE);
+    expect(worstCaseLlmCallsForAssetClass('stocks')).toBe(
+      MAX_ROUNDS_BY_ASSET_CLASS.stocks * LLM_CALLS_PER_ROUND + 1,
+    );
+    // #1080 capped stocks at one round, so the per-class reservation is now
+    // strictly below the `MAX_ROUNDS`-sized ceiling the profile sizes against.
+    // That gap is the point of having both: a ceiling for sizing, a per-class
+    // figure for admission.
+    expect(worstCaseLlmCallsForAssetClass('stocks')).toBeLessThan(WORST_CASE_LLM_CALLS_PER_DEBATE);
   });
 });
 
@@ -696,6 +708,14 @@ describe('the composition root wires market-data fetch telemetry (#1082)', () =>
  * hitting. This makes it structural: widen the universe again and this fails
  * rather than silently under-sizing the burst.
  */
+/**
+ * Distinct `(timeframe, lookback)` bar windows one instrument's decision pass
+ * asks for, MEASURED (#1080) across the 2026-09-07 and 2026-09-10 soak bursts:
+ * `5m/260`, `1h/57`, `1h/20`, `1d/30`. The worst single burst issued 53
+ * distinct windows across the 20-instrument universe, inside this bound.
+ */
+const DISTINCT_BAR_WINDOWS_PER_INSTRUMENT = 4;
+
 describe("Alpaca's burst covers one fill-poll sweep of the configured universe (#299)", () => {
   it('has capacity for a getOrder per open bracket plus a concurrent submit', () => {
     // `AlpacaBrokerAdapter.fetchNewFills` issues exactly one `getOrder` per
@@ -725,6 +745,37 @@ describe("Alpaca's burst covers one fill-poll sweep of the configured universe (
       1; // a submitBracket from the first tick
 
     expect(DEFAULT_VENUE_PACING.alpaca.capacity).toBeGreaterThanOrEqual(coldStart);
+  });
+
+  /**
+   * #1080. The cold-start derivation above counts ONE bars fetch per
+   * instrument. The soak says otherwise: a decision pass asks for four
+   * distinct windows per instrument — `5m/260` and `1h/57` for the technical
+   * analyst's indicators and context, `1h/20` for the trader's signal bar, and
+   * `1d/30` for the liquidity/ADV screen — and the 2026-09-10 19:56 burst shows
+   * all four shapes inside one tick. So `capacity` covers the first 20 requests
+   * of a sweep that issues up to 80, and the remaining 60 come at
+   * `refillPerSecond`.
+   *
+   * That drain is what the analyst's per-attempt deadline actually waits on:
+   * `technical` issues no LLM call at all, it fetches bars, and a fetch that
+   * cannot get a token has not started. The deadline must therefore be at least
+   * the drain, or the LAST instruments of every sweep time out by construction
+   * — which is exactly #1080's instance 2 (57% of main-arm runs missing quorum,
+   * every one attributing to `technical did not answer within 10000ms`).
+   *
+   * The literal is the shipped constants' value, pinned so a change to either
+   * side has to be re-read here rather than silently absorbed.
+   */
+  it("affords the analyst deadline the deduped cold sweep's drain at this pacing (#1080)", () => {
+    const { capacity, refillPerSecond, reserveForPriority } = DEFAULT_VENUE_PACING.alpaca;
+    const backgroundHeadroom = capacity - (reserveForPriority ?? 0);
+    const sweepRequests = DEFAULT_UNIVERSE.length * DISTINCT_BAR_WINDOWS_PER_INSTRUMENT;
+
+    const drainMs = ((sweepRequests - backgroundHeadroom) / refillPerSecond) * 1_000;
+
+    expect(drainMs).toBe(30_000);
+    expect(DEFAULT_ANALYST_TIMEOUT_MS).toBeGreaterThanOrEqual(drainMs);
   });
 
   it('reserves enough for the order path to complete a full sweep under a data burst', () => {

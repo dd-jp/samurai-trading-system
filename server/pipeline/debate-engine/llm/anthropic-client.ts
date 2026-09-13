@@ -32,10 +32,30 @@ import {
 } from './types.js';
 
 /**
- * Only failure modes the spec calls out as transient are retried (timeout,
- * rate limit, malformed response). Anything else (auth errors, bad requests,
- * unclassified `LlmProviderError`s) is assumed non-transient and rethrown
- * immediately. Closed over the generalized `withRetry` (issue #271).
+ * Only failure modes the spec calls out as transient are retried (rate limit,
+ * malformed response). Anything else (auth errors, bad requests, unclassified
+ * `LlmProviderError`s) is assumed non-transient and rethrown immediately.
+ * Closed over the generalized `withRetry` (issue #271).
+ *
+ * TIMEOUT was in this set until #1080 (2026-09-14) and is the one class whose
+ * cost is not the error but the WAIT. A rate limit fails in milliseconds and a
+ * malformed response fails as fast as the model streams; a timeout, by
+ * definition, has already spent the entire per-attempt deadline, and every
+ * caller in this system issues its calls inside a latency budget the retry was
+ * never counted against (`enforceLatencyBudget`). Retrying it therefore spends
+ * a second full deadline out of the budget it was supposed to help meet.
+ *
+ * Measured rather than argued: of 22 `llm_attempt_retried` lines in the
+ * 2026-09-03 sample, 22 reported `elapsed_ms` in 28,002-28,007ms — the deadline
+ * itself, not a transient blip — and none was followed by a success inside the
+ * budget. Two later soak sessions add 38 more retried attempts with the same
+ * shape. The retry was buying nothing and costing half a debate's budget.
+ *
+ * What this gives up, stated rather than hidden: a genuinely transient network
+ * stall that would have cleared on a second attempt now surfaces as
+ * `LlmTimeoutError` to the caller. That is not a silent loss — #1385 degrades
+ * it inside `enforceLatencyBudget` with `termination_cause: 'llm_failure'`,
+ * which is the discriminator #1080 AC4 asks for, and the next tick re-asks.
  *
  * "Malformed responses are reparseable on a fresh sample" is TRUE OF THE
  * SAMPLE, not of every response that fails to parse, and there are two
@@ -52,11 +72,7 @@ import {
  *    carries the `usage` of the call it burned.
  */
 function isRetryable(error: unknown): boolean {
-  return (
-    error instanceof LlmTimeoutError ||
-    error instanceof LlmRateLimitError ||
-    error instanceof LlmMalformedResponseError
-  );
+  return error instanceof LlmRateLimitError || error instanceof LlmMalformedResponseError;
 }
 
 export interface AnthropicMessageRequest {
