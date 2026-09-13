@@ -221,6 +221,24 @@ export const DEFAULT_VENUE_PACING: VenuePacingConfig = {
    *   reachable paper state, since the caps are 5%/10% of ~$100k equity — that
    *   alone is `20 / 15s = 1.33 tok/s` sustained, before the bar sweep
    *   (`20 / 120s = 0.17`) and submits (~0.05). Call it **~1.55 tok/s**.
+   * - **Demand side, as MEASURED — amended 2026-09-14
+   *   ([#1080](https://github.com/dd-jp/samurai-trading-system/issues/1080)).**
+   *   The bullet above is wrong in both terms, in opposite directions, and the
+   *   bar-sweep term is the one that matters. `fetchNewFills` polls the
+   *   brackets that exist, and the paper store holds 3, not 20. The sweep is
+   *   not `20 / 120s`: one tick asks for up to FOUR distinct bar windows per
+   *   instrument (`5m/260`, `1h/57`, `1h/20`, `1d/30`, all four measured in a
+   *   single soak tick), and until #1080 concurrent callers asking for the SAME
+   *   window each spent a token, because the bar cache writes on completion and
+   *   cannot see a request in flight — the 2026-09-10 19:56 burst issued 133
+   *   fetches over 34 distinct windows, **~2.85 tok/s** against the `0.17`
+   *   estimated here. Deduped by `MarketDataServiceImpl`'s single-flight
+   *   coalescing it is **~0.73 tok/s**, still 4.3x the estimate, and it is this
+   *   term that `DEFAULT_ANALYST_TIMEOUT_MS` (`pipeline/analysts/orchestrator.ts`)
+   *   is derived against. `refillPerSecond` is deliberately NOT raised on this
+   *   correction: the two errors partly cancel, and buying the analyst deadline
+   *   by raising it would need Alpaca's data-API and trading-API quotas to be
+   *   separate budgets, which this file's 200/min ceiling does not establish.
    *
    * So `1.8` — the value the "restore exactly 75%" arithmetic suggests — leaves
    * only ~14% headroom over real demand, and the failure it invites is the same
