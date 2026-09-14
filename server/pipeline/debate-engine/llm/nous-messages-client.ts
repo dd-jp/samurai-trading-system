@@ -21,6 +21,8 @@
  * `content` block array `extractText` and `recordSpend` already read.
  */
 
+import type { LlmInFlightGate } from '../../../shared/llm/in-flight-gate.js';
+import { LlmInFlightRefusedError } from '../../../shared/llm/index.js';
 import type { NousChatResult } from '../../../shared/llm/nous-chat.js';
 import { NousRefusalError, NousTruncatedError, nousChat } from '../../../shared/llm/nous-chat.js';
 import type {
@@ -29,7 +31,7 @@ import type {
   AnthropicMessageResponse,
   AnthropicMessagesClient,
 } from './anthropic-client.js';
-import { LlmRefusalError, LlmTruncatedError } from './errors.js';
+import { LlmAdmissionRefusedError, LlmRefusalError, LlmTruncatedError } from './errors.js';
 
 export interface NousMessagesClientOptions {
   apiKey: string;
@@ -47,17 +49,39 @@ export interface NousMessagesClientOptions {
    * second source of truth that goes stale silently.
    */
   timeoutMs?: number;
+  /**
+   * The account-wide in-flight cap (#1080). Required, so that a construction
+   * site cannot silently uncap the account — see `in-flight-gate.ts`.
+   */
+  gate: LlmInFlightGate;
+  /**
+   * The caller's per-call deadline, in milliseconds, as the GATE should
+   * understand it: the whole budget a call has, queue wait included.
+   *
+   * Set from `AnthropicLlmClientConfig.timeoutMs` at the composition root, not
+   * from `timeoutMs` above — this client's `timeoutMs` is the wider network
+   * backstop, while the timer that actually decides a slow call's
+   * `LlmTimeoutError` is `AnthropicLlmClient.callWithTimeout`'s, whose clock
+   * starts before `createMessage` is called and therefore spans the gate wait
+   * too. Omitted means "queue without a deadline", which disables the
+   * admission check for this client.
+   */
+  gateBudgetMs?: number | undefined;
 }
 
 export class NousMessagesClient implements AnthropicMessagesClient {
   readonly #apiKey: string;
   readonly #baseUrl: string;
   readonly #timeoutMs: number | undefined;
+  readonly #gate: LlmInFlightGate;
+  readonly #gateBudgetMs: number | undefined;
 
   constructor(options: NousMessagesClientOptions) {
     this.#apiKey = options.apiKey;
     this.#baseUrl = options.baseUrl;
     this.#timeoutMs = options.timeoutMs;
+    this.#gate = options.gate;
+    this.#gateBudgetMs = options.gateBudgetMs;
   }
 
   /**
@@ -79,6 +103,9 @@ export class NousMessagesClient implements AnthropicMessagesClient {
           baseUrl: this.#baseUrl,
           ...(this.#timeoutMs === undefined ? {} : { timeoutMs: this.#timeoutMs }),
           signal: options.signal,
+          gate: this.#gate,
+          gateBudgetMs: this.#gateBudgetMs,
+          llmStage: 'debate',
         },
         {
           model: request.model,
@@ -104,6 +131,14 @@ export class NousMessagesClient implements AnthropicMessagesClient {
       // `LlmTruncatedError`.
       if (error instanceof NousTruncatedError) {
         throw new LlmTruncatedError(error.message, error.model, error.max_tokens, error.usage);
+      }
+      // #1080, same reason as the two above: left to `classifyProviderError`
+      // an in-flight refusal lands on `LlmProviderError` and is counted as
+      // `transport` — indistinguishable in the log from a dead gateway, which
+      // is exactly the distinction the gate was built to make measurable. No
+      // call was sent, so there are no tokens and no usage to carry.
+      if (error instanceof LlmInFlightRefusedError) {
+        throw new LlmAdmissionRefusedError(error);
       }
       throw error;
     }

@@ -10,7 +10,9 @@
 
 import { type RetryAttemptReport, withRetry } from '../../../shared/index.js';
 import type { AnthropicUsage } from '../../../shared/llm/pricing.js';
+import { hashPromptTemplate } from '../../../shared/llm/prompt-template-hash.js';
 import {
+  LlmAdmissionRefusedError,
   LlmCancelledError,
   LlmMalformedResponseError,
   LlmProviderError,
@@ -20,7 +22,7 @@ import {
   LlmTruncatedError,
 } from './errors.js';
 import { classifyFailureCause, type FailureCause } from './failure-cause.js';
-import { wrapUntrusted } from './prompt-safety.js';
+import { UNTRUSTED_WRAPPER_TEMPLATE, wrapUntrusted } from './prompt-safety.js';
 import { type LlmSpendSink, NULL_SPEND_SINK } from './spend-sink.js';
 import {
   LLM_CONTEXT_FIELD_KIND,
@@ -328,6 +330,33 @@ export function renderMessageContent<T>(request: LlmRequest<T>): string {
   return `${request.prompt}\n\nContext:\n${wrapUntrusted(contextJson)}`;
 }
 
+/**
+ * The fixed scaffold `renderMessageContent` wraps every prompt in, OUTSIDE
+ * `request.prompt` — the `\n\nContext:\n` separator plus `wrapUntrusted`'s
+ * preamble/tags. #1514's round-1 review: this scaffold is shared by every
+ * metered call regardless of stage (every call passes through it, unlike the
+ * per-stage templates), so an edit here changes what the model sees on every
+ * call while the per-call `prompt_template_hash` stays byte-identical —
+ * exactly the invisibility #1514 exists to end. Folded into the persisted
+ * hash below rather than into `LlmAttribution`: it is a property of the wire
+ * client's own rendering, not of any one call site's template, so it belongs
+ * where `renderMessageContent` itself lives.
+ */
+const WIRE_ENVELOPE_TEMPLATE = `\n\nContext:\n${UNTRUSTED_WRAPPER_TEMPLATE}`;
+export const WIRE_ENVELOPE_TEMPLATE_HASH = hashPromptTemplate(WIRE_ENVELOPE_TEMPLATE);
+
+/**
+ * Combines a call site's own template hash with `WIRE_ENVELOPE_TEMPLATE_HASH`
+ * into the single hash actually persisted, so a change to EITHER half changes
+ * the stored value. `undefined` in, `undefined` out: a call site that has not
+ * been wired to supply `prompt_template_hash` still gets no fabricated value.
+ */
+function withWireEnvelope(callTemplateHash: string | undefined): string | undefined {
+  return callTemplateHash === undefined
+    ? undefined
+    : hashPromptTemplate(`${callTemplateHash}:${WIRE_ENVELOPE_TEMPLATE_HASH}`);
+}
+
 function extractText(response: AnthropicMessageResponse): string {
   return response.content
     .filter(
@@ -355,7 +384,12 @@ function classifyProviderError(error: unknown): Error {
     // call cost, and re-wrapping would discard both (#1391). A truncation
     // carries `max_tokens`/`usage` for the same reason (#1394).
     error instanceof LlmRefusalError ||
-    error instanceof LlmTruncatedError
+    error instanceof LlmTruncatedError ||
+    // #1080: an in-flight refusal names a call that was never sent. Duck-typed
+    // down to `LlmProviderError` it would be counted as `transport` — a
+    // counterfeit gateway fault, and precisely the conflation the gate exists
+    // to remove.
+    error instanceof LlmAdmissionRefusedError
   ) {
     return error;
   }
@@ -582,6 +616,7 @@ export class AnthropicLlmClient implements LlmClient {
         timestamp: new Date(),
         prompt,
         response: responseText,
+        prompt_template_hash: withWireEnvelope(request.context.attribution?.prompt_template_hash),
       });
     } catch {
       // The sink contract says `record` must not throw, and the SQLite

@@ -7,9 +7,14 @@
  * unpriced (and an unpriced row does not count against the spend cap).
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { UNGATED_LLM_IN_FLIGHT } from './in-flight-gate.js';
 import { NousApiError, NousRefusalError, NousTruncatedError, nousChat } from './nous-chat.js';
 
-const OPTIONS = { apiKey: 'test-fake-nous-key', baseUrl: 'https://nous.test/v1' };
+const OPTIONS = {
+  apiKey: 'test-fake-nous-key',
+  baseUrl: 'https://nous.test/v1',
+  gate: UNGATED_LLM_IN_FLIGHT,
+};
 const REQUEST = {
   model: 'openai/gpt-5.6-luna',
   max_tokens: 1024,

@@ -1127,8 +1127,8 @@ const LLM_BUDGET_WINDOW_MS = 300_000;
  *   not a smooth rate.
  * - The burst does NOT reliably complete inside one window. At #1013's width 6,
  *   20 names walk in `ceil(20 / 6) = 4` groups; #1080 (2026-09-14) sized each
- *   group's worst case at 172s (60s analysts — `DEFAULT_ANALYST_TIMEOUT_MS`
- *   twice, one retry per persona — plus a 112,000ms debate budget), so the
+ *   group's worst case at 172s (`ANALYST_STAGE_WALL_CLOCK_MS`, 60s, plus a
+ *   112,000ms debate budget), so the
  *   worst-case walk is ~11.5 min against `LLM_BUDGET_WINDOW_MS` (5 min), and
  *   even a clean walk at the measured post-fan-out per-call p50 (18,306ms, so
  *   ~73s of debate) is ~4.9 min of debate alone before analyst time.
@@ -2219,24 +2219,34 @@ export function buildStartingProfileConfigs(
      * rests on EVERY instrument starting its pass in the same tick instant, and
      * 20 names at width 6 walk in `ceil(20 / 6) = 4` groups instead. The last
      * group therefore decides on data up to ~3 passes deep. That is a STALENESS
-     * regression, not a safety one, and it is gated rather than tolerated:
-     * `max_signal_age` and `max_mark_age` for stocks are both 15 min, against a
-     * worst-case full pass of ~11.5 min since #1080 (2026-09-14) — 4 groups of
-     * 172s, being 60s of analysts (`DEFAULT_ANALYST_TIMEOUT_MS` twice, one
-     * retry per persona) plus a 112,000ms debate budget. The tail of the walk
-     * is still inside the freshness bounds Verdict enforces, but the margin is
-     * 1.3x, against 2.81x at the 60,000ms budget and 10,000ms analyst deadline
-     * this replaces (4 groups of 80s, 320s in all). Both are worst-case-to-
-     * worst-case, the only comparison a tripwire can act on. THIS IS THE
-     * TRIPWIRE: if either of those two gates is tightened,
-     * or either sub-budget raised again, the tail gets refused at Verdict and
-     * this dial has to rise with it — and at width 6 the next step is width 7,
-     * which makes the walk 3 groups.
+     * regression, not a safety one. The worst-case full pass is ~11.5 min since
+     * #1080 (2026-09-14) — 4 groups of 172s, being `ANALYST_STAGE_WALL_CLOCK_MS`
+     * (60s) plus a 112,000ms debate budget — against 320s (4 groups of 80s) at
+     * the 60,000ms debate budget and 10,000ms analyst deadline this replaces.
      *
-     * Raising it now would trade that measured, gated staleness for #692's
+     * **NOTHING ENFORCES THAT FIGURE, and an earlier version of this comment
+     * claimed otherwise (#1104).** It read the walk's ~11.5 min against
+     * `max_signal_age` / `max_mark_age` (both 15 min for stocks) and called the
+     * 1.3x gap a margin. Neither gate measures a walk: Verdict's gate 1
+     * measures `now - orderIntent.decided_at` (verdict/index.ts) and
+     * `decided_at` is a `clock.now()` read inside that instrument's OWN Trader
+     * step (decide.ts), while gate 2 measures `Mark.observed_at` on a mark
+     * `getMark(instrument, now)` re-reads at gate time behind a 5,000ms TTL
+     * (`MarketDataServiceImpl`). An instrument's position in the walk enters
+     * neither — the mark cannot be pass-start-old at gate time — so the
+     * tail was never "still inside the freshness bounds Verdict enforces" —
+     * Verdict was never looking. The pass overruns the 120,000ms
+     * `tickIntervalMs` by design (#1080) with no gate to catch it either.
+     *
+     * THIS IS THE TRIPWIRE, and it is a HUMAN one for exactly that reason: if
+     * either sub-budget is raised again, or the universe widens, re-derive this
+     * dial here rather than expecting a test or a gate to refuse the result. At
+     * width 6 the next step is width 7, which makes the walk 3 groups.
+     *
+     * Raising it now would trade that measured staleness for #692's
      * overlapping-pass multiplication and a wider same-tick window for #1019's
-     * race — both unmeasured. The staleness is bounded and checked; the other
-     * two are not. So: unchanged, on evidence.
+     * race — both unmeasured. The staleness is measured and bounded by
+     * arithmetic; the other two are neither. So: unchanged, on evidence.
      *
      * **NOT sized for the ~30-name live LSE ETP pool (#895).** A universe that
      * wide makes `maxConcurrentInstruments x passes in flight` (#692) actually
@@ -2880,5 +2890,21 @@ export function paperStartingProfile(
     // and certain fix is preserving the original guarantee, not arguing it
     // away.
     ...(mode === 'backtest' ? { maxConcurrentInstruments: 1 } : {}),
+    // #1511 — long-only book, gated to the ACTUAL Saxo-tradeable set. Same
+    // `bookCurrency === 'GBP'` discriminator as `capitalCeilingUsd` above:
+    // `SAMURAI_BROKER=saxo` is the one caller that supplies both `'GBP'` and
+    // `saxoTradeableUniverse()` as `universe` (`startingProfileForMode`,
+    // index.ts) — so this is the run's actual routed venue, not a proxy for
+    // it. `DEFAULT_UNIVERSE` (every Alpaca run, `bookCurrency: 'USD'`) is
+    // left unmarked: it trades no Saxo instrument, so nothing in it should
+    // ever match `long_only_instruments`.
+    ...(mode === 'paper' && bookCurrency === 'GBP' && universe !== undefined
+      ? {
+          riskConfig: {
+            ...configs.riskConfig,
+            long_only_instruments: new Set(universe.map((instrument) => instrument.asset)),
+          },
+        }
+      : {}),
   };
 }

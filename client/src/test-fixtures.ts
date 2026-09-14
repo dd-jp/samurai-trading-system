@@ -9,21 +9,22 @@
  * only the field it is about.
  */
 
-import type {
-  AnalystPerformanceRow,
-  ArmComparisonRow,
-  ClosedTradeRow,
-  DebateRow,
-  EvaluatedConditionWire,
-  FillRow,
-  LlmSpendSummary,
-  LlmSpendWindow,
-  MetricsSuiteWire,
-  OutsideBenchmarkRow,
-  PipelineView,
-  PositionRow,
-  RiskCriticRow,
-  VerdictRow,
+import {
+  type AnalystPerformanceRow,
+  type ArmComparisonRow,
+  type ClosedTradeRow,
+  CONTRACT_VERSION,
+  type DebateRow,
+  type EvaluatedConditionWire,
+  type FillRow,
+  type LlmSpendSummary,
+  type LlmSpendWindow,
+  type MetricsSuiteWire,
+  type OutsideBenchmarkRow,
+  type PipelineView,
+  type PositionRow,
+  type RiskCriticRow,
+  type VerdictRow,
 } from '@contracts';
 import type { WireSnapshot } from './hooks/useSnapshot.ts';
 
@@ -334,6 +335,12 @@ export function makeSnapshot(overrides: Partial<WireSnapshot> = {}): WireSnapsho
     },
     llm_spend: makeSpend(),
     pipeline: EMPTY_PIPELINE,
+    // The real exported constant, not a hand-typed literal (#1316) — this
+    // fixture must track whatever `contracts/snapshot.ts` actually computes,
+    // the same way a real server's response would, or every test built on
+    // this fixture would silently exercise the mismatch path instead of the
+    // healthy one.
+    contract_version: CONTRACT_VERSION,
     ...overrides,
   };
 }

@@ -74,6 +74,17 @@ export interface SaxoHttpBrokerClientOptions {
    * `fetchWithTimeout` call (#1222 — a public operation like `submitBracket`
    * or `cancel` can fan out to several, so pacing lives at the transport
    * boundary rather than the caller). Defaults to `DEFAULT_VENUE_PACING.saxo`.
+   *
+   * Since #1419, each call site spends one of two lanes on this same bucket
+   * (`SaxoRequestPriority`): `placeOrder`/`cancelOrder` go through
+   * `acquire()`, everything else — polling, pagination, reference-data
+   * reads — through `acquireBackground()`, so `DEFAULT_VENUE_PACING.saxo`'s
+   * `reserveForPriority` protects a pending placement/cancel from a
+   * draining read sweep. The one-time account-identity lookup
+   * (`resolveIdentity()`) always spends `acquire()` too, REGARDLESS of
+   * which caller triggers it — see that method's own doc for why a
+   * background-triggered identity fetch would otherwise reopen this same
+   * stall one layer removed.
    */
   rateLimiter?: TokenBucket;
   /**
@@ -111,6 +122,24 @@ interface AccountIdentity {
  * picking up retries it never asked for.
  */
 type SaxoRequestInit = Omit<RequestInit, 'method'> & { method: SaxoHttpMethod };
+
+/**
+ * Which `TokenBucket` lane a request spends (#1419). `'priority'` is for
+ * anything that arms or removes a protective leg or flattens a position —
+ * `placeOrder`/`cancelOrder`. Everything else (position/order/activity
+ * polling, pagination, reference-data reads) is `'background'`, so a
+ * multi-page sweep can drain down to `DEFAULT_VENUE_PACING.saxo`'s reserve
+ * without delaying a pending placement/cancel. The account-identity lookup
+ * (`resolveIdentity()`) is NOT classified by its caller's own lane — it
+ * hard-codes `'priority'` regardless, because `this.identity` memoises a
+ * shared PROMISE rather than a per-call lane: whichever caller runs first
+ * is the one whose request actually goes over the wire, and every later
+ * caller (on either lane) just awaits it. If a background reader were
+ * allowed to create that promise on the background lane, a concurrent
+ * priority caller sharing this client would be waiting on a promise gated
+ * by the background reserve threshold instead of the priority one.
+ */
+type SaxoRequestPriority = 'priority' | 'background';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -391,6 +420,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
     init: SaxoRequestInit,
     context: string,
     validate: (body: unknown, context: string) => T,
+    priority: SaxoRequestPriority,
     retry: RetryConfig = this.retry,
     extraHeaders: Record<string, string> = {},
   ): Promise<T> {
@@ -399,7 +429,11 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
         // One token per attempt (#1222): a retried request is a second
         // upstream call and must be paced as one, not covered by the first
         // attempt's token.
-        await this.rateLimiter.acquire();
+        if (priority === 'priority') {
+          await this.rateLimiter.acquire();
+        } else {
+          await this.rateLimiter.acquireBackground();
+        }
         let response: Response;
         try {
           response = await fetchWithTimeout(
@@ -442,12 +476,31 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
     );
   }
 
+  /**
+   * ALWAYS priority, regardless of which caller triggers it (#1419 round 2).
+   * `this.identity` memoises the PROMISE, not a per-call lane — whichever
+   * caller runs first (`placeOrder`/`cancelOrder`, or a background reader
+   * like `listOrderActivities`) is the one whose request actually goes over
+   * the wire, and every later caller just awaits that same promise. If that
+   * first request spent the background lane (because a background reader
+   * happened to race ahead — real in this repo: `placeIdempotently` awaits
+   * `lookup()`, which can itself resolve identity via `listOrderActivities`,
+   * before ever calling `placeOrder`), a concurrent write elsewhere sharing
+   * this client would be waiting on a promise gated by the BACKGROUND
+   * reserve threshold, not the priority one — exactly the stall #1419
+   * exists to prevent, one layer removed. Since this is a one-shot,
+   * per-client bootstrap (cheap: `needed` is 1 on the priority lane, not
+   * `1 + reserveForPriority`), there is no reason to ever let it draw from
+   * the background lane, and the identity-gates-every-write property only
+   * holds if it doesn't.
+   */
   private resolveIdentity(): Promise<AccountIdentity> {
     this.identity ??= this.request(
       '/port/v1/accounts/me',
       { method: 'GET' },
       'resolveAccount',
       (body) => validateIdentity(body, this.pinnedAccountKey),
+      'priority',
     ).catch((cause: unknown) => {
       this.identity = undefined;
       throw cause;
@@ -459,6 +512,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
     firstPath: string,
     context: string,
     validateRow: (raw: unknown, context: string) => T,
+    priority: SaxoRequestPriority,
   ): Promise<T[]> {
     const rows: T[] = [];
     let path: string | undefined = firstPath;
@@ -471,6 +525,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
           rows: readData(body, context).map((row) => validateRow(row, context)),
           next: readNext(body),
         }),
+        priority,
       );
       rows.push(...page.rows);
       // `__next` is absolute on the gateway; strip the base so `request` re-prefixes it.
@@ -491,6 +546,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
       { method: 'GET' },
       'getInstrumentDetails',
       (body, context) => validateInstrumentDetails(body, context, { uic, assetType }),
+      'background',
     );
   }
 
@@ -519,6 +575,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
       { method: 'POST', body: JSON.stringify({ AccountKey: accountKey, ...request }) },
       'placeOrder',
       validatePlacement,
+      'priority',
       { ...this.retry, maxAttempts: 1 },
       { 'x-request-id': requestId },
     );
@@ -531,6 +588,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
       { method: 'DELETE' },
       'cancelOrder',
       () => undefined,
+      'priority',
     );
   }
 
@@ -539,6 +597,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
       `/port/v1/orders/me?$top=${PAGE_SIZE}`,
       'listOpenOrders',
       validateOpenOrder,
+      'background',
     );
   }
 
@@ -553,6 +612,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
       `/cs/v1/audit/orderactivities?${query.toString()}`,
       'listOrderActivities',
       validateActivity,
+      'background',
     );
   }
 
@@ -561,6 +621,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
       `/port/v1/netpositions/me?FieldGroups=NetPositionBase,NetPositionView,DisplayAndFormat&$top=${PAGE_SIZE}`,
       'listNetPositions',
       validateNetPosition,
+      'background',
     );
   }
 }

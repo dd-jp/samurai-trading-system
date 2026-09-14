@@ -84,6 +84,7 @@
  */
 
 import type { Logger } from '../../../shared/index.js';
+import type { LlmInFlightGate } from '../../../shared/llm/in-flight-gate.js';
 import type { NousChatResult } from '../../../shared/llm/nous-chat.js';
 import { NousRefusalError, nousChat } from '../../../shared/llm/nous-chat.js';
 import type { IntelligenceItem } from '../types.js';
@@ -117,6 +118,13 @@ export interface NousSentimentClientOptions {
   timeoutMs?: number;
   maxTokens?: number;
   logger?: Logger;
+  /**
+   * The account-wide in-flight cap (#1080). Required here for the reason it is
+   * required on the debate client: the Nous queue is per ACCOUNT, so a
+   * sentiment refresh left outside the cap would contend with every debate
+   * call and uncap them too.
+   */
+  gate: LlmInFlightGate;
 }
 
 export class NousSentimentClient implements GrokSentimentClient {
@@ -126,6 +134,7 @@ export class NousSentimentClient implements GrokSentimentClient {
   readonly #timeoutMs: number;
   readonly #maxTokens: number;
   readonly #logger: Logger | undefined;
+  readonly #gate: LlmInFlightGate;
 
   constructor(options: NousSentimentClientOptions) {
     this.#apiKey = options.apiKey;
@@ -134,6 +143,7 @@ export class NousSentimentClient implements GrokSentimentClient {
     this.#timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.#maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
     this.#logger = options.logger;
+    this.#gate = options.gate;
   }
 
   async fetchSentiment(instrument: string, asOf: Date) {
@@ -165,6 +175,20 @@ export class NousSentimentClient implements GrokSentimentClient {
           apiKey: this.#apiKey,
           baseUrl: this.#baseUrl,
           timeoutMs: this.#timeoutMs,
+          gate: this.#gate,
+          // The gate budget bounds the WAIT; `timeoutMs` bounds the call. There
+          // is no outer race above a sentiment refresh to reconcile them, so
+          // worst case is their sum — see the same note in `x-search-client.ts`
+          // (#1080 review round 1, finding 6).
+          gateBudgetMs: this.#timeoutMs,
+          // No `expectedCallMs`, deliberately, unlike `x-search-client.ts`: a
+          // sentiment refresh is one chat completion of the same shape and
+          // output size as a debate call, so the gate's debate-calibrated
+          // default IS the estimate for it. Retrieval differs because it runs
+          // the provider's search loop and was measured doing so; nothing has
+          // measured a sentiment call apart, and inventing a figure would look
+          // like evidence.
+          llmStage: 'market_intelligence_sentiment',
         },
         {
           model: this.#model,

@@ -806,6 +806,31 @@ export interface ProductionConfig extends AlertChannelSlots {
    */
   maxConcurrentInstruments?: number;
   /**
+   * Nous calls this process may have in flight at once, ACROSS EVERY CLIENT —
+   * debate personas, the disagreement pass, the risk critic, MI scoring and
+   * the Grok sentiment refresh (#1080). Defaults to
+   * `DEFAULT_MAX_IN_FLIGHT_LLM_CALLS`.
+   *
+   * Orthogonal to both neighbours above. `maxConcurrentInstruments` bounds
+   * instrument PASSES, each of which issues several calls; `rateLimiterConfig`
+   * bounds calls per time WINDOW. Neither bounds simultaneity, which is what
+   * the 2026-09-14 measurement found the provider's own latency is a function
+   * of — see `DEFAULT_MAX_IN_FLIGHT_LLM_CALLS` for the numbers.
+   */
+  maxInFlightLlmCalls?: number;
+  /**
+   * What the in-flight gate should ASSUME a Nous call takes, in milliseconds,
+   * when it estimates a queue wait and charges a caller's own call against its
+   * budget (#1080). Defaults to `DEFAULT_EXPECTED_NOUS_CALL_MS`.
+   *
+   * A knob because the default is a small-sample soak figure (n = 4) and this
+   * number decides how many callers are admitted per budget, not how long any
+   * call is allowed to take — nothing here is a timeout. Raising it refuses
+   * more callers earlier; lowering it admits callers that may then burn a full
+   * deadline, which is the failure #1080 exists to remove.
+   */
+  expectedLlmCallMs?: number;
+  /**
    * Per-asset-class LLM budget for the Debate Engine's `RateLimiter` (#388) —
    * the debates-per-window and calls-per-window ceiling every debate is
    * admitted against, and metered through, at `buildDebateStep`.

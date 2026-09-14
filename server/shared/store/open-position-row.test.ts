@@ -28,6 +28,7 @@ function row(overrides: Partial<OpenPositionRow> = {}): OpenPositionRow {
     converged: 1,
     residual_unprotected_since: null,
     residual_rearm_alerted_at: null,
+    residual_rearm_unsupported_alerted_at: null,
     decision_price: null,
     quote_bid: null,
     quote_ask: null,

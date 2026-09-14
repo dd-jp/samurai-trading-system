@@ -24,6 +24,10 @@ export interface FillRow {
   flatten_idempotency_key: string | null;
   /** #1220, migration 0054 — see `Fill.fee_currency`. */
   fee_currency: string | null;
+  /** #1521, migration 0060 — see `Fill.fx_rate_to_gbp`. */
+  fx_rate_to_gbp: number | null;
+  /** #1521, migration 0060 — see `Fill.fx_rate_to_gbp_source`. */
+  fx_rate_to_gbp_source: string | null;
 }
 
 export function fromFillRow(row: FillRow): Fill {
@@ -47,5 +51,9 @@ export function fromFillRow(row: FillRow): Fill {
       ? {}
       : { flatten_idempotency_key: row.flatten_idempotency_key }),
     ...(row.fee_currency === null ? {} : { fee_currency: row.fee_currency }),
+    ...(row.fx_rate_to_gbp === null ? {} : { fx_rate_to_gbp: row.fx_rate_to_gbp }),
+    ...(row.fx_rate_to_gbp_source === null
+      ? {}
+      : { fx_rate_to_gbp_source: row.fx_rate_to_gbp_source }),
   };
 }

@@ -28,8 +28,14 @@
  * (`log-event-code.test.ts`) and unmatchable by a scrape.
  */
 
-import { NousApiError, NousRefusalError, NousTruncatedError } from '../../../shared/llm/index.js';
 import {
+  LlmInFlightRefusedError,
+  NousApiError,
+  NousRefusalError,
+  NousTruncatedError,
+} from '../../../shared/llm/index.js';
+import {
+  LlmAdmissionRefusedError,
   LlmCancelledError,
   LlmMalformedResponseError,
   LlmProviderError,
@@ -48,6 +54,15 @@ import {
  * signal value this taxonomy exists to protect — and would train an operator
  * to ignore that bucket, which is #1394's own complaint one level down.
  *
+ * `gate_refused` is #1080's addition and the one code here that names a call
+ * this system never sent: the account-wide in-flight gate refused it because
+ * the queue in front of it was longer than its own budget. It is separated
+ * from `timeout` for the measurement that motivated the gate — the 2026-09-14
+ * session could not distinguish "held, then given up on" from "dispatched, and
+ * the provider took longer than 28,000 ms", and those two point at opposite
+ * fixes. A `gate_refused` costs no tokens and no deadline; a `timeout` costs
+ * both.
+ *
  * `other` is not a dumping ground but a refusal to guess: an unrecognised
  * rejection is reported as unclassified rather than as a counterfeit
  * `transport`, which is the specific mislabelling this ticket was filed over
@@ -61,6 +76,7 @@ export type FailureCause =
   | 'timeout'
   | 'rate_limited'
   | 'cancelled'
+  | 'gate_refused'
   | 'transport'
   | 'other';
 
@@ -86,6 +102,13 @@ function classify(error: unknown): FailureCause {
   if (error instanceof LlmRefusalError || error instanceof NousRefusalError) return 'refusal';
   if (error instanceof LlmTruncatedError || error instanceof NousTruncatedError) return 'truncated';
   if (error instanceof LlmMalformedResponseError) return 'unparseable';
+  // Above `LlmCancelledError` and `LlmTimeoutError` because it is neither: the
+  // MI path reports the gate's own error class, the debate path the adapter's
+  // translation of it, and both must land here rather than in the two buckets
+  // whose signal value #1080 depends on.
+  if (error instanceof LlmAdmissionRefusedError || error instanceof LlmInFlightRefusedError) {
+    return 'gate_refused';
+  }
   if (error instanceof LlmCancelledError) return 'cancelled';
   if (error instanceof LlmTimeoutError) return 'timeout';
   if (error instanceof LlmRateLimitError) return 'rate_limited';

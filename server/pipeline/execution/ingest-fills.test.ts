@@ -746,6 +746,107 @@ describe('ExecutionImpl.ingestFills', () => {
       );
     });
 
+    it('#1447: a store-read-failure page already recorded must not block this venue-refusal page, and this page uses its OWN dedup column', async () => {
+      const { store } = openTestExecutionStore();
+      await seedPosition(store, { requested_size: 10, stop: 95, target: 110, side: 'buy' });
+      const broker = new ScriptedBroker([
+        fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 10, price: 100 }),
+        fill({
+          broker_fill_id: toBrokerFillId('x1'),
+          leg: 'exit',
+          qty: 4,
+          price: 98,
+          timestamp: new Date('2026-07-20T15:30:00Z'),
+        }),
+      ]);
+      broker.rearmFailure = new ProtectiveRearmUnsupportedError(
+        'saxo',
+        'IsOcoOrderSupported false on every pool line',
+      );
+      const residualExposureAlerts = makeResidualExposureAlerts();
+      const shutCalendar: TradingCalendar = {
+        isOpen: () => false,
+        isTradingDay: () => true,
+        sessionStart: () => NOW,
+        sessionEnd: () => NOW,
+      };
+      // Simulates a pre-attempt page (store-read failure or non-finite
+      // residual) that already fired and recorded against the GENERAL dedup
+      // for this episode, before the re-arm was ever attempted.
+      await store.markResidualUnprotected('key-1', NOW);
+      await store.markResidualAlerted('key-1', NOW);
+
+      await new ExecutionImpl(
+        makeInput(
+          broker,
+          store,
+          residualExposureAlerts,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          { crypto: new AlwaysOpenCalendar(), stocks: shutCalendar },
+        ),
+      ).ingestFills();
+
+      // The already-spent general dedup must not have suppressed this.
+      expect(residualExposureAlerts.alerts).toEqual([
+        expect.objectContaining({ idempotency_key: 'key-1', rearm_unsupported: true }),
+      ]);
+      expect(await store.getResidualRearmUnsupportedAlertedAtRaw('key-1')).not.toBeNull();
+    });
+
+    it('#1447: a second call for the same still-unsupported episode does not page twice — the observing poll consults the dedup BEFORE paging, not only records it after', async () => {
+      const { store } = openTestExecutionStore();
+      await seedPosition(store, { requested_size: 10, stop: 95, target: 110, side: 'buy' });
+      const broker = new ScriptedBroker([
+        fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 10, price: 100 }),
+        fill({
+          broker_fill_id: toBrokerFillId('x1'),
+          leg: 'exit',
+          qty: 4,
+          price: 98,
+          timestamp: new Date('2026-07-20T15:30:00Z'),
+        }),
+      ]);
+      broker.rearmFailure = new ProtectiveRearmUnsupportedError(
+        'saxo',
+        'IsOcoOrderSupported false on every pool line',
+      );
+      const residualExposureAlerts = makeResidualExposureAlerts();
+      const shutCalendar: TradingCalendar = {
+        isOpen: () => false,
+        isTradingDay: () => true,
+        sessionStart: () => NOW,
+        sessionEnd: () => NOW,
+      };
+      // Simulates the permanent-gap page having already fired for THIS
+      // episode on an earlier pass (a #1214 reflatten submitted, then this
+      // same venue refusal was hit again by a later partial fill re-entering
+      // `advanceLot`) — the dedup this pass must consult before paging again.
+      await store.markResidualUnprotected('key-1', NOW);
+      await store.markResidualRearmUnsupportedAlerted('key-1', NOW);
+
+      await new ExecutionImpl(
+        makeInput(
+          broker,
+          store,
+          residualExposureAlerts,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          { crypto: new AlwaysOpenCalendar(), stocks: shutCalendar },
+        ),
+      ).ingestFills();
+
+      expect(residualExposureAlerts.alerts).toEqual([]);
+    });
+
     it('survives a throwing logger on the re-arm-failure path — the alert is still posted and the fills still persist', async () => {
       const { store } = openTestExecutionStore();
       await seedPosition(store, { requested_size: 10, stop: 95, target: 110, side: 'buy' });
@@ -4113,6 +4214,78 @@ describe('a non-sterling fee is a loud contradiction, not a silent GBP sum (#122
     expect(
       logger.entries.filter((entry) => entry.message === FEE_CURRENCY_NOT_BOOK_CURRENCY),
     ).toHaveLength(1);
+  });
+});
+
+// #1521: `fx_rate_to_gbp`/`fx_rate_to_gbp_source` carried through `toFill`
+// the same way `fee_currency` is — verbatim, never derived here.
+describe('fx_rate_to_gbp is carried through verbatim (#1521)', () => {
+  it('persists a rate an adapter reports, alongside its source', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 5 });
+    const broker = new ScriptedBroker([
+      fill({
+        broker_fill_id: toBrokerFillId('usd-1'),
+        qty: 5,
+        fee: 0.8,
+        fee_currency: 'USD',
+        fx_rate_to_gbp: 0.79,
+        fx_rate_to_gbp_source: 'venue',
+      }),
+    ]);
+
+    await new ExecutionImpl(makeInput(broker, store)).ingestFills();
+
+    const [persisted] = await store.getFills('key-1');
+    expect(persisted?.fx_rate_to_gbp).toBe(0.79);
+    expect(persisted?.fx_rate_to_gbp_source).toBe('venue');
+  });
+
+  it('logs the reason on the same fee_currency_not_book_currency line when no rate is reported', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 5 });
+    const broker = new ScriptedBroker([
+      fill({
+        broker_fill_id: toBrokerFillId('usd-1'),
+        qty: 5,
+        fee: 0.8,
+        fee_currency: 'USD',
+        fx_rate_to_gbp_source: 'not_reported_by_venue',
+      }),
+    ]);
+    const logger = recordingLogger();
+
+    await new ExecutionImpl(makeInput(broker, store, undefined, undefined, logger)).ingestFills();
+
+    expect(logger.entries).toContainEqual(
+      expect.objectContaining({
+        level: 'error',
+        message: FEE_CURRENCY_NOT_BOOK_CURRENCY,
+        payload: expect.objectContaining({
+          broker_fill_id: 'usd-1',
+          fx_rate_to_gbp: undefined,
+          fx_rate_to_gbp_source: 'not_reported_by_venue',
+        }),
+      }),
+    );
+
+    const [persisted] = await store.getFills('key-1');
+    expect(persisted?.fx_rate_to_gbp).toBeUndefined();
+    expect(persisted?.fx_rate_to_gbp_source).toBe('not_reported_by_venue');
+  });
+
+  it('omits both fields for a book-currency fill, no adapter having reported either', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 2 });
+    const broker = new ScriptedBroker([
+      fill({ broker_fill_id: toBrokerFillId('gbp-1'), qty: 2, fee: 0.1, fee_currency: 'GBP' }),
+    ]);
+
+    await new ExecutionImpl(makeInput(broker, store)).ingestFills();
+
+    const [persisted] = await store.getFills('key-1');
+    expect(persisted?.fx_rate_to_gbp).toBeUndefined();
+    expect(persisted?.fx_rate_to_gbp_source).toBeUndefined();
   });
 });
 

@@ -27,6 +27,7 @@ import {
   runDebate,
 } from '../../../pipeline/debate-engine/index.js';
 import type { Clock } from '../../../shared/index.js';
+import { UNGATED_LLM_IN_FLIGHT } from '../../../shared/llm/index.js';
 import { buildDebatePersonas } from './debate-adapter.js';
 
 const FAKE_KEY = 'test-fake-nous-key';
@@ -110,7 +111,12 @@ function buildLlmClient(): AnthropicLlmClient {
   return new AnthropicLlmClient(
     // 60s network backstop, well outside anything these tests exercise, so the
     // only thing that ever cancels a call here is the latency budget.
-    new NousMessagesClient({ apiKey: FAKE_KEY, baseUrl: FAKE_BASE_URL, timeoutMs: 60_000 }),
+    new NousMessagesClient({
+      apiKey: FAKE_KEY,
+      baseUrl: FAKE_BASE_URL,
+      timeoutMs: 60_000,
+      gate: UNGATED_LLM_IN_FLIGHT,
+    }),
     {
       model: 'openai/gpt-5.6-luna',
       max_tokens: 1024,

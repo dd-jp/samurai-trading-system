@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { NousApiError, NousRefusalError, NousTruncatedError } from '../../../shared/llm/index.js';
 import {
+  LlmInFlightRefusedError,
+  NousApiError,
+  NousRefusalError,
+  NousTruncatedError,
+} from '../../../shared/llm/index.js';
+import {
+  LlmAdmissionRefusedError,
   LlmCancelledError,
   LlmMalformedResponseError,
   LlmProviderError,
@@ -25,6 +31,28 @@ describe('classifyFailureCause (#1394)', () => {
     expect(classifyFailureCause(new LlmRateLimitError('429'))).toBe('rate_limited');
     expect(classifyFailureCause(new LlmCancelledError('budget fired'))).toBe('cancelled');
     expect(classifyFailureCause(new LlmProviderError('500'))).toBe('transport');
+  });
+
+  it('maps a gate refusal to `gate_refused`, on both reasons and at both layers (#1080)', () => {
+    const fields = { queue_depth: 3, in_flight: 1, budget_ms: 28_000, waited_ms: 0 };
+    // Both layers, because the gate's own error crosses the MI clients
+    // untranslated while `NousMessagesClient` re-wraps it for the debate path —
+    // and a refusal is not a `transport` fault at either: nothing was sent.
+    expect(
+      classifyFailureCause(
+        new LlmInFlightRefusedError({ ...fields, reason: 'admission', message: 'refused' }),
+      ),
+    ).toBe('gate_refused');
+    expect(
+      classifyFailureCause(
+        new LlmAdmissionRefusedError({ ...fields, reason: 'admission', message: 'refused' }),
+      ),
+    ).toBe('gate_refused');
+    expect(
+      classifyFailureCause(
+        new LlmAdmissionRefusedError({ ...fields, reason: 'queue_deadline', message: 'dropped' }),
+      ),
+    ).toBe('gate_refused');
   });
 
   it('maps the Nous wire hierarchy, which never reaches the typed classes on the MI path', () => {

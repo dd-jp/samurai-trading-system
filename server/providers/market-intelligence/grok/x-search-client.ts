@@ -73,11 +73,30 @@
  */
 
 import type { Logger } from '../../../shared/index.js';
+import type { LlmInFlightGate } from '../../../shared/llm/in-flight-gate.js';
 import { type NousCitation, nousResponses } from '../../../shared/llm/nous-responses.js';
 import type { IntelligenceItem } from '../types.js';
 import type { GrokSentimentClient } from './grok-agent.js';
 
 const DEFAULT_TIMEOUT_MS = 60_000;
+
+/**
+ * What a retrieval call is EXPECTED to take, for the in-flight gate's queue
+ * estimate (#1080) — the top of the 5–26 s range measured on 2026-09-14, not
+ * `DEFAULT_TIMEOUT_MS`.
+ *
+ * The distinction is load-bearing in both directions. The timeout is a
+ * worst-case bound and doubles as this call's gate budget; the gate refuses a
+ * caller whose estimated wait plus its own expected call reaches that budget,
+ * so declaring the timeout as the expectation would make `wait + 60,000 >=
+ * 60,000` true for every non-zero wait — every retrieval call refused the
+ * moment anything else holds the permit. Declaring the measured 26 s instead
+ * leaves ~34 s of wait tolerance, which is what lets retrieval queue behind a
+ * debate call rather than be refused behind it, while still telling callers
+ * queued behind THIS one that they are waiting on something far heavier than
+ * a ~13 s debate call.
+ */
+const MEASURED_RETRIEVAL_CALL_MS = 26_000;
 
 /**
  * Response budget.
@@ -221,6 +240,12 @@ export interface XSearchClientOptions {
   timeoutMs?: number;
   maxTokens?: number;
   logger?: Logger;
+  /**
+   * The account-wide in-flight cap (#1080). Required for the reason it is on
+   * the other two Nous clients — and most load-bearing here: a retrieval call
+   * is the longest thing this process puts in the shared account queue.
+   */
+  gate: LlmInFlightGate;
 }
 
 export class XSearchClient implements GrokSentimentClient {
@@ -232,6 +257,7 @@ export class XSearchClient implements GrokSentimentClient {
   readonly #timeoutMs: number;
   readonly #maxTokens: number;
   readonly #logger: Logger | undefined;
+  readonly #gate: LlmInFlightGate;
 
   constructor(options: XSearchClientOptions) {
     this.#apiKey = options.apiKey;
@@ -242,6 +268,7 @@ export class XSearchClient implements GrokSentimentClient {
     this.#timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.#maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
     this.#logger = options.logger;
+    this.#gate = options.gate;
   }
 
   async fetchSentiment(instrument: string, asOf: Date) {
@@ -281,6 +308,21 @@ export class XSearchClient implements GrokSentimentClient {
         // model issues several searches the provider reports them and the
         // reported count wins, which is the only number that matches the bill.
         maxServerToolCalls: this.#maxSearchResults,
+        gate: this.#gate,
+        // The gate budget bounds the WAIT, the network timeout bounds the CALL,
+        // and there is no outer race above a retrieval call to reconcile them —
+        // so worst-case wall clock here is their sum, not `this.#timeoutMs`. A
+        // whole-call budget would need `nousResponses` to shorten its own
+        // timeout by the wait it just served; that is a follow-up, not this
+        // change (#1080 review round 1, finding 6).
+        gateBudgetMs: this.#timeoutMs,
+        // Declared, because a retrieval call is nothing like a debate call: it
+        // runs the provider's own search loop, measured at 5–26 s against a
+        // debate call's ~13 s. A caller queued behind one that estimated its
+        // wait at 13 s would be admitted into a deadline it cannot make. The
+        // measured figure, not `this.#timeoutMs` — see the constant.
+        expectedCallMs: MEASURED_RETRIEVAL_CALL_MS,
+        llmStage: 'market_intelligence_retrieval',
       },
       {
         model: this.#model,

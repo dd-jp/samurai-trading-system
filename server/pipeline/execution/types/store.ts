@@ -386,12 +386,22 @@ export interface ResidualMarkers {
    */
   confirmResidualProtected(idempotency_key: string): Promise<void>;
   /**
-   * Once-per-episode alert dedup for the #549 sweep (#342's repeated-line
-   * lesson): recorded when `ResidualExposureAlertChannel` accepted a
-   * delivery for an unprotected episode, checked by the sweep so a marker
-   * that stays unprotected across many passes pages the operator once, not
-   * once per pass. Cleared together with the marker by
-   * `confirmResidualProtected`.
+   * TWO independent once-per-episode alert dedups live on the #549 marker
+   * (#342's repeated-line lesson: a marker that stays unprotected across many
+   * passes must page the operator once per REASON, not once per pass, and
+   * not once total across every reason it could page for) —
+   * `residual_rearm_alerted_at`, written here, and
+   * `residual_rearm_unsupported_alerted_at`, written by
+   * `markResidualRearmUnsupportedAlerted` below (#1447, migration 0059).
+   * `markResidualAlerted` is the ORIGINAL column: every pre-attempt page
+   * (a store-read failure while recomputing the exact residual, a
+   * non-finite/non-positive residual) and every ordinary retryable re-arm
+   * failure records here, checked by the sweep so that reason pages once.
+   * It is deliberately NEVER checked or written by the CONFIRMED-venue-
+   * refusal branch (`ProtectiveRearmUnsupportedError`) — that branch has its
+   * own column precisely so a pre-attempt page firing first can never
+   * consume the one page a real permanent gap needs. Cleared together with
+   * the marker by `confirmResidualProtected`.
    *
    * CONDITIONAL (#549 review): records only when the episode has no
    * alerted-at yet (`... AND residual_rearm_alerted_at IS NULL`) and
@@ -403,13 +413,39 @@ export interface ResidualMarkers {
    */
   markResidualAlerted(idempotency_key: string, alerted_at: Date): Promise<boolean>;
   /**
+   * The TRUTHFUL permanent-gap page's OWN once-per-episode dedup (#1447,
+   * migration 0059) — deliberately a SEPARATE column from
+   * `markResidualAlerted`'s, not a second writer of it. Only the two call
+   * sites that actually observed `ProtectiveRearmUnsupportedError`
+   * (`maybeRearmResidual`'s broker-call catch, `sweepOne`'s via
+   * `alertResidualExposureOnce`) call this — the store-read-failure and
+   * non-finite-residual pre-attempt paths never reach here, so neither can
+   * consume the one page a confirmed venue refusal needs. Same
+   * CONDITIONAL/first-writer-wins contract as `markResidualAlerted`: records
+   * only while `residual_rearm_unsupported_alerted_at IS NULL`, returns
+   * whether THIS call won. Cleared together with the rest of the marker by
+   * `confirmResidualProtected`.
+   */
+  markResidualRearmUnsupportedAlerted(idempotency_key: string, alerted_at: Date): Promise<boolean>;
+  /**
+   * Point-read of the #1447 permanent-gap dedup, consulted BEFORE paging
+   * (not only recorded after) by `maybeRearmResidual`'s unsupported branch:
+   * after a #1214 re-flatten is submitted for a residual, a later partial
+   * fill can re-enter `advanceLot` and hit the same venue refusal again for
+   * the SAME episode, and without this check that second pass would page a
+   * second time before the (already-in-flight) reflatten's fill closes the
+   * marker. Returns null for both "never alerted" and "lot unknown" — a
+   * cheap existence-agnostic read, not a marker write.
+   */
+  getResidualRearmUnsupportedAlertedAt(idempotency_key: string): Promise<Date | null>;
+  /**
    * The #549 sweep's worklist: every NON-TERMINAL lot still marked
    * unprotected. Bounded the same way `getOpenPositions()` is — a terminal
    * lot's residual is settled by definition (`closed` means round-tripped to
    * flat; `rejected`/`cancelled`/`expired` mean no venue exposure under this
    * lot) — so the sweep never grows with history. Each row carries the full
    * `OpenPosition` (everything a retry needs: instrument, side, stop,
-   * target, requested_size) plus the marker's own two timestamps.
+   * target, requested_size) plus the marker's own timestamps.
    */
   getUnprotectedResidualLots(): Promise<UnprotectedResidualLot[]>;
 }
@@ -502,6 +538,12 @@ export interface UnprotectedResidualLot {
   unprotected_since: Date;
   /** When this episode's operator alert was posted; null if it never was. */
   alerted_at: Date | null;
+  /**
+   * When the TRUTHFUL permanent-gap page (a confirmed venue refusal) was
+   * posted for this episode; null if it never was. Independent of
+   * `alerted_at` (#1447, migration 0059) — see `markResidualRearmUnsupportedAlerted`.
+   */
+  rearm_unsupported_alerted_at: Date | null;
 }
 
 /**

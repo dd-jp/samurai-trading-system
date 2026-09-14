@@ -349,6 +349,7 @@ samurai-trading-system/
 │       ├── check-path-citations.ts    # `yarn check:citations` — CI gate over the docs
 │       ├── check-live-money-gates.ts  # `yarn check:live-gates` — the cited gates are still open
 │       ├── report-arm-comparison.ts   # `yarn report:arms`
+│       ├── report-cgt-disposals.ts    # `yarn report:cgt`
 │       ├── place-soak-position.ts     # `yarn place-soak-position`
 │       └── run-stage2*.ts, measure-conviction-ceiling.ts  # hand-run, no script
 │
@@ -363,7 +364,8 @@ samurai-trading-system/
 │   ├── specs/             # Synthesized PRDs per stage + cross-spec verification
 │   ├── dashboard-v2/      # Dashboard v2 design material
 │   ├── wayfinder/         # Historical design maps (new ones are GitHub issues)
-│   └── coding-standards.md
+│   ├── coding-standards.md
+│   └── cgt-disposal-matching.md  # #1518 — live Saxo GIA CGT disposal matching, NOT tax advice
 ├── .github/workflows/     # CI + AI review
 ├── CLAUDE.md              # Project briefing (read every session)
 ├── CONTEXT.md             # Domain glossary
@@ -385,7 +387,7 @@ dist/server/apps/supervisor/index.js      # yarn start
 
 ## Scripts
 
-Every script in `package.json`, all 27 of them. There are no others.
+Every script in `package.json`, all 29 of them. There are no others.
 
 | Tier | Script | What it does |
 | --- | --- | --- |
@@ -415,6 +417,7 @@ Every script in `package.json`, all 27 of them. There are no others.
 | quality | `yarn check:citations` | `tsx server/tools/check-path-citations.ts` — every backticked path in the tracked docs resolves. **A CI step**, and it reads this file too |
 | ops | `yarn check:live-gates` | `tsx server/tools/check-live-money-gates.ts` — re-verifies that the issues the live-money gate list cites are still open, so a closed issue cannot silently falsify the gate |
 | ops | `yarn report:arms` | `tsx server/tools/report-arm-comparison.ts` — the LLM arm vs. the indicator-only control |
+| ops | `yarn report:cgt` | `tsx server/tools/report-cgt-disposals.ts` — per-tax-year CGT disposal matching for the live Saxo GIA leg (#1518, `docs/cgt-disposal-matching.md`). NOT tax advice |
 | ops | `yarn place-soak-position` | `tsx --env-file=.env.local server/tools/place-soak-position.ts` — hand-places a soak position. Reads `.env.local`, so it touches the venue |
 
 **Five run scripts build first** (`start`, `orchestrator`, `api`, `smoke`,

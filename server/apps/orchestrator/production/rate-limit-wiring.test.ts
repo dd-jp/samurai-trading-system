@@ -794,8 +794,10 @@ describe("Alpaca's burst covers one fill-poll sweep of the configured universe (
    * inside it where the 10,000ms one served 40 — better, not safe.
    *
    * Raising the deadline is not the fix available: two attempts per persona at
-   * 70,000ms is 140s of analyst wall clock against a 120,000ms tick, which
-   * `paper-profile.ts`'s pass-duration tripwire refuses. The fix is warming the
+   * 70,000ms is 140s of analyst wall clock against a 120,000ms tick. Nothing
+   * REFUSES that — `paper-profile.ts`'s pass-duration tripwire is a human one
+   * and no gate downstream measures a walk (#1104) — so the overrun would just
+   * happen, per instrument group, unannounced. The fix is warming the
    * store OFF the tick path, and no boot-time bar prefetch exists today; it is
    * recorded as declined-for-now on #1080 (analysts-spec.md, "Module: Failure
    * Handling"), because the starvation #1080 measured is steady-state.

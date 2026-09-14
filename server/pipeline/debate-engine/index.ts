@@ -55,9 +55,10 @@ export type {
   AnthropicMessagesClient,
   LlmCallFailureReport,
 } from './llm/anthropic-client.js';
-export { AnthropicLlmClient } from './llm/anthropic-client.js';
+export { AnthropicLlmClient, WIRE_ENVELOPE_TEMPLATE_HASH } from './llm/anthropic-client.js';
 export type { LlmError } from './llm/errors.js';
 export {
+  LlmAdmissionRefusedError,
   LlmCancelledError,
   LlmMalformedResponseError,
   LlmProviderError,

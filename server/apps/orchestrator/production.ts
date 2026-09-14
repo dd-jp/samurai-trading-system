@@ -217,7 +217,8 @@ import {
   resolveVenuePacing,
   TokenBucket,
 } from '../../shared/index.js';
-import { tryNousCredentials } from '../../shared/llm/index.js';
+import type { LlmInFlightGate } from '../../shared/llm/index.js';
+import { NousAccountInFlightGate, tryNousCredentials } from '../../shared/llm/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import {
   guardedStore,
@@ -375,10 +376,12 @@ export {
   buildDefaultAlpacaBrokerClient,
   buildDefaultAlpacaDataClient,
   buildDefaultLlmClient,
+  DEFAULT_EXPECTED_NOUS_CALL_MS,
   DEFAULT_FEEDBACK_INTERVAL_MS,
   DEFAULT_HEARTBEAT_INTERVAL_MS,
   DEFAULT_LLM_CLIENT_CONFIG,
   DEFAULT_LLM_RATE_LIMIT_CONFIG,
+  DEFAULT_MAX_IN_FLIGHT_LLM_CALLS,
   universeAssetClasses,
 } from './production/defaults.js';
 
@@ -388,11 +391,13 @@ import {
   buildBenchmarkDataSource,
   buildDefaultAlpacaBrokerClient,
   buildDefaultLlmClient,
+  DEFAULT_EXPECTED_NOUS_CALL_MS,
   DEFAULT_FEEDBACK_INTERVAL_MS,
   DEFAULT_FILL_POLL_INTERVAL_MS,
   DEFAULT_GDELT_POLL_INTERVAL_MS,
   DEFAULT_HEARTBEAT_INTERVAL_MS,
   DEFAULT_LLM_RATE_LIMIT_CONFIG,
+  DEFAULT_MAX_IN_FLIGHT_LLM_CALLS,
   DEFAULT_POLYMARKET_POLL_INTERVAL_MS,
   DEFAULT_TICK_INTERVAL_MS,
   DEFAULT_VOLATILITY_INDICATOR,
@@ -547,6 +552,19 @@ export interface ProductionComponents {
    * `buildProductionComponents` directly (rate-limit-wiring.test.ts).
    */
   llmRateLimiter: RateLimiter;
+  /**
+   * The ONE account-wide in-flight gate (#1080) every Nous-speaking client
+   * this function builds was handed — the debate client, and the sentiment or
+   * X-retrieval client when one is configured.
+   *
+   * Exposed for `llmRateLimiter`'s reason, and the argument is sharper here:
+   * the gate's whole value is that there is exactly one of it per process
+   * (Nous queues per ACCOUNT), so a test that constructed its own would prove
+   * the class works and nothing about whether this root's clients are behind
+   * it. Holding this instance's only slot must stop the root's own
+   * `llmClient` from reaching the wire.
+   */
+  llmInFlightGate: LlmInFlightGate;
   /**
    * The GDELT macro archiver (#556), or undefined when this run has no MI
    * archive to write into.
@@ -1712,10 +1730,25 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * one-then-every-8 contract (#1155).
    */
   const promptTierThrottle = new PromptTierCrossingThrottle();
+  /**
+   * ONE in-flight gate for the whole root (#1080), for a reason stronger than
+   * the two above: Nous queues per ACCOUNT, not per key or per client, so a
+   * second gate would cap two populations of the same queue independently and
+   * cap neither. Every Nous-speaking client built below takes THIS instance —
+   * the debate client, the sentiment client and the X retrieval client — and
+   * `nousChat`/`nousResponses` cannot be called without one, so a client added
+   * later cannot quietly opt out.
+   */
+  const llmInFlightGate = new NousAccountInFlightGate({
+    maxInFlight: config.maxInFlightLlmCalls ?? DEFAULT_MAX_IN_FLIGHT_LLM_CALLS,
+    expectedCallMs: config.expectedLlmCallMs ?? DEFAULT_EXPECTED_NOUS_CALL_MS,
+    logger,
+  });
   const llmClient =
     config.llmClient ??
     buildDefaultLlmClient(
       logger,
+      llmInFlightGate,
       new SqliteLlmSpendStore(
         guardedStore(config.db, 'debate-engine'),
         logger,
@@ -1739,6 +1772,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
           client: sentimentRetrieval
             ? new XSearchClient({
                 ...sentimentCredentials,
+                gate: llmInFlightGate,
                 // The credentials' model is the PINNED `x-ai/grok-4.5`, on
                 // which `x_search` 400s ("supported only on OpenRouter-routed
                 // models"). The routed alias is not a preference here, it is
@@ -1748,7 +1782,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
                 windowMs: GROK_REFRESH_MS,
                 logger,
               })
-            : new NousSentimentClient({ ...sentimentCredentials, logger }),
+            : new NousSentimentClient({ ...sentimentCredentials, logger, gate: llmInFlightGate }),
           store: marketIntelligence,
           spendCap,
           spendSink: new SqliteLlmSpendStore(
@@ -2333,6 +2367,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     executionDeps,
     controlArmWiring,
     llmRateLimiter,
+    llmInFlightGate,
     gdeltIngestAgent,
     gdeltScoringPass,
     polymarketAgent,

@@ -31,11 +31,13 @@
     "check:citations": "tsx server/tools/check-path-citations.ts",
     "check:live-gates": "tsx server/tools/check-live-money-gates.ts",
     "report:arms": "tsx server/tools/report-arm-comparison.ts",
+    "report:cgt": "tsx server/tools/report-cgt-disposals.ts",
     "classify:debate-termination": "tsx server/tools/classify-debate-termination.ts",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "precommit": "yarn lint:fix && yarn typecheck && yarn test:coverage",
-    "place-soak-position": "tsx --env-file=.env.local server/tools/place-soak-position.ts"
+    "place-soak-position": "tsx --env-file=.env.local server/tools/place-soak-position.ts",
+    "saxo:login": "tsx --env-file=.env.local server/tools/saxo-login.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.3",

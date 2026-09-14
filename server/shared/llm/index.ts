@@ -10,6 +10,18 @@
  */
 
 export type {
+  LlmInFlightGate,
+  LlmInFlightRefusalReason,
+  LlmInFlightRequest,
+  LlmInFlightSlot,
+  NousAccountInFlightGateOptions,
+} from './in-flight-gate.js';
+export {
+  LlmInFlightRefusedError,
+  NousAccountInFlightGate,
+  UNGATED_LLM_IN_FLIGHT,
+} from './in-flight-gate.js';
+export type {
   NousChatMessage,
   NousChatOptions,
   NousChatRequest,
@@ -42,3 +54,4 @@ export {
   priceUsage,
   rateFor,
 } from './pricing.js';
+export { hashPromptTemplate } from './prompt-template-hash.js';

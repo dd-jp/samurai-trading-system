@@ -1,11 +1,13 @@
+import { hashPromptTemplate } from '../../../shared/llm/prompt-template-hash.js';
 import type {
   AnthropicMessageRequest,
   AnthropicMessageResponse,
   AnthropicMessagesClient,
   LlmCallFailureReport,
 } from './anthropic-client.js';
-import { AnthropicLlmClient } from './anthropic-client.js';
+import { AnthropicLlmClient, WIRE_ENVELOPE_TEMPLATE_HASH } from './anthropic-client.js';
 import {
+  LlmAdmissionRefusedError,
   LlmCancelledError,
   LlmMalformedResponseError,
   LlmProviderError,
@@ -13,6 +15,7 @@ import {
   LlmRefusalError,
   LlmTimeoutError,
 } from './errors.js';
+import { classifyFailureCause } from './failure-cause.js';
 import type { LlmSpendRecord } from './spend-sink.js';
 import { LLM_CONTEXT_FIELD_KIND, type LlmRequest, type LlmRequestContext } from './types.js';
 
@@ -362,6 +365,39 @@ describe('AnthropicLlmClient', () => {
     expect((error as LlmRefusalError).usage).toEqual({ input_tokens: 900, output_tokens: 3 });
     expect(wire.createMessage).toHaveBeenCalledTimes(1);
   });
+
+  it('does not retry a gate refusal, and keeps its class and queue state (#1080)', async () => {
+    // `classifyProviderError` must pass `LlmAdmissionRefusedError` through
+    // rather than laundering it into `LlmProviderError`. Two consequences if it
+    // does not: the queue state that explains the refusal is lost, and a
+    // refusal becomes retryable — the worst possible response, since the budget
+    // that made it unadmittable is only smaller by the time a retry is issued.
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi.fn().mockRejectedValue(
+        new LlmAdmissionRefusedError({
+          message: 'LLM gate refused admission',
+          reason: 'admission',
+          queue_depth: 3,
+          in_flight: 1,
+          budget_ms: 28_000,
+          waited_ms: 0,
+        }),
+      ),
+    };
+    const client = new AnthropicLlmClient(wire, {
+      model: 'anthropic/claude-sonnet-5',
+      max_tokens: 1024,
+      timeoutMs: 1_000,
+      retry: { maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 1_000 },
+    });
+
+    const error = await client.complete(request()).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(LlmAdmissionRefusedError);
+    expect((error as LlmAdmissionRefusedError).queue_depth).toBe(3);
+    expect(classifyFailureCause(error)).toBe('gate_refused');
+    expect(wire.createMessage).toHaveBeenCalledTimes(1);
+  });
 });
 
 /**
@@ -477,6 +513,59 @@ describe('AnthropicLlmClient spend metering', () => {
     // grouping every stray call into one fictional debate.
     expect(sink.records[0]?.debate_id).toBeUndefined();
     expect(sink.records[0]?.trace_id).toBe('unattributed');
+  });
+
+  /**
+   * #1514 round-1 review, finding 1: `renderMessageContent` wraps every
+   * request's `contextJson` in a fixed scaffold (`\n\nContext:\n` plus
+   * `wrapUntrusted`'s preamble/tags) OUTSIDE `request.prompt`, so an edit to
+   * that scaffold changes what the model sees on every call while a bare
+   * per-stage `prompt_template_hash` stays byte-identical. `recordSpend` must
+   * fold `WIRE_ENVELOPE_TEMPLATE_HASH` into the persisted value so it reacts
+   * to both halves, not just the caller's own template.
+   */
+  it('folds the wire envelope hash into the persisted prompt_template_hash', async () => {
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi.fn().mockResolvedValue(usageResponse('good')),
+    };
+    const sink = recordingSink();
+    const client = new AnthropicLlmClient(
+      wire,
+      { model: 'openai/gpt-5.6-luna', max_tokens: 100, timeoutMs: 1000, retry: NO_RETRY },
+      sink,
+    );
+
+    const callTemplateHash = 'a'.repeat(64);
+    const attributedRequest = request();
+    attributedRequest.context.attribution = {
+      trace_id: 'trace-envelope',
+      stage: 'debate',
+      prompt_template_hash: callTemplateHash,
+    };
+
+    await client.complete(attributedRequest);
+
+    expect(sink.records[0]?.prompt_template_hash).toBeDefined();
+    expect(sink.records[0]?.prompt_template_hash).not.toBe(callTemplateHash);
+    expect(sink.records[0]?.prompt_template_hash).toBe(
+      hashPromptTemplate(`${callTemplateHash}:${WIRE_ENVELOPE_TEMPLATE_HASH}`),
+    );
+  });
+
+  it('leaves prompt_template_hash undefined when the caller supplies none', async () => {
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi.fn().mockResolvedValue(usageResponse('good')),
+    };
+    const sink = recordingSink();
+    const client = new AnthropicLlmClient(
+      wire,
+      { model: 'openai/gpt-5.6-luna', max_tokens: 100, timeoutMs: 1000, retry: NO_RETRY },
+      sink,
+    );
+
+    await client.complete(request());
+
+    expect(sink.records[0]?.prompt_template_hash).toBeUndefined();
   });
 
   /**

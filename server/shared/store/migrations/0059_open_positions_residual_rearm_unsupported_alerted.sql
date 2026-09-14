@@ -1,0 +1,35 @@
+-- #1447: a durable, separate dedup for the TRUTHFUL permanent-gap page.
+--
+-- THE DEFECT THIS CLOSES. `residual_rearm_alerted_at` (migration 0024) is one
+-- dedup shared by every reason `maybeRearmResidual`/`sweepOne` can page the
+-- operator: a store-read failure while recomputing the exact residual, a
+-- non-finite/non-positive residual, an ordinary retryable re-arm failure, AND
+-- a venue's PERMANENT refusal (`ProtectiveRearmUnsupportedError`, #1214).
+-- David's 2026-09-14 ruling makes the permanent-gap page fire ONCE PER
+-- EPISODE — which means whichever reason pages FIRST must not spend the one
+-- page a later, more truthful reason needs. Before this column, a
+-- store-read failure or a garbage residual reached first (either is a
+-- pre-attempt condition, observed before `broker.rearmProtectiveLegs` is even
+-- called) durably set `residual_rearm_alerted_at`, and the real page raised
+-- once the sweep later got Saxo's typed refusal was silently swallowed by
+-- `alertResidualExposureOnce`'s `row.alerted_at !== null` guard — an operator
+-- who never sees that Saxo cannot re-arm this lot at all.
+--
+-- `residual_rearm_unsupported_alerted_at` is that page's OWN dedup, checked
+-- and set only by the branch that actually observed `rearm_unsupported: true`
+-- (`maybeRearmResidual` in residual-protection.ts, `sweepOne` via
+-- `alertResidualExposureOnce` in residual-protection-sweep.ts) — never by the
+-- store-read-failure or non-finite-residual paths, which keep using the
+-- original `residual_rearm_alerted_at` column exactly as before. The two
+-- dedups are independent: a pre-attempt page can still fire (and still dedup
+-- against ITSELF across passes) without ever touching this one.
+--
+-- Cleared together with the rest of the #549 marker by
+-- `confirmResidualProtected`, same reasoning as `residual_rearm_alerted_at`:
+-- a LATER unprotected episode on the same lot must page afresh, including
+-- the permanent-gap page if that episode also hits a venue refusal.
+--
+-- NULL, not a sentinel default, per 0024's own precedent: a lot with no
+-- unconfirmed residual reads NULL whether it predates this migration or was
+-- opened five minutes ago.
+ALTER TABLE open_positions ADD COLUMN residual_rearm_unsupported_alerted_at TEXT NULL;

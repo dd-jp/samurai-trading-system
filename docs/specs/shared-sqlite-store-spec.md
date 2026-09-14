@@ -126,7 +126,10 @@ CREATE INDEX idx_cii_snapshots_captured_at ON cii_snapshots(captured_at);
 -- (0033), decision_price/quote_bid/quote_ask/quote_mid/quote_observed_at/
 -- modelled_cost_breakdown_json (0037), sizing_capital_ceiling (0045),
 -- abandon_reason (0056, #1186 — why the wedged-zero-fill sweep in
--- execution-spec.md retired a lot to the 'abandoned' terminal OrderState).
+-- execution-spec.md retired a lot to the 'abandoned' terminal OrderState),
+-- residual_rearm_unsupported_alerted_at (0059, #1447 — the truthful
+-- permanent-gap page's OWN once-per-episode dedup, independent of
+-- residual_rearm_alerted_at so a pre-attempt page can never consume it).
 CREATE TABLE open_positions (
   idempotency_key              TEXT PRIMARY KEY,
   debate_id                    TEXT NOT NULL,
@@ -156,7 +159,8 @@ CREATE TABLE open_positions (
   quote_observed_at            TEXT,
   modelled_cost_breakdown_json TEXT,
   sizing_capital_ceiling       REAL,
-  abandon_reason               TEXT
+  abandon_reason               TEXT,
+  residual_rearm_unsupported_alerted_at TEXT
 );
 
 CREATE INDEX idx_open_positions_instrument ON open_positions(instrument, asset_class);
@@ -181,6 +185,8 @@ CREATE TABLE fills (
   exit_reason              TEXT,
   flatten_idempotency_key  TEXT,
   fee_currency             TEXT,           -- 0054, #1220: the currency the VENUE denominated `fee` in, recorded verbatim and never converted; NULL means the adapter reported none, never "it was GBP"
+  fx_rate_to_gbp           REAL,           -- 0060, #1521: venue-applied rate to convert a fee_currency-denominated price/fee to GBP, when the venue reports one; NULL on a book-currency fill (none needed) or when the venue reported none
+  fx_rate_to_gbp_source    TEXT,           -- 0060, #1521: why fx_rate_to_gbp is NULL, e.g. 'not_reported_by_venue' — absent on a book-currency fill and on any row written before this migration
   PRIMARY KEY (idempotency_key, broker_fill_id)
 );
 CREATE INDEX idx_fills_broker_fill_id ON fills(broker_fill_id);
@@ -639,7 +645,19 @@ CREATE TABLE llm_spend (
   -- Added by 0018 (#476): server-side tool calls, billed but token-invisible.
   server_tool_calls            INTEGER NOT NULL DEFAULT 0,
   -- Added by 0038: time-to-first-byte, a strict lower bound inside latency_ms's span.
-  ttfb_ms                      INTEGER
+  ttfb_ms                      INTEGER,
+  -- Added by 0058 (#1514): sha256 of `"<stageTemplateHash>:<wireEnvelopeHash>"`
+  -- — the call's stage's STATIC prompt template combined with the shared wire
+  -- envelope every call also passes through (renderMessageContent's
+  -- Context: wrap, prompt-safety.ts's wrapUntrusted preamble/tags; see
+  -- WIRE_ENVELOPE_TEMPLATE_HASH, llm/anthropic-client.ts) — not the rendered
+  -- prompt, and not the bare per-stage hash either, since either half
+  -- changing must change this column. NULL for a call site not yet wired to
+  -- supply one, never fabricated. Answers "which prompt version produced
+  -- decision X" together with this row's existing model/timestamp; no
+  -- separate effective-from column — derive it with MIN(timestamp) WHERE
+  -- prompt_template_hash = ? (the composite value, not a bare stage hash).
+  prompt_template_hash          TEXT
 );
 
 -- The operator surface's only access pattern is "sum the last N hours/days" —

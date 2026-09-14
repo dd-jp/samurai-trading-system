@@ -112,6 +112,15 @@ class FakeSharedStore implements SharedStore {
   async markResidualAlerted(_idempotency_key: string, _alerted_at: Date): Promise<boolean> {
     return true;
   }
+  async markResidualRearmUnsupportedAlerted(
+    _idempotency_key: string,
+    _alerted_at: Date,
+  ): Promise<boolean> {
+    return true;
+  }
+  async getResidualRearmUnsupportedAlertedAt(_idempotency_key: string): Promise<Date | null> {
+    return null;
+  }
   async getUnprotectedResidualLots(): Promise<UnprotectedResidualLot[]> {
     return [];
   }

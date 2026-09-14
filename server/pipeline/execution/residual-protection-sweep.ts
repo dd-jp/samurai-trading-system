@@ -421,21 +421,34 @@ async function sweepOne(
  * the one failed attempt permanently silencing the only page for a
  * still-naked residual.
  *
- * ORDERING (#549 review, cycle 2): `row.alerted_at` is the pass-start
- * worklist snapshot, and `markResidualAlerted` is CONDITIONAL
- * (first-writer-wins on `residual_rearm_alerted_at IS NULL`, reporting
- * whether this call won), so the durable dedup holds regardless of which
- * alert surface runs first or in what order. The two surfaces cannot
- * actually interleave in-process today — `runStartupReconcile` is awaited
- * before `startFillSync` ever arms its first timer (production.ts
- * `start()`), and within the fill-sync loop `runPoll` awaits `ingestFills`
- * (the inline alert path) before the sweep, under an `inFlight` guard that
- * serializes passes — so a lost race is a composition change away, not a
- * live behaviour; the conditional write is the durable backstop that keeps
- * the record single-writer even then. In the worst interleave the page
- * itself could go out twice (delivery precedes the claim, deliberately —
- * claim-first would re-create the suppressed-page bug the delivery gate
- * above closes); the RECORD never does.
+ * ORDERING (#549 review, cycle 2; dedup split #1447): TWO independent
+ * durable dedups back this function — `row.alerted_at` /
+ * `markResidualAlerted` (`residual_rearm_alerted_at`) for every pre-attempt
+ * or ordinary-retry page (store-read failure, non-finite residual, an
+ * ordinary retryable re-arm failure), and `row.rearm_unsupported_alerted_at`
+ * / `markResidualRearmUnsupportedAlerted` (`residual_rearm_unsupported_alerted_at`)
+ * for the TRUTHFUL permanent-gap page — a CONFIRMED venue refusal
+ * (`flags.rearmUnsupported: true`, only ever set by the caller in `sweepOne`
+ * right after `isProtectiveRearmUnsupported` returned true). `flags.rearmUnsupported`
+ * below picks which pair `dedup` reads from and writes to; the two never
+ * cross, which is what stops a pre-attempt page from ever consuming the one
+ * page a permanent gap needs — the defect #1447 was filed against.
+ *
+ * Each pair reads the pass-start worklist snapshot (`row.alerted_at` /
+ * `row.rearm_unsupported_alerted_at`), and each `mark*` write is CONDITIONAL
+ * (first-writer-wins on its own column `IS NULL`, reporting whether this
+ * call won), so each durable dedup holds regardless of which alert surface
+ * runs first or in what order. The two surfaces cannot actually interleave
+ * in-process today — `runStartupReconcile` is awaited before `startFillSync`
+ * ever arms its first timer (production.ts `start()`), and within the
+ * fill-sync loop `runPoll` awaits `ingestFills` (the inline alert path)
+ * before the sweep, under an `inFlight` guard that serializes passes — so a
+ * lost race is a composition change away, not a live behaviour; the
+ * conditional write is the durable backstop that keeps each record
+ * single-writer even then. In the worst interleave the page itself could go
+ * out twice (delivery precedes the claim, deliberately — claim-first would
+ * re-create the suppressed-page bug the delivery gate above closes); the
+ * RECORD never does.
  */
 async function alertResidualExposureOnce(
   input: ResidualSweepInput,
@@ -444,11 +457,27 @@ async function alertResidualExposureOnce(
   now: Date,
   flags: ResidualExposureFlags,
 ): Promise<void> {
-  if (row.alerted_at !== null) return;
+  const dedup = flags.rearmUnsupported
+    ? {
+        alreadyAlerted: row.rearm_unsupported_alerted_at !== null,
+        record: (key: string, at: Date) => input.store.markResidualRearmUnsupportedAlerted(key, at),
+        failureMessage:
+          'markResidualRearmUnsupportedAlerted failed — the next sweep pass may page a second ' +
+          'time for a permanent gap that was already alerted (noisy, not unsafe; #1447)',
+      }
+    : {
+        alreadyAlerted: row.alerted_at !== null,
+        record: (key: string, at: Date) => input.store.markResidualAlerted(key, at),
+        failureMessage:
+          'markResidualAlerted failed — the next sweep pass may page a second time for an ' +
+          'episode that was already alerted (noisy, not unsafe)',
+      };
+
+  if (dedup.alreadyAlerted) return;
   const delivered = await alertResidualExposure(input, row.position, residualQty, now, flags);
   if (!delivered) return;
   try {
-    const recorded = await input.store.markResidualAlerted(row.position.idempotency_key, now);
+    const recorded = await dedup.record(row.position.idempotency_key, now);
     if (!recorded) {
       // Another surface recorded the episode's page between this pass's
       // worklist snapshot and now — the durable dedup already held, this
@@ -471,9 +500,7 @@ async function alertResidualExposureOnce(
         stage: 'execution',
         event: 'residual_alert_mark_failed',
         level: 'warn',
-        message:
-          'markResidualAlerted failed — the next sweep pass may page a second time for an ' +
-          'episode that was already alerted (noisy, not unsafe)',
+        message: dedup.failureMessage,
       },
       error,
       { idempotency_key: row.position.idempotency_key },

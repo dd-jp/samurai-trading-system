@@ -4,6 +4,7 @@
  */
 import type { SpendCap } from '../../../pipeline/debate-engine/index.js';
 import { SimulatedClock } from '../../../shared/index.js';
+import { UNGATED_LLM_IN_FLIGHT } from '../../../shared/llm/index.js';
 import type { LogEntry, Logger } from '../../../shared/types.js';
 import { MiArchiveStore } from '../archive/mi-archive-store.js';
 import { MarketIntelligenceStore } from '../index.js';
@@ -352,6 +353,7 @@ describe('GrokAgent', () => {
           apiKey: 'test-fake-nous-key',
           baseUrl: 'https://nous.test/v1',
           model: '~x-ai/grok-latest',
+          gate: UNGATED_LLM_IN_FLIGHT,
         }),
         store: new MarketIntelligenceStore(clock),
         spendCap: ADMITS,

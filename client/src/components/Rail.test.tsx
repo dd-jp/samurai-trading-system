@@ -25,6 +25,7 @@ function makeFeed(overrides: Partial<SnapshotFeed> = {}): SnapshotFeed {
     stale: false,
     lastSuccessAt: '2026-08-07T12:00:05.000Z',
     error: null,
+    status: 'alive',
     ...overrides,
   };
 }
@@ -65,10 +66,122 @@ describe('Rail — poll clock', () => {
   });
 
   it('dates a STALE rail by the server generated_at, not by the client poll clock', () => {
-    renderRail(makeFeed({ stale: true, lastSuccessAt: '2026-08-07T12:00:35.000Z' }));
+    renderRail(
+      makeFeed({ stale: true, status: 'stale', lastSuccessAt: '2026-08-07T12:00:35.000Z' }),
+    );
 
     expect(screen.getByText(/stale — last update 12:00:00Z/)).toBeTruthy();
     expect(screen.queryByText(/last update 12:00:35Z/)).toBeNull();
+  });
+});
+
+/**
+ * #1316: a served client bundle disagreeing with the server's wire contract
+ * must be visually distinct from both ALIVE and STALE, and none of the
+ * six health-derived tiles may keep computing off `snapshot` while it holds
+ * — they read as unknown, not calm (the decision comment's own words). Each
+ * test below is mutation evidence in the sense the task asks for: before
+ * `status: 'contract-mismatch'` existed as a case `Rail.tsx` branched on,
+ * every one of these would have rendered the SAME output a healthy poll
+ * does (a zero-failure `AlertDeliveryBlock` renders nothing either way,
+ * which is the exact defect #1316 is named for).
+ */
+describe('Rail — contract mismatch (#1316)', () => {
+  function mismatchedFeed(overrides: Partial<SnapshotFeed> = {}): SnapshotFeed {
+    return makeFeed({
+      status: 'contract-mismatch',
+      stale: false,
+      snapshot: null,
+      error:
+        "served bundle disagrees with the server's wire contract (server sent no contract_version; this client expects abc123)",
+      ...overrides,
+    });
+  }
+
+  it('renders the MISMATCH word, not ALIVE, STALE or WAITING', () => {
+    renderRail(mismatchedFeed());
+
+    expect(screen.getByText('MISMATCH')).toBeTruthy();
+    expect(screen.queryByText('ALIVE')).toBeNull();
+    expect(screen.queryByText('STALE')).toBeNull();
+    expect(screen.queryByText('WAITING')).toBeNull();
+  });
+
+  it('states the mismatch error under the health word', () => {
+    renderRail(
+      mismatchedFeed({
+        error:
+          "served bundle disagrees with the server's wire contract (server sent no contract_version; this client expects abc123)",
+      }),
+    );
+
+    expect(screen.getByText(/disagrees with the server's wire contract/)).toBeTruthy();
+  });
+
+  it('replaces every health-derived tile with an explicit "unknown" reading rather than a computed one, even against a snapshot that would otherwise render healthy values', () => {
+    // The snapshot here is NOT null and NOT unhealthy — a fully populated,
+    // ordinary-looking payload. The point: `status` alone must be what gates
+    // these tiles, not whether `snapshot` happens to be present or "look
+    // fine". If any block below read off `snapshot` instead of `status`, this
+    // test would see the healthy value (a mode pill, a live-tick line, a
+    // providers block) instead of the mismatch reading.
+    renderRail(mismatchedFeed({ snapshot: makeSnapshot() }));
+
+    const mismatchTiles = screen.getAllByText('unknown — contract mismatch');
+    // Mode, live tick, alert channel, providers, LLM cap, drawdown.
+    expect(mismatchTiles.length).toBe(6);
+  });
+
+  it('shows a visible alert-channel tile during a mismatch even though the count is 0 — never the silent, no-tile reading a healthy channel gets', () => {
+    // This is #1316's actual bug, reproduced directly: `AlertDeliveryBlock`
+    // alone renders NOTHING for `alert_delivery_failures_24h: 0`, which is
+    // indistinguishable from "the field could not be read". During a
+    // mismatch this tile must be visible and explicit instead.
+    renderRail(
+      mismatchedFeed({
+        snapshot: makeSnapshot({ alert_delivery_failures_24h: 0 }),
+      }),
+    );
+
+    const alertTile = screen
+      .getByText('Alert channel')
+      .closest('[data-field="alert-delivery-failures"]');
+    expect(alertTile).toBeTruthy();
+    expect(alertTile?.textContent).toContain('unknown — contract mismatch');
+  });
+
+  it('never renders a healthy 0-failure alert tile as absent alongside a mismatch, the way a healthy poll legitimately would', () => {
+    // Sanity check on the CONTROL case this issue is about: a genuinely
+    // healthy snapshot with 0 failures renders NO alert-channel tile at all
+    // — that absence is fine there. Pinned here so a change that made the
+    // mismatch path start reusing `AlertDeliveryBlock` (and so re-absorb the
+    // bug) would be caught by the test above, not silently pass because this
+    // file never exercised the healthy 0-failure case.
+    renderRail(makeFeed({ snapshot: makeSnapshot({ alert_delivery_failures_24h: 0 }) }));
+
+    expect(screen.queryByText('Alert channel')).toBeNull();
+  });
+
+  it('marks the rail visually distinct from the stale state (a different border/data attribute), not merely stale-with-extra-text', () => {
+    const { container } = renderRail(mismatchedFeed());
+    const aside = container.querySelector('aside');
+
+    expect(aside?.className).toContain('rail-mismatch');
+    expect(aside?.className).not.toContain('rail-stale');
+    expect(aside?.getAttribute('data-contract-mismatch')).toBe('true');
+    expect(aside?.getAttribute('data-stale')).toBe('false');
+  });
+
+  it('outranks staleness: a poll that is BOTH mismatched and watchdog-stale still reads MISMATCH, never STALE', () => {
+    // `useSnapshot.ts`'s `deriveStatus` never actually produces this
+    // combination (mismatch always implies `stale: false`), but `Rail.tsx`
+    // must not derive its own, second opinion from the raw booleans either —
+    // it must read `status` and trust it. This pins that Rail has no local
+    // fallback path that would disagree.
+    renderRail(mismatchedFeed({ stale: true }));
+
+    expect(screen.getByText('MISMATCH')).toBeTruthy();
+    expect(screen.queryByText('STALE')).toBeNull();
   });
 });
 

@@ -299,18 +299,65 @@ export async function maybeRearmResidual(
       // at the venue — the same state as a fresh submit, so the same
       // suppression. See `standDown` (residual-reflatten.ts).
       if (reflatten.kind === 'skipped' && reflatten.reason === 'own_reflatten_in_flight') return;
+      // #1447: a partial fill can re-enter `advanceLot` -> `maybeRearmResidual`
+      // after a reflatten was already SUBMITTED for this episode (the branch
+      // above only suppresses while it is still in flight), and land on the
+      // same venue refusal again. Consult the dedup BEFORE paging, not only
+      // record it after — otherwise this second pass pages a second time for
+      // a permanent gap the operator was already told about. A store read
+      // failure here fails OPEN (falls through to page): missing a page is
+      // the unsafe direction, a noisy duplicate is not (#1447 review).
+      try {
+        if (
+          (await input.store.getResidualRearmUnsupportedAlertedAt(position.idempotency_key)) !==
+          null
+        ) {
+          return;
+        }
+      } catch (error) {
+        logCaughtFailure(
+          input.logger,
+          {
+            trace_id: input.trace_id,
+            stage: 'execution',
+            event: 'residual_rearm_unsupported_dedup_read_failed',
+            level: 'warn',
+            message:
+              'maybeRearmResidual: getResidualRearmUnsupportedAlertedAt failed — paging without ' +
+              'the dedup check (may duplicate a page already sent, never skip one; #1447)',
+          },
+          error,
+          { idempotency_key: position.idempotency_key },
+        );
+      }
     }
     // #549: the marker stays set (protection is NOT confirmed). The episode
     // is recorded as already-alerted ONLY when the channel accepted the
     // delivery (#549) — so the sweep retries the re-arm on cadence
     // without paging again for a page that actually landed (#342), and DOES
     // page again for one a transport outage swallowed.
+    //
+    // #1447: a CONFIRMED venue refusal records against its OWN dedup column,
+    // not the general one the pre-attempt paths above use — the general
+    // column already carries every OTHER reason this function pages
+    // (store-read failure, non-finite residual, an ordinary retryable
+    // failure), and letting any of those consume the one page a permanent
+    // gap needs is exactly the defect this split closes. Checked before
+    // paging above; recorded after a successful delivery below — the same
+    // check-then-write shape `alertResidualExposureOnce` uses on the sweep
+    // surface (residual-protection-sweep.ts), because that surface is the
+    // only other place this dedup exists.
     if (
       await alertResidualExposure(input, position, residual, now, {
         rearmUnsupported: unsupported,
       })
     ) {
-      await bestEffortMarkerWrite(input, position, now, 'mark-alerted');
+      await bestEffortMarkerWrite(
+        input,
+        position,
+        now,
+        unsupported ? 'mark-rearm-unsupported-alerted' : 'mark-alerted',
+      );
     }
   }
 }
@@ -346,6 +393,13 @@ const MARKER_WRITES = {
     failureMessage:
       'markResidualAlerted failed — the #549 sweep may page a second time for an episode ' +
       'that was already alerted (noisy, not unsafe)',
+  },
+  'mark-rearm-unsupported-alerted': {
+    write: (input: MarkerInput, key: string, now: Date) =>
+      input.store.markResidualRearmUnsupportedAlerted(key, now),
+    failureMessage:
+      'markResidualRearmUnsupportedAlerted failed — the #549 sweep may page a second time ' +
+      'for a permanent gap that was already alerted (noisy, not unsafe; #1447)',
   },
 } as const;
 
@@ -410,12 +464,16 @@ export interface ResidualExposureFlags {
  * a second hand-rolled copy of this channel's swallow/trace posture is
  * exactly the drift `shared/safe-log.ts` was extracted to prevent.
  *
- * Returns whether the channel RESOLVED (#549): the once-per-episode
- * dedup (`markResidualAlerted`) may only be recorded against a delivery the
- * channel accepted — marking it after a swallowed failure would let a
- * transient transport outage permanently suppress the only page for a
- * still-naked residual. The swallow itself is unchanged; only the caller's
- * bookkeeping branches on the answer.
+ * Returns whether the channel RESOLVED (#549): the caller's once-per-episode
+ * dedup write — `markResidualAlerted` for a pre-attempt or ordinary-retry
+ * page, `markResidualRearmUnsupportedAlerted` for a CONFIRMED venue refusal's
+ * OWN dedup (`flags.rearmUnsupported`, #1447, migration 0059; see that
+ * method's doc for why the two columns are kept separate) — may only be
+ * recorded against a delivery the channel accepted, whichever column it is.
+ * Marking either after a swallowed failure would let a transient transport
+ * outage permanently suppress the only page for a still-naked residual. The
+ * swallow itself is unchanged; only the caller's bookkeeping branches on the
+ * answer.
  */
 export async function alertResidualExposure(
   input: AlertInput,

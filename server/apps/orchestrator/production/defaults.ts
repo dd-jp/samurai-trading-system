@@ -37,6 +37,7 @@ import {
 } from '../../../providers/market-data-service/index.js';
 import { buildRoutingMap, LSE_ETP_POOL } from '../../../providers/universe-pool/index.js';
 import { type AssetClass, logCaughtFailure, type TokenBucket } from '../../../shared/index.js';
+import type { LlmInFlightGate } from '../../../shared/llm/index.js';
 import { nousCredentials } from '../../../shared/llm/index.js';
 import type { Logger, UniverseInstrument } from '../types.js';
 import type { ProductionConfig } from './config.js';
@@ -244,7 +245,11 @@ export const DEFAULT_LLM_CLIENT_CONFIG: Omit<AnthropicLlmClientConfig, 'model'> 
  * so an in-flight request is not left dangling after the outer race settles.
  */
 /** Exported for `production.test.ts` — lets the test assert the constructed client's actual shape (instance type, model, retry/timeout config) rather than only the startup warn log's side effect (PR #284 review). */
-export function buildDefaultLlmClient(logger: Logger, spendSink?: LlmSpendSink): LlmClient {
+export function buildDefaultLlmClient(
+  logger: Logger,
+  gate: LlmInFlightGate,
+  spendSink?: LlmSpendSink,
+): LlmClient {
   const { apiKey, baseUrl, model } = nousCredentials('debate');
   // Loud, not silent: omitting `ProductionConfig.llmClient` now means a real,
   // billed API call per debate round rather than a required seam
@@ -337,7 +342,18 @@ export function buildDefaultLlmClient(logger: Logger, spendSink?: LlmSpendSink):
       );
     },
   };
-  const client = new NousMessagesClient({ apiKey, baseUrl });
+  // `gateBudgetMs` is `config.timeoutMs`, NOT `NousMessagesClient`'s own (wider)
+  // network backstop: the gate wait happens inside the outer race in
+  // `callWithTimeout`, whose timer starts before `createMessage` is called, so
+  // that is the clock a queue wait actually eats into (#1080).
+  //
+  // Equal to it, with no safety margin subtracted, because the gate's queue
+  // timer fires at `budgetMs - expectedCallMs` — a full expected call before
+  // the budget, and therefore unconditionally before the outer race — so
+  // `queue_deadline` is reachable by construction rather than by a constant.
+  // An earlier revision subtracted a 1,000 ms `LLM_GATE_BUDGET_MARGIN_MS` to
+  // buy that reachability; the timer change made it dead weight.
+  const client = new NousMessagesClient({ apiKey, baseUrl, gate, gateBudgetMs: config.timeoutMs });
   // `spendSink` is only ever supplied on this default path, and deliberately
   // so: a `ProductionConfig.llmClient` override is a test double or another
   // provider, and metering one against the Nous price table would produce a
@@ -372,6 +388,86 @@ export const DEFAULT_LLM_RATE_LIMIT_CONFIG: RateLimiterConfig = {
     maxLlmCalls: 30 * WORST_CASE_LLM_CALLS_PER_DEBATE,
   },
 };
+
+/**
+ * How many Nous calls this process may have in flight at once, across every
+ * client (#1080). Default 1.
+ *
+ * MEASURED, on 2026-09-14, outside the orchestrator and against the same
+ * account: `anthropic/claude-haiku-4.5` answers the same prompt in p50 5,764 ms
+ * with one call in flight and p50 18,912 ms / max 25,687 ms in a burst of
+ * four, with input and output token counts flat across the ladder. The soak
+ * saw the same shape from the inside — 2 in flight -> 19.1 s, 4 in flight ->
+ * 27.0 s — against a 28,000 ms per-call deadline, which is how 32 of that
+ * session's 40 debates produced no synthesis at all. A follow-up spread one
+ * burst across three separate Nous API keys and it was equal-or-worse than one
+ * key, so the queue is per ACCOUNT and one process-wide number is the right
+ * shape for it.
+ *
+ * 1 rather than 2 because the probe found no throughput gain from a second
+ * concurrent call — two in flight measured 7,684 ms and 18,342 ms for the same
+ * work one call does in ~5.8 s — so a second slot buys latency inflation and
+ * nothing else.
+ *
+ * ## What this costs, stated honestly
+ *
+ * A stocks debate is 4 sequential LLM calls since #1080 capped the class at one
+ * round, so a 20-name sweep is ~80 debate calls (plus a risk-critic call per
+ * intent and an MI scoring call per refresh). At a cap of 1 and
+ * `DEFAULT_EXPECTED_NOUS_CALL_MS`, running all 80 would take ~1,040 s against
+ * a 120 s tick — about 8.7 ticks. A previous version of this comment said
+ * "~24 calls ~= 139 s", which is one WAVE of `maxConcurrentInstruments: 6`,
+ * not a sweep, and understated the serialized total by ~7.5x.
+ *
+ * That is why the cap ships WITH admission control rather than alone. The
+ * sweep does not take 1,040 s: with `DEFAULT_EXPECTED_NOUS_CALL_MS` against
+ * the debate client's 28,000 ms budget, the gate admits one call in flight
+ * plus exactly ONE queued caller (13,000 + 13,000 < 28,000) and refuses every
+ * further arrival on the spot (26,000 + 13,000 >= 28,000). So of the six
+ * instruments a pass runs concurrently, two proceed and four are refused at
+ * zero cost — no tokens, no burned deadline, an immediate `gate_refused`
+ * result and a `no_trade` for that instrument's pass.
+ *
+ * A refused instrument costs ONE `warn` line (`debate_refused_gate`) and an
+ * `audit_log` row reading `not_admitted`; no `debate_log` row, no error-level
+ * line, no retry. That is `gateRefusedDebateResult` in `debate-adapter.ts`,
+ * and it had to be built for the sentence above to be true: until review
+ * round 2 of #1080 the refusal threw, so the four refused instruments each
+ * produced two error-level lines, an `audit_log` row reading `crashed`, and a
+ * rescind that retried the bar and re-billed every persona that had already
+ * answered.
+ *
+ * **That is the design, not a side effect.** #1080's measurement is that a
+ * fast pass producing zero synthesis is worth less than a slow one that
+ * decides: the trade this number takes is instrument COVERAGE per tick for
+ * debate COMPLETION on the instruments it does run, and a refusal is legible
+ * (`gate_refused`) where a 28,000 ms provider timeout was not. Raising
+ * coverage is a `maxInFlightLlmCalls` / `expectedLlmCallMs` decision for a
+ * later measurement, not a reason to widen the deadline this gate protects.
+ */
+export const DEFAULT_MAX_IN_FLIGHT_LLM_CALLS = 1;
+
+/**
+ * Expected per-call wall time for a debate call, used ONLY to estimate a queue
+ * wait and to charge a caller's own call against its budget in the gate's
+ * admission check — never as a timeout.
+ *
+ * 13,000 ms, from the SOAK — the same process this gate ships into — not from
+ * the out-of-process probe. The probe's uncontended p50 was 5,764 ms, and an
+ * earlier revision of this constant used it; that figure is measured, but it
+ * is measured on a machine doing nothing else, with prompts of 3,031-4,614
+ * tokens, and it is contradicted by what the orchestrator actually sees. The
+ * soak's own `llm_spend` rows for the pinned debate model at in-flight 1
+ * centre on ~13 s. **n = 4** at that concurrency, so this is a small sample
+ * and deliberately the pessimistic end of it: an over-estimate refuses a call
+ * that might have squeaked through, an under-estimate admits one that burns a
+ * full 28,000 ms deadline and produces nothing, and #1080 is the record of
+ * which of those two mistakes is expensive.
+ *
+ * A knob, not a constant of nature: `ProductionConfig.expectedLlmCallMs`
+ * overrides it, and re-measuring at a larger n is the obvious follow-up.
+ */
+export const DEFAULT_EXPECTED_NOUS_CALL_MS = 13_000;
 
 /**
  * The default broker wire client, with the Alpaca environment DERIVED FROM

@@ -12,6 +12,7 @@
 
 export { fundamentalAnalyst } from './fundamental-analyst.js';
 export {
+  ANALYST_STAGE_WALL_CLOCK_MS,
   AnalystOrchestrator,
   type AnalystOrchestratorDeps,
   DEFAULT_ANALYST_TIMEOUT_MS,

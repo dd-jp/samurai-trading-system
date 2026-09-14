@@ -74,6 +74,23 @@ export interface NormalizedFill {
    * the fill, because the venue has already traded it.
    */
   fee_currency?: string;
+  /**
+   * #1521, migration 0060: the venue-applied rate to multiply a
+   * `fee_currency`-denominated `price`/`fee` by to get GBP, WHEN the venue
+   * reports one. No current adapter sets this — verified absent from
+   * Saxo's `GET /cs/v1/audit/orderactivities` (this system's only source of
+   * Saxo fill data) on real `FinalFill` rows, SIM, 2026-09-14. The field
+   * exists so a future Saxo surface or adapter can supply it without a
+   * further wire-shape change; see `Fill.fx_rate_to_gbp`'s doc for the fuller
+   * record.
+   */
+  fx_rate_to_gbp?: number;
+  /**
+   * #1521, migration 0060: why `fx_rate_to_gbp` is absent, e.g.
+   * `'not_reported_by_venue'`. Set by an adapter alongside `fee_currency`
+   * whenever that currency is not book currency — see `Fill.fx_rate_to_gbp_source`.
+   */
+  fx_rate_to_gbp_source?: string;
   timestamp: Date;
   /**
    * Populated only by the Simulated adapter, mapped from `CostModel.fill`'s
