@@ -7,7 +7,7 @@ the gate survives a whole session rather than just the open. It does not: the
 minutes later. Rerun across several sessions before any figure here is treated
 as a time-of-day rule.
 
-Reads SAXO_OPENAPI_TOKEN from .env.local at the repo root; never prints it.
+Reads SAXO_SIM_ACCESS_TOKEN from .env.local at the repo root; never prints it.
 Writes one JSON record per sample to stdout and to $SPREAD_PROFILE_OUT.
 
     SAMPLES=6 INTERVAL_S=5400 python3 docs/research/44-spread-session-profile.py
@@ -42,7 +42,7 @@ def _env_file():
 
 
 token = re.search(
-    r'^SAXO_OPENAPI_TOKEN=(.+)$', _env_file().read_text(), re.M
+    r'^SAXO_SIM_ACCESS_TOKEN=(.+)$', _env_file().read_text(), re.M
 ).group(1).strip()
 HEADERS = {'Authorization': 'Bearer ' + token}
 

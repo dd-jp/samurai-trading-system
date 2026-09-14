@@ -123,7 +123,7 @@ const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // Separator and value-class treatment: see the module doc comment above.
   /(?<![A-Za-z0-9])(?:client[_-]?secret|access[_-]?token|refresh[_-]?token)(?:\x5c?[\x22\x27])?[ \t]*[:=][ \t]*(?:\x5c?[\x22\x27])?(?:(?!\x5c[\x22\x27])[^\s,;&\x22\x27\x7d\]])+/gi,
   // Underscore-joined ALL-CAPS env-var names (`ALPACA_API_SECRET`,
-  // `SAXO_OPENAPI_TOKEN`, `TELEGRAM_BOT_TOKEN` — grepped from this repo's
+  // `SAXO_SIM_ACCESS_TOKEN`, `TELEGRAM_BOT_TOKEN` — grepped from this repo's
   // real `process.env.*` reads, not just the one Alpaca name; `DB_PASSWORD`
   // is illustrative of the `_PASSWORD` suffix, not a name in this repo's
   // own `process.env.*` reads): the shape the bareword pattern above can't
@@ -148,7 +148,7 @@ const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // `next_page_token`/`page_token`, the exact regression the all-caps-only
   // design above exists to avoid. The result is an intentional residual
   // gap: a lowercase or mixed-case name ending only in `_token` (e.g.
-  // `saxo_openapi_token`, `Saxo_Openapi_Token`) is still not masked by
+  // `saxo_session_token`, `Saxo_Session_Token`) is still not masked by
   // either pattern — narrower coverage than the all-caps branch, on
   // purpose, because `_token` alone can't tell a credential from a cursor
   // without the case signal. The gap is wider than just `_token`, though:

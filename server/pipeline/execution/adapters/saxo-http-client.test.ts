@@ -85,7 +85,7 @@ describe('SaxoHttpBrokerClient', () => {
   it('refuses to construct without a token, naming the env var', () => {
     vi.stubEnv(SAXO_CREDENTIAL_ENV_VARS.sim.token, '   ');
     expect(() => new SaxoHttpBrokerClient({ logger: recordingLogger() })).toThrow(
-      /SAXO_OPENAPI_TOKEN/,
+      /SAXO_SIM_ACCESS_TOKEN/,
     );
     vi.unstubAllEnvs();
   });

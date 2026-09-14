@@ -3,11 +3,13 @@
  * of `alpaca-http-client.ts`: same `withRetry` + `fetchWithTimeout` transport,
  * same validate-at-the-boundary posture, same env-sourced credential rule.
  *
- * Authentication is a 24-hour OAuth bearer (`SAXO_OPENAPI_TOKEN`), issued by
- * the code-flow against `SAXO_SIM_AUTH_URL`/`SAXO_SIM_TOKEN_URL`; refreshing
- * it is not this client's job and an expired token surfaces as a 401
- * `SaxoBrokerProviderError`. The token is never logged or embedded in an
- * error message.
+ * Authentication is an OAuth bearer from `SAXO_SIM_ACCESS_TOKEN` or
+ * `SAXO_LIVE_ACCESS_TOKEN`. The developer portal's 24-hour token works on SIM
+ * only; a live token comes only from the authorization-code flow, whose access
+ * token lasts 1200 s (refresh token measured at 3600 s on live, 2026-09-14).
+ * Obtaining or refreshing the token is not this client's job, so an expired
+ * token surfaces as a 401 `SaxoBrokerProviderError`. The token is never logged
+ * or embedded in an error message.
  *
  * `AccountKey`/`ClientKey` are resolved once from `/port/v1/accounts/me` and
  * memoised, so the adapter never holds an account identifier.
@@ -43,8 +45,8 @@ export type SaxoTradingEnvironment = 'sim' | 'live';
 export const SAXO_CREDENTIAL_ENV_VARS: Readonly<
   Record<SaxoTradingEnvironment, { readonly token: string; readonly gateway: string }>
 > = {
-  sim: { token: 'SAXO_OPENAPI_TOKEN', gateway: 'SAXO_SIM_GATEWAY' },
-  live: { token: 'SAXO_LIVE_OPENAPI_TOKEN', gateway: 'SAXO_LIVE_GATEWAY' },
+  sim: { token: 'SAXO_SIM_ACCESS_TOKEN', gateway: 'SAXO_SIM_GATEWAY' },
+  live: { token: 'SAXO_LIVE_ACCESS_TOKEN', gateway: 'SAXO_LIVE_GATEWAY' },
 };
 
 export const SAXO_GATEWAY_URLS: Readonly<Record<SaxoTradingEnvironment, string>> = {

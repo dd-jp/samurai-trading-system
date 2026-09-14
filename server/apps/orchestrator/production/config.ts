@@ -521,7 +521,7 @@ export interface ProductionConfig extends AlertChannelSlots {
    * Saxo OpenAPI surface, read ONLY when `SAMURAI_BROKER=saxo` selects the
    * Saxo venue (#1400, production/saxo-venue.ts). Optional for
    * `alpacaBrokerClient`'s reason: `SaxoHttpBrokerClient` refuses to be
-   * constructed without `SAXO_OPENAPI_TOKEN`, so a test — or any offline
+   * constructed without `SAXO_SIM_ACCESS_TOKEN`, so a test — or any offline
    * composition root — needs a way to exercise the venue without a
    * credential. There are no Saxo credentials on the development host and the
    * SIM token is a 24-hour bearer, so this seam is what every in-repo Saxo
