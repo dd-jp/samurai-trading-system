@@ -705,14 +705,25 @@ export class SqliteExecutionStore implements SharedStore {
    *
    * #1500: also bounded by `UNRESOLVABLE_FLATTEN_MAX_AGE_MS` — a blocking row
    * older than that against THIS submission's own `submitted_at` (the
-   * caller's `now`, so no extra clock dependency here) no longer counts. A
-   * row still inside the bound blocks exactly as before; the #516 protection
-   * is unchanged for every row that has not yet gone stale. What ages out
-   * stays in `flatten_submissions` at whatever status it already had —
-   * unlike `reconcileFlatten`'s own age branch, this gate does not resolve
-   * the row, it only stops citing it as a reason to refuse a NEW flatten.
-   * See `SharedStore.writeAheadFlatten`'s doc for why leaving it unresolved
-   * is the deliberate trade, not an oversight.
+   * caller's `now`, so no extra clock dependency here) no longer counts,
+   * UNLESS its last observed `order_state` is a WORKING one (review round 1:
+   * age alone is not evidence the lot is flat — a venue that keeps
+   * confirming a genuinely open order, e.g. an auction/halt/illiquid LSE
+   * ETP, must keep blocking no matter how old the row is, or this gate
+   * would let a second full-size market flatten through on a lot #1389
+   * already proved was still fully held — the reverse-position outcome
+   * #1389 closed). Only a row whose `order_state` is `null` (the venue was
+   * never successfully asked at all) or one of `TERMINAL_ORDER_STATES`
+   * (venue answered, definitively, that the order is done) is eligible for
+   * the age cutoff. `order_state` is read STICKILY off the row, not
+   * re-derived — see `UnresolvedFlattenSubmission.order_state`'s doc. A row
+   * still inside the bound, or whose `order_state` is working, blocks
+   * exactly as before; the #516 protection is unchanged for either. What
+   * ages out stays in `flatten_submissions` at whatever status it already
+   * had — unlike `reconcileFlatten`'s own age branch, this gate does not
+   * resolve the row, it only stops citing it as a reason to refuse a NEW
+   * flatten. See `SharedStore.writeAheadFlatten`'s doc for why leaving it
+   * unresolved is the deliberate trade, not an oversight.
    */
   async writeAheadFlatten(submission: FlattenSubmissionWriteAhead): Promise<void> {
     try {
@@ -720,6 +731,10 @@ export class SqliteExecutionStore implements SharedStore {
         const blockingCutoff = toStoredTimestamp(
           new Date(submission.submitted_at.getTime() - UNRESOLVABLE_FLATTEN_MAX_AGE_MS),
         );
+        // #1500 review round 1: a row whose last observed `order_state` is
+        // still WORKING (not in `TERMINAL_ORDER_STATES`, and not `NULL`)
+        // blocks regardless of `submitted_at` — see this method's own doc.
+        const terminalPlaceholders = TERMINAL_ORDER_STATES.map(() => '?').join(', ');
         const blocking = this.db
           .prepare(
             `SELECT idempotency_key FROM flatten_submissions
@@ -728,12 +743,19 @@ export class SqliteExecutionStore implements SharedStore {
                 AND idempotency_key <> ?
                 AND (status = 'submitting'
                  OR (status = 'submitted' AND fills_swept_at IS NULL))
-                AND submitted_at > ?
+                AND (
+                  submitted_at > ?
+                  OR (order_state IS NOT NULL AND order_state NOT IN (${terminalPlaceholders}))
+                )
               LIMIT 1`,
           )
-          .get(this.arm, submission.instrument, submission.idempotency_key, blockingCutoff) as
-          | { idempotency_key: string }
-          | undefined;
+          .get(
+            this.arm,
+            submission.instrument,
+            submission.idempotency_key,
+            blockingCutoff,
+            ...TERMINAL_ORDER_STATES,
+          ) as { idempotency_key: string } | undefined;
         if (blocking !== undefined) {
           throw new UnresolvedFlattenForInstrumentError(
             submission.idempotency_key,
@@ -997,7 +1019,7 @@ export class SqliteExecutionStore implements SharedStore {
   async getUnresolvedFlattens(): Promise<UnresolvedFlattenSubmission[]> {
     const rows = this.db
       .prepare(
-        `SELECT idempotency_key, instrument, status, submitted_at
+        `SELECT idempotency_key, instrument, status, submitted_at, order_state
            FROM flatten_submissions
           WHERE arm = ?
             AND (status = 'submitting'
@@ -1008,6 +1030,7 @@ export class SqliteExecutionStore implements SharedStore {
       instrument: string;
       status: 'submitting' | 'submitted';
       submitted_at: string;
+      order_state: OrderState | null;
     }>;
 
     return rows.map((row) => ({
@@ -1015,6 +1038,7 @@ export class SqliteExecutionStore implements SharedStore {
       instrument: row.instrument,
       status: row.status,
       submitted_at: new Date(row.submitted_at),
+      order_state: row.order_state,
     }));
   }
 

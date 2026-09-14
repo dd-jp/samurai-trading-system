@@ -898,6 +898,57 @@ describe('SqliteExecutionStore', () => {
         'flatten-2',
       ]);
     });
+
+    // #1500 review round 1: age alone is not evidence the lot is flat — a
+    // venue that keeps confirming a genuinely open order (auction, halt,
+    // illiquid LSE ETP) must keep blocking no matter how old the row is, or
+    // this gate lets the exact #516/#1389 reverse-position over-sell through.
+    it('still refuses a second flatten past the age bound when the venue last confirmed the row WORKING', async () => {
+      const { store } = makeStore();
+      await store.writeAheadFlatten(
+        makeFlattenWriteAhead({ idempotency_key: 'flatten-1', submitted_at: OPENED_AT }),
+      );
+      await store.resolveFlattenSubmitted(
+        'flatten-1',
+        { order_state: 'partially_filled', broker_order_ids: ['broker-order-1'] },
+        OPENED_AT,
+      );
+
+      const wayPastBound = new Date(OPENED_AT.getTime() + UNRESOLVABLE_FLATTEN_MAX_AGE_MS * 100);
+
+      await expect(
+        store.writeAheadFlatten(
+          makeFlattenWriteAhead({ idempotency_key: 'flatten-2', submitted_at: wayPastBound }),
+        ),
+      ).rejects.toThrow(UnresolvedFlattenForInstrumentError);
+    });
+
+    it('no longer refuses a second flatten past the age bound once the venue confirms the row terminal', async () => {
+      const { store } = makeStore();
+      await store.writeAheadFlatten(
+        makeFlattenWriteAhead({ idempotency_key: 'flatten-1', submitted_at: OPENED_AT }),
+      );
+      await store.resolveFlattenSubmitted(
+        'flatten-1',
+        { order_state: 'cancelled', broker_order_ids: ['broker-order-1'] },
+        OPENED_AT,
+      );
+
+      const pastBound = new Date(OPENED_AT.getTime() + UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1);
+
+      await store.writeAheadFlatten(
+        makeFlattenWriteAhead({
+          idempotency_key: 'flatten-2',
+          instrument: 'AAPL',
+          submitted_at: pastBound,
+        }),
+      );
+
+      expect((await store.getFlattenAttribution('flatten-2'))?.lot_idempotency_keys).toEqual([
+        'key-lot-1',
+        'key-lot-2',
+      ]);
+    });
   });
 
   // Review feedback on #524 (kimi): the same unvalidated-cast defect class
@@ -1053,6 +1104,7 @@ describe('SqliteExecutionStore', () => {
           instrument: 'AAPL',
           status: 'submitting',
           submitted_at: OPENED_AT,
+          order_state: null,
         },
       ]);
     });
@@ -1074,6 +1126,7 @@ describe('SqliteExecutionStore', () => {
           instrument: 'AAPL',
           status: 'submitted',
           submitted_at: OPENED_AT,
+          order_state: 'submitted',
         },
       ]);
     });

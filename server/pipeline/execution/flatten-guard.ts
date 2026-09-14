@@ -13,18 +13,38 @@
  * instrument forever, across restarts and trading days, with no operator
  * path but editing SQLite by hand. That is exactly the outcome
  * `UNRESOLVABLE_FLATTEN_MAX_AGE_MS`'s own doc (reconcile.ts) already argues
- * against for `reconcileFlatten`'s narrower branch; this file applies the
- * SAME bound to the guard itself, at the one place the Trader stays
+ * against for `reconcileFlatten`'s narrower branch; this file applies an
+ * ORDER-STATE-GATED version of that bound to the guard itself (review round
+ * 1 — see `isFlattenBlockingAt`'s doc, reconcile.ts, for exactly which
+ * `order_state` values are eligible), at the one place the Trader stays
  * age-ignorant on purpose (trader/types.ts's `UnresolvedFlatten` doc): the
  * composition root, not `pipeline/trader`.
  *
+ * **Aging out re-arms a second live order only under specific venue
+ * evidence.** Age alone is never enough: a row the venue keeps confirming
+ * WORKING (an auction, a halt, an illiquid LSE ETP all keep a flatten
+ * genuinely `'submitted'`/`'partially_filled'` well past 5 minutes without
+ * ever being wrong) must keep blocking no matter how old it is, or this
+ * guard would let the Trader build a second full-size flatten intent on a
+ * lot #1389 already proved was still fully held — the exact reverse-position
+ * over-sell #1389 closed, reintroduced with certainty. Only a row whose last
+ * observed `order_state` is `null` (the venue was never successfully asked
+ * — `reconcileFlatten`'s `resumeFlatten`-throw branch, which leaves this
+ * field untouched) or TERMINAL (the venue answered, definitively, that the
+ * order is done) ages out. `order_state` is read STICKILY off the row (see
+ * `UnresolvedFlattenSubmission.order_state`'s doc) — a later `resumeFlatten`
+ * throw never reverts a previously observed working answer back to unknown.
+ *
  * `writeAheadFlatten`'s own atomic one-flatten-per-instrument check
- * (sqlite-shared-store.ts) carries the identical bound independently — see
- * its doc. Bounding only this read would leave the Trader willing to build
- * a flatten intent that `executeExit`/`reflattenResidual` then refuse at the
- * store, which is the same "instrument un-flattenable forever" outcome one
- * layer down; bounding only the store would leave the Trader still skipping
- * on `flattenAlreadyInFlight` before ever reaching it. Both must hold.
+ * (sqlite-shared-store.ts) carries the identical, identically-gated bound
+ * independently — see its doc. Bounding only this read would leave the
+ * Trader willing to build a flatten intent that `executeExit`/
+ * `reflattenResidual` then refuse at the store, which is the same
+ * "instrument un-flattenable forever" outcome one layer down; bounding only
+ * the store would leave the Trader still skipping on `flattenAlreadyInFlight`
+ * before ever reaching it. Both must hold, and both must apply the SAME
+ * `order_state` gate, or the two disagree on the exact case #1389 exists to
+ * prevent.
  *
  * ## What ages out is not resolved
  *
@@ -87,6 +107,14 @@ export function boundedUnresolvedFlattens(
   // not tick count — and cleared on restart, which re-alerts rather than
   // silently drops one, matching `FilledZeroSizeThrottle`'s posture on the
   // same trade-off.
+  //
+  // #1500 review round 1: a row is added here ONLY after
+  // `postFlattenGuardBoundAlert` reports the alert DELIVERED, not merely
+  // attempted — unlike `reconcile.ts`'s own `postFlattenReconcileAlert`
+  // call sites, this dedup set would otherwise make one transport failure
+  // permanent: a swallowed throw would still have marked the row alerted,
+  // and it would then never be retried for the rest of the process's life.
+  // A row whose delivery failed is retried on the very next call instead.
   const alerted = new Set<string>();
 
   return async () => {
@@ -99,20 +127,27 @@ export function boundedUnresolvedFlattens(
         continue;
       }
       if (!alerted.has(row.idempotency_key)) {
-        alerted.add(row.idempotency_key);
-        await postFlattenGuardBoundAlert(deps, row, now);
+        const delivered = await postFlattenGuardBoundAlert(deps, row, now);
+        if (delivered) {
+          alerted.add(row.idempotency_key);
+        }
       }
     }
     return blocking;
   };
 }
 
-/** Fire-and-forget, fully swallowed — mirrors `reconcile.ts`'s own `postFlattenReconcileAlert`. */
+/**
+ * Fire-and-forget, fully swallowed — mirrors `reconcile.ts`'s own
+ * `postFlattenReconcileAlert`. Returns whether the alert was actually
+ * DELIVERED (not merely attempted) — see the `alerted` set's doc above for
+ * why the caller must not mark a row alerted on a swallowed failure.
+ */
 async function postFlattenGuardBoundAlert(
   deps: FlattenGuardDeps,
   row: UnresolvedFlattenSubmission,
   now: Date,
-): Promise<void> {
+): Promise<boolean> {
   const reason =
     `flatten guard bound tripped — this row has been unresolved for longer than ` +
     `UNRESOLVABLE_FLATTEN_MAX_AGE_MS (${UNRESOLVABLE_FLATTEN_MAX_AGE_MS}ms) and no longer blocks ` +
@@ -125,6 +160,7 @@ async function postFlattenGuardBoundAlert(
       reason,
       observed_at: now,
     });
+    return true;
   } catch (error) {
     safeLog(deps.logger, {
       trace_id: deps.trace_id,
@@ -133,12 +169,13 @@ async function postFlattenGuardBoundAlert(
       level: 'error',
       message:
         'postFlattenReconcileAlert delivery failed for a flatten-guard bound trip — the ' +
-        'instrument is flattenable again but the operator was not paged; check by hand',
+        'instrument is flattenable again but the operator was not paged; retrying next tick',
       payload: {
         idempotency_key: row.idempotency_key,
         instrument: row.instrument,
         error: describeThrownSafely(error),
       },
     });
+    return false;
   }
 }

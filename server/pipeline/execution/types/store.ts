@@ -222,6 +222,23 @@ export interface FlattenJournal {
    * forever. Aging out of THIS check does not resolve the row — see
    * `SqliteExecutionStore.writeAheadFlatten`'s own doc for why that is the
    * deliberate trade, not an oversight.
+   *
+   * **The age cutoff alone is NOT sufficient (#1500 review round 1) — it is
+   * gated by `order_state`, the last venue answer this row ever got.** A row
+   * whose `order_state` is a WORKING state (anything not in
+   * `TERMINAL_ORDER_STATES` — `'pending'`, `'submitted'`,
+   * `'partially_filled'`, `'filled'`) keeps blocking NO MATTER HOW OLD it is:
+   * the venue is actively saying this lot is still open, and letting a second
+   * market order through on that evidence is the exact #516/#1389 over-sell
+   * this gate exists to prevent. Only a row whose `order_state` is `null`
+   * (the venue was never asked successfully, `resumeFlatten` kept throwing —
+   * `reconcileFlatten`'s doc, reconcile.ts) or a TERMINAL `order_state`
+   * (venue answered, definitively, that the order is done) is eligible for
+   * the age cutoff above. This is the evidence the row's own `order_state`
+   * column carries (set by `resolveFlattenSubmitted` /
+   * `recordFlattenOrderStateObserved`, and STICKY — a later `resumeFlatten`
+   * throw never clears a previously observed working state), not a fresh
+   * read at refusal time.
    */
   writeAheadFlatten(submission: FlattenSubmissionWriteAhead): Promise<void>;
   /** Persist the post-ack transition (`'submitting'` → `'submitted'`). */
@@ -512,6 +529,19 @@ export interface UnresolvedFlattenSubmission {
    * and no durable counter of its own.
    */
   submitted_at: Date;
+  /**
+   * The last venue answer this row ever got, or `null` if it never got one —
+   * `resolveFlattenSubmitted` / `recordFlattenOrderStateObserved` set it,
+   * and it is STICKY: a later `resumeFlatten` throw (reconcile.ts) leaves it
+   * exactly as it was, so a row the venue has ever confirmed alive keeps
+   * that answer through an adapter outage rather than reverting to unknown.
+   *
+   * #1500 review round 1: this, not `submitted_at` alone, is what
+   * `isFlattenBlockingAt` and `SqliteExecutionStore.writeAheadFlatten` gate
+   * the age bound on — see `SharedStore.writeAheadFlatten`'s doc for exactly
+   * which values are eligible to age out and which are not.
+   */
+  order_state: OrderState | null;
 }
 
 /**

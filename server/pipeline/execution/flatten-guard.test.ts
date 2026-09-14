@@ -38,6 +38,7 @@ function makeRow(
     instrument: 'AAPL',
     status: 'submitted',
     submitted_at: NOW,
+    order_state: null,
     ...overrides,
   };
 }
@@ -59,6 +60,42 @@ describe('boundedUnresolvedFlattens (#1500)', () => {
 
     expect(result.map((row) => row.instrument)).toEqual(['AAPL']);
     expect(flattenReconcileAlerts.alerts).toEqual([]);
+  });
+
+  it('keeps blocking a row past the age bound when the venue last confirmed it WORKING (#1500 review round 1)', async () => {
+    const wayPastBound = new Date(NOW.getTime() - UNRESOLVABLE_FLATTEN_MAX_AGE_MS * 100);
+    const store = fakeStore([
+      makeRow({ submitted_at: wayPastBound, order_state: 'partially_filled' }),
+    ]);
+    const flattenReconcileAlerts = recordingAlerts();
+    const unresolvedFlattens = boundedUnresolvedFlattens({
+      store,
+      clock: fixedClock(NOW),
+      flattenReconcileAlerts,
+      logger: recordingLogger(),
+      trace_id: 'flatten-guard',
+    });
+
+    const result = await unresolvedFlattens();
+
+    expect(result.map((row) => row.instrument)).toEqual(['AAPL']);
+    expect(flattenReconcileAlerts.alerts).toEqual([]);
+  });
+
+  it('drops a row past the age bound whose venue answer is terminal, even though it is unresolved', async () => {
+    const pastBound = new Date(NOW.getTime() - (UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1));
+    const store = fakeStore([makeRow({ submitted_at: pastBound, order_state: 'cancelled' })]);
+    const unresolvedFlattens = boundedUnresolvedFlattens({
+      store,
+      clock: fixedClock(NOW),
+      flattenReconcileAlerts: recordingAlerts(),
+      logger: recordingLogger(),
+      trace_id: 'flatten-guard',
+    });
+
+    const result = await unresolvedFlattens();
+
+    expect(result).toEqual([]);
   });
 
   it('drops a row past the age bound and no longer blocks the instrument', async () => {
@@ -163,5 +200,46 @@ describe('boundedUnresolvedFlattens (#1500)', () => {
     expect(logger.entries.some((e) => e.event === 'flatten_guard_bound_alert_send_failed')).toBe(
       true,
     );
+  });
+
+  it('retries the alert on the next call rather than marking a failed delivery alerted (#1500 review round 1)', async () => {
+    const pastBound = new Date(NOW.getTime() - (UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1));
+    const store = fakeStore([makeRow({ submitted_at: pastBound })]);
+    let attempts = 0;
+    const unresolvedFlattens = boundedUnresolvedFlattens({
+      store,
+      clock: fixedClock(NOW),
+      flattenReconcileAlerts: {
+        postFlattenReconcileAlert: async () => {
+          attempts++;
+          throw new Error('transport down');
+        },
+      },
+      logger: recordingLogger(),
+      trace_id: 'flatten-guard',
+    });
+
+    await unresolvedFlattens();
+    await unresolvedFlattens();
+
+    expect(attempts).toBe(2);
+  });
+
+  it('once delivery succeeds, does not retry on a later call even if the row is still unresolved', async () => {
+    const pastBound = new Date(NOW.getTime() - (UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1));
+    const store = fakeStore([makeRow({ submitted_at: pastBound })]);
+    const flattenReconcileAlerts = recordingAlerts();
+    const unresolvedFlattens = boundedUnresolvedFlattens({
+      store,
+      clock: fixedClock(NOW),
+      flattenReconcileAlerts,
+      logger: recordingLogger(),
+      trace_id: 'flatten-guard',
+    });
+
+    await unresolvedFlattens();
+    await unresolvedFlattens();
+
+    expect(flattenReconcileAlerts.alerts).toHaveLength(1);
   });
 });

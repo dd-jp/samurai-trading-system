@@ -884,8 +884,9 @@ async function executeExit(
         '`deduped`, which is NOT the same as "already flat": this lot is still held. The next ' +
         'tick in the #826 window retries, and the blocking row is bounded — both by whatever ' +
         'resolves it (reconcile.ts UNRESOLVABLE_FLATTEN_MAX_AGE_MS) and, since #1500, by ' +
-        "writeAheadFlatten's own age cutoff on this SAME check, so a row that never resolves " +
-        'still stops blocking once it is old enough.',
+        "writeAheadFlatten's own age cutoff on this SAME check — but ONLY once the venue's " +
+        'last known answer for that row is null or terminal; a row the venue keeps confirming ' +
+        "WORKING stays blocking no matter how old it is (see writeAheadFlatten's doc).",
       payload: {
         idempotency_key: idempotencyKey,
         instrument: order.instrument,

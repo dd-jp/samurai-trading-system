@@ -213,19 +213,36 @@ export const TERMINAL_SWEEP_AGE_MS = 24 * 60 * 60 * 1_000;
 export const UNRESOLVABLE_FLATTEN_MAX_AGE_MS = 5 * 60 * 1_000;
 
 /**
- * #1500: the one age test every consumer of this bound shares — `now - row.
- * submitted_at < UNRESOLVABLE_FLATTEN_MAX_AGE_MS`. `writeAheadFlatten`
- * (sqlite-shared-store.ts) inlines the equivalent as a SQL predicate rather
- * than calling this (it never materializes a `UnresolvedFlattenSubmission`
- * to test), but the two must stay the same comparison — see that method's
- * doc. `flatten-guard.ts`'s `boundedUnresolvedFlattens` calls this directly
- * to decide what the Trader-facing guard (`flattenAlreadyInFlight`,
- * trader/decide.ts) still gets to see.
+ * #1500: the one blocking test every consumer of this bound shares.
+ * `writeAheadFlatten` (sqlite-shared-store.ts) inlines the equivalent as a
+ * SQL predicate rather than calling this (it never materializes a
+ * `UnresolvedFlattenSubmission` to test), but the two must stay the same
+ * comparison — see that method's doc. `flatten-guard.ts`'s
+ * `boundedUnresolvedFlattens` calls this directly to decide what the
+ * Trader-facing guard (`flattenAlreadyInFlight`, trader/decide.ts) still
+ * gets to see.
+ *
+ * **Age alone is NOT sufficient (review round 1).** A row whose last
+ * observed `order_state` is WORKING — anything not in
+ * `TERMINAL_ORDER_STATES` and not `null` — blocks NO MATTER HOW OLD it is:
+ * the venue is actively confirming the lot is still open (an auction, a
+ * halt, an illiquid LSE ETP all keep a flatten genuinely `'submitted'` or
+ * `'partially_filled'` well past 5 minutes without it ever being wrong),
+ * and letting a second full-size market flatten through on that evidence is
+ * the #516/#1389 reverse-position over-sell this bound must never
+ * reintroduce. Only `order_state === null` (the venue was never
+ * successfully asked — see `reconcileFlatten`'s `resumeFlatten`-throw
+ * branch just below, which leaves this field untouched) or a TERMINAL
+ * `order_state` (the venue answered, definitively, that the order is done)
+ * is eligible for the age cutoff.
  */
 export function isFlattenBlockingAt(
-  row: Pick<UnresolvedFlattenSubmission, 'submitted_at'>,
+  row: Pick<UnresolvedFlattenSubmission, 'submitted_at' | 'order_state'>,
   now: Date,
 ): boolean {
+  if (row.order_state !== null && !TERMINAL_ORDER_STATES.includes(row.order_state)) {
+    return true;
+  }
   return now.getTime() - row.submitted_at.getTime() < UNRESOLVABLE_FLATTEN_MAX_AGE_MS;
 }
 
@@ -346,11 +363,28 @@ async function reconcileFlatten(
     // that bound. Below, the venue ANSWERS — repeatedly, negatively — and a
     // decision can be forced on consistent evidence. Here the adapter could
     // not answer at all, so forcing the row terminal would write into the
-    // journal a finding nothing observed, and it would buy nothing: an adapter
-    // that cannot reach the venue to ask about this flatten cannot submit a
-    // replacement one either. The resolution path is the next pass on which
-    // the adapter CAN answer, which routes into the branch below or into a
-    // real order state.
+    // journal a finding nothing observed, and it would buy nothing: this
+    // function's own RESOLUTION of the row stays exactly as unbounded as
+    // before. The resolution path is the next pass on which the adapter CAN
+    // answer, which routes into the branch below or into a real order state.
+    //
+    // #1500 review round 1 correction: the claim this comment used to make —
+    // "an adapter that cannot reach the venue to ask about this flatten
+    // cannot submit a replacement one either" — is no longer the reason
+    // nothing bad happens here. `writeAheadFlatten`'s own gate (and the
+    // Trader-facing `boundedUnresolvedFlattens`) now DOES let a replacement
+    // flatten through once this row is old enough — but only when
+    // `order_state` is `null` (never confirmed by the venue at all, which is
+    // exactly this row's state if it never got past `'submitting'`) or
+    // terminal. If this row was EVER confirmed `'submitted'`/`'partially_
+    // filled'`/`'filled'` before `resumeFlatten` started throwing,
+    // `order_state` stays at that working value (sticky — this branch never
+    // clears it) and the age bound never applies, so a second flatten is
+    // still refused. The narrower, still-open case is a row that was NEVER
+    // confirmed even once: for that one, #1500 accepts the same asymmetry
+    // this comment already argued for reconcile's own resolution — a
+    // replacement attempt against a venue the adapter cannot reach is not
+    // expected to land either.
     const reason = describeThrownSafely(error);
     await postFlattenReconcileAlert(input, row, reason, now);
     return {
