@@ -23,6 +23,7 @@
  */
 
 import {
+  CONTRACT_VERSION,
   type DashboardSnapshot,
   type LlmSpendSummary,
   type MetricsSuiteWire,
@@ -124,10 +125,61 @@ function pollTimeoutMs(intervalMs: number): number {
   return intervalMs * STALE_AFTER_MISSED_POLLS;
 }
 
+/**
+ * The rail's single health discriminator (#1316's decision comment: "one
+ * small state discriminator on the client, not three ad-hoc flags"). Every
+ * consumer that needs to know how much of the feed to trust reads THIS field,
+ * not `stale/snapshot/error` combined by hand — `stale` is kept on
+ * `SnapshotFeed` too, but it is derived FROM `status`, never set
+ * independently, so the two can never disagree about what state the page is
+ * in.
+ *
+ * Ranked, highest priority first, because more than one can be true of the
+ * underlying facts at once and only one word can be shown:
+ *
+ * 1. `'contract-mismatch'` — the served client bundle and the answering
+ *    server disagree about the wire shape (#1316). Outranks everything below:
+ *    a mismatched poll's `stale`/`waiting` reading would be a WRONG
+ *    diagnosis, not just a less specific one — "the feed went quiet" when the
+ *    real fact is "the feed is answering, but this client cannot trust what
+ *    it says", which is worse than the silence it would otherwise report.
+ * 2. `'waiting'` — no snapshot has ever been read successfully.
+ * 3. `'stale'` — a snapshot exists, but two poll intervals have passed since
+ *    the last one that validated.
+ * 4. `'alive'` — the feed is healthy.
+ *
+ * This is the extension point named for #1520 (cold-start / stale-feed
+ * states): a new member added to this union, with its own priority slot in
+ * `deriveStatus` below and its own entry in `Rail.tsx`'s `HEALTH` record, is
+ * the SAME mechanism this ticket introduces — not a second, parallel flag.
+ */
+export type FeedStatus = 'contract-mismatch' | 'waiting' | 'stale' | 'alive';
+
 export interface SnapshotFeed {
-  /** The most recent successfully-fetched payload, or `null` before the first. */
+  /**
+   * The most recent successfully-fetched payload, or `null` before the
+   * first — including while `status === 'contract-mismatch'`: a mismatched
+   * poll does not overwrite this with a payload this client cannot trust the
+   * shape of, so it holds whatever the last VALIDATED poll produced (or
+   * `null`, if there has never been one). `status`, not this field's
+   * nullness, is what a caller must check before reading health off it — see
+   * `Rail.tsx`'s block components, which read `status`, not `snapshot`
+   * directly, for exactly this reason.
+   */
   snapshot: WireSnapshot | null;
-  /** Two poll intervals have passed with no successful poll. */
+  /**
+   * The watchdog's own reading: two poll intervals have passed with no
+   * successful (matching-contract) poll. NOT simply `status === 'stale'` —
+   * `status` gives `'waiting'` priority over this while no snapshot has ever
+   * landed (nothing to call stale yet), but a caller keying off `stale`
+   * alone (the rail's border colour) still needs to see a watchdog trip that
+   * happens before the first success too. The one guarantee this DOES share
+   * with `status`: it is never true during `'contract-mismatch'` — a
+   * mismatched poll's own staleness is not the fact wrong with it, and
+   * `status` already outranks it for exactly that reason (`deriveStatus`'s
+   * doc comment, #1316's decision comment on why mismatch must outrank
+   * staleness).
+   */
   stale: boolean;
   /**
    * Client wall-clock time of the last successful poll — distinct from
@@ -137,6 +189,8 @@ export interface SnapshotFeed {
   lastSuccessAt: string | null;
   /** Why the last poll failed, for the rail to name. `null` when the last poll worked. */
   error: string | null;
+  /** The rail's health discriminator — see `FeedStatus`'s doc comment. */
+  status: FeedStatus;
 }
 
 export interface UseSnapshotOptions {
@@ -154,6 +208,30 @@ export interface UseSnapshotOptions {
    * identical to before this option existed.
    */
   authToken?: string | null;
+}
+
+/**
+ * Reads `contract_version` off a body that at least parsed as an object,
+ * without trusting anything else about its shape yet (#1316) — this runs
+ * BEFORE `hasWireShape` in `poll()` below, deliberately, so a renamed or
+ * dropped field that also fails the structural check is still diagnosed as a
+ * contract mismatch rather than falling through to the generic "did not
+ * match the wire shape" error, which reads like a proxy/captive-portal fault
+ * rather than what it actually is.
+ *
+ * Returns `undefined` for both "the body is not even an object" and "the
+ * field is absent or not a string" — this function does not need to
+ * distinguish those two, because either one already fails to equal
+ * `CONTRACT_VERSION` the same way. A pre-#1316 server (this field did not
+ * exist yet) and a hostile/malformed payload therefore both read as
+ * "unversioned", which is the correct, conservative default: an unversioned
+ * server IS the old-server/new-client skew direction this field exists to
+ * name.
+ */
+function readServerContractVersion(value: unknown): string | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const version = (value as Record<string, unknown>).contract_version;
+  return typeof version === 'string' ? version : undefined;
 }
 
 /**
@@ -420,17 +498,41 @@ export function toWireSnapshot(body: unknown): WireSnapshot | null {
 
 interface FeedState {
   snapshot: WireSnapshot | null;
-  stale: boolean;
+  /** Two poll intervals with no successful (matching-contract) poll. */
+  watchdogStale: boolean;
+  /**
+   * The most recent poll parsed as an object but carried a `contract_version`
+   * other than this client's own `CONTRACT_VERSION` (or none at all). Cleared
+   * only by a poll that validates — NOT by the passage of time, and NOT by
+   * the staleness watchdog, which answers a different question (#1316: a
+   * mismatch is a diagnosis about what the server IS saying, not about how
+   * long since it last said something trustworthy).
+   */
+  contractMismatch: boolean;
   lastSuccessAt: string | null;
   error: string | null;
 }
 
 const INITIAL: FeedState = {
   snapshot: null,
-  stale: false,
+  watchdogStale: false,
+  contractMismatch: false,
   lastSuccessAt: null,
   error: null,
 };
+
+/**
+ * The single place `FeedStatus` is computed from the raw booleans above —
+ * see `FeedStatus`'s doc comment for the ranking and why mismatch outranks
+ * staleness. `SnapshotFeed.stale` is DERIVED from this (`status === 'stale'`)
+ * rather than read off `watchdogStale` directly, so the two can never
+ * disagree about what state a caller sees.
+ */
+function deriveStatus(state: FeedState): FeedStatus {
+  if (state.contractMismatch) return 'contract-mismatch';
+  if (state.snapshot === null) return 'waiting';
+  return state.watchdogStale ? 'stale' : 'alive';
+}
 
 function describeError(cause: unknown): string {
   if (cause instanceof Error) return cause.message;
@@ -465,8 +567,10 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
     let lastSuccessMs = optionsRef.current.now();
     const controllers = new Set<AbortController>();
 
-    const markStale = (stale: boolean) => {
-      setState((prev) => (prev.stale === stale ? prev : { ...prev, stale }));
+    const markStale = (watchdogStale: boolean) => {
+      setState((prev) =>
+        prev.watchdogStale === watchdogStale ? prev : { ...prev, watchdogStale },
+      );
     };
 
     const timeoutMs = pollTimeoutMs(intervalMs);
@@ -531,12 +635,38 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
         // poll has already been declared dead over must not land later and
         // rewrite the page from a snapshot the page never showed.
         if (cancelled || timedOut) return;
+        // Checked BEFORE `toWireSnapshot`/`hasWireShape`, deliberately
+        // (#1316): a renamed or dropped field would also fail the structural
+        // check below, and the generic "did not match the wire shape" error
+        // that path throws reads like a proxy/captive-portal fault, not what
+        // it actually is. `readServerContractVersion` only needs `body` to be
+        // an object — it makes no other claim about shape — so this check
+        // runs on strictly less trust than the structural one and is meant to
+        // win the race to explain a bad payload.
+        const serverVersion = readServerContractVersion(body);
+        if (serverVersion !== CONTRACT_VERSION) {
+          // Deliberately does NOT advance `lastSuccessMs` and does NOT touch
+          // `snapshot`: this poll produced nothing this client can trust the
+          // shape of, so it is not a success by either measure the rest of
+          // this hook uses — see `FeedState.contractMismatch`'s doc comment.
+          const message =
+            serverVersion === undefined
+              ? `served bundle disagrees with the server's wire contract (server sent no contract_version; this client expects ${CONTRACT_VERSION})`
+              : `served bundle disagrees with the server's wire contract (server ${serverVersion}, client ${CONTRACT_VERSION})`;
+          setState((prev) =>
+            prev.contractMismatch && prev.error === message
+              ? prev
+              : { ...prev, contractMismatch: true, error: message },
+          );
+          return;
+        }
         const snapshot = toWireSnapshot(body);
         if (snapshot === null) throw new Error('snapshot payload did not match the wire shape');
         lastSuccessMs = optionsRef.current.now();
         setState(() => ({
           snapshot,
-          stale: false,
+          watchdogStale: false,
+          contractMismatch: false,
           lastSuccessAt: new Date(lastSuccessMs).toISOString(),
           error: null,
         }));
@@ -544,8 +674,11 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
         // An abort is either this effect tearing down or the timeout above,
         // and the timeout has already named itself in `error`.
         if (cancelled || controller.signal.aborted) return;
-        // Deliberately leaves `snapshot` untouched: the
-        // numbers stay on screen and the watchdog decides when they are stale.
+        // Deliberately leaves `snapshot` and `contractMismatch` untouched:
+        // the numbers stay on screen and the watchdog decides when they are
+        // stale; a prior mismatch stays a mismatch until a validating poll
+        // clears it, rather than being papered over by an unrelated network
+        // error's message.
         const message = describeError(cause);
         setState((prev) => (prev.error === message ? prev : { ...prev, error: message }));
       } finally {
@@ -572,13 +705,23 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
     };
   }, [intervalMs]);
 
-  return useMemo(
-    () => ({
+  return useMemo(() => {
+    const status = deriveStatus(state);
+    return {
       snapshot: state.snapshot,
-      stale: state.stale,
+      // The raw watchdog reading, not `status === 'stale'`: `deriveStatus`
+      // gives `'waiting'` priority over staleness while no snapshot has ever
+      // landed (there is nothing yet to call stale), but the watchdog can
+      // still be genuinely tripped in that same window — a request that has
+      // hung since mount, say — and callers that key off `stale` alone (the
+      // rail's border colour) must still see that. The one thing this MUST
+      // NOT do is read true during a contract mismatch: a mismatched poll's
+      // own staleness is not the fact wrong with it, and `status` already
+      // outranks it for exactly that reason (`deriveStatus`'s doc comment).
+      stale: state.watchdogStale && !state.contractMismatch,
       lastSuccessAt: state.lastSuccessAt,
       error: state.error,
-    }),
-    [state],
-  );
+      status,
+    };
+  }, [state]);
 }
