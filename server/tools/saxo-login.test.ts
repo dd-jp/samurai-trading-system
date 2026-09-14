@@ -1,4 +1,13 @@
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -169,6 +178,27 @@ describe('exchangeAuthorizationCode', () => {
     );
   });
 
+  it('masks a token-shaped value even if an error body echoes one back (review round 1, finding 6)', async () => {
+    const fetchImpl: FetchLike = vi.fn(async () =>
+      jsonResponse(
+        {
+          error: 'invalid_grant',
+          access_token: FAKE_ACCESS_TOKEN,
+          refresh_token: FAKE_REFRESH_TOKEN,
+        },
+        400,
+      ),
+    );
+    try {
+      await exchangeAuthorizationCode(config, 'auth-code', now, fetchImpl);
+      expect.unreachable('expected exchangeAuthorizationCode to throw');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      expect(message).not.toContain(FAKE_ACCESS_TOKEN);
+      expect(message).not.toContain(FAKE_REFRESH_TOKEN);
+    }
+  });
+
   it('throws on a malformed (non-JSON) body', async () => {
     const fetchImpl: FetchLike = vi.fn(
       async () => ({ ok: true, status: 200, text: async () => 'not json' }) as Response,
@@ -226,6 +256,28 @@ describe('waitForCallback', () => {
     await assertion;
     server.close();
   });
+
+  it('rejects — not an uncaught exception — when the port is already bound (review round 1, finding 3)', async () => {
+    const blocker = createServer(() => undefined);
+    await new Promise<void>((resolvePromise) => blocker.listen(0, '127.0.0.1', resolvePromise));
+    const blockedAddress = blocker.address();
+    if (blockedAddress === null || typeof blockedAddress === 'string') {
+      throw new Error('expected a bound port');
+    }
+
+    const { result } = waitForCallback(
+      `http://127.0.0.1:${blockedAddress.port}/callback`,
+      'expected-state',
+    );
+    await expect(result).rejects.toThrow(/callback server failed to start/);
+    blocker.close();
+  });
+
+  it('refuses a non-loopback redirect host before binding anything (review round 1, finding 7)', () => {
+    expect(() => waitForCallback('http://0.0.0.0:8080/callback', 'expected-state')).toThrow(
+      /redirect URI host must be loopback/,
+    );
+  });
 });
 
 describe('writeTokenFile', () => {
@@ -254,12 +306,53 @@ describe('writeTokenFile', () => {
     const parsed = JSON.parse(readFileSync(path, 'utf8'));
     expect(parsed.accessToken).toBe(FAKE_ACCESS_TOKEN);
   });
+
+  it('re-enforces 0700/0600 on a re-login over an already-existing, wrongly-permissioned dir and file (review round 1, finding 2)', () => {
+    const subDir = join(dir, 'sub');
+    const path = join(subDir, 'sim.json');
+    mkdirSync(subDir, { recursive: true, mode: 0o755 });
+    writeFileSync(path, '{}', { mode: 0o644 });
+    chmodSync(subDir, 0o755);
+    chmodSync(path, 0o644);
+    expect(statSync(subDir).mode & 0o777).toBe(0o755);
+    expect(statSync(path).mode & 0o777).toBe(0o644);
+
+    writeTokenFile(path, {
+      accessToken: FAKE_ACCESS_TOKEN,
+      refreshToken: FAKE_REFRESH_TOKEN,
+      accessTokenExpiresAt: '2026-09-14T12:20:00.000Z',
+      refreshTokenExpiresAt: '2026-09-14T13:00:00.000Z',
+      environment: 'sim',
+      obtainedAt: '2026-09-14T12:00:00.000Z',
+    });
+
+    expect(statSync(subDir).mode & 0o777).toBe(0o700);
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
 });
 
 describe('tokenFilePath', () => {
   it('is under data/saxo-tokens, one file per environment', () => {
     expect(tokenFilePath('sim')).toMatch(/data\/saxo-tokens\/sim\.json$/);
     expect(tokenFilePath('live')).toMatch(/data\/saxo-tokens\/live\.json$/);
+  });
+
+  it('is anchored to the repo root, not the working directory (review round 1, finding 1)', () => {
+    // The gitignore pattern `data/saxo-tokens/` is root-anchored (no leading
+    // `**/`), so a cwd-relative path only matches it when run from the repo
+    // root. Pinning cwd-independence here is what actually protects the
+    // ignore match — this is the property the mismatch broke.
+    const fromRepoRoot = tokenFilePath('sim');
+    const originalCwd = process.cwd();
+    const elsewhere = mkdtempSync(join(tmpdir(), 'saxo-login-cwd-'));
+    try {
+      process.chdir(elsewhere);
+      expect(tokenFilePath('sim')).toBe(fromRepoRoot);
+      expect(tokenFilePath('sim')).not.toContain(elsewhere);
+    } finally {
+      process.chdir(originalCwd);
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
   });
 });
 
@@ -307,16 +400,17 @@ describe('printSafely', () => {
 
 describe('runLogin — never prints a token or secret (#1522 AC4)', () => {
   let dir: string;
-  let originalCwd: string;
+  let tokenPath: string;
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'saxo-login-run-'));
-    originalCwd = process.cwd();
-    process.chdir(dir);
+    // `tokenPath` sandboxes the write under `dir` (finding 1's repo-root
+    // anchoring means `tokenFilePath` itself is no longer cwd-sensitive, so
+    // this test no longer needs — and no longer uses — `process.chdir`).
+    tokenPath = join(dir, 'sim.json');
   });
 
   afterEach(() => {
-    process.chdir(originalCwd);
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -347,8 +441,12 @@ describe('runLogin — never prints a token or secret (#1522 AC4)', () => {
       now: () => new Date('2026-09-14T12:00:00.000Z'),
       state: () => 'fixed-state',
       openBrowser: async () => undefined,
+      tokenPath,
       waitForCallbackImpl: () => ({
-        server: { close: () => undefined } as unknown as import('node:http').Server,
+        server: {
+          close: () => undefined,
+          closeAllConnections: () => undefined,
+        } as unknown as import('node:http').Server,
         result: Promise.resolve({ code: 'auth-code-fake' }),
       }),
     });
@@ -360,9 +458,9 @@ describe('runLogin — never prints a token or secret (#1522 AC4)', () => {
     expect(combined).toContain('Token saved to');
     expect(combined).toContain('Verified');
 
-    const stored = JSON.parse(readFileSync(tokenFilePath('sim'), 'utf8'));
+    const stored = JSON.parse(readFileSync(tokenPath, 'utf8'));
     expect(stored.accessToken).toBe(FAKE_ACCESS_TOKEN);
-    expect(statSync(tokenFilePath('sim')).mode & 0o777).toBe(0o600);
+    expect(statSync(tokenPath).mode & 0o777).toBe(0o600);
 
     logSpy.mockRestore();
   });
@@ -378,8 +476,12 @@ describe('runLogin — never prints a token or secret (#1522 AC4)', () => {
         now: () => new Date('2026-09-14T12:00:00.000Z'),
         state: () => 'fixed-state',
         openBrowser: async () => undefined,
+        tokenPath,
         waitForCallbackImpl: () => ({
-          server: { close: () => undefined } as unknown as import('node:http').Server,
+          server: {
+            close: () => undefined,
+            closeAllConnections: () => undefined,
+          } as unknown as import('node:http').Server,
           result: Promise.reject(
             new SaxoLoginError(
               'Saxo login callback: state was missing or did not match — refusing the code exchange.',

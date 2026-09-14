@@ -20,15 +20,25 @@
  */
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { dirname, isAbsolute, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   SAXO_CREDENTIAL_ENV_VARS,
   SAXO_GATEWAY_URLS,
   type SaxoTradingEnvironment,
 } from '../pipeline/execution/adapters/saxo-http-client.js';
 import { fetchWithTimeout, maskCredentials } from '../shared/index.js';
+
+/**
+ * `server/tools/` → repo root, two levels up. Token-file paths are anchored
+ * here rather than at `process.cwd()` (review round 1, finding 1): the
+ * gitignore pattern `data/saxo-tokens/` is root-anchored, so a cwd-relative
+ * `resolve()` produced a path the ignore rule doesn't match whenever this
+ * command ran from anywhere but the repo root.
+ */
+const REPO_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 
 export class SaxoLoginError extends Error {}
 
@@ -115,6 +125,9 @@ export interface CallbackResult {
   code: string;
 }
 
+/** Loopback only (review round 1, finding 7) — a redirect URI host of `0.0.0.0` (or any other) would bind the code-receiving listener on every interface. */
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+
 /**
  * Listens on the redirect URI's own host:port and path. Resolves only on a
  * `state` that matches exactly — a missing or mismatched `state` is refused
@@ -125,6 +138,11 @@ export function waitForCallback(
   expectedState: string,
 ): { server: Server; result: Promise<CallbackResult> } {
   const target = new URL(redirectUri);
+  if (!LOOPBACK_HOSTS.has(target.hostname)) {
+    throw new SaxoLoginError(
+      `Saxo login: redirect URI host must be loopback (127.0.0.1/localhost), got "${target.hostname}" — refusing to bind a code-receiving listener on it.`,
+    );
+  }
   let settle: (result: CallbackResult) => void;
   let fail: (error: Error) => void;
   const result = new Promise<CallbackResult>((resolvePromise, rejectPromise) => {
@@ -166,6 +184,20 @@ export function waitForCallback(
       .writeHead(200, { 'content-type': 'text/plain' })
       .end('Login complete — you can close this tab.');
     settle({ code });
+  });
+
+  // `listen` failures (EADDRINUSE, EACCES, ...) are emitted asynchronously
+  // on the server, not thrown from `listen()` itself — without this handler
+  // one is an uncaught exception that `runLogin`'s try/catch never sees
+  // (review round 1, finding 3).
+  server.on('error', (cause) => {
+    fail(
+      new SaxoLoginError(
+        `Saxo login callback server failed to start on ${redirectUri}: ${maskCredentials(
+          cause instanceof Error ? cause.message : String(cause),
+        )}`,
+      ),
+    );
   });
 
   const port = target.port === '' ? 80 : Number(target.port);
@@ -266,7 +298,7 @@ export async function exchangeAuthorizationCode(
 }
 
 export function tokenFilePath(environment: SaxoTradingEnvironment): string {
-  return resolve(`data/saxo-tokens/${environment}.json`);
+  return resolve(REPO_ROOT, 'data', 'saxo-tokens', `${environment}.json`);
 }
 
 export interface SaxoTokenFileRecord extends SaxoTokenResponse {
@@ -274,10 +306,21 @@ export interface SaxoTokenFileRecord extends SaxoTokenResponse {
   obtainedAt: string;
 }
 
-/** Directory `0o700`, file `0o600` — owner-read-only, matching `rotating-file-sink.ts`'s posture for the most sensitive file this process writes. */
+/**
+ * Directory `0o700`, file `0o600` — owner-read-only, matching
+ * `rotating-file-sink.ts`'s posture for the most sensitive file this process
+ * writes. `{ mode }` on `mkdirSync`/`writeFileSync` only applies at CREATE
+ * (review round 1, finding 2) — every re-login (the access token lives
+ * 1200 s) is a rewrite over an already-existing file/directory, so the mode
+ * is enforced explicitly with `chmodSync` after every write, not assumed
+ * from creation.
+ */
 export function writeTokenFile(path: string, record: SaxoTokenFileRecord): void {
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const dir = dirname(path);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  chmodSync(dir, 0o700);
   writeFileSync(path, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+  chmodSync(path, 0o600);
 }
 
 const IDENTITY_FIELDS = ['UserId', 'ClientKey', 'Name', 'Culture', 'Language'] as const;
@@ -353,6 +396,8 @@ export interface RunLoginDeps {
   waitForCallbackImpl?: typeof waitForCallback;
   openBrowser?: (url: string) => Promise<void>;
   state?: () => string;
+  /** Overrides `tokenFilePath(environment)` — tests use this to sandbox the write under a temp directory instead of the real repo-root-anchored path. */
+  tokenPath?: string;
 }
 
 export async function runLogin(
@@ -376,12 +421,16 @@ export async function runLogin(
   try {
     callback = await result;
   } finally {
+    // `closeAllConnections` drops any socket still open (an abandoned
+    // browser tab) so `close()` doesn't wait on it — see the PR body's
+    // recorded finding 5 for the still-open gap (no listener timeout).
+    server.closeAllConnections();
     server.close();
   }
 
   const now = (deps.now ?? (() => new Date()))();
   const token = await exchangeAuthorizationCode(config, callback.code, now, fetchImpl);
-  const path = tokenFilePath(environment);
+  const path = deps.tokenPath ?? tokenFilePath(environment);
   writeTokenFile(path, { ...token, environment, obtainedAt: now.toISOString() });
   printSafely(`Token saved to ${path} (mode 0600, gitignored).`);
 
