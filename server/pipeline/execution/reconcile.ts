@@ -212,6 +212,23 @@ export const TERMINAL_SWEEP_AGE_MS = 24 * 60 * 60 * 1_000;
  */
 export const UNRESOLVABLE_FLATTEN_MAX_AGE_MS = 5 * 60 * 1_000;
 
+/**
+ * #1500: the one age test every consumer of this bound shares — `now - row.
+ * submitted_at < UNRESOLVABLE_FLATTEN_MAX_AGE_MS`. `writeAheadFlatten`
+ * (sqlite-shared-store.ts) inlines the equivalent as a SQL predicate rather
+ * than calling this (it never materializes a `UnresolvedFlattenSubmission`
+ * to test), but the two must stay the same comparison — see that method's
+ * doc. `flatten-guard.ts`'s `boundedUnresolvedFlattens` calls this directly
+ * to decide what the Trader-facing guard (`flattenAlreadyInFlight`,
+ * trader/decide.ts) still gets to see.
+ */
+export function isFlattenBlockingAt(
+  row: Pick<UnresolvedFlattenSubmission, 'submitted_at'>,
+  now: Date,
+): boolean {
+  return now.getTime() - row.submitted_at.getTime() < UNRESOLVABLE_FLATTEN_MAX_AGE_MS;
+}
+
 export async function reconcile(input: ReconcileInput): Promise<ReconcileReport> {
   const { clock, store } = input;
   const now = clock.now();

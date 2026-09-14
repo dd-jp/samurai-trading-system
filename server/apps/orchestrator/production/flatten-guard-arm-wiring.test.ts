@@ -45,7 +45,10 @@ import type {
   NormalizedOrder,
   NormalizedPosition,
 } from '../../../pipeline/execution/index.js';
-import { SqliteExecutionStore } from '../../../pipeline/execution/index.js';
+import {
+  SqliteExecutionStore,
+  UNRESOLVABLE_FLATTEN_MAX_AGE_MS,
+} from '../../../pipeline/execution/index.js';
 import { DEFAULT_TRADER_CONFIG } from '../../../pipeline/trader/index.js';
 import { AlwaysOpenCalendar } from '../../../providers/market-data-service/index.js';
 import { PolymarketClient } from '../../../providers/market-intelligence/index.js';
@@ -290,5 +293,60 @@ describe("the in-flight flatten guard reads its own arm's journal (#1389)", () =
     expect((await controlDeps.getUnresolvedFlattens()).map((row) => row.instrument)).toEqual([
       'TSLA',
     ]);
+  });
+
+  /**
+   * #1500: both arms' `getUnresolvedFlattens` binding must be the AGE-BOUNDED
+   * thunk (`boundedUnresolvedFlattens`), not the store's raw, unbounded scan
+   * — see `flatten-guard.ts`'s doc. THE MUTATION THIS KILLS: either
+   * composition root (production.ts's live-arm bind, or
+   * `buildControlArmWiring`'s `getUnresolvedFlattens` override) reverting to
+   * `() => store.getUnresolvedFlattens()`. That mutation is invisible to the
+   * test above — it still asserts the right ROW comes back for a fresh
+   * flatten — so it needs its own row that has aged out.
+   */
+  it("bounds each arm's guard by age, not only by arm (#1500)", async () => {
+    const clock = new SimulatedClock(NOW);
+    const orchestrator = buildProductionOrchestrator({
+      ...stubConfig(db, recordingLogger()),
+      clock,
+      broker: new AmnesiacFlattenBroker(),
+    });
+    await orchestrator.start();
+    await orchestrator.stop();
+
+    const capturedDeps = buildTraderStepsSpy.mock.calls.map(([deps]) => deps as TraderStepDeps);
+    const liveDeps = onlyArm(capturedDeps, 'live');
+    const controlDeps = onlyArm(capturedDeps, 'control');
+
+    await seedUnresolvedFlatten(
+      new SqliteExecutionStore(guardedStore(db, 'execution')),
+      'flatten-live-aged',
+      'AAPL',
+    );
+    await seedUnresolvedFlatten(
+      new SqliteExecutionStore(guardedStore(db, 'execution'), 'control'),
+      'flatten-control-aged',
+      'TSLA',
+    );
+
+    // Still within the bound — both #1389 guards see their own row.
+    expect((await liveDeps.getUnresolvedFlattens()).map((row) => row.instrument)).toEqual(['AAPL']);
+    expect((await controlDeps.getUnresolvedFlattens()).map((row) => row.instrument)).toEqual([
+      'TSLA',
+    ]);
+
+    clock.advanceTo(new Date(NOW.getTime() + UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1));
+
+    expect(await liveDeps.getUnresolvedFlattens()).toEqual([]);
+    expect(await controlDeps.getUnresolvedFlattens()).toEqual([]);
+
+    // The row itself is untouched — this gate stops CITING it, not resolving
+    // it. `reconcile()`'s own worklist (the raw, unbounded scan) still sees it.
+    expect(
+      (await new SqliteExecutionStore(guardedStore(db, 'execution')).getUnresolvedFlattens()).map(
+        (row) => row.idempotency_key,
+      ),
+    ).toEqual(['flatten-live-aged']);
   });
 });

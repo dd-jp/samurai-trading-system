@@ -97,6 +97,7 @@ import {
   TERMINAL_ORDER_STATES,
   toStoredTimestamp,
 } from '../../shared/store/index.js';
+import { UNRESOLVABLE_FLATTEN_MAX_AGE_MS } from './reconcile.js';
 import type {
   FlattenAttribution,
   FlattenSubmissionWriteAhead,
@@ -701,10 +702,24 @@ export class SqliteExecutionStore implements SharedStore {
    * two must agree, or a row invisible to reconcile could block a flatten
    * nothing will ever unblock, or (arm dropped) the control arm's rows could
    * stand the live arm's mandatory flat-by-close down.
+   *
+   * #1500: also bounded by `UNRESOLVABLE_FLATTEN_MAX_AGE_MS` — a blocking row
+   * older than that against THIS submission's own `submitted_at` (the
+   * caller's `now`, so no extra clock dependency here) no longer counts. A
+   * row still inside the bound blocks exactly as before; the #516 protection
+   * is unchanged for every row that has not yet gone stale. What ages out
+   * stays in `flatten_submissions` at whatever status it already had —
+   * unlike `reconcileFlatten`'s own age branch, this gate does not resolve
+   * the row, it only stops citing it as a reason to refuse a NEW flatten.
+   * See `SharedStore.writeAheadFlatten`'s doc for why leaving it unresolved
+   * is the deliberate trade, not an oversight.
    */
   async writeAheadFlatten(submission: FlattenSubmissionWriteAhead): Promise<void> {
     try {
       this.db.transaction(() => {
+        const blockingCutoff = toStoredTimestamp(
+          new Date(submission.submitted_at.getTime() - UNRESOLVABLE_FLATTEN_MAX_AGE_MS),
+        );
         const blocking = this.db
           .prepare(
             `SELECT idempotency_key FROM flatten_submissions
@@ -713,9 +728,10 @@ export class SqliteExecutionStore implements SharedStore {
                 AND idempotency_key <> ?
                 AND (status = 'submitting'
                  OR (status = 'submitted' AND fills_swept_at IS NULL))
+                AND submitted_at > ?
               LIMIT 1`,
           )
-          .get(this.arm, submission.instrument, submission.idempotency_key) as
+          .get(this.arm, submission.instrument, submission.idempotency_key, blockingCutoff) as
           | { idempotency_key: string }
           | undefined;
         if (blocking !== undefined) {

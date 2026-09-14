@@ -955,13 +955,27 @@ type ExitKind =
  * identical over-sell wearing a different `exit_reason`, which is worse than
  * the bug it replaces because the row would not even say "flatten".
  *
- * ## What this blocks that it should not
+ * ## What this blocks that it should not, and what bounds it (#1500)
  *
- * A wedged fill poll leaves rows unresolved forever and makes the instrument
- * un-flattenable until it is unwedged. Blocking is still the safe direction —
- * the held quantities really are unknown until the sweep lands — and the
- * carried-lot alert is what bounds it. That bound is documented, not coded;
- * see ADR-0014's 2026-09-10 amendment.
+ * A wedged fill poll leaves rows unresolved forever and would make the
+ * instrument un-flattenable until it is unwedged. Blocking is still the safe
+ * direction — the held quantities really are unknown until the sweep lands
+ * — so `input.unresolvedFlattens` itself is bounded rather than this
+ * function's own predicate: the composition root binds it to
+ * `boundedUnresolvedFlattens` (pipeline/execution/flatten-guard.ts), not to
+ * `SharedStore.getUnresolvedFlattens` directly, so a row past
+ * `UNRESOLVABLE_FLATTEN_MAX_AGE_MS` stops reaching this function at all. That
+ * keeps the bound out of `pipeline/trader` (this file's own no-new-edge rule
+ * into `pipeline/execution`, `trader/types.ts`'s `UnresolvedFlatten` doc)
+ * while still making it CODE, not only the carried-lot alert's documentation
+ * — see ADR-0014's 2026-09-10 amendment for the residual, narrower carry this
+ * does not cover (a row first submitted inside the same session's flatten
+ * window). Both composition-root bind sites (production.ts, control-arm-
+ * wiring.ts) are proven bounded, and not merely bounded per-arm, by
+ * `production/flatten-guard-arm-wiring.test.ts`'s "(#1500)" case, which ages
+ * a row past `UNRESOLVABLE_FLATTEN_MAX_AGE_MS` under a real
+ * `buildProductionOrchestrator` and asserts both arms' thunks stop blocking
+ * while the raw store row stays unresolved.
  */
 async function flattenAlreadyInFlight(
   input: Pick<TraderInput, 'instrument' | 'unresolvedFlattens'>,

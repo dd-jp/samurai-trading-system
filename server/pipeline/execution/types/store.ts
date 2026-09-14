@@ -208,11 +208,20 @@ export interface FlattenJournal {
    * re-flatten attempt); this is the backstop that makes their own reads
    * advisory rather than load-bearing.
    *
-   * The refusal is BOUNDED, not open-ended: every row this gate can block on
-   * has a resolution path that terminates — see `getUnresolvedFlattens` and
-   * `resolveFlattenError` for the three ways a row leaves the predicate, and
-   * `UNRESOLVABLE_FLATTEN_MAX_AGE_MS` (reconcile.ts) for the bound on the one
-   * that used to have none.
+   * The refusal is BOUNDED, not open-ended, in two independent ways. Every
+   * row this gate can block on has a resolution path that terminates — see
+   * `getUnresolvedFlattens` and `resolveFlattenError` for the three ways a
+   * row leaves the predicate, and `UNRESOLVABLE_FLATTEN_MAX_AGE_MS`
+   * (reconcile.ts) for the bound on the one that used to have none. And
+   * (#1500) even a row that has NOT yet resolved stops blocking once it is
+   * older than `UNRESOLVABLE_FLATTEN_MAX_AGE_MS` against this submission's
+   * own `submitted_at` — an implementation applies that age cutoff to the
+   * SAME predicate this refusal checks, not only to `resolveFlattenError`'s
+   * paths, or a wedged `resumeFlatten` (never resolving, never terminal)
+   * would leave this gate refusing every future flatten on the instrument
+   * forever. Aging out of THIS check does not resolve the row — see
+   * `SqliteExecutionStore.writeAheadFlatten`'s own doc for why that is the
+   * deliberate trade, not an oversight.
    */
   writeAheadFlatten(submission: FlattenSubmissionWriteAhead): Promise<void>;
   /** Persist the post-ack transition (`'submitting'` → `'submitted'`). */
@@ -290,11 +299,19 @@ export interface FlattenJournal {
    * that arrives afterwards.
    *
    * This scan is also the one-flatten-per-instrument gate's predicate
-   * (`writeAheadFlatten`) and, since #1389, the Trader's own
-   * `flattenAlreadyInFlight` refusal. Every row it returns therefore blocks
-   * the instrument, which is why every row it returns must have a resolution
-   * path that terminates: fills swept (`markFlattenFillsSwept`), or one of
-   * `resolveFlattenError`'s three ways in.
+   * (`writeAheadFlatten`) and, since #1389, feeds the Trader's own
+   * `flattenAlreadyInFlight` refusal — via `boundedUnresolvedFlattens`
+   * (#1500, pipeline/execution/flatten-guard.ts), which every production
+   * composition root binds `TraderInput.unresolvedFlattens` to instead of
+   * this method directly, so the Trader never sees a row past
+   * `UNRESOLVABLE_FLATTEN_MAX_AGE_MS`. This method itself stays unbounded on
+   * purpose — `reconcile()`'s own worklist read needs every row, aged or
+   * not, to keep attempting resolution — so a row this scan returns does not
+   * by itself mean the instrument is still blocked from a new flatten; it
+   * means reconcile still has work to do on it. Every row it returns must
+   * still have a resolution path that terminates: fills swept
+   * (`markFlattenFillsSwept`), or one of `resolveFlattenError`'s three ways
+   * in.
    *
    * Scoped to the calling instance's own arm (migration 0050, #1124) — this
    * is a SCAN over `flatten_submissions`, not a key-based lookup, so it needs

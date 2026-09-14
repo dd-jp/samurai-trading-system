@@ -1,7 +1,11 @@
 import type { ClosedTrade, Fill, OpenPosition } from '../../shared/index.js';
 import { toBrokerFillId } from '../../shared/index.js';
 import { openSharedStore, type StoreHandle } from '../../shared/store/index.js';
-import { SqliteExecutionStore } from './sqlite-shared-store.js';
+import { UNRESOLVABLE_FLATTEN_MAX_AGE_MS } from './reconcile.js';
+import {
+  SqliteExecutionStore,
+  UnresolvedFlattenForInstrumentError,
+} from './sqlite-shared-store.js';
 
 const OPENED_AT = new Date('2026-07-20T14:00:00Z');
 const DECISION_AT = new Date('2026-07-20T13:55:00Z');
@@ -828,6 +832,71 @@ describe('SqliteExecutionStore', () => {
         // breakdown against.
         size: 25,
       });
+    });
+  });
+
+  // #1500: `writeAheadFlatten`'s atomic one-flatten-per-instrument refusal,
+  // bounded by `UNRESOLVABLE_FLATTEN_MAX_AGE_MS` against the NEW
+  // submission's own `submitted_at` — see that method's doc.
+  describe('writeAheadFlatten — the one-flatten-per-instrument refusal is age-bounded (#1500)', () => {
+    it('still refuses a second flatten while the blocking row is within the age bound', async () => {
+      const { store } = makeStore();
+      await store.writeAheadFlatten(
+        makeFlattenWriteAhead({ idempotency_key: 'flatten-1', submitted_at: OPENED_AT }),
+      );
+
+      const justInsideBound = new Date(OPENED_AT.getTime() + UNRESOLVABLE_FLATTEN_MAX_AGE_MS - 1);
+
+      await expect(
+        store.writeAheadFlatten(
+          makeFlattenWriteAhead({
+            idempotency_key: 'flatten-2',
+            submitted_at: justInsideBound,
+          }),
+        ),
+      ).rejects.toThrow(UnresolvedFlattenForInstrumentError);
+    });
+
+    it('no longer refuses a second flatten once the blocking row is past the age bound', async () => {
+      const { store } = makeStore();
+      await store.writeAheadFlatten(
+        makeFlattenWriteAhead({ idempotency_key: 'flatten-1', submitted_at: OPENED_AT }),
+      );
+
+      const pastBound = new Date(OPENED_AT.getTime() + UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1);
+
+      await store.writeAheadFlatten(
+        makeFlattenWriteAhead({
+          idempotency_key: 'flatten-2',
+          instrument: 'AAPL',
+          submitted_at: pastBound,
+        }),
+      );
+
+      expect((await store.getFlattenAttribution('flatten-2'))?.lot_idempotency_keys).toEqual([
+        'key-lot-1',
+        'key-lot-2',
+      ]);
+    });
+
+    // The aged-out row itself is untouched — this gate stops CITING it, it
+    // does not resolve it. `reconcile()`'s worklist must keep seeing it.
+    it('leaves the aged-out blocking row exactly as unresolved as before', async () => {
+      const { store } = makeStore();
+      await store.writeAheadFlatten(
+        makeFlattenWriteAhead({ idempotency_key: 'flatten-1', submitted_at: OPENED_AT }),
+      );
+      const pastBound = new Date(OPENED_AT.getTime() + UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1);
+
+      await store.writeAheadFlatten(
+        makeFlattenWriteAhead({ idempotency_key: 'flatten-2', submitted_at: pastBound }),
+      );
+
+      const unresolved = await store.getUnresolvedFlattens();
+      expect(unresolved.map((row) => row.idempotency_key).sort()).toEqual([
+        'flatten-1',
+        'flatten-2',
+      ]);
     });
   });
 

@@ -135,6 +135,7 @@ import type {
 } from '../../pipeline/execution/index.js';
 import {
   AlpacaBrokerAdapter,
+  boundedUnresolvedFlattens,
   FilledZeroSizeThrottle,
   // #753: falsifier arm 2's venue. A measurement, not a second book.
   SimulatedBrokerAdapter,
@@ -1946,7 +1947,17 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // #1389: the same `executionStore` again, for the same reason — and here
     // it also carries the arm scoping (migration 0050), so the live arm's
     // Trader sees the live arm's in-flight flattens and nobody else's.
-    getUnresolvedFlattens: () => executionStore.getUnresolvedFlattens(),
+    // #1500: bounded, not the store's raw scan — see `boundedUnresolvedFlattens`'s
+    // doc for why an unbounded read here can make an instrument un-flattenable
+    // forever, and why the bound has to live at THIS composition root rather
+    // than in `pipeline/trader` or `pipeline/execution` itself.
+    getUnresolvedFlattens: boundedUnresolvedFlattens({
+      store: executionStore,
+      clock,
+      flattenReconcileAlerts: executionDeps.flattenReconcileAlerts,
+      logger,
+      trace_id: 'flatten-guard',
+    }),
     setupStore,
     traderLog: new SqliteTraderLogStore(guardedStore(config.db, 'trader')),
     // #511: the declared capital ceiling, spread through rather than read

@@ -34,7 +34,10 @@ import type {
   ExecutionConfig,
   SharedStore as ExecutionSharedStore,
 } from '../../../pipeline/execution/index.js';
-import { FilledZeroSizeThrottle } from '../../../pipeline/execution/index.js';
+import {
+  boundedUnresolvedFlattens,
+  FilledZeroSizeThrottle,
+} from '../../../pipeline/execution/index.js';
 import type {
   BreakerStatePersistence,
   CircuitBreakers,
@@ -258,7 +261,21 @@ export function buildControlArmWiring(deps: ControlArmWiringDeps): ControlArmWir
     // later tick and every future close. In a matched control that is every
     // instrument both arms hold, so the falsifier baseline is the arm that
     // carries lots past the bell.
-    getUnresolvedFlattens: () => deps.store.getUnresolvedFlattens(),
+    // #1500: bounded, not the store's raw scan — see `boundedUnresolvedFlattens`'s
+    // doc (pipeline/execution/flatten-guard.ts) for why an unbounded read here
+    // can make an instrument un-flattenable forever, and why the bound has to
+    // live at a composition root rather than in `pipeline/trader` or
+    // `pipeline/execution` itself.
+    getUnresolvedFlattens: boundedUnresolvedFlattens({
+      store: deps.store,
+      clock: executionDeps.clock,
+      flattenReconcileAlerts: executionDeps.flattenReconcileAlerts,
+      logger: executionDeps.logger,
+      // `control-arm-` prefix per `FlattenReconcileAlert.trace_id`'s own
+      // convention — every other control-arm surface (reconcile, fill-sync)
+      // fixes the same prefix on a literal it owns.
+      trace_id: 'control-arm-flatten-guard',
+    }),
     // Deliberately NOT `withOnTradeClose`-wrapped upstream: the control arm
     // writes its setup vectors into the shared `cosine_setups` table under its
     // own `control:`-prefixed decision ids, and never labels them. Unlabelled
