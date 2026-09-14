@@ -84,6 +84,7 @@
  */
 
 import type { Logger } from '../../../shared/index.js';
+import type { LlmInFlightGate } from '../../../shared/llm/in-flight-gate.js';
 import type { NousChatResult } from '../../../shared/llm/nous-chat.js';
 import { NousRefusalError, nousChat } from '../../../shared/llm/nous-chat.js';
 import type { IntelligenceItem } from '../types.js';
@@ -117,6 +118,13 @@ export interface NousSentimentClientOptions {
   timeoutMs?: number;
   maxTokens?: number;
   logger?: Logger;
+  /**
+   * The account-wide in-flight cap (#1080). Required here for the reason it is
+   * required on the debate client: the Nous queue is per ACCOUNT, so a
+   * sentiment refresh left outside the cap would contend with every debate
+   * call and uncap them too.
+   */
+  gate: LlmInFlightGate;
 }
 
 export class NousSentimentClient implements GrokSentimentClient {
@@ -126,6 +134,7 @@ export class NousSentimentClient implements GrokSentimentClient {
   readonly #timeoutMs: number;
   readonly #maxTokens: number;
   readonly #logger: Logger | undefined;
+  readonly #gate: LlmInFlightGate;
 
   constructor(options: NousSentimentClientOptions) {
     this.#apiKey = options.apiKey;
@@ -134,6 +143,7 @@ export class NousSentimentClient implements GrokSentimentClient {
     this.#timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.#maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
     this.#logger = options.logger;
+    this.#gate = options.gate;
   }
 
   async fetchSentiment(instrument: string, asOf: Date) {
@@ -165,6 +175,12 @@ export class NousSentimentClient implements GrokSentimentClient {
           apiKey: this.#apiKey,
           baseUrl: this.#baseUrl,
           timeoutMs: this.#timeoutMs,
+          gate: this.#gate,
+          // The whole budget this refresh has: there is no outer race above
+          // it, so its network timeout IS its deadline, and a queue wait that
+          // would outlast it buys nothing.
+          gateBudgetMs: this.#timeoutMs,
+          llmStage: 'market_intelligence',
         },
         {
           model: this.#model,

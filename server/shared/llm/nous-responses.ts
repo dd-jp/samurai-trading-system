@@ -45,6 +45,7 @@
  */
 
 import { fetchWithTimeout } from '../http/fetch-with-timeout.js';
+import type { LlmInFlightGate } from './in-flight-gate.js';
 import {
   buildApiError,
   DEFAULT_NOUS_TIMEOUT_MS,
@@ -141,6 +142,18 @@ export interface NousResponsesOptions {
   baseUrl: string;
   timeoutMs?: number;
   signal?: AbortSignal | undefined;
+  /**
+   * The account-wide in-flight cap (#1080) — REQUIRED for the reason
+   * `NousChatOptions.gate` is. This endpoint's retrieval calls are the
+   * HEAVIEST things this process puts in that queue (5–26 s measured on
+   * 2026-09-14), so leaving them outside the cap would leave the cap
+   * measuring the wrong population.
+   */
+  gate: LlmInFlightGate;
+  /** The caller's remaining deadline for the whole call, gate wait included. */
+  gateBudgetMs?: number | undefined;
+  /** Names this call's stage on the gate's own log lines. */
+  llmStage?: string | undefined;
   /**
    * Ceiling on the CITATION-DERIVED ESTIMATE of `server_tool_calls` — not a
    * limit on tool calls, and not a cap on the reported count.
@@ -308,8 +321,28 @@ function truncationReason(body: ResponsesBody): string | null {
   return typeof reason === 'string' ? reason : 'incomplete';
 }
 
-/** POSTs one non-streaming Responses call to Nous and normalises the reply. */
+/**
+ * POSTs one non-streaming Responses call to Nous and normalises the reply,
+ * behind the account-wide in-flight gate (#1080) — same slot discipline as
+ * `nousChat`, and the same account queue.
+ */
 export async function nousResponses(
+  options: NousResponsesOptions,
+  request: NousResponsesRequest,
+): Promise<NousResponsesResult> {
+  const slot = await options.gate.acquire({
+    budgetMs: options.gateBudgetMs,
+    signal: options.signal,
+    llmStage: options.llmStage,
+  });
+  try {
+    return await dispatchResponses(options, request);
+  } finally {
+    slot.release();
+  }
+}
+
+async function dispatchResponses(
   options: NousResponsesOptions,
   request: NousResponsesRequest,
 ): Promise<NousResponsesResult> {

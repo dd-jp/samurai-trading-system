@@ -73,6 +73,7 @@
  */
 
 import type { Logger } from '../../../shared/index.js';
+import type { LlmInFlightGate } from '../../../shared/llm/in-flight-gate.js';
 import { type NousCitation, nousResponses } from '../../../shared/llm/nous-responses.js';
 import type { IntelligenceItem } from '../types.js';
 import type { GrokSentimentClient } from './grok-agent.js';
@@ -221,6 +222,12 @@ export interface XSearchClientOptions {
   timeoutMs?: number;
   maxTokens?: number;
   logger?: Logger;
+  /**
+   * The account-wide in-flight cap (#1080). Required for the reason it is on
+   * the other two Nous clients — and most load-bearing here: a retrieval call
+   * is the longest thing this process puts in the shared account queue.
+   */
+  gate: LlmInFlightGate;
 }
 
 export class XSearchClient implements GrokSentimentClient {
@@ -232,6 +239,7 @@ export class XSearchClient implements GrokSentimentClient {
   readonly #timeoutMs: number;
   readonly #maxTokens: number;
   readonly #logger: Logger | undefined;
+  readonly #gate: LlmInFlightGate;
 
   constructor(options: XSearchClientOptions) {
     this.#apiKey = options.apiKey;
@@ -242,6 +250,7 @@ export class XSearchClient implements GrokSentimentClient {
     this.#timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.#maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
     this.#logger = options.logger;
+    this.#gate = options.gate;
   }
 
   async fetchSentiment(instrument: string, asOf: Date) {
@@ -281,6 +290,11 @@ export class XSearchClient implements GrokSentimentClient {
         // model issues several searches the provider reports them and the
         // reported count wins, which is the only number that matches the bill.
         maxServerToolCalls: this.#maxSearchResults,
+        gate: this.#gate,
+        // Its network timeout IS its deadline — there is no outer race above a
+        // retrieval call.
+        gateBudgetMs: this.#timeoutMs,
+        llmStage: 'market_intelligence',
       },
       {
         model: this.#model,

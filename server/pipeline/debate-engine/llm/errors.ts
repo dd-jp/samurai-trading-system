@@ -63,6 +63,45 @@ export class LlmMalformedResponseError extends Error {
   }
 }
 
+/**
+ * The account-wide in-flight gate refused this call before it reached the
+ * wire (#1080) — see `shared/llm/in-flight-gate.ts`.
+ *
+ * Its own class for `LlmCancelledError`'s first reason and for a measurement
+ * one. A refusal is not a provider fault: NOTHING was sent, so it cost no
+ * tokens, burned no per-call deadline and says nothing about the gateway's
+ * health. It must also never be retried — the budget that made it unadmittable
+ * is smaller by the time a retry would be issued, so `isRetryable`'s
+ * exclusion-by-construction is the correct behaviour rather than an omission.
+ *
+ * The fields are the gate's own, forwarded so `llm_call_failed`'s payload can
+ * carry the queue state that produced the refusal.
+ */
+export class LlmAdmissionRefusedError extends Error {
+  readonly reason: string;
+  readonly queue_depth: number;
+  readonly in_flight: number;
+  readonly budget_ms: number;
+  readonly waited_ms: number;
+
+  constructor(refusal: {
+    message: string;
+    reason: string;
+    queue_depth: number;
+    in_flight: number;
+    budget_ms: number;
+    waited_ms: number;
+  }) {
+    super(refusal.message);
+    this.name = 'LlmAdmissionRefusedError';
+    this.reason = refusal.reason;
+    this.queue_depth = refusal.queue_depth;
+    this.in_flight = refusal.in_flight;
+    this.budget_ms = refusal.budget_ms;
+    this.waited_ms = refusal.waited_ms;
+  }
+}
+
 /** Any other upstream failure (auth, bad request, 5xx, network) — not classified further. */
 export class LlmProviderError extends Error {
   constructor(message: string) {

@@ -37,6 +37,7 @@ import {
 } from '../../../providers/market-data-service/index.js';
 import { buildRoutingMap, LSE_ETP_POOL } from '../../../providers/universe-pool/index.js';
 import { type AssetClass, logCaughtFailure, type TokenBucket } from '../../../shared/index.js';
+import type { LlmInFlightGate } from '../../../shared/llm/index.js';
 import { nousCredentials } from '../../../shared/llm/index.js';
 import type { Logger, UniverseInstrument } from '../types.js';
 import type { ProductionConfig } from './config.js';
@@ -244,7 +245,11 @@ export const DEFAULT_LLM_CLIENT_CONFIG: Omit<AnthropicLlmClientConfig, 'model'> 
  * so an in-flight request is not left dangling after the outer race settles.
  */
 /** Exported for `production.test.ts` — lets the test assert the constructed client's actual shape (instance type, model, retry/timeout config) rather than only the startup warn log's side effect (PR #284 review). */
-export function buildDefaultLlmClient(logger: Logger, spendSink?: LlmSpendSink): LlmClient {
+export function buildDefaultLlmClient(
+  logger: Logger,
+  gate: LlmInFlightGate,
+  spendSink?: LlmSpendSink,
+): LlmClient {
   const { apiKey, baseUrl, model } = nousCredentials('debate');
   // Loud, not silent: omitting `ProductionConfig.llmClient` now means a real,
   // billed API call per debate round rather than a required seam
@@ -337,7 +342,18 @@ export function buildDefaultLlmClient(logger: Logger, spendSink?: LlmSpendSink):
       );
     },
   };
-  const client = new NousMessagesClient({ apiKey, baseUrl });
+  // `gateBudgetMs` is derived from `config.timeoutMs`, NOT from
+  // `NousMessagesClient`'s own (wider) network backstop: the gate wait happens
+  // inside the outer race in `callWithTimeout`, whose timer starts before
+  // `createMessage` is called, so that is the budget a queue wait actually eats
+  // into (#1080) — less the margin that keeps the gate's clock strictly inside
+  // it.
+  const client = new NousMessagesClient({
+    apiKey,
+    baseUrl,
+    gate,
+    gateBudgetMs: config.timeoutMs - LLM_GATE_BUDGET_MARGIN_MS,
+  });
   // `spendSink` is only ever supplied on this default path, and deliberately
   // so: a `ProductionConfig.llmClient` override is a test double or another
   // provider, and metering one against the Nous price table would produce a
@@ -365,6 +381,69 @@ export function buildDefaultLlmClient(logger: Logger, spendSink?: LlmSpendSink):
  * less and the call budget, not the debate budget, becomes the binding
  * constraint, which would refuse debates while reporting the wrong reason.
  */
+/**
+ * How many Nous calls this process may have in flight at once, across every
+ * client (#1080). Default 1.
+ *
+ * MEASURED, on 2026-09-14, outside the orchestrator and against the same
+ * account: `anthropic/claude-haiku-4.5` answers the same prompt in p50 5,764 ms
+ * with one call in flight and p50 18,912 ms / max 25,687 ms in a burst of
+ * four, with input and output token counts flat across the ladder. The soak
+ * saw the same shape from the inside — 2 in flight → 19.1 s, 4 in flight →
+ * 27.0 s — against a 28,000 ms per-call deadline, which is how 32 of that
+ * session's 40 debates produced no synthesis at all. A follow-up spread one
+ * burst across three separate Nous API keys and it was equal-or-worse than one
+ * key, so the queue is per ACCOUNT and one process-wide number is the right
+ * shape for it.
+ *
+ * 1 rather than 2 because the probe found no throughput gain from a second
+ * concurrent call — two in flight measured 7,684 ms and 18,342 ms for the same
+ * work one call does in ~5.8 s — so a second slot buys latency inflation and
+ * nothing else.
+ *
+ * The cost is pass duration, and it is not small: ~24 sequential calls over a
+ * 20-name sweep at ~5.8 s each is ~139 s against a 120 s tick, so passes still
+ * overrun and the running map still skips instruments. The trade this number
+ * takes is debate COMPLETION for pass duration — #1080's measurement is that
+ * a fast pass producing zero synthesis is worth less than a slow one that
+ * decides.
+ */
+export const DEFAULT_MAX_IN_FLIGHT_LLM_CALLS = 1;
+
+/**
+ * Uncontended per-call wall time for the pinned debate model, used ONLY to
+ * estimate a queue wait in the gate's admission check — never as a timeout.
+ *
+ * 5,800 ms from the 2026-09-14 probe's concurrency-1 p50 (5,764 ms, max
+ * 6,385 ms). Conservative-high on purpose twice over: the probe's prompts
+ * measured 3,031–4,614 tokens against the ~1,600 a real persona call sends, so
+ * a production call should be faster than this, and over-estimating the wait
+ * refuses a call early rather than admitting one that will burn a whole
+ * deadline.
+ */
+export const MEASURED_UNCONTENDED_NOUS_CALL_MS = 5_800;
+
+/**
+ * How far INSIDE the outer per-call race the debate client's gate budget sits.
+ *
+ * `AnthropicLlmClient.callWithTimeout` starts its `config.timeoutMs` timer
+ * BEFORE calling `createMessage`, and the gate is acquired inside that call. A
+ * gate budget equal to `timeoutMs` therefore always loses the race: the outer
+ * timer aborts the combined signal first, the queued waiter is dropped with
+ * the timeout as its abort reason, and the call is recorded as `timeout` —
+ * making `queue_deadline` unreachable on the debate path and re-creating
+ * exactly the "sit in the queue then time out" outcome #1080 set out to
+ * replace. The margin makes the gate's own clock win deterministically.
+ *
+ * 1,000 ms, not larger: it must survive event-loop jitter under a full sweep,
+ * and it must not move the ADMISSION threshold, which is the dominant refusal
+ * at a cap of 1. At 28,000 ms and `MEASURED_UNCONTENDED_NOUS_CALL_MS` the
+ * refusal still lands on the fifth queued caller either way (5 x 5,800 =
+ * 29,000 ms exceeds both 28,000 and 27,000), so this buys reachability for the
+ * backstop and changes nothing else.
+ */
+export const LLM_GATE_BUDGET_MARGIN_MS = 1_000;
+
 export const DEFAULT_LLM_RATE_LIMIT_CONFIG: RateLimiterConfig = {
   default: {
     windowMs: 60_000,

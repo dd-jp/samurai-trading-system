@@ -7,6 +7,7 @@
  * citation to somewhere that is not X reading exactly like evidence.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { UNGATED_LLM_IN_FLIGHT } from '../../../shared/llm/in-flight-gate.js';
 import type { LogEntry, Logger } from '../../../shared/types.js';
 import { parseStatusUrl, XSearchClient } from './x-search-client.js';
 
@@ -14,6 +15,7 @@ const OPTIONS = {
   apiKey: 'test-fake-nous-key',
   baseUrl: 'https://nous.test/v1',
   windowMs: 2 * 60 * 60 * 1000,
+  gate: UNGATED_LLM_IN_FLIGHT,
 };
 
 const AS_OF = new Date('2026-09-03T12:00:00Z');

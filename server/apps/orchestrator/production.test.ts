@@ -87,7 +87,7 @@ import {
 import type { ClosedTrade, OrderIntent, TradingArm } from '../../shared/index.js';
 import { currentTraceId, SimulatedClock, TokenBucket, toBrokerFillId } from '../../shared/index.js';
 import type { NousCredentials } from '../../shared/llm/index.js';
-import { DEFAULT_NOUS_MODELS } from '../../shared/llm/index.js';
+import { DEFAULT_NOUS_MODELS, UNGATED_LLM_IN_FLIGHT } from '../../shared/llm/index.js';
 import { guardedStore, openSharedStore, type StoreHandle } from '../../shared/store/index.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
 import { CostModelImpl, SqliteStage2SelectionStore } from '../../tools/backtest/index.js';
@@ -2031,7 +2031,7 @@ describe('buildProductionComponents (default llmClient fallback)', () => {
   it('builds a real AnthropicLlmClient wrapping the live client, not just a log side effect', () => {
     const logger = recordingLogger();
 
-    const client = buildDefaultLlmClient(logger);
+    const client = buildDefaultLlmClient(logger, UNGATED_LLM_IN_FLIGHT);
 
     // Instance type + retry/timeout budget, not only the model threaded
     // through the startup warn log's payload (kimi-3-review on #284).
@@ -2120,7 +2120,7 @@ describe('buildProductionComponents (default llmClient fallback)', () => {
           ),
       ),
     );
-    const client = buildDefaultLlmClient(logger);
+    const client = buildDefaultLlmClient(logger, UNGATED_LLM_IN_FLIGHT);
     let parses = 0;
 
     await expect(

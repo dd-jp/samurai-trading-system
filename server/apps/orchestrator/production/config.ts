@@ -806,6 +806,19 @@ export interface ProductionConfig extends AlertChannelSlots {
    */
   maxConcurrentInstruments?: number;
   /**
+   * Nous calls this process may have in flight at once, ACROSS EVERY CLIENT —
+   * debate personas, the disagreement pass, the risk critic, MI scoring and
+   * the Grok sentiment refresh (#1080). Defaults to
+   * `DEFAULT_MAX_IN_FLIGHT_LLM_CALLS`.
+   *
+   * Orthogonal to both neighbours above. `maxConcurrentInstruments` bounds
+   * instrument PASSES, each of which issues several calls; `rateLimiterConfig`
+   * bounds calls per time WINDOW. Neither bounds simultaneity, which is what
+   * the 2026-09-14 measurement found the provider's own latency is a function
+   * of — see `DEFAULT_MAX_IN_FLIGHT_LLM_CALLS` for the numbers.
+   */
+  maxInFlightLlmCalls?: number;
+  /**
    * Per-asset-class LLM budget for the Debate Engine's `RateLimiter` (#388) —
    * the debates-per-window and calls-per-window ceiling every debate is
    * admitted against, and metered through, at `buildDebateStep`.

@@ -23,6 +23,7 @@
  */
 
 import { fetchWithTimeout } from '../http/fetch-with-timeout.js';
+import type { LlmInFlightGate } from './in-flight-gate.js';
 import {
   buildApiError,
   DEFAULT_NOUS_TIMEOUT_MS,
@@ -103,6 +104,17 @@ export interface NousChatOptions {
   timeoutMs?: number;
   /** Cancellation from the caller (the debate's latency budget). Composed with the timeout inside `fetchWithTimeout`. */
   signal?: AbortSignal | undefined;
+  /**
+   * The account-wide in-flight cap (#1080). REQUIRED, not optional: the Nous
+   * queue is per account, so a caller that could omit this would uncap every
+   * other caller too. Tests and programmatic callers pass
+   * `UNGATED_LLM_IN_FLIGHT`; the composition root passes the one shared gate.
+   */
+  gate: LlmInFlightGate;
+  /** The caller's remaining deadline for the whole call, gate wait included — see `LlmInFlightRequest.budgetMs`. */
+  gateBudgetMs?: number | undefined;
+  /** Names this call's stage on the gate's own log lines. */
+  llmStage?: string | undefined;
 }
 
 interface NousChoice {
@@ -117,8 +129,34 @@ interface NousResponseBody {
   usage?: NousWireUsage;
 }
 
-/** POSTs one non-streaming chat completion to Nous and normalises the reply. */
+/**
+ * POSTs one non-streaming chat completion to Nous and normalises the reply,
+ * behind the account-wide in-flight gate (#1080).
+ *
+ * The slot is held for the WHOLE call — dispatch through body read — and
+ * released in a `finally`, so a throw, a timeout and a caller abort all free
+ * it. `ttfb_ms` is measured after the slot is granted, so a queue wait is not
+ * reported as provider latency; the caller's own `latency_ms` span does
+ * include it, which makes `latency_ms − ttfb_ms` the gate wait and is why the
+ * gate logs `wait_ms` itself rather than leaving it to be inferred.
+ */
 export async function nousChat(
+  options: NousChatOptions,
+  request: NousChatRequest,
+): Promise<NousChatResult> {
+  const slot = await options.gate.acquire({
+    budgetMs: options.gateBudgetMs,
+    signal: options.signal,
+    llmStage: options.llmStage,
+  });
+  try {
+    return await dispatch(options, request);
+  } finally {
+    slot.release();
+  }
+}
+
+async function dispatch(
   options: NousChatOptions,
   request: NousChatRequest,
 ): Promise<NousChatResult> {
