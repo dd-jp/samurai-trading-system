@@ -8,6 +8,8 @@
  * what is worth retrying.
  */
 
+import type { LlmInFlightRefusalReason } from '../../../shared/llm/index.js';
+
 /**
  * Where the timeout came from. The two are the same word and NOT the same
  * event, and `anthropic-client.ts`'s `isRetryable` has to tell them apart
@@ -78,7 +80,13 @@ export class LlmMalformedResponseError extends Error {
  * carry the queue state that produced the refusal.
  */
 export class LlmAdmissionRefusedError extends Error {
-  readonly reason: string;
+  /**
+   * The gate's own union, not a widened `string`: `admission` and
+   * `queue_deadline` answer different questions (refused on arrival vs. ran out
+   * of room while queued), and a consumer that switches on them must be told by
+   * the compiler when a third reason appears.
+   */
+  readonly reason: LlmInFlightRefusalReason;
   readonly queue_depth: number;
   readonly in_flight: number;
   readonly budget_ms: number;
@@ -86,7 +94,7 @@ export class LlmAdmissionRefusedError extends Error {
 
   constructor(refusal: {
     message: string;
-    reason: string;
+    reason: LlmInFlightRefusalReason;
     queue_depth: number;
     in_flight: number;
     budget_ms: number;

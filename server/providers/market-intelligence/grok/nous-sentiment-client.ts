@@ -176,11 +176,12 @@ export class NousSentimentClient implements GrokSentimentClient {
           baseUrl: this.#baseUrl,
           timeoutMs: this.#timeoutMs,
           gate: this.#gate,
-          // The whole budget this refresh has: there is no outer race above
-          // it, so its network timeout IS its deadline, and a queue wait that
-          // would outlast it buys nothing.
+          // The gate budget bounds the WAIT; `timeoutMs` bounds the call. There
+          // is no outer race above a sentiment refresh to reconcile them, so
+          // worst case is their sum — see the same note in `x-search-client.ts`
+          // (#1080 review round 1, finding 6).
           gateBudgetMs: this.#timeoutMs,
-          llmStage: 'market_intelligence',
+          llmStage: 'market_intelligence_sentiment',
         },
         {
           model: this.#model,

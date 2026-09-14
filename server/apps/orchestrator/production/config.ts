@@ -819,6 +819,18 @@ export interface ProductionConfig extends AlertChannelSlots {
    */
   maxInFlightLlmCalls?: number;
   /**
+   * What the in-flight gate should ASSUME a Nous call takes, in milliseconds,
+   * when it estimates a queue wait and charges a caller's own call against its
+   * budget (#1080). Defaults to `DEFAULT_EXPECTED_NOUS_CALL_MS`.
+   *
+   * A knob because the default is a small-sample soak figure (n = 4) and this
+   * number decides how many callers are admitted per budget, not how long any
+   * call is allowed to take — nothing here is a timeout. Raising it refuses
+   * more callers earlier; lowering it admits callers that may then burn a full
+   * deadline, which is the failure #1080 exists to remove.
+   */
+  expectedLlmCallMs?: number;
+  /**
    * Per-asset-class LLM budget for the Debate Engine's `RateLimiter` (#388) —
    * the debates-per-window and calls-per-window ceiling every debate is
    * admitted against, and metered through, at `buildDebateStep`.

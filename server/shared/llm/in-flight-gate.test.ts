@@ -67,7 +67,7 @@ describe('NousAccountInFlightGate', () => {
     );
   });
 
-  it('refuses admission when the estimated queue wait already exceeds the caller budget', async () => {
+  it('refuses admission when the estimated wait plus the call itself exceeds the caller budget', async () => {
     const { entries, logger } = collector();
     const gate = new NousAccountInFlightGate({
       maxInFlight: 1,
@@ -76,8 +76,10 @@ describe('NousAccountInFlightGate', () => {
     });
 
     const held = await gate.acquire({ budgetMs: 28_000 });
-    // Four queued callers put the fifth at an estimated 5 x 5,800 = 29,000ms.
-    const queued = [0, 1, 2, 3].map(() => gate.acquire({ budgetMs: 28_000 }));
+    // Three queued callers put the fourth at an estimated 4 x 5,800 = 23,200ms
+    // of waiting. That wait ALONE fits inside 28,000 — the call it would then
+    // have to make is what does not (23,200 + 5,800 = 29,000).
+    const queued = [0, 1, 2].map(() => gate.acquire({ budgetMs: 28_000 }));
 
     await expect(gate.acquire({ budgetMs: 28_000, llmStage: 'debate' })).rejects.toBeInstanceOf(
       LlmInFlightRefusedError,
@@ -86,22 +88,63 @@ describe('NousAccountInFlightGate', () => {
     expect(refusals).toHaveLength(1);
     expect(refusals[0]?.payload).toMatchObject({
       reason: 'admission',
-      queue_depth: 4,
+      queue_depth: 3,
       budget_ms: 28_000,
-      estimated_wait_ms: 29_000,
+      estimated_wait_ms: 23_200,
     });
 
     held.release();
     for (const pending of queued) (await pending).release();
   });
 
-  it('admits when the estimated wait still fits the caller budget', async () => {
+  it('admits when the estimated wait and the call both fit the caller budget', async () => {
     const gate = new NousAccountInFlightGate({ maxInFlight: 1, expectedCallMs: EXPECTED_CALL_MS });
     const held = await gate.acquire({ budgetMs: 28_000 });
 
     const queued = gate.acquire({ budgetMs: 28_000 });
     held.release();
     (await queued).release();
+  });
+
+  it("estimates a wait from the queue's OWN declared call durations, not one constant", async () => {
+    const { entries, logger } = collector();
+    const gate = new NousAccountInFlightGate({
+      maxInFlight: 1,
+      expectedCallMs: EXPECTED_CALL_MS,
+      logger,
+    });
+
+    // One X-retrieval call in flight, measured at up to 60s — a debate caller
+    // behind it waits for THAT, not for a 5,800ms debate call.
+    const held = await gate.acquire({ budgetMs: 60_000, expectedCallMs: 60_000 });
+
+    await expect(gate.acquire({ budgetMs: 28_000, llmStage: 'debate' })).rejects.toBeInstanceOf(
+      LlmInFlightRefusedError,
+    );
+    expect(entries.find((entry) => entry.event === 'llm_gate_refused')?.payload).toMatchObject({
+      reason: 'admission',
+      estimated_wait_ms: 60_000,
+    });
+
+    held.release();
+  });
+
+  it("charges a caller's own declared duration against its budget on admission", async () => {
+    const gate = new NousAccountInFlightGate({ maxInFlight: 1, expectedCallMs: EXPECTED_CALL_MS });
+    const held = await gate.acquire({ budgetMs: 28_000 });
+
+    // A 5,800ms wait fits a 28,000ms budget; a 60,000ms call after it does not.
+    await expect(gate.acquire({ budgetMs: 28_000, expectedCallMs: 60_000 })).rejects.toBeInstanceOf(
+      LlmInFlightRefusedError,
+    );
+
+    held.release();
+  });
+
+  it('rejects a non-positive expectedCallMs rather than silently disabling admission', () => {
+    expect(() => new NousAccountInFlightGate({ maxInFlight: 1, expectedCallMs: 0 })).toThrow(
+      /expectedCallMs/,
+    );
   });
 
   it('refuses a queued caller whose budget expires before a slot frees', async () => {
@@ -113,11 +156,15 @@ describe('NousAccountInFlightGate', () => {
         expectedCallMs: EXPECTED_CALL_MS,
         logger,
       });
-      const held = await gate.acquire({ budgetMs: 10_000 });
-      const queued = gate.acquire({ budgetMs: 10_000, llmStage: 'risk_critic' });
+      const held = await gate.acquire({ budgetMs: 14_000 });
+      const queued = gate.acquire({ budgetMs: 14_000, llmStage: 'risk_critic' });
       const settled = queued.catch((error: unknown) => error);
 
-      await vi.advanceTimersByTimeAsync(10_000);
+      // Dropped at `budgetMs - expectedCallMs`, not at `budgetMs`: a waiter
+      // granted any later could not make its own call inside the budget.
+      await vi.advanceTimersByTimeAsync(8_199);
+      expect(entries.filter((entry) => entry.event === 'llm_gate_refused')).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
       const error = await settled;
       expect(error).toBeInstanceOf(LlmInFlightRefusedError);
       expect((error as LlmInFlightRefusedError).reason).toBe('queue_deadline');
@@ -131,7 +178,7 @@ describe('NousAccountInFlightGate', () => {
 
       // The refused waiter must not have consumed the slot it never got.
       held.release();
-      const next = await gate.acquire({ budgetMs: 10_000 });
+      const next = await gate.acquire({ budgetMs: 14_000 });
       next.release();
     } finally {
       vi.useRealTimers();

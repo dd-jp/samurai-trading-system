@@ -24,12 +24,13 @@
 import { DEFAULT_TRADER_CONFIG } from '../../../pipeline/trader/index.js';
 import type { LogEntry, Logger } from '../../../shared/index.js';
 import { SimulatedClock } from '../../../shared/index.js';
+import { DEFAULT_NOUS_TIMEOUT_MS } from '../../../shared/llm/index.js';
 import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import {
   buildProductionComponents,
+  DEFAULT_EXPECTED_NOUS_CALL_MS,
   DEFAULT_LLM_CLIENT_CONFIG,
   DEFAULT_MAX_IN_FLIGHT_LLM_CALLS,
-  LLM_GATE_BUDGET_MARGIN_MS,
   type ProductionConfig,
 } from '../production.js';
 import {
@@ -109,6 +110,41 @@ function recordingLogger(): { logger: Logger; entries: LogEntry[] } {
 }
 
 /**
+ * A fully typed broker stub, NOT a cast. `docs/coding-standards.md` bars `as`
+ * on fixtures, and this site is why: the `as unknown as` that used to stand
+ * here described a client with `listOrders` and `listFills` — two methods
+ * `AlpacaBrokerClient` does not declare — while five it does declare were
+ * missing, and the compiler was told not to look. Nothing here is ever called;
+ * `buildProductionComponents` only wires it.
+ */
+function stubBrokerClient(): NonNullable<ProductionConfig['alpacaBrokerClient']> {
+  return {
+    submitOrder: vi.fn(),
+    submitMarketOrder: vi.fn(),
+    submitOcoOrder: vi.fn(),
+    submitLimitOrder: vi.fn(),
+    submitStopLimitOrder: vi.fn(),
+    cancelOrder: vi.fn(),
+    getPositions: vi.fn(async () => []),
+    getOrder: vi.fn(),
+    getOrderByClientOrderId: vi.fn(async () => null),
+    getAccount: vi.fn(),
+  };
+}
+
+function stubAccountState(): NonNullable<ProductionConfig['accountState']> {
+  const basis = { known: true, open_equity: 100_000, realized_pnl: 0 } as const;
+  return {
+    getAccountState: vi.fn(async () => ({
+      cash: 100_000,
+      peak_equity: 100_000,
+      daily_basis: { crypto: basis, stocks: basis, portfolio: basis },
+      consecutive_losses: 0,
+    })),
+  };
+}
+
+/**
  * The narrowest `ProductionConfig` that builds — and deliberately WITHOUT
  * `llmClient`, because the default debate client is the thing under test.
  */
@@ -118,34 +154,16 @@ function stubConfig(db: StoreHandle, overrides: Partial<ProductionConfig>): Prod
     clock: new SimulatedClock(NOW),
     mode: 'paper',
     universe: [{ asset: 'SPY', asset_class: 'stocks' }],
-    alpacaBrokerClient: {
-      submitOrder: vi.fn(),
-      submitLimitOrder: vi.fn(),
-      submitStopLimitOrder: vi.fn(),
-      cancelOrder: vi.fn(),
-      getOrder: vi.fn(),
-      listOrders: vi.fn(async () => []),
-      listFills: vi.fn(async () => []),
-    } as unknown as ProductionConfig['alpacaBrokerClient'],
+    alpacaBrokerClient: stubBrokerClient(),
     alpacaDataClient: {
       getBars: vi.fn(async () => []),
       getLatestQuote: vi.fn(async () => ({ t: NOW.toISOString(), ap: 100, bp: 99 })),
-    } as unknown as ProductionConfig['alpacaDataClient'],
-    accountState: {
-      getAccountState: vi.fn(async () => ({
-        cash: 100_000,
-        peak_equity: 100_000,
-        daily_basis: {
-          crypto: { known: true, open_equity: 100_000, realized_pnl: 0 },
-          stocks: { known: true, open_equity: 100_000, realized_pnl: 0 },
-          portfolio: { known: true, open_equity: 100_000, realized_pnl: 0 },
-        },
-        consecutive_losses: 0,
-      })),
-    } as unknown as ProductionConfig['accountState'],
+    },
+    accountState: stubAccountState(),
     polymarketClient: {
-      fetchMarket: vi.fn(async () => undefined),
-    } as unknown as ProductionConfig['polymarketClient'],
+      fetchEventMarket: vi.fn(async () => undefined),
+      fetchPriceHistory: vi.fn(async () => []),
+    },
     traderConfig: DEFAULT_TRADER_CONFIG,
     riskConfig: makeWiringRiskConfig(),
     verdictConfig: makeWiringVerdictConfig(),
@@ -158,11 +176,11 @@ function stubConfig(db: StoreHandle, overrides: Partial<ProductionConfig>): Prod
       max_consecutive_losses: 5,
       volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
       auto_rearm: { recovery_drawdown_pct: 0.2, max_days_tripped: 5 },
-    } as ProductionConfig['breakerConfig'],
+    },
     costConfig: makeWiringCostConfig(),
     ciiConsumerConfig: makeWiringCiiConsumerConfig(),
     ...overrides,
-  } as ProductionConfig;
+  };
 }
 
 describe('in-flight gate wiring (#1080)', () => {
@@ -216,14 +234,16 @@ describe('in-flight gate wiring (#1080)', () => {
 
     buildProductionComponents(stubConfig(db, { logger }));
 
-    // STRICTLY inside the outer race, not equal to it: `callWithTimeout` starts
-    // its timer before `createMessage`, so an equal budget always loses and
-    // `queue_deadline` would be unreachable — every gate wait would be recorded
-    // as a provider `timeout`, which is the exact confusion #1080 must resolve.
-    expect(captured.debate[0]?.gateBudgetMs).toBeLessThan(DEFAULT_LLM_CLIENT_CONFIG.timeoutMs);
-    expect(captured.debate[0]?.gateBudgetMs).toBe(
-      DEFAULT_LLM_CLIENT_CONFIG.timeoutMs - LLM_GATE_BUDGET_MARGIN_MS,
-    );
+    // The OUTER race's clock, not the network backstop: `callWithTimeout`'s
+    // timer starts before `createMessage`, so that is what a queue wait eats
+    // into. Equal to it and not less, because the gate's queue timer fires a
+    // full `expectedCallMs` earlier — `queue_deadline` is reachable by
+    // construction, so no safety margin is subtracted here (an earlier revision
+    // subtracted `LLM_GATE_BUDGET_MARGIN_MS`; the timer change retired it).
+    expect(captured.debate[0]?.gateBudgetMs).toBe(DEFAULT_LLM_CLIENT_CONFIG.timeoutMs);
+    // The mutation this kills: hand it `NousMessagesClientOptions.timeoutMs`,
+    // the wider network backstop, which is not the clock a wait actually eats.
+    expect(captured.debate[0]?.gateBudgetMs).toBeLessThan(DEFAULT_NOUS_TIMEOUT_MS);
   });
 
   it('caps the exposed gate at one call in flight by default', async () => {
@@ -245,6 +265,48 @@ describe('in-flight gate wiring (#1080)', () => {
     held.release();
     (await queued).release();
     expect(secondGranted).toBe(true);
+  });
+
+  /**
+   * The shipped trade, pinned as behaviour. At a cap of 1 and
+   * `DEFAULT_EXPECTED_NOUS_CALL_MS` against the debate client's 28,000 ms
+   * budget, the account admits ONE call in flight plus exactly ONE queued
+   * caller; every further arrival is refused on the spot, at zero tokens and
+   * zero burned deadline. Of the six instruments a pass runs concurrently,
+   * two proceed and four get `gate_refused` — deliberately, because #1080
+   * measured that a fast pass producing no synthesis is worth less than a slow
+   * one that decides.
+   */
+  it('admits exactly one queued caller per debate budget at the shipped default', async () => {
+    const components = buildProductionComponents(stubConfig(db, {}));
+    const budgetMs = DEFAULT_LLM_CLIENT_CONFIG.timeoutMs;
+
+    const held = await components.llmInFlightGate.acquire({ budgetMs });
+    const queued = await Promise.race([
+      components.llmInFlightGate.acquire({ budgetMs }).then(() => 'granted' as const),
+      Promise.resolve('pending' as const),
+    ]);
+    expect(queued).toBe('pending');
+
+    await expect(components.llmInFlightGate.acquire({ budgetMs })).rejects.toThrow(
+      /refused admission/,
+    );
+    expect(DEFAULT_EXPECTED_NOUS_CALL_MS).toBe(13_000);
+
+    held.release();
+  });
+
+  it('honours an explicit expectedLlmCallMs', async () => {
+    // A 30,000 ms expected call cannot fit a 28,000 ms budget even with an idle
+    // queue ahead of it, so the FIRST caller behind a held slot is refused —
+    // which the 13,000 ms default admits.
+    const components = buildProductionComponents(stubConfig(db, { expectedLlmCallMs: 30_000 }));
+
+    const held = await components.llmInFlightGate.acquire({ budgetMs: 28_000 });
+    await expect(components.llmInFlightGate.acquire({ budgetMs: 28_000 })).rejects.toThrow(
+      /refused admission/,
+    );
+    held.release();
   });
 
   it('honours an explicit maxInFlightLlmCalls', async () => {

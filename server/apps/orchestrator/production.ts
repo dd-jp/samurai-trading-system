@@ -375,13 +375,12 @@ export {
   buildDefaultAlpacaBrokerClient,
   buildDefaultAlpacaDataClient,
   buildDefaultLlmClient,
+  DEFAULT_EXPECTED_NOUS_CALL_MS,
   DEFAULT_FEEDBACK_INTERVAL_MS,
   DEFAULT_HEARTBEAT_INTERVAL_MS,
   DEFAULT_LLM_CLIENT_CONFIG,
   DEFAULT_LLM_RATE_LIMIT_CONFIG,
   DEFAULT_MAX_IN_FLIGHT_LLM_CALLS,
-  LLM_GATE_BUDGET_MARGIN_MS,
-  MEASURED_UNCONTENDED_NOUS_CALL_MS,
   universeAssetClasses,
 } from './production/defaults.js';
 
@@ -391,6 +390,7 @@ import {
   buildBenchmarkDataSource,
   buildDefaultAlpacaBrokerClient,
   buildDefaultLlmClient,
+  DEFAULT_EXPECTED_NOUS_CALL_MS,
   DEFAULT_FEEDBACK_INTERVAL_MS,
   DEFAULT_FILL_POLL_INTERVAL_MS,
   DEFAULT_GDELT_POLL_INTERVAL_MS,
@@ -400,7 +400,6 @@ import {
   DEFAULT_POLYMARKET_POLL_INTERVAL_MS,
   DEFAULT_TICK_INTERVAL_MS,
   DEFAULT_VOLATILITY_INDICATOR,
-  MEASURED_UNCONTENDED_NOUS_CALL_MS,
   universeAssetClasses,
 } from './production/defaults.js';
 
@@ -1741,7 +1740,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    */
   const llmInFlightGate = new NousAccountInFlightGate({
     maxInFlight: config.maxInFlightLlmCalls ?? DEFAULT_MAX_IN_FLIGHT_LLM_CALLS,
-    expectedCallMs: MEASURED_UNCONTENDED_NOUS_CALL_MS,
+    expectedCallMs: config.expectedLlmCallMs ?? DEFAULT_EXPECTED_NOUS_CALL_MS,
     logger,
   });
   const llmClient =

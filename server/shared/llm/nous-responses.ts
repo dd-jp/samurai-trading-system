@@ -152,6 +152,12 @@ export interface NousResponsesOptions {
   gate: LlmInFlightGate;
   /** The caller's remaining deadline for the whole call, gate wait included. */
   gateBudgetMs?: number | undefined;
+  /**
+   * What this caller's own call is expected to take, for the gate's estimate —
+   * see `LlmInFlightRequest.expectedCallMs`. Omitted means "a debate-sized
+   * call", which is wrong for anything materially slower.
+   */
+  expectedCallMs?: number | undefined;
   /** Names this call's stage on the gate's own log lines. */
   llmStage?: string | undefined;
   /**
@@ -332,6 +338,7 @@ export async function nousResponses(
 ): Promise<NousResponsesResult> {
   const slot = await options.gate.acquire({
     budgetMs: options.gateBudgetMs,
+    expectedCallMs: options.expectedCallMs,
     signal: options.signal,
     llmStage: options.llmStage,
   });

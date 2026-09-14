@@ -27,7 +27,7 @@ import {
   runDebate,
 } from '../../../pipeline/debate-engine/index.js';
 import type { Clock } from '../../../shared/index.js';
-import { UNGATED_LLM_IN_FLIGHT } from '../../../shared/llm/in-flight-gate.js';
+import { UNGATED_LLM_IN_FLIGHT } from '../../../shared/llm/index.js';
 import { buildDebatePersonas } from './debate-adapter.js';
 
 const FAKE_KEY = 'test-fake-nous-key';

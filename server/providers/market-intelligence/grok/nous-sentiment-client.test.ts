@@ -10,7 +10,7 @@
  * arithmetic as a direction the type system says cannot exist.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { UNGATED_LLM_IN_FLIGHT } from '../../../shared/llm/in-flight-gate.js';
+import { UNGATED_LLM_IN_FLIGHT } from '../../../shared/llm/index.js';
 import type { LogEntry, Logger } from '../../../shared/types.js';
 import { NousSentimentClient } from './nous-sentiment-client.js';
 
