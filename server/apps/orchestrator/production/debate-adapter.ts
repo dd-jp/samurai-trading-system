@@ -466,10 +466,10 @@ function persistDebateLog(params: {
  * per round), so the LLM cost is bounded"). Pinned against `MAX_ROUNDS` by a
  * test so a change to the round cap cannot silently under-reserve.
  *
- * The arithmetic itself moved to `llmCallsPerDebate` (debate-engine's
- * `latency-budget.ts`) in #1080: the latency budget is sized from the same call
- * count this reserves for, and two copies of it in two layers is the drift
- * this file's own comment warns about one paragraph up.
+ * The arithmetic lives in `llmCallsPerDebate` (debate-engine's
+ * `latency-budget.ts`), not here: the latency budget is sized from the same
+ * call count this reserves for, and two copies of it in two layers is the
+ * drift this file's own comment warns about one paragraph up.
  */
 export const WORST_CASE_LLM_CALLS_PER_DEBATE = llmCallsPerDebate(MAX_ROUNDS);
 

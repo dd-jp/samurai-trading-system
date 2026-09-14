@@ -202,6 +202,23 @@ describe('MarketDataServiceImpl.getBars — per-bar-interval caching (#391)', ()
     expect(source.fetches).toBe(2);
   });
 
+  /**
+   * `partial` is a CONTRACT, not a hint: `'allow'` accepts a short window and
+   * the default `'error'` throws on one (`alpaca-http-client.ts`). Two callers
+   * that disagree about it are asking different questions of the same bytes, so
+   * coalescing them would silently hand one of them the other's contract.
+   */
+  it('does not coalesce callers that disagree about partial windows (#1080)', async () => {
+    const { service, source } = buildCounting('live');
+
+    await Promise.all([
+      service.getBars(INSTRUMENT, { timeframe: TIMEFRAME, lookback: 2 }, ASOF),
+      service.getBars(INSTRUMENT, { timeframe: TIMEFRAME, lookback: 2, partial: 'allow' }, ASOF),
+    ]);
+
+    expect(source.fetches).toBe(2);
+  });
+
   it('releases the in-flight entry so a later interval still re-fetches (#1080)', async () => {
     const { service, source } = buildCounting('live');
     const window = { timeframe: TIMEFRAME, lookback: 2 };

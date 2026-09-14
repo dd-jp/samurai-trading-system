@@ -37,25 +37,28 @@ import {
  * `LlmProviderError`s) is assumed non-transient and rethrown immediately.
  * Closed over the generalized `withRetry` (issue #271).
  *
- * TIMEOUT was in this set until #1080 (2026-09-14) and is the one class whose
- * cost is not the error but the WAIT. A rate limit fails in milliseconds and a
- * malformed response fails as fast as the model streams; a timeout, by
- * definition, has already spent the entire per-attempt deadline, and every
- * caller in this system issues its calls inside a latency budget the retry was
- * never counted against (`enforceLatencyBudget`). Retrying it therefore spends
- * a second full deadline out of the budget it was supposed to help meet.
+ * TIMEOUT is split on `LlmTimeoutError.source` (#1080, 2026-09-14), because the
+ * two things that word covers have opposite costs. A `status` timeout is the
+ * gateway answering 408 or 504, usually well inside the deadline — a transient
+ * blip, and a retry costs a backoff. A `deadline` timeout is OUR clock firing,
+ * so the attempt has already spent the entire per-attempt budget; every caller
+ * in this system issues its calls inside a latency budget the retry is not
+ * counted against (`enforceLatencyBudget`), so retrying spends a second full
+ * deadline out of the budget it was supposed to help meet.
  *
  * Measured rather than argued: of 22 `llm_attempt_retried` lines in the
  * 2026-09-03 sample, 22 reported `elapsed_ms` in 28,002-28,007ms — the deadline
  * itself, not a transient blip — and none was followed by a success inside the
  * budget. Two later soak sessions add 38 more retried attempts with the same
- * shape. The retry was buying nothing and costing half a debate's budget.
+ * shape. Every one of them is the `deadline` branch; no 408 or 504 appears in
+ * the sample at all.
  *
  * What this gives up, stated rather than hidden: a genuinely transient network
- * stall that would have cleared on a second attempt now surfaces as
- * `LlmTimeoutError` to the caller. That is not a silent loss — #1385 degrades
- * it inside `enforceLatencyBudget` with `termination_cause: 'llm_failure'`,
- * which is the discriminator #1080 AC4 asks for, and the next tick re-asks.
+ * stall that stretches past the deadline rather than being reported as a status
+ * now surfaces as `LlmTimeoutError` to the caller. That is not a silent loss —
+ * #1385 degrades it inside `enforceLatencyBudget` with `termination_cause:
+ * 'llm_failure'`, which is the discriminator #1080 AC4 asks for, and the next
+ * tick re-asks.
  *
  * "Malformed responses are reparseable on a fresh sample" is TRUE OF THE
  * SAMPLE, not of every response that fails to parse, and there are two
@@ -72,6 +75,9 @@ import {
  *    carries the `usage` of the call it burned.
  */
 function isRetryable(error: unknown): boolean {
+  if (error instanceof LlmTimeoutError) {
+    return error.source === 'status';
+  }
   return error instanceof LlmRateLimitError || error instanceof LlmMalformedResponseError;
 }
 
@@ -362,7 +368,7 @@ function classifyProviderError(error: unknown): Error {
     return new LlmRateLimitError(message);
   }
   if (status === 408 || status === 504) {
-    return new LlmTimeoutError(message);
+    return new LlmTimeoutError(message, 'status');
   }
   return new LlmProviderError(message);
 }
@@ -528,6 +534,11 @@ export class AnthropicLlmClient implements LlmClient {
    * metered is readable from the log rather than inferable from timestamps.
    * The rows are still not written — there is still no usage block on a failed
    * call — so this remains a floor, but a floor whose size can be checked.
+   *
+   * That measurement was taken while a `deadline` timeout was retried. It is
+   * not any more (`isRetryable`), so the largest single contributor to the
+   * floor — a full deadline billed twice for one logical call — cannot recur;
+   * what remains is one unmetered attempt per call that fails.
    *
    * `latency_ms` (#326) is the SAME number returned to the caller on
    * `LlmResponse` — measured once, around `callWithTimeout`, and passed in

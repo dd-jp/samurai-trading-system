@@ -197,16 +197,33 @@ describe('paperStartingProfile', () => {
       // equity order would no-go on staleness and the soak would silently trade
       // crypto only.
       //
-      // The multiple was 10x against a 60,000ms budget until #1080 (2026-09-14)
-      // sized the budget against the calls a debate actually issues. At
-      // 112,000ms the ratio is 8x, so a debate that spends its ENTIRE budget
-      // still hands Verdict an intent at an eighth of the staleness bound —
-      // still well clear, and the property this asserts is unchanged. 5x is the
-      // floor below which it would stop being: the gate has to have room for
-      // the rest of the pass (Trader, Risk, Verdict) on top of the debate.
+      // 900,000ms against a 112,000ms budget is 8.03x: a debate that spends its
+      // ENTIRE budget still hands Verdict an intent at an eighth of the
+      // staleness bound. 5x is the floor below which "well clear" would stop
+      // being true, since the gate also has to have room for the rest of the
+      // pass (Trader, Risk, Verdict) on top of the debate.
       const { verdictConfig } = paperStartingProfile('paper');
 
       expect(verdictConfig.max_signal_age.stocks).toBeGreaterThan(5 * LATENCY_BUDGET_MS.stocks);
+    });
+
+    /**
+     * #1080. `LATENCY_BUDGET_MS.stocks` derives from
+     * `MAX_ROUNDS_BY_ASSET_CLASS.stocks`, so raising the round cap raises the
+     * budget silently — and the budget is a per-instrument cost inside a tick
+     * that also has to run analysts, Trader, Risk, Verdict and Execution.
+     *
+     * The tick interval is the hard side of that: a debate budget at or above
+     * it means the next tick is due before this one's debate can even fail, and
+     * `maxConcurrentInstruments` groups stack. At a cap of 2 the budget is
+     * 196,000ms against a 120,000ms tick and this fails, which is the point —
+     * the cap cannot be raised without someone reading this.
+     */
+    it('keeps one debate budget inside the tick interval it runs in (#1080)', () => {
+      const { tickIntervalMs } = paperStartingProfile('paper');
+
+      expect(tickIntervalMs).toBe(120_000);
+      expect(LATENCY_BUDGET_MS.stocks).toBeLessThanOrEqual(tickIntervalMs);
     });
 
     it('correlates over a window Alpaca can serve on tick 1, so #303 is not reachable here', () => {

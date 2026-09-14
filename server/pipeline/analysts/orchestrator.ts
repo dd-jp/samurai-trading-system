@@ -55,30 +55,26 @@ const ALL_PERSONAS: Analyst[] = [technicalAnalyst, fundamentalAnalyst, sentiment
 /**
  * The "short timeout" of analysts-spec.md story 19, as a number.
  *
- * Sized against what a persona actually waits on, which is market data over
- * HTTP, not an LLM: the personas are mechanical (technical reads indicators,
- * fundamental returns a constant, sentiment reads an in-memory store).
+ * What a persona waits on is market data over HTTP, not an LLM — the personas
+ * are mechanical (technical reads indicators, fundamental returns a constant,
+ * sentiment reads an in-memory store) — and specifically it waits on the QUEUE
+ * in front of that HTTP. Bar fetches take `acquireBackground()` on the Alpaca
+ * token bucket shared with the order path (`shared/http/venue-pacing.ts`),
+ * which holds 20 tokens above the order path's reserve and refills at 2.0/s,
+ * while one sweep of the 20-instrument universe reaches the venue for up to
+ * four distinct windows per instrument. A fetch that cannot get a token has not
+ * started, so a deadline under the drain times the back of every sweep out by
+ * construction — the 2026-09-10 19:56 burst measured 91 of 133 fetches past
+ * 10,000ms with a median of 21,338ms, which is #1080's instance 2: `technical
+ * did not answer within 10000ms` on 57% of main-arm runs, with no fault logged
+ * anywhere because there was none.
  *
- * It was 10,000ms until #1080 (2026-09-14), on the reasoning that 10s is
- * generous for an HTTP fetch. That reasoning measured the fetch and not the
- * QUEUE. Bar fetches take `acquireBackground()` on the Alpaca token bucket
- * shared with the order path (`shared/http/venue-pacing.ts`), which holds 20
- * tokens above the order path's reserve and refills at 2.0/s, while one sweep
- * of the 20-instrument universe asks for up to four distinct windows per
- * instrument. A fetch that cannot get a token has not started, so the
- * instruments at the back of every sweep timed out by construction: the
- * 2026-09-10 19:56 burst measured 91 of 133 fetches past 10,000ms with a median
- * of 21,338ms, which is #1080's instance 2 — `technical did not answer within
- * 10000ms` on 57% of main-arm runs, and no fault logged anywhere because there
- * was none.
- *
- * 30,000ms is the drain that queue can impose, derived rather than chosen:
- * `(20 instruments * 4 windows - 20 tokens of headroom) / 2.0 per second`. The
- * derivation is pinned from the pacing side by
- * `production/rate-limit-wiring.test.ts`, which is where the bucket's constants
- * live. It is a quarter of the two-minute tick cadence, so a hung upstream
- * still costs freshness rather than wedging the scheduler — the property the
- * old figure claimed against ADR-0008's since-superseded 15-minute cadence.
+ * 30,000ms is that drain, derived rather than chosen: `(20 instruments *
+ * 4 windows - 20 tokens of headroom) / 2.0 per second`. The derivation is
+ * pinned from the pacing side by `production/rate-limit-wiring.test.ts`, which
+ * is where the bucket's constants live. `ATTEMPTS_PER_PERSONA` is 2, so the
+ * per-persona wall clock is up to 60,000ms — half the two-minute tick cadence,
+ * which is the bound `paper-profile.ts`'s pass-duration arithmetic uses.
  *
  * The other half of #1080's instance 2 is upstream of this number: concurrent
  * callers asking for the SAME window no longer each spend a token

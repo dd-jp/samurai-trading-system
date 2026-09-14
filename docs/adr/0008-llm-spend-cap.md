@@ -392,8 +392,13 @@ What #1080 adds is a measurement and a way to keep measuring it:
   exist client-side — so the sum remains a floor, but a floor whose size can
   be checked against the log instead of inferred from timestamp gaps.
 
-The retry schedule itself is now bounded by the latency budget it runs inside:
-`maxAttempts * (timeoutMs + maxDelayMs) <= LATENCY_BUDGET_MS.stocks`, pinned by
-test in `production.test.ts`. Before #1080 that product was 64,000ms against a
-60,000ms budget — one logical call could, alone and invisibly, exceed the
-deadline it was supposed to be helping the caller meet.
+The retry schedule itself is bounded by the latency budget it runs inside:
+`maxAttempts * timeoutMs + (maxAttempts - 1) * maxDelayMs <= LATENCY_BUDGET_MS.stocks`,
+pinned by test in `production.test.ts`. There are `maxAttempts` deadlines but
+only `maxAttempts - 1` backoffs between them; the earlier form of this line
+wrote `maxAttempts * (timeoutMs + maxDelayMs)`, which over-counts by one
+backoff. Both forms hold at the shipped numbers (58,000ms and 60,000ms against
+112,000ms). Amended 2026-09-14 by
+[#1080](https://github.com/dd-jp/samurai-trading-system/issues/1080), which also
+raised `LATENCY_BUDGET_MS.stocks` from 60,000ms to 112,000ms — see that ticket
+for why the budget is derived from the round cap rather than chosen.

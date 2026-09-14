@@ -143,8 +143,8 @@ export const DEFAULT_FEEDBACK_INTERVAL_MS = 24 * 60 * 60 * 1_000;
 const DEFAULT_LLM_RETRY = { maxAttempts: 2, baseDelayMs: 500, maxDelayMs: 2_000 } as const;
 
 /**
- * The wall-clock ceiling ONE LOGICAL LLM CALL may occupy: the latency budget of
- * the debate that issues it (#1080).
+ * The wall-clock ceiling a WHOLE DEBATE may occupy (#1080), which is what the
+ * per-attempt timeout below has to be shared out of.
  *
  * `LATENCY_BUDGET_MS.stocks`, not the crypto entry, because Samurai is an
  * equities system — crypto left scope 2026-08-16 (ADR-0015's amendment) and
@@ -160,45 +160,38 @@ const DEFAULT_LLM_RETRY = { maxAttempts: 2, baseDelayMs: 500, maxDelayMs: 2_000 
  * model's latency. A crypto system re-entering scope inherits that as an open
  * problem, not as a constant to copy.
  */
-const LOGICAL_LLM_CALL_BUDGET_MS = LATENCY_BUDGET_MS.stocks;
+const DEBATE_BUDGET_MS = LATENCY_BUDGET_MS.stocks;
 
 /**
  * The per-attempt timeout, DERIVED from the budget above rather than chosen —
  * the budget divided by the calls the debate spending it actually issues.
  *
- * The divisor was `maxAttempts` until #1080's second pass (2026-09-14), and
- * that was the wrong axis. It made ONE logical call fit the budget, which was
- * a real fix for a real defect (`2 * (30,000 + 2,000)` = 64,000ms against
- * 60,000ms, spent invisibly — see `AnthropicLlmClientConfig.onRetryAttempt`),
- * but it said nothing about the DEBATE, and the debate is what races the
- * budget. A debate is `llmCallsPerDebate(maxRounds)` strictly sequential calls
- * — three personas a round plus one disagreement detection — so the constraint
- * is per-debate, not per-call. At three rounds that was ten calls against a 60s
- * budget: 190s of measured p50 latency in a 60s box. The store recorded the
- * consequence, not an inference — 46 of 58 debates over the two measured
- * sessions terminated at `rounds = 0`.
+ * The debate is what races the budget, and a debate is
+ * `llmCallsPerDebate(maxRounds)` strictly sequential calls (three personas a
+ * round plus one disagreement detection), so the constraint is per-debate, not
+ * per-call. The invariant is `llmCallsPerDebate(MAX_ROUNDS_BY_ASSET_CLASS.stocks)
+ * * timeoutMs <= DEBATE_BUDGET_MS`, pinned by a test. It holds by construction
+ * in both directions: `LATENCY_BUDGET_MS.stocks` is itself derived from
+ * `MAX_ROUNDS_BY_ASSET_CLASS.stocks`, so moving the round cap moves the budget
+ * and this timeout together and the three cannot drift apart.
  *
- * The invariant is `llmCallsPerDebate(MAX_ROUNDS_BY_ASSET_CLASS.stocks) *
- * timeoutMs <= LOGICAL_LLM_CALL_BUDGET_MS`, pinned by a test so the three
- * cannot drift apart — the budget, the round cap and the per-attempt timeout
- * are ONE decision, which is the coupling `LATENCY_BUDGET_MS` and
- * `MAX_ROUNDS_BY_ASSET_CLASS` already carried for crypto since #581.
+ * `maxAttempts` is not a factor here, and that is a deliberate reading of what
+ * the budget bounds. `enforceLatencyBudget` races the WHOLE debate and aborts
+ * at the budget, so a retry cannot overrun the tick — it can only cause the
+ * budget to fire. What the budget must afford is therefore the clean path,
+ * where every call returns: a retry is a degradation that may cost the debate
+ * its remaining budget, not an addend the budget has to cover. `maxAttempts`
+ * does bound one call's own worst case, which `production.test.ts` pins
+ * separately.
  *
- * `maxAttempts` no longer appears because a timeout — the only failure mode
- * that can spend a whole per-attempt deadline — is no longer retried at all
- * (`isRetryable`, debate-engine/llm/anthropic-client.ts). What remains
- * retryable fails in milliseconds (429) or as fast as the model streams
- * (malformed), so a retry costs a backoff, not a second deadline.
- *
- * The resulting 28,000ms is unchanged from the previous derivation and is now
- * doubly sourced: it is `112,000 / 4`, and it sits just above the measured p95
- * of a returning debate call (#1080: 27,510ms over 113 rows, p90 26,999ms).
- * Those percentiles are right-censored by this very timeout, so they are a
- * lower bound on the tail — which is why the budget is sized at the timeout
- * rather than at the measured p95 itself.
+ * The resulting 28,000ms is doubly sourced: it is `112,000 / 4`, and it sits
+ * just above the measured p95 of a returning debate call (#1080: 27,510ms over
+ * 113 rows, p90 26,999ms). Those percentiles are right-censored by this very
+ * timeout, so they are a lower bound on the tail — which is why the budget is
+ * sized at the timeout rather than at the measured p95 itself.
  */
 const DEFAULT_LLM_TIMEOUT_MS =
-  LOGICAL_LLM_CALL_BUDGET_MS / llmCallsPerDebate(MAX_ROUNDS_BY_ASSET_CLASS.stocks);
+  DEBATE_BUDGET_MS / llmCallsPerDebate(MAX_ROUNDS_BY_ASSET_CLASS.stocks);
 
 /**
  * Debate/disagreement-detection's LLM knobs (max tokens, per-attempt

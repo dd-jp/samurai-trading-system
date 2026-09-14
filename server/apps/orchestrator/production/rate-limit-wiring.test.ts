@@ -702,20 +702,33 @@ describe('the composition root wires market-data fetch telemetry (#1082)', () =>
 });
 
 /**
+ * VENUE-REACHING `(timeframe, lookback)` bar fetches one instrument's decision
+ * pass issues — the ones that take a token. A `getBars` call served from the
+ * store takes none and is silent in the log, which is why this is smaller than
+ * the eight windows `MarketDataServiceImpl.logFetch` documents a technical
+ * analyst asking for: five of those (`5m/936`, `5m/84`, `5m/81` and the
+ * indicator specs behind them) are served by the 260-bar warm-up fetch that
+ * precedes them.
+ *
+ * MEASURED (#1080) over 38 fetch bursts in the 2026-09-04, 2026-09-08 and
+ * 2026-09-10 soak logs, restarts included: no instrument reached the venue for
+ * more than 4 distinct windows in a burst. Five shapes appear across the
+ * universe within a single burst — `5m/260` and `1h/57` for the technical
+ * analyst's indicators and context, `5m/112` for MACD's warm-up, `1h/20` for
+ * the trader's signal bar, and `1d/30` for `correlationConfig.window` — but no
+ * single instrument asks for all five. `adv_window` (`1d/20`) is an
+ * Execution-stage read (`getADV`), not part of this sweep, and appears in no
+ * measured burst.
+ */
+const DISTINCT_BAR_WINDOWS_PER_INSTRUMENT = 4;
+
+/**
  * #299's burst value has no published Alpaca figure behind it (see
  * `DEFAULT_VENUE_PACING.alpaca`), so it is derived from OUR workload instead —
  * and a derivation stated only in a comment is the drift shape this repo keeps
  * hitting. This makes it structural: widen the universe again and this fails
  * rather than silently under-sizing the burst.
  */
-/**
- * Distinct `(timeframe, lookback)` bar windows one instrument's decision pass
- * asks for, MEASURED (#1080) across the 2026-09-07 and 2026-09-10 soak bursts:
- * `5m/260`, `1h/57`, `1h/20`, `1d/30`. The worst single burst issued 53
- * distinct windows across the 20-instrument universe, inside this bound.
- */
-const DISTINCT_BAR_WINDOWS_PER_INSTRUMENT = 4;
-
 describe("Alpaca's burst covers one fill-poll sweep of the configured universe (#299)", () => {
   it('has capacity for a getOrder per open bracket plus a concurrent submit', () => {
     // `AlpacaBrokerAdapter.fetchNewFills` issues exactly one `getOrder` per
@@ -749,12 +762,10 @@ describe("Alpaca's burst covers one fill-poll sweep of the configured universe (
 
   /**
    * #1080. The cold-start derivation above counts ONE bars fetch per
-   * instrument. The soak says otherwise: a decision pass asks for four
-   * distinct windows per instrument — `5m/260` and `1h/57` for the technical
-   * analyst's indicators and context, `1h/20` for the trader's signal bar, and
-   * `1d/30` for the liquidity/ADV screen — and the 2026-09-10 19:56 burst shows
-   * all four shapes inside one tick. So `capacity` covers the first 20 requests
-   * of a sweep that issues up to 80, and the remaining 60 come at
+   * instrument; the soak measured up to four (see
+   * `DISTINCT_BAR_WINDOWS_PER_INSTRUMENT`). So a cold sweep issues up to 80
+   * requests against 20 tokens of background headroom — `capacity` 41 less the
+   * order path's `reserveForPriority` 21 — and the remaining 60 arrive at
    * `refillPerSecond`.
    *
    * That drain is what the analyst's per-attempt deadline actually waits on:

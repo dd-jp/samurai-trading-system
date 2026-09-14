@@ -918,11 +918,10 @@ describe('buildDebateStep latency budget (#374)', () => {
   });
 
   /**
-   * #1080 capped stocks at one round, so the round that completes IS the
-   * debate: there is no round 2 for a stall to land in, and the salvage path
-   * `getCurrentState` exists for is unreachable at a one-round cap — as it has
-   * been for crypto since #581. This test therefore now pins the OTHER half of
-   * the contract: bull and bear answer, the mediator stalls, and the debate
+   * At a one-round cap the round that completes IS the debate, so there is no
+   * round 2 for a stall to land in and the salvage path `getCurrentState`
+   * exists for is unreachable. What this pins is the other half of the
+   * contract: bull and bear answer, the mediator stalls, and the debate
    * degrades to the fallback with a row written rather than hanging.
    *
    * The salvage mechanism itself stays covered at its own seam —

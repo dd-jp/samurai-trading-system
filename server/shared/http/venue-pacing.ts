@@ -214,39 +214,35 @@ export const DEFAULT_VENUE_PACING: VenuePacingConfig = {
    *   while raising capacity to 41 would have made it `191/min` — 96%, and the
    *   burst raise would have quietly eaten sustained margin it was never scoped
    *   to touch.
-   * - **Demand side.** The dominant consumer is NOT the tick. `fetchNewFills`
-   *   (alpaca-adapter.ts) issues one `getOrder` per tracked bracket on EVERY
-   *   fill poll, and that poll runs on `DEFAULT_FILL_POLL_INTERVAL_MS`
-   *   (15_000), independently of `tickIntervalMs`. At 20 open brackets — a
-   *   reachable paper state, since the caps are 5%/10% of ~$100k equity — that
-   *   alone is `20 / 15s = 1.33 tok/s` sustained, before the bar sweep
-   *   (`20 / 120s = 0.17`) and submits (~0.05). Call it **~1.55 tok/s**.
-   * - **Demand side, as MEASURED — amended 2026-09-14
-   *   ([#1080](https://github.com/dd-jp/samurai-trading-system/issues/1080)).**
-   *   The bullet above is wrong in both terms, in opposite directions, and the
-   *   bar-sweep term is the one that matters. `fetchNewFills` polls the
-   *   brackets that exist, and the paper store holds 3, not 20. The sweep is
-   *   not `20 / 120s`: one tick asks for up to FOUR distinct bar windows per
-   *   instrument (`5m/260`, `1h/57`, `1h/20`, `1d/30`, all four measured in a
-   *   single soak tick), and until #1080 concurrent callers asking for the SAME
+   * - **Demand side, MEASURED over the 2026-09-04/08/10 soak logs (#1080,
+   *   2026-09-14).** Two consumers, and the bar sweep dominates. `fetchNewFills`
+   *   (alpaca-adapter.ts) issues one `getOrder` per TRACKED bracket on every
+   *   fill poll at `DEFAULT_FILL_POLL_INTERVAL_MS` (15_000), independently of
+   *   `tickIntervalMs`; the paper store holds 3 such brackets, so ~0.2 tok/s.
+   *   The sweep asks for up to four VENUE-REACHING bar windows per instrument
+   *   (`5m/260`, `1h/57`, `1h/20`, `1d/30`, with `5m/112` a fifth shape across
+   *   the universe), and before #1080 concurrent callers asking for the SAME
    *   window each spent a token, because the bar cache writes on completion and
    *   cannot see a request in flight — the 2026-09-10 19:56 burst issued 133
-   *   fetches over 34 distinct windows, **~2.85 tok/s** against the `0.17`
-   *   estimated here. Deduped by `MarketDataServiceImpl`'s single-flight
-   *   coalescing it is **~0.73 tok/s**, still 4.3x the estimate, and it is this
-   *   term that `DEFAULT_ANALYST_TIMEOUT_MS` (`pipeline/analysts/orchestrator.ts`)
-   *   is derived against. `refillPerSecond` is deliberately NOT raised on this
-   *   correction: the two errors partly cancel, and buying the analyst deadline
-   *   by raising it would need Alpaca's data-API and trading-API quotas to be
+   *   fetches over 34 distinct windows, **~2.85 tok/s**. Deduped by
+   *   `MarketDataServiceImpl`'s single-flight coalescing it is **~0.73 tok/s**,
+   *   and it is this term that `DEFAULT_ANALYST_TIMEOUT_MS`
+   *   (`pipeline/analysts/orchestrator.ts`) is derived against. Total ~0.95
+   *   tok/s deduped, ~3.05 tok/s before the fix. `refillPerSecond` is
+   *   deliberately NOT raised on the measurement: buying the analyst deadline
+   *   that way would need Alpaca's data-API and trading-API quotas to be
    *   separate budgets, which this file's 200/min ceiling does not establish.
    *
-   * So `1.8` — the value the "restore exactly 75%" arithmetic suggests — leaves
-   * only ~14% headroom over real demand, and the failure it invites is the same
-   * silent trade-loss this universe widening exists to avoid, arriving by a
-   * different door: bar fetches starve behind the 20-token priority reserve,
-   * `withRetry` backs off, marks go stale, and Verdict refuses on
-   * `max_mark_age`. `2.0` gives ~29% headroom at `41 + 120 = 161/min`, i.e. 80%
-   * of the ceiling rather than 75%.
+   * The binding constraint is the BURST, not that ~0.95 tok/s average: a sweep
+   * arrives as up to 80 requests at once against 20 tokens of background
+   * headroom, so what the refill sets is how fast the remaining 60 drain, and
+   * the analyst deadline has to cover that drain (`DEFAULT_ANALYST_TIMEOUT_MS`).
+   * `1.8` — the value the "restore exactly 75%" arithmetic suggests — stretches
+   * that drain to 33s, and the failure it invites is the same silent trade-loss
+   * this universe widening exists to avoid, arriving by a different door: bar
+   * fetches starve behind the 20-token priority reserve, `withRetry` backs off,
+   * marks go stale, and Verdict refuses on `max_mark_age`. `2.0` drains in 30s
+   * at `41 + 120 = 161/min`, i.e. 80% of the ceiling rather than 75%.
    *
    * **That 75% -> 80% is a deliberate, named regression, not an oversight.** At
    * 20 instruments on ONE shared bucket the two postures cannot both hold with

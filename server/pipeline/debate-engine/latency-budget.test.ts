@@ -5,7 +5,6 @@ import {
   LATENCY_BUDGET_MS,
   llmCallsPerDebate,
   MAX_ROUNDS_BY_ASSET_CLASS,
-  MEASURED_DEBATE_CALL_CEILING_MS,
   type PartialDebateState,
 } from './latency-budget.js';
 import {
@@ -755,13 +754,11 @@ describe('enforceLatencyBudget', () => {
 });
 
 /**
- * #1080. The budget and the round cap are one decision (the `MAX_ROUNDS_BY_ASSET_CLASS`
- * comment says so for crypto); this pins the arithmetic that joins them, so a
- * budget can no longer be set to a number the debate it bounds cannot finish in.
- *
- * Both sides are literals rather than the shipped constants: comparing
- * `LATENCY_BUDGET_MS.stocks` against a value derived from `LATENCY_BUDGET_MS.stocks`
- * is an identity that holds for any budget, including one nobody chose.
+ * #1080. The stocks budget derives from the round cap, so an assertion that
+ * recovers the budget from the cap is an identity and pins nothing. What is
+ * pinnable is the pair of values the derivation resolves to, and the per-call
+ * ceiling implied by dividing one by the other — a change to either side has to
+ * be re-read here rather than silently absorbed.
  */
 describe('the stocks debate budget against the calls the debate issues (#1080)', () => {
   it('counts three persona calls per round plus one disagreement detection per debate', () => {
@@ -770,13 +767,10 @@ describe('the stocks debate budget against the calls the debate issues (#1080)',
   });
 
   it('affords every sequential call a stocks debate issues at the measured per-call ceiling', () => {
-    expect(MEASURED_DEBATE_CALL_CEILING_MS).toBe(28_000);
     expect(MAX_ROUNDS_BY_ASSET_CLASS.stocks).toBe(1);
-
-    const worstCaseDebateMs =
-      llmCallsPerDebate(MAX_ROUNDS_BY_ASSET_CLASS.stocks) * MEASURED_DEBATE_CALL_CEILING_MS;
-
-    expect(worstCaseDebateMs).toBeLessThanOrEqual(LATENCY_BUDGET_MS.stocks);
     expect(LATENCY_BUDGET_MS.stocks).toBe(112_000);
+    expect(LATENCY_BUDGET_MS.stocks / llmCallsPerDebate(MAX_ROUNDS_BY_ASSET_CLASS.stocks)).toBe(
+      28_000,
+    );
   });
 });

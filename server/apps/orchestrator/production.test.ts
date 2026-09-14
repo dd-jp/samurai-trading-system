@@ -2048,15 +2048,10 @@ describe('buildProductionComponents (default llmClient fallback)', () => {
   });
 
   /**
-   * #1080. Two things had to hold and only one did.
-   *
-   * The old assertion was that ONE logical call fits the budget:
-   * `2 * (30,000 + 2,000)` = 64,000ms against 60,000ms failed it, and
-   * 28,000ms fixed it. What it explicitly did NOT check — and said so — is that
-   * the budget fits the DEBATE, which is `llmCallsPerDebate(maxRounds)`
-   * sequential calls, not one. At three rounds that was ten calls against a
-   * 60s budget, and the measurement is what it produced: 46 of 58 debates
-   * recorded `rounds = 0`. The whole-debate side is now asserted here.
+   * #1080. One call's own worst case — every attempt its retry schedule
+   * affords, plus the backoffs between them — must still fit inside the budget
+   * the debate races, or a single retried call guarantees the debate ends on
+   * budget expiry no matter how fast the rest of it is.
    *
    * Both budget figures are literals on purpose. `DEFAULT_LLM_TIMEOUT_MS` is
    * derived from `LATENCY_BUDGET_MS.stocks`, so comparing the shipped config
@@ -2077,10 +2072,13 @@ describe('buildProductionComponents (default llmClient fallback)', () => {
 
   /**
    * #1080's own acceptance criterion, as an invariant: the budget must afford
-   * every call the debate it bounds issues, at the per-attempt ceiling. A
-   * timeout is the only failure mode that can consume a full deadline and is no
-   * longer retried (`isRetryable`, anthropic-client.ts), so the per-call cost
-   * here is `timeoutMs` rather than the whole retry schedule.
+   * every call the debate it bounds issues, at the per-attempt ceiling.
+   *
+   * The per-call cost here is `timeoutMs` and not the whole retry schedule
+   * because `enforceLatencyBudget` aborts the debate at the budget: a retry
+   * cannot overrun the tick, only cause the budget to fire. What the budget has
+   * to afford is the clean path where every call returns. The retried worst
+   * case for a single call is pinned by the test above.
    */
   it('affords every sequential call a stocks debate issues (#1080)', () => {
     expect(MAX_ROUNDS_BY_ASSET_CLASS.stocks).toBe(1);

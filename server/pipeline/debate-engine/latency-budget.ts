@@ -44,90 +44,77 @@ export function llmCallsPerDebate(maxRounds: number): number {
 }
 
 /**
- * Per-call ceiling the budget below is sized against, MEASURED (#1080,
+ * Round cap by asset class. `MAX_ROUNDS` (round-orchestrator.ts) stays 3 as the
+ * structural ceiling `runDebate` validates against; this is a policy inside it,
+ * and it is the constant to move if the measurement below changes.
+ *
+ * Crypto: #581, option 2 — shrink the debate so it fits its budget rather than
+ * truncating every tick. The prior shape was cut off mid-round on every tick,
+ * which cost both quality (disagreement detection runs only on the final round,
+ * so it never ran) and attribution (every row read `converged: false,
+ * timed_out`).
+ *
+ * Stocks: #1080 (2026-09-14). MEASURED over the store's 184 debates and the
+ * `llm_spend` rows behind them, split at the 2026-09-03 fan-out from 4 names to
+ * 20:
+ *
+ *   pre-fan-out  — 57 debates over 4 instruments: per-call p50 5,620ms
+ *                  (n=441), 9 converged, 45 ran 2+ rounds, 1 at `rounds = 0`.
+ *                  Ten sequential calls is ~56s, inside the 60,000ms budget of
+ *                  the day. This also corroborates #346's ~5s/call.
+ *   post-fan-out — 127 debates over 20 instruments: per-call p50 18,306ms
+ *                  (n=266), 1 converged, 102 at `rounds = 0`. The same ten
+ *                  calls is ~183s against the same 60,000ms.
+ *
+ * Three rounds was therefore REACHABLE and in use, and fan-out took it away by
+ * inflating per-call latency 3.3x. The cap is a consequence of width, not a
+ * codification of a capability nothing exercised, and it is a real reduction
+ * against the 4-name era — taken because at the post-fan-out latency no budget
+ * that also respects the 2-minute tick cadence affords ten sequential calls.
+ *
+ * The successor condition is this constant: if per-call latency returns to the
+ * ~5.6s regime (#1023's per-call work, or a narrower universe), raise it and
+ * the budget below follows by derivation.
+ */
+export const MAX_ROUNDS_BY_ASSET_CLASS: Record<AssetClass, number> = {
+  crypto: 1,
+  stocks: 1,
+};
+
+/**
+ * Per-call ceiling the stocks budget is sized against, MEASURED (#1080,
  * 2026-09-14) over the 2026-09-07 and 2026-09-10 soak sessions: 113 returning
  * `llm_spend` rows at `stage: 'debate'` give p50 19,017ms, p90 26,999ms,
  * p95 27,510ms. The distribution is RIGHT-CENSORED — a call that exhausts the
  * per-attempt timeout writes no row at all (see AC5 on #1080) — so these are a
  * lower bound on the true tail, which is the direction that matters here.
  *
- * It equals `DEFAULT_LLM_TIMEOUT_MS` (production/defaults.ts) by construction:
- * that constant derives from this budget divided by the call count below, and
- * this value is the measurement the pair was chosen against. A call cannot
- * exceed it without the per-attempt timeout firing.
+ * `DEFAULT_LLM_TIMEOUT_MS` (production/defaults.ts) recovers this number by
+ * dividing the budget below by the same call count, so a call cannot exceed it
+ * without the per-attempt timeout firing.
  */
-export const MEASURED_DEBATE_CALL_CEILING_MS = 28_000;
+const MEASURED_DEBATE_CALL_CEILING_MS = 28_000;
 
 /**
  * Budget by asset class, in milliseconds (spec's "Budget by Asset Class").
  *
- * Crypto was 15s until #581: the first real paper tick measured every crypto
- * debate timing out at 15s while the FASTEST completed equity debate took ~17s
- * — the budget was below one round of sequential bull/bear/mediator calls at
- * real LLM latency, so 100% of crypto decisions were partial syntheses. 30s
- * covers the measured one-round debate (~17-20s incl. disagreement detection)
- * with headroom while staying half the stocks budget, because crypto signals
- * decay faster. The budget and the round cap below are ONE decision: raising
- * the budget without capping rounds would let a 3-round crypto debate run
- * ~45-60s of 24/7 spend and blow the ADR-0008 $50 soak cap (priced in #581's
- * cost-coupling comment).
+ * Stocks is arithmetic and nothing else: every sequential call the round cap
+ * above affords, at the measured per-call ceiling. Deliberately not a round
+ * number, and pinned by test. Derived from `MAX_ROUNDS_BY_ASSET_CLASS` rather
+ * than from a literal so the budget, the round cap and the per-attempt timeout
+ * cannot drift apart — moving the cap moves all three.
  *
- * **Stocks was 60,000 until #1080 (2026-09-14), and it was unreachable by
- * arithmetic, not by contention.** A three-round stocks debate is
- * `llmCallsPerDebate(3)` = 10 sequential calls; at the measured p50 of 19,017ms
- * that is 190s against a 60s budget, and even ONE round is 4 calls = 76s at p50.
- * The store shows what that produced: of 58 debates over the two measured
- * sessions, 46 issued two calls or fewer, one converged, and 46 recorded
- * `rounds = 0` — the budget fired before the first round closed, every time.
- * Across the store's whole history exactly one debate of 184 converged.
- *
- * Stocks is now sized the way #581 sized crypto, as ONE decision with the round
- * cap below: one round, and a budget that affords every call that round issues
- * at the measured per-call ceiling — `llmCallsPerDebate(1) * 28,000` = 112,000.
- * It is deliberately not a round number: it is the arithmetic, pinned by a test.
- *
- * Crypto is left at 30,000 rather than re-derived: crypto left Samurai's scope
- * on 2026-08-16 (ADR-0015's amendment), the universe holds no crypto
- * instrument, and #581's figure is a decision about a system that no longer
- * runs. It does NOT satisfy the arithmetic above and never did — see
- * `LOGICAL_LLM_CALL_BUDGET_MS` (production/defaults.ts), which states the same
+ * Crypto is #581's figure, covering its measured one-round debate (~17-20s
+ * including disagreement detection) with headroom. It is NOT re-derived from
+ * the arithmetic above and does not satisfy it: crypto left Samurai's scope on
+ * 2026-08-16 (ADR-0015's amendment) and the universe holds no crypto
+ * instrument, so re-deriving it would be inventing a number for a system that
+ * no longer runs. `DEBATE_BUDGET_MS` (production/defaults.ts) states the same
  * gap from the retry side.
  */
 export const LATENCY_BUDGET_MS: Record<AssetClass, number> = {
   crypto: 30_000,
-  stocks: llmCallsPerDebate(1) * MEASURED_DEBATE_CALL_CEILING_MS,
-};
-
-/**
- * Round cap by asset class (#581, option 2: shrink the crypto debate so it
- * genuinely fits its budget rather than truncating every tick).
- *
- * Crypto gets ONE round — bull, bear, mediator, once — because the debate is
- * strictly sequential (~5s/call measured, #346) and a second round cannot fit
- * any budget that respects crypto signal decay. A one-round debate is a
- * designed debate that completes; the old shape was a three-round debate that
- * was cut off mid-round on every tick, which is worse on both quality (no
- * disagreement detection ran — that only runs on the final round) and
- * attribution (every crypto row read `converged: false, timed_out`).
- *
- * **Stocks joined crypto at one round in #1080 (2026-09-14)**, for the same
- * reason and on the same evidence shape. The spec's 3-round hybrid termination
- * was never what ran: 46 of 58 measured debates recorded `rounds = 0`, and one
- * debate in the store's entire 184-row history has `converged = 1`. A round cap
- * of 3 was not buying three rounds; it was buying a budget nothing could finish
- * inside, and a `confidence: 0` fallback on nearly every tick. This codifies
- * what the measurement already showed rather than removing a capability that
- * was being used. `MAX_ROUNDS` (round-orchestrator.ts) stays 3 as the ceiling
- * `runDebate` validates against — the cap chosen here is a per-asset-class
- * policy inside it, not the structural bound.
- *
- * If debate-as-edge requires multi-round convergence, the lever is per-call
- * latency (#1023), not this cap: at the measured p50 no budget that also
- * respects the 2-minute tick cadence affords ten sequential calls.
- */
-export const MAX_ROUNDS_BY_ASSET_CLASS: Record<AssetClass, number> = {
-  crypto: 1,
-  stocks: 1,
+  stocks: llmCallsPerDebate(MAX_ROUNDS_BY_ASSET_CLASS.stocks) * MEASURED_DEBATE_CALL_CEILING_MS,
 };
 
 /**
