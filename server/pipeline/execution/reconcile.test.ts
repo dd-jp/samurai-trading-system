@@ -1297,6 +1297,13 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     ).toMatchObject({ action: 'rejected', kind: 'flatten' });
     expect(alerts[0]?.reason).toContain('INFERENCE');
     expect(await store.getUnresolvedFlattens()).toEqual([]);
+    // Retiring the row is not enough: the remainder the venue still holds has
+    // to be flattenable again, and only `status='error'` lets
+    // `resolveExitRetryKey` walk to a fresh key. Retiring it any other way
+    // (e.g. `markFlattenFillsSwept`) leaves `execute()` on `deduped` and the
+    // remainder never exits. Safe here precisely because the release is gated
+    // on the venue covering everything the store still holds.
+    expect(await store.isRetryableFlattenError(FLATTEN_KEY)).toBe(true);
   });
 
   it('keeps a terminal unswept flatten blocking when the venue holds LESS than the store has booked', async () => {
