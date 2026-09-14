@@ -300,7 +300,7 @@ function ProvidersBlock({ snapshot }: { snapshot: WireSnapshot }) {
  * failure was observed recently", never "the channel is currently reachable".
  */
 function AlertDeliveryBlock({ snapshot }: { snapshot: WireSnapshot }) {
-  const count = snapshot.alert_delivery_failures_24h ?? 0;
+  const count = snapshot.alert_delivery_failures_24h;
   if (count === 0) return null;
   return (
     <div className="rail-block rail-alert-degraded" data-field="alert-delivery-failures">
