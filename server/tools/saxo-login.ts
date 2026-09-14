@@ -8,10 +8,6 @@
  * command is what makes a LIVE token obtainable at all, and what replaces
  * hand-copying the portal token for SIM.
  *
- * Never handles a real login itself — the callback server, code exchange
- * and verification below all run, but only ever against a fake token
- * endpoint in tests. A real SIM/live run is the operator's, by hand.
- *
  * Every line this command prints goes through `printSafely`, which routes
  * through the shared `maskCredentials` redaction pass (the same one
  * `safe-log.ts` uses for upstream-controlled text) — belt-and-braces on top
