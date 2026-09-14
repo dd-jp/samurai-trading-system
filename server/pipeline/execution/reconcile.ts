@@ -235,13 +235,38 @@ export const UNRESOLVABLE_FLATTEN_MAX_AGE_MS = 5 * 60 * 1_000;
  * branch just below, which leaves this field untouched) or a TERMINAL
  * `order_state` (the venue answered, definitively, that the order is done)
  * is eligible for the age cutoff.
+ *
+ * **A TERMINAL `order_state` additionally needs `fills_swept_at` (review
+ * round 2).** `reconcileFlatten` below resolves every terminal row that
+ * filled NOTHING, so the only terminal row that can still reach this test is
+ * a cancelled/expired flatten that PARTIALLY filled and whose fills
+ * `ingestFills()` has not applied yet. Releasing that one is a certain
+ * over-sell: `executeExit` sizes the replacement off
+ * `heldQuantitiesFor(getOpenPositions, getExitFillSizes)` with no broker
+ * cross-check, the unswept partial is invisible to both reads, and the
+ * second flatten goes out at the full original quantity — net short, the
+ * #516/#1389 shape. Once the fills ARE swept those same reads carry the
+ * partial, so the replacement is sized on the true residual; no cross-check
+ * is needed, only the ordering.
+ *
+ * That pairing is currently UNREACHABLE through `getUnresolvedFlattens`,
+ * whose own predicate already drops a `'submitted'` row the moment
+ * `fills_swept_at` is set. The clause is written anyway: it makes this
+ * function safe on its own terms — it is handed rows, not a query — rather
+ * than safe only as long as that predicate keeps its present shape.
+ *
+ * Nothing here releases an acked, still-WORKING row at any age. What stops
+ * that row wedging its instrument forever is `reconcileFlatten`'s
+ * cancel-then-replace below, whose cancel turns the row terminal at the
+ * venue so one of the ordinary resolution paths can retire it.
  */
 export function isFlattenBlockingAt(
-  row: Pick<UnresolvedFlattenSubmission, 'submitted_at' | 'order_state'>,
+  row: Pick<UnresolvedFlattenSubmission, 'submitted_at' | 'order_state' | 'fills_swept_at'>,
   now: Date,
 ): boolean {
-  if (row.order_state !== null && !TERMINAL_ORDER_STATES.includes(row.order_state)) {
-    return true;
+  if (row.order_state !== null) {
+    if (!TERMINAL_ORDER_STATES.includes(row.order_state)) return true;
+    if (row.fills_swept_at === null) return true;
   }
   return now.getTime() - row.submitted_at.getTime() < UNRESOLVABLE_FLATTEN_MAX_AGE_MS;
 }
@@ -384,7 +409,11 @@ async function reconcileFlatten(
     // confirmed even once: for that one, #1500 accepts the same asymmetry
     // this comment already argued for reconcile's own resolution — a
     // replacement attempt against a venue the adapter cannot reach is not
-    // expected to land either.
+    // expected to land either. Round 2 leaves one shape genuinely unbounded
+    // and says so rather than papering it: a row with a sticky WORKING
+    // `order_state` whose `resumeFlatten` throws forever blocks forever —
+    // the cancel-then-replace below cannot run through an adapter that
+    // cannot answer, and the alert above is the whole of the response.
     const reason = describeThrownSafely(error);
     await postFlattenReconcileAlert(input, row, reason, now);
     return {
@@ -536,6 +565,48 @@ async function reconcileFlatten(
     });
   }
 
+  const adopted = `flatten journal said '${row.status}'; broker reports '${order.order_state}'`;
+
+  // #1500 review round 2 — cancel-then-replace, the only path that reaches
+  // the shape #1500 was filed for. Every acked row carries a WORKING
+  // `order_state` (`resolveFlattenSubmitted` sets it, the branch just above
+  // refreshes it), and `isFlattenBlockingAt` never releases a working row at
+  // any age — correctly, since a second full-size market flatten against an
+  // order the venue is still confirming open is the #516/#1389 over-sell.
+  // So a flatten the venue acks and then never fills would block its
+  // instrument's mandatory flat-by-close forever. The way out is not to
+  // release the row on age, it is to make the row STOP BEING WORKING: ask
+  // the venue to cancel it. The cancel's own terminal answer then arrives on
+  // a later pass and routes into one of the two resolution paths that
+  // already exist — `filled_qty === 0` resolves the row above, and a partial
+  // fill is retired by `markFlattenFillsSwept` once `ingestFills()` applies
+  // it — so what finally unblocks the instrument is always venue evidence
+  // plus swept fills, never elapsed time.
+  //
+  // Gated on the FRESH `order.order_state` rather than `row.status`: a
+  // `'submitting'` row the venue confirms working is the same hazard and
+  // wants the same cancel, and one rule covering both cannot disagree with
+  // itself. Re-issued on every pass past the bound, with nothing journalled
+  // to remember it by — `BrokerAdapter.cancel` is idempotent BY CONTRACT
+  // (already cancelled, filled or unknown all resolve rather than throw),
+  // and a durable marker would carry no authority anyway: permission to
+  // replace is read off terminal-plus-swept, never off a record that a
+  // cancel was attempted. The cost is one cancel call per pass per wedged
+  // row against the venue's pacing budget, which is the cheaper side of the
+  // trade against an un-flattenable instrument.
+  const working = !TERMINAL_ORDER_STATES.includes(order.order_state);
+  if (working && now.getTime() - row.submitted_at.getTime() >= UNRESOLVABLE_FLATTEN_MAX_AGE_MS) {
+    return {
+      idempotency_key: row.idempotency_key,
+      instrument: row.instrument,
+      store_state: storeState,
+      broker_state: order.order_state,
+      action: 'adopted',
+      kind: 'flatten',
+      reason: `${adopted}; ${await cancelWedgedFlatten(input, row, order.order_state, now)}`,
+    };
+  }
+
   return {
     idempotency_key: row.idempotency_key,
     instrument: row.instrument,
@@ -543,8 +614,41 @@ async function reconcileFlatten(
     broker_state: order.order_state,
     action: 'adopted',
     kind: 'flatten',
-    reason: `flatten journal said '${row.status}'; broker reports '${order.order_state}'`,
+    reason: adopted,
   };
+}
+
+/**
+ * The cancel half of the cancel-then-replace above. Fully swallowed, like
+ * every other venue call on this sweep: a cancel that could not be delivered
+ * leaves the row exactly as it was — still blocking, still working, still
+ * retried next pass — which is the same standing this sweep already gives a
+ * `resumeFlatten` that could not answer. Returns the sentence the caller
+ * appends to its divergence `reason`, so a cancel and its outcome are
+ * readable off the reconcile report as well as off the alert.
+ */
+async function cancelWedgedFlatten(
+  input: ReconcileInput,
+  row: UnresolvedFlattenSubmission,
+  observedState: OrderState,
+  now: Date,
+): Promise<string> {
+  const age = Math.round((now.getTime() - row.submitted_at.getTime()) / 1_000);
+  const provenance =
+    `the venue still reports this flatten '${observedState}' after ${age}s — past the ` +
+    `${UNRESOLVABLE_FLATTEN_MAX_AGE_MS / 1_000}s bound, so it is being CANCELLED at the venue ` +
+    'rather than left to block every later flatten on this instrument. The journal row is ' +
+    'unchanged and keeps blocking until the venue reports the order terminal AND its fills ' +
+    'are swept — nothing is re-armed on age alone';
+  try {
+    await input.broker.cancel(row.idempotency_key, row.instrument);
+  } catch (error) {
+    const reason = `${provenance}. The cancel FAILED (${describeThrownSafely(error)}); retrying next pass`;
+    await postFlattenReconcileAlert(input, row, reason, now);
+    return reason;
+  }
+  await postFlattenReconcileAlert(input, row, provenance, now);
+  return provenance;
 }
 
 /** Fire-and-forget, fully swallowed — the alert IS the fallback; see `FlattenReconcileAlertChannel`'s doc. */

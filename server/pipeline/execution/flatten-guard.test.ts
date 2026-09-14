@@ -39,6 +39,7 @@ function makeRow(
     status: 'submitted',
     submitted_at: NOW,
     order_state: null,
+    fills_swept_at: null,
     ...overrides,
   };
 }
@@ -82,9 +83,31 @@ describe('boundedUnresolvedFlattens (#1500)', () => {
     expect(flattenReconcileAlerts.alerts).toEqual([]);
   });
 
-  it('drops a row past the age bound whose venue answer is terminal, even though it is unresolved', async () => {
+  it('keeps blocking a terminal row past the bound whose partial fills are NOT yet swept (#1500 review round 2)', async () => {
     const pastBound = new Date(NOW.getTime() - (UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1));
-    const store = fakeStore([makeRow({ submitted_at: pastBound, order_state: 'cancelled' })]);
+    const store = fakeStore([
+      makeRow({ submitted_at: pastBound, order_state: 'cancelled', fills_swept_at: null }),
+    ]);
+    const flattenReconcileAlerts = recordingAlerts();
+    const unresolvedFlattens = boundedUnresolvedFlattens({
+      store,
+      clock: fixedClock(NOW),
+      flattenReconcileAlerts,
+      logger: recordingLogger(),
+      trace_id: 'flatten-guard',
+    });
+
+    const result = await unresolvedFlattens();
+
+    expect(result.map((row) => row.instrument)).toEqual(['AAPL']);
+    expect(flattenReconcileAlerts.alerts).toEqual([]);
+  });
+
+  it('releases that same terminal row once its fills have been swept (#1500 review round 2)', async () => {
+    const pastBound = new Date(NOW.getTime() - (UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1));
+    const store = fakeStore([
+      makeRow({ submitted_at: pastBound, order_state: 'cancelled', fills_swept_at: NOW }),
+    ]);
     const unresolvedFlattens = boundedUnresolvedFlattens({
       store,
       clock: fixedClock(NOW),

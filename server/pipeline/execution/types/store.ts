@@ -239,6 +239,21 @@ export interface FlattenJournal {
    * `recordFlattenOrderStateObserved`, and STICKY — a later `resumeFlatten`
    * throw never clears a previously observed working state), not a fresh
    * read at refusal time.
+   *
+   * **A TERMINAL `order_state` is eligible only once `fills_swept_at` is set
+   * too (#1500 review round 2)** — see `UnresolvedFlattenSubmission.
+   * fills_swept_at`'s doc for the over-sell that rule prevents. Given
+   * `getUnresolvedFlattens`'s own predicate that pairing is currently
+   * unreachable (a `'submitted'` row with `fills_swept_at` set has already
+   * left the scan), so in practice only `order_state === null` rows age out;
+   * the clause is written anyway, because it is what makes the age bound
+   * safe INDEPENDENTLY of that predicate rather than by coincidence of it.
+   *
+   * The acked-and-still-working row the bound therefore never releases is
+   * not left wedged: `reconcileFlatten` (reconcile.ts) CANCELS it at the
+   * venue once it is past the bound, and the cancel's terminal answer then
+   * routes into one of the ordinary resolution paths — which is what
+   * unblocks the instrument, never age on its own.
    */
   writeAheadFlatten(submission: FlattenSubmissionWriteAhead): Promise<void>;
   /** Persist the post-ack transition (`'submitting'` → `'submitted'`). */
@@ -584,6 +599,22 @@ export interface UnresolvedFlattenSubmission {
    * which values are eligible to age out and which are not.
    */
   order_state: OrderState | null;
+  /**
+   * When `markFlattenFillsSwept` durably applied this flatten's fills, or
+   * `null` if it never has.
+   *
+   * #1500 review round 2: the second half of the age bound's eligibility
+   * test. A TERMINAL `order_state` on an UNRESOLVED row means exactly one
+   * thing — `reconcileFlatten` resolves terminal-with-`filled_qty === 0`
+   * rows itself, so the only terminal row still in this scan is a
+   * cancelled/expired flatten that PARTIALLY FILLED with its fills not yet
+   * ingested. Releasing that row lets `executeExit` size a replacement from
+   * `heldQuantitiesFor(getOpenPositions, getExitFillSizes)`, which has not
+   * seen the partial, so the second flatten goes out at the full original
+   * quantity and the account ends net SHORT (#516/#1389). So terminal is
+   * eligible to age out only once the fills are in.
+   */
+  fills_swept_at: Date | null;
 }
 
 /**

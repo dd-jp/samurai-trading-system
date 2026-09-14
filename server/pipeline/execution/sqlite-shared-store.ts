@@ -715,9 +715,12 @@ export class SqliteExecutionStore implements SharedStore {
    * would let a second full-size market flatten through on a lot #1389
    * already proved was still fully held — the reverse-position outcome
    * #1389 closed). Only a row whose `order_state` is `null` (the venue was
-   * never successfully asked at all) or one of `TERMINAL_ORDER_STATES`
-   * (venue answered, definitively, that the order is done) is eligible for
-   * the age cutoff. `order_state` is read STICKILY off the row, not
+   * never successfully asked at all) or one of `TERMINAL_ORDER_STATES` WITH
+   * its `fills_swept_at` already set (venue answered definitively, and
+   * whatever it filled before dying is in the store — review round 2: a
+   * terminal row whose partial fills are still unswept is the certain
+   * over-sell, see `isFlattenBlockingAt`'s doc) is eligible for the age
+   * cutoff. `order_state` is read STICKILY off the row, not
    * re-derived — see `UnresolvedFlattenSubmission.order_state`'s doc. A row
    * still inside the bound, or whose `order_state` is working, blocks
    * exactly as before; the #516 protection is unchanged for either. What
@@ -747,7 +750,9 @@ export class SqliteExecutionStore implements SharedStore {
                  OR (status = 'submitted' AND fills_swept_at IS NULL))
                 AND (
                   submitted_at > ?
-                  OR (order_state IS NOT NULL AND order_state NOT IN (${terminalPlaceholders}))
+                  OR (order_state IS NOT NULL
+                      AND (order_state NOT IN (${terminalPlaceholders})
+                        OR fills_swept_at IS NULL))
                 )
               LIMIT 1`,
           )
@@ -1021,7 +1026,7 @@ export class SqliteExecutionStore implements SharedStore {
   async getUnresolvedFlattens(): Promise<UnresolvedFlattenSubmission[]> {
     const rows = this.db
       .prepare(
-        `SELECT idempotency_key, instrument, status, submitted_at, order_state
+        `SELECT idempotency_key, instrument, status, submitted_at, order_state, fills_swept_at
            FROM flatten_submissions
           WHERE arm = ?
             AND (status = 'submitting'
@@ -1033,6 +1038,7 @@ export class SqliteExecutionStore implements SharedStore {
       status: 'submitting' | 'submitted';
       submitted_at: string;
       order_state: OrderState | null;
+      fills_swept_at: string | null;
     }>;
 
     return rows.map((row) => ({
@@ -1041,6 +1047,7 @@ export class SqliteExecutionStore implements SharedStore {
       status: row.status,
       submitted_at: new Date(row.submitted_at),
       order_state: row.order_state,
+      fills_swept_at: row.fills_swept_at === null ? null : new Date(row.fills_swept_at),
     }));
   }
 

@@ -30,10 +30,24 @@
  * over-sell #1389 closed, reintroduced with certainty. Only a row whose last
  * observed `order_state` is `null` (the venue was never successfully asked
  * — `reconcileFlatten`'s `resumeFlatten`-throw branch, which leaves this
- * field untouched) or TERMINAL (the venue answered, definitively, that the
- * order is done) ages out. `order_state` is read STICKILY off the row (see
- * `UnresolvedFlattenSubmission.order_state`'s doc) — a later `resumeFlatten`
- * throw never reverts a previously observed working answer back to unknown.
+ * field untouched) or TERMINAL WITH ITS FILLS ALREADY SWEPT (review round 2 —
+ * the venue answered definitively AND whatever it filled before dying is in
+ * the store, so `heldQuantitiesFor` sizes the replacement off the true
+ * residual; a terminal row with an unswept PARTIAL fill is the one row shape
+ * that would resize a replacement to the FULL original quantity and end the
+ * account net short) ages out. `order_state` is read STICKILY off the row
+ * (see `UnresolvedFlattenSubmission.order_state`'s doc) — a later
+ * `resumeFlatten` throw never reverts a previously observed working answer
+ * back to unknown.
+ *
+ * **The working row is not left wedged — it is cancelled.** Because every
+ * acked row carries a working `order_state`, this bound alone would never
+ * reach #1500's headline case at all. What reaches it is `reconcileFlatten`
+ * (reconcile.ts): past the same bound, it CANCELS the still-working flatten
+ * at the venue, and the cancel's terminal answer then retires the row
+ * through the ordinary paths (`resolveFlattenError` when it filled nothing,
+ * `markFlattenFillsSwept` when it filled part). So the instrument does get
+ * unblocked — on venue evidence plus swept fills, never on age.
  *
  * `writeAheadFlatten`'s own atomic one-flatten-per-instrument check
  * (sqlite-shared-store.ts) carries the identical, identically-gated bound
