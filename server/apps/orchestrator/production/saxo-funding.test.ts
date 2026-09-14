@@ -5,7 +5,7 @@ import type { RiskConfig } from '../../../pipeline/risk-manager/index.js';
 import { LIVE_BOOK_GBP } from '../paper-profile.js';
 import {
   armSameCurrencyCeilings,
-  hasSameCurrencyCeiling,
+  assertSameCurrencyFunding,
   saxoFunding,
   verifySameCurrency,
 } from './saxo-funding.js';
@@ -131,17 +131,47 @@ describe('armSameCurrencyCeilings', () => {
   });
 });
 
-describe('hasSameCurrencyCeiling', () => {
-  it('is false for a profile that declares no ceiling, so no boot read is made for nothing', () => {
-    expect(hasSameCurrencyCeiling({} as RiskConfig)).toBe(false);
+describe('assertSameCurrencyFunding (the boot refusal, ungated by any ceiling)', () => {
+  it('refuses the boot when the account answers another currency', () => {
+    expect(() =>
+      assertSameCurrencyFunding({
+        verified: false,
+        bookCurrency: 'GBP',
+        accountCurrency: 'EUR',
+      }),
+    ).toThrow(/EUR.*GBP/s);
   });
 
-  it('is true when either ceiling is declared', () => {
-    expect(hasSameCurrencyCeiling(liveShapedConfig())).toBe(true);
+  /**
+   * The check is deliberately NOT gated on a declared ceiling. A profile with
+   * no ceiling is the case with the least protection downstream — every tick
+   * still sizes against `readFunding`'s `equity` — so it must refuse too.
+   */
+  it('refuses regardless of what the risk config declares', () => {
+    const noCeiling = {} as RiskConfig;
     expect(
-      hasSameCurrencyCeiling({
-        live_book_ceiling: { book: LIVE_BOOK_GBP, refuse_above_tolerance: 0.05 },
-      } as RiskConfig),
-    ).toBe(true);
+      armSameCurrencyCeilings(noCeiling, {
+        verified: false,
+        bookCurrency: 'GBP',
+        accountCurrency: 'EUR',
+      }),
+    ).toEqual(noCeiling);
+    expect(() =>
+      assertSameCurrencyFunding({
+        verified: false,
+        bookCurrency: 'GBP',
+        accountCurrency: 'EUR',
+      }),
+    ).toThrow();
+  });
+
+  it('passes a matching account through', () => {
+    expect(() =>
+      assertSameCurrencyFunding({
+        verified: true,
+        bookCurrency: 'GBP',
+        accountCurrency: 'GBP',
+      }),
+    ).not.toThrow();
   });
 });

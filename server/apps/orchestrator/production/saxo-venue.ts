@@ -33,21 +33,24 @@
  *   so this refusal is satisfied by EITHER an injected `accountState` or an
  *   `accountFunding` source, and the entrypoint supplies the latter. It is
  *   still a refusal and not a formality: the read reports the account's own
- *   `Currency`, and on the SIM trial account that is `EUR` (doc 44 §6.3), so
- *   what lifts #949's guard is the comparison in
- *   `verifySameCurrency` — never the fact that the venue is Saxo UK.
+ *   `Currency`, `assertSameCurrencyFunding` refuses the boot outright when it
+ *   is not the book's, and on the SIM trial account it is `EUR` (doc 44
+ *   §6.3). What clears #949 is that comparison — never the fact that the
+ *   venue is Saxo UK.
  * - **A universe this venue does not trade.** The adapter routes by
  *   `lse_ticker`; anything else has no Uic, and an instrument that silently
  *   drops out of the resolver reads as a pool gap rather than a wiring one.
  *
- * ## Reachable from `main()` since #1509, but only in `sim`
+ * ## Wired from `main()` since #1509 — as far as the funding read
  *
  * The entrypoint now builds one `SaxoHttpBrokerClient` and hands it to both
- * this venue and `saxoFunding`, so `SAMURAI_BROKER=saxo` boots without a
- * programmatic config. The `live` refusal above is untouched, and it is the
- * one that matters: no live boot exercises the funding read or the
- * same-currency verdict, so nothing here has been measured against the UK
- * GIA.
+ * this venue and `saxoFunding`, so `SAMURAI_BROKER=saxo` no longer needs a
+ * programmatic `accountState` to get past composition. It still does not
+ * reach a tick: the read then answers the SIM trial account's `EUR` and
+ * `assertSameCurrencyFunding` refuses the boot. That refusal is the point —
+ * the alternative is a GBP-declared book sized off a EUR balance. The `live`
+ * refusal above is untouched, so nothing here has been measured against the
+ * UK GIA.
  *
  * ## What a real SIM boot measured (#1400 AC3, 2026-09-11)
  *

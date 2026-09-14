@@ -54,21 +54,6 @@ export function saxoFunding(client: SaxoAccountBalanceReader): AccountFundingSou
   };
 }
 
-/**
- * Whether this config carries a ceiling the verdict could arm.
- *
- * The boot-time funding read is gated on this so a run with no ceiling makes
- * no call whose answer changes nothing. `paperStartingProfile` sets neither
- * ceiling; `liveStartingProfile` sets both (`buildStartingProfileConfigs`
- * with `LIVE_BOOK_GBP`).
- */
-export function hasSameCurrencyCeiling(config: RiskConfig): boolean {
-  return (
-    config.live_book_ceiling !== undefined ||
-    config.per_subclass_deployment_cap?.equity_ceiling !== undefined
-  );
-}
-
 export interface SameCurrencyVerdict {
   readonly verified: boolean;
   readonly bookCurrency: string;
@@ -89,6 +74,36 @@ export function verifySameCurrency(
     bookCurrency,
     accountCurrency: funding.currency,
   };
+}
+
+/**
+ * The boot refusal, and the reason the arming gate above cannot carry it.
+ *
+ * Arming is gated on a ceiling being declared — a profile with none has
+ * nothing to write. The CURRENCY CHECK is not, and must not be: every tick
+ * sizes against `readFunding`'s `equity`, so an account answering a foreign
+ * currency feeds a foreign number into the same fields the GBP book's caps are
+ * frozen against ("Static Caps vs Equity-Relative D5"). A profile that
+ * declares no ceiling is the case with the LEAST protection downstream, not
+ * the most.
+ *
+ * So the read runs whenever the Saxo funding source is the one in use, and a
+ * mismatch refuses the boot rather than being logged. This is what
+ * `assertSaxoVenueBootable` used to achieve by refusing every Saxo boot that
+ * had not been handed a deliberate account read; #1509 supplies the read and
+ * keeps the refusal, rather than trading one for the other.
+ */
+export function assertSameCurrencyFunding(verdict: SameCurrencyVerdict): void {
+  if (verdict.verified) return;
+  throw new Error(
+    `Orchestrator cannot start: the broker account's balances read answers ` +
+      `${verdict.accountCurrency}, but the book is declared in ${verdict.bookCurrency} ` +
+      `(LIVE_BOOK_GBP, ADR-0015's 2026-08-18 amendment). Sizing a ${verdict.bookCurrency} ` +
+      `book off a ${verdict.accountCurrency} balance is the currency mismatch #949 refuses. ` +
+      `The SIM gateway's trial account answers EUR (doc 44 §6.3), so this is the expected ` +
+      `outcome there — run the Saxo venue against an account denominated in ` +
+      `${verdict.bookCurrency}, or supply ProductionConfig.accountState.`,
+  );
 }
 
 /**

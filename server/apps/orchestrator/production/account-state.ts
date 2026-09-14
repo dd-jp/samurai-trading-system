@@ -73,6 +73,13 @@ export interface ClosedTradeReader {
 export interface AccountFunding {
   readonly cash: number;
   readonly equity: number;
+  /**
+   * Checked once at boot, not per tick — `startFromEnvironment` refuses to
+   * start a run whose account answers anything but the declared book's
+   * currency (`assertSameCurrencyFunding`, #1509). `getAccountState` therefore
+   * reads only `cash` and `equity`, deliberately: a per-tick throw here would
+   * kill a running process over a fact that cannot change under it.
+   */
   readonly currency: string;
 }
 
