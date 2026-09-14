@@ -473,8 +473,8 @@ export class SqliteExecutionStore implements SharedStore {
         .prepare(
           `INSERT INTO fills (
              idempotency_key, broker_fill_id, leg, price, qty, fee, timestamp, cost_breakdown_json,
-             exit_reason, flatten_idempotency_key, fee_currency
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             exit_reason, flatten_idempotency_key, fee_currency, fx_rate_to_gbp, fx_rate_to_gbp_source
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           fill.idempotency_key,
@@ -488,6 +488,8 @@ export class SqliteExecutionStore implements SharedStore {
           fill.exit_reason ?? null,
           fill.flatten_idempotency_key ?? null,
           fill.fee_currency ?? null,
+          fill.fx_rate_to_gbp ?? null,
+          fill.fx_rate_to_gbp_source ?? null,
         );
     } catch (cause) {
       if (isUniqueConstraintError(cause)) {

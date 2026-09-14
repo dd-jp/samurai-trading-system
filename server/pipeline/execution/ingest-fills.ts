@@ -1320,7 +1320,14 @@ async function warnOnNonSterlingFee(
     event: 'fee_currency_not_book_currency',
     level: 'error',
     message: FEE_CURRENCY_NOT_BOOK_CURRENCY,
-    payload: alert,
+    // #1521: same trip point as `fx_rate_to_gbp`'s absence — a non-book fee
+    // currency and a missing conversion rate are the same fact about this
+    // fill, so the reason rides this existing line rather than a second one.
+    payload: {
+      ...alert,
+      fx_rate_to_gbp: fill.fx_rate_to_gbp,
+      fx_rate_to_gbp_source: fill.fx_rate_to_gbp_source,
+    },
   });
   if (input.nonSterlingFeeAlerts === undefined) return;
   try {
@@ -1383,6 +1390,12 @@ function toFill(
     // is what makes a foreign one loud, on both `toFill` call sites (#1465
     // closed the `cumulativeTopUp` gap — see that function's own call).
     ...(fill.fee_currency === undefined ? {} : { fee_currency: fill.fee_currency }),
+    // #1521, migration 0060: carried through verbatim, same posture as
+    // `fee_currency` above — see `Fill.fx_rate_to_gbp`'s doc.
+    ...(fill.fx_rate_to_gbp === undefined ? {} : { fx_rate_to_gbp: fill.fx_rate_to_gbp }),
+    ...(fill.fx_rate_to_gbp_source === undefined
+      ? {}
+      : { fx_rate_to_gbp_source: fill.fx_rate_to_gbp_source }),
   };
 }
 

@@ -651,6 +651,28 @@ export interface Fill {
    * Absence is "not reported", never an assertion that the fee was GBP.
    */
   fee_currency?: string;
+  /**
+   * #1521, migration 0060: the venue-applied rate to multiply a
+   * `fee_currency`-denominated `price`/`fee` by to get GBP, when the venue
+   * reports one. Absent (not zero, not one) whenever no rate is available —
+   * see `fx_rate_to_gbp_source` for why.
+   *
+   * VERIFIED absent from Saxo's own fill feed: `GET
+   * /cs/v1/audit/orderactivities` (`saxo-adapter.ts`'s only source of fill
+   * data) carries no conversion-rate field on any real `FinalFill` row (SIM,
+   * 2026-09-14). `saxo-adapter.ts`'s `toCashFill` therefore never sets this
+   * for a live fill today; the column exists for a future Saxo surface or
+   * adapter that can (migration 0060's header has the full probe record).
+   */
+  fx_rate_to_gbp?: number;
+  /**
+   * #1521, migration 0060: why `fx_rate_to_gbp` is absent on this row, e.g.
+   * `'not_reported_by_venue'` — distinct from a row written before this
+   * migration existed, which carries no source either but for a different
+   * reason (the concept did not exist yet). Absent on a book-currency
+   * (GBP/GBX) fill, which never needed a rate in the first place.
+   */
+  fx_rate_to_gbp_source?: string;
 }
 
 /**
