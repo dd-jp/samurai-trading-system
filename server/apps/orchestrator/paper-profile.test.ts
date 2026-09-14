@@ -8,6 +8,7 @@
  * then rejects or halts everything is indistinguishable, at a glance, from a
  * clean run that decided not to trade (`SMOKE_TEST_UNIVERSE`'s doc comment).
  */
+import { ANALYST_STAGE_WALL_CLOCK_MS } from '../../pipeline/analysts/index.js';
 import type { DebateResult } from '../../pipeline/debate-engine/index.js';
 import { InMemoryDebateLogStore, LATENCY_BUDGET_MS } from '../../pipeline/debate-engine/index.js';
 import {
@@ -652,29 +653,37 @@ describe('paperStartingProfile', () => {
       expect(profile.maxConcurrentInstruments).toBe(6);
     });
 
-    it('keeps the widened universe worst-case pass inside the freshness gates it is checked against', () => {
-      // The universe (20) is now WIDER than the width (6), so `runTickPlan`
-      // walks it in `ceil(20 / 6)` groups and the last group decides on data
-      // several debates old. That is a deliberate trade — see
-      // `maxConcurrentInstruments`' "Revisited at 20 names" comment: the
-      // staleness is accepted only because Verdict's own freshness gates sit
-      // well above the worst-case pass. This test is that argument, executable.
-      // If either gate is tightened below the pass, the tail of the walk gets
-      // refused at Verdict and the width has to rise with it.
+    /**
+     * REPLACES a check that asserted this pass against
+     * `verdictConfig.max_signal_age.stocks` and `max_mark_age.stocks` and
+     * called itself "that argument, executable" (#1104). It was neither.
+     * Verdict's gate 1 measures `now - orderIntent.decided_at`, and
+     * `decided_at` is a `clock.now()` read inside that instrument's OWN Trader
+     * step (decide.ts) — so the walk it was compared against is not a quantity
+     * that gate ever sees, and the comparison passed for a reason unrelated to
+     * what it claimed to prove. Gate 2 measures the age of a mark re-fetched at
+     * gate time, likewise per-instrument.
+     *
+     * So this pins the arithmetic instead, from the shipped sub-budgets rather
+     * than from #1012's stale ~61s per-instrument estimate. Nothing downstream
+     * refuses a pass for being slow — the walk overruns `tickIntervalMs`
+     * (120,000ms) by design since #1080 — which makes
+     * `maxConcurrentInstruments`' tripwire a HUMAN one, and this pin the thing
+     * that forces it to be re-read when either sub-budget moves.
+     */
+    it('pins the widened universe worst-case pass, which nothing downstream bounds (#1104)', () => {
       const profile = paperStartingProfile('paper');
       const universe = profile.universe;
       if (universe === undefined) {
         throw new Error("paperStartingProfile('paper') always carries a universe");
       }
 
-      // #1012's measured mean debate latency, the per-instrument estimate the
-      // width comment derives from.
-      const MEAN_DEBATE_LATENCY_MS = 61_000;
       const width = profile.maxConcurrentInstruments ?? universe.length;
-      const worstCasePassMs = Math.ceil(universe.length / width) * MEAN_DEBATE_LATENCY_MS;
+      const worstCaseGroupMs = ANALYST_STAGE_WALL_CLOCK_MS + LATENCY_BUDGET_MS.stocks;
+      const worstCasePassMs = Math.ceil(universe.length / width) * worstCaseGroupMs;
 
-      expect(profile.verdictConfig.max_signal_age.stocks).toBeGreaterThan(worstCasePassMs);
-      expect(profile.verdictConfig.max_mark_age.stocks).toBeGreaterThan(worstCasePassMs);
+      expect(worstCaseGroupMs).toBe(172_000);
+      expect(worstCasePassMs).toBe(688_000);
     });
 
     it('stays well inside the stocks rate-limiter budget even if every instrument debates in one window', () => {
