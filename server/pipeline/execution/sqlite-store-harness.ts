@@ -207,9 +207,13 @@ export class TestExecutionStore extends SqliteExecutionStore {
    * Raw read of the #1447 permanent-gap dedup column (migration 0059) — kept
    * off `getResidualProtectionMarker`'s shape rather than added to it so the
    * many existing `toEqual({ unprotected_since, alerted_at })` assertions
-   * stay exact instead of needing a third field everywhere.
+   * stay exact instead of needing a third field everywhere. Named `...Raw`
+   * (not overriding the base class's `getResidualRearmUnsupportedAlertedAt`,
+   * production's own point-read of the same column, which returns
+   * `Date | null`) so tests can assert the exact stored TEXT when that
+   * matters without colliding with the production method's type.
    */
-  async getResidualRearmUnsupportedAlertedAt(idempotency_key: string): Promise<string | null> {
+  async getResidualRearmUnsupportedAlertedAtRaw(idempotency_key: string): Promise<string | null> {
     const row = this.testDb
       .prepare(
         `SELECT residual_rearm_unsupported_alerted_at AS alerted_at

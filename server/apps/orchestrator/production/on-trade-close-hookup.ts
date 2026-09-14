@@ -92,6 +92,8 @@ export function withOnTradeClose(
     markResidualAlerted: (...args) => store.markResidualAlerted(...args),
     markResidualRearmUnsupportedAlerted: (...args) =>
       store.markResidualRearmUnsupportedAlerted(...args),
+    getResidualRearmUnsupportedAlertedAt: (...args) =>
+      store.getResidualRearmUnsupportedAlertedAt(...args),
     getUnprotectedResidualLots: (...args) => store.getUnprotectedResidualLots(...args),
     sweepTerminalPositions: (...args) => store.sweepTerminalPositions(...args),
     abandonWedgedZeroFillLot: (...args) => store.abandonWedgedZeroFillLot(...args),

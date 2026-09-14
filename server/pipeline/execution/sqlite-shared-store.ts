@@ -1125,6 +1125,26 @@ export class SqliteExecutionStore implements SharedStore {
   }
 
   /**
+   * Point-read of `residual_rearm_unsupported_alerted_at` — see
+   * `SharedStore.getResidualRearmUnsupportedAlertedAt`. A lot the query
+   * matches no row for reads the same as one that was never alerted (null):
+   * both mean "nothing on record says this episode already paged", which is
+   * the caller's actual question.
+   */
+  async getResidualRearmUnsupportedAlertedAt(idempotency_key: string): Promise<Date | null> {
+    const row = this.db
+      .prepare(
+        `SELECT residual_rearm_unsupported_alerted_at
+           FROM open_positions WHERE idempotency_key = ?`,
+      )
+      .get(idempotency_key) as { residual_rearm_unsupported_alerted_at: string | null } | undefined;
+
+    return row === undefined
+      ? null
+      : fromStoredTimestampOrNull(row.residual_rearm_unsupported_alerted_at);
+  }
+
+  /**
    * The #549 sweep's worklist — non-terminal lots still marked unprotected,
    * in `opened_at` order for the same determinism `getOpenPositions()` gives
    * its own iterating callers.

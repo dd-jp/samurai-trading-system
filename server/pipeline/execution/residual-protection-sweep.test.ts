@@ -1384,7 +1384,7 @@ describe('residual-protection sweep (#549)', () => {
       expect(alerts.alerts).toEqual([
         expect.objectContaining({ idempotency_key: LOT, rearm_unsupported: true }),
       ]);
-      expect(await restartedStore.getResidualRearmUnsupportedAlertedAt(LOT)).not.toBeNull();
+      expect(await restartedStore.getResidualRearmUnsupportedAlertedAtRaw(LOT)).not.toBeNull();
     });
 
     it('once fired, the venue-refusal page stays quiet on a later pass (once per episode)', async () => {
@@ -1417,10 +1417,10 @@ describe('residual-protection sweep (#549)', () => {
       await seedPosition(store);
       await store.markResidualUnprotected(LOT, NOW);
       await store.markResidualRearmUnsupportedAlerted(LOT, NOW);
-      expect(await store.getResidualRearmUnsupportedAlertedAt(LOT)).not.toBeNull();
+      expect(await store.getResidualRearmUnsupportedAlertedAtRaw(LOT)).not.toBeNull();
 
       await store.confirmResidualProtected(LOT);
-      expect(await store.getResidualRearmUnsupportedAlertedAt(LOT)).toBeNull();
+      expect(await store.getResidualRearmUnsupportedAlertedAtRaw(LOT)).toBeNull();
 
       const later = new Date('2026-08-07T17:00:00Z');
       await store.markResidualUnprotected(LOT, later);
@@ -1438,7 +1438,7 @@ describe('residual-protection sweep (#549)', () => {
       // Second writer for the SAME dedup loses; the general dedup is untouched.
       const later = new Date('2026-08-07T17:00:00Z');
       await expect(store.markResidualRearmUnsupportedAlerted(LOT, later)).resolves.toBe(false);
-      expect(await store.getResidualRearmUnsupportedAlertedAt(LOT)).toBe(NOW.toISOString());
+      expect(await store.getResidualRearmUnsupportedAlertedAtRaw(LOT)).toBe(NOW.toISOString());
     });
   });
 });

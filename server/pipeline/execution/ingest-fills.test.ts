@@ -795,7 +795,56 @@ describe('ExecutionImpl.ingestFills', () => {
       expect(residualExposureAlerts.alerts).toEqual([
         expect.objectContaining({ idempotency_key: 'key-1', rearm_unsupported: true }),
       ]);
-      expect(await store.getResidualRearmUnsupportedAlertedAt('key-1')).not.toBeNull();
+      expect(await store.getResidualRearmUnsupportedAlertedAtRaw('key-1')).not.toBeNull();
+    });
+
+    it('#1447: a second call for the same still-unsupported episode does not page twice — the observing poll consults the dedup BEFORE paging, not only records it after', async () => {
+      const { store } = openTestExecutionStore();
+      await seedPosition(store, { requested_size: 10, stop: 95, target: 110, side: 'buy' });
+      const broker = new ScriptedBroker([
+        fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 10, price: 100 }),
+        fill({
+          broker_fill_id: toBrokerFillId('x1'),
+          leg: 'exit',
+          qty: 4,
+          price: 98,
+          timestamp: new Date('2026-07-20T15:30:00Z'),
+        }),
+      ]);
+      broker.rearmFailure = new ProtectiveRearmUnsupportedError(
+        'saxo',
+        'IsOcoOrderSupported false on every pool line',
+      );
+      const residualExposureAlerts = makeResidualExposureAlerts();
+      const shutCalendar: TradingCalendar = {
+        isOpen: () => false,
+        isTradingDay: () => true,
+        sessionStart: () => NOW,
+        sessionEnd: () => NOW,
+      };
+      // Simulates the permanent-gap page having already fired for THIS
+      // episode on an earlier pass (a #1214 reflatten submitted, then this
+      // same venue refusal was hit again by a later partial fill re-entering
+      // `advanceLot`) — the dedup this pass must consult before paging again.
+      await store.markResidualUnprotected('key-1', NOW);
+      await store.markResidualRearmUnsupportedAlerted('key-1', NOW);
+
+      await new ExecutionImpl(
+        makeInput(
+          broker,
+          store,
+          residualExposureAlerts,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          { crypto: new AlwaysOpenCalendar(), stocks: shutCalendar },
+        ),
+      ).ingestFills();
+
+      expect(residualExposureAlerts.alerts).toEqual([]);
     });
 
     it('survives a throwing logger on the re-arm-failure path — the alert is still posted and the fills still persist', async () => {
