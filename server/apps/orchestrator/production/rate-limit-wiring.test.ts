@@ -790,8 +790,8 @@ describe("Alpaca's burst covers one fill-poll sweep of the configured universe (
    * documents, which is `(20 * 8 - 20) / 2.0` = 70s of drain against a
    * 30,000ms deadline: the back of that sweep misses quorum and the tick
    * records a no-trade it never measured. It self-heals from the sweep's own
-   * fetches as they land, and this deadline makes it 3x shorter than the
-   * 10,000ms one did — better, not safe.
+   * fetches as they land, and this deadline serves 80 of the 160 fetches
+   * inside it where the 10,000ms one served 40 — better, not safe.
    *
    * Raising the deadline is not the fix available: two attempts per persona at
    * 70,000ms is 140s of analyst wall clock against a 120,000ms tick, which

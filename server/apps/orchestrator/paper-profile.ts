@@ -2226,8 +2226,9 @@ export function buildStartingProfileConfigs(
      * retry per persona) plus a 112,000ms debate budget. The tail of the walk
      * is still inside the freshness bounds Verdict enforces, but the margin is
      * 1.3x, against 2.81x at the 60,000ms budget and 10,000ms analyst deadline
-     * this replaces (4 groups of 320s). Both are worst-case-to-worst-case,
-     * which is the only comparison a tripwire can act on. THIS IS THE TRIPWIRE: if either of those two gates is tightened,
+     * this replaces (4 groups of 80s, 320s in all). Both are worst-case-to-
+     * worst-case, the only comparison a tripwire can act on. THIS IS THE
+     * TRIPWIRE: if either of those two gates is tightened,
      * or either sub-budget raised again, the tail gets refused at Verdict and
      * this dial has to rise with it — and at width 6 the next step is width 7,
      * which makes the walk 3 groups.

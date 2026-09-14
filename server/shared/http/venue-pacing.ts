@@ -222,7 +222,7 @@ export const DEFAULT_VENUE_PACING: VenuePacingConfig = {
    *   The sweep asks for up to four VENUE-REACHING bar windows per instrument
    *   (`5m/260`, `1h/57`, `1h/20`, `1d/30`, with `5m/112` a fifth shape across
    *   the universe), and before #1080 concurrent callers asking for the SAME
-   *   window each spend a token undeduped, because the bar cache writes on
+   *   window each spent a token undeduped, because the bar cache writes on
    *   completion and cannot see a request in flight — the 2026-09-10 19:56
    *   burst measured that shape directly: 133 fetches over 34 distinct
    *   windows, **~2.85 tok/s**. Coalesced onto the 34 by
