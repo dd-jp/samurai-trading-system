@@ -149,6 +149,10 @@ export type {
   UnresolvedFlattenSubmission,
   WedgedSweepInput,
 } from './types.js';
+export type {
+  UnattributedFlattenFillAlert,
+  UnattributedFlattenFillAlertChannel,
+} from './unattributed-flatten-fill-alert.js';
 export type { UnpricedFillAlert, UnpricedFillAlertChannel } from './unpriced-fill-alert.js';
 export type {
   UnresolvedPriceUnitAlert,

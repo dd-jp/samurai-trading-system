@@ -62,6 +62,7 @@ export const ALERT_IDS = [
   'lseCalendarCoverageAlerts',
   'llmFailureRateAlerts',
   'nonSterlingFeeAlerts',
+  'unattributedFlattenFillAlerts',
 ] as const satisfies readonly (keyof AlertChannelSlots)[];
 
 export type AlertId = (typeof ALERT_IDS)[number];
@@ -79,6 +80,7 @@ export const UNLOGGED_ALERT_IDS = [
   'thresholdClampAlerts',
   'exitValuationAlerts',
   'nonSterlingFeeAlerts',
+  'unattributedFlattenFillAlerts',
 ] as const satisfies readonly AlertId[];
 
 export type UnloggedAlertId = (typeof UNLOGGED_ALERT_IDS)[number];
@@ -1083,6 +1085,18 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
       `fee of ${alert.fee} ${alert.fee_currency}, not ${alert.book_currency}.\n` +
       `Fill ${alert.broker_fill_id}. tradeableUniverse() should have excluded this instrument — ` +
       'check the universe pool and universe-selector wiring for a selection-layer defect.',
+  },
+
+  unattributedFlattenFillAlerts: {
+    method: 'postUnattributedFlattenFillAlert',
+    delivery: 'awaited',
+    text: (alert) =>
+      `Samurai UNATTRIBUTED FLATTEN FILL: flatten ${alert.flatten_idempotency_key} sold ` +
+      `${alert.qty} against lot ${alert.lot_idempotency_key}, which had already closed, as of ` +
+      `${alert.observed_at.toISOString()}.\n` +
+      `Fill ${alert.broker_fill_id} is booked, but that lot's closed trade understates the sale — ` +
+      'check the venue for a REVERSE position no open lot explains, and correct the realized ' +
+      'record by hand.',
   },
 };
 

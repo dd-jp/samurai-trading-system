@@ -1632,6 +1632,10 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     ...(config.nonSterlingFeeAlerts === undefined
       ? {}
       : { nonSterlingFeeAlerts: config.nonSterlingFeeAlerts }),
+    // #1506: optional for the same reason as `nonSterlingFeeAlerts` above.
+    ...(config.unattributedFlattenFillAlerts === undefined
+      ? {}
+      : { unattributedFlattenFillAlerts: config.unattributedFlattenFillAlerts }),
   };
 
   // #464, retargeted at Nous by ADR-0009. The off switch used to be the

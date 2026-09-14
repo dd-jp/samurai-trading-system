@@ -34,6 +34,7 @@ import type {
   NonSterlingFeeAlertChannel,
   ResidualExposureAlertChannel,
   SharedStore,
+  UnattributedFlattenFillAlertChannel,
 } from '../../../pipeline/execution/index.js';
 import { ExecutionImpl } from '../../../pipeline/execution/index.js';
 import type {
@@ -1497,6 +1498,8 @@ export interface ExecutionStepDeps {
   sessionCalendars: Record<AssetClass, TradingCalendar>;
   /** #1465's non-sterling-fee page — see `ExecutionInput.nonSterlingFeeAlerts`. Optional, same as there. */
   nonSterlingFeeAlerts?: NonSterlingFeeAlertChannel;
+  /** #1506's unattributed-flatten-fill page — see `ExecutionInput.unattributedFlattenFillAlerts`. Optional, same as there. */
+  unattributedFlattenFillAlerts?: UnattributedFlattenFillAlertChannel;
 }
 
 /**
@@ -1528,6 +1531,9 @@ export function buildExecutionStep(deps: ExecutionStepDeps): TickSteps['executio
       ...(deps.nonSterlingFeeAlerts === undefined
         ? {}
         : { nonSterlingFeeAlerts: deps.nonSterlingFeeAlerts }),
+      ...(deps.unattributedFlattenFillAlerts === undefined
+        ? {}
+        : { unattributedFlattenFillAlerts: deps.unattributedFlattenFillAlerts }),
     });
     return execution.execute(verdict);
   };
@@ -1567,6 +1573,9 @@ export function buildExecutionSurface(deps: ExecutionStepDeps, traceId: string):
     ...(deps.nonSterlingFeeAlerts === undefined
       ? {}
       : { nonSterlingFeeAlerts: deps.nonSterlingFeeAlerts }),
+    ...(deps.unattributedFlattenFillAlerts === undefined
+      ? {}
+      : { unattributedFlattenFillAlerts: deps.unattributedFlattenFillAlerts }),
   });
 }
 

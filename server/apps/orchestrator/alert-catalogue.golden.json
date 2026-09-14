@@ -1510,5 +1510,15 @@
       "sendFailed": null,
       "sendFailedInTrace": null
     }
+  ],
+  "unattributedFlattenFillAlerts": [
+    {
+      "log": null,
+      "logInTrace": null,
+      "text": "Samurai UNATTRIBUTED FLATTEN FILL: flatten flatten-2 sold 3 against lot lot-9, which had already closed, as of 2026-01-02T10:00:00.000Z.\nFill fill-4 is booked, but that lot's closed trade understates the sale — check the venue for a REVERSE position no open lot explains, and correct the realized record by hand.",
+      "rejected": "telegram 502",
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    }
   ]
 }
