@@ -65,6 +65,9 @@ describe('formatCgtReport', () => {
     expect(text).toContain('(no disposals in this tax year)');
     expect(text).toContain('UNCONVERTED');
     expect(text).toContain('(none this tax year)');
+    // Pinned so a future currency-handling change can't silently narrow this
+    // back to "GBX" only, as happened once already in review round 1.
+    expect(text).toContain('neither GBP nor a pence sub-unit (GBX/gbx/GBp/p)');
   });
 });
 

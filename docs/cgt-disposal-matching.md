@@ -82,7 +82,7 @@ timestamp so the reader knows which disposals that applies to; treat a
 window has closed. A `same-day` or `30-day` match is never provisional — it
 was already matched against a specific acquisition that exists.
 
-## Currency: GBP, GBX, and everything else
+## Currency: GBP, pence sub-units, and everything else
 
 `fills.fee_currency` also names the currency `fills.price` is denominated
 in (both come off Saxo's `CurrencyCode` for the line — see
@@ -128,7 +128,7 @@ number:
   (see "Running the report" below) — named explicitly rather than read
   against a schema this report was not written against.
 
-A non-GBP, non-GBX fee currency is **not** in this list any more (round 1
+A non-GBP, non-pence (i.e. not GBX/gbx/GBp/p) fee currency is **not** in this list any more (round 1
 review, finding 1): earlier drafts refused the whole report on it, which
 would have aborted on the majority of the tradeable pool's USD-denominated
 lines. See "Currency" above.

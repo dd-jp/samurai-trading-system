@@ -53,9 +53,10 @@ export function assertTaxYearIsSourced(startYear: number): void {
  * disposal (`stop`/`target`/`exit`) by the caller. `grossAmount` is
  * price × quantity in GBP; `charges` is the fill's own incidental cost
  * (commission/fee), also GBP — the caller is responsible for converting a
- * GBX (pence) figure and setting aside anything it cannot price in sterling
- * before construction (see `sqlite-cgt-fill-source.ts`), because this module
- * has no FX model and must not silently misprice a foreign-currency fill.
+ * pence sub-unit (GBX/gbx/GBp/p) figure and setting aside anything it cannot
+ * price in sterling before construction (see `sqlite-cgt-fill-source.ts`),
+ * because this module has no FX model and must not silently misprice a
+ * foreign-currency fill.
  */
 export interface CgtFillLeg {
   instrument: string;
@@ -71,9 +72,10 @@ export interface CgtFillLeg {
 /**
  * A fill the caller could not price in sterling — its `fee_currency` (which
  * also names the currency `grossAmount`/`charges` are denominated in, see
- * `sqlite-cgt-fill-source.ts`) is neither GBP nor GBX, and this module has no
- * FX rate to convert it with. Carried in native currency so the report can
- * name exactly what is missing rather than guess or drop it silently.
+ * `sqlite-cgt-fill-source.ts`) is neither GBP nor a pence sub-unit
+ * (GBX/gbx/GBp/p), and this module has no FX rate to convert it with.
+ * Carried in native currency so the report can name exactly what is missing
+ * rather than guess or drop it silently.
  */
 export interface UnconvertedCgtFill {
   instrument: string;

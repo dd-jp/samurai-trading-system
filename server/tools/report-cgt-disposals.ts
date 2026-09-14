@@ -179,9 +179,9 @@ export function formatCgtReport(
     '',
     '  UNCONVERTED — FX rate not captured at fill time',
     '  These fills are NOT included in any figure above: their fee_currency is',
-    '  neither GBP nor GBX, and this report has no transaction-date FX rate to',
-    '  convert them with. Convert each by hand from its native-currency amount',
-    '  before including it in a return.',
+    '  neither GBP nor a pence sub-unit (GBX/gbx/GBp/p), and this report has no',
+    '  transaction-date FX rate to convert them with. Convert each by hand from',
+    '  its native-currency amount before including it in a return.',
     '  instrument       fill date    kind          qty   native amount  native charges  currency',
   );
 
