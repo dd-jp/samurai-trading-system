@@ -213,11 +213,14 @@ describe('paperStartingProfile', () => {
      * budget silently — and the budget is a per-instrument cost inside a tick
      * that also has to run analysts, Trader, Risk, Verdict and Execution.
      *
-     * The tick interval is the hard side of that: a debate budget at or above
-     * it means the next tick is due before this one's debate can even fail, and
-     * `maxConcurrentInstruments` groups stack. At a cap of 2 the budget is
-     * 196,000ms against a 120,000ms tick and this fails, which is the point —
-     * the cap cannot be raised without someone reading this.
+     * This does NOT assert the pass fits the tick — it does not: the analyst
+     * stage runs before the debate, so a worst-case pass reaches ~172s against
+     * a 120,000ms tick, and `paper-profile.ts`'s pass-duration tripwire is
+     * where that argument lives. What this pins is the floor on how far the
+     * budget alone may drift: one debate must not on its own outlast a whole
+     * tick. Raising the round cap inflates the budget superlinearly — at a cap
+     * of 2 it is 196,000ms against a 120,000ms tick and this fails, forcing
+     * whoever raises it to re-read the tripwire.
      */
     it('keeps one debate budget inside the tick interval it runs in (#1080)', () => {
       const { tickIntervalMs } = paperStartingProfile('paper');

@@ -56,7 +56,9 @@ export function llmCallsPerDebate(maxRounds: number): number {
  *
  * Stocks: #1080 (2026-09-14). MEASURED over the store's 184 debates and the
  * `llm_spend` rows behind them, split at the 2026-09-03 fan-out from 4 names to
- * 20:
+ * 20. Both eras are EQUITIES ONLY — the pre-era names are SPY, QQQ, AAPL and
+ * TSLA over 2026-08-26 to 2026-09-02, so no crypto row (capped at one round
+ * since #581, and out of scope since 2026-08-16) is in either sample:
  *
  *   pre-fan-out  — 57 debates over 4 instruments: per-call p50 5,620ms
  *                  (n=441), 9 converged, 45 ran 2+ rounds, 1 at `rounds = 0`.

@@ -321,6 +321,8 @@ Recorded rather than built: closing it needs a second rate over a different deno
 | pre-fan-out (`created_at < 2026-09-03`) | 57 | 4 | 5,620ms (n=441) | 9 (16%) | 1 |
 | post-fan-out | 127 | 20 | 18,306ms (n=266) | 1 (0.8%) | 102 |
 
+Both eras are equities only — the pre-era names are SPY, QQQ, AAPL and TSLA over 2026-08-26 to 2026-09-02, all after crypto left scope (2026-08-16) — so the 3-round rows are not crypto rows sitting at a pre-[#581](https://github.com/dd-jp/samurai-trading-system/issues/581) cap.
+
 Three rounds was therefore reachable and in use at 4 names — ten sequential calls at 5,620ms is ~56s, inside the 60s budget of the day — and fan-out took it away by inflating per-call latency 3.3×. The cap is a consequence of width, not a codification of a capability nothing exercised. 10 of 184 debates in the whole store converged; 9 of those 10 pre-date fan-out.
 
 The successor condition is `MAX_ROUNDS_BY_ASSET_CLASS.stocks`: if per-call latency returns to the ~5.6s regime — [#1023](https://github.com/dd-jp/samurai-trading-system/issues/1023)'s per-call work, or a narrower universe — raise it and `LATENCY_BUDGET_MS.stocks` follows by derivation. At the post-fan-out latency no budget that also respects the two-minute tick cadence affords ten sequential calls, so the cap is what the arithmetic leaves.

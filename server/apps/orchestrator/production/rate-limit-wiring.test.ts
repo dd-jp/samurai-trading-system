@@ -719,6 +719,15 @@ describe('the composition root wires market-data fetch telemetry (#1082)', () =>
  * single instrument asks for all five. `adv_window` (`1d/20`) is an
  * Execution-stage read (`getADV`), not part of this sweep, and appears in no
  * measured burst.
+ *
+ * This is a WARM-STORE count, and the soak is the only regime it was taken in.
+ * A restart does not cold it — the bar store is on disk — but a first-ever tick
+ * against an empty store has no 260-bar warm-up to serve the wider specs from,
+ * so per-instrument demand rises toward the eight windows `logFetch` documents.
+ * That case is `MarketDataServiceImpl`'s figure, not this one; it is a
+ * one-time transient, and `consecutive_misses` is what surfaces it if it is
+ * not. The drain below is therefore the steady-state sweep, not the worst
+ * sweep the system can ever issue.
  */
 const DISTINCT_BAR_WINDOWS_PER_INSTRUMENT = 4;
 
