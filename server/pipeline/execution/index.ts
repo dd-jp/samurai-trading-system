@@ -69,6 +69,16 @@ export {
   SAXO_GATEWAY_URLS,
   SaxoHttpBrokerClient,
 } from './adapters/saxo-http-client.js';
+export type { SaxoOAuthConfig } from './adapters/saxo-oauth.js';
+export { resolveSaxoOAuthConfig, SaxoOAuthError } from './adapters/saxo-oauth.js';
+export type { SaxoTokenFileRecord } from './adapters/saxo-token-file.js';
+export { savedSessionExists, tokenFilePath } from './adapters/saxo-token-file.js';
+export type { SaxoSessionState, SaxoTokenSource } from './adapters/saxo-token-source.js';
+export {
+  SaxoSessionLostError,
+  SaxoTokenRefresher,
+  StaticSaxoTokenSource,
+} from './adapters/saxo-token-source.js';
 export { BrokerError, sanitizeBrokerError } from './broker-error.js';
 export type {
   BrokerBracketOrderIds,

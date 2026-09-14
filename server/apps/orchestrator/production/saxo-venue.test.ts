@@ -3,18 +3,28 @@
  * the seam being REACHABLE and REFUSING correctly; the adapter's own order
  * semantics are `saxo-adapter.test.ts`'s.
  */
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type {
   SaxoAssetType,
   SaxoInstrumentDetails,
   SaxoOpenApiClient,
 } from '../../../pipeline/execution/index.js';
-import { SaxoBrokerAdapter } from '../../../pipeline/execution/index.js';
+import {
+  SaxoBrokerAdapter,
+  SaxoHttpBrokerClient,
+  SaxoTokenRefresher,
+} from '../../../pipeline/execution/index.js';
 import { LSE_ETP_POOL, tradeableUniverse } from '../../../providers/universe-pool/index.js';
+import { recordingLogger } from '../../../shared/recording-logger.js';
 import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import type { Logger, UniverseInstrument } from '../types.js';
 import {
   BROKER_VENUE_ENV_VAR,
   buildSaxoBroker,
+  buildSaxoTokenSource,
+  buildSaxoVenueClient,
   resolveBrokerVenue,
   saxoTradeableUniverse,
 } from './saxo-venue.js';
@@ -172,5 +182,115 @@ describe('buildSaxoBroker', () => {
     await expect(buildSaxoBroker(saxoDeps(db, { client: unscaled }))).rejects.toThrow(
       /PriceToContractFactor/,
     );
+  });
+});
+
+/**
+ * #1523 — which bearer a Saxo run authenticates with. Every case reads a
+ * sandboxed token path; the operator's real saved session is never touched.
+ */
+describe('buildSaxoTokenSource', () => {
+  const APP_CREDENTIALS = {
+    SAXO_SIM_APP_KEY: 'app-key-fixture',
+    SAXO_SIM_APP_SECRET: 'app-secret-fixture',
+  };
+  let dir: string;
+  let tokenPath: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'saxo-venue-token-'));
+    tokenPath = join(dir, 'sim.json');
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function savedSession(): void {
+    writeFileSync(
+      tokenPath,
+      JSON.stringify({
+        environment: 'sim',
+        accessToken: 'access-fixture',
+        refreshToken: 'refresh-fixture',
+        accessTokenExpiresAt: new Date(Date.now() + 1_200_000).toISOString(),
+        refreshTokenExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+        obtainedAt: new Date().toISOString(),
+      }),
+      { mode: 0o600 },
+    );
+  }
+
+  it('prefers the saved login session over a pasted portal token', () => {
+    savedSession();
+
+    const source = buildSaxoTokenSource('sim', silentLogger, {
+      env: { ...APP_CREDENTIALS, SAXO_SIM_ACCESS_TOKEN: 'pasted-fixture' },
+      tokenPath,
+    });
+
+    expect(source).toBeInstanceOf(SaxoTokenRefresher);
+    source.stop();
+  });
+
+  it('does NOT fall back to the pasted token when the saved session is unusable — it reports the session lost', async () => {
+    writeFileSync(tokenPath, '{"environment":"sim"}', { mode: 0o600 });
+
+    const source = buildSaxoTokenSource('sim', silentLogger, {
+      env: { ...APP_CREDENTIALS, SAXO_SIM_ACCESS_TOKEN: 'pasted-fixture' },
+      tokenPath,
+    });
+
+    await expect(source.getAccessToken()).rejects.toThrow(/session is lost/);
+    expect(source.sessionState()).toMatchObject({ status: 'lost' });
+  });
+
+  it('falls back to the pasted token only when no session was ever saved, and says it cannot be renewed', async () => {
+    const logger = recordingLogger();
+
+    const source = buildSaxoTokenSource('sim', logger, {
+      env: { ...APP_CREDENTIALS, SAXO_SIM_ACCESS_TOKEN: 'pasted-fixture' },
+      tokenPath,
+    });
+
+    expect(await source.getAccessToken()).toBe('pasted-fixture');
+    expect(source.sessionState()).toEqual({ status: 'unrefreshable' });
+    expect(logger.entries.map((entry) => entry.event)).toContain('saxo_session_unrefreshable');
+  });
+
+  it('refuses the boot with neither, naming the login command', () => {
+    expect(() =>
+      buildSaxoTokenSource('sim', silentLogger, { env: APP_CREDENTIALS, tokenPath }),
+    ).toThrow(/yarn saxo:login --env sim/);
+  });
+
+  it('resolves the LIVE gateway from the live variables and the live file (#1523)', () => {
+    const livePath = join(dir, 'live.json');
+    writeFileSync(livePath, '{"environment":"live"}', { mode: 0o600 });
+
+    const source = buildSaxoTokenSource('live', silentLogger, {
+      env: { SAXO_LIVE_APP_KEY: 'k', SAXO_LIVE_APP_SECRET: 's' },
+      tokenPath: livePath,
+    });
+
+    expect(source).toBeInstanceOf(SaxoTokenRefresher);
+    source.stop();
+  });
+
+  it('is what the venue client authenticates with — no SAXO_SIM_ACCESS_TOKEN in the environment', () => {
+    savedSession();
+    const source = buildSaxoTokenSource('sim', silentLogger, {
+      env: APP_CREDENTIALS,
+      tokenPath,
+    });
+    const saved = process.env.SAXO_SIM_ACCESS_TOKEN;
+    delete process.env.SAXO_SIM_ACCESS_TOKEN;
+
+    try {
+      expect(buildSaxoVenueClient(silentLogger, source)).toBeInstanceOf(SaxoHttpBrokerClient);
+    } finally {
+      if (saved !== undefined) process.env.SAXO_SIM_ACCESS_TOKEN = saved;
+      source.stop();
+    }
   });
 });

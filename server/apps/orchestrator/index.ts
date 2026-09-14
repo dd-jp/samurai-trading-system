@@ -48,9 +48,12 @@
  */
 import { basename, dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import type { SaxoTokenSource } from '../../pipeline/execution/index.js';
 import {
   ALPACA_CREDENTIAL_ENV_VARS,
   SAXO_CREDENTIAL_ENV_VARS,
+  savedSessionExists,
+  tokenFilePath,
 } from '../../pipeline/execution/index.js';
 import { LseRegularHoursCalendar } from '../../providers/market-data-service/index.js';
 import { MiArchiveStore, miArchivePath } from '../../providers/market-intelligence/index.js';
@@ -89,6 +92,7 @@ import {
 import {
   type BrokerVenue,
   buildSaxoBroker,
+  buildSaxoTokenSource,
   buildSaxoVenueClient,
   resolveBrokerVenue,
   saxoTradeableUniverse,
@@ -461,11 +465,18 @@ function credentialRequirements(): readonly {
       // the live Alpaca entry gives: this pre-flight exists to report what the
       // constructor would refuse on, and two lists that could drift apart
       // defeat it.
+      // Since #1523 the variable is the FALLBACK, not the only way in: a run
+      // with a saved `yarn saxo:login` session reads its bearer from the token
+      // file and renews it, so demanding the pasted token there would refuse
+      // exactly the boot this repo now wants. `buildSaxoTokenSource` makes the
+      // same choice in the same order; this stays a report of what that
+      // constructor would refuse on.
       vars: [SAXO_CREDENTIAL_ENV_VARS.sim.token],
       unusedByThisRun: ({ injected, venue }) =>
         venue !== 'saxo' ||
         injected.saxoBrokerClient !== undefined ||
-        injected.broker !== undefined,
+        injected.broker !== undefined ||
+        savedSessionExists(tokenFilePath('sim')),
     },
   ];
 }
@@ -815,10 +826,17 @@ export async function startFromEnvironment(
   // would be two budgets against one limit. Built only when neither an adapter
   // nor a client was injected — a caller that passed either has already chosen
   // its transport, and the funding read must not open a second one behind it.
-  const saxoClient =
+  // The bearer the client reads PER REQUEST (#1523), built beside the client
+  // for the same reason the client is built once: the refresher owns the saved
+  // session file, and two of them would rotate the same refresh token against
+  // each other. Whoever builds the client builds this.
+  const saxoTokenSource =
     venue === 'saxo' && injected.broker === undefined && injected.saxoBrokerClient === undefined
-      ? buildSaxoVenueClient(logger)
+      ? buildSaxoTokenSource('sim', logger)
       : undefined;
+
+  const saxoClient =
+    saxoTokenSource === undefined ? undefined : buildSaxoVenueClient(logger, saxoTokenSource);
 
   // The GBP-native funding read. Skipped when the caller supplied a whole
   // `accountState` or its own funding source, so this never fires under a test
@@ -941,6 +959,11 @@ export async function startFromEnvironment(
     mode,
   });
 
+  const started =
+    saxoTokenSource === undefined
+      ? orchestrator
+      : withSaxoSessionStop(orchestrator, saxoTokenSource);
+
   const orphans = await orchestrator.start();
   orchestrator.logger.log({
     trace_id: 'startup',
@@ -957,7 +980,31 @@ export async function startFromEnvironment(
     },
   });
 
-  return orchestrator;
+  return started;
+}
+
+/**
+ * Folds the token refresher's timer into the orchestrator's own shutdown
+ * (#1523). The timer is `unref`'d, so it never holds the process open — what
+ * this stops is a rotation being scheduled, or landing, after the run has
+ * drained: a refresh that completes post-shutdown rewrites the session file
+ * for a process that is already gone.
+ *
+ * A spread rather than a subclass because `buildProductionOrchestrator`
+ * returns a plain object literal whose methods close over its own locals, so
+ * copying them carries no `this` binding to lose.
+ */
+function withSaxoSessionStop(
+  orchestrator: ProductionOrchestrator,
+  tokenSource: SaxoTokenSource,
+): ProductionOrchestrator {
+  return {
+    ...orchestrator,
+    stop: async () => {
+      tokenSource.stop();
+      await orchestrator.stop();
+    },
+  };
 }
 
 /**

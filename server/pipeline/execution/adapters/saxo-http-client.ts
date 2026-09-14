@@ -3,13 +3,16 @@
  * of `alpaca-http-client.ts`: same `withRetry` + `fetchWithTimeout` transport,
  * same validate-at-the-boundary posture, same env-sourced credential rule.
  *
- * Authentication is an OAuth bearer from `SAXO_SIM_ACCESS_TOKEN` or
- * `SAXO_LIVE_ACCESS_TOKEN`. The developer portal's 24-hour token works on SIM
- * only; a live token comes only from the authorization-code flow, whose access
- * token lasts 1200 s (refresh token measured at 3600 s on live, 2026-09-14).
- * Obtaining or refreshing the token is not this client's job, so an expired
- * token surfaces as a 401 `SaxoBrokerProviderError`. The token is never logged
- * or embedded in an error message.
+ * Authentication is an OAuth bearer read from a `SaxoTokenSource` **per
+ * request** (#1523), not captured once at construction: the access token
+ * lasts 1200 s and the refresher rotates it underneath, so a client that held
+ * a string would 401 twenty minutes into any run. Obtaining and renewing the
+ * token is still not this client's job — it asks for the current one and
+ * sends it. A session that can no longer be renewed surfaces as
+ * `SaxoSessionLostError` from the token source rather than as a 401 here.
+ * `SAXO_SIM_ACCESS_TOKEN`/`SAXO_LIVE_ACCESS_TOKEN` remain the fallback for an
+ * operator-pasted developer-portal token, wrapped in a `StaticSaxoTokenSource`.
+ * The token is never logged or embedded in an error message.
  *
  * `AccountKey`/`ClientKey` are resolved once from `/port/v1/accounts/me` and
  * memoised, so the adapter never holds an account identifier.
@@ -41,20 +44,12 @@ import type {
   SaxoOrderPlacement,
   SaxoOrderRequest,
 } from './saxo-client.js';
+import type { SaxoTradingEnvironment } from './saxo-environment.js';
+import { SAXO_CREDENTIAL_ENV_VARS, SAXO_GATEWAY_URLS } from './saxo-environment.js';
+import type { SaxoTokenSource } from './saxo-token-source.js';
+import { StaticSaxoTokenSource } from './saxo-token-source.js';
 
-export type SaxoTradingEnvironment = 'sim' | 'live';
-
-export const SAXO_CREDENTIAL_ENV_VARS: Readonly<
-  Record<SaxoTradingEnvironment, { readonly token: string; readonly gateway: string }>
-> = {
-  sim: { token: 'SAXO_SIM_ACCESS_TOKEN', gateway: 'SAXO_SIM_GATEWAY' },
-  live: { token: 'SAXO_LIVE_ACCESS_TOKEN', gateway: 'SAXO_LIVE_GATEWAY' },
-};
-
-export const SAXO_GATEWAY_URLS: Readonly<Record<SaxoTradingEnvironment, string>> = {
-  sim: 'https://gateway.saxobank.com/sim/openapi',
-  live: 'https://gateway.saxobank.com/openapi',
-};
+export { SAXO_CREDENTIAL_ENV_VARS, SAXO_GATEWAY_URLS, type SaxoTradingEnvironment };
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_RETRY_CONFIG: RetryConfig = { maxAttempts: 3, baseDelayMs: 250, maxDelayMs: 4_000 };
@@ -62,7 +57,15 @@ const DEFAULT_RETRY_CONFIG: RetryConfig = { maxAttempts: 3, baseDelayMs: 250, ma
 const PAGE_SIZE = 500;
 
 export interface SaxoHttpBrokerClientOptions {
-  /** Defaults to `SAXO_CREDENTIAL_ENV_VARS[environment].token`. Never logged. */
+  /**
+   * Where the bearer for the NEXT request comes from (#1523). The composition
+   * root passes the refresher (`buildSaxoTokenSource`, saxo-venue.ts); omitted,
+   * `accessToken`/the environment variable is wrapped in a
+   * `StaticSaxoTokenSource`, which is the pre-#1523 behaviour and cannot be
+   * renewed.
+   */
+  tokenSource?: SaxoTokenSource;
+  /** Defaults to `SAXO_CREDENTIAL_ENV_VARS[environment].token`. Never logged. Ignored when `tokenSource` is given. */
   accessToken?: string;
   environment?: SaxoTradingEnvironment;
   /** Defaults to `SAXO_CREDENTIAL_ENV_VARS[environment].gateway`, then `SAXO_GATEWAY_URLS[environment]`. */
@@ -383,7 +386,7 @@ function validateIdentity(body: unknown, pinnedAccountKey: string | undefined): 
 }
 
 export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalanceReader {
-  private readonly accessToken: string;
+  private readonly tokenSource: SaxoTokenSource;
   readonly baseUrl: string;
   private readonly pinnedAccountKey: string | undefined;
   private readonly timeoutMs: number;
@@ -398,15 +401,20 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
       const value = process.env[name]?.trim();
       return value === undefined || value.length === 0 ? undefined : value;
     };
-    const accessToken = options.accessToken ?? fromEnv(names.token);
-    if (accessToken === undefined || accessToken.length === 0) {
-      throw new Error(
-        `SaxoHttpBrokerClient: ${names.token} is not set. Provide it via the environment ` +
-          `(.env.local) or pass { accessToken } explicitly. This is the ${environment} ` +
-          "gateway's 24-hour bearer; the SIM and live gateways issue separate tokens.",
-      );
+    if (options.tokenSource === undefined) {
+      const accessToken = options.accessToken ?? fromEnv(names.token);
+      if (accessToken === undefined || accessToken.length === 0) {
+        throw new Error(
+          `SaxoHttpBrokerClient: ${names.token} is not set. Provide it via the environment ` +
+            `(.env.local), pass { accessToken } explicitly, or pass a { tokenSource } built ` +
+            'from a `yarn saxo:login` session (#1523). This is the ' +
+            `${environment} gateway's bearer; the SIM and live gateways issue separate tokens.`,
+        );
+      }
+      this.tokenSource = new StaticSaxoTokenSource(accessToken);
+    } else {
+      this.tokenSource = options.tokenSource;
     }
-    this.accessToken = accessToken;
     this.baseUrl = (
       options.baseUrl ??
       fromEnv(names.gateway) ??
@@ -423,11 +431,20 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
       });
   }
 
-  private headers(init: RequestInit, extra: Record<string, string> = {}): Record<string, string> {
+  /**
+   * Asks the token source on every attempt, not once per client and not once
+   * per operation: a rotation that lands between a failed attempt and its
+   * retry is picked up by the retry (#1523).
+   */
+  private async headers(
+    init: RequestInit,
+    extra: Record<string, string> = {},
+  ): Promise<Record<string, string>> {
+    const accessToken = await this.tokenSource.getAccessToken();
     return {
       ...(init.body != null ? { 'content-type': 'application/json' } : {}),
       accept: 'application/json',
-      authorization: `Bearer ${this.accessToken}`,
+      authorization: `Bearer ${accessToken}`,
       ...extra,
     };
   }
@@ -451,11 +468,12 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
         } else {
           await this.rateLimiter.acquireBackground();
         }
+        const headers = await this.headers(init, extraHeaders);
         let response: Response;
         try {
           response = await fetchWithTimeout(
             `${this.baseUrl}${path}`,
-            { ...init, headers: this.headers(init, extraHeaders) },
+            { ...init, headers },
             this.timeoutMs,
           );
         } catch (cause) {
