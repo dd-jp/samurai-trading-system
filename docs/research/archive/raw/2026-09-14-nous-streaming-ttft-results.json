@@ -1,0 +1,114 @@
+{
+  "raw": {
+    "sequential": [
+      {
+        "status": 200,
+        "ttfbMs": 4261.099832999999,
+        "ttftMs": 4261.848875,
+        "totalMs": 6921.603249999999,
+        "chunkCount": 110,
+        "contentLength": 800,
+        "finishReason": "stop",
+        "errorMsg": null
+      },
+      {
+        "status": 200,
+        "ttfbMs": 4534.246833,
+        "ttftMs": 4534.515833,
+        "totalMs": 7296.033666,
+        "chunkCount": 110,
+        "contentLength": 800,
+        "finishReason": "stop",
+        "errorMsg": null
+      },
+      {
+        "status": 200,
+        "ttfbMs": 3118.703040999999,
+        "ttftMs": 3119.3293749999993,
+        "totalMs": 6156.117082999999,
+        "chunkCount": 110,
+        "contentLength": 800,
+        "finishReason": "stop",
+        "errorMsg": null
+      },
+      {
+        "status": 200,
+        "ttfbMs": 3931.9482919999973,
+        "ttftMs": 3932.4617499999986,
+        "totalMs": 6570.052,
+        "chunkCount": 110,
+        "contentLength": 800,
+        "finishReason": "stop",
+        "errorMsg": null
+      },
+      {
+        "status": 200,
+        "ttfbMs": 5187.610625000001,
+        "ttftMs": 5188.228041000002,
+        "totalMs": 7764.926375000003,
+        "chunkCount": 110,
+        "contentLength": 800,
+        "finishReason": "stop",
+        "errorMsg": null
+      }
+    ],
+    "burst": [
+      {
+        "status": 200,
+        "ttfbMs": 3704.688707999994,
+        "ttftMs": 3731.6354999999967,
+        "totalMs": 6289.361375,
+        "chunkCount": 110,
+        "contentLength": 800,
+        "finishReason": "stop",
+        "errorMsg": null
+      },
+      {
+        "status": 200,
+        "ttfbMs": 11868.223082999997,
+        "ttftMs": 11868.569582999997,
+        "totalMs": 13778.720167,
+        "chunkCount": 110,
+        "contentLength": 800,
+        "finishReason": "stop",
+        "errorMsg": null
+      },
+      {
+        "status": 200,
+        "ttfbMs": 16317.223791999997,
+        "ttftMs": 16317.56925,
+        "totalMs": 19278.961582999997,
+        "chunkCount": 110,
+        "contentLength": 800,
+        "finishReason": "stop",
+        "errorMsg": null
+      }
+    ]
+  },
+  "summary": {
+    "sequential": {
+      "label": "sequential (concurrency 1)",
+      "n": 5,
+      "ok": 5,
+      "ttfb_ms": [
+        3118.703040999999, 3931.9482919999973, 4261.099832999999, 4534.246833, 5187.610625000001
+      ],
+      "ttft_ms": [
+        3119.3293749999993, 3932.4617499999986, 4261.848875, 4534.515833, 5188.228041000002
+      ],
+      "total_ms": [6156.117082999999, 6570.052, 6921.603249999999, 7296.033666, 7764.926375000003],
+      "generation_only_ms": [
+        2659.7543749999995, 2761.517833, 3036.787708, 2637.590250000001, 2576.6983340000006
+      ]
+    },
+    "burst": {
+      "label": "burst (concurrency 3)",
+      "n": 3,
+      "ok": 3,
+      "ttfb_ms": [3704.688707999994, 11868.223082999997, 16317.223791999997],
+      "ttft_ms": [3731.6354999999967, 11868.569582999997, 16317.56925],
+      "total_ms": [6289.361375, 13778.720167, 19278.961582999997],
+      "generation_only_ms": [2557.7258750000037, 1910.1505840000027, 2961.392332999996]
+    }
+  }
+}

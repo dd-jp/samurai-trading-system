@@ -1,0 +1,13 @@
+NOUS_BASE_URL present (len=41), NOUS_DEBATE_API_KEY present (len=40).
+
+=== sequential (n=5, concurrency 1) ===
+  seq[0] status=200 ttfb=4261ms ttft=4262ms total=6922ms chunks=110 err=
+  seq[1] status=200 ttfb=4534ms ttft=4535ms total=7296ms chunks=110 err=
+  seq[2] status=200 ttfb=3119ms ttft=3119ms total=6156ms chunks=110 err=
+  seq[3] status=200 ttfb=3932ms ttft=3932ms total=6570ms chunks=110 err=
+  seq[4] status=200 ttfb=5188ms ttft=5188ms total=7765ms chunks=110 err=
+
+=== burst (n=3, concurrent) ===
+  burst status=200 ttfb=3705ms ttft=3732ms total=6289ms chunks=110 err=
+  burst status=200 ttfb=11868ms ttft=11869ms total=13779ms chunks=110 err=
+  burst status=200 ttfb=16317ms ttft=16318ms total=19279ms chunks=110 err=
