@@ -7,7 +7,7 @@
  *
  * | Field | Source |
  * |---|---|
- * | `cash` | Alpaca `GET /v2/account` — the broker's own ledger, not a reimplementation |
+ * | `cash` | the venue's own ledger via `AccountFundingSource` — not a reimplementation |
  * | `peak_equity` | locally persisted running max (`account_state` table) — Alpaca has no such field |
  * | `daily_basis` | locally persisted per-class session snapshots (`session_equity`) + `closed_trades` |
  * | `consecutive_losses` | walked backwards through the existing `ClosedTrade` store — no new ledger |
@@ -35,6 +35,16 @@
  * `computePortfolioView` adds the unrealized mark-to-market term and divides,
  * because it has already fetched the marks for its exposure math and #332
  * requires they not be fetched twice.
+ *
+ * ## Why the funding read is a port and not an Alpaca client (#1509)
+ *
+ * Everything below the first two lines of `getAccountState` — the high-water
+ * mark, the per-class session boundaries, the loss streak — is venue-neutral
+ * and was never Alpaca-specific. Only `cash`/`equity` came from a broker.
+ * Saxo needs the same machinery over `GET /port/v1/balances/me`, and a second
+ * copy of ~200 lines of session-boundary logic is how the two drift. So the
+ * funding read is injected as `AccountFundingSource` and the provider is named
+ * for the role, not the vendor.
  */
 import type { AlpacaBrokerClient } from '../../../pipeline/execution/index.js';
 import type { SessionBasis, SessionBasisByClass } from '../../../pipeline/risk-manager/index.js';
@@ -52,8 +62,62 @@ export interface ClosedTradeReader {
   getClosedTradesBetween(from: Date, to: Date): ClosedTrade[];
 }
 
-export interface AlpacaAccountStateProviderInput {
-  client: AlpacaBrokerClient;
+/**
+ * One funding read from a venue's own ledger.
+ *
+ * `currency` is what the VENUE reports the account is denominated in, never a
+ * constant picked from the venue's identity — #949's currency-mismatch guard
+ * is armed by comparing it against the declared book currency, so a hard-coded
+ * value here would launder the assumption it exists to catch.
+ */
+export interface AccountFunding {
+  readonly cash: number;
+  readonly equity: number;
+  /**
+   * Checked once at boot, not per tick, and only on the Saxo venue —
+   * `startFromEnvironment` refuses to start a `SAMURAI_BROKER=saxo` run whose
+   * account answers anything but `LIVE_BOOK_CURRENCY`
+   * (`assertSameCurrencyFunding`, #1509), whether the source is the one it
+   * built or one the caller injected. That is the venue whose book is declared
+   * in GBP (ADR-0015); an Alpaca run's funding is USD by construction
+   * (`ALPACA_ACCOUNT_CURRENCY`) and is not compared.
+   *
+   * `getAccountState` therefore reads only `cash` and `equity`, deliberately:
+   * a per-tick throw here would kill a running process over a fact that
+   * cannot change under it.
+   */
+  readonly currency: string;
+}
+
+export interface AccountFundingSource {
+  readFunding(): Promise<AccountFunding>;
+}
+
+/**
+ * Alpaca `GET /v2/account`, which `AlpacaAccount` models as `cash`/`equity`
+ * only — the response carries no currency this boundary parses, and the
+ * account is USD (live-money-gates.ts's #949 paragraph states it as the
+ * standing reason the GBP book cannot be sized off this read). Declared as a
+ * constant here so that fact is one greppable place rather than an assumption
+ * spread across the risk manager.
+ */
+export const ALPACA_ACCOUNT_CURRENCY = 'USD';
+
+export function alpacaFunding(client: AlpacaBrokerClient): AccountFundingSource {
+  return {
+    readFunding: async () => {
+      const account = await client.getAccount();
+      return {
+        cash: parseMoney(account.cash, 'cash'),
+        equity: parseMoney(account.equity, 'equity'),
+        currency: ALPACA_ACCOUNT_CURRENCY,
+      };
+    },
+  };
+}
+
+export interface BrokerAccountStateProviderInput {
+  funding: AccountFundingSource;
   store: SqliteAccountStateStore;
   sessionEquity: SqliteSessionEquityStore;
   /**
@@ -108,7 +172,7 @@ export interface AlpacaAccountStateProviderInput {
 const DEFAULT_LOSS_STREAK_WINDOW_DAYS = 365;
 const MS_PER_DAY = 24 * 60 * 60 * 1_000;
 
-export class AlpacaAccountStateProvider implements AccountStateProvider {
+export class BrokerAccountStateProvider implements AccountStateProvider {
   /**
    * `key@open_at` pairs already warned about, so a mid-session base is
    * announced once per session rather than once per tick. Purely about log
@@ -116,7 +180,7 @@ export class AlpacaAccountStateProvider implements AccountStateProvider {
    */
   private readonly warnedSessions = new Set<string>();
 
-  constructor(private readonly input: AlpacaAccountStateProviderInput) {}
+  constructor(private readonly input: BrokerAccountStateProviderInput) {}
 
   async getAccountState(asOf: Date): Promise<{
     cash: number;
@@ -124,10 +188,7 @@ export class AlpacaAccountStateProvider implements AccountStateProvider {
     daily_basis: SessionBasisByClass;
     consecutive_losses: number;
   }> {
-    const account = await this.input.client.getAccount();
-
-    const cash = parseMoney(account.cash, 'cash');
-    const equity = parseMoney(account.equity, 'equity');
+    const { cash, equity } = await this.input.funding.readFunding();
 
     // Raise the high-water mark before reading it, so a new all-time high is
     // reflected in the very tick that set it rather than one tick later.

@@ -310,7 +310,7 @@ export interface RiskConfig {
    *
    * **Currency mismatch, guarded rather than merely flagged (#949).** `book`
    * is GBP (`LIVE_BOOK_GBP`); the only `AccountStateProvider` this repo ships
-   * (`AlpacaAccountStateProvider`, production/account-state.ts) reads
+   * (`BrokerAccountStateProvider`, production/account-state.ts) reads
    * `portfolio.equity` from Alpaca's `GET /v2/account`, which is
    * USD-denominated with no FX conversion anywhere in this codebase — so a
    * numeric comparison of `portfolio.equity` against `book` compares GBP to
@@ -320,7 +320,11 @@ export interface RiskConfig {
    * (risk-manager/index.ts) refuses to arm — a distinct `currency_mismatch`
    * `binding_constraint`, not the `equity_exceeds_book` refusal below — for
    * as long as this is `false`/absent, regardless of what `portfolio.equity`
-   * reads. No caller sets it, and #1180 decided none should yet.
+   * reads. #1180 decided the configured rate must not set it (below). The one
+   * caller that may is `armSameCurrencyCeilings`
+   * (orchestrator/production/saxo-funding.ts, #1509), and only when a real
+   * `GET /port/v1/balances/me` reports the account denominated in the book's
+   * own currency — never inferred from the venue being Saxo UK.
    *
    * **Why a configured rate does NOT lift this, now that one exists.** #1180
    * added `SIZING_USD_PER_GBP` (paper-profile.ts) — a static, code-configured
@@ -336,11 +340,10 @@ export interface RiskConfig {
    * or a total miss — rate staleness would become indistinguishable from the
    * overfunding this refusal exists to catch.
    *
-   * So the refusal is PERMANENT BY DESIGN until a LIVE rate feed or a
-   * GBP-native broker adapter exists (#946 is the eventual same-currency
-   * adapter) — not a stale guard left standing after its cause was removed.
-   * Setting it true is only correct once one of those exists and this
-   * comparison is known to hold like-for-like.
+   * So the refusal stands until a LIVE rate feed exists, or the account is
+   * read in the book's own currency — which is what #1509 wired, over Saxo's
+   * `GET /port/v1/balances/me`. Setting it true is only correct on the
+   * strength of that read, and never on the strength of a configured rate.
    */
   live_book_ceiling?: {
     /** The declared book (`LIVE_BOOK_GBP`), in GBP. */
@@ -486,17 +489,19 @@ export interface SubclassDeploymentCap {
      * mechanism as `RiskConfig['live_book_ceiling'].same_currency_verified`,
      * read that field's doc comment for the full account.** `book` is GBP;
      * `portfolio.equity` is read from Alpaca's USD-denominated
-     * `GET /v2/account` (`production/account-state.ts:129`), so comparing the
+     * `GET /v2/account` (`alpacaFunding`, production/account-state.ts) on
+     * every run but the Saxo venue's, so comparing the
      * two proves nothing about real funding regardless of which way the
      * tolerance check comes out. `perSubclassDeploymentCap`
      * (risk-manager/index.ts) refuses to arm — `binding_constraint` ending
      * `:currency_mismatch:<instrument>`, distinct from
      * `:equity_exceeds_book:<instrument>` below — for as long as this is
-     * `false`/absent. No caller sets it, and #1180's configured
-     * `SIZING_USD_PER_GBP` deliberately does not: its drift exceeds
-     * `refuse_above_tolerance`, so arming with it would make FX movement
-     * indistinguishable from overfunding. Permanently refusing by design
-     * until a live rate feed or a GBP-native adapter exists.
+     * `false`/absent. #1180's configured `SIZING_USD_PER_GBP` deliberately
+     * does not set it: its drift exceeds `refuse_above_tolerance`, so arming
+     * with it would make FX movement indistinguishable from overfunding. The
+     * one caller that may is `armSameCurrencyCeilings` (#1509), from a real
+     * same-currency account read, and it arms this field and
+     * `live_book_ceiling` together or neither.
      */
     same_currency_verified?: boolean;
   };

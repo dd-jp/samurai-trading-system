@@ -792,8 +792,9 @@ export class ConstantResponseLlmClient implements LlmClient {
  * The account scalars, fixed.
  *
  * Injected rather than composed because the only in-repo `AccountStateProvider`
- * is `AlpacaAccountStateProvider`, which reads `GET /v2/account` — a network
- * call, and therefore out of bounds here. `equity` feeds `portfolio.equity`
+ * is `BrokerAccountStateProvider`, whose funding read is a network call
+ * (`GET /v2/account`, or Saxo's `GET /port/v1/balances/me` since #1509) and
+ * therefore out of bounds here. `equity` feeds `portfolio.equity`
  * directly, and every `riskConfig` cap is a fraction resolved against that
  * figure at evaluate time (#886) rather than a boot-time anchor, so this
  * value need only be plausible, not calibrated to a specific constant.

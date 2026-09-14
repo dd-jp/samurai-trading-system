@@ -26,28 +26,31 @@
  *   that a GBP-native adapter does not by itself lift. Refusing here also
  *   means no live Saxo token is ever read: `SaxoHttpBrokerClient` is built
  *   against the `sim` gateway unconditionally.
- * - **No injected `accountState`.** `SaxoOpenApiClient` calls no balances
- *   endpoint (saxo-client.ts), so the only funding read this repo has is
- *   `AlpacaAccountStateProvider`'s USD `GET /v2/account`. Sizing a GBP book
- *   off a USD account is the #949 mismatch, so the venue refuses to boot
- *   rather than sizing off the wrong currency. The venue itself DOES serve
- *   `GET /port/v1/balances/me` — measured against SIM 2026-09-11, doc 44
- *   §6 — but on the SIM trial account it answers `Currency: "EUR"`, so
- *   calling it would ship the #949 mismatch in a second currency rather than
- *   lift it. What is missing is a GBP-denominated account read, and NO OPEN
- *   ISSUE OWNS IT.
+ * - **No funding read at all.** Sizing a GBP book off Alpaca's USD
+ *   `GET /v2/account` is the #949 mismatch, so the venue refuses to boot
+ *   rather than size off the wrong currency. Since #1509 the read exists —
+ *   `SaxoHttpBrokerClient.getBalances()` over `GET /port/v1/balances/me` —
+ *   so this refusal is satisfied by EITHER an injected `accountState` or an
+ *   `accountFunding` source, and the entrypoint supplies the latter. It is
+ *   still a refusal and not a formality: the read reports the account's own
+ *   `Currency`, `assertSameCurrencyFunding` refuses the boot outright when it
+ *   is not the book's, and on the SIM trial account it is `EUR` (doc 44
+ *   §6.3). What clears #949 is that comparison — never the fact that the
+ *   venue is Saxo UK.
  * - **A universe this venue does not trade.** The adapter routes by
  *   `lse_ticker`; anything else has no Uic, and an instrument that silently
  *   drops out of the resolver reads as a pool gap rather than a wiring one.
  *
- * ## NOT REACHABLE FROM `main()` TODAY, and that is deliberate
+ * ## Wired from `main()` since #1509 — as far as the funding read
  *
- * The entrypoint supplies no `accountState` — no GBP-native account read
- * exists in this repo, and no open issue owns building one — so an operator
- * setting `SAMURAI_BROKER=saxo` gets the `accountState` refusal above, by
- * design and not by omission. Everything below is reachable from a
- * PROGRAMMATIC config that injects one, which is what this branch's tests
- * drive. Do not read the venue's tests as evidence of an operator boot.
+ * The entrypoint now builds one `SaxoHttpBrokerClient` and hands it to both
+ * this venue and `saxoFunding`, so `SAMURAI_BROKER=saxo` no longer needs a
+ * programmatic `accountState` to get past composition. It still does not
+ * reach a tick: the read then answers the SIM trial account's `EUR` and
+ * `assertSameCurrencyFunding` refuses the boot. That refusal is the point —
+ * the alternative is a GBP-declared book sized off a EUR balance. The `live`
+ * refusal above is untouched, so nothing here has been measured against the
+ * UK GIA.
  *
  * ## What a real SIM boot measured (#1400 AC3, 2026-09-11)
  *
@@ -55,8 +58,9 @@
  * gateway: the resolver reads `/ref/v1/instruments/details` for all five
  * tradeable lines, the adapter constructs, and the orchestrator reaches its
  * startup reconcile. The two seams an operator still has to supply by hand
- * are `accountState` (above) and `lseMarkClient` (#895, still an open owner
- * decision), and NEITHER is missing wiring. Doc 44 §6 carries the run.
+ * were `accountState` (now supplied from `GET /port/v1/balances/me`, #1509)
+ * and `lseMarkClient` (#895, still an open owner decision, still not wiring).
+ * Doc 44 §6 carries the run.
  */
 import type {
   BrokerAdapter,
@@ -156,8 +160,10 @@ export interface SaxoVenueDeps {
   mode: ProductionConfig['mode'];
   /** The configured universe, checked against what this venue can actually route. */
   universe: readonly UniverseInstrument[];
-  /** `ProductionConfig.accountState` — REQUIRED here; see the module doc. */
+  /** `ProductionConfig.accountState` — one of this and `accountFunding` is REQUIRED; see the module doc. */
   accountState: ProductionConfig['accountState'];
+  /** `ProductionConfig.accountFunding` — the GBP-native read (#1509). */
+  accountFunding?: ProductionConfig['accountFunding'];
   db: StoreHandle;
   logger: Logger;
   legResizeAlerts: LegResizeUnverifiedAlertChannel;
@@ -284,30 +290,47 @@ function buildSaxoRateLimiter(logger: Logger): TokenBucket {
   return new TokenBucket(resolveVenuePacing().saxo, undefined, { logger, name: 'saxo' });
 }
 
+/**
+ * The ONE Saxo client a run may hold (#1509), for a caller that needs both the
+ * broker and the funding read. Two clients would be two token budgets against
+ * the account's one rate limit — the same invariant `buildSaxoRateLimiter`
+ * exists for, which is why the bucket is built here and not inside the client.
+ *
+ * `sim` unconditionally, matching `buildSaxoBroker`: no live token is read on
+ * any path this venue reaches.
+ */
+export function buildSaxoVenueClient(logger: Logger): SaxoHttpBrokerClient {
+  return new SaxoHttpBrokerClient({
+    environment: 'sim',
+    logger,
+    rateLimiter: buildSaxoRateLimiter(logger),
+  });
+}
+
 function assertSaxoVenueBootable(deps: SaxoVenueDeps): void {
   if (deps.mode === 'live') {
     throw new Error(
       `Orchestrator cannot start: ${BROKER_VENUE_ENV_VAR}=saxo was selected with ` +
         'SAMURAI_MODE=live. The Saxo venue is wired against the SIM gateway only: the ' +
         "live-money gates (yarn check:live-gates) are open, and #949's currency-mismatch " +
-        'refusal stands until a same-currency GBP-native account read exists — no open issue ' +
-        'owns building one. Run it with SAMURAI_MODE=paper, or leave the venue unset to run ' +
+        'refusal is lifted only by a same-currency account read (#1509 wires ' +
+        'GET /port/v1/balances/me for that) whose currency has never been observed on the live ' +
+        'UK GIA. Run it with SAMURAI_MODE=paper, or leave the venue unset to run ' +
         'the Alpaca path.',
     );
   }
 
-  if (deps.accountState === undefined) {
+  if (deps.accountState === undefined && deps.accountFunding === undefined) {
     throw new Error(
       `Orchestrator cannot start: ${BROKER_VENUE_ENV_VAR}=saxo requires ` +
-        "ProductionConfig.accountState to be supplied. This repo's Saxo client " +
-        '(saxo-client.ts) calls no balances endpoint, so the only funding read available is ' +
-        "AlpacaAccountStateProvider's USD GET /v2/account — and sizing a GBP LSE book off a " +
-        'USD account balance is exactly the currency mismatch #949 refuses every live entry ' +
-        "on. The venue's own GET /port/v1/balances/me answers Currency: EUR on the SIM trial " +
-        'account (measured 2026-09-11, doc 44 §6), so calling it would re-ship that mismatch ' +
-        'rather than lift it. No open issue owns the GBP-native account read, so until one ' +
-        'exists the equity this venue sizes against has to be supplied deliberately, not ' +
-        'inherited from another venue.',
+        'ProductionConfig.accountFunding (or a whole accountState) to be supplied. The ' +
+        "default funding read is Alpaca's USD GET /v2/account, and sizing a GBP LSE book off " +
+        'a USD account balance is exactly the currency mismatch #949 refuses every live entry ' +
+        "on — so this venue will not inherit another venue's ledger. Since #1509 the read it " +
+        'wants exists: saxoFunding(client) over GET /port/v1/balances/me, which the entrypoint ' +
+        'supplies. A programmatic config has to pass one of the two deliberately — and an ' +
+        'accountFunding passed to startFromEnvironment is currency-verified there ' +
+        '(assertSameCurrencyFunding), the same as the one it builds itself.',
     );
   }
 }
