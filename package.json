@@ -36,7 +36,8 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "precommit": "yarn lint:fix && yarn typecheck && yarn test:coverage",
-    "place-soak-position": "tsx --env-file=.env.local server/tools/place-soak-position.ts"
+    "place-soak-position": "tsx --env-file=.env.local server/tools/place-soak-position.ts",
+    "saxo:login": "tsx --env-file=.env.local server/tools/saxo-login.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.3",
