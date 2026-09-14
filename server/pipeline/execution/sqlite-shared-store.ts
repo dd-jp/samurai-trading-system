@@ -311,8 +311,9 @@ export class SqliteExecutionStore implements SharedStore {
              order_state, broker_order_ids, opened_at, decision_timestamp,
              conviction, converged, arm,
              decision_price, quote_bid, quote_ask, quote_mid, quote_observed_at,
-             modelled_cost_breakdown_json, sizing_capital_ceiling
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             modelled_cost_breakdown_json, modelled_protective_exit_cost_breakdown_json,
+             sizing_capital_ceiling
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           position.idempotency_key,
@@ -349,6 +350,11 @@ export class SqliteExecutionStore implements SharedStore {
           position.modelled_cost_breakdown === undefined
             ? null
             : JSON.stringify(position.modelled_cost_breakdown),
+          // #1301, migration 0061 — the protective legs' own estimate, from the
+          // same capture pass.
+          position.modelled_protective_exit_cost_breakdown === undefined
+            ? null
+            : JSON.stringify(position.modelled_protective_exit_cost_breakdown),
           // #1112 AC5, migration 0045 — see `sizingCapitalCeiling`'s own doc.
           this.sizingCapitalCeiling ?? null,
         );

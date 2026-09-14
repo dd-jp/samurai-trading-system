@@ -2329,11 +2329,10 @@ describe('ExecutionImpl.ingestFills — cumulative partial fills (#842)', () => 
  * own (`fill.cost_breakdown === undefined`, always true for a real broker)
  * and `toFill()` falls back to the submit-time modelled snapshot instead:
  * `OpenPosition.modelled_cost_breakdown` for an `'entry'` leg,
- * `FlattenAttribution.modelled_cost_breakdown` for a flatten's `'exit'` leg
- * — each prorated by this fill's share of the size the snapshot was modelled
- * against. Scoped to entry + flatten-exit only, deliberately: the Simulated
- * adapter itself never models `'stop'`/`'target'` fills either
- * (`simulated-adapter.ts`), so there is no fallback for those.
+ * `OpenPosition.modelled_protective_exit_cost_breakdown` for a `'stop'`/
+ * `'target'` leg (#1301), `FlattenAttribution.modelled_cost_breakdown` for a
+ * flatten's `'exit'` leg — each prorated by this fill's share of the size the
+ * snapshot was modelled against.
  */
 describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#1001)', () => {
   const modelledCostBreakdown = {
@@ -2341,6 +2340,18 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
     commission: 1,
     slippage: 0.25,
     market_impact: 0.1,
+  };
+  /**
+   * #1301's protective-exit snapshot. Distinct from the entry's in EVERY
+   * component so a test cannot pass on the wrong one — under today's cost model
+   * the real pair coincides on `commission` (see `captureSubmitSnapshot`), which
+   * is exactly what would hide a crossed wire in production.
+   */
+  const modelledProtectiveExitCostBreakdown = {
+    spread_cost: 2,
+    commission: 3,
+    slippage: 1,
+    market_impact: 2,
   };
 
   /** Float-tolerant equality — `prorateCostBreakdown` multiplies by a share, so exact decimal equality is not guaranteed. */
@@ -2431,12 +2442,51 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
     expect(fills[0]?.cost_breakdown).toEqual(ownBreakdown);
   });
 
-  it('never falls back for a stop/target leg fill, even when the lot carries a modelled entry snapshot', async () => {
+  // #1301: a protective leg falls back to the lot's PROTECTIVE snapshot, never
+  // the entry's — the two are separate `CostModel.fill` calls and a crossed
+  // wire is invisible under today's model, where their `commission` components
+  // coincide. `modelledProtectiveExitCostBreakdown` is deliberately distinct
+  // from `modelledCostBreakdown` in every component so the cross fails here.
+  it.each([
+    'stop',
+    'target',
+  ] as const)('prorates the modelled PROTECTIVE exit cost breakdown onto a %s leg fill', async (leg) => {
     const { store } = openTestExecutionStore();
     await seedPosition(store, {
       requested_size: 10,
       side: 'buy',
-      stop: 95,
+      modelled_cost_breakdown: modelledCostBreakdown,
+      modelled_protective_exit_cost_breakdown: modelledProtectiveExitCostBreakdown,
+    });
+    const broker = new ScriptedBroker([
+      fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 10 }),
+      fill({
+        broker_fill_id: toBrokerFillId('x1'),
+        leg,
+        qty: 4,
+        price: 95,
+        timestamp: new Date('2026-07-20T15:30:00Z'),
+      }),
+    ]);
+
+    await new ExecutionImpl(makeInput(broker, store)).ingestFills();
+
+    const fills = await store.getFills('key-1');
+    // share = 4/10 of the protective snapshot, linearly.
+    expectCostBreakdownCloseTo(fills.find((row) => row.broker_fill_id === 'x1')?.cost_breakdown, {
+      spread_cost: 0.8,
+      commission: 1.2,
+      slippage: 0.4,
+      market_impact: 0.8,
+    });
+  });
+
+  it('leaves cost_breakdown unset on a protective leg fill when the lot carries no protective snapshot', async () => {
+    const { store } = openTestExecutionStore();
+    // Entry snapshot only — a lot opened before migration 0061.
+    await seedPosition(store, {
+      requested_size: 10,
+      side: 'buy',
       modelled_cost_breakdown: modelledCostBreakdown,
     });
     const broker = new ScriptedBroker([
@@ -2453,8 +2503,42 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
     await new ExecutionImpl(makeInput(broker, store)).ingestFills();
 
     const fills = await store.getFills('key-1');
-    const stopFill = fills.find((row) => row.broker_fill_id === 's1');
-    expect(stopFill?.cost_breakdown).toBeUndefined();
+    expect(fills.find((row) => row.broker_fill_id === 's1')?.cost_breakdown).toBeUndefined();
+  });
+
+  // #1301's whole point: the estimate is SPENT, not merely recorded. A venue
+  // reporting `fee: 0` on the protective leg (Alpaca paper) left the lot
+  // under-charged by a whole exit commission against a control arm that pays
+  // one on every close.
+  it('charges the modelled protective commission on a stop fill the venue reported no fee for', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, {
+      requested_size: 10,
+      side: 'buy',
+      modelled_cost_breakdown: modelledCostBreakdown,
+      modelled_protective_exit_cost_breakdown: modelledProtectiveExitCostBreakdown,
+    });
+    const broker = new ScriptedBroker([
+      fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 10, fee: 0 }),
+      fill({
+        broker_fill_id: toBrokerFillId('s1'),
+        leg: 'stop',
+        qty: 10,
+        price: 95,
+        fee: 0,
+        timestamp: new Date('2026-07-20T15:30:00Z'),
+      }),
+    ]);
+
+    await new ExecutionImpl(makeInput(broker, store)).ingestFills();
+
+    const fills = await store.getFills('key-1');
+    expect(fills.find((row) => row.broker_fill_id === 's1')?.fee).toBeCloseTo(
+      modelledProtectiveExitCostBreakdown.commission,
+      9,
+    );
+    const closed = await store.getClosedTrades();
+    expect(closed[0]?.modelled_cost_charged).toBe(true);
   });
 
   it('prorates the flatten own modelled cost breakdown across a FIFO split exit fill, by each lot share of the raw fill', async () => {
@@ -3587,27 +3671,60 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
   });
 
   /**
-   * ROUND-1 REVIEW, finding 3 — the residual, PINNED rather than fixed
-   * (#1301). No MODELLED estimate exists for a protective leg on either arm,
-   * so the live lot is charged whatever its adapter reports on that leg and
-   * `chargeTopUpTo` has nothing to top it up to.
+   * ROUND-1 REVIEW, finding 3 — the residual, now CLOSED by #1301. It was
+   * pinned by this test in the form "a live protective-leg exit is charged
+   * whatever its adapter reports, and `chargeTopUpTo` has nothing to top it up
+   * to". `captureSubmitSnapshot` prices the protective legs at submit time
+   * (migration 0061), so there is something to top up to and the round trip is
+   * charged on BOTH legs, exactly as the control arm's flatten close is.
    *
-   * Round 5, finding 1: what that costs is ADAPTER-DEPENDENT, and this
-   * fixture pins one adapter, not the mechanism. The `fee: 0` below is the
-   * Alpaca shape (`alpaca-order-normalization.ts`), where the exit commission
-   * goes unpaid entirely. `saxo-adapter.ts` reports
-   * `price * qty * SAXO_COMMISSION_RATE` on EVERY leg, so under Saxo the leg
-   * does pay and the residual is a price-basis difference instead — see
-   * `toFill`'s "What this still does not cover" for both readings. Do not
-   * read "uncharged" in this test's name as a venue-independent property.
-   *
-   * The flag stays `true`: vetoing on it would drop live trades BECAUSE they
-   * exited on a stop, which selects on outcome (stops are the losers). This
-   * test exists so the residual cannot be quietly forgotten — it fails the
-   * moment bracket legs start being charged, which is where #1301 has to
-   * update it.
+   * The `fee: 0` below is the Alpaca shape
+   * (`alpaca-order-normalization.ts`) — the venue report that used to leave the
+   * exit commission unpaid entirely, and the one the soak ran on. Under
+   * `saxo-adapter.ts` (`price * qty * SAXO_COMMISSION_RATE` on every leg) the
+   * venue's own number would simply win the `max` where it is the larger.
    */
-  it('leaves a live protective-leg (stop) exit uncharged — the known residual, #1301', async () => {
+  it('charges a live protective-leg (stop) exit the modelled commission, same as the entry leg', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, {
+      requested_size: 10,
+      side: 'buy',
+      modelled_cost_breakdown: modelledCostBreakdown,
+      modelled_protective_exit_cost_breakdown: modelledCostBreakdown,
+    });
+    await new ExecutionImpl(
+      makeInput(
+        new ScriptedBroker([
+          fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 10, price: 100, fee: 0 }),
+          fill({
+            broker_fill_id: toBrokerFillId('s1'),
+            leg: 'stop',
+            qty: 10,
+            price: 95,
+            fee: 0,
+            timestamp: new Date('2026-07-20T15:30:00Z'),
+          }),
+        ]),
+        store,
+      ),
+    ).ingestFills();
+
+    const stop = (await store.getFills('key-1')).find((row) => row.leg === 'stop');
+    expect(stop?.fee).toBeCloseTo(modelledCostBreakdown.commission, 9);
+    expect(stop?.cost_breakdown).toBeDefined();
+    const closed = (await store.getClosedTrades())[0];
+    expect(closed.fees_total).toBeCloseTo(modelledCostBreakdown.commission * 2, 9);
+    expect(closed.modelled_cost_charged).toBe(true);
+  });
+
+  /**
+   * The transitional case #1301's widened coverage creates, asserted rather
+   * than left to be discovered: a lot OPEN ACROSS the deploy carries the entry
+   * snapshot and no protective one, so its protective leg is still uncharged —
+   * and the row now says so (`modelled_cost_charged = false`) instead of
+   * certifying a cost basis it is not on.
+   */
+  it('stamps modelled_cost_charged false on a pre-0061 lot that exits on a protective leg', async () => {
     const { store } = openTestExecutionStore();
     await seedPosition(store, {
       requested_size: 10,
@@ -3635,10 +3752,8 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
     expect(stop?.fee).toBe(0);
     expect(stop?.cost_breakdown).toBeUndefined();
     const closed = (await store.getClosedTrades())[0];
-    // Entry commission only: the round trip is charged one leg where the
-    // control arm's equivalent flatten close is charged two.
     expect(closed.fees_total).toBeCloseTo(modelledCostBreakdown.commission, 9);
-    expect(closed.modelled_cost_charged).toBe(true);
+    expect(closed.modelled_cost_charged).toBe(false);
   });
 });
 

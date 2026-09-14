@@ -208,6 +208,11 @@ export async function executeVerdict(
     ...(snapshot.modelled_cost_breakdown === null
       ? {}
       : { modelled_cost_breakdown: snapshot.modelled_cost_breakdown }),
+    ...(snapshot.modelled_protective_exit_cost_breakdown === null
+      ? {}
+      : {
+          modelled_protective_exit_cost_breakdown: snapshot.modelled_protective_exit_cost_breakdown,
+        }),
   };
 
   // Write-ahead: `pending` is durable BEFORE the broker call, so a crash in
@@ -288,6 +293,7 @@ interface SubmitSnapshot {
   quote_mid: number | null;
   quote_observed_at: Date | null;
   modelled_cost_breakdown: CostBreakdown | null;
+  modelled_protective_exit_cost_breakdown: CostBreakdown | null;
 }
 
 /**
@@ -297,6 +303,28 @@ interface SubmitSnapshot {
  * priced the same way the Simulated adapter prices one
  * (`SimulatedBrokerAdapter.buildMarketState` + `CostModel.fill`), so a
  * real-broker fill has something honest to diff its realized price against.
+ *
+ * #1301 adds a SECOND modelled breakdown on the bracket path: the protective
+ * exit the same submission arms. Without it a live lot that exited on its
+ * stop/target leg had no modelled commission to be topped up to
+ * (`chargeTopUpTo`, fill-cost.ts) and was under-charged by a whole exit
+ * commission against a control arm that pays one on every close — the bias
+ * #1121 closed on the entry and flatten legs, left open on this one. It is
+ * priced HERE, off the one `MarketState` already assembled, because #1121 AC6
+ * allows a single derivation per priced event; deriving it at ingest would be
+ * a second one, against a different instant's market.
+ *
+ * ONE breakdown covers BOTH protective legs, and it is not a shortcut. The
+ * stop and the target are OCO — at most one ever fills — and `CostModel.fill`
+ * reads only `size` and `side` off the request (`order_type` and
+ * `limit_price` are never consulted; cost-model.ts), so both legs price
+ * identically against one market state. Under today's model that also makes
+ * the protective `commission` component numerically EQUAL to the entry's: same
+ * size, same `mid`, same asset config, and `side` signs only `fill_price`. The
+ * separate call is still the right shape rather than a reuse of the entry's
+ * breakdown — it names which economic event is being priced, and it stays
+ * correct on the day the cost model gains side- or order-type sensitivity,
+ * where a silent reuse would go quietly wrong.
  *
  * BEST-EFFORT — this is instrumentation, not a trading decision.
  * `decision_price` alone needs no I/O (`order.entry` is already in hand), so
@@ -353,6 +381,7 @@ async function captureSubmitSnapshot(
     quote_mid: null,
     quote_observed_at: null,
     modelled_cost_breakdown: null,
+    modelled_protective_exit_cost_breakdown: null,
   };
 
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -427,6 +456,7 @@ async function readSubmitSnapshot(
   let quoteAsk: number | null = null;
   let quoteObservedAt: Date | null = null;
   let modelledCostBreakdown: CostBreakdown | null = null;
+  let modelledProtectiveExitCostBreakdown: CostBreakdown | null = null;
 
   if (order.metadata.unpriced_exit !== true) {
     const { marketData, costModel, config, logger, trace_id } = input;
@@ -501,6 +531,7 @@ async function readSubmitSnapshot(
         quote_mid: quoteBid === null || quoteAsk === null ? null : (quoteBid + quoteAsk) / 2,
         quote_observed_at: quoteObservedAt,
         modelled_cost_breakdown: null,
+        modelled_protective_exit_cost_breakdown: null,
       };
     }
 
@@ -528,7 +559,35 @@ async function readSubmitSnapshot(
         ...(order.intent_type === 'exit' ? {} : { limit_price: order.entry }),
         idempotency_key: order.idempotency_key,
       };
-      modelledCostBreakdown = costModel.fill(fillRequest, marketState).cost_breakdown;
+      const entryCost = costModel.fill(fillRequest, marketState).cost_breakdown;
+
+      // #1301: the protective exit the SAME submission arms. Priced here, in
+      // this try/catch and off this one `marketState`, because #1121 AC6
+      // allows one derivation per priced event and `ingest-fills.ts` must not
+      // open a second. An exit submits no bracket, so it has no protective leg
+      // to price; `order.stop`/`order.target` on that path are `decide.ts`'s
+      // degenerate placeholders (see `decisionPriceFor`).
+      //
+      // Assigned only once BOTH have priced, so the pair is present or absent
+      // together — `modelledCostCharged` (closed-trade.ts) covers legs priced
+      // from either, and a lot holding one without the other would stamp a
+      // coverage answer no submit-time outcome can actually produce.
+      const protectiveExitCost =
+        order.intent_type === 'exit'
+          ? null
+          : costModel.fill(
+              {
+                instrument: order.instrument,
+                side: order.side === 'buy' ? 'sell' : 'buy',
+                size: order.size,
+                order_type: 'market',
+                idempotency_key: order.idempotency_key,
+              },
+              marketState,
+            ).cost_breakdown;
+
+      modelledCostBreakdown = entryCost;
+      modelledProtectiveExitCostBreakdown = protectiveExitCost;
     } catch (error) {
       logCaughtFailure(
         logger,
@@ -566,6 +625,7 @@ async function readSubmitSnapshot(
     quote_mid: quoteBid === null || quoteAsk === null ? null : (quoteBid + quoteAsk) / 2,
     quote_observed_at: quoteObservedAt,
     modelled_cost_breakdown: modelledCostBreakdown,
+    modelled_protective_exit_cost_breakdown: modelledProtectiveExitCostBreakdown,
   };
 }
 

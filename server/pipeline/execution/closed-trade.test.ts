@@ -114,12 +114,20 @@ describe('modelledCostCharged', () => {
     ).toBe(false);
   });
 
-  it('does not veto on protective legs nothing models', () => {
+  // #1301: protective legs used to be excluded from coverage because nothing
+  // modelled them. `captureSubmitSnapshot` prices them now, so an uncharged one
+  // is a real gap in the lot's cost basis and vetoes like any other leg.
+  it('requires a breakdown on protective legs too', () => {
     expect(modelledCostCharged(chargedEntry, [exitFill({ qty: 1, price: 1, leg: 'stop' })])).toBe(
-      true,
+      false,
     );
     expect(modelledCostCharged(chargedEntry, [exitFill({ qty: 1, price: 1, leg: 'target' })])).toBe(
-      true,
+      false,
     );
+    expect(
+      modelledCostCharged(chargedEntry, [
+        exitFill({ qty: 1, price: 1, leg: 'stop', cost_breakdown: BREAKDOWN }),
+      ]),
+    ).toBe(true);
   });
 });

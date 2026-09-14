@@ -182,19 +182,22 @@ export class SqliteArmComparisonSource {
  * outcome-blind. It is not, and the earlier version of this comment claiming
  * so was wrong (#1121 review round 2, finding 1).
  *
- * THE EXCLUSION SELECTS ON EXIT TYPE, through the coverage rule rather than
- * through a veto. `closedTrade()`'s `modelledCostCharged` covers the entry
- * legs plus flatten (`'exit'`) legs and excludes `'stop'`/`'target'` legs
- * (ingest-fills.ts). Each covered leg needs its own successful, best-effort
- * `captureSubmitSnapshot`. So a lot that exits on a protective leg stamps 1
- * on its entry legs' captures alone, while a lot that exits on a flatten
- * needs those SAME captures AND the flatten's. The requirement is strictly
- * weaker for protective-leg exits, so their drop rate is WEAKLY lower — equal
- * exactly when the FLATTEN capture never fails, which is the condition that
- * matters: an entry capture that fails hits both exit types identically and
- * does not equalize anything. The surviving live population is therefore
- * enriched in protective-leg exits. The veto `closedTrade()` refuses is
- * genuinely refused; the selection arrives anyway, by the back door.
+ * THE EXCLUSION SELECTS ON EXIT TYPE, through the SUBMISSION count rather than
+ * through a veto — and #1301's fix does not remove that. `closedTrade()`'s
+ * `modelledCostCharged` now covers every leg (#1301 widened it once a
+ * protective leg had a modelled estimate at all), but coverage was never the
+ * operative term: each covered leg needs a successful, best-effort
+ * `captureSubmitSnapshot`, and a protective leg's estimate comes from the
+ * ENTRY submission's capture, the same one its entry legs already needed. So a
+ * lot that exits on a protective leg still stamps 1 on the entry capture
+ * alone, while a lot that exits on a flatten needs that SAME capture AND the
+ * flatten's. The requirement is strictly weaker for protective-leg exits, so
+ * their drop rate is WEAKLY lower — equal exactly when the FLATTEN capture
+ * never fails, which is the condition that matters: an entry capture that
+ * fails hits both exit types identically and does not equalize anything. The
+ * surviving live population is therefore enriched in protective-leg exits. The
+ * veto `closedTrade()` refuses is genuinely refused; the selection arrives
+ * anyway, by the back door.
  *
  * No failure RATE is claimed here, only the shape. The round-2 soak read
  * (live rows, `fills.cost_breakdown_json IS NOT NULL`) found both flatten-exit
@@ -216,23 +219,22 @@ export class SqliteArmComparisonSource {
  *   `modelledCostCharged`'s narrow claim about STOPS — true there, where the
  *   subject is a veto on stops — carried unchanged onto a referent widened to
  *   stop/target, where it is false.
- * - The #1301 term is ADAPTER-DEPENDENT. No modelled cost exists for a
- *   protective leg, so a surviving protective-leg exit is charged whatever
- *   its adapter reports and `chargeTopUpTo` has nothing to top it up to.
- *   Under `alpaca-order-normalization.ts` (`fee: 0`) that is a whole exit
- *   commission unpaid, biasing live `return_pct` UP — the case that holds for
- *   the soak this filter runs over. Under `saxo-adapter.ts`, which reports
- *   `price * qty * SAXO_COMMISSION_RATE` on every leg, it collapses to an
- *   unsigned price-basis difference. See `toFill`'s "What this still does not
- *   cover" (ingest-fills.ts) for both readings.
+ * - The #1301 UNDER-CHARGE term is CLOSED for lots opened after migration
+ *   0061. A protective leg now carries its own submit-time modelled estimate
+ *   (`open_positions.modelled_protective_exit_cost_breakdown_json`) and
+ *   `chargeTopUpTo` has something to top the adapter's report up to, so the
+ *   whole-exit-commission bias under an adapter reporting `fee: 0` is gone.
+ *   It still applies to every row written BEFORE that migration, which is
+ *   every live row the soak this filter runs over produced.
  *
- * The limit settles that "net conservative" cannot be claimed. If the flatten
- * capture never fails, the selection term is exactly zero while the #1301
- * under-charge on the soak's adapter is a whole commission, and the net bias
- * is UP — flattering the live edge, not understating it. Nothing measured
- * here excludes that limit, and the selection term is weighted by the very
- * failure rate the paragraph above declines to claim. Ordering the two needs
- * the two numbers this comment does not have: that rate (`flatten_submissions`
+ * "Net conservative" still cannot be claimed, on either side of that
+ * migration. Below it, the reasoning is unchanged: if the flatten capture
+ * never fails, the selection term is exactly zero while the under-charge is a
+ * whole commission, so the net bias is UP — flattering the live edge. Above
+ * it, the under-charge term is zero and the selection term is whatever it is,
+ * sign unestablished, so the net is simply the selection term with no
+ * counterweight. Ordering anything still needs the two numbers this comment
+ * does not have: the flatten capture's failure rate (`flatten_submissions`
  * rows with a null `modelled_cost_breakdown_json`, restricted to
  * post-migration-0037 rows so a failed capture is separable from a
  * pre-migration one) and the surviving bracket population's mean return split
@@ -255,16 +257,15 @@ export class SqliteArmComparisonSource {
  *   the floor on a heavily selected population. So this is a coupling, not a
  *   bound, and no bound is claimed.
  *
- * Tracked on #1301, and it is the same defect that ticket already owns rather
- * than a rider on it: both terms come from the one missing piece, a modelled
- * cost for a protective leg. Charging it removes the under-charge outright
- * and MAY close the drop differential too — but only if the charge needs its
- * own capture on the protective leg. AC6 forbids a second derivation and
- * `captureSubmitSnapshot` prices the entry and the flatten only (`toFill`'s
- * "What this still does not cover"), so a fix that prices a protective leg
- * off the ENTRY snapshot leaves protective exits needing the entry captures
- * alone and flattens needing one more, and the differential survives. Which
- * way it lands is #1301's design, not decided here.
+ * HOW #1301 LANDED. David ruled on 2026-09-14 for Option 1 — price the
+ * protective legs at submit, off the entry's own `MarketState`, keeping one
+ * derivation per priced event (#1121 AC6) — over giving the control arm a
+ * bracket-exit path. That removes the under-charge outright and leaves the
+ * drop differential exactly as it was, for the reason this comment anticipated:
+ * a charge priced off the ENTRY snapshot needs no capture of its own, so
+ * protective exits still need the entry captures alone and flattens still need
+ * one more. The differential is a deliberate residual of the chosen option,
+ * not an open question.
  *
  * The floor covers the AUTOMATED reader only. `tools/report-arm-comparison.ts`
  * has no floor — it prints `trade_count` per arm to an operator, who would

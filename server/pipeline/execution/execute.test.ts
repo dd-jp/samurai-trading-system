@@ -3267,7 +3267,9 @@ describe('#1001: submit-time quote and decision price', () => {
       ).execute(makeGo());
 
       expect(result.status).toBe('submitted');
-      expect(costModel.fill).toHaveBeenCalledTimes(1);
+      // Two: the entry and, since #1301, the protective exit the same bracket
+      // arms — one `MarketState`, two priced events.
+      expect(costModel.fill).toHaveBeenCalledTimes(2);
       const position = await store.getPosition('key-aapl-1355');
       expect(position?.modelled_cost_breakdown).toEqual(modelledCostBreakdown);
     });
@@ -3374,6 +3376,58 @@ describe('#1001: submit-time quote and decision price', () => {
       // The independent quote try/catch is unaffected by the cost-model one.
       expect(position?.quote_bid).toBe(100.1);
       expect(position?.modelled_cost_breakdown).toBeUndefined();
+      // #1301: priced in the same try/catch, so it is absent with it.
+      expect(position?.modelled_protective_exit_cost_breakdown).toBeUndefined();
+    });
+
+    /**
+     * #1301: the bracket arms stop/target legs at submit time, so their cost is
+     * modelled at submit time too — off the SAME `MarketState`, in the same
+     * pass, keeping this one derivation per priced event (#1121 AC6) rather
+     * than a second one at ingest.
+     */
+    it('prices the protective exit alongside the entry, closing side and market order, on one MarketState', async () => {
+      const { store } = openTestExecutionStore();
+      const protectiveBreakdown = {
+        spread_cost: 9,
+        commission: 8,
+        slippage: 7,
+        market_impact: 6,
+      };
+      const costModel: CostModel = {
+        fill: vi
+          .fn()
+          .mockReturnValueOnce({
+            fill_price: 100,
+            filled_size: 100,
+            cost_breakdown: modelledCostBreakdown,
+          })
+          .mockReturnValueOnce({
+            fill_price: 95,
+            filled_size: 100,
+            cost_breakdown: protectiveBreakdown,
+          }),
+      };
+
+      const result = await new ExecutionImpl(
+        makeInput({ store, broker: makeBroker(), costModel, marketData: makeSnapshotMarketData() }),
+      ).execute(makeGo());
+
+      expect(result.status).toBe('submitted');
+      const calls = vi.mocked(costModel.fill).mock.calls;
+      const entryRequest = calls[0]?.[0];
+      const protectiveRequest = calls[1]?.[0];
+      expect(entryRequest?.side).toBe('buy');
+      expect(protectiveRequest?.side).toBe('sell');
+      expect(protectiveRequest?.order_type).toBe('market');
+      expect(protectiveRequest?.limit_price).toBeUndefined();
+      expect(protectiveRequest?.size).toBe(entryRequest?.size);
+      // The same assembled market state, not a second read of the feed.
+      expect(calls[1]?.[1]).toBe(calls[0]?.[1]);
+
+      const position = await store.getPosition('key-aapl-1355');
+      expect(position?.modelled_cost_breakdown).toEqual(modelledCostBreakdown);
+      expect(position?.modelled_protective_exit_cost_breakdown).toEqual(protectiveBreakdown);
     });
   });
 
