@@ -211,3 +211,25 @@ This ADR records the venue decision; it does not itself update the documents and
 ### What this does not change
 
 The **GBP LSE-listed leveraged ETF/ETC universe restriction** ([ADR-0016](0016-universe-leveraged-etps-ungated.md)), the **£1,000, all-equity book** and D5's sizing fractions (the 2026-08-18 amendment above), and [ADR-0017](0017-validation-gates-paper-operational-thesis-expectancy.md)'s £100–200 live ramp. **No `SaxoAdapter` exists yet** — the execution layer is entirely Alpaca for paper/backtest; this amendment settles which venue the live `BrokerAdapter` implementation targets, not that it has been built.
+
+## Amendment — 2026-09-14: Saxo's commission verified on the live gateway
+
+- **Earned by:** [#1311](https://github.com/dd-jp/samurai-trading-system/issues/1311) under map [#1308](https://github.com/dd-jp/samurai-trading-system/issues/1308) — measurement recorded in [#1311 comment 5668017278](https://github.com/dd-jp/samurai-trading-system/issues/1311#issuecomment-5668017278)
+- **Decided by:** measurement, not a ruling — no decision above changes
+
+**The 2026-08-30 amendments' cost claim — 8bps per side, no per-order minimum, 0.16% round trip — rested on Saxo's published Classic tariff as surveyed by doc 35 and [#906](https://github.com/dd-jp/samurai-trading-system/issues/906), not on a reading from the account.** It is now read from the funded live GIA itself (`port/v1/clients/me`: `DefaultCurrency` GBP, one `Normal` account, not a trial account), via `trade/v1/infoprices` with the `Commissions` field group at Amounts 1 / 10 / 100 / 1,000:
+
+| Line | Uic | CostBuy at 1 / 10 / 100 / 1,000 | Rate |
+| --- | --- | --- | --- |
+| 3LUS:xlon (GBP, quoted GBX) | 29049628 | £0.11 / £1.08 / £10.79 / £107.87 at ask 13,484 GBX | 0.08% flat |
+| 3USL:xlon (USD) | 3347273 | $0.15 / $1.45 / $14.54 / $145.42 | 0.08% flat |
+
+**Commission is proportional down to a single unit — there is no per-order minimum**, so the "Saxo has no per-order minimum" paragraph above, and the 0.16% round trip at ADR-0018 D5's £350 / £250 tickets, stand as verified rather than assumed. The £8 minimum seen earlier on SIM was the EUR trial account's tariff, not this account's (the account-shaped-fact caveat SIM evidence always carried).
+
+**What the figure does not cover:** it was read with the market `Closed` (indicative prices), and the `Commissions` group excludes FX conversion on the USD line, exchange/clearing pass-throughs, and any fill-time charge. Those remain for the first real fill to confirm.
+
+**Market data, recorded without concluding:** the same live read returned `DelayedByMinutes: 15`, but outside market hours; whether the GIA's quotes are delayed in session stays on [#895](https://github.com/dd-jp/samurai-trading-system/issues/895).
+
+### What this does not change
+
+The venue, the account type, the book, and D5's sizing fractions — this amendment verifies an input, it does not reopen a decision.
