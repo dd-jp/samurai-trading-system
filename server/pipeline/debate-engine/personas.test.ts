@@ -50,13 +50,58 @@ describe('runBullPersona', () => {
       analyst_views: [makeView()],
     });
 
-    // Without these three the spend meter cannot say which decision a persona
-    // call was made for, and every per-debate cost figure is NULL-keyed.
+    // Without trace_id/stage/debate_id the spend meter cannot say which
+    // decision a persona call was made for, and every per-debate cost figure
+    // is NULL-keyed. prompt_template_hash (#1514) is asserted separately
+    // below, since its value depends on this persona's template text.
     expect(client.requests[0]?.context.attribution).toEqual({
       trace_id: 'trace-1',
       stage: 'debate',
       debate_id: 'debate-abc',
+      prompt_template_hash: expect.stringMatching(/^[0-9a-f]{64}$/) as unknown as string,
     });
+  });
+
+  it('carries a stable prompt_template_hash on the attribution (#1514)', async () => {
+    const client = new MockLlmClient();
+    client.enqueueText(JSON.stringify({ stance: 'bullish', rationale: 'A.' }));
+    client.enqueueText(JSON.stringify({ stance: 'bullish', rationale: 'B.' }));
+
+    await runBullPersona(client, {
+      trace_id: 'trace-1',
+      analyst_views: [makeView({ key_points: ['first'] })],
+    });
+    await runBullPersona(client, {
+      trace_id: 'trace-1',
+      analyst_views: [makeView({ key_points: ['second, entirely different views'] })],
+    });
+
+    const first = client.requests[0]?.context.attribution?.prompt_template_hash;
+    const second = client.requests[1]?.context.attribution?.prompt_template_hash;
+    // Same template both times, despite the analyst views (the dynamic,
+    // per-call content) differing — the hash identifies the TEMPLATE, not
+    // the rendered prompt.
+    expect(first).toBe(second);
+    expect(first).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('gives each persona a distinct prompt_template_hash (#1514)', async () => {
+    const client = new MockLlmClient();
+    client.enqueueText(JSON.stringify({ stance: 'bullish', rationale: 'A.' }));
+    client.enqueueText(JSON.stringify({ stance: 'bearish', rationale: 'B.' }));
+    client.enqueueText(JSON.stringify({ stance: 'neutral', rationale: 'C.', converged: true }));
+
+    const input = { trace_id: 'trace-1', analyst_views: [makeView()] };
+    await runBullPersona(client, input);
+    await runBearPersona(client, input);
+    await runMediatorPersona(client, {
+      ...input,
+      bullResponse: { stance: 'bullish', rationale: 'Up.' },
+      bearResponse: { stance: 'bearish', rationale: 'Down.' },
+    });
+
+    const hashes = client.requests.map((r) => r.context.attribution?.prompt_template_hash);
+    expect(new Set(hashes).size).toBe(3);
   });
 
   it('omits debate_id for a persona invoked outside a debate rather than inventing one', async () => {

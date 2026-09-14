@@ -1,0 +1,46 @@
+-- Prompt-template version hash per logged decision (#1514).
+--
+-- `llm_spend` already carries `model` for every metered call, unconditionally
+-- (migrations/0010) — but the PROMPT TEMPLATE a call sends (the static
+-- instructional text a persona or the risk critic reuses on every call, as
+-- distinct from the per-request dynamic block folded in beside it) carries no
+-- version identifier anywhere. A prompt edit is invisible in the log: two
+-- rows with the same model can have been produced by materially different
+-- instructions, with nothing to tell them apart.
+--
+-- `hashPromptTemplate` (shared/llm/prompt-template-hash.ts) hashes each
+-- stage's static template once at module load (sha256, hex), and the hash
+-- rides `LlmAttribution` the same way `stage`/`debate_id` already do —
+-- meter bookkeeping, never sent to the model.
+--
+-- NOT the bare per-stage hash (#1514 round-1 review). Every metered call also
+-- passes through `renderMessageContent`'s `\n\nContext:\n` wrap and
+-- `wrapUntrusted`'s preamble/tags (llm/prompt-safety.ts), OUTSIDE the
+-- per-stage template — a shared surface every call shares regardless of
+-- stage. `AnthropicLlmClient.recordSpend` therefore persists
+-- `sha256("<stageTemplateHash>:<wireEnvelopeHash>")`
+-- (`WIRE_ENVELOPE_TEMPLATE_HASH`, llm/anthropic-client.ts), so this column
+-- changes on an edit to EITHER half, not just the stage's own text. A query
+-- keyed on a known stage's exported hash constant (e.g.
+-- `CRITIC_PROMPT_TEMPLATE_HASH`) must recompute the same composite to match a
+-- row; it will not find rows by the bare constant alone.
+--
+-- NULLABLE, not `NOT NULL`: every row already in this table predates this
+-- concept, and every call site that does not (yet) supply one — anything
+-- outside the debate/risk_critic stages this ticket covers — must not have a
+-- value fabricated for it. NULL is the honest "not attributed" record, the
+-- same reading migration 0057 gives `refused_pass_count`.
+--
+-- NO "effective-from" COLUMN. `llm_spend.timestamp` already carries when each
+-- call happened, so "when did this template version first appear" is
+-- `SELECT MIN(timestamp) FROM llm_spend WHERE prompt_template_hash = ?` —
+-- `?` bound to the composite value described above, derived from data that
+-- already exists, not a second value stamped at process start (which would
+-- record host uptime, not template history, and go stale on every restart).
+-- Answering "which prompt version produced decision X" (#1514 AC) needs only
+-- the hash beside the existing `model` column and `timestamp` already on this
+-- row.
+--
+-- ALTER TABLE, not a rebuild: one column, no CHECK, same posture as 0057.
+
+ALTER TABLE llm_spend ADD COLUMN prompt_template_hash TEXT;

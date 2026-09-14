@@ -69,6 +69,15 @@ export interface LlmAttribution {
    * `trace_id` + `stage`, is what attributes a call to a decision.
    */
   debate_id?: string | undefined;
+  /**
+   * `hashPromptTemplate(...)` (#1514, shared/llm/prompt-template-hash.ts) of
+   * the STATIC prompt template this call site sends — not the rendered
+   * prompt, which also carries per-request dynamic content (analyst views,
+   * book context) and would make the hash different on every call. Rides
+   * this envelope so a prompt edit is visible in `llm_spend` alongside
+   * `model` the same way a model swap already is.
+   */
+  prompt_template_hash?: string | undefined;
 }
 
 /**

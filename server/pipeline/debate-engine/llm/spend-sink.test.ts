@@ -30,6 +30,7 @@ interface SpendRow {
   latency_ms: number | null;
   ttfb_ms: number | null;
   timestamp: string;
+  prompt_template_hash: string | null;
 }
 
 function rows(db: StoreHandle): SpendRow[] {
@@ -89,6 +90,37 @@ describe('SqliteLlmSpendStore', () => {
     // unpriceable model must not cost us the usage data too.
     expect(row?.input_tokens).toBe(4_242);
     expect(row?.output_tokens).toBe(99);
+  });
+
+  it('persists the prompt template hash (#1514) when the record carries one', () => {
+    const db = openSharedStore(':memory:');
+    new SqliteLlmSpendStore(db).record({
+      trace_id: 'trace-1',
+      stage: 'debate',
+      model: 'openai/gpt-5.6-luna',
+      usage: { input_tokens: 10, output_tokens: 10 },
+      latency_ms: 10,
+      timestamp: NOW,
+      prompt_template_hash: 'abc123',
+    });
+
+    const [row] = rows(db);
+    expect(row?.prompt_template_hash).toBe('abc123');
+  });
+
+  it('leaves the prompt template hash NULL when the record carries none', () => {
+    const db = openSharedStore(':memory:');
+    new SqliteLlmSpendStore(db).record({
+      trace_id: 'trace-1',
+      stage: 'debate',
+      model: 'openai/gpt-5.6-luna',
+      usage: { input_tokens: 10, output_tokens: 10 },
+      latency_ms: 10,
+      timestamp: NOW,
+    });
+
+    const [row] = rows(db);
+    expect(row?.prompt_template_hash).toBeNull();
   });
 
   it('swallows a write failure to a warn instead of throwing into the caller', () => {
