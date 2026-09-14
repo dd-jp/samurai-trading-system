@@ -1487,6 +1487,10 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     ).reconcile();
 
     expect(alerts[0]?.reason).toContain('attribute them by hand');
+    // The row was submitted 6h ago but LAST examined a window ago, and the
+    // alert must say the second — the column is re-armed, so it cannot speak
+    // for the age of the wedge.
+    expect(alerts[0]?.reason).toContain('1800s after this sweep last examined it');
     expect((await store.getUnresolvedFlattens()).map((row) => row.idempotency_key)).toEqual([
       FLATTEN_KEY,
     ]);

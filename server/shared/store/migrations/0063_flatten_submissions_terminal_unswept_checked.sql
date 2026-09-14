@@ -22,6 +22,11 @@
 --    Bumped again on every pass that looks and does not release, so the check
 --    costs at most one venue read and one page per window per row.
 --
+-- Because of that re-arming, the value is the FIRST sighting only until the
+-- first look that reaches a verdict, and the LAST look thereafter. It therefore
+-- never measures how long a row has been wedged, and no alert may word it that
+-- way — the age of a wedge is `submitted_at` to `now`.
+--
 -- Durable rather than process-local for migration 0062's reason: a crash loop
 -- or an operator restart would otherwise re-arm a per-pass read-and-page, and
 -- would restart the ordering window from zero on a row that had already sat
