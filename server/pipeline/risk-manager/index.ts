@@ -215,7 +215,20 @@ export class RiskManagerImpl implements RiskManager {
   constructor(
     private readonly config: RiskConfig,
     private readonly thresholds?: RiskThresholdSource,
-  ) {}
+  ) {
+    // #1135/#569 — `Math.min(equity, NaN)` is `NaN`, `trimToAllowed` reads
+    // `NaN` as "no bound", and every generic cap then passes any size at all.
+    // Refused here, at construction, so a mis-declared book stops the process
+    // at boot rather than failing open on a money path one tick later.
+    const ceiling = config.generic_cap_equity_ceiling_usd;
+    if (ceiling !== undefined && (!Number.isFinite(ceiling) || ceiling <= 0)) {
+      throw new Error(
+        `RiskConfig.generic_cap_equity_ceiling_usd must be a positive, finite number of US ` +
+          `dollars, but it is ${String(ceiling)}. Refusing to build a Risk Manager whose generic ` +
+          'caps would resolve against an unbounded equity base.',
+      );
+    }
+  }
 
   /**
    * The check pipeline: exit pass-through, then the circuit-breaker gate,
@@ -512,6 +525,24 @@ type EntryCapGate = (
 ) => { name: string; allowedAdditional: number } | null;
 
 /**
+ * The equity the five GENERIC caps resolve against (#1135) —
+ * `min(portfolio.equity, generic_cap_equity_ceiling_usd)`.
+ *
+ * Re-derived here rather than shared with the Trader's `sizingEquity`
+ * (production/direct-bind.ts) on purpose: the two must clamp to the same book
+ * through INDEPENDENT paths, so that losing the Trader's ceiling — #1112's
+ * defect exactly — is caught by a cap instead of mirrored by one. Importing
+ * the Trader's inlet here would re-couple them and void the whole ticket.
+ *
+ * The D5 gate keeps its own `equity_ceiling` read: that one is GBP and decides
+ * a total refusal, which #1180 forbids resolving through a configured rate.
+ */
+function genericCapEquity(config: RiskConfig, portfolio: PortfolioView): number {
+  const ceiling = config.generic_cap_equity_ceiling_usd;
+  return ceiling === undefined ? portfolio.equity : Math.min(portfolio.equity, ceiling);
+}
+
+/**
  * Whether D5 is ARMED for this instrument with a NUMERIC fraction — the
  * predicate `perTradeSizeCap`, `perAssetExposureCap`, and
  * `perSubclassDeploymentCap` must agree on (#886, extended to
@@ -552,7 +583,8 @@ const perTradeSizeCap: EntryCapGate = (config, intent, portfolio) => {
   if (isD5ArmedWithNumericFraction(config, intent.instrument)) return null;
   return {
     name: 'per_trade_size_cap',
-    allowedAdditional: config.max_position_size_fraction_of_equity * portfolio.equity,
+    allowedAdditional:
+      config.max_position_size_fraction_of_equity * genericCapEquity(config, portfolio),
   };
 };
 
@@ -584,7 +616,7 @@ const perAssetExposureCap: EntryCapGate = (config, intent, portfolio) => {
   return {
     name: 'per_asset_exposure_cap',
     allowedAdditional:
-      config.per_asset_cap_fraction_of_equity * portfolio.equity -
+      config.per_asset_cap_fraction_of_equity * genericCapEquity(config, portfolio) -
       (portfolio.exposure_by_instrument[intent.instrument] ?? 0),
   };
 };
@@ -592,14 +624,16 @@ const perAssetExposureCap: EntryCapGate = (config, intent, portfolio) => {
 const perAssetClassExposureCap: EntryCapGate = (config, intent, portfolio) => ({
   name: 'per_asset_class_exposure_cap',
   allowedAdditional:
-    config.per_asset_class_cap_fraction_of_equity[intent.asset_class] * portfolio.equity -
+    config.per_asset_class_cap_fraction_of_equity[intent.asset_class] *
+      genericCapEquity(config, portfolio) -
     portfolio.exposure_by_class[intent.asset_class],
 });
 
 const portfolioGrossExposureCap: EntryCapGate = (config, _intent, portfolio) => ({
   name: 'portfolio_gross_exposure_cap',
   allowedAdditional:
-    config.portfolio_gross_cap_fraction_of_equity * portfolio.equity - portfolio.gross_exposure,
+    config.portfolio_gross_cap_fraction_of_equity * genericCapEquity(config, portfolio) -
+    portfolio.gross_exposure,
 });
 
 /**
@@ -624,7 +658,8 @@ const concentrationCorrelationCap: EntryCapGate = (config, intent, portfolio, co
   return {
     name: 'concentration_correlation_cap',
     allowedAdditional:
-      config.concentration.cap_fraction_of_equity * portfolio.equity - existingCorrelatedExposure,
+      config.concentration.cap_fraction_of_equity * genericCapEquity(config, portfolio) -
+      existingCorrelatedExposure,
   };
 };
 

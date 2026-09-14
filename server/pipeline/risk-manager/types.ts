@@ -186,8 +186,9 @@ export interface CorrelationEstimate {
  */
 export interface RiskConfig {
   /**
-   * Max notional for a single trade, as a FRACTION OF EQUITY resolved at
-   * evaluate time (#886) — not a frozen cash amount, which is what this field
+   * Max notional for a single trade, as a FRACTION OF the equity read at
+   * evaluate time (#886), itself capped at `generic_cap_equity_ceiling_usd`
+   * where one is declared (#1135) — not a frozen cash amount, which is what this field
    * carried until #886's equity-relative amendment. Renamed rather than
    * reinterpreted in place: a bare `max_position_size` left every existing
    * cash-literal test fixture compiling and silently testing a 1000x-wider
@@ -200,8 +201,9 @@ export interface RiskConfig {
    */
   max_position_size_fraction_of_equity: number;
   /**
-   * Max total notional exposure to one instrument, as a FRACTION OF EQUITY
-   * resolved at evaluate time (#886).
+   * Max total notional exposure to one instrument, as a FRACTION OF the equity
+   * read at evaluate time (#886), itself capped at
+   * `generic_cap_equity_ceiling_usd` where one is declared (#1135).
    *
    * Skipped entirely for a D5-classified instrument with a numeric
    * `per_subclass_deployment_cap` fraction (`isD5ArmedWithNumericFraction` in
@@ -224,17 +226,58 @@ export interface RiskConfig {
    * a D5-classified instrument unchanged.
    */
   per_asset_cap_fraction_of_equity: number;
-  /** Max total notional exposure per asset-class bucket, as a FRACTION OF EQUITY resolved at evaluate time (#886). */
+  /** Max total notional exposure per asset-class bucket, as a FRACTION OF EQUITY resolved at evaluate time (#886), of `generic_cap_equity_ceiling_usd` where one is declared (#1135). */
   per_asset_class_cap_fraction_of_equity: { crypto: number; stocks: number };
-  /** Max total gross notional exposure across the portfolio, as a FRACTION OF EQUITY resolved at evaluate time (#886). */
+  /** Max total gross notional exposure across the portfolio, as a FRACTION OF EQUITY resolved at evaluate time (#886), of `generic_cap_equity_ceiling_usd` where one is declared (#1135). */
   portfolio_gross_cap_fraction_of_equity: number;
   /** v2 dynamic concentration check (#50) — caps combined exposure across the intent's instrument and every instrument correlated with it. */
   concentration: {
-    /** Max combined notional exposure across the intent's instrument and everything correlated with it, as a FRACTION OF EQUITY resolved at evaluate time (#886). */
+    /** Max combined notional exposure across the intent's instrument and everything correlated with it, as a FRACTION OF EQUITY resolved at evaluate time (#886), of `generic_cap_equity_ceiling_usd` where one is declared (#1135). */
     cap_fraction_of_equity: number;
     /** |correlation| at/above which another instrument counts as concentrated risk with this one. */
     threshold: number;
   };
+  /**
+   * #1135 — the equity the FIVE generic caps above resolve against, capped at
+   * this figure: each one multiplies `min(portfolio.equity, this)` rather than
+   * raw `portfolio.equity`. In **USD**, the currency `portfolio.equity` is read
+   * in (`AlpacaAccountStateProvider`, production/account-state.ts).
+   *
+   * Absent means "no book declared" — every fraction resolves against raw
+   * equity exactly as it did before #1135, which is what paper, backtest and
+   * every pre-#1135 fixture get.
+   *
+   * **Why the caps need a book at all.** #1112 made the Trader size against
+   * `min(equity, capitalCeilingUsd)` (`sizingEquity`, production/direct-bind.ts)
+   * while these caps kept multiplying the unclamped figure. Against Alpaca's
+   * simulated ~$100k that put every cap 16-40x above the whole £1,000 book, so
+   * a correctly-sized position and a position sized off the pre-#1112 defect
+   * cleared them equally trivially. A cap that cannot tell the bug from its fix
+   * is not bounding that failure mode.
+   *
+   * **Set from the declared book, NOT from the Trader's ceiling, and that is
+   * the load-bearing part.** #1112's defect shape was a ceiling that existed in
+   * config and never reached `TraderStepDeps`. If this field were fed from the
+   * same value through the same wiring, a repeat of that defect would unclamp
+   * the Trader AND these caps together — mirrored, not caught.
+   * `buildStartingProfileConfigs` (paper-profile.ts) derives it from
+   * `LIVE_BOOK_GBP` on the config object instead, so a Trader-side regression
+   * still meets a bounded cap that names its gate.
+   *
+   * **Why a converted GBP figure is allowed here when `live_book_ceiling`
+   * refuses one.** #1180's asymmetry: "a rate error is proportional at the
+   * Trader's ask and absolute here, where it decides a total refusal against a
+   * few percent of tolerance." This field is a cap BASE, so a stale
+   * `SIZING_USD_PER_GBP` is a proportional sizing error of the same kind the
+   * Trader's inlet already accepts — not a refusal threshold, which is why
+   * `live_book_ceiling` and `SubclassDeploymentCap['equity_ceiling']` stay
+   * unarmed and GBP-native.
+   *
+   * **Deliberately not a `RISK_THRESHOLD_KEYS` dial** (risk-thresholds.ts): the
+   * declared book is a statement about the account, not a risk parameter the
+   * Feedback Loop may retune.
+   */
+  generic_cap_equity_ceiling_usd?: number;
   /** Below this notional, a trimmed intent is dust and must be rejected. */
   min_viable_size: number;
   /**

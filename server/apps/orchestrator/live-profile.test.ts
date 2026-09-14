@@ -107,21 +107,25 @@ describe('liveStartingProfile', () => {
     // all — asserted below by rebuilding `live` with a wildly different
     // ceiling and getting the identical `riskConfig` back.
     //
-    // **`live_book_ceiling` is the one deliberate exception (#888 review
-    // fix-up), and it is NOT ceiling-argument-shaped.** It is set from
-    // `LIVE_BOOK_GBP` — a fixed constant, not `CEILING` — whenever
-    // `liveStartingProfile` calls `buildStartingProfileConfigs` at all, which
-    // is unconditional, unlike the ceiling argument's independence asserted
-    // above. See `RiskConfig['live_book_ceiling']`'s doc comment
-    // (risk-manager/types.ts) for why paper deliberately does not carry it.
+    // **`live_book_ceiling` and `generic_cap_equity_ceiling_usd` are the two
+    // deliberate exceptions (#888 review fix-up; #1135), and neither is
+    // ceiling-argument-shaped.** Both are set from `LIVE_BOOK_GBP` — a fixed
+    // constant, not `CEILING` — whenever `liveStartingProfile` calls
+    // `buildStartingProfileConfigs` at all, which is unconditional, unlike the
+    // ceiling argument's independence asserted above. That independence is the
+    // whole of #1135: caps fed from the operator's ceiling would unclamp with
+    // it. See those two fields' doc comments (risk-manager/types.ts) for why
+    // paper deliberately carries neither.
     const live = liveStartingProfile(CEILING);
     const paper = paperStartingProfile('paper');
 
     expect(live.riskConfig).toEqual({
       ...paper.riskConfig,
       live_book_ceiling: { book: LIVE_BOOK_GBP, refuse_above_tolerance: expect.any(Number) },
+      generic_cap_equity_ceiling_usd: LIVE_BOOK_SIZING_USD,
     });
     expect(paper.riskConfig.live_book_ceiling).toBeUndefined();
+    expect(paper.riskConfig.generic_cap_equity_ceiling_usd).toBeUndefined();
   });
 
   it('produces the identical riskConfig regardless of which ceiling it is built with', () => {

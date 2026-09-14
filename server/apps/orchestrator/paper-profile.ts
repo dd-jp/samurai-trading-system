@@ -1462,6 +1462,28 @@ export function buildStartingProfileConfigs(
             refuse_above_tolerance: D5_BOOK_REFUSE_ABOVE_TOLERANCE,
           },
         }),
+    /**
+     * #1135 — the base the five generic caps above resolve against, in the
+     * currency `portfolio.equity` is read in. Supplied on the same condition
+     * as `live_book_ceiling` (a declared book, i.e. live only) and converted
+     * here, which is the one difference between them: this is a cap BASE, so
+     * `SIZING_USD_PER_GBP`'s drift is a proportional sizing error of the kind
+     * #1180 already accepts at the Trader's inlet — not the absolute
+     * refuse/don't-refuse decision that keeps `live_book_ceiling` GBP-native
+     * and unarmed.
+     *
+     * **Paper deliberately gets none, and it was measured rather than
+     * assumed.** At the converted book ($1,270) the clamped caps resolve to
+     * $63.50-$635 while `DEFAULT_UNIVERSE`'s shares cost $200-600 under
+     * `whole_share_sizing`, so every paper entry would floor to zero shares
+     * and reject `whole_share_sizing:rounds_to_zero` — a soak that boots and
+     * trades nothing, the #625/#691 signature. See
+     * `generic-cap-book-ceiling.test.ts` for the pinned arithmetic and
+     * risk-manager-spec.md's 2026-09-14 amendment for the decision.
+     */
+    ...(bookCeilingGbp === undefined
+      ? {}
+      : { generic_cap_equity_ceiling_usd: bookCeilingGbp * SIZING_USD_PER_GBP }),
   };
 
   const verdictConfig: VerdictConfig = {

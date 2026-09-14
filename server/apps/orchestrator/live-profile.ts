@@ -67,18 +67,22 @@
  * `portfolio.equity` at evaluate time — the same pattern D5 already used.**
  * That retired the STATIC-cap limit this section used to describe (the six
  * caps used to be derived from the ceiling once at boot, and were therefore
- * looser than intended whenever equity sat below it). It also means the Risk
- * Manager's caps now scale with REAL, unclamped account equity, not with the
- * ceiling: `sizingEquity` (direct-bind.ts) clamps equity only at the Trader's
- * sizing inlet, deliberately, so the drawdown/loss breakers still observe the
- * true account. D5 has always worked this way — its envelope is 35%/25% of
- * real equity regardless of any declared ceiling — and the other five caps
- * now match it rather than being an exception. **Consequence, stated rather
- * than hidden:** on an account funded ABOVE the declared ceiling, the Risk
- * Manager's caps are no longer bounded by the ceiling at all; the ceiling's
- * only remaining effect is on the Trader's ASK via `sizingEquity`. Declaring
- * a ceiling at or below what the account actually holds is what a capital cap
- * means in the first place, and remains the mitigation.
+ * looser than intended whenever equity sat below it). `sizingEquity`
+ * (direct-bind.ts) clamps equity only at the Trader's sizing inlet,
+ * deliberately, so the drawdown/loss breakers still observe the true account.
+ *
+ * **#1135 then bounded the five generic caps by the DECLARED BOOK, which is
+ * not this ceiling.** They resolve against `min(portfolio.equity,
+ * riskConfig.generic_cap_equity_ceiling_usd)`, and that figure is
+ * `LIVE_BOOK_GBP` converted at `SIZING_USD_PER_GBP` — set on the config by
+ * `buildStartingProfileConfigs`, never read from
+ * `SAMURAI_LIVE_MAX_CAPITAL_USD`. The separation is the point: #1112's defect
+ * was a ceiling that existed in config and never reached the Trader, and caps
+ * fed from that same wiring would have unclamped with it instead of catching
+ * it. **Consequence, stated rather than hidden:** declaring a ceiling ABOVE
+ * the book does not widen these caps, and an account funded above the book
+ * does not widen them either — only D5's own envelope still scales with real
+ * equity (35%/25%), under its separate GBP `equity_ceiling` (#888).
  */
 import { DEFAULT_TRADER_CONFIG } from '../../pipeline/trader/index.js';
 import type { Logger } from '../../shared/index.js';
@@ -300,9 +304,15 @@ export function liveStartingProfile(
       'building the LIVE STARTING PROFILE — real money, no human gate (ADR-0007). Its dials ' +
       "are the paper soak's untuned starting values. The six notional caps are fractions of " +
       `live equity, identical to the paper profile's; ${LIVE_MAX_CAPITAL_ENV_VAR} bounds ` +
-      "only the Trader's ask (sizingEquity: min(ceiling, equity)), not the Risk Manager's caps " +
+      "only the Trader's ask (sizingEquity: min(ceiling, equity)). Since #1135 the five " +
+      `generic Risk Manager caps resolve against min(equity, £${LIVE_BOOK_GBP} at ` +
+      `SIZING_USD_PER_GBP = $${LIVE_BOOK_SIZING_USD}) — the DECLARED BOOK, not this ceiling and ` +
+      'not raw equity, so a Trader that loses its ceiling is trimmed here rather than tracked ' +
       `— declare a ceiling at or below what the account actually holds. ${LIVE_MONEY_GATE_SUMMARY}`,
-    payload: { capital_ceiling_usd: ceiling },
+    payload: {
+      capital_ceiling_usd: ceiling,
+      generic_cap_equity_ceiling_usd: LIVE_BOOK_SIZING_USD,
+    },
   });
 
   if (ceilingLooksLikeUnconvertedBookGbp(ceiling)) {
