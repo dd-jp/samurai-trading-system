@@ -131,6 +131,14 @@ Any store operation making more than one dependent write wraps them in a single 
 
 Every env-derived value is an explicit option/config field whose default reads `process.env` at the option site — `options.apiKey ?? process.env.ALPACA_API_KEY` — documented in that option's doc comment. Entry points (`orchestrator/index.ts`, `dashboard/index.ts`, scripts) are the only places that do raw multi-variable env parsing. Composition and stage code never reach for `process.env` mid-wiring: a build function that needs an env decision takes a config field carrying the env default instead, so tests and programmatic callers can decide without touching the process environment. (Review 2026-08-06 D2 — `sentimentEnabled` is the worked example.)
 
+## Dependency direction: `contracts` ← `shared` ← `providers` ← `pipeline` ← `apps`; `tools/` is a leaf
+
+A module imports only from layers below it. `tools/` (CLIs, the backtest harness, reports) imports from every layer and is imported by none — a type or mechanism the money path needs (`CostModel`, `MetricsSuite`, `MarketState`) is not a tool and lives in `shared/`. A port consumed by more than one stage (`LlmClient`, `SpendCap`) is not owned by the stage that first needed it; it moves to `shared/` when the second consumer arrives, not after the ninth. A lower layer never imports a higher one for a type it could declare itself (`shared/types/records.ts` importing from `pipeline/debate-engine` is the worked counter-example). Review 2026-09-15 D1 measured 19 non-test files importing `tools/backtest` from below and 18 `tools/` imports of `apps/orchestrator` — a cycle that forces `credentialRequirements()` to be a lazy function.
+
+## Test doubles are not barrel exports
+
+`InMemory*`, `Fixture*`, `Mock*` and `Scripted*` adapters live in a `testing.ts` (or the test file) next to the module and are imported by path from tests only. A module barrel exports its interface and its production adapters; a double on the barrel widens the interface every caller must read and is the reason the `feedback-loop` and `debate-engine` barrels reached 70 and 120 exports (review 2026-09-15 D6). The one exception is a double that a production composition root binds on purpose (`UNCAPPED_SPEND`, `NULL_SPEND_SINK`, `UNGATED_LLM_IN_FLIGHT`) — those are second adapters, and they stay.
+
 ## When in doubt
 
 Grep for existing patterns in sibling modules before introducing a new one. Match the file's existing style over a "better" abstraction.
