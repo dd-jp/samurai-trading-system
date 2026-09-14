@@ -81,6 +81,24 @@ import type { GrokSentimentClient } from './grok-agent.js';
 const DEFAULT_TIMEOUT_MS = 60_000;
 
 /**
+ * What a retrieval call is EXPECTED to take, for the in-flight gate's queue
+ * estimate (#1080) — the top of the 5–26 s range measured on 2026-09-14, not
+ * `DEFAULT_TIMEOUT_MS`.
+ *
+ * The distinction is load-bearing in both directions. The timeout is a
+ * worst-case bound and doubles as this call's gate budget; the gate refuses a
+ * caller whose estimated wait plus its own expected call reaches that budget,
+ * so declaring the timeout as the expectation would make `wait + 60,000 >=
+ * 60,000` true for every non-zero wait — every retrieval call refused the
+ * moment anything else holds the permit. Declaring the measured 26 s instead
+ * leaves ~34 s of wait tolerance, which is what lets retrieval queue behind a
+ * debate call rather than be refused behind it, while still telling callers
+ * queued behind THIS one that they are waiting on something far heavier than
+ * a ~13 s debate call.
+ */
+const MEASURED_RETRIEVAL_CALL_MS = 26_000;
+
+/**
  * Response budget.
  *
  * Larger than `NousSentimentClient`'s 2048 because this model reasons before
@@ -298,12 +316,12 @@ export class XSearchClient implements GrokSentimentClient {
         // timeout by the wait it just served; that is a follow-up, not this
         // change (#1080 review round 1, finding 6).
         gateBudgetMs: this.#timeoutMs,
-        // Declared, because it is nothing like a debate call: a retrieval call
-        // runs the provider's own search loop and this client's default
-        // timeout is 60,000 ms against a debate call's ~13,000. A caller queued
-        // behind one that estimated its wait at 13 s would be admitted into a
-        // deadline it cannot make.
-        expectedCallMs: this.#timeoutMs,
+        // Declared, because a retrieval call is nothing like a debate call: it
+        // runs the provider's own search loop, measured at 5–26 s against a
+        // debate call's ~13 s. A caller queued behind one that estimated its
+        // wait at 13 s would be admitted into a deadline it cannot make. The
+        // measured figure, not `this.#timeoutMs` — see the constant.
+        expectedCallMs: MEASURED_RETRIEVAL_CALL_MS,
         llmStage: 'market_intelligence_retrieval',
       },
       {

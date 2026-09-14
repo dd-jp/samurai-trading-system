@@ -181,6 +181,13 @@ export class NousSentimentClient implements GrokSentimentClient {
           // worst case is their sum — see the same note in `x-search-client.ts`
           // (#1080 review round 1, finding 6).
           gateBudgetMs: this.#timeoutMs,
+          // No `expectedCallMs`, deliberately, unlike `x-search-client.ts`: a
+          // sentiment refresh is one chat completion of the same shape and
+          // output size as a debate call, so the gate's debate-calibrated
+          // default IS the estimate for it. Retrieval differs because it runs
+          // the provider's search loop and was measured doing so; nothing has
+          // measured a sentiment call apart, and inventing a figure would look
+          // like evidence.
           llmStage: 'market_intelligence_sentiment',
         },
         {

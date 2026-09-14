@@ -60,9 +60,16 @@
  * full deadline and produce nothing. #1080's measurement is that the second
  * mistake is the expensive one, which is also why the durations are per
  * CALLER (`LlmInFlightRequest.expectedCallMs`) rather than one constant: an X
- * retrieval call holds the permit for up to 60 s, and a debate call queued
- * behind one must not estimate its wait as though a 13 s debate call were
- * ahead of it.
+ * retrieval call was measured at 5–26 s, and a debate call queued behind one
+ * must not estimate its wait as though a 13 s debate call were ahead of it.
+ *
+ * A caller declares what its call is EXPECTED to take, never its timeout. The
+ * two are different numbers and substituting one for the other degenerates
+ * this predicate: a caller whose `budgetMs` and `expectedCallMs` are both its
+ * timeout satisfies `wait + call >= budget` for every non-zero wait, so it is
+ * refused whenever anything else holds a permit and runs only when the gate
+ * is idle. `budgetMs - expectedCallMs` IS a caller's tolerance for waiting;
+ * equality means it will not wait at all.
  */
 
 import type { Logger } from '../types.js';
