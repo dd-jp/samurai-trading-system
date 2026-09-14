@@ -65,10 +65,23 @@ bracket resolves, so every row is a lower bound that loosens as its resolve rate
 > **Amended 2026-09-14 by [#1218](https://github.com/dd-jp/samurai-trading-system/issues/1218): the round trips
 > above are SPREAD ONLY and carry no commission, so every bar in this table is understated by Saxo's 16 bps.**
 >
-> Doc 52's `COST = {index: 0.18, single: 0.41}` is ADR-0018 D3's, and D3's is doc 18's — where it is stated as
-> *"one observed **0.18% spread** quote for 3USL"* (doc 18, Known weaknesses). It is a spread, not a blended
-> total. Saxo's live GIA commission was measured 2026-09-14 at **0.08%/side flat, no per-order minimum**
-> (ADR-0015's amendment, `1d155b7e`), which is **0.16% round trip** and additive to it. So `cost' = cost + 0.16`:
+> **This restates, it does not discover.** [`59-universe-tradeability-screen.md`](59-universe-tradeability-screen.md)
+> §3 reached the same per-name figures on 2026-09-04 as a cross-check on its own accuracy budget, and this
+> amendment reproduces them rather than competing with them. What it adds is the discharge of doc 59's one
+> caveat: §3.0 tags the spread-only premise **`[inferred]`** — *"the single load-bearing inference in §3"* —
+> because "no document states in those words that the D3 figures exclude venue commission". **Two documents now
+> do.** Doc 18's Known weaknesses states the index figure as *"one observed **0.18% spread** quote for 3USL"*,
+> and ADR-0016's own open-items paragraph calls both figures spreads: *"real LSE ETP **spreads** per subclass
+> have not been measured … the 0.18% and 0.41% figures are each a single quote"*. That covers the single-stock
+> leg too, which doc 18's quote alone does not. The premise is therefore **[verified]**, not inferred, and doc
+> 59 §3.0's flag is discharged on the evidence it named; doc 59's separate `[assumed]` on ADR-0017's ~55% as an
+> accuracy *budget* is untouched by this and still stands.
+>
+> Doc 52's `COST = {index: 0.18, single: 0.41}` is ADR-0018 D3's, and D3's is doc 18's and ADR-0016's, per the
+> two quotes above. It is a spread, not a blended total. Saxo's live GIA commission was measured 2026-09-14 at
+> **0.08%/side flat, no per-order minimum** (ADR-0015's amendment, `1d155b7e`), which is **0.16% round trip** and
+> additive to it — doc 59 §3 states the same non-double-counting explicitly (*"adding Saxo's full 16 bps
+> double-counts nothing"*). So `cost' = cost + 0.16`:
 > **0.34% index, 0.57% single-stock.**
 >
 > **Nothing needs re-simulating.** In `52-exit-geometry-and-subclass-odds.py` cost enters only as a terminal

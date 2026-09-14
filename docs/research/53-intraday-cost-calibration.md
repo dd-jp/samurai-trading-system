@@ -286,13 +286,18 @@ not have a mandate to touch them, and the criterion above explicitly excludes th
 >
 > **G2's delta column therefore does NOT survive as printed — but its verdict does.** Because only one of the two
 > configs declares a `venues` key, the stamp does not cancel across the comparison: the instrument is stamped in
-> both arms, but only the intraday arm has an override to honour. As the code now runs it the deltas are **+7.0687
-> (SPY), +7.0686 (QQQ), +7.1031 (AAPL), +7.1354 (TSLA)** on the 2017-03-15 basis — every symbol roughly 28x over
-> the 0.25 bps bar. That is not a repricing of the spread calibration. It is the two timeframe-keyed configs now
-> differing on **two axes rather than one**, so the delta no longer isolates what it was built to isolate. Hold
-> `venues` equal across both arms and the published deltas come back exactly (0.0687 / 0.0686 / 0.1031 / 0.1354,
-> all under the bar) — so the coefficient comparison is intact, **"roughly an order of magnitude" stays
-> withdrawn**, and G1, G3 and G4 are untouched. **Any future re-run of G2 must equalize `venues` across the two
+> both arms, but only the intraday arm has an override to honour. As the code now runs it the deltas become
+> **+7.0687 (SPY), +7.0686 (QQQ), +7.1031 (AAPL), +7.1354 (TSLA)** on the *2017-03-15 snapshot* basis, or
+> **+7.0688 / +7.0686 / +7.1031 / +7.1837** on the *published five-session-median* basis of the table above —
+> every symbol roughly 28x over the 0.25 bps bar either way. **Mind the basis**: the two differ only on TSLA, by
+> the 0.0483 bps the restatement log records as doc 53's own snapshot-vs-median gap, and the flat +7.0000 carries
+> through both identically. That is not a repricing of the spread calibration. It is the two timeframe-keyed
+> configs now differing on **two axes rather than one**, so the delta no longer isolates what it was built to
+> isolate. Hold `venues` equal across both arms and the published deltas come back on their own basis — the
+> log's snapshot figures 0.0687 / 0.0686 / 0.1031 / 0.1354 against this table's 0.0688 / 0.0686 / 0.1031 /
+> 0.1837, and the largest of the four, TSLA's 0.1837, is still under the 0.25 bps bar — so the coefficient
+> comparison is intact, **"roughly an order of magnitude" stays withdrawn**, and G3 and G4 are untouched (for G1
+> see its residual 1 below, amended by the same ticket). **Any future re-run of G2 must equalize `venues` across the two
 > arms, or it measures the venue override instead of the calibration.** Part 4 of the restatement log prices both
 > ways rather than arguing it.
 >
@@ -325,7 +330,10 @@ charged cost for every symbol (the floor is invariant while slippage still shrin
 G4 proxy gap is uncovered. So the WARNING narrows, and its replacement states three named residuals:
 
 1. charged half-spread is at the structural floor at both resolutions and under both configs, so the floor governs
-   what a fill is charged, not this calibration;
+   what a fill is charged, not this calibration; **amended 2026-09-14 by
+   [#1218](https://github.com/dd-jp/samurai-trading-system/issues/1218) — the first clause stands, the second no
+   longer does on the intraday path. The *spread* floor still binds, but what governs a fill's charge there is now
+   `venues.saxo.commissionRate` (8 bps/side), which dwarfs both floors. See the amendment box in G2;**
 2. one per-asset-class coefficient under-charges the wide names (G3, TSLA at 3.3x the median);
 3. the fit is a **US-equity proxy**; the live universe is GBP LSE-listed leveraged ETPs (ADR-0016) with no free
    quote source.
