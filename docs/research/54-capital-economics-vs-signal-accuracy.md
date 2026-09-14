@@ -66,16 +66,19 @@ bracket resolves, so every row is a lower bound that loosens as its resolve rate
 > above are SPREAD ONLY and carry no commission, so every bar in this table is understated by Saxo's 16 bps.**
 >
 > **This restates, it does not discover.** [`59-universe-tradeability-screen.md`](59-universe-tradeability-screen.md)
-> §3 reached the same per-name figures on 2026-09-04 as a cross-check on its own accuracy budget, and this
-> amendment reproduces them rather than competing with them. What it adds is the discharge of doc 59's one
-> caveat: §3.0 tags the spread-only premise **`[inferred]`** — *"the single load-bearing inference in §3"* —
-> because "no document states in those words that the D3 figures exclude venue commission". **Two documents now
-> do.** Doc 18's Known weaknesses states the index figure as *"one observed **0.18% spread** quote for 3USL"*,
-> and ADR-0016's own open-items paragraph calls both figures spreads: *"real LSE ETP **spreads** per subclass
-> have not been measured … the 0.18% and 0.41% figures are each a single quote"*. That covers the single-stock
-> leg too, which doc 18's quote alone does not. The premise is therefore **[verified]**, not inferred, and doc
-> 59 §3.0's flag is discharged on the evidence it named; doc 59's separate `[assumed]` on ADR-0017's ~55% as an
-> accuracy *budget* is untouched by this and still stands.
+> §3 reached the same per-name figures on 2026-09-03 as a cross-check on its own accuracy budget, and this
+> amendment reproduces them rather than competing with them. **Doc 59 §3.0's `[inferred]` tag on the spread-only
+> premise still stands**, and this amendment inherits it rather than discharging it. §3.0's caveat is that "no
+> document states in those words that the D3 figures **exclude venue commission**"; what the sources establish
+> is the weaker premise that the figures are **spread quotes** — doc 18's Known weaknesses for the index leg
+> (*"one observed **0.18% spread** quote for 3USL"*) and ADR-0016's open-items paragraph for both (*"real LSE
+> ETP **spreads** per subclass have not been measured … the 0.18% and 0.41% figures are each a single quote"*).
+> Getting from there to "excludes commission" is still the inference doc 59 flagged. Nor is ADR-0016 new
+> evidence: doc 59 §3.0 already cites it as its own input. All it adds here is **coverage of the single-stock
+> 0.41 leg**, which doc 18's 3USL quote does not reach — a narrowing of the inference, not its removal.
+> Aligning the two documents' tags is carried by
+> [#1548](https://github.com/dd-jp/samurai-trading-system/issues/1548). Doc 59's separate `[assumed]` on
+> ADR-0017's ~55% as an accuracy *budget* is untouched by this and likewise stands.
 >
 > Doc 52's `COST = {index: 0.18, single: 0.41}` is ADR-0018 D3's, and D3's is doc 18's and ADR-0016's, per the
 > two quotes above. It is a spread, not a blended total. Saxo's live GIA commission was measured 2026-09-14 at
