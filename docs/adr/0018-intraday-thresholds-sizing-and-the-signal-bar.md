@@ -301,7 +301,7 @@ cost' = cost + 0.16                bar' = bar + 0.16 / width × 100
 | 3× index ETP / ETC | 0.18% → **0.34%** | 4.16% | +4.33 pp | **+8.18 pp** | +0.34%/trade |
 | 3× single-stock ETP | 0.41% → **0.57%** | 12.25% | +3.35 pp | **+4.66 pp** | +0.57%/trade |
 
-(Dividing the charged row directly gives 8.17 / 4.65; the published **+8.18 / +4.66** is the sum of the pre-rounded parts — `4.33 + 3.85` and `3.35 + 1.31` — per this amendment's own derivation below, not a rounding error.)
+(Dividing the charged row directly gives 8.17 / 4.65 — the same figure direct division of the unrounded sum gives (8.1731 → 8.17). The published **+8.18 / +4.66** is the sum of the *published, already-rounded* parts — `4.33 + 3.85` and `3.35 + 1.31` — not a division a reader should reproduce and flag as wrong.)
 
 The index bar moves further in absolute terms (+3.85 pp) than the single-stock bar (+1.31 pp), because the same flat 16 bps is amortised over a bracket 2.9x narrower — the D3 corollary that narrow brackets demand a large edge is sharper, not reversed. Doc 54 §5's break-even table (per-name, not per-subclass) restates in the same pass: **52.6% (PLTR) to 58.5% (MSTR)** before the LLM bill, widened from the spread-only **51.29% (PLTR) to 57.16% (MSTR)** doc 54 §2's table (drawn from doc 52's per-name simulation, not a figure this ADR itself ever published) implied.
 
