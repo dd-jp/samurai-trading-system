@@ -54,3 +54,4 @@ export {
   priceUsage,
   rateFor,
 } from './pricing.js';
+export { hashPromptTemplate } from './prompt-template-hash.js';

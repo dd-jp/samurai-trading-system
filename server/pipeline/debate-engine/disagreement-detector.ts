@@ -9,6 +9,7 @@
  * `analyst-contribution.ts`.
  */
 import { type Logger, safeLog } from '../../shared/index.js';
+import { hashPromptTemplate } from '../../shared/llm/prompt-template-hash.js';
 import { classifyFailureCause } from './llm/failure-cause.js';
 import { BARE_JSON_INSTRUCTION, unwrapFencedJson } from './llm/json-response.js';
 import type { LlmClient } from './llm/types.js';
@@ -55,6 +56,8 @@ const PROMPT = [
   'If there are no conflicts, respond with an empty "conflicts" array and a',
   'summary noting agreement.',
 ].join('\n');
+/** sha256 of `PROMPT` above (#1514) — this detector's whole prompt is static, so it hashes the constant directly rather than splitting a template out. */
+const PROMPT_TEMPLATE_HASH = hashPromptTemplate(PROMPT);
 
 function isConflict(value: unknown): value is { analysts: string[]; nature: string } {
   if (typeof value !== 'object' || value === null) {
@@ -189,6 +192,7 @@ export async function detectDisagreements(
           trace_id: attribution?.trace_id,
           stage: 'debate',
           debate_id: attribution?.debate_id,
+          prompt_template_hash: PROMPT_TEMPLATE_HASH,
         },
       },
       parseResponse: parseDisagreementResponse,

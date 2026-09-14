@@ -643,7 +643,19 @@ CREATE TABLE llm_spend (
   -- Added by 0018 (#476): server-side tool calls, billed but token-invisible.
   server_tool_calls            INTEGER NOT NULL DEFAULT 0,
   -- Added by 0038: time-to-first-byte, a strict lower bound inside latency_ms's span.
-  ttfb_ms                      INTEGER
+  ttfb_ms                      INTEGER,
+  -- Added by 0058 (#1514): sha256 of `"<stageTemplateHash>:<wireEnvelopeHash>"`
+  -- — the call's stage's STATIC prompt template combined with the shared wire
+  -- envelope every call also passes through (renderMessageContent's
+  -- Context: wrap, prompt-safety.ts's wrapUntrusted preamble/tags; see
+  -- WIRE_ENVELOPE_TEMPLATE_HASH, llm/anthropic-client.ts) — not the rendered
+  -- prompt, and not the bare per-stage hash either, since either half
+  -- changing must change this column. NULL for a call site not yet wired to
+  -- supply one, never fabricated. Answers "which prompt version produced
+  -- decision X" together with this row's existing model/timestamp; no
+  -- separate effective-from column — derive it with MIN(timestamp) WHERE
+  -- prompt_template_hash = ? (the composite value, not a bare stage hash).
+  prompt_template_hash          TEXT
 );
 
 -- The operator surface's only access pattern is "sum the last N hours/days" —

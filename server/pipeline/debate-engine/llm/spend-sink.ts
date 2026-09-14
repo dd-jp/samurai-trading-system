@@ -103,6 +103,21 @@ export interface LlmSpendRecord {
   prompt?: string | undefined;
   /** The model's raw response text, same provenance and same treatment as `prompt`. */
   response?: string | undefined;
+  /**
+   * `hashPromptTemplate("<stageTemplateHash>:<wireEnvelopeHash>")` (#1514,
+   * round-1 review) — the call's stage's STATIC template combined with the
+   * shared wire envelope every call also passes through
+   * (`WIRE_ENVELOPE_TEMPLATE_HASH`, `anthropic-client.ts`), not the rendered
+   * prompt (which also carries per-request dynamic content and would make
+   * the hash different on every call) and not the bare stage hash alone
+   * (which would miss an edit to the shared envelope). The only writer,
+   * `AnthropicLlmClient.recordSpend`, computes this composite via
+   * `withWireEnvelope`; a `LlmSpendRecord` built directly (e.g. in a test)
+   * must supply the same composite to match a real row. Undefined for a call
+   * site that has not been wired to supply a stage hash at all; persisted as
+   * NULL rather than fabricated (migrations/0058).
+   */
+  prompt_template_hash?: string | undefined;
 }
 
 /**
@@ -225,8 +240,9 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
              trace_id, stage, debate_id, model,
              input_tokens, output_tokens,
              cache_creation_input_tokens, cache_read_input_tokens,
-             cost_usd, server_tool_calls, latency_ms, ttfb_ms, timestamp
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             cost_usd, server_tool_calls, latency_ms, ttfb_ms, timestamp,
+             prompt_template_hash
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           entry.trace_id,
@@ -246,6 +262,7 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
           entry.latency_ms,
           entry.ttfb_ms ?? null,
           toStoredTimestamp(entry.timestamp),
+          entry.prompt_template_hash ?? null,
         );
 
       // Reached only once the spend row has landed, so `spend_id` is always a

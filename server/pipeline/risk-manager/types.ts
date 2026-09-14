@@ -350,6 +350,32 @@ export interface RiskConfig {
     /** See the currency-mismatch paragraph above. Absent/`false` refuses to arm outright. */
     same_currency_verified?: boolean;
   };
+  /**
+   * #1511, David's 2026-09-14 decision: long-only book. The instruments a
+   * `sell` that is not an exit must be refused on — every Saxo-venue name the
+   * run is actually configured to trade, i.e. `saxoTradeableUniverse()`
+   * (production/saxo-venue.ts), which is threaded here from
+   * `paperStartingProfile`'s `bookCurrency === 'GBP'` branch (the one caller
+   * `startingProfileForMode`, index.ts, supplies with `SAMURAI_BROKER=saxo`).
+   *
+   * NOT `asset_class === 'stocks'`. That was the first-pass discriminator and
+   * it is wrong: it also catches the Alpaca paper universe (`DEFAULT_UNIVERSE`
+   * — SPY/QQQ/AAPL/TSLA, scheduler.ts), which is `asset_class: 'stocks'` too
+   * but trades on no venue this decision was ever asked about, and one round
+   * of review measured it silently removing ~2/3 of entry intents from the
+   * running 14-day soak on both arms.
+   *
+   * Also NOT `per_subclass_deployment_cap.subclass_of` membership: a Saxo
+   * row's D5 subclass is only set once its bracket is MEASURED
+   * (`liveSizingSubclassFor`), so an unmeasured-but-tradeable Saxo line would
+   * be silently exempted from a refusal that has nothing to do with sizing.
+   *
+   * Absent means the gate does not apply — the same "off by default" idiom as
+   * `per_subclass_deployment_cap` above, correct for every fixture and for
+   * the unwidened `DEFAULT_UNIVERSE` paper/live path, which trades no Saxo
+   * venue at all.
+   */
+  long_only_instruments?: ReadonlySet<string>;
 }
 
 /**
