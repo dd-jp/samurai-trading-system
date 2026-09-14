@@ -400,7 +400,12 @@ What #1080 adds is a measurement and a way to keep measuring it:
   floor and not a total: 17 more debate calls gave up with
   `failure_cause: 'cancelled'` — the latency budget aborting a request already
   on the wire — and wrote no row either, each for an unknown partial
-  generation.
+  generation. All 17 were in flight rather than refused before dispatch: the
+  pre-dispatch guard in `complete` (the #347 "no further calls after the budget
+  fires" path) reports through the same observer and would be legible as
+  `cancelled before dispatch`, and no give-up line in either session says that.
+  That distinction is the whole question for this bullet — a pre-dispatch
+  refusal costs nothing, an in-flight abort bills an unknown partial.
 - **The timestamp-gap method cannot replace the log.** An earlier form of this
   bullet inferred hidden attempts from intervals between consecutive
   `llm_spend` rows of one debate, and put the floor at 9 attempts / ~$0.021.

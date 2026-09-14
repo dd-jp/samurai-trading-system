@@ -244,11 +244,14 @@ describe('AnthropicLlmClient', () => {
    * a latency budget the retry is not counted against, while a `status` timeout
    * is a 408/504 the gateway answered fast.
    *
-   * Measured over three soak sessions: 22 of 22 retried attempts in the
-   * 2026-09-03 sample reported `elapsed_ms` between 28,002 and 28,007 — every
-   * one of them the deadline itself — and none contributed a success. No 408 or
-   * 504 appears in the sample at all, which is why the fast branch is decided
-   * on cost rather than on measurement.
+   * Measured over the two soak sessions that ran the 28,000ms deadline
+   * (2026-09-08, 2026-09-10 — `onRetryAttempt` ships with #1103, so no earlier
+   * session logs a retry): all 38 retried attempts are attempt 1 of 2,
+   * reporting `elapsed_ms` between 28,002 and 28,012 — every one of them the
+   * deadline itself — and at most 6 of the 37 debate-stage ones are followed
+   * by a metered row in their own debate. No 408 or 504 appears in either
+   * session at all, which is why the fast branch is decided on cost rather
+   * than on measurement.
    *
    * The assertion that matters is the ATTEMPT COUNT, not the thrown class.
    */

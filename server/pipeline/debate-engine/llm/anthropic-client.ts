@@ -46,12 +46,14 @@ import {
  * counted against (`enforceLatencyBudget`), so retrying spends a second full
  * deadline out of the budget it was supposed to help meet.
  *
- * Measured rather than argued: of 22 `llm_attempt_retried` lines in the
- * 2026-09-03 sample, 22 reported `elapsed_ms` in 28,002-28,007ms — the deadline
- * itself, not a transient blip — and none was followed by a success inside the
- * budget. Two later soak sessions add 38 more retried attempts with the same
- * shape. Every one of them is the `deadline` branch; no 408 or 504 appears in
- * the sample at all.
+ * Measured rather than argued, over the only two soak sessions that log
+ * retries at all — `onRetryAttempt` ships with #1103, so nothing earlier could
+ * have recorded one: all 38 retried attempts are attempt 1 of 2, each
+ * reporting `elapsed_ms` of 28,002-28,012ms against `LLM call exceeded
+ * 28000ms` — the deadline itself, not a transient blip — and at most 6 of the
+ * 37 debate-stage ones are followed by any metered `llm_spend` row in their
+ * own debate. Every one of them is the `deadline` branch; no 408 or 504
+ * appears in either session at all.
  *
  * What this gives up, stated rather than hidden: a genuinely transient network
  * stall that stretches past the deadline rather than being reported as a status
@@ -527,8 +529,11 @@ export class AnthropicLlmClient implements LlmClient {
    * $0.002297, those 39 debate attempts are a floor of ~$0.090 against $0.2595
    * metered over 113 rows: `llm_spend` sees 113 of 152 debate attempts. It is
    * a floor and not a total — 17 more calls gave up `cancelled`, the budget
-   * aborting a request already on the wire, and wrote nothing either.
-   * ADR-0008 carries the working.
+   * aborting a request already on the wire, and wrote nothing either. All 17
+   * were in flight: `complete`'s pre-dispatch guard reports through the same
+   * `onCallFailed` observer, and no give-up line in either session carries its
+   * `cancelled before dispatch` message, which is the one cancellation shape
+   * that costs nothing. ADR-0008 carries the working.
    *
    * They are counted because `onRetryAttempt` logs each retried attempt with
    * its elapsed time, which is the ONLY source: inference from `llm_spend`
