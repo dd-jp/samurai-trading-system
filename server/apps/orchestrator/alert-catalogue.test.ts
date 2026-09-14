@@ -329,6 +329,16 @@ const FIXTURES: { readonly [K in AlertId]: readonly AlertOf<K>[] } = {
       book_currency: 'GBP',
     },
   ],
+  unattributedFlattenFillAlerts: [
+    {
+      trace_id: 'fill-sync',
+      flatten_idempotency_key: 'flatten-2',
+      lot_idempotency_key: 'lot-9',
+      broker_fill_id: 'fill-4',
+      qty: 3,
+      observed_at: new Date('2026-01-02T10:00:00Z'),
+    },
+  ],
 };
 
 /** Each port through its own method name — what makes `asPort`'s cast in the catalogue safe. */
@@ -357,6 +367,7 @@ const INVOKE: { readonly [K in AlertId]: (port: AlertPort<K>, alert: AlertOf<K>)
   lseCalendarCoverageAlerts: (port, alert) => port.postLseCalendarCoverageAlert(alert),
   llmFailureRateAlerts: (port, alert) => port.postLlmFailureRateAlert(alert),
   nonSterlingFeeAlerts: (port, alert) => port.postNonSterlingFeeAlert(alert),
+  unattributedFlattenFillAlerts: (port, alert) => port.postUnattributedFlattenFillAlert(alert),
 };
 
 interface GoldenCase {

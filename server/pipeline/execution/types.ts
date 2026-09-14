@@ -92,3 +92,7 @@ export type {
   UnprotectedResidualLot,
   UnresolvedFlattenSubmission,
 } from './types/store.js';
+export type {
+  UnattributedFlattenFillAlert,
+  UnattributedFlattenFillAlertChannel,
+} from './unattributed-flatten-fill-alert.js';

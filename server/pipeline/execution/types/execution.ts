@@ -17,6 +17,7 @@ import type { FlattenOverfillAlertChannel } from '../flatten-overfill-alert.js';
 import type { FlattenReconcileAlertChannel } from '../flatten-reconcile-alert.js';
 import type { NonSterlingFeeAlertChannel } from '../non-sterling-fee-alert.js';
 import type { ResidualExposureAlertChannel } from '../residual-exposure-alert.js';
+import type { UnattributedFlattenFillAlertChannel } from '../unattributed-flatten-fill-alert.js';
 import type { BrokerAdapter } from './broker.js';
 import type {
   FillJournal,
@@ -197,6 +198,15 @@ export interface ExecutionInput {
    * record is the log line and the `fee_currency` column on the booked fill.
    */
   nonSterlingFeeAlerts?: NonSterlingFeeAlertChannel;
+  /**
+   * #1506: where a flatten split booked against an already-closed named lot is
+   * escalated — `redistributeOneFlatten` (ingest-fills.ts) posts here after
+   * persisting the fill and writing its own `error`-level `safeLog` line.
+   * OPTIONAL with no log-only default, for the reason `nonSterlingFeeAlerts`
+   * above documents: absent means "no second, audible copy", never "silent" —
+   * the durable record is the log line and the booked `fills` row itself.
+   */
+  unattributedFlattenFillAlerts?: UnattributedFlattenFillAlertChannel;
 }
 
 /**
@@ -252,6 +262,7 @@ export type FillIngestInput = Pick<
   | 'logger'
   | 'filledZeroSizeThrottle'
   | 'nonSterlingFeeAlerts'
+  | 'unattributedFlattenFillAlerts'
 > &
   ResidualReflattenInput & {
     store: PositionReader & FillReader & FillJournal & ResidualMarkers;
@@ -378,7 +389,11 @@ export interface ReconcileDivergence {
    *   (#429): a write-ahead that died before persisting, or an order placed by
    *   hand. Nothing is written; see `reconcile()` for why adoption is not
    *   automatic. Until an operator acts, this exposure is invisible to Risk's
-   *   caps, which is the whole reason it is reported.
+   *   caps, which is the whole reason it is reported — and why
+   *   `reconcileDivergenceLevel()` (fill-sync.ts) logs it at `warn`
+   *   alongside `undetermined` rather than at `info` (#1506): having no
+   *   backstop detector is the argument for raising the level, not for
+   *   leaving it quiet.
    */
   action: 'adopted' | 'rejected' | 'undetermined' | 'unrecorded';
   /** Operator-facing detail — the adapter's error on `undetermined`. */
