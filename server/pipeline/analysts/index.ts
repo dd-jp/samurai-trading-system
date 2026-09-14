@@ -11,7 +11,11 @@
  */
 
 export { fundamentalAnalyst } from './fundamental-analyst.js';
-export { AnalystOrchestrator, type AnalystOrchestratorDeps } from './orchestrator.js';
+export {
+  AnalystOrchestrator,
+  type AnalystOrchestratorDeps,
+  DEFAULT_ANALYST_TIMEOUT_MS,
+} from './orchestrator.js';
 export { sentimentAnalyst } from './sentiment-analyst.js';
 export {
   type AxisVote,

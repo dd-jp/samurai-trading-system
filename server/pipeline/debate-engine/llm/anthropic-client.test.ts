@@ -237,6 +237,64 @@ describe('AnthropicLlmClient', () => {
     expect(wire.createMessage).toHaveBeenCalledTimes(2);
   });
 
+  /**
+   * #1080. `LlmTimeoutError` covers two events with opposite costs, so the
+   * retry decision splits on `source`. This pair is the discriminator: a
+   * `deadline` timeout has spent the full per-attempt budget of a caller racing
+   * a latency budget the retry is not counted against, while a `status` timeout
+   * is a 408/504 the gateway answered fast.
+   *
+   * Measured over the two soak sessions that ran the 28,000ms deadline
+   * (2026-09-08, 2026-09-10 — `onRetryAttempt` ships with #1103, so no earlier
+   * session logs a retry): all 38 retried attempts are attempt 1 of 2,
+   * reporting `elapsed_ms` between 28,002 and 28,012 — every one of them the
+   * deadline itself — and at most 6 of the 37 debate-stage ones are followed
+   * by a metered row in their own debate. No 408 or 504 appears in either
+   * session at all, which is why the fast branch is decided on cost rather
+   * than on measurement.
+   *
+   * The assertion that matters is the ATTEMPT COUNT, not the thrown class.
+   */
+  it('does not retry a timeout, whose failed attempt spends the whole deadline (#1080)', async () => {
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi.fn().mockImplementation(() => new Promise(() => {})),
+    };
+    const client = new AnthropicLlmClient(wire, {
+      model: 'anthropic/claude-sonnet-5',
+      max_tokens: 1024,
+      timeoutMs: 1_000,
+      retry: { maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 1_000 },
+    });
+
+    const rejection = expect(client.complete(request())).rejects.toBeInstanceOf(LlmTimeoutError);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await rejection;
+
+    expect(wire.createMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('DOES retry a 504 the gateway answered, which cost a round trip not a deadline (#1080)', async () => {
+    const gatewayTimeout = Object.assign(new Error('gateway timeout'), { status: 504 });
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi
+        .fn()
+        .mockRejectedValueOnce(gatewayTimeout)
+        .mockResolvedValueOnce(textResponse('good')),
+    };
+    const client = new AnthropicLlmClient(wire, {
+      model: 'anthropic/claude-sonnet-5',
+      max_tokens: 1024,
+      timeoutMs: 30_000,
+      retry: { maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 1_000 },
+    });
+
+    const promise = client.complete(request());
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect((await promise).data).toEqual({ value: 'good' });
+    expect(wire.createMessage).toHaveBeenCalledTimes(2);
+  });
+
   it('does not retry an unclassified LlmProviderError (isRetryable closure, #271)', async () => {
     const wire: AnthropicMessagesClient = {
       createMessage: vi.fn().mockRejectedValue(new Error('server exploded')),

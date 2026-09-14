@@ -16,9 +16,9 @@ The Debate Engine receives views from upstream Analysts, runs a structured debat
 
 Key architectural decisions:
 - **No state persistence** — debates are pre-trade decisions with no real money at risk, so re-running from scratch on crash is acceptable
-- **Hybrid termination** — mediator-driven convergence check with a hard 3-round cap for safety
+- **Hybrid termination** — mediator-driven convergence check with a hard structural 3-round cap for safety, and a tighter per-asset-class policy cap inside it (both classes at 1 round since 2026-09-14, [#1080](https://github.com/dd-jp/samurai-trading-system/issues/1080))
 - **Semantic disagreement detection** — LLM analyzes free-text rationale to catch nuanced conflicts, not just directional divergence
-- **Asset-class-aware latency budgets AND round caps** — tight 30s/1-round cap for crypto (signals decay fast; see [#581](https://github.com/dd-jp/samurai-trading-system/issues/581)), looser 60s/3-round for stocks (slower-moving, market-hours only)
+- **Asset-class-aware latency budgets AND round caps** — tight 30s/1-round cap for crypto (signals decay fast; see [#581](https://github.com/dd-jp/samurai-trading-system/issues/581)), 112s/1-round for stocks (amended 2026-09-14, [#1080](https://github.com/dd-jp/samurai-trading-system/issues/1080); was 60s/3-round — see "Module: Latency Budget")
 - **Quorum-based fault tolerance** — timeout-based handling with majority requirement (≥50% of analysts must respond)
 
 ## User Stories
@@ -36,10 +36,10 @@ Key architectural decisions:
 
 7. As the Debate Engine, I want to structure debates as round-robin exchanges (bull → bear → mediator), so that all perspectives are heard in sequence
 8. As the mediator, I want to evaluate whether material disagreement remains after each round, so that I can signal convergence and terminate early
-9. As the Debate Engine, I want a hard cap of 3 rounds maximum, so that debates don't run away and block trading indefinitely
+9. As the Debate Engine, I want a hard structural cap of 3 rounds maximum, so that debates don't run away and block trading indefinitely — with a per-asset-class policy cap inside it (`MAX_ROUNDS_BY_ASSET_CLASS`, both classes at 1 since [#1080](https://github.com/dd-jp/samurai-trading-system/issues/1080))
 10. As the mediator, I want to produce a full synthesis (position statement + confidence + open items) on every round I signal convergence or on hard cap, so that the output is always actionable
 11. As the Debate Engine, I want to detect semantic conflicts in analyst rationale (not just directional divergence), so that I surface real disagreements rather than averaging them away
-12. As the Debate Engine, I want to complete debates within asset-class-specific latency budgets (30s crypto, 60s stocks; [#581](https://github.com/dd-jp/samurai-trading-system/issues/581)), so that signals don't decay before decisions are made
+12. As the Debate Engine, I want to complete debates within asset-class-specific latency budgets (30s crypto, 112s stocks; [#581](https://github.com/dd-jp/samurai-trading-system/issues/581), [#1080](https://github.com/dd-jp/samurai-trading-system/issues/1080)), so that signals don't decay before decisions are made
 13. As the Debate Engine, I want to terminate early and use current state if the latency budget is exceeded, so that I deliver a decision (even if imperfect) rather than blocking entirely
 
 ### Output & Downstream
@@ -64,7 +64,7 @@ Key architectural decisions:
 - Accept Analyst views (upstream contract)
 - Detect semantic disagreements via LLM analysis of free-text rationale
 - Orchestrate bull/bear/moderator personas in round-robin fashion
-- Apply hybrid termination (mediator convergence + 3-round hard cap)
+- Apply hybrid termination (mediator convergence + the structural 3-round hard cap, narrowed per asset class by `MAX_ROUNDS_BY_ASSET_CLASS`)
 - Enforce asset-class latency budgets with hard timeout
 - Produce conviction score, per-analyst contributions, disagreement summary
 - Handle analyst failures with timeout + majority quorum
@@ -232,7 +232,7 @@ Every round follows the same sequence: bull → bear → mediator
 Hybrid approach:
 1. **Dynamic check**: after each round, mediator evaluates whether material disagreement remains
 2. **Convergence signal**: if mediator determines debate has converged, terminate early
-3. **Hard cap**: if 3 rounds completed without convergence, force termination
+3. **Hard cap**: if the asset class's round cap is reached without convergence, force termination. The structural ceiling is 3 (`MAX_ROUNDS`); the policy cap both classes actually run is 1 ([#1080](https://github.com/dd-jp/samurai-trading-system/issues/1080), 2026-09-14)
 
 **Output on Termination**
 
@@ -251,7 +251,7 @@ The round format above (bull → bear → mediator) is not an implementation acc
 
 The latency it was proposed to fix is real but was the wrong target. `DEBATE_BAR_TIMEFRAME_MS` is 1 hour, so every instrument's decision pass lands on the same bar boundary, and debate is 93-96% of pipeline wall time at ~35-55s; the cost was the *serial fan-out across instruments*, not the ordering inside one debate. Parallelising bull and bear would have roughly halved a figure that was over budget by more than an order of magnitude, while spending the edge. The fix went to the orchestrator instead — see orchestrator-spec.md, "Phase split: concurrent heads, serial portfolio tail (2026-09-03)" (#1040), which fans Analysts + Debate out across instruments and keeps the portfolio-mutating tail serial.
 
-Caveat on the figure, recorded so it is not quoted as measurement: the ~50s comes from **two traces**, not a distribution. Termination breaks early on convergence (above), so debates may routinely run fewer than the 3-round cap. Measure before tuning the fan-out width beyond its default.
+Caveat on the figure, recorded so it is not quoted as measurement: the ~50s comes from **two traces**, not a distribution. Termination breaks early on convergence (above), so debates may routinely run fewer rounds than the cap in force — 3 when that figure was taken, 1 for both asset classes since [#1080](https://github.com/dd-jp/samurai-trading-system/issues/1080). Measure before tuning the fan-out width beyond its default.
 
 **Debate log write.** Immediately after the mediator produces the final synthesis (converged or hard-cap), the Debate Engine writes one `DebateLog` record to the shared store (append-only, keyed by `debate_id`). This is the only write in the debate lifecycle — it happens once, after resolution, and is separate from (does not require) the ephemeral round-by-round state described in State Persistence below.
 
@@ -285,17 +285,57 @@ Both breakdowns below were corrected in [#346](https://github.com/dd-jp/samurai-
 - **Crypto**: 30s hard cap, **1-round cap** (`MAX_ROUNDS_BY_ASSET_CLASS.crypto = 1`)
   - Measured ([#581](https://github.com/dd-jp/samurai-trading-system/issues/581)): one round (bull → bear → mediator + final-round disagreement detection) takes ~17-20s at real LLM latency
   - Rationale: crypto markets are 24/7, signals decay fast, need tight latency — so the debate is SHRUNK to fit the budget rather than the budget stretched to fit a 3-round debate
-- **Stocks**: 60s hard cap, 3-round cap (`MAX_ROUNDS`)
-  - Breakdown: ~5s for the analyst stage (parallel, not 15-20s) + ~15s per round × 3 rounds (45s) = **~50s** total
-  - Rationale: stocks move slower, have market-hours buffer, can afford longer debate
+- **Stocks**: 112s hard cap, **1-round cap** (amended 2026-09-14, [#1080](https://github.com/dd-jp/samurai-trading-system/issues/1080) — was 60s/3 rounds)
+  - Derivation: `llmCallsPerDebate(1)` = 4 sequential calls × the 28,000ms per-attempt LLM timeout = **112,000ms**. Not a chosen round number; pinned by tests in `production.test.ts` and `latency-budget.test.ts`.
+  - Rationale: the 60s/3-round pair became unreachable by arithmetic when the universe fanned out. A three-round debate is 10 sequential calls; measured debate-call latency over the 2026-09-07 and 2026-09-10 soak sessions is p50 19,017ms / p90 26,999ms (n=113, right-censored by the per-attempt timeout — a call that exhausts it writes no `llm_spend` row), so 10 calls is ~190s in a 60s box and even ONE round is ~76s. The store recorded the result: 46 of 58 debates at `rounds = 0`.
+  - The superseded breakdown, kept for the record: "~5s for the analyst stage (parallel, not 15-20s) + ~15s per round × 3 rounds (45s) = ~50s total". The ~15s/round figure assumed ~5s per call, which is 3.8× faster than measured.
 
 **Crypto's budget and round cap — the decision, superseding #346's posture ([#581](https://github.com/dd-jp/samurai-trading-system/issues/581))**
 
 The debate itself is strictly sequential and cannot be parallelised without changing its semantics: per round `bull.argue` → `bear.argue` → `mediator.assess`, each awaited, each genuinely dependent on the last (bear's `RoundContext` carries bull's argument; the mediator's carries both).
 
-The original posture ([#346](https://github.com/dd-jp/samurai-trading-system/issues/346)) kept crypto at 15s/3 rounds assuming round-1 convergence would fit, and named its own revisit trigger: a crypto timeout rate materially above zero once real latency existed. The first real paper tick (2026-08-07, #581) hit that trigger maximally — **every** crypto debate timed out at 15s while the fastest COMPLETED equity debate took ~17s. Real per-call latency is ~5s, so even a round-1 convergence cannot fit 15s. The status quo was a 3-round debate truncated mid-round on 100% of crypto ticks: partial synthesis, `converged: false`, and no disagreement detection (it only runs on the final round, which was never reached).
+The original posture ([#346](https://github.com/dd-jp/samurai-trading-system/issues/346)) kept crypto at 15s/3 rounds assuming round-1 convergence would fit, and named its own revisit trigger: a crypto timeout rate materially above zero once real latency existed. The first real paper tick (2026-08-07, #581) hit that trigger maximally — **every** crypto debate timed out at 15s while the fastest COMPLETED equity debate took ~17s. Real per-call latency is ~5s at the 4-name width of the time ([#1080](https://github.com/dd-jp/samurai-trading-system/issues/1080) measured that era's p50 at 5,620ms, against 18,306ms after the 2026-09-03 fan-out to 20), so even a round-1 convergence cannot fit 15s. The status quo was a 3-round debate truncated mid-round on 100% of crypto ticks: partial synthesis, `converged: false`, and no disagreement detection (it only runs on the final round, which was never reached).
 
-**Decision: crypto runs ONE round inside a 30s budget; stocks are unchanged.** The budget and the round cap are one coupled decision, priced against ADR-0008's $50/14-day soak cap in #581's cost-coupling comment: crypto is ~80% of ticks (24/7), and raising the budget so 3-round crypto debates complete projects to ~$59 — over the cap. A 1-round debate completes in ~17-20s (measured), costs ~$0.008/instrument (≈ the measured 1-round equity debate), and projects the soak to ~$40 — inside the cap. A completed 1-round debate beats a truncated 3-round one on both output quality (disagreement detection actually runs; `converged` is the mediator's real verdict) and attribution (a `debate.timeout` in the log is once again a fault signal, not the steady state).
+**Decision (2026-08-07): crypto runs ONE round inside a 30s budget; stocks were unchanged at the time.** The budget and the round cap are one coupled decision, priced against ADR-0008's $50/14-day soak cap in #581's cost-coupling comment: crypto is ~80% of ticks (24/7), and raising the budget so 3-round crypto debates complete projects to ~$59 — over the cap. A 1-round debate completes in ~17-20s (measured), costs ~$0.008/instrument (≈ the measured 1-round equity debate), and projects the soak to ~$40 — inside the cap. A completed 1-round debate beats a truncated 3-round one on both output quality (disagreement detection actually runs; `converged` is the mediator's real verdict) and attribution (a `debate.timeout` in the log is once again a fault signal, not the steady state).
+
+**Stocks' budget and round cap — amended 2026-09-14 ([#1080](https://github.com/dd-jp/samurai-trading-system/issues/1080))**
+
+Stocks reached #581's trigger the same way crypto did, one substrate later, and the decision has the same shape: shrink the debate to fit a budget it can finish, rather than stretch a budget around a debate that never completes.
+
+**Decision: stocks run ONE round inside a 112s budget, and a timeout is no longer retried inside that budget.** Three changes, one decision:
+
+1. `MAX_ROUNDS_BY_ASSET_CLASS.stocks` 3 → 1. `MAX_ROUNDS` stays 3 as the structural ceiling `runDebate` validates against; the per-asset-class cap is the policy inside it.
+2. `LATENCY_BUDGET_MS.stocks` 60,000 → 112,000, derived as `llmCallsPerDebate(1) × 28,000`.
+3. A DEADLINE-EXPIRY `LlmTimeoutError` leaves `isRetryable` (`debate-engine/llm/anthropic-client.ts`); a STATUS-mapped one (HTTP 408/504) keeps its retry. The class covers two events with opposite costs, so it carries a `source` discriminator: a deadline expiry has already spent the full per-attempt deadline out of the budget it was meant to help meet, while a gateway 408/504 returns fast and is the transient class retry exists for. Measured over the two soak sessions that ran the 28,000ms per-attempt deadline (2026-09-08 and 2026-09-10): all 38 logged retries are attempt 1 of 2, every one reporting `elapsed_ms` between 28,002ms and 28,012ms against the error `LLM call exceeded 28000ms`, and at most 6 of the 37 debate-stage ones are followed by any metered `llm_spend` row in their own debate — at most, because that join is on `debate_id`, so a later logical call of the same debate is counted here even when it is not the retry's own second attempt. The retry bought a completion in at most a sixth of cases and spent a full deadline out of the budget in all of them. No 408 or 504 appears in either session. Rate-limit and malformed-response retries are unchanged — they fail in milliseconds and a 429 carries `Retry-After`. [#1103](https://github.com/dd-jp/samurai-trading-system/issues/1103) declined this lever because an exhausted call THREW and crashed the instrument pass; [#1385](https://github.com/dd-jp/samurai-trading-system/issues/1385) removed that hazard by degrading `LlmFailure` inside `enforceLatencyBudget` with `termination_cause: 'llm_failure'`.
+
+**Known gap — no operator alert fires on sustained BUDGET expiry.** `LlmFailureRateGuard` (`orchestrator/production/llm-failure-rate-guard.ts`) alerts above a 0.25 rate, but its numerator is `termination_cause = 'llm_failure'` only, explicitly excluding budget expiry, and its denominator is truncations. A stream that is 100% `termination_cause = 'budget'` — precisely what a binding 112s budget produces — contributes zero to that numerator and re-arms the guard's latch (`observe()` at `llmFailureCount === 0`). The quorum-skip alert (`production/analysts-adapter.ts`) covers the analyst substrate, not this one.
+
+Recorded rather than built: closing it needs a second rate over a different denominator plus a threshold nobody has measured, and this guard's own doc refuses a provisional threshold without measurement. The data it would need already exists — `debate_log.termination_cause` distinguishes `budget` from `llm_failure` since migration 0051 ([#1385](https://github.com/dd-jp/samurai-trading-system/issues/1385)) — so the alert is a pure addition once a post-#1080 soak supplies a baseline budget-expiry rate to set it against. Until then a budget-starved no-trade is distinguishable in the log, in `debate_log.termination_cause`, in `trader_decision.decision_class` and on the dashboard, but not on an alert channel.
+
+**Lever considered and DECLINED — admission control on the debate path.** [#1080](https://github.com/dd-jp/samurai-trading-system/issues/1080) proposes refusing to start a debate whose budget cannot plausibly be met at the current in-flight depth, and logging the refusal, rather than starting it and emitting `confidence: 0`. Not built, and not dropped silently:
+
+- The refusal predicate needs a measured relationship between concurrent in-flight depth and per-call latency, and no soak measures one. The only depth signal on the debate path is `maxConcurrentInstruments`, which already gates fan-out upstream of any admission decision, so a threshold here would be invented rather than derived — the same bar the budget-expiry alert gap above refuses to clear without measurement.
+- The starvation the lever was proposed to catch is removed at source by this amendment. The budget is now `llmCallsPerDebate(cap) × the measured per-call ceiling`, so a debate that starts has budget for every call it will issue, and a deadline expiry no longer buys a second full deadline out of it.
+- The legibility admission control would have bought already exists without refusing anything: `debate_log.termination_cause` (`budget` vs `llm_failure`, migration 0051, [#1385](https://github.com/dd-jp/samurai-trading-system/issues/1385)) and `trader_decision.decision_class` separate a budget-starved no-trade from a genuine no-signal.
+
+Revisit if a post-#1080 soak shows budget expiry persisting at a rate the derived budget cannot explain — the same measurement the alert gap above waits on.
+
+**Consequence, stated rather than hidden.** At a one-round cap the partial-synthesis salvage path (`getCurrentState` / `PartialDebateState`) is unreachable for stocks, because the round that completes IS the debate — the same consequence crypto has carried since #581. A stocks debate now either completes its four calls inside 112s or degrades to the `confidence: 0` fallback, with `debate_log.termination_cause` naming which (#1385). The mechanism is not removed and stays covered at its own seam in `latency-budget.test.ts`.
+
+**Product-level note for the record — this cap IS a capability reduction, and the measurement says so.** `CLAUDE.md`'s thesis is debate-as-edge, and a one-round debate is one bull/bear/mediator exchange plus disagreement detection. Splitting the store's 184 debates at the 2026-09-03 fan-out from 4 names to 20:
+
+| era | debates | instruments | per-call p50 | converged | `rounds = 0` |
+| --- | --- | --- | --- | --- | --- |
+| pre-fan-out (`created_at < 2026-09-03`) | 57 | 4 | 5,620ms (n=441) | 9 (16%) | 1 |
+| post-fan-out | 127 | 20 | 18,306ms (n=266) | 1 (0.8%) | 102 |
+
+Both eras are equities only — the pre-era names are SPY, QQQ, AAPL and TSLA over 2026-08-26 to 2026-09-02, all after crypto left scope (2026-08-16) — so the 3-round rows are not crypto rows sitting at a pre-[#581](https://github.com/dd-jp/samurai-trading-system/issues/581) cap.
+
+Three rounds was therefore reachable and in use at 4 names — ten sequential calls at 5,620ms is ~56s, inside the 60s budget of the day — and fan-out took it away by inflating per-call latency 3.3×. The cap is a consequence of width, not a codification of a capability nothing exercised. 10 of 184 debates in the whole store converged; 9 of those 10 pre-date fan-out.
+
+The successor condition is `MAX_ROUNDS_BY_ASSET_CLASS.stocks`: if per-call latency returns to the ~5.6s regime — [#1023](https://github.com/dd-jp/samurai-trading-system/issues/1023)'s per-call work, or a narrower universe — raise it and `LATENCY_BUDGET_MS.stocks` follows by derivation. At the post-fan-out latency no budget that also respects the two-minute tick cadence affords ten sequential calls, so the cap is what the arithmetic leaves.
+
+Narrowing the universe is **not** available as the lever today on the other substrate's evidence: the analyst bar sweep already runs 152–171s against a 120s tick at width 6 and 20 names, so the fan-out is load-bearing for the pass and the two substrates point in opposite directions on width. That measurement is separate from this one and unchanged by it.
 
 The hard timeout below stays as the backstop for a genuinely slow round, not the designed path. [#326](https://github.com/dd-jp/samurai-trading-system/issues/326) still tracks persisting per-call latency; sustained crypto timeouts at 30s/1-round would mean per-call latency has degraded and this section owns the revisit.
 
@@ -319,7 +359,7 @@ This applies only to the in-flight, round-by-round operational state (bull/bear/
 
 **Rationale**
 
-- Debates are fast (<10-60s), so re-run cost is low
+- Debates are bounded by the latency budget — 30s crypto, 112s stocks since [#1080](https://github.com/dd-jp/samurai-trading-system/issues/1080) — so re-run cost is bounded
 - Persistence of round-by-round state adds complexity (state machine, recovery logic, consistency guarantees) disproportionate to the value — but the one-time log write at completion is cheap and is required downstream by FL
 - The crash-restart invariant in CLAUDE.md applies to open positions, not pre-trade debates
 - Simpler architecture is preferable when the cost of failure is acceptable
@@ -357,7 +397,7 @@ If debates become expensive (e.g., many analysts, long transcripts) or if the sy
 
 **Latency Budget**
 - Budget enforcement (terminates early when exceeded)
-- Asset-class differentiation (15s crypto, 60s stocks)
+- Asset-class differentiation (30s crypto, 112s stocks — amended 2026-09-14, [#1080](https://github.com/dd-jp/samurai-trading-system/issues/1080); originally 15s/60s)
 - Timeout behavior (uses current state, flags correctly)
 
 **Analyst Failure Handling**
@@ -416,7 +456,7 @@ Per CONTEXT.md:
 
 ### Latency Budget Trade-offs
 
-The 15s/60s budgets are initial estimates based on:
+The original 15s/60s budgets were initial estimates based on (both superseded — 30s crypto by [#581](https://github.com/dd-jp/samurai-trading-system/issues/581), 112s stocks by [#1080](https://github.com/dd-jp/samurai-trading-system/issues/1080)):
 - Crypto: 2s per analyst + 3s per round
 - Stocks: 5s for the parallel analyst stage + 15s per round (corrected breakdown above — #346)
 
@@ -467,11 +507,11 @@ Wayfinder decisions for this stage live in [docs/wayfinder/debate-engine-map.md]
 
 - **Conviction score** — hybrid algorithm (disagreement inverse + evidence strength).
 - **Downstream contract with Trader** — score + contributions + disagreement summary.
-- **Round structure & termination** — round-robin, 3-round cap, hybrid termination.
+- **Round structure & termination** — round-robin, structural 3-round ceiling with a per-asset-class policy cap of 1, hybrid termination.
 - **Disagreement detection** — semantic conflict detection via LLM.
 - **Analyst failure/timeout handling** — hybrid timeout with majority quorum.
 - **State persistence** — none; re-run from scratch on crash.
-- **Latency budget** — 15s crypto / 60s stocks with hard timeout.
+- **Latency budget** — 30s crypto / 112s stocks with hard timeout (amended 2026-09-14, [#1080](https://github.com/dd-jp/samurai-trading-system/issues/1080); originally 15s/60s).
 - **Agent roles** — bull/bear/moderator separation, distinct from Analysts.
 - **Per-analyst contribution tracking** — structured fields + rationale.
 - **Upstream contract with Analysts** — `AnalystView` (direction + confidence + key points).

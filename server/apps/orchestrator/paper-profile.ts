@@ -1125,10 +1125,16 @@ const LLM_BUDGET_WINDOW_MS = 300_000;
  *   #617). So the first `tickIntervalMs` tick after each hourly close finds a
  *   fresh bar for EVERY instrument at once: the load is a burst of `N` debates,
  *   not a smooth rate.
- * - The burst completes inside one window. At #1013's width 6 and #1012's ~61s
- *   mean debate latency, 20 names walk in `ceil(20 / 6) = 4` groups, ~4.1 min —
- *   under `LLM_BUDGET_WINDOW_MS` (5 min), so all 20 reservations land in the
- *   same window rather than spreading across two.
+ * - The burst does NOT reliably complete inside one window. At #1013's width 6,
+ *   20 names walk in `ceil(20 / 6) = 4` groups; #1080 (2026-09-14) sized each
+ *   group's worst case at 172s (60s analysts — `DEFAULT_ANALYST_TIMEOUT_MS`
+ *   twice, one retry per persona — plus a 112,000ms debate budget), so the
+ *   worst-case walk is ~11.5 min against `LLM_BUDGET_WINDOW_MS` (5 min), and
+ *   even a clean walk at the measured post-fan-out per-call p50 (18,306ms, so
+ *   ~73s of debate) is ~4.9 min of debate alone before analyst time.
+ *   Reservations therefore SPREAD across windows, which leaves per-window
+ *   demand below a full pass rather than above it — so 24 covers the burst with
+ *   more margin than the floor below assumes, not less.
  * - A refused reservation is DROPPED, not deferred. `buildDebateStep`
  *   (debate-adapter.ts) returns `rateLimitedDebateResult` and the tick
  *   short-circuits at Trader with `no_trade`; nothing re-queues it on the next
@@ -2138,11 +2144,14 @@ export function buildStartingProfileConfigs(
      *   that arithmetic: it only affects how many instruments' FIRST attempt
      *   in a bar can start in parallel, not how many attempts each can
      *   eventually make.
-     * - #1012 measured the debate LLM call itself at 6,441ms mean / 28,340ms
-     *   max, ~9-10 calls serially per one debate (`WORST_CASE_LLM_CALLS_PER_DEBATE`
-     *   below reserves for exactly 10) — a mean debate of ~61s (matching the
-     *   ~50s/instrument this ticket measured), a worst case of ~4.7 min.
-     *   Neither figure is gated by THIS dial. **Corrected here (#1013 fix-up
+     * - A stocks debate is 4 sequential calls since #1080 capped the class at
+     *   one round (`MAX_ROUNDS_BY_ASSET_CLASS`), bounded at 112,000ms by
+     *   `LATENCY_BUDGET_MS.stocks` and running ~73s at the measured
+     *   post-fan-out per-call p50 of 18,306ms. `WORST_CASE_LLM_CALLS_PER_DEBATE`
+     *   still reserves 10 because it is keyed to the structural `MAX_ROUNDS`,
+     *   which is the sizing bound and is deliberately looser than what any
+     *   class can now spend. Neither figure is gated by THIS dial.
+     *   **Corrected here (#1013 fix-up
      *   M1) — `RateLimiter.reserve` does NOT book the worst-case call count up
      *   front**; it only increments `debatesUsed` by one, synchronously, and
      *   CHECKS (does not reserve) that `llmCallsUsed + worstCaseLlmCalls`
@@ -2209,15 +2218,20 @@ export function buildStartingProfileConfigs(
      * The width-6 collapse argument in the paragraph above no longer holds: it
      * rests on EVERY instrument starting its pass in the same tick instant, and
      * 20 names at width 6 walk in `ceil(20 / 6) = 4` groups instead. The last
-     * group therefore decides on data up to ~3 debates deep — at #1012's ~61s
-     * mean, on the order of ~3 min, the same figure the width-1 serial walk
-     * produced for the old 4-name universe. That is a STALENESS regression, not
-     * a safety one, and it is gated rather than tolerated: `max_signal_age` and
-     * `max_mark_age` for stocks are both 15 min, comfortably above the ~4.1 min
-     * worst-case full pass, so the tail of the walk is well inside the freshness
-     * bounds Verdict enforces. If either of those two gates is ever tightened
-     * below the pass duration, the tail gets refused at Verdict and this dial
-     * has to rise with it.
+     * group therefore decides on data up to ~3 passes deep. That is a STALENESS
+     * regression, not a safety one, and it is gated rather than tolerated:
+     * `max_signal_age` and `max_mark_age` for stocks are both 15 min, against a
+     * worst-case full pass of ~11.5 min since #1080 (2026-09-14) — 4 groups of
+     * 172s, being 60s of analysts (`DEFAULT_ANALYST_TIMEOUT_MS` twice, one
+     * retry per persona) plus a 112,000ms debate budget. The tail of the walk
+     * is still inside the freshness bounds Verdict enforces, but the margin is
+     * 1.3x, against 2.81x at the 60,000ms budget and 10,000ms analyst deadline
+     * this replaces (4 groups of 80s, 320s in all). Both are worst-case-to-
+     * worst-case, the only comparison a tripwire can act on. THIS IS THE
+     * TRIPWIRE: if either of those two gates is tightened,
+     * or either sub-budget raised again, the tail gets refused at Verdict and
+     * this dial has to rise with it — and at width 6 the next step is width 7,
+     * which makes the walk 3 groups.
      *
      * Raising it now would trade that measured, gated staleness for #692's
      * overlapping-pass multiplication and a wider same-tick window for #1019's
@@ -2534,16 +2548,21 @@ export function buildStartingProfileConfigs(
      * and the explicit non-claim about the wider ~30-name LSE pool.
      *
      * **`maxLlmCalls = maxDebates * WORST_CASE_LLM_CALLS_PER_DEBATE` —
-     * DERIVED, and deliberately redundant.** `reserve` admits a debate only if
-     * its worst case (3 rounds x 3 persona calls + 1 disagreement call = 10)
-     * still fits, so setting the call budget to exactly that product makes
-     * `maxDebates` the single binding dial: an operator changes one number and
-     * gets the behaviour they expected. Sizing the call budget any LOWER would
-     * make it bind first, refusing debates while `ReserveResult.reason` blamed
-     * the wrong budget; sizing it higher would leave it unable to bind at all.
-     * The money ceiling this implies is what matters:
-     * `maxDebates * 10 calls * ~$0.004/call`, i.e. under $1 per 5-minute
-     * window per class in the worst case, against ~$45/day measured.
+     * DERIVED, and deliberately redundant.** The product is sized at the
+     * STRUCTURAL worst case (`MAX_ROUNDS` = 3, so 3 x 3 persona calls + 1
+     * disagreement call = 10), which makes `maxDebates` the single binding
+     * dial: an operator changes one number and gets the behaviour they
+     * expected. Sizing the call budget any LOWER would make it bind first,
+     * refusing debates while `ReserveResult.reason` blamed the wrong budget.
+     *
+     * `reserve` itself checks the PER-CLASS worst case, which #1080 lowered to
+     * `llmCallsPerDebate(1)` = 4 for stocks, so the call budget now has 2.5x
+     * more slack than the check can consume and cannot bind at all for either
+     * class. That is the intended direction — the dial that binds is
+     * `maxDebates` — but it means the product is a ceiling on the
+     * configuration, not a prediction of spend. The money ceiling actually
+     * reachable is `maxDebates * 4 calls * ~$0.004/call`, under $0.40 per
+     * 5-minute window per class, against a configured ceiling of under $1.
      *
      * **`default` — DERIVED, not chosen.** No third asset class exists
      * (`AssetClass` is `crypto | stocks`), so this is unreachable today. The

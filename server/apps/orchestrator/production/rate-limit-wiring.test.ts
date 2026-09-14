@@ -8,9 +8,12 @@
  * component: `RateLimiter` was implemented, unit-tested and exported, and
  * constructed nowhere in production, while every unit test passed.
  */
+
+import { DEFAULT_ANALYST_TIMEOUT_MS } from '../../../pipeline/analysts/index.js';
 import type { AnalystView, LlmClient, LlmRequest } from '../../../pipeline/debate-engine/index.js';
 import {
   InMemoryDebateLogStore,
+  LLM_CALLS_PER_ROUND,
   MAX_ROUNDS,
   MAX_ROUNDS_BY_ASSET_CLASS,
   RateLimiter,
@@ -40,7 +43,6 @@ import { SequentialTickRunner } from '../tick-runner.js';
 import type { AuditLog, CurrentTickStore, TickPlan, TickSteps } from '../types.js';
 import {
   buildDebateStep,
-  LLM_CALLS_PER_ROUND,
   WORST_CASE_LLM_CALLS_PER_DEBATE,
   worstCaseLlmCallsForAssetClass,
 } from './debate-adapter.js';
@@ -424,8 +426,10 @@ describe('the reserved worst case matches what a debate can actually spend', () 
   it('is not exceeded by a debate that runs to the hard round cap', async () => {
     // The assertion that makes the constant more than arithmetic: run the real
     // personas to the cap and count. Under-reserving would let a debate blow
-    // the budget it was admitted under. Stocks, since #581 capped crypto at
-    // one round — the crypto counterpart is the test below.
+    // the budget it was admitted under. Stocks, which #1080 capped at one round
+    // alongside crypto — the crypto counterpart is the test below, and this one
+    // now asserts the PER-CLASS cap rather than `MAX_ROUNDS`, which remains the
+    // structural ceiling `runDebate` validates against.
     const llmClient = countingLlmClient({ converged: false });
     const rateLimiter = new RateLimiter(CLOCK, budget());
     const step = buildDebateStep(
@@ -444,7 +448,8 @@ describe('the reserved worst case matches what a debate can actually spend', () 
       bar: NOW,
     });
 
-    expect(result.rounds_completed).toBe(MAX_ROUNDS);
+    expect(result.rounds_completed).toBe(MAX_ROUNDS_BY_ASSET_CLASS.stocks);
+    expect(llmClient.calls).toBeLessThanOrEqual(worstCaseLlmCallsForAssetClass('stocks'));
     expect(llmClient.calls).toBeLessThanOrEqual(WORST_CASE_LLM_CALLS_PER_DEBATE);
     expect(rateLimiter.snapshot().stocks?.llmCallsUsed).toBe(llmClient.calls);
   });
@@ -482,7 +487,14 @@ describe('the reserved worst case matches what a debate can actually spend', () 
     expect(worstCaseLlmCallsForAssetClass('crypto')).toBe(
       MAX_ROUNDS_BY_ASSET_CLASS.crypto * LLM_CALLS_PER_ROUND + 1,
     );
-    expect(worstCaseLlmCallsForAssetClass('stocks')).toBe(WORST_CASE_LLM_CALLS_PER_DEBATE);
+    expect(worstCaseLlmCallsForAssetClass('stocks')).toBe(
+      MAX_ROUNDS_BY_ASSET_CLASS.stocks * LLM_CALLS_PER_ROUND + 1,
+    );
+    // #1080 capped stocks at one round, so the per-class reservation is now
+    // strictly below the `MAX_ROUNDS`-sized ceiling the profile sizes against.
+    // That gap is the point of having both: a ceiling for sizing, a per-class
+    // figure for admission.
+    expect(worstCaseLlmCallsForAssetClass('stocks')).toBeLessThan(WORST_CASE_LLM_CALLS_PER_DEBATE);
   });
 });
 
@@ -690,6 +702,36 @@ describe('the composition root wires market-data fetch telemetry (#1082)', () =>
 });
 
 /**
+ * VENUE-REACHING `(timeframe, lookback)` bar fetches one instrument's decision
+ * pass issues — the ones that take a token. A `getBars` call served from the
+ * store takes none and is silent in the log, which is why this is smaller than
+ * the eight windows `MarketDataServiceImpl.logFetch` documents a technical
+ * analyst asking for: five of those (`5m/936`, `5m/84`, `5m/81` and the
+ * indicator specs behind them) are served by the 260-bar warm-up fetch that
+ * precedes them.
+ *
+ * MEASURED (#1080) over 38 fetch bursts in the 2026-09-04, 2026-09-08 and
+ * 2026-09-10 soak logs, restarts included: no instrument reached the venue for
+ * more than 4 distinct windows in a burst. Five shapes appear across the
+ * universe within a single burst — `5m/260` and `1h/57` for the technical
+ * analyst's indicators and context, `5m/112` for MACD's warm-up, `1h/20` for
+ * the trader's signal bar, and `1d/30` for `correlationConfig.window` — but no
+ * single instrument asks for all five. `adv_window` (`1d/20`) is an
+ * Execution-stage read (`getADV`), not part of this sweep, and appears in no
+ * measured burst.
+ *
+ * This is a WARM-STORE count, and the soak is the only regime it was taken in.
+ * A restart does not cold it — the bar store is on disk — but a first-ever tick
+ * against an empty store has no 260-bar warm-up to serve the wider specs from,
+ * so per-instrument demand rises toward the eight windows `logFetch` documents.
+ * That case is `MarketDataServiceImpl`'s figure, not this one; it is a
+ * one-time transient, and `consecutive_misses` is what surfaces it if it is
+ * not. The drain below is therefore the steady-state sweep, not the worst
+ * sweep the system can ever issue.
+ */
+const DISTINCT_BAR_WINDOWS_PER_INSTRUMENT = 4;
+
+/**
  * #299's burst value has no published Alpaca figure behind it (see
  * `DEFAULT_VENUE_PACING.alpaca`), so it is derived from OUR workload instead —
  * and a derivation stated only in a comment is the drift shape this repo keeps
@@ -725,6 +767,57 @@ describe("Alpaca's burst covers one fill-poll sweep of the configured universe (
       1; // a submitBracket from the first tick
 
     expect(DEFAULT_VENUE_PACING.alpaca.capacity).toBeGreaterThanOrEqual(coldStart);
+  });
+
+  /**
+   * #1080. The cold-start derivation above counts ONE bars fetch per
+   * instrument; the soak measured up to four (see
+   * `DISTINCT_BAR_WINDOWS_PER_INSTRUMENT`). So a warm sweep issues up to 80
+   * requests against 20 tokens of background headroom — `capacity` 41 less the
+   * order path's `reserveForPriority` 21 — and the remaining 60 arrive at
+   * `refillPerSecond`.
+   *
+   * That drain is what the analyst's per-attempt deadline actually waits on:
+   * `technical` issues no LLM call at all, it fetches bars, and a fetch that
+   * cannot get a token has not started. The deadline must therefore be at least
+   * the drain, or the LAST instruments of every sweep time out by construction
+   * — which is exactly #1080's instance 2 (57% of main-arm runs missing quorum,
+   * every one attributing to `technical did not answer within 10000ms`).
+   *
+   * WARM STORE, and therefore not the worst sweep the system can issue. A
+   * first-ever tick against an empty store has no stored history to serve the
+   * wider specs from and asks the eight windows `MarketDataServiceImpl`
+   * documents, which is `(20 * 8 - 20) / 2.0` = 70s of drain against a
+   * 30,000ms deadline: the back of that sweep misses quorum and the tick
+   * records a no-trade it never measured. It self-heals from the sweep's own
+   * fetches as they land, and this deadline serves 80 of the 160 fetches
+   * inside it where the 10,000ms one served 40 — better, not safe.
+   *
+   * Raising the deadline is not the fix available: two attempts per persona at
+   * 70,000ms is 140s of analyst wall clock against a 120,000ms tick, which
+   * `paper-profile.ts`'s pass-duration tripwire refuses. The fix is warming the
+   * store OFF the tick path, and no boot-time bar prefetch exists today; it is
+   * recorded as declined-for-now on #1080 (analysts-spec.md, "Module: Failure
+   * Handling"), because the starvation #1080 measured is steady-state.
+   *
+   * If it does not self-heal, `consecutive_misses` plus the quorum-skip alert
+   * is the surface. Single-flight coalescing moved that counter from per-caller
+   * to per-fetch-group — smaller and truer: it counts ticks that missed rather
+   * than callers that joined one miss, so a cold store reads as a streak across
+   * ticks instead of one fan-out-inflated spike.
+   *
+   * The literal is the shipped constants' value, pinned so a change to either
+   * side has to be re-read here rather than silently absorbed.
+   */
+  it("affords the analyst deadline the deduped warm sweep's drain at this pacing (#1080)", () => {
+    const { capacity, refillPerSecond, reserveForPriority } = DEFAULT_VENUE_PACING.alpaca;
+    const backgroundHeadroom = capacity - (reserveForPriority ?? 0);
+    const sweepRequests = DEFAULT_UNIVERSE.length * DISTINCT_BAR_WINDOWS_PER_INSTRUMENT;
+
+    const drainMs = ((sweepRequests - backgroundHeadroom) / refillPerSecond) * 1_000;
+
+    expect(drainMs).toBe(30_000);
+    expect(DEFAULT_ANALYST_TIMEOUT_MS).toBeGreaterThanOrEqual(drainMs);
   });
 
   it('reserves enough for the order path to complete a full sweep under a data burst', () => {

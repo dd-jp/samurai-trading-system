@@ -8,10 +8,31 @@
  * what is worth retrying.
  */
 
+/**
+ * Where the timeout came from. The two are the same word and NOT the same
+ * event, and `anthropic-client.ts`'s `isRetryable` has to tell them apart
+ * (#1080):
+ *
+ *  - `deadline` — OUR clock fired (`callWithTimeout`). The call has already
+ *    spent the entire per-attempt budget, so a retry spends a second one out
+ *    of the latency budget it was supposed to help meet.
+ *  - `status` — the gateway answered 408 or 504, typically in well under the
+ *    deadline. That is the transient class retry exists for, and it costs a
+ *    backoff rather than a deadline.
+ *
+ * Defaults to `deadline` because that is the conservative branch: an
+ * unclassified timeout is treated as having spent its budget rather than as
+ * free to re-ask.
+ */
+export type LlmTimeoutSource = 'deadline' | 'status';
+
 export class LlmTimeoutError extends Error {
-  constructor(message: string) {
+  readonly source: LlmTimeoutSource;
+
+  constructor(message: string, source: LlmTimeoutSource = 'deadline') {
     super(message);
     this.name = 'LlmTimeoutError';
+    this.source = source;
   }
 }
 

@@ -55,18 +55,47 @@ const ALL_PERSONAS: Analyst[] = [technicalAnalyst, fundamentalAnalyst, sentiment
 /**
  * The "short timeout" of analysts-spec.md story 19, as a number.
  *
- * Sized against what a persona actually waits on, which is market data over
- * HTTP, not an LLM: the personas are mechanical (technical reads indicators,
- * fundamental returns a constant, sentiment reads an in-memory store). 10s is
- * generous for that and still an order of magnitude under the 15-minute tick
- * cadence of ADR-0008, so a hung upstream costs one tick's freshness rather
- * than wedging the scheduler.
+ * What a persona waits on is market data over HTTP, not an LLM — the personas
+ * are mechanical (technical reads indicators, fundamental returns a constant,
+ * sentiment reads an in-memory store) — and specifically it waits on the QUEUE
+ * in front of that HTTP. Bar fetches take `acquireBackground()` on the Alpaca
+ * token bucket shared with the order path (`shared/http/venue-pacing.ts`),
+ * which holds 20 tokens above the order path's reserve and refills at 2.0/s,
+ * while one sweep of the 20-instrument universe reaches the venue for up to
+ * four distinct windows per instrument — a WARM-STORE count; a first-ever tick
+ * against an empty store asks eight and drains for 70s, which this deadline
+ * does not cover (analysts-spec.md, \"Module: Failure Handling\"). A fetch that
+
+ * cannot get a token has not
+ * started, so a deadline under the drain times the back of every sweep out by
+ * construction — the 2026-09-10 19:56 burst measured 91 of 133 fetches past
+ * 10,000ms with a median of 21,338ms, which is #1080's instance 2: `technical
+ * did not answer within 10000ms` on 57% of main-arm runs, with no fault logged
+ * anywhere because there was none.
+ *
+ * 30,000ms is that drain, derived rather than chosen: `(20 instruments *
+ * 4 windows - 20 tokens of headroom) / 2.0 per second`. The derivation is
+ * pinned from the pacing side by `production/rate-limit-wiring.test.ts`, which
+ * is where the bucket's constants live. `ATTEMPTS_PER_PERSONA` is 2, so the
+ * per-persona wall clock is up to 60,000ms — half the two-minute tick cadence,
+ * which is the bound `paper-profile.ts`'s pass-duration arithmetic uses. Those
+ * two attempts may be waiting on the SAME fetch: the retry carries no
+ * `AbortSignal`, so attempt 1's request is still in flight and attempt 2 joins
+ * it through `MarketDataServiceImpl.inFlightBarFetches` instead of re-asking
+ * the venue. Against a queue — which is what this deadline is sized for — that
+ * is the right trade; liveness against a stuck fetch comes from
+ * `fetchWithTimeout`, not from the retry.
+ *
+ * The other half of #1080's instance 2 is upstream of this number: concurrent
+ * callers asking for the SAME window no longer each spend a token
+ * (`MarketDataServiceImpl.inFlightBarFetches`), which removed 74% of the
+ * measured burst. This deadline covers what remains after that.
  *
  * The point of having a timeout at all is that `Promise.all` below has no
  * deadline of its own: one persona whose fetch never settles hangs the whole
  * analyst stage forever, and an unattended run has nobody to notice.
  */
-export const DEFAULT_ANALYST_TIMEOUT_MS = 10_000;
+export const DEFAULT_ANALYST_TIMEOUT_MS = 30_000;
 
 /** analysts-spec.md story 19: exactly one retry, so a blip is absorbed without a retry storm. */
 const ATTEMPTS_PER_PERSONA = 2;

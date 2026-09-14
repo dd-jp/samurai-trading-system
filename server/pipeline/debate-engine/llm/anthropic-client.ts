@@ -32,10 +32,35 @@ import {
 } from './types.js';
 
 /**
- * Only failure modes the spec calls out as transient are retried (timeout,
- * rate limit, malformed response). Anything else (auth errors, bad requests,
- * unclassified `LlmProviderError`s) is assumed non-transient and rethrown
- * immediately. Closed over the generalized `withRetry` (issue #271).
+ * Only failure modes the spec calls out as transient are retried (rate limit,
+ * malformed response). Anything else (auth errors, bad requests, unclassified
+ * `LlmProviderError`s) is assumed non-transient and rethrown immediately.
+ * Closed over the generalized `withRetry` (issue #271).
+ *
+ * TIMEOUT is split on `LlmTimeoutError.source` (#1080, 2026-09-14), because the
+ * two things that word covers have opposite costs. A `status` timeout is the
+ * gateway answering 408 or 504, usually well inside the deadline — a transient
+ * blip, and a retry costs a backoff. A `deadline` timeout is OUR clock firing,
+ * so the attempt has already spent the entire per-attempt budget; every caller
+ * in this system issues its calls inside a latency budget the retry is not
+ * counted against (`enforceLatencyBudget`), so retrying spends a second full
+ * deadline out of the budget it was supposed to help meet.
+ *
+ * Measured rather than argued, over the only two soak sessions that log
+ * retries at all — `onRetryAttempt` ships with #1103, so nothing earlier could
+ * have recorded one: all 38 retried attempts are attempt 1 of 2, each
+ * reporting `elapsed_ms` of 28,002-28,012ms against `LLM call exceeded
+ * 28000ms` — the deadline itself, not a transient blip — and at most 6 of the
+ * 37 debate-stage ones are followed by any metered `llm_spend` row in their
+ * own debate. Every one of them is the `deadline` branch; no 408 or 504
+ * appears in either session at all.
+ *
+ * What this gives up, stated rather than hidden: a genuinely transient network
+ * stall that stretches past the deadline rather than being reported as a status
+ * now surfaces as `LlmTimeoutError` to the caller. That is not a silent loss —
+ * #1385 degrades it inside `enforceLatencyBudget` with `termination_cause:
+ * 'llm_failure'`, which is the discriminator #1080 AC4 asks for, and the next
+ * tick re-asks.
  *
  * "Malformed responses are reparseable on a fresh sample" is TRUE OF THE
  * SAMPLE, not of every response that fails to parse, and there are two
@@ -52,11 +77,10 @@ import {
  *    carries the `usage` of the call it burned.
  */
 function isRetryable(error: unknown): boolean {
-  return (
-    error instanceof LlmTimeoutError ||
-    error instanceof LlmRateLimitError ||
-    error instanceof LlmMalformedResponseError
-  );
+  if (error instanceof LlmTimeoutError) {
+    return error.source === 'status';
+  }
+  return error instanceof LlmRateLimitError || error instanceof LlmMalformedResponseError;
 }
 
 export interface AnthropicMessageRequest {
@@ -346,7 +370,7 @@ function classifyProviderError(error: unknown): Error {
     return new LlmRateLimitError(message);
   }
   if (status === 408 || status === 504) {
-    return new LlmTimeoutError(message);
+    return new LlmTimeoutError(message, 'status');
   }
   return new LlmProviderError(message);
 }
@@ -497,21 +521,32 @@ export class AnthropicLlmClient implements LlmClient {
    * separately, which is correct: each attempt is separately billed.
    *
    * #1080 MEASURED THAT FLOOR for the first time, and the number is not
-   * negligible. In the 2026-09-03 paper session, at least nine of the 26
-   * timed-out debates contained a full 30s attempt that timed out and was
-   * retried — provably, because a single attempt is bounded by
-   * `config.timeoutMs`, so any interval between one logged call and the next
-   * that exceeds it must contain one. One debate (`9d9e505f3493`) burned its
-   * entire 60s budget with ZERO rows in `llm_spend` at all. At the session's
-   * mean metered debate-call cost of $0.002332, those nine attempts are a
-   * floor of ~$0.021 the cap could not see — small against ADR-0008's $50, but
-   * unbounded in principle, since nothing counted them.
+   * negligible. Across the two soak sessions running the 28,000ms deadline
+   * (2026-09-08, 2026-09-10) `onRetryAttempt` recorded 38 attempts that spent
+   * the full deadline and wrote no row — 37 at `stage: 'debate'` — and two
+   * further debate calls gave up with `failure_cause: 'timeout'`, their second
+   * attempt unmetered too. At those sessions' mean metered debate-call cost of
+   * $0.002297, those 39 debate attempts are a floor of ~$0.090 against $0.2595
+   * metered over 113 rows: `llm_spend` sees 113 of 152 debate attempts. It is
+   * a floor and not a total — 17 more calls gave up `cancelled`, the budget
+   * aborting a request already on the wire, and wrote nothing either. All 17
+   * were in flight: `complete`'s pre-dispatch guard reports through the same
+   * `onCallFailed` observer, and no give-up line in either session carries its
+   * `cancelled before dispatch` message, which is the one cancellation shape
+   * that costs nothing. ADR-0008 carries the working.
    *
-   * They are counted now: `AnthropicLlmClientConfig.onRetryAttempt` logs each
-   * retried attempt with its elapsed time, so the gap between billed and
-   * metered is readable from the log rather than inferable from timestamps.
-   * The rows are still not written — there is still no usage block on a failed
-   * call — so this remains a floor, but a floor whose size can be checked.
+   * They are counted because `onRetryAttempt` logs each retried attempt with
+   * its elapsed time, which is the ONLY source: inference from `llm_spend`
+   * timestamps cannot see these at all, since none of the 37 debate attempts
+   * sits between two metered rows of its own debate. The rows are still not
+   * written — there is still no usage block on a failed call — so this remains
+   * a floor, but a floor whose size can be read off the log.
+   *
+   * A `deadline` timeout is no longer retried (`isRetryable`), which halves
+   * the worst case per failing call from two unmetered attempts to one. That
+   * does not remove the floor: every measured attempt above is a FIRST
+   * attempt, which still expires and still writes nothing, and a terminal
+   * deadline can make failing calls more numerous rather than fewer.
    *
    * `latency_ms` (#326) is the SAME number returned to the caller on
    * `LlmResponse` — measured once, around `callWithTimeout`, and passed in
@@ -569,8 +604,9 @@ export class AnthropicLlmClient implements LlmClient {
    * only on a timed-out debate):
    *
    *  - The per-call timeout now aborts its own in-flight request. Before, a
-   *    timed-out call kept running and was RETRIED underneath itself
-   *    (`LlmTimeoutError` is retryable), so one slow call could hold two or
+   *    timed-out call kept running and was RETRIED underneath itself (every
+   *    `LlmTimeoutError` was retryable then; since #1080 only a `'status'` one
+   *    is), so one slow call could hold two or
    *    three concurrent requests open against the provider's rate limit and
    *    bill for all of them while at most one answer was ever read.
    *  - `callerSignal` (the debate's latency budget) is combined with that

@@ -377,23 +377,61 @@ direction of the error is the unsafe one.
 That was already stated at the writer as "a known floor, not an oversight".
 What #1080 adds is a measurement and a way to keep measuring it:
 
-- **Measured.** In the 2026-09-03 paper session, at least 9 of the 26
-  timed-out debates contained a full 30s attempt that timed out and was
-  retried — provably, because one attempt is bounded by
-  `AnthropicLlmClientConfig.timeoutMs`, so any interval between consecutive
-  logged calls that exceeds it must contain one. One debate (`9d9e505f3493`)
-  consumed its entire 60s budget with **zero** `llm_spend` rows. At the
-  session's mean metered debate-call cost of $0.002332, those attempts are a
-  floor of roughly **$0.021** the cap could not see.
-- **Readable.** `AnthropicLlmClientConfig.onRetryAttempt` now logs every
-  retried attempt at `warn` with its elapsed milliseconds
+- **Readable.** `AnthropicLlmClientConfig.onRetryAttempt` logs every retried
+  attempt at `warn` with its elapsed milliseconds
   (`llm retry: <model> attempt N of M failed after Xms …`), wired at the
-  composition root. The rows are still not written — the information does not
-  exist client-side — so the sum remains a floor, but a floor whose size can
-  be checked against the log instead of inferred from timestamp gaps.
+  composition root, and `onCallFailed` names every logical call that exhausts
+  its retries with a `failure_cause`. The rows are still not written — the
+  information does not exist client-side — so the sum remains a floor, but a
+  floor whose size can be read off the log.
+- **Measured, from that log.** Across the two soak sessions that ran the
+  28,000ms per-attempt deadline (2026-09-08 and 2026-09-10), `onRetryAttempt`
+  recorded **38** attempts that spent the full deadline and wrote no
+  `llm_spend` row — 37 at `stage: 'debate'` and one at `market_intelligence`,
+  every one of them attempt 1 of 2, `elapsed_ms` between 28,002 and 28,012,
+  error `LLM call exceeded 28000ms`. Two further debate calls gave up with
+  `failure_cause: 'timeout'`, so their second attempt spent a deadline
+  unmetered too. At those sessions' mean metered debate-call cost of
+  **$0.002297**, the **39 unmetered debate attempts are a floor of ≈$0.090**.
+  The denominator, stated so the percentage is not ambiguous: 113 metered
+  `stage: 'debate'` rows totalling $0.2595 over the same two sessions, so
+  `llm_spend` records 113 of 152 debate attempts — **25.7% of attempts
+  unrecorded**, or **34.5% on top of the recorded dollar figure**. It is a
+  floor and not a total: 17 more debate calls gave up with
+  `failure_cause: 'cancelled'` — the latency budget aborting a request already
+  on the wire — and wrote no row either, each for an unknown partial
+  generation. All 17 were in flight rather than refused before dispatch: the
+  pre-dispatch guard in `complete` (the #347 "no further calls after the budget
+  fires" path) reports through the same observer and would be legible as
+  `cancelled before dispatch`, and no give-up line in either session says that.
+  That distinction is the whole question for this bullet — a pre-dispatch
+  refusal costs nothing, an in-flight abort bills an unknown partial.
+- **The timestamp-gap method cannot replace the log.** An earlier form of this
+  bullet inferred hidden attempts from intervals between consecutive
+  `llm_spend` rows of one debate, and put the floor at 9 attempts / ~$0.021.
+  That method is structurally blind here: re-run against the same store, **none
+  of the 37 logged debate attempts sits between two metered rows of its own
+  debate** (13 belong to debates with no metered row at all, 6 were the
+  debate's first call, 18 have no metered row after them), and it finds 1
+  hidden attempt store-wide against the 38 the log records. Quote the log line,
+  not a gap.
+- **Direction under #1080's `source` split.** A DEADLINE-expiry timeout is no
+  longer retried, which halves the worst case per failing call — one unmetered
+  attempt instead of two — and is why only 2 of the calls above reached a
+  second deadline. It does **not** remove the floor: every one of the 38
+  measured attempts is a FIRST attempt, which still happens, still expires and
+  still writes nothing, and the population of failing logical calls may grow
+  rather than shrink now that a deadline is terminal. The floor is documented,
+  logged and bounded; it is not closed, and closing it needs a usage figure the
+  provider does not return on a call that never came back.
 
-The retry schedule itself is now bounded by the latency budget it runs inside:
-`maxAttempts * (timeoutMs + maxDelayMs) <= LATENCY_BUDGET_MS.stocks`, pinned by
-test in `production.test.ts`. Before #1080 that product was 64,000ms against a
-60,000ms budget — one logical call could, alone and invisibly, exceed the
-deadline it was supposed to be helping the caller meet.
+The retry schedule itself is bounded by the latency budget it runs inside:
+`maxAttempts * timeoutMs + (maxAttempts - 1) * maxDelayMs <= LATENCY_BUDGET_MS.stocks`,
+pinned by test in `production.test.ts`. There are `maxAttempts` deadlines but
+only `maxAttempts - 1` backoffs between them; the earlier form of this line
+wrote `maxAttempts * (timeoutMs + maxDelayMs)`, which over-counts by one
+backoff. Both forms hold at the shipped numbers (58,000ms and 60,000ms against
+112,000ms). Amended 2026-09-14 by
+[#1080](https://github.com/dd-jp/samurai-trading-system/issues/1080), which also
+raised `LATENCY_BUDGET_MS.stocks` from 60,000ms to 112,000ms — see that ticket
+for why the budget is derived from the round cap rather than chosen.

@@ -84,6 +84,7 @@ import {
   detectDisagreements,
   enforceLatencyBudget,
   JsonDebateLogger,
+  llmCallsPerDebate,
   MAX_ROUNDS,
   MAX_ROUNDS_BY_ASSET_CLASS,
   type MediatorAssessment,
@@ -464,9 +465,13 @@ function persistDebateLog(params: {
  * (debate-engine-spec.md: disagreement detection "runs once per debate (not
  * per round), so the LLM cost is bounded"). Pinned against `MAX_ROUNDS` by a
  * test so a change to the round cap cannot silently under-reserve.
+ *
+ * The arithmetic lives in `llmCallsPerDebate` (debate-engine's
+ * `latency-budget.ts`), not here: the latency budget is sized from the same
+ * call count this reserves for, and two copies of it in two layers is the
+ * drift this file's own comment warns about one paragraph up.
  */
-export const LLM_CALLS_PER_ROUND = 3;
-export const WORST_CASE_LLM_CALLS_PER_DEBATE = MAX_ROUNDS * LLM_CALLS_PER_ROUND + 1;
+export const WORST_CASE_LLM_CALLS_PER_DEBATE = llmCallsPerDebate(MAX_ROUNDS);
 
 /**
  * The same worst case, but at the ASSET CLASS's round cap (#581). Crypto is
@@ -478,7 +483,7 @@ export const WORST_CASE_LLM_CALLS_PER_DEBATE = MAX_ROUNDS * LLM_CALLS_PER_ROUND 
  * safely covers the smaller one.
  */
 export function worstCaseLlmCallsForAssetClass(assetClass: AssetClass): number {
-  return MAX_ROUNDS_BY_ASSET_CLASS[assetClass] * LLM_CALLS_PER_ROUND + 1;
+  return llmCallsPerDebate(MAX_ROUNDS_BY_ASSET_CLASS[assetClass]);
 }
 
 /**

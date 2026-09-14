@@ -63,6 +63,45 @@ export class MarketDataServiceImpl implements MarketDataService {
    */
   private readonly lastBarFetch = new Map<string, number>();
   /**
+   * `instrument|timeframe|lookback|partial|barIndex` -> the fetch already in
+   * flight for exactly that window (#1080).
+   *
+   * `lastBarFetch` above is written when a fetch COMPLETES, so it is blind to
+   * one that is still running: under the fan-out every concurrent caller asking
+   * for the same window missed together, and every one of them spent a venue
+   * token on the same bytes. Measured in the 2026-09-10 19:56 soak burst — 133
+   * fetches over 34 distinct windows, all logged `cache: "miss"`, one window
+   * fetched seven times in a single tick. Against Alpaca's shared bucket
+   * (`shared/http/venue-pacing.ts`, 2.0 tok/s with 20 tokens of headroom above
+   * the order path's reserve) those 99 redundant tokens are ~50s of queue that
+   * every analyst's answer deadline then waited behind.
+   *
+   * Two fields beyond `(instrument, timeframe, lookback)` are in the key
+   * because sharing a promise across either would hand a joiner a different
+   * contract than it asked for:
+   *
+   *  - `barIndex`, because two callers a bar apart want genuinely different
+   *    data and the later one would get a window stopping short of its `asOf`.
+   *  - `window.partial`, because `'allow'` and the default `'error'` disagree
+   *    about what a short read means (`alpaca-http-client.ts`), and a caller
+   *    that wanted the throw would silently receive a short window instead.
+   *
+   * An analyst RETRY joins one of these rather than re-issuing, and that is the
+   * intended reading rather than an accident. `AnalystOrchestrator` runs its
+   * second attempt without an `AbortSignal`, so attempt 1's fetch is still in
+   * flight, and `barIndex` is unchanged across a 30s gap at 5m or 1h — so
+   * attempt 2 lands on this key. Re-asking the venue would put a second request
+   * behind the same token queue that made attempt 1 slow; joining costs no
+   * token and settles when the first settles, which `fetchWithTimeout`
+   * (10,000ms, inside a bounded `withRetry`) bounds independently of anything
+   * here. The price is that analysts-spec.md story 19's retry absorbs a
+   * transient FAULT and not a transient QUEUE, which that spec now says.
+   *
+   * Entries are removed in a `finally`, so a rejection cannot poison the key —
+   * the next caller re-fetches rather than replaying a stale error.
+   */
+  private readonly inFlightBarFetches = new Map<string, Promise<Bar[]>>();
+  /**
    * instrument -> when its mark was last FETCHED (wall-clock of the request,
    * not the mark's own trade-time `observed_at`, which can lag minutes on an
    * illiquid symbol while the quote is perfectly fresh). In-process and
@@ -189,6 +228,31 @@ export class MarketDataServiceImpl implements MarketDataService {
       return cached;
     }
 
+    // Backtest replays a single walk and never overlaps calls, so joining an
+    // in-flight fetch can only add a map to a path that has nothing to share
+    // — and `cachedBars` already disables itself there for the same reason.
+    if (this.mode !== 'backtest') {
+      const key = this.inFlightKey(instrument, window, asOf);
+      const inFlight = this.inFlightBarFetches.get(key);
+      if (inFlight !== undefined) {
+        return inFlight;
+      }
+      const started = this.fetchAndStoreBars(instrument, window, asOf).finally(() => {
+        this.inFlightBarFetches.delete(key);
+      });
+      this.inFlightBarFetches.set(key, started);
+      return started;
+    }
+
+    return this.fetchAndStoreBars(instrument, window, asOf);
+  }
+
+  /** `getBars`'s miss path, extracted so the in-flight map above wraps exactly one call. */
+  private async fetchAndStoreBars(
+    instrument: string,
+    window: BarWindow,
+    asOf: Date,
+  ): Promise<Bar[]> {
     // Backtest never touches `consecutiveFetchMisses` at all (review on
     // #1095, deepseek) — `cachedBars` disables itself unconditionally in
     // that mode (see its own doc comment), so EVERY replay step lands here,
@@ -229,6 +293,12 @@ export class MarketDataServiceImpl implements MarketDataService {
     this.store.appendBars(completed);
     this.recordFetch(instrument, window, asOf);
     return this.store.readBars(instrument, window.timeframe, asOf, window.lookback);
+  }
+
+  /** `${instrument}|${timeframe}|${lookback}|${partial}|${barIndex}` — see `inFlightBarFetches` for why the last two are part of this key. */
+  private inFlightKey(instrument: string, window: BarWindow, asOf: Date): string {
+    const partial = window.partial ?? 'error';
+    return `${this.missCounterKey(instrument, window)}|${partial}|${this.barIndex(window.timeframe, asOf)}`;
   }
 
   /** `${instrument}|${timeframe}|${lookback}` — see `consecutiveFetchMisses`'s doc comment for why lookback is part of this key and `barCacheKey` is not reused. */

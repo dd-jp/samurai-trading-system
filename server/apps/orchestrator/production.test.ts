@@ -19,6 +19,8 @@ import { buildArmComparison } from '../../pipeline/control-arm/index.js';
 import {
   AnthropicLlmClient,
   LATENCY_BUDGET_MS,
+  llmCallsPerDebate,
+  MAX_ROUNDS_BY_ASSET_CLASS,
   MockLlmClient,
   SqliteDebateLogStore,
   SqliteSpendCap,
@@ -2046,31 +2048,46 @@ describe('buildProductionComponents (default llmClient fallback)', () => {
   });
 
   /**
-   * #1080: the previous retry schedule let ONE logical LLM call occupy
-   * `2 * (30,000 + 2,000)` = 64,000ms, more than the whole budget the debate
-   * issuing it was racing. See `LOGICAL_LLM_CALL_BUDGET_MS` (defaults.ts) for
-   * the arithmetic and for why the crypto budget is knowingly out of bounds.
+   * #1080. One call's own worst case — every attempt its retry schedule
+   * affords, plus the backoffs between them — must still fit inside the budget
+   * the debate races, or a single retried call guarantees the debate ends on
+   * budget expiry no matter how fast the rest of it is.
    *
-   * The BUDGET side is a literal here on purpose. `DEFAULT_LLM_TIMEOUT_MS` is
+   * Both budget figures are literals on purpose. `DEFAULT_LLM_TIMEOUT_MS` is
    * derived from `LATENCY_BUDGET_MS.stocks`, so comparing the shipped config
    * against that same constant is an identity — it holds for any budget,
-   * including one nobody chose, and would keep passing if the derivation were
-   * replaced by a hand-picked wider timeout. Pinning 60,000 makes both sides
+   * including one nobody chose. Pinning the numbers makes the sides
    * independent: a hand-edited `timeoutMs` fails the inequality, and a moved
-   * latency budget fails the literal and has to be re-read here.
-   *
-   * What this is NOT: an allocation of the budget across a debate's calls. A
-   * three-round debate issues nine of them sequentially, so a per-attempt
-   * ceiling cannot make the budget reachable — that is the open question #1080
-   * leaves to a session that can measure it.
+   * latency budget or round cap fails a literal and has to be re-read here.
    */
   it('cannot let one logical LLM call outlast the latency budget it runs inside', () => {
-    expect(LATENCY_BUDGET_MS.stocks).toBe(60_000);
+    expect(LATENCY_BUDGET_MS.stocks).toBe(112_000);
 
     const { maxAttempts, maxDelayMs } = DEFAULT_LLM_CLIENT_CONFIG.retry;
-    const worstCaseLogicalCallMs = maxAttempts * (DEFAULT_LLM_CLIENT_CONFIG.timeoutMs + maxDelayMs);
+    const worstCaseLogicalCallMs =
+      maxAttempts * DEFAULT_LLM_CLIENT_CONFIG.timeoutMs + (maxAttempts - 1) * maxDelayMs;
 
-    expect(worstCaseLogicalCallMs).toBeLessThanOrEqual(60_000);
+    expect(worstCaseLogicalCallMs).toBeLessThanOrEqual(112_000);
+  });
+
+  /**
+   * #1080's own acceptance criterion, as an invariant: the budget must afford
+   * every call the debate it bounds issues, at the per-attempt ceiling.
+   *
+   * The per-call cost here is `timeoutMs` and not the whole retry schedule
+   * because `enforceLatencyBudget` aborts the debate at the budget: a retry
+   * cannot overrun the tick, only cause the budget to fire. What the budget has
+   * to afford is the clean path where every call returns. The retried worst
+   * case for a single call is pinned by the test above.
+   */
+  it('affords every sequential call a stocks debate issues (#1080)', () => {
+    expect(MAX_ROUNDS_BY_ASSET_CLASS.stocks).toBe(1);
+    expect(DEFAULT_LLM_CLIENT_CONFIG.timeoutMs).toBe(28_000);
+
+    const worstCaseDebateMs =
+      llmCallsPerDebate(MAX_ROUNDS_BY_ASSET_CLASS.stocks) * DEFAULT_LLM_CLIENT_CONFIG.timeoutMs;
+
+    expect(worstCaseDebateMs).toBeLessThanOrEqual(112_000);
   });
 
   /**

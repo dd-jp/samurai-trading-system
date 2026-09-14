@@ -15,6 +15,8 @@ import {
   CORRUPT_LEDGER_REMEDY,
   computeDebateId,
   InMemoryDebateLogStore,
+  LATENCY_BUDGET_MS,
+  MAX_ROUNDS_BY_ASSET_CLASS,
   RateLimiter,
   READ_FAULT_REMEDY,
   SqliteDebateLogStore,
@@ -326,10 +328,12 @@ describe('buildDebateStep', () => {
     });
 
     expect(result.converged).toBe(false);
-    expect(result.rounds_completed).toBe(3);
+    expect(result.rounds_completed).toBe(MAX_ROUNDS_BY_ASSET_CLASS[ASSET_CLASS]);
     // A halted debate is at least as interesting as a converged one: the row
     // is written on the same path, no convergence branch.
-    expect(store.getByDebateId(result.debate_id)?.rounds).toBe(3);
+    expect(store.getByDebateId(result.debate_id)?.rounds).toBe(
+      MAX_ROUNDS_BY_ASSET_CLASS[ASSET_CLASS],
+    );
   });
 
   it('writes NO row when the debate throws partway, and logs the miss', async () => {
@@ -899,22 +903,34 @@ describe('buildDebateStep latency budget (#374)', () => {
     // Nothing completed a round, so this is the low-confidence fallback —
     // deliberately unactionable: confidence 0 is under any conviction floor,
     // so the tick short-circuits at Trader with no_trade.
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(LATENCY_BUDGET_MS.stocks);
     const result = await pending;
 
-    expect(result.timed_out).toEqual({ budget_ms: 60_000, elapsed_ms: 60_000, cause: 'budget' });
+    expect(result.timed_out).toEqual({
+      budget_ms: LATENCY_BUDGET_MS.stocks,
+      elapsed_ms: LATENCY_BUDGET_MS.stocks,
+      cause: 'budget',
+    });
     expect(result.converged).toBe(false);
     expect(result.rounds_completed).toBe(0);
     expect(result.confidence).toBe(0);
     expect(result.contributions).toEqual([]);
   });
 
-  it('returns the partial synthesis, not the bare fallback, when a round completed', async () => {
-    // Round 1 completes without converging (3 calls: bull, bear, mediator);
-    // round 2's bull then stalls. Without `getCurrentState` exposed through
-    // the persona closure, that round-1 synthesis would be thrown away and
-    // this would come back as the empty fallback above.
-    const { client, callCount } = stallingLlmClient({ stallAfterCalls: 3 });
+  /**
+   * At a one-round cap the round that completes IS the debate, so there is no
+   * round 2 for a stall to land in and the salvage path `getCurrentState`
+   * exists for is unreachable. What this pins is the other half of the
+   * contract: bull and bear answer, the mediator stalls, and the debate
+   * degrades to the fallback with a row written rather than hanging.
+   *
+   * The salvage mechanism itself stays covered at its own seam —
+   * `latency-budget.test.ts`, "uses the mediator synthesis in progress on
+   * timeout, when available" — which is where it belongs: it is a property of
+   * `enforceLatencyBudget`, not of the round cap this adapter happens to pass.
+   */
+  it('degrades to the fallback when the single round stalls before it closes', async () => {
+    const { client, callCount } = stallingLlmClient({ stallAfterCalls: 2 });
     const store = new InMemoryDebateLogStore();
     const step = buildDebateStep(client, store, unlimited(), UNCAPPED_SPEND);
     const views = [makeView()];
@@ -928,20 +944,17 @@ describe('buildDebateStep latency budget (#374)', () => {
       bar: NOW,
     });
 
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(LATENCY_BUDGET_MS.stocks);
     const result = await pending;
 
-    expect(result.timed_out).toEqual({ budget_ms: 60_000, elapsed_ms: 60_000, cause: 'budget' });
+    expect(result.timed_out).toEqual({
+      budget_ms: LATENCY_BUDGET_MS.stocks,
+      elapsed_ms: LATENCY_BUDGET_MS.stocks,
+      cause: 'budget',
+    });
     expect(result.converged).toBe(false);
-    expect(result.rounds_completed).toBe(1);
-    expect(result.synthesis).toBe('bull case wins');
-    expect(result.direction).toBe('bullish');
-    expect(result.contributions).toHaveLength(1);
-    expect(result.contributions[0]?.analyst_id).toBe('technical-1');
-    // Non-converged results must carry a reason downstream can act on; the
-    // once-per-debate disagreement call never ran, so the summary is empty
-    // and the adapter names the actual cause instead.
-    expect(result.open_items).toEqual(['debate did not converge before the latency budget fired']);
+    expect(result.rounds_completed).toBe(0);
+    expect(result.confidence).toBe(0);
 
     // The timed-out debate is still a resolved debate, so it gets its row.
     expect(store.getByDebateId(result.debate_id)).toBeDefined();
@@ -949,7 +962,7 @@ describe('buildDebateStep latency budget (#374)', () => {
     // Cancellation, not just abandonment (#347): no further persona call is
     // issued after the budget fires.
     const atTimeout = callCount();
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(LATENCY_BUDGET_MS.stocks);
     expect(callCount()).toBe(atTimeout);
   });
 
@@ -994,7 +1007,7 @@ describe('buildDebateStep latency budget (#374)', () => {
       bar: NOW,
     });
 
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(LATENCY_BUDGET_MS.stocks);
     await pending;
 
     const timeout = entries.find((entry) => entry.message === 'debate.timeout');

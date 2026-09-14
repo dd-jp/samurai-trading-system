@@ -191,14 +191,42 @@ describe('paperStartingProfile', () => {
     });
 
     it('leaves the stocks staleness bound well clear of one debate latency budget', () => {
-      // `LATENCY_BUDGET_MS.stocks` is 60s and gate 1 measures age from
-      // `decided_at` (#1190) — `clock.now()` read at Trader intent-build
-      // time, bounded by that same debate latency budget, not the quote's own
-      // `observed_at`. If it ever approached this bound, every equity order
-      // would no-go on staleness and the soak would silently trade crypto only.
+      // Gate 1 measures age from `decided_at` (#1190) — `clock.now()` read at
+      // Trader intent-build time, bounded by the debate latency budget, not by
+      // the quote's own `observed_at`. If it ever approached this bound, every
+      // equity order would no-go on staleness and the soak would silently trade
+      // crypto only.
+      //
+      // 900,000ms against a 112,000ms budget is 8.03x: a debate that spends its
+      // ENTIRE budget still hands Verdict an intent at an eighth of the
+      // staleness bound. 5x is the floor below which "well clear" would stop
+      // being true, since the gate also has to have room for the rest of the
+      // pass (Trader, Risk, Verdict) on top of the debate.
       const { verdictConfig } = paperStartingProfile('paper');
 
-      expect(verdictConfig.max_signal_age.stocks).toBeGreaterThan(10 * LATENCY_BUDGET_MS.stocks);
+      expect(verdictConfig.max_signal_age.stocks).toBeGreaterThan(5 * LATENCY_BUDGET_MS.stocks);
+    });
+
+    /**
+     * #1080. `LATENCY_BUDGET_MS.stocks` derives from
+     * `MAX_ROUNDS_BY_ASSET_CLASS.stocks`, so raising the round cap raises the
+     * budget silently — and the budget is a per-instrument cost inside a tick
+     * that also has to run analysts, Trader, Risk, Verdict and Execution.
+     *
+     * This does NOT assert the pass fits the tick — it does not: the analyst
+     * stage runs before the debate, so a worst-case pass reaches ~172s against
+     * a 120,000ms tick, and `paper-profile.ts`'s pass-duration tripwire is
+     * where that argument lives. What this pins is the floor on how far the
+     * budget alone may drift: one debate must not on its own outlast a whole
+     * tick. Raising the round cap inflates the budget superlinearly — at a cap
+     * of 2 it is 196,000ms against a 120,000ms tick and this fails, forcing
+     * whoever raises it to re-read the tripwire.
+     */
+    it('keeps one debate budget inside the tick interval it runs in (#1080)', () => {
+      const { tickIntervalMs } = paperStartingProfile('paper');
+
+      expect(tickIntervalMs).toBe(120_000);
+      expect(LATENCY_BUDGET_MS.stocks).toBeLessThanOrEqual(tickIntervalMs);
     });
 
     it('correlates over a window Alpaca can serve on tick 1, so #303 is not reachable here', () => {
