@@ -50,11 +50,16 @@ Event conditioning was tested directly rather than assumed away. Earnings-reacti
 | **3× index ETP / ETC** | 0.18% | **+2.00%** | **−2.16%** | 48.8% | **+4.33 pp** |
 | **3× single-stock ETP** | 0.41% | **+6.00%** | **−6.25%** | 71.6% | **+3.35 pp** |
 
+> **Superseded by the 2026-09-14 amendment near the end of this ADR** — the 0.18% / 0.41% round trips above are
+> spread-only and carry no venue commission. Charged against Saxo's measured 16 bps round trip, the accuracy
+> edges become **+8.18 pp (index) / +4.66 pp (single-stock)**. The take-profit/stop levels themselves are
+> unchanged; only the bar the signal must clear moves. Kept above as the as-declared figures (ADR convention).
+
 In underlying terms: **+0.67% / −0.72%** on the index and **+2.00% / −2.08%** on the single name — ordinary intraday moves, which is the sanity check that matters.
 
 **Why the single-stock bracket is wider despite higher volatility:** its cost is 2.3× larger, and cost is amortised over bracket width. Narrow brackets make the ladder fire often but demand a large edge (+8.9 pp at +1.0%); wide brackets need almost none but rarely fire, degenerating into hold-to-close (90.4% close-outs at +4.5%). These two sit at the widest point that still resolves a meaningful share of trades.
 
-Both require **less** accuracy than the ~55% win rate (+5 pp) [ADR-0017](0017-validation-gates-paper-operational-thesis-expectancy.md) already assumes, so they carry margin against the project's own claim.
+Both require **less** accuracy than the ~55% win rate (+5 pp) [ADR-0017](0017-validation-gates-paper-operational-thesis-expectancy.md) already assumes, so they carry margin against the project's own claim. **Superseded by the 2026-09-14 amendment near the end of this ADR**: charged against Saxo's commission this holds for the single-stock bracket only — the index bar no longer sits inside ADR-0017's assumed margin.
 
 **Corollary that corrects ADR-0016's intuition:** it is **not leverage** that improves the economics — it is **bracket width relative to a fixed cost**. Leverage helps only by making a wide ETP-percentage bracket reachable within one session, and it raises the spread at the same time.
 
@@ -99,6 +104,10 @@ Measured on a **drift-removed** series, so this is the pure volatility envelope 
 ## Consequences
 
 **The study's output is a bar, not a profit estimate.** At the neutral bracket the required edge is the cost itself: **+0.18%/trade for index ETPs, +0.41% for single-stock ETPs**, or equivalently **+4.33 and +3.35 percentage points of directional accuracy** over a coin flip. This is the first falsifiable statement of what the debate layer has to be worth.
+
+> **Superseded by the 2026-09-14 amendment near the end of this ADR**, on the same spread-only defect: charged
+> against Saxo's commission the required edge is **+0.34%/trade (index) / +0.57%/trade (single-stock)**, i.e.
+> **+8.18 / +4.66 percentage points**.
 
 **[#625](https://github.com/dd-jp/samurai-trading-system/issues/625) becomes the critical path.** A system that has produced 96 debates and 0 trades has never been measured against this bar, and nothing downstream of it can be.
 
@@ -273,6 +282,32 @@ No new drawdown measurement is published here. Producing one for the reserved fi
 ### Timing, against #800 AC5
 
 [#800](https://github.com/dd-jp/samurai-trading-system/issues/800) AC5 required this be resolved **before C1's pool file arms the subclass dimension**, since the constraint is silent until then. It is: `resolveSubclassBracket` returns `null` while `subclass_of` is empty and `DEFAULT_UNIVERSE` carries no subclass classification, so the whole per-subclass sizing path — this reserve included — is dark in production today. The change lands ahead of [#751](https://github.com/dd-jp/samurai-trading-system/issues/751)'s `ActiveUniverseProvider`, which is what will arm it.
+
+## Amendment — 2026-09-14, [#1548](https://github.com/dd-jp/samurai-trading-system/issues/1548): D3's bars restated for Saxo's charged 16 bps round trip (successor of #1218)
+
+- **Amends:** Decision 3's accuracy-edge column and the Consequences paragraph's required-edge line — the **bar**, not the take-profit/stop levels, which are untouched.
+- **Source:** [`docs/research/54-capital-economics-vs-signal-accuracy.md`](../research/54-capital-economics-vs-signal-accuracy.md) §2's amendment (the closed form and the per-name break-even table), restated 2026-09-14 by [#1218](https://github.com/dd-jp/samurai-trading-system/issues/1218) from ADR-0015's measured Saxo commission (0.08%/side flat, no per-order minimum — 16 bps round trip).
+
+Decision 3's 0.18% / 0.41% round trips are **spread-only**: doc 18's index quote and ADR-0016's open-items paragraph both source them to an observed spread, and neither names venue commission. Saxo's GIA commission is additive to a spread rather than a substitute for one, so the declared round trips understate what a live fill actually pays by the full 16 bps.
+
+Doc 54 §2's identity is `E(p) = (p − 0.5) × width + E_net`; under `E_gross = 0` — a modelling choice doc 59 §3.0 flags `[assumed]`, not a measurement, but the same choice D3's own declared bars were already computed under — it reduces to `bar = cost / width × 100`. That reduced form is cost-invariant, so the restatement is closed-form, not a re-simulation:
+
+```
+cost' = cost + 0.16                bar' = bar + 0.16 / width × 100
+```
+
+| subclass | round trip | width | bar (as declared) | **bar, charged** | required edge, charged |
+| --- | --- | --- | --- | --- | --- |
+| 3× index ETP / ETC | 0.18% → **0.34%** | 4.16% | +4.33 pp | **+8.18 pp** | +0.34%/trade |
+| 3× single-stock ETP | 0.41% → **0.57%** | 12.25% | +3.35 pp | **+4.66 pp** | +0.57%/trade |
+
+(Dividing the charged row directly gives 8.17 / 4.65 — the same figure direct division of the unrounded sum gives (8.1731 → 8.17). The published **+8.18 / +4.66** is the sum of the *published, already-rounded* parts — `4.33 + 3.85` and `3.35 + 1.31` — not a division a reader should reproduce and flag as wrong.)
+
+The index bar moves further in absolute terms (+3.85 pp) than the single-stock bar (+1.31 pp), because the same flat 16 bps is amortised over a bracket 2.9x narrower — the D3 corollary that narrow brackets demand a large edge is sharper, not reversed. Doc 54 §2's break-even table (per-name, not per-subclass) restates in the same pass: **52.6% (PLTR) to 58.5% (MSTR)** before the LLM bill, widened from the spread-only **51.29% (PLTR) to 57.16% (MSTR)** that same table (drawn from doc 52's per-name simulation, not a figure this ADR itself ever published) previously gave.
+
+**Against ADR-0017's ~55% assumed win rate (+5.00 pp), D3's margin survives on one row and fails on the other.** The single-stock bar stays inside it at **+4.66 pp**; the index bar at **+8.18 pp** does not. Decision 3's claim below that both brackets "carry margin against the project's own claim" therefore now holds for the single-stock bracket only. This ADR does not decide what follows from that — doc 54 §5 is explicit that nothing here resolves #655 or #658, only states what each would have to measure.
+
+**What this does not change.** The neutral-bracket levels (+2.00%/−2.16% index, +6.00%/−6.25% single-stock), the resolve-at-a-level percentages, D4's selection budget, and D5's sizing and drawdown figures are all untouched — this amendment is Decision 3's cost column and its two downstream bars only.
 
 ## Known weaknesses
 
