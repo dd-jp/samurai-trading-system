@@ -587,7 +587,15 @@ async function reconcileFlatten(
     if (firstSeen === null) {
       await store.markFlattenTerminalUnsweptChecked(row.idempotency_key, now);
     } else if (now.getTime() - firstSeen.getTime() >= UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS) {
-      return await judgeTerminalUnsweptFlatten(input, row, order, storePositions, storeState, now);
+      return await judgeTerminalUnsweptFlatten(
+        input,
+        row,
+        order,
+        firstSeen,
+        storePositions,
+        storeState,
+        now,
+      );
     }
   }
 
@@ -868,16 +876,18 @@ async function judgeTerminalUnsweptFlatten(
   input: ReconcileInput,
   row: UnresolvedFlattenSubmission,
   order: NormalizedOrder,
+  lastExamined: Date,
   storePositions: readonly OpenPosition[],
   storeState: OrderState,
   now: Date,
 ): Promise<ReconcileDivergence> {
-  const sat = Math.round(
-    (now.getTime() - (row.terminal_unswept_checked_at?.getTime() ?? 0)) / 1_000,
-  );
+  // Since the LAST look, not since the first: the column is re-armed by every
+  // look that does not release, so on a row wedged for days this reads one
+  // window, never the whole age. See migration 0063.
+  const sat = Math.round((now.getTime() - lastExamined.getTime()) / 1_000);
   const provenance =
     `the venue reports this flatten '${order.order_state}' having filled ${order.filled_qty}, ` +
-    `and ${sat}s after this sweep first saw it terminal ingestFills has still not swept its ` +
+    `and ${sat}s after this sweep last examined it ingestFills has still not swept its ` +
     `fills — past the ${UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS / 60_000}min bound`;
   const coverage = await venueCoversStoreHeld(input, row, storePositions);
   if (!coverage.covered) {
