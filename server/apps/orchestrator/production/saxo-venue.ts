@@ -328,7 +328,9 @@ function assertSaxoVenueBootable(deps: SaxoVenueDeps): void {
         'a USD account balance is exactly the currency mismatch #949 refuses every live entry ' +
         "on — so this venue will not inherit another venue's ledger. Since #1509 the read it " +
         'wants exists: saxoFunding(client) over GET /port/v1/balances/me, which the entrypoint ' +
-        'supplies. A programmatic config has to pass one of the two deliberately.',
+        'supplies. A programmatic config has to pass one of the two deliberately — and an ' +
+        'accountFunding passed to startFromEnvironment is currency-verified there ' +
+        '(assertSameCurrencyFunding), the same as the one it builds itself.',
     );
   }
 }

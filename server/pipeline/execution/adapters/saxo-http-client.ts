@@ -639,7 +639,16 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
    * pins, so this cannot drift onto a different account than orders go to.
    */
   async getBalances(): Promise<SaxoAccountBalance> {
-    return this.request('/port/v1/balances/me', { method: 'GET' }, 'getBalances', validateBalance);
+    return this.request(
+      '/port/v1/balances/me',
+      { method: 'GET' },
+      'getBalances',
+      validateBalance,
+      // A once-per-boot funding read, not an order path: the priority lane
+      // (#1419) exists for `placeOrder`/`cancelOrder` and the identity call
+      // they depend on, which must not queue behind a portfolio sweep.
+      'background',
+    );
   }
 
   async listNetPositions(): Promise<SaxoNetPosition[]> {

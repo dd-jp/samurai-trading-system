@@ -74,11 +74,17 @@ export interface AccountFunding {
   readonly cash: number;
   readonly equity: number;
   /**
-   * Checked once at boot, not per tick — `startFromEnvironment` refuses to
-   * start a run whose account answers anything but the declared book's
-   * currency (`assertSameCurrencyFunding`, #1509). `getAccountState` therefore
-   * reads only `cash` and `equity`, deliberately: a per-tick throw here would
-   * kill a running process over a fact that cannot change under it.
+   * Checked once at boot, not per tick, and only on the Saxo venue —
+   * `startFromEnvironment` refuses to start a `SAMURAI_BROKER=saxo` run whose
+   * account answers anything but `LIVE_BOOK_CURRENCY`
+   * (`assertSameCurrencyFunding`, #1509), whether the source is the one it
+   * built or one the caller injected. That is the venue whose book is declared
+   * in GBP (ADR-0015); an Alpaca run's funding is USD by construction
+   * (`ALPACA_ACCOUNT_CURRENCY`) and is not compared.
+   *
+   * `getAccountState` therefore reads only `cash` and `equity`, deliberately:
+   * a per-tick throw here would kill a running process over a fact that
+   * cannot change under it.
    */
   readonly currency: string;
 }

@@ -87,11 +87,20 @@ export function verifySameCurrency(
  * declares no ceiling is the case with the LEAST protection downstream, not
  * the most.
  *
- * So the read runs whenever the Saxo funding source is the one in use, and a
- * mismatch refuses the boot rather than being logged. This is what
- * `assertSaxoVenueBootable` used to achieve by refusing every Saxo boot that
- * had not been handed a deliberate account read; #1509 supplies the read and
- * keeps the refusal, rather than trading one for the other.
+ * So the read runs on every `SAMURAI_BROKER=saxo` boot that has an
+ * `AccountFundingSource` — the entrypoint's own or an injected one alike,
+ * since `assertSaxoVenueBootable` accepts either in place of a whole
+ * `accountState` — and a mismatch refuses the boot rather than being logged.
+ * This is what `assertSaxoVenueBootable` used to achieve by refusing every
+ * Saxo boot that had not been handed a deliberate account read; #1509
+ * supplies the read and keeps the refusal, rather than trading one for the
+ * other.
+ *
+ * Its scope is exactly that: `startFromEnvironment`, on the `saxo` venue. A
+ * non-Saxo run is not compared at all (`LIVE_BOOK_CURRENCY` is the Saxo leg's
+ * book, ADR-0015 — Alpaca's account is USD by construction), and a caller
+ * that composes `buildProductionOrchestrator` or `buildSaxoBroker` itself
+ * reaches this no more than it reaches any other entrypoint-level guard.
  */
 export function assertSameCurrencyFunding(verdict: SameCurrencyVerdict): void {
   if (verdict.verified) return;

@@ -888,19 +888,29 @@ export async function startFromEnvironment(
   // to get by demanding a deliberate account read, kept rather than traded away
   // for the read itself.
   //
-  // Only the Saxo source, not an injected one: a caller that supplied its own
-  // funding has chosen it, the way an injected broker or calendar is honoured
-  // above.
+  // Scoped by VENUE, not by who built the source. `assertSaxoVenueBootable`
+  // accepts an `accountFunding` in place of a whole `accountState`, so an
+  // injected one reaches the same per-tick sizing the entrypoint's own does —
+  // exempting it would leave the refusal true only of the path that needed it
+  // least. `venue === 'saxo'` is what makes `LIVE_BOOK_CURRENCY` the right
+  // book to compare against (ADR-0015: the Saxo leg is the GBP LSE one); a
+  // non-Saxo run's injected funding is not GBP-denominated and is not checked
+  // here.
+  //
+  // Out of reach either way: a caller that composes `buildProductionOrchestrator`
+  // or `buildSaxoBroker` itself, as `production.ts` documents for every other
+  // entrypoint-level guard.
   //
   // Arming is the narrower step: `armSameCurrencyCeilings` writes only the
   // ceilings the profile declares, so a profile that declares none is left
   // alone. The SIM trial account answers EUR (doc 44 §6.3), so today the
   // refusal above is what a Saxo boot reaches.
   const declaredRiskConfig = injected.riskConfig;
+  const fundingToVerify = venue === 'saxo' ? accountFunding : undefined;
   const sameCurrency =
-    saxoAccountFunding === undefined
+    fundingToVerify === undefined
       ? undefined
-      : verifySameCurrency(await saxoAccountFunding.readFunding());
+      : verifySameCurrency(await fundingToVerify.readFunding());
   if (sameCurrency !== undefined) {
     logger.log({
       trace_id: 'startup',
