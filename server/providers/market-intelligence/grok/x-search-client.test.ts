@@ -446,6 +446,28 @@ describe('XSearchClient', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('releases its permit when the call FAILS, not only when it succeeds (#1080)', async () => {
+    // A leaked permit at cap 1 wedges the whole account queue for the lifetime
+    // of the process — every later call, debate included, refused forever. The
+    // release lives in a `finally` in `nous-responses.ts`; moving it onto the
+    // success path alone is invisible to every other case here, because they
+    // all run ungated where release is a no-op.
+    const gate = new NousAccountInFlightGate({ maxInFlight: 1, expectedCallMs: 13_000 });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new Error('connection reset');
+      }),
+    );
+
+    await new XSearchClient({ ...OPTIONS, gate })
+      .fetchSentiment('TSLA', AS_OF)
+      .catch(() => undefined);
+
+    const after = await gate.acquire({ budgetMs: 1_000 });
+    after.release();
+  });
+
   it('declares its MEASURED duration to the gate, not its timeout (#1080)', async () => {
     // What a caller queued behind a retrieval call is told it is waiting for.
     const entries: LogEntry[] = [];
