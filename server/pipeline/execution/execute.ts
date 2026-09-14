@@ -949,13 +949,8 @@ async function executeExit(
         `executeExit: this exit (exit_reason '${order.metadata.exit_reason}') was refused ` +
         'because another flatten on this instrument is still unresolved — reported as ' +
         '`deduped`, which is NOT the same as "already flat": this lot is still held. The next ' +
-        'tick in the #826 window retries, and the blocking row is bounded — both by whatever ' +
-        'resolves it (reconcile.ts UNRESOLVABLE_FLATTEN_MAX_AGE_MS) and, since #1500, by ' +
-        "writeAheadFlatten's own age cutoff on this SAME check — but ONLY once the venue's " +
-        'last known answer for that row is null, or terminal WITH its fills already swept. A ' +
-        'row the venue keeps confirming WORKING stays blocking no matter how old it is; ' +
-        'reconcile() cancels that one at the venue instead, and the cancel’s terminal answer ' +
-        "is what eventually retires it (see writeAheadFlatten's doc).",
+        'tick in the #826 window retries, and the blocking row is bounded (reconcile.ts ' +
+        'UNRESOLVABLE_FLATTEN_MAX_AGE_MS).',
       payload: {
         idempotency_key: idempotencyKey,
         instrument: order.instrument,

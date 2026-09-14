@@ -208,52 +208,11 @@ export interface FlattenJournal {
    * re-flatten attempt); this is the backstop that makes their own reads
    * advisory rather than load-bearing.
    *
-   * The refusal is BOUNDED, not open-ended, in two independent ways. Every
-   * row this gate can block on has a resolution path that terminates — see
-   * `getUnresolvedFlattens` and `resolveFlattenError` for the three ways a
-   * row leaves the predicate, and `UNRESOLVABLE_FLATTEN_MAX_AGE_MS`
-   * (reconcile.ts) for the bound on the one that used to have none. And
-   * (#1500) even a row that has NOT yet resolved stops blocking once it is
-   * older than `UNRESOLVABLE_FLATTEN_MAX_AGE_MS` against this submission's
-   * own `submitted_at` — an implementation applies that age cutoff to the
-   * SAME predicate this refusal checks, not only to `resolveFlattenError`'s
-   * paths, or a wedged `resumeFlatten` (never resolving, never terminal)
-   * would leave this gate refusing every future flatten on the instrument
-   * forever. Aging out of THIS check does not resolve the row — see
-   * `SqliteExecutionStore.writeAheadFlatten`'s own doc for why that is the
-   * deliberate trade, not an oversight.
-   *
-   * **The age cutoff alone is NOT sufficient (#1500 review round 1) — it is
-   * gated by `order_state`, the last venue answer this row ever got.** A row
-   * whose `order_state` is a WORKING state (anything not in
-   * `TERMINAL_ORDER_STATES` — `'pending'`, `'submitted'`,
-   * `'partially_filled'`, `'filled'`) keeps blocking NO MATTER HOW OLD it is:
-   * the venue is actively saying this lot is still open, and letting a second
-   * market order through on that evidence is the exact #516/#1389 over-sell
-   * this gate exists to prevent. Only a row whose `order_state` is `null`
-   * (the venue was never asked successfully, `resumeFlatten` kept throwing —
-   * `reconcileFlatten`'s doc, reconcile.ts) or a TERMINAL `order_state`
-   * (venue answered, definitively, that the order is done) is eligible for
-   * the age cutoff above. This is the evidence the row's own `order_state`
-   * column carries (set by `resolveFlattenSubmitted` /
-   * `recordFlattenOrderStateObserved`, and STICKY — a later `resumeFlatten`
-   * throw never clears a previously observed working state), not a fresh
-   * read at refusal time.
-   *
-   * **A TERMINAL `order_state` is eligible only once `fills_swept_at` is set
-   * too (#1500 review round 2)** — see `UnresolvedFlattenSubmission.
-   * fills_swept_at`'s doc for the over-sell that rule prevents. Given
-   * `getUnresolvedFlattens`'s own predicate that pairing is currently
-   * unreachable (a `'submitted'` row with `fills_swept_at` set has already
-   * left the scan), so in practice only `order_state === null` rows age out;
-   * the clause is written anyway, because it is what makes the age bound
-   * safe INDEPENDENTLY of that predicate rather than by coincidence of it.
-   *
-   * The acked-and-still-working row the bound therefore never releases is
-   * not left wedged: `reconcileFlatten` (reconcile.ts) CANCELS it at the
-   * venue once it is past the bound, and the cancel's terminal answer then
-   * routes into one of the ordinary resolution paths — which is what
-   * unblocks the instrument, never age on its own.
+   * The refusal is BOUNDED, not open-ended: every row this gate can block on
+   * has a resolution path that terminates — see `getUnresolvedFlattens` and
+   * `resolveFlattenError` for the three ways a row leaves the predicate, and
+   * `UNRESOLVABLE_FLATTEN_MAX_AGE_MS` (reconcile.ts) for the bound on the one
+   * that used to have none.
    */
   writeAheadFlatten(submission: FlattenSubmissionWriteAhead): Promise<void>;
   /** Persist the post-ack transition (`'submitting'` → `'submitted'`). */
@@ -331,19 +290,11 @@ export interface FlattenJournal {
    * that arrives afterwards.
    *
    * This scan is also the one-flatten-per-instrument gate's predicate
-   * (`writeAheadFlatten`) and, since #1389, feeds the Trader's own
-   * `flattenAlreadyInFlight` refusal — via `boundedUnresolvedFlattens`
-   * (#1500, pipeline/execution/flatten-guard.ts), which every production
-   * composition root binds `TraderInput.unresolvedFlattens` to instead of
-   * this method directly, so the Trader never sees a row past
-   * `UNRESOLVABLE_FLATTEN_MAX_AGE_MS`. This method itself stays unbounded on
-   * purpose — `reconcile()`'s own worklist read needs every row, aged or
-   * not, to keep attempting resolution — so a row this scan returns does not
-   * by itself mean the instrument is still blocked from a new flatten; it
-   * means reconcile still has work to do on it. Every row it returns must
-   * still have a resolution path that terminates: fills swept
-   * (`markFlattenFillsSwept`), or one of `resolveFlattenError`'s three ways
-   * in.
+   * (`writeAheadFlatten`) and, since #1389, the Trader's own
+   * `flattenAlreadyInFlight` refusal. Every row it returns therefore blocks
+   * the instrument, which is why every row it returns must have a resolution
+   * path that terminates: fills swept (`markFlattenFillsSwept`), or one of
+   * `resolveFlattenError`'s three ways in.
    *
    * Scoped to the calling instance's own arm (migration 0050, #1124) — this
    * is a SCAN over `flatten_submissions`, not a key-based lookup, so it needs
@@ -355,6 +306,17 @@ export interface FlattenJournal {
    * not a defect in whichever adapter actually held the order.
    */
   getUnresolvedFlattens(): Promise<UnresolvedFlattenSubmission[]>;
+  /**
+   * Records that `reconcileFlatten` sent this flatten a venue cancel at
+   * `attempted_at` — success or failure alike, so a cancel that throws every
+   * pass cannot escape the throttle it feeds
+   * (`FLATTEN_CANCEL_RETRY_EVERY_MS`, reconcile.ts). Overwrites: the LAST
+   * attempt is what the throttle measures against.
+   *
+   * Changes nothing about whether the row blocks. It is not a record that the
+   * venue cancelled anything, and nothing may read it as one.
+   */
+  markFlattenCancelAttempted(idempotency_key: string, attempted_at: Date): Promise<void>;
   /**
    * Refreshes a flatten's known venue state on an ALREADY-`'submitted'` row,
    * without touching `resolved_at` (migration 0019: the moment the ORIGINAL
@@ -587,34 +549,29 @@ export interface UnresolvedFlattenSubmission {
    */
   submitted_at: Date;
   /**
-   * The last venue answer this row ever got, or `null` if it never got one —
-   * `resolveFlattenSubmitted` / `recordFlattenOrderStateObserved` set it,
-   * and it is STICKY: a later `resumeFlatten` throw (reconcile.ts) leaves it
-   * exactly as it was, so a row the venue has ever confirmed alive keeps
-   * that answer through an adapter outage rather than reverting to unknown.
+   * The venue's last known answer about this flatten, or `null` if the venue
+   * has never once described it — `resolveFlattenSubmitted` writes the ack's
+   * state and `recordFlattenOrderStateObserved` refreshes it, and nothing
+   * ever clears it back to `null`.
    *
-   * #1500 review round 1: this, not `submitted_at` alone, is what
-   * `isFlattenBlockingAt` and `SqliteExecutionStore.writeAheadFlatten` gate
-   * the age bound on — see `SharedStore.writeAheadFlatten`'s doc for exactly
-   * which values are eligible to age out and which are not.
+   * That stickiness is what `reconcileFlatten` reads it for: a `null` here
+   * means the venue has never answered, so no later pass can be relied on to
+   * turn the row terminal and it takes the never-confirmed cancel path. A
+   * WORKING value means the opposite — the venue is describing a live order,
+   * and the row must keep blocking every later flatten on the instrument no
+   * matter how old it is (#516/#1389).
    */
   order_state: OrderState | null;
   /**
-   * When `markFlattenFillsSwept` durably applied this flatten's fills, or
-   * `null` if it never has.
+   * When `markFlattenCancelAttempted` last recorded a venue cancel attempt
+   * for this row, or `null` if none was ever attempted.
    *
-   * #1500 review round 2: the second half of the age bound's eligibility
-   * test. A TERMINAL `order_state` on an UNRESOLVED row means exactly one
-   * thing — `reconcileFlatten` resolves terminal-with-`filled_qty === 0`
-   * rows itself, so the only terminal row still in this scan is a
-   * cancelled/expired flatten that PARTIALLY FILLED with its fills not yet
-   * ingested. Releasing that row lets `executeExit` size a replacement from
-   * `heldQuantitiesFor(getOpenPositions, getExitFillSizes)`, which has not
-   * seen the partial, so the second flatten goes out at the full original
-   * quantity and the account ends net SHORT (#516/#1389). So terminal is
-   * eligible to age out only once the fills are in.
+   * A throttle input ONLY (`FLATTEN_CANCEL_RETRY_EVERY_MS`, reconcile.ts), and
+   * never evidence: it says a cancel was sent, not that the venue cancelled
+   * anything, and no path derives permission to submit a replacement flatten
+   * from it. Migration 0062.
    */
-  fills_swept_at: Date | null;
+  cancel_attempted_at: Date | null;
 }
 
 /**

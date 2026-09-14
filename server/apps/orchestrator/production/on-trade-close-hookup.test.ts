@@ -107,6 +107,7 @@ class FakeSharedStore implements SharedStore {
     _update: { order_state: OrderState; broker_order_ids: string[] },
   ): Promise<void> {}
   async markFlattenFillsSwept(_idempotency_key: string, _swept_at: Date): Promise<void> {}
+  async markFlattenCancelAttempted(_idempotency_key: string, _attempted_at: Date): Promise<void> {}
   async markResidualUnprotected(_idempotency_key: string, _observed_at: Date): Promise<void> {}
   async confirmResidualProtected(_idempotency_key: string): Promise<void> {}
   async markResidualAlerted(_idempotency_key: string, _alerted_at: Date): Promise<boolean> {

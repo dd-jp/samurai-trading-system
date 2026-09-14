@@ -17,7 +17,7 @@ import type { CostModel } from '../../tools/backtest/index.js';
 import type { VerdictDecision } from '../verdict/index.js';
 import { ExecutionImpl } from './execute.js';
 import { FilledZeroSizeThrottle } from './filled-zero-size-throttle.js';
-import { UNRESOLVABLE_FLATTEN_MAX_AGE_MS } from './reconcile.js';
+import { FLATTEN_CANCEL_RETRY_EVERY_MS, UNRESOLVABLE_FLATTEN_MAX_AGE_MS } from './reconcile.js';
 import { openTestExecutionStore, type TestExecutionStore } from './sqlite-store-harness.js';
 import type {
   BrokerAck,
@@ -995,6 +995,175 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     expect(alerts).toEqual([
       expect.objectContaining({ idempotency_key: FLATTEN_KEY, reason: 'venue unreachable' }),
     ]);
+  });
+
+  /**
+   * #1500 round 3, finding 1 — the NEVER-CONFIRMED row. `writeAheadFlatten`
+   * committed, `submitFlatten` may well have landed at the venue (the ack is
+   * exactly what was lost), and `resumeFlatten` throws on every pass since —
+   * so `order_state` stays null forever and no later pass can turn the row
+   * terminal. Age alone must not release it: the order may be working, and a
+   * venue can serve order placement while its order-details endpoint fails.
+   *
+   * THE MUTATION THESE KILL: releasing such a row on age (or on a delivered
+   * cancel alone). `cancel()` resolves for an order that already FILLED on
+   * both production adapters, so the venue's own position is the only
+   * evidence that separates "nothing filled" from "we just cancelled a fill".
+   */
+  async function heldLot(store: TestExecutionStore, filled_size: number): Promise<void> {
+    await store.writeAheadPosition(
+      pendingPosition({
+        idempotency_key: 'key-aapl-entry',
+        order_state: 'filled',
+        filled_size,
+        requested_size: filled_size,
+        avg_entry_price: 100,
+      }),
+    );
+  }
+
+  function neverConfirmed(broker: ReturnType<typeof makeBroker>, venueQty: number): void {
+    broker.failFlattenLookup = 'order-details endpoint 503';
+    broker.venuePositions = [
+      { instrument: 'AAPL', qty: venueQty, side: 'buy', avg_entry_price: 100 },
+    ];
+  }
+
+  it('cancels a never-confirmed flatten past the bound and releases it only because the venue still holds the whole lot (#1500 round 3)', async () => {
+    const { store } = openTestExecutionStore();
+    await heldLot(store, 10);
+    await writeAheadFlatten(store, {
+      submitted_at: new Date(NOW.getTime() - (UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1)),
+    });
+    const broker = makeBroker();
+    neverConfirmed(broker, 10);
+
+    const report = await new ExecutionImpl(makeInput(store, broker)).reconcile();
+
+    expect(broker.cancelCalls).toEqual([{ client_order_id: FLATTEN_KEY, instrument: 'AAPL' }]);
+    expect(
+      report.divergences.find((divergence) => divergence.idempotency_key === FLATTEN_KEY),
+    ).toMatchObject({ action: 'rejected', kind: 'flatten' });
+    expect((await store.getFlattenSubmission(FLATTEN_KEY))?.status).toBe('error');
+    expect(await store.getUnresolvedFlattens()).toEqual([]);
+  });
+
+  it('keeps a never-confirmed flatten blocking when the venue holds LESS than the store does — something filled', async () => {
+    const { store } = openTestExecutionStore();
+    await heldLot(store, 10);
+    await writeAheadFlatten(store, {
+      submitted_at: new Date(NOW.getTime() - (UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1)),
+    });
+    const broker = makeBroker();
+    neverConfirmed(broker, 6);
+    const alerts: FlattenReconcileAlert[] = [];
+
+    await new ExecutionImpl(
+      makeInput(store, broker, {
+        postFlattenReconcileAlert: async (alert) => {
+          alerts.push(alert);
+        },
+      }),
+    ).reconcile();
+
+    expect(broker.cancelCalls).toHaveLength(1);
+    expect(alerts[0]?.reason).toContain('attribute them by hand');
+    expect((await store.getUnresolvedFlattens()).map((row) => row.idempotency_key)).toEqual([
+      FLATTEN_KEY,
+    ]);
+  });
+
+  it('keeps a never-confirmed flatten blocking when the venue refuses the cancel', async () => {
+    const { store } = openTestExecutionStore();
+    await heldLot(store, 10);
+    await writeAheadFlatten(store, {
+      submitted_at: new Date(NOW.getTime() - (UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1)),
+    });
+    const broker = makeBroker();
+    neverConfirmed(broker, 10);
+    broker.failCancel = 'venue refused the cancel';
+
+    const report = await new ExecutionImpl(makeInput(store, broker)).reconcile();
+
+    expect(
+      report.divergences.find((divergence) => divergence.idempotency_key === FLATTEN_KEY)?.reason,
+    ).toContain('cancel FAILED');
+    expect((await store.getUnresolvedFlattens()).map((row) => row.idempotency_key)).toEqual([
+      FLATTEN_KEY,
+    ]);
+  });
+
+  it('keeps a never-confirmed flatten blocking when the venue book could not be read this pass', async () => {
+    const { store } = openTestExecutionStore();
+    await heldLot(store, 10);
+    await writeAheadFlatten(store, {
+      submitted_at: new Date(NOW.getTime() - (UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1)),
+    });
+    const broker = makeBroker();
+    neverConfirmed(broker, 10);
+    broker.failPositions = 'positions endpoint 503';
+
+    await new ExecutionImpl(makeInput(store, broker)).reconcile();
+
+    expect(broker.cancelCalls).toHaveLength(1);
+    expect((await store.getUnresolvedFlattens()).map((row) => row.idempotency_key)).toEqual([
+      FLATTEN_KEY,
+    ]);
+  });
+
+  it('does NOT cancel a never-confirmed flatten that is still inside the bound', async () => {
+    const { store } = openTestExecutionStore();
+    await heldLot(store, 10);
+    await writeAheadFlatten(store, {
+      submitted_at: new Date(NOW.getTime() - (UNRESOLVABLE_FLATTEN_MAX_AGE_MS - 1)),
+    });
+    const broker = makeBroker();
+    neverConfirmed(broker, 10);
+
+    await new ExecutionImpl(makeInput(store, broker)).reconcile();
+
+    expect(broker.cancelCalls).toEqual([]);
+    expect((await store.getUnresolvedFlattens()).map((row) => row.idempotency_key)).toEqual([
+      FLATTEN_KEY,
+    ]);
+  });
+
+  /**
+   * #1500 round 3, finding 3 — the cancel and its page are throttled against
+   * the DURABLE `cancel_attempted_at`, not re-issued on every fill-sync poll.
+   */
+  it('does not re-cancel or re-page a wedged row inside FLATTEN_CANCEL_RETRY_EVERY_MS', async () => {
+    const { store } = openTestExecutionStore();
+    await ackedFlatten(store, new Date(NOW.getTime() - (UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1)));
+    const broker = makeBroker();
+    workingFlattenBook(broker);
+    const alerts: FlattenReconcileAlert[] = [];
+    const input = makeInput(store, broker, {
+      postFlattenReconcileAlert: async (alert) => {
+        alerts.push(alert);
+      },
+    });
+
+    await new ExecutionImpl(input).reconcile();
+    await new ExecutionImpl(input).reconcile();
+
+    expect(broker.cancelCalls).toHaveLength(1);
+    expect(alerts).toHaveLength(1);
+  });
+
+  it('cancels again once the last attempt is older than FLATTEN_CANCEL_RETRY_EVERY_MS', async () => {
+    const { store } = openTestExecutionStore();
+    await ackedFlatten(store, new Date(NOW.getTime() - (UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1)));
+    await store.markFlattenCancelAttempted(
+      FLATTEN_KEY,
+      new Date(NOW.getTime() - (FLATTEN_CANCEL_RETRY_EVERY_MS + 1)),
+    );
+    const broker = makeBroker();
+    workingFlattenBook(broker);
+
+    await new ExecutionImpl(makeInput(store, broker)).reconcile();
+
+    expect(broker.cancelCalls).toEqual([{ client_order_id: FLATTEN_KEY, instrument: 'AAPL' }]);
   });
 
   /**

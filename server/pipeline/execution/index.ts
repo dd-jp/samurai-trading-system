@@ -91,8 +91,6 @@ export {
   FILLED_ZERO_SIZE_REANNOUNCE_EVERY_MS,
   FilledZeroSizeThrottle,
 } from './filled-zero-size-throttle.js';
-export type { FlattenGuardDeps } from './flatten-guard.js';
-export { boundedUnresolvedFlattens } from './flatten-guard.js';
 export type {
   FlattenOverfillAlertChannel,
   FlattenOverfillWarning,
@@ -110,11 +108,7 @@ export type {
   NonSterlingFeeAlertChannel,
 } from './non-sterling-fee-alert.js';
 export type { OcoDoubleFillAlert, OcoDoubleFillAlertChannel } from './oco-double-fill-alert.js';
-export {
-  isFlattenBlockingAt,
-  TERMINAL_SWEEP_AGE_MS,
-  UNRESOLVABLE_FLATTEN_MAX_AGE_MS,
-} from './reconcile.js';
+export { TERMINAL_SWEEP_AGE_MS, UNRESOLVABLE_FLATTEN_MAX_AGE_MS } from './reconcile.js';
 export type {
   ResidualExposureAlert,
   ResidualExposureAlertChannel,

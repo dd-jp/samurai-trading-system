@@ -1,11 +1,7 @@
 import type { ClosedTrade, Fill, OpenPosition } from '../../shared/index.js';
 import { toBrokerFillId } from '../../shared/index.js';
 import { openSharedStore, type StoreHandle } from '../../shared/store/index.js';
-import { UNRESOLVABLE_FLATTEN_MAX_AGE_MS } from './reconcile.js';
-import {
-  SqliteExecutionStore,
-  UnresolvedFlattenForInstrumentError,
-} from './sqlite-shared-store.js';
+import { SqliteExecutionStore } from './sqlite-shared-store.js';
 
 const OPENED_AT = new Date('2026-07-20T14:00:00Z');
 const DECISION_AT = new Date('2026-07-20T13:55:00Z');
@@ -851,162 +847,6 @@ describe('SqliteExecutionStore', () => {
     });
   });
 
-  // #1500: `writeAheadFlatten`'s atomic one-flatten-per-instrument refusal,
-  // bounded by `UNRESOLVABLE_FLATTEN_MAX_AGE_MS` against the NEW
-  // submission's own `submitted_at` — see that method's doc.
-  describe('writeAheadFlatten — the one-flatten-per-instrument refusal is age-bounded (#1500)', () => {
-    it('still refuses a second flatten while the blocking row is within the age bound', async () => {
-      const { store } = makeStore();
-      await store.writeAheadFlatten(
-        makeFlattenWriteAhead({ idempotency_key: 'flatten-1', submitted_at: OPENED_AT }),
-      );
-
-      const justInsideBound = new Date(OPENED_AT.getTime() + UNRESOLVABLE_FLATTEN_MAX_AGE_MS - 1);
-
-      await expect(
-        store.writeAheadFlatten(
-          makeFlattenWriteAhead({
-            idempotency_key: 'flatten-2',
-            submitted_at: justInsideBound,
-          }),
-        ),
-      ).rejects.toThrow(UnresolvedFlattenForInstrumentError);
-    });
-
-    it('no longer refuses a second flatten once the blocking row is past the age bound', async () => {
-      const { store } = makeStore();
-      await store.writeAheadFlatten(
-        makeFlattenWriteAhead({ idempotency_key: 'flatten-1', submitted_at: OPENED_AT }),
-      );
-
-      const pastBound = new Date(OPENED_AT.getTime() + UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1);
-
-      await store.writeAheadFlatten(
-        makeFlattenWriteAhead({
-          idempotency_key: 'flatten-2',
-          instrument: 'AAPL',
-          submitted_at: pastBound,
-        }),
-      );
-
-      expect((await store.getFlattenAttribution('flatten-2'))?.lot_idempotency_keys).toEqual([
-        'key-lot-1',
-        'key-lot-2',
-      ]);
-    });
-
-    // The aged-out row itself is untouched — this gate stops CITING it, it
-    // does not resolve it. `reconcile()`'s worklist must keep seeing it.
-    it('leaves the aged-out blocking row exactly as unresolved as before', async () => {
-      const { store } = makeStore();
-      await store.writeAheadFlatten(
-        makeFlattenWriteAhead({ idempotency_key: 'flatten-1', submitted_at: OPENED_AT }),
-      );
-      const pastBound = new Date(OPENED_AT.getTime() + UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1);
-
-      await store.writeAheadFlatten(
-        makeFlattenWriteAhead({ idempotency_key: 'flatten-2', submitted_at: pastBound }),
-      );
-
-      const unresolved = await store.getUnresolvedFlattens();
-      expect(unresolved.map((row) => row.idempotency_key).sort()).toEqual([
-        'flatten-1',
-        'flatten-2',
-      ]);
-    });
-
-    // #1500 review round 1: age alone is not evidence the lot is flat — a
-    // venue that keeps confirming a genuinely open order (auction, halt,
-    // illiquid LSE ETP) must keep blocking no matter how old the row is, or
-    // this gate lets the exact #516/#1389 reverse-position over-sell through.
-    it('still refuses a second flatten past the age bound when the venue last confirmed the row WORKING', async () => {
-      const { store } = makeStore();
-      await store.writeAheadFlatten(
-        makeFlattenWriteAhead({ idempotency_key: 'flatten-1', submitted_at: OPENED_AT }),
-      );
-      await store.resolveFlattenSubmitted(
-        'flatten-1',
-        { order_state: 'partially_filled', broker_order_ids: ['broker-order-1'] },
-        OPENED_AT,
-      );
-
-      const wayPastBound = new Date(OPENED_AT.getTime() + UNRESOLVABLE_FLATTEN_MAX_AGE_MS * 100);
-
-      await expect(
-        store.writeAheadFlatten(
-          makeFlattenWriteAhead({ idempotency_key: 'flatten-2', submitted_at: wayPastBound }),
-        ),
-      ).rejects.toThrow(UnresolvedFlattenForInstrumentError);
-    });
-
-    // #1500 review round 2: a TERMINAL `order_state` on a row that is still
-    // unresolved means a cancelled/expired flatten that PARTIALLY filled
-    // with its fills not yet ingested (`reconcileFlatten` resolves the
-    // filled-nothing case itself). Releasing it would size the replacement
-    // off reads that cannot see the partial — the #516/#1389 over-sell.
-    // Terminal is eligible only WITH `fills_swept_at`, and a row that has
-    // that is already out of this predicate's `status`/`fills_swept_at`
-    // filter, so what this asserts is that terminal alone no longer releases.
-    it('still refuses a second flatten past the age bound when the terminal row has unswept fills', async () => {
-      const { store } = makeStore();
-      await store.writeAheadFlatten(
-        makeFlattenWriteAhead({ idempotency_key: 'flatten-1', submitted_at: OPENED_AT }),
-      );
-      await store.resolveFlattenSubmitted(
-        'flatten-1',
-        { order_state: 'cancelled', broker_order_ids: ['broker-order-1'] },
-        OPENED_AT,
-      );
-
-      const pastBound = new Date(OPENED_AT.getTime() + UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1);
-
-      await expect(
-        store.writeAheadFlatten(
-          makeFlattenWriteAhead({ idempotency_key: 'flatten-2', submitted_at: pastBound }),
-        ),
-      ).rejects.toThrow(UnresolvedFlattenForInstrumentError);
-    });
-
-    it('allows the second flatten once that terminal row’s fills are swept', async () => {
-      const { store } = makeStore();
-      await store.writeAheadFlatten(
-        makeFlattenWriteAhead({ idempotency_key: 'flatten-1', submitted_at: OPENED_AT }),
-      );
-      await store.resolveFlattenSubmitted(
-        'flatten-1',
-        { order_state: 'cancelled', broker_order_ids: ['broker-order-1'] },
-        OPENED_AT,
-      );
-      await store.markFlattenFillsSwept('flatten-1', OPENED_AT);
-
-      const pastBound = new Date(OPENED_AT.getTime() + UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1);
-
-      await store.writeAheadFlatten(
-        makeFlattenWriteAhead({
-          idempotency_key: 'flatten-2',
-          instrument: 'AAPL',
-          submitted_at: pastBound,
-        }),
-      );
-
-      expect((await store.getFlattenAttribution('flatten-2'))?.lot_idempotency_keys).toEqual([
-        'key-lot-1',
-        'key-lot-2',
-      ]);
-    });
-
-    it('carries fills_swept_at onto the rows getUnresolvedFlattens returns', async () => {
-      const { store } = makeStore();
-      await store.writeAheadFlatten(
-        makeFlattenWriteAhead({ idempotency_key: 'flatten-1', submitted_at: OPENED_AT }),
-      );
-      await store.markFlattenFillsSwept('flatten-1', OPENED_AT);
-
-      const [row] = await store.getUnresolvedFlattens();
-      expect(row?.fills_swept_at).toEqual(OPENED_AT);
-    });
-  });
-
   // Review feedback on #524 (kimi): the same unvalidated-cast defect class
   // #509 closed repo-wide, freshly reintroduced by #517 if left unguarded.
   describe('getFlattenAttribution — corrupted rows (#524 review, #571)', () => {
@@ -1161,7 +1001,7 @@ describe('SqliteExecutionStore', () => {
           status: 'submitting',
           submitted_at: OPENED_AT,
           order_state: null,
-          fills_swept_at: null,
+          cancel_attempted_at: null,
         },
       ]);
     });
@@ -1184,9 +1024,41 @@ describe('SqliteExecutionStore', () => {
           status: 'submitted',
           submitted_at: OPENED_AT,
           order_state: 'submitted',
-          fills_swept_at: null,
+          cancel_attempted_at: null,
         },
       ]);
+    });
+
+    /**
+     * #1500: the cancel throttle's durable input (migration 0062). A row's
+     * last venue-cancel attempt has to survive a restart, or a crash loop
+     * turns `reconcileFlatten`'s cancel back into one per fill-sync poll.
+     */
+    it('carries the last venue-cancel attempt onto the rows the scan returns, without releasing the row', async () => {
+      const { store } = makeStore();
+      await store.writeAheadFlatten(makeFlattenWriteAhead({ idempotency_key: 'flatten-wedged' }));
+      const attemptedAt = new Date(OPENED_AT.getTime() + 60_000);
+
+      await store.markFlattenCancelAttempted('flatten-wedged', attemptedAt);
+
+      expect(await store.getUnresolvedFlattens()).toEqual([
+        {
+          idempotency_key: 'flatten-wedged',
+          instrument: 'AAPL',
+          status: 'submitting',
+          submitted_at: OPENED_AT,
+          order_state: null,
+          cancel_attempted_at: attemptedAt,
+        },
+      ]);
+    });
+
+    it('refuses a cancel-attempt mark for a flatten that does not exist', async () => {
+      const { store } = makeStore();
+
+      await expect(store.markFlattenCancelAttempted('no-such-flatten', OPENED_AT)).rejects.toThrow(
+        /no flatten_submissions row/,
+      );
     });
 
     it('excludes a row once markFlattenFillsSwept has run — the bound migration 0023 exists for', async () => {

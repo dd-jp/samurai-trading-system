@@ -97,7 +97,6 @@ import {
   TERMINAL_ORDER_STATES,
   toStoredTimestamp,
 } from '../../shared/store/index.js';
-import { UNRESOLVABLE_FLATTEN_MAX_AGE_MS } from './reconcile.js';
 import type {
   FlattenAttribution,
   FlattenSubmissionWriteAhead,
@@ -710,42 +709,10 @@ export class SqliteExecutionStore implements SharedStore {
    * two must agree, or a row invisible to reconcile could block a flatten
    * nothing will ever unblock, or (arm dropped) the control arm's rows could
    * stand the live arm's mandatory flat-by-close down.
-   *
-   * #1500: also bounded by `UNRESOLVABLE_FLATTEN_MAX_AGE_MS` — a blocking row
-   * older than that against THIS submission's own `submitted_at` (the
-   * caller's `now`, so no extra clock dependency here) no longer counts,
-   * UNLESS its last observed `order_state` is a WORKING one (review round 1:
-   * age alone is not evidence the lot is flat — a venue that keeps
-   * confirming a genuinely open order, e.g. an auction/halt/illiquid LSE
-   * ETP, must keep blocking no matter how old the row is, or this gate
-   * would let a second full-size market flatten through on a lot #1389
-   * already proved was still fully held — the reverse-position outcome
-   * #1389 closed). Only a row whose `order_state` is `null` (the venue was
-   * never successfully asked at all) or one of `TERMINAL_ORDER_STATES` WITH
-   * its `fills_swept_at` already set (venue answered definitively, and
-   * whatever it filled before dying is in the store — review round 2: a
-   * terminal row whose partial fills are still unswept is the certain
-   * over-sell, see `isFlattenBlockingAt`'s doc) is eligible for the age
-   * cutoff. `order_state` is read STICKILY off the row, not
-   * re-derived — see `UnresolvedFlattenSubmission.order_state`'s doc. A row
-   * still inside the bound, or whose `order_state` is working, blocks
-   * exactly as before; the #516 protection is unchanged for either. What
-   * ages out stays in `flatten_submissions` at whatever status it already
-   * had — unlike `reconcileFlatten`'s own age branch, this gate does not
-   * resolve the row, it only stops citing it as a reason to refuse a NEW
-   * flatten. See `SharedStore.writeAheadFlatten`'s doc for why leaving it
-   * unresolved is the deliberate trade, not an oversight.
    */
   async writeAheadFlatten(submission: FlattenSubmissionWriteAhead): Promise<void> {
     try {
       this.db.transaction(() => {
-        const blockingCutoff = toStoredTimestamp(
-          new Date(submission.submitted_at.getTime() - UNRESOLVABLE_FLATTEN_MAX_AGE_MS),
-        );
-        // #1500 review round 1: a row whose last observed `order_state` is
-        // still WORKING (not in `TERMINAL_ORDER_STATES`, and not `NULL`)
-        // blocks regardless of `submitted_at` — see this method's own doc.
-        const terminalPlaceholders = TERMINAL_ORDER_STATES.map(() => '?').join(', ');
         const blocking = this.db
           .prepare(
             `SELECT idempotency_key FROM flatten_submissions
@@ -754,21 +721,11 @@ export class SqliteExecutionStore implements SharedStore {
                 AND idempotency_key <> ?
                 AND (status = 'submitting'
                  OR (status = 'submitted' AND fills_swept_at IS NULL))
-                AND (
-                  submitted_at > ?
-                  OR (order_state IS NOT NULL
-                      AND (order_state NOT IN (${terminalPlaceholders})
-                        OR fills_swept_at IS NULL))
-                )
               LIMIT 1`,
           )
-          .get(
-            this.arm,
-            submission.instrument,
-            submission.idempotency_key,
-            blockingCutoff,
-            ...TERMINAL_ORDER_STATES,
-          ) as { idempotency_key: string } | undefined;
+          .get(this.arm, submission.instrument, submission.idempotency_key) as
+          | { idempotency_key: string }
+          | undefined;
         if (blocking !== undefined) {
           throw new UnresolvedFlattenForInstrumentError(
             submission.idempotency_key,
@@ -1032,7 +989,7 @@ export class SqliteExecutionStore implements SharedStore {
   async getUnresolvedFlattens(): Promise<UnresolvedFlattenSubmission[]> {
     const rows = this.db
       .prepare(
-        `SELECT idempotency_key, instrument, status, submitted_at, order_state, fills_swept_at
+        `SELECT idempotency_key, instrument, status, submitted_at, order_state, cancel_attempted_at
            FROM flatten_submissions
           WHERE arm = ?
             AND (status = 'submitting'
@@ -1044,7 +1001,7 @@ export class SqliteExecutionStore implements SharedStore {
       status: 'submitting' | 'submitted';
       submitted_at: string;
       order_state: OrderState | null;
-      fills_swept_at: string | null;
+      cancel_attempted_at: string | null;
     }>;
 
     return rows.map((row) => ({
@@ -1053,7 +1010,8 @@ export class SqliteExecutionStore implements SharedStore {
       status: row.status,
       submitted_at: new Date(row.submitted_at),
       order_state: row.order_state,
-      fills_swept_at: row.fills_swept_at === null ? null : new Date(row.fills_swept_at),
+      cancel_attempted_at:
+        row.cancel_attempted_at === null ? null : new Date(row.cancel_attempted_at),
     }));
   }
 
@@ -1077,6 +1035,20 @@ export class SqliteExecutionStore implements SharedStore {
     if (result.changes === 0) {
       throw new Error(
         `SqliteExecutionStore.recordFlattenOrderStateObserved: no flatten_submissions row for ` +
+          `'${idempotency_key}'`,
+      );
+    }
+  }
+
+  /** Migration 0062's throttle input — see `SharedStore.markFlattenCancelAttempted`. */
+  async markFlattenCancelAttempted(idempotency_key: string, attempted_at: Date): Promise<void> {
+    const result = this.db
+      .prepare('UPDATE flatten_submissions SET cancel_attempted_at = ? WHERE idempotency_key = ?')
+      .run(toStoredTimestamp(attempted_at), idempotency_key);
+
+    if (result.changes === 0) {
+      throw new Error(
+        `SqliteExecutionStore.markFlattenCancelAttempted: no flatten_submissions row for ` +
           `'${idempotency_key}'`,
       );
     }

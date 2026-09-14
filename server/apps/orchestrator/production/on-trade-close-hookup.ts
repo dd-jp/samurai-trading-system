@@ -85,6 +85,7 @@ export function withOnTradeClose(
     isRetryableFlattenError: (...args) => store.isRetryableFlattenError(...args),
     getFlattenAttribution: (...args) => store.getFlattenAttribution(...args),
     getUnresolvedFlattens: (...args) => store.getUnresolvedFlattens(...args),
+    markFlattenCancelAttempted: (...args) => store.markFlattenCancelAttempted(...args),
     recordFlattenOrderStateObserved: (...args) => store.recordFlattenOrderStateObserved(...args),
     markFlattenFillsSwept: (...args) => store.markFlattenFillsSwept(...args),
     markResidualUnprotected: (...args) => store.markResidualUnprotected(...args),
