@@ -1076,7 +1076,9 @@ export class SqliteExecutionStore implements SharedStore {
     this.db
       .prepare(
         `UPDATE open_positions
-            SET residual_unprotected_since = NULL, residual_rearm_alerted_at = NULL
+            SET residual_unprotected_since = NULL,
+                residual_rearm_alerted_at = NULL,
+                residual_rearm_unsupported_alerted_at = NULL
           WHERE idempotency_key = ?`,
       )
       .run(idempotency_key);
@@ -1098,6 +1100,48 @@ export class SqliteExecutionStore implements SharedStore {
       .run(toStoredTimestamp(alerted_at), idempotency_key);
 
     return result.changes > 0;
+  }
+
+  /**
+   * The TRUTHFUL permanent-gap page's own dedup — see
+   * `SharedStore.markResidualRearmUnsupportedAlerted`. Same first-writer-wins
+   * WHERE-guard shape as `markResidualAlerted`, over its own column, so a
+   * pre-attempt page (which never calls this method) cannot block it and it
+   * cannot block a pre-attempt page.
+   */
+  async markResidualRearmUnsupportedAlerted(
+    idempotency_key: string,
+    alerted_at: Date,
+  ): Promise<boolean> {
+    const result = this.db
+      .prepare(
+        `UPDATE open_positions
+            SET residual_rearm_unsupported_alerted_at = ?
+          WHERE idempotency_key = ? AND residual_rearm_unsupported_alerted_at IS NULL`,
+      )
+      .run(toStoredTimestamp(alerted_at), idempotency_key);
+
+    return result.changes > 0;
+  }
+
+  /**
+   * Point-read of `residual_rearm_unsupported_alerted_at` — see
+   * `SharedStore.getResidualRearmUnsupportedAlertedAt`. A lot the query
+   * matches no row for reads the same as one that was never alerted (null):
+   * both mean "nothing on record says this episode already paged", which is
+   * the caller's actual question.
+   */
+  async getResidualRearmUnsupportedAlertedAt(idempotency_key: string): Promise<Date | null> {
+    const row = this.db
+      .prepare(
+        `SELECT residual_rearm_unsupported_alerted_at
+           FROM open_positions WHERE idempotency_key = ?`,
+      )
+      .get(idempotency_key) as { residual_rearm_unsupported_alerted_at: string | null } | undefined;
+
+    return row === undefined
+      ? null
+      : fromStoredTimestampOrNull(row.residual_rearm_unsupported_alerted_at);
   }
 
   /**
@@ -1136,6 +1180,9 @@ export class SqliteExecutionStore implements SharedStore {
         position: fromOpenPositionRow(row),
         unprotected_since: fromStoredTimestamp(row.residual_unprotected_since),
         alerted_at: fromStoredTimestampOrNull(row.residual_rearm_alerted_at),
+        rearm_unsupported_alerted_at: fromStoredTimestampOrNull(
+          row.residual_rearm_unsupported_alerted_at,
+        ),
       };
     });
   }

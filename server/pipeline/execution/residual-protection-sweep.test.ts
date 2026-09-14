@@ -1350,4 +1350,95 @@ describe('residual-protection sweep (#549)', () => {
       await expect(store.confirmResidualProtected('no-such-lot')).resolves.toBeUndefined();
     });
   });
+
+  describe('#1447: the truthful permanent-gap page has its own dedup', () => {
+    it('a pre-attempt page already recorded must not suppress the later venue-refusal page', async () => {
+      const { db, store } = openTestExecutionStore();
+      await seedPosition(store);
+      await seedPartiallyFlattenedFills(store);
+      await store.markResidualUnprotected(LOT, NOW);
+      // Simulates a store-read-failure/non-finite-residual page that already
+      // fired for this episode BEFORE any re-arm was even attempted — the
+      // general dedup is spent, exactly the pre-condition #1447 was filed
+      // against.
+      await store.markResidualAlerted(LOT, new Date('2026-08-07T15:00:00Z'));
+
+      const restartedStore = new TestExecutionStore(db);
+      const broker = new SweepBroker();
+      broker.rearmFailure = new ProtectiveRearmUnsupportedError(
+        'saxo',
+        'IsOcoOrderSupported false',
+      );
+      // Force the #1214 re-flatten remedy to fail too, so this pass falls
+      // through to the page — same technique as "never submits unjournalled"
+      // above.
+      restartedStore.writeAheadFlatten = async () => {
+        throw new Error('disk full');
+      };
+      const alerts = makeResidualExposureAlerts();
+      const execution = new ExecutionImpl(makeInput(broker, restartedStore, alerts));
+
+      await execution.sweepResidualProtection();
+
+      // The general dedup being already-set must not have blocked this.
+      expect(alerts.alerts).toEqual([
+        expect.objectContaining({ idempotency_key: LOT, rearm_unsupported: true }),
+      ]);
+      expect(await restartedStore.getResidualRearmUnsupportedAlertedAtRaw(LOT)).not.toBeNull();
+    });
+
+    it('once fired, the venue-refusal page stays quiet on a later pass (once per episode)', async () => {
+      const { db, store } = openTestExecutionStore();
+      await seedPosition(store);
+      await seedPartiallyFlattenedFills(store);
+      await store.markResidualUnprotected(LOT, NOW);
+
+      const restartedStore = new TestExecutionStore(db);
+      const broker = new SweepBroker();
+      broker.rearmFailure = new ProtectiveRearmUnsupportedError(
+        'saxo',
+        'IsOcoOrderSupported false',
+      );
+      restartedStore.writeAheadFlatten = async () => {
+        throw new Error('disk full');
+      };
+      const alerts = makeResidualExposureAlerts();
+      const execution = new ExecutionImpl(makeInput(broker, restartedStore, alerts));
+
+      await execution.sweepResidualProtection();
+      expect(alerts.alerts).toHaveLength(1);
+
+      await execution.sweepResidualProtection();
+      expect(alerts.alerts).toHaveLength(1);
+    });
+
+    it('confirmResidualProtected clears the permanent-gap dedup too, so a LATER episode pages afresh', async () => {
+      const { store } = openTestExecutionStore();
+      await seedPosition(store);
+      await store.markResidualUnprotected(LOT, NOW);
+      await store.markResidualRearmUnsupportedAlerted(LOT, NOW);
+      expect(await store.getResidualRearmUnsupportedAlertedAtRaw(LOT)).not.toBeNull();
+
+      await store.confirmResidualProtected(LOT);
+      expect(await store.getResidualRearmUnsupportedAlertedAtRaw(LOT)).toBeNull();
+
+      const later = new Date('2026-08-07T17:00:00Z');
+      await store.markResidualUnprotected(LOT, later);
+      await expect(store.markResidualRearmUnsupportedAlerted(LOT, later)).resolves.toBe(true);
+    });
+
+    it('markResidualRearmUnsupportedAlerted is first-writer-wins, independent of markResidualAlerted', async () => {
+      const { store } = openTestExecutionStore();
+      await seedPosition(store);
+      await store.markResidualUnprotected(LOT, NOW);
+
+      // The general dedup is exercised first — it must not gate this one.
+      await expect(store.markResidualAlerted(LOT, NOW)).resolves.toBe(true);
+      await expect(store.markResidualRearmUnsupportedAlerted(LOT, NOW)).resolves.toBe(true);
+      // Second writer for the SAME dedup loses; the general dedup is untouched.
+      const later = new Date('2026-08-07T17:00:00Z');
+      await expect(store.markResidualRearmUnsupportedAlerted(LOT, later)).resolves.toBe(false);
+      expect(await store.getResidualRearmUnsupportedAlertedAtRaw(LOT)).toBe(NOW.toISOString());
+    });
+  });
 });
