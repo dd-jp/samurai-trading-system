@@ -69,6 +69,8 @@ export type { VenuePacingConfig } from './http/venue-pacing.js';
 export {
   DEFAULT_POLYGON_PACING,
   DEFAULT_VENUE_PACING,
+  DISTINCT_BAR_WINDOWS_PER_INSTRUMENT,
+  deriveAnalystTimeoutMs,
   resolvePolygonPacing,
   resolveVenuePacing,
 } from './http/venue-pacing.js';

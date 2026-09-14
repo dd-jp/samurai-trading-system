@@ -1,6 +1,8 @@
 import {
   DEFAULT_POLYGON_PACING,
   DEFAULT_VENUE_PACING,
+  DISTINCT_BAR_WINDOWS_PER_INSTRUMENT,
+  deriveAnalystTimeoutMs,
   POLYGON_DOCUMENTED_CEILING_PER_SECOND,
   resolvePolygonPacing,
   resolveVenuePacing,
@@ -235,5 +237,51 @@ describe('resolvePolygonPacing', () => {
       ceilingPerSecond: 'SAMURAI_PACING_POLYGON_CEILING_PER_SEC',
       reserveForPriority: 'SAMURAI_PACING_POLYGON_PRIORITY_RESERVE',
     });
+  });
+});
+
+/**
+ * #1542: the analyst deadline moves with whatever bucket the fetches are
+ * actually resolved against — the follow-up to #1104, whose
+ * `DEFAULT_ANALYST_TIMEOUT_MS` is this same arithmetic run once, by hand,
+ * against `DEFAULT_VENUE_PACING.alpaca` and `DEFAULT_UNIVERSE.length`.
+ */
+describe('deriveAnalystTimeoutMs', () => {
+  it("reproduces DEFAULT_ANALYST_TIMEOUT_MS's own derivation at the checked-in defaults", () => {
+    // `DEFAULT_UNIVERSE.length` is 20 as of #1080's widening — pinned as a
+    // literal here (not imported from `scheduler.ts`) so this test does not
+    // gain a dependency on the orchestrator layer for a module that has none
+    // today; `rate-limit-wiring.test.ts`'s "affords the analyst deadline..."
+    // test is what actually pins this function against the live
+    // `DEFAULT_UNIVERSE` array.
+    const DEFAULT_UNIVERSE_LENGTH = 20;
+    expect(deriveAnalystTimeoutMs(DEFAULT_VENUE_PACING.alpaca, DEFAULT_UNIVERSE_LENGTH)).toBe(
+      30_000,
+    );
+  });
+
+  it('moves with a widened override rather than staying pinned to the default', () => {
+    const widened = { capacity: 1, refillPerSecond: 0.05, reserveForPriority: 0 };
+    const derived = deriveAnalystTimeoutMs(widened, 1);
+
+    // sweepRequests = 1 * 4 = 4; headroom = 1 - 0 = 1; (4 - 1) / 0.05 * 1000.
+    expect(derived).toBe(60_000);
+    expect(derived).toBeGreaterThan(30_000);
+  });
+
+  it('moves the other direction too: a tighter override shrinks the deadline', () => {
+    const tightened = { capacity: 41, refillPerSecond: 4, reserveForPriority: 21 };
+    const derived = deriveAnalystTimeoutMs(tightened, 20);
+
+    expect(derived).toBeLessThan(30_000);
+  });
+
+  it('scales sweep demand off DISTINCT_BAR_WINDOWS_PER_INSTRUMENT, not a second hardcoded count', () => {
+    const pacing = { capacity: 0, refillPerSecond: 1, reserveForPriority: 0 };
+    expect(deriveAnalystTimeoutMs(pacing, 5)).toBe(5 * DISTINCT_BAR_WINDOWS_PER_INSTRUMENT * 1_000);
+  });
+
+  it('never goes negative when headroom alone already covers the sweep', () => {
+    expect(deriveAnalystTimeoutMs({ capacity: 1_000, refillPerSecond: 1 }, 1)).toBe(0);
   });
 });

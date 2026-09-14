@@ -211,6 +211,7 @@ import {
 } from '../../providers/market-intelligence/index.js';
 import type { AssetClass, Clock, TuningStore } from '../../shared/index.js';
 import {
+  deriveAnalystTimeoutMs,
   isThresholdBoundViolation,
   logCaughtFailure,
   resolveVenuePacing,
@@ -1267,35 +1268,51 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   const llmFailureRateMonitor = new LlmFailureRateMonitor();
   const debateLogStore = new SqliteDebateLogStore(guardedStore(config.db, 'debate-engine'));
 
-  const analysts = new AnalystOrchestrator({
-    market_intelligence: marketIntelligence,
-    market_data: marketData,
-    /**
-     * #746: reuses the SAME `sessionCalendars` pair the flatten rule resolved
-     * above rather than deriving a second one — see
-     * `AnalystOrchestratorDeps.sessionCalendars`'s doc comment for why a
-     * second derivation is the dangerous move (#696 found exactly that class
-     * of bug once already). `production.test.ts` asserts this is the real
-     * pair, not the orchestrator's `AlwaysOpenCalendar` default.
-     */
-    sessionCalendars,
-    /**
-     * #745: `technical_indicator_unavailable{kind}`. Wired here, unconditionally
-     * and with no config switch — an unwired counter is indistinguishable from
-     * an instrument whose axes are all available, which is the exact reading an
-     * operator must not be given. `production.test.ts` asserts this line exists
-     * by driving a thin instrument through the composed step and reading the
-     * log, rather than by inspecting the field.
-     */
-    telemetry: new LoggingAnalystTelemetry(logger),
-    /**
-     * #1114. Deleting this line collapses `AnalystOrchestrator`'s logger back
-     * to `NOOP_LOGGER` silently, so `runAnalystFailureCauseScenario` in
-     * `smoke-run.ts` drives a real rejection through this instance and fails
-     * the gate when it observes nothing.
-     */
-    logger,
-  });
+  /**
+   * #1542: `DEFAULT_ANALYST_TIMEOUT_MS` is `deriveAnalystTimeoutMs` run once
+   * by hand against the CHECKED-IN `DEFAULT_VENUE_PACING.alpaca` and
+   * `DEFAULT_UNIVERSE.length` — correct only while an operator has not set
+   * `SAMURAI_PACING_ALPACA_*`. `venuePacing` above is already the RESOLVED
+   * bucket (`resolveVenuePacing`, env override applied); re-running the same
+   * derivation against it here ties the live deadline to what the fetches
+   * actually queue behind, instead of leaving it pinned to a default the
+   * override no longer describes.
+   */
+  const analystTimeoutMs = deriveAnalystTimeoutMs(venuePacing.alpaca, universe.length);
+
+  const analysts = new AnalystOrchestrator(
+    {
+      market_intelligence: marketIntelligence,
+      market_data: marketData,
+      /**
+       * #746: reuses the SAME `sessionCalendars` pair the flatten rule resolved
+       * above rather than deriving a second one — see
+       * `AnalystOrchestratorDeps.sessionCalendars`'s doc comment for why a
+       * second derivation is the dangerous move (#696 found exactly that class
+       * of bug once already). `production.test.ts` asserts this is the real
+       * pair, not the orchestrator's `AlwaysOpenCalendar` default.
+       */
+      sessionCalendars,
+      /**
+       * #745: `technical_indicator_unavailable{kind}`. Wired here, unconditionally
+       * and with no config switch — an unwired counter is indistinguishable from
+       * an instrument whose axes are all available, which is the exact reading an
+       * operator must not be given. `production.test.ts` asserts this line exists
+       * by driving a thin instrument through the composed step and reading the
+       * log, rather than by inspecting the field.
+       */
+      telemetry: new LoggingAnalystTelemetry(logger),
+      /**
+       * #1114. Deleting this line collapses `AnalystOrchestrator`'s logger back
+       * to `NOOP_LOGGER` silently, so `runAnalystFailureCauseScenario` in
+       * `smoke-run.ts` drives a real rejection through this instance and fails
+       * the gate when it observes nothing.
+       */
+      logger,
+    },
+    undefined,
+    { timeout_ms: analystTimeoutMs },
+  );
 
   // One instance, both ends of `cosine_setups` (#432): the Trader's `decide`
   // WRITES the setup at decision time and `onTradeClose` LABELS it with the

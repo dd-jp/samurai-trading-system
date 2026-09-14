@@ -609,6 +609,43 @@ export function resolvePolygonPacing(env: NodeJS.ProcessEnv = process.env): Toke
 }
 
 /**
+ * MEASURED (#1080), not derived: a warm-store sweep asks the venue for at
+ * most this many distinct bar windows per instrument. See
+ * `server/apps/orchestrator/production/rate-limit-wiring.test.ts`'s
+ * "Alpaca's burst covers one fill-poll sweep" describe block, which pins the
+ * same figure against the same measurement — kept as one exported constant
+ * rather than two copies so the two sides cannot drift apart silently.
+ */
+export const DISTINCT_BAR_WINDOWS_PER_INSTRUMENT = 4;
+
+/**
+ * The analyst per-attempt deadline `pacing` forces on a warm-store sweep of
+ * `universeSize` instruments (#1542, follow-up to #1104).
+ *
+ * `pipeline/analysts/orchestrator.ts`'s `DEFAULT_ANALYST_TIMEOUT_MS` is this
+ * same arithmetic run once, by hand, against `DEFAULT_VENUE_PACING.alpaca`
+ * and `DEFAULT_UNIVERSE.length` — correct at boot only while both stay at
+ * their checked-in defaults. `resolveVenuePacing` lets
+ * `SAMURAI_PACING_ALPACA_*` change the live bucket without touching that
+ * constant, which is what let an operator override silently outrun the
+ * analyst deadline. This function is the derivation the composition root
+ * runs against the RESOLVED bucket instead, so the deadline moves with
+ * whatever bucket the fetches actually queue behind.
+ *
+ * A fetch that cannot get a token has not started (`orchestrator.ts`'s own
+ * doc), so the deadline is the drain of the background headroom
+ * (`capacity - reserveForPriority`) at `refillPerSecond`, for a sweep of
+ * `DISTINCT_BAR_WINDOWS_PER_INSTRUMENT` windows per instrument — identical
+ * to `DEFAULT_ANALYST_TIMEOUT_MS`'s own derivation, generalized over the
+ * two inputs that can now move independently of the checked-in defaults.
+ */
+export function deriveAnalystTimeoutMs(pacing: TokenBucketConfig, universeSize: number): number {
+  const backgroundHeadroom = pacing.capacity - (pacing.reserveForPriority ?? 0);
+  const sweepRequests = universeSize * DISTINCT_BAR_WINDOWS_PER_INSTRUMENT;
+  return Math.max(((sweepRequests - backgroundHeadroom) / pacing.refillPerSecond) * 1_000, 0);
+}
+
+/**
  * The tokens `acquireBackground()` may not spend (#391).
  *
  * Validated against the RESOLVED capacity rather than the default, because

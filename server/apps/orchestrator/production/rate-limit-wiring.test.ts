@@ -21,11 +21,12 @@ import {
   UNCAPPED_SPEND,
 } from '../../../pipeline/debate-engine/index.js';
 import { DEFAULT_TRADER_CONFIG } from '../../../pipeline/trader/index.js';
-import type { Bar } from '../../../providers/market-data-service/index.js';
+import type { Bar, DataSource } from '../../../providers/market-data-service/index.js';
 import { FixtureDataSource } from '../../../providers/market-data-service/index.js';
 import type { AssetClass, Clock, LogEntry, Logger } from '../../../shared/index.js';
 import {
   DEFAULT_VENUE_PACING,
+  deriveAnalystTimeoutMs,
   SimulatedClock,
   TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS,
 } from '../../../shared/index.js';
@@ -630,6 +631,107 @@ describe('the composition root wires wait telemetry onto the shared Alpaca bucke
 });
 
 /**
+ * #1542's wiring proof: an env-shaped `SAMURAI_PACING_ALPACA_*` override
+ * (modelled here as `config.venuePacing`, the same seam
+ * `resolveVenuePacing()` feeds in production) moves `AnalystOrchestrator`'s
+ * real per-attempt deadline, not just `deriveAnalystTimeoutMs`'s standalone
+ * arithmetic.
+ *
+ * THE MUTATION THIS KILLS: pass no third argument (or `{}`) to the
+ * `new AnalystOrchestrator(...)` call in `production.ts`, so it falls back
+ * to the compiled-in `DEFAULT_ANALYST_TIMEOUT_MS` regardless of the resolved
+ * pacing. Every OTHER test in this file still passes — the bucket still
+ * paces the broker and market-data calls identically — because a deadline
+ * that never moves is silent right up until an operator's override widens
+ * the real drain past it (#1080's failure mode, recurring one seam over).
+ */
+describe('the composition root ties the analyst deadline to the resolved Alpaca pacing (#1542)', () => {
+  let db: StoreHandle;
+
+  beforeEach(() => {
+    db = openSharedStore(':memory:');
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    db.close();
+  });
+
+  /** Never settles: a fetch that cannot get a token has not started either way. */
+  const stallingDataSource: DataSource = {
+    fetchBars: () => new Promise<Bar[]>(() => {}),
+    fetchMark: async () => ({
+      price: 100,
+      observed_at: NOW,
+      source: 'fixture',
+      asset_class: 'stocks',
+    }),
+  };
+
+  it('waits past DEFAULT_ANALYST_TIMEOUT_MS under a widened override, and settles at the derived deadline', async () => {
+    // Capacity 1, no reserve, a slow refill: against `SMOKE_TEST_UNIVERSE`'s
+    // one instrument (`production.ts`'s default when `config.universe` is
+    // unset) this derives to 60,000ms — double the compiled-in 30,000ms — so
+    // the two are trivially distinguishable rather than coincidentally equal.
+    const overriddenAlpacaPacing = { capacity: 1, refillPerSecond: 0.05, reserveForPriority: 0 };
+    const components = buildProductionComponents(
+      stubConfig(db, {
+        llmClient: countingLlmClient(),
+        dataSource: stallingDataSource,
+        venuePacing: {
+          alpaca: overriddenAlpacaPacing,
+          ccxt: DEFAULT_VENUE_PACING.ccxt,
+          ibkr: DEFAULT_VENUE_PACING.ibkr,
+          saxo: DEFAULT_VENUE_PACING.saxo,
+        },
+      }),
+    );
+
+    const derivedTimeoutMs = deriveAnalystTimeoutMs(
+      overriddenAlpacaPacing,
+      components.universe.length,
+    );
+    expect(derivedTimeoutMs).toBeGreaterThan(DEFAULT_ANALYST_TIMEOUT_MS);
+
+    let result: Awaited<ReturnType<typeof components.analysts.runAnalysts>> | undefined;
+    void components.analysts
+      .runAnalysts('trace-1542', { asset: 'AAPL', asset_class: 'stocks' }, CLOCK, NOW)
+      .then((settled) => {
+        result = settled;
+      });
+
+    // If the composition root had ignored the override, `technical`'s first
+    // attempt would already have timed out (and be mid-retry) by here.
+    await vi.advanceTimersByTimeAsync(DEFAULT_ANALYST_TIMEOUT_MS);
+    expect(result, 'the compiled-in default deadline must not fire under the widened pacing').toBe(
+      undefined,
+    );
+
+    // THE DISCRIMINATING CHECK: `ATTEMPTS_PER_PERSONA` is 2, so a root that
+    // ignored the override (still using `DEFAULT_ANALYST_TIMEOUT_MS` per
+    // attempt) would have fully settled — both attempts exhausted — by
+    // `2 * DEFAULT_ANALYST_TIMEOUT_MS`. Wired to the derived deadline, the
+    // stage is still on its FIRST attempt at that point, since
+    // `derivedTimeoutMs` (60,000ms) exceeds it.
+    await vi.advanceTimersByTimeAsync(DEFAULT_ANALYST_TIMEOUT_MS);
+    expect(
+      result,
+      'a root ignoring the override would have exhausted both attempts by 2x the default deadline',
+    ).toBe(undefined);
+
+    // Two attempts, each at the derived deadline (`ATTEMPTS_PER_PERSONA`,
+    // orchestrator.ts) — the retry joins the same still-pending fetch
+    // (single-flight coalescing) rather than re-asking a source that never
+    // answers, so it too runs the full derived deadline before giving up.
+    await vi.advanceTimersByTimeAsync(2 * derivedTimeoutMs - 2 * DEFAULT_ANALYST_TIMEOUT_MS + 1);
+
+    expect(result?.skipped).toBe(true);
+    expect(result?.failures.some((failure) => failure.kind === 'timeout')).toBe(true);
+  });
+});
+
+/**
  * #1082's wiring proof: the PRIMARY `marketData` instance `production.ts`
  * builds is constructed WITH telemetry, not just constructed — the same
  * shape of gap #388's file header and #1083's block above both cover. A
@@ -728,8 +830,11 @@ describe('the composition root wires market-data fetch telemetry (#1082)', () =>
  * one-time transient, and `consecutive_misses` is what surfaces it if it is
  * not. The drain below is therefore the steady-state sweep, not the worst
  * sweep the system can ever issue.
+ *
+ * `DISTINCT_BAR_WINDOWS_PER_INSTRUMENT` itself now lives in `venue-pacing.ts`
+ * (#1542), imported rather than redefined here, so this measurement and
+ * `deriveAnalystTimeoutMs`'s own use of it cannot drift apart.
  */
-const DISTINCT_BAR_WINDOWS_PER_INSTRUMENT = 4;
 
 /**
  * #299's burst value has no published Alpaca figure behind it (see
@@ -812,11 +917,7 @@ describe("Alpaca's burst covers one fill-poll sweep of the configured universe (
    * side has to be re-read here rather than silently absorbed.
    */
   it("affords the analyst deadline the deduped warm sweep's drain at this pacing (#1080)", () => {
-    const { capacity, refillPerSecond, reserveForPriority } = DEFAULT_VENUE_PACING.alpaca;
-    const backgroundHeadroom = capacity - (reserveForPriority ?? 0);
-    const sweepRequests = DEFAULT_UNIVERSE.length * DISTINCT_BAR_WINDOWS_PER_INSTRUMENT;
-
-    const drainMs = ((sweepRequests - backgroundHeadroom) / refillPerSecond) * 1_000;
+    const drainMs = deriveAnalystTimeoutMs(DEFAULT_VENUE_PACING.alpaca, DEFAULT_UNIVERSE.length);
 
     expect(drainMs).toBe(30_000);
     expect(DEFAULT_ANALYST_TIMEOUT_MS).toBeGreaterThanOrEqual(drainMs);
