@@ -13,6 +13,18 @@
 -- rides `LlmAttribution` the same way `stage`/`debate_id` already do —
 -- meter bookkeeping, never sent to the model.
 --
+-- NOT the bare per-stage hash (#1514 round-1 review). Every metered call also
+-- passes through `renderMessageContent`'s `\n\nContext:\n` wrap and
+-- `wrapUntrusted`'s preamble/tags (llm/prompt-safety.ts), OUTSIDE the
+-- per-stage template — a shared surface every call shares regardless of
+-- stage. `AnthropicLlmClient.recordSpend` therefore persists
+-- `sha256("<stageTemplateHash>:<wireEnvelopeHash>")`
+-- (`WIRE_ENVELOPE_TEMPLATE_HASH`, llm/anthropic-client.ts), so this column
+-- changes on an edit to EITHER half, not just the stage's own text. A query
+-- keyed on a known stage's exported hash constant (e.g.
+-- `CRITIC_PROMPT_TEMPLATE_HASH`) must recompute the same composite to match a
+-- row; it will not find rows by the bare constant alone.
+--
 -- NULLABLE, not `NOT NULL`: every row already in this table predates this
 -- concept, and every call site that does not (yet) supply one — anything
 -- outside the debate/risk_critic stages this ticket covers — must not have a
@@ -22,11 +34,12 @@
 -- NO "effective-from" COLUMN. `llm_spend.timestamp` already carries when each
 -- call happened, so "when did this template version first appear" is
 -- `SELECT MIN(timestamp) FROM llm_spend WHERE prompt_template_hash = ?` —
--- derived from data that already exists, not a second value stamped at
--- process start (which would record host uptime, not template history, and
--- go stale on every restart). Answering "which prompt version produced
--- decision X" (#1514 AC) needs only the hash beside the existing `model`
--- column and `timestamp` already on this row.
+-- `?` bound to the composite value described above, derived from data that
+-- already exists, not a second value stamped at process start (which would
+-- record host uptime, not template history, and go stale on every restart).
+-- Answering "which prompt version produced decision X" (#1514 AC) needs only
+-- the hash beside the existing `model` column and `timestamp` already on this
+-- row.
 --
 -- ALTER TABLE, not a rebuild: one column, no CHECK, same posture as 0057.
 
