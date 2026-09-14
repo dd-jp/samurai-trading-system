@@ -11,6 +11,7 @@
 import { type RetryAttemptReport, withRetry } from '../../../shared/index.js';
 import type { AnthropicUsage } from '../../../shared/llm/pricing.js';
 import {
+  LlmAdmissionRefusedError,
   LlmCancelledError,
   LlmMalformedResponseError,
   LlmProviderError,
@@ -355,7 +356,12 @@ function classifyProviderError(error: unknown): Error {
     // call cost, and re-wrapping would discard both (#1391). A truncation
     // carries `max_tokens`/`usage` for the same reason (#1394).
     error instanceof LlmRefusalError ||
-    error instanceof LlmTruncatedError
+    error instanceof LlmTruncatedError ||
+    // #1080: an in-flight refusal names a call that was never sent. Duck-typed
+    // down to `LlmProviderError` it would be counted as `transport` — a
+    // counterfeit gateway fault, and precisely the conflation the gate exists
+    // to remove.
+    error instanceof LlmAdmissionRefusedError
   ) {
     return error;
   }

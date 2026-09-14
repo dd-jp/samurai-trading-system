@@ -84,6 +84,7 @@ import {
   detectDisagreements,
   enforceLatencyBudget,
   JsonDebateLogger,
+  LlmAdmissionRefusedError,
   llmCallsPerDebate,
   MAX_ROUNDS,
   MAX_ROUNDS_BY_ASSET_CLASS,
@@ -575,6 +576,53 @@ export function spendCappedDebateResult(
 }
 
 /**
+ * What a debate the account-wide in-flight gate refused returns (#1080).
+ *
+ * The third member of the not-admitted family, and it ships for the reason
+ * #388's comment above already argues: a gate refusal is routine and expected
+ * under load — at the shipped cap of 1 it is the designed outcome for four of
+ * every six instruments in a pass — so logging it as an `error`-level
+ * instrument failure is the wrong signal for a degrade-not-fail path. Until
+ * this function existed the refusal propagated out of `enforceLatencyBudget`
+ * uncaught and produced, per refused instrument per pass, a `debate_unresolved`
+ * error line, an `instrument_pass_failed` error line, an `audit_log` row
+ * reading `decision: 'crashed'`, and — because `tick-loop.ts`'s refusal
+ * carve-out tests `LlmRefusalError`, which this is not — a rescind that
+ * retried the bar and re-billed every persona that had already answered.
+ *
+ * ## `rounds_completed: 0` does not mean nothing ran
+ *
+ * It means nothing is being handed downstream, which is `rateLimitedDebateResult`'s
+ * contract and the fail-safe direction. The gate can refuse the FIRST persona
+ * call, in which case no model was asked anything; it can equally refuse the
+ * third, when an MI refresh takes the permit mid-debate — `debate-engine-spec.md`
+ * is explicit that this is not rare. In that second shape the earlier persona
+ * calls were issued and billed and their answers are discarded here. That is
+ * not a regression: the throw discarded them too, and then re-billed them on
+ * every retry until #785 forfeited the bar.
+ *
+ * ## Countability (#1080 AC4)
+ *
+ * No `debate_log` row is written — same reasoning as `rateLimitedDebateResult`,
+ * and it means `LlmFailureRateGuard` sees a refusal in neither its numerator
+ * nor its denominator. Refusals are counted off the log instead: the gate's own
+ * `llm_call_failed` line carries `reason`, `queue_depth` and `waited_ms`, and
+ * `debate_refused_gate` below names the instrument. The `audit_log` row reads
+ * `not_admitted` (`debateDecisionWord`), distinct from both `no_trade` and
+ * `crashed`.
+ */
+export function gateRefusedDebateResult(
+  debate_id: string,
+  bar: Date,
+  reason: string,
+): DebateResult {
+  return {
+    ...rateLimitedDebateResult(debate_id, bar, reason),
+    position: 'No position — the debate was not admitted under the in-flight LLM cap.',
+  };
+}
+
+/**
  * The debate this bar already resolved, rebuilt from its `debate_log` row
  * (#617).
  *
@@ -1036,6 +1084,35 @@ export function buildDebateStep(
         logger: new JsonDebateLogger(logger ?? { log: () => {} }),
       });
     } catch (cause) {
+      // The gate refused this debate a permit (#1080). Degrade, do not fault —
+      // see `gateRefusedDebateResult`. Returning here also skips
+      // `resolvedBarByInstrument.set` below, exactly as the rate-limiter
+      // refusal above does: no debate ran, so the bar stays unresolved and a
+      // later pass may still run a real one.
+      if (cause instanceof LlmAdmissionRefusedError) {
+        logger?.log({
+          trace_id,
+          stage: 'debate',
+          event: 'debate_refused_gate',
+          level: 'warn',
+          message:
+            `debate: ${instrument} not admitted — ${sanitizeLogText(cause.message)}. No ` +
+            'debate_log row is written and the tick short-circuits at Trader with no_trade. ' +
+            'Persistent refusals mean maxInFlightLlmCalls is sized under the pass width, not ' +
+            'that the market is quiet.',
+          payload: {
+            instrument,
+            asset_class,
+            debate_id,
+            reason: cause.reason,
+            queue_depth: cause.queue_depth,
+            in_flight: cause.in_flight,
+            budget_ms: cause.budget_ms,
+            waited_ms: cause.waited_ms,
+          },
+        });
+        return gateRefusedDebateResult(debate_id, bar, cause.message);
+      }
       logDebateFailure({ logger, trace_id, instrument, bar, views, cause });
       throw cause;
     }

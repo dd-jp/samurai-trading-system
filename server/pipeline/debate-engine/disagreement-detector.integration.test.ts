@@ -15,7 +15,7 @@
  * deliberately a narrow structural interface so any wire client satisfies it
  * without one.
  */
-import { tryNousCredentials } from '../../shared/llm/index.js';
+import { tryNousCredentials, UNGATED_LLM_IN_FLIGHT } from '../../shared/llm/index.js';
 import { detectDisagreements } from './disagreement-detector.js';
 import { AnthropicLlmClient } from './llm/anthropic-client.js';
 import { NousMessagesClient } from './llm/nous-messages-client.js';
@@ -40,12 +40,15 @@ describe.skipIf(credentials === undefined)('detectDisagreements (real LLM integr
   it('detects a semantic conflict between two bullish analysts with contradictory reasoning', async () => {
     // Non-null by construction: the suite is skipped when this is undefined.
     const { apiKey, baseUrl, model } = credentials as NonNullable<typeof credentials>;
-    const client = new AnthropicLlmClient(new NousMessagesClient({ apiKey, baseUrl }), {
-      model,
-      max_tokens: 1024,
-      timeoutMs: 28_000,
-      retry: { maxAttempts: 2, baseDelayMs: 500, maxDelayMs: 2_000 },
-    });
+    const client = new AnthropicLlmClient(
+      new NousMessagesClient({ apiKey, baseUrl, gate: UNGATED_LLM_IN_FLIGHT }),
+      {
+        model,
+        max_tokens: 1024,
+        timeoutMs: 28_000,
+        retry: { maxAttempts: 2, baseDelayMs: 500, maxDelayMs: 2_000 },
+      },
+    );
 
     const views = [
       makeView({

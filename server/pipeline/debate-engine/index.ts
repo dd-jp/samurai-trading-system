@@ -58,6 +58,7 @@ export type {
 export { AnthropicLlmClient } from './llm/anthropic-client.js';
 export type { LlmError } from './llm/errors.js';
 export {
+  LlmAdmissionRefusedError,
   LlmCancelledError,
   LlmMalformedResponseError,
   LlmProviderError,

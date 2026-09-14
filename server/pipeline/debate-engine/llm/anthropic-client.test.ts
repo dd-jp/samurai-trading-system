@@ -6,6 +6,7 @@ import type {
 } from './anthropic-client.js';
 import { AnthropicLlmClient } from './anthropic-client.js';
 import {
+  LlmAdmissionRefusedError,
   LlmCancelledError,
   LlmMalformedResponseError,
   LlmProviderError,
@@ -13,6 +14,7 @@ import {
   LlmRefusalError,
   LlmTimeoutError,
 } from './errors.js';
+import { classifyFailureCause } from './failure-cause.js';
 import type { LlmSpendRecord } from './spend-sink.js';
 import { LLM_CONTEXT_FIELD_KIND, type LlmRequest, type LlmRequestContext } from './types.js';
 
@@ -360,6 +362,39 @@ describe('AnthropicLlmClient', () => {
 
     expect(error).toBeInstanceOf(LlmRefusalError);
     expect((error as LlmRefusalError).usage).toEqual({ input_tokens: 900, output_tokens: 3 });
+    expect(wire.createMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry a gate refusal, and keeps its class and queue state (#1080)', async () => {
+    // `classifyProviderError` must pass `LlmAdmissionRefusedError` through
+    // rather than laundering it into `LlmProviderError`. Two consequences if it
+    // does not: the queue state that explains the refusal is lost, and a
+    // refusal becomes retryable — the worst possible response, since the budget
+    // that made it unadmittable is only smaller by the time a retry is issued.
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi.fn().mockRejectedValue(
+        new LlmAdmissionRefusedError({
+          message: 'LLM gate refused admission',
+          reason: 'admission',
+          queue_depth: 3,
+          in_flight: 1,
+          budget_ms: 28_000,
+          waited_ms: 0,
+        }),
+      ),
+    };
+    const client = new AnthropicLlmClient(wire, {
+      model: 'anthropic/claude-sonnet-5',
+      max_tokens: 1024,
+      timeoutMs: 1_000,
+      retry: { maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 1_000 },
+    });
+
+    const error = await client.complete(request()).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(LlmAdmissionRefusedError);
+    expect((error as LlmAdmissionRefusedError).queue_depth).toBe(3);
+    expect(classifyFailureCause(error)).toBe('gate_refused');
     expect(wire.createMessage).toHaveBeenCalledTimes(1);
   });
 });

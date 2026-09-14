@@ -7,6 +7,11 @@
  * citation to somewhere that is not X reading exactly like evidence.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  LlmInFlightRefusedError,
+  NousAccountInFlightGate,
+  UNGATED_LLM_IN_FLIGHT,
+} from '../../../shared/llm/index.js';
 import type { LogEntry, Logger } from '../../../shared/types.js';
 import { parseStatusUrl, XSearchClient } from './x-search-client.js';
 
@@ -14,6 +19,7 @@ const OPTIONS = {
   apiKey: 'test-fake-nous-key',
   baseUrl: 'https://nous.test/v1',
   windowMs: 2 * 60 * 60 * 1000,
+  gate: UNGATED_LLM_IN_FLIGHT,
 };
 
 const AS_OF = new Date('2026-09-03T12:00:00Z');
@@ -417,5 +423,80 @@ describe('XSearchClient', () => {
     const result = await new XSearchClient(OPTIONS).fetchSentiment('TSLA', AS_OF);
 
     expect(result.items).toEqual([]);
+  });
+
+  it('waits behind a held permit rather than refusing itself (#1080)', async () => {
+    // The whole point of gating retrieval is that it QUEUES. Declaring its own
+    // timeout as its expected duration would have made `wait + 60,000 >=
+    // 60,000` true for any non-zero wait, so a retrieval call would have been
+    // refused the moment anything else held the single permit — a mechanism
+    // that runs only when the system is idle. Nothing else in this suite sees
+    // that, because every other case here passes `UNGATED_LLM_IN_FLIGHT`.
+    const gate = new NousAccountInFlightGate({ maxInFlight: 1, expectedCallMs: 13_000 });
+    const held = await gate.acquire({ budgetMs: 28_000 });
+    const fetchMock = stubFetch(responsesBody());
+
+    const pending = new XSearchClient({ ...OPTIONS, gate }).fetchSentiment('TSLA', AS_OF);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    held.release();
+    await pending;
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases its permit when the call FAILS, not only when it succeeds (#1080)', async () => {
+    // A leaked permit at cap 1 wedges the whole account queue for the lifetime
+    // of the process — every later call, debate included, refused forever. The
+    // release lives in a `finally` in `nous-responses.ts`; moving it onto the
+    // success path alone is invisible to every other case here, because they
+    // all run ungated where release is a no-op.
+    const gate = new NousAccountInFlightGate({ maxInFlight: 1, expectedCallMs: 13_000 });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new Error('connection reset');
+      }),
+    );
+
+    await new XSearchClient({ ...OPTIONS, gate })
+      .fetchSentiment('TSLA', AS_OF)
+      .catch(() => undefined);
+
+    const after = await gate.acquire({ budgetMs: 1_000 });
+    after.release();
+  });
+
+  it('declares its MEASURED duration to the gate, not its timeout (#1080)', async () => {
+    // What a caller queued behind a retrieval call is told it is waiting for.
+    const entries: LogEntry[] = [];
+    const gate = new NousAccountInFlightGate({
+      maxInFlight: 1,
+      expectedCallMs: 13_000,
+      logger: { log: (entry: LogEntry) => void entries.push(entry) },
+    });
+    let finishCall = (): void => undefined;
+    const inFlight = new Promise<void>((resolve) => {
+      finishCall = resolve;
+    });
+    const fetchMock = vi.fn(async () => {
+      await inFlight;
+      return new Response(JSON.stringify(responsesBody()), { status: 200, statusText: 'OK' });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const pending = new XSearchClient({ ...OPTIONS, gate }).fetchSentiment('TSLA', AS_OF);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+
+    await expect(gate.acquire({ budgetMs: 28_000, llmStage: 'debate' })).rejects.toBeInstanceOf(
+      LlmInFlightRefusedError,
+    );
+    expect(entries.find((entry) => entry.event === 'llm_gate_refused')?.payload).toMatchObject({
+      estimated_wait_ms: 26_000,
+    });
+
+    finishCall();
+    await pending;
   });
 });

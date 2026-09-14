@@ -8,6 +8,8 @@
  * what is worth retrying.
  */
 
+import type { LlmInFlightRefusalReason } from '../../../shared/llm/index.js';
+
 /**
  * Where the timeout came from. The two are the same word and NOT the same
  * event, and `anthropic-client.ts`'s `isRetryable` has to tell them apart
@@ -60,6 +62,51 @@ export class LlmMalformedResponseError extends Error {
     super(`malformed LLM response: ${reason}`);
     this.name = 'LlmMalformedResponseError';
     this.reason = reason;
+  }
+}
+
+/**
+ * The account-wide in-flight gate refused this call before it reached the
+ * wire (#1080) — see `shared/llm/in-flight-gate.ts`.
+ *
+ * Its own class for `LlmCancelledError`'s first reason and for a measurement
+ * one. A refusal is not a provider fault: NOTHING was sent, so it cost no
+ * tokens, burned no per-call deadline and says nothing about the gateway's
+ * health. It must also never be retried — the budget that made it unadmittable
+ * is smaller by the time a retry would be issued, so `isRetryable`'s
+ * exclusion-by-construction is the correct behaviour rather than an omission.
+ *
+ * The fields are the gate's own, forwarded so `llm_call_failed`'s payload can
+ * carry the queue state that produced the refusal.
+ */
+export class LlmAdmissionRefusedError extends Error {
+  /**
+   * The gate's own union, not a widened `string`: `admission` and
+   * `queue_deadline` answer different questions (refused on arrival vs. ran out
+   * of room while queued), and a consumer that switches on them must be told by
+   * the compiler when a third reason appears.
+   */
+  readonly reason: LlmInFlightRefusalReason;
+  readonly queue_depth: number;
+  readonly in_flight: number;
+  readonly budget_ms: number;
+  readonly waited_ms: number;
+
+  constructor(refusal: {
+    message: string;
+    reason: LlmInFlightRefusalReason;
+    queue_depth: number;
+    in_flight: number;
+    budget_ms: number;
+    waited_ms: number;
+  }) {
+    super(refusal.message);
+    this.name = 'LlmAdmissionRefusedError';
+    this.reason = refusal.reason;
+    this.queue_depth = refusal.queue_depth;
+    this.in_flight = refusal.in_flight;
+    this.budget_ms = refusal.budget_ms;
+    this.waited_ms = refusal.waited_ms;
   }
 }
 
