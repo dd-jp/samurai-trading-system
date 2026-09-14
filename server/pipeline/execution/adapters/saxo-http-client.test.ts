@@ -569,11 +569,14 @@ describe('SaxoHttpBrokerClient pacing (#1222)', () => {
     vi.unstubAllGlobals();
   });
 
-  it("paces a burst of 3 requests through the constructor's own default bucket, not just an injected one", async () => {
+  it("paces a burst of 3 background requests through the constructor's own default bucket, not just an injected one", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ Data: [] }));
     vi.stubGlobal('fetch', fetchMock);
     // No `rateLimiter` override: DEFAULT_VENUE_PACING.saxo (capacity 2,
-    // refill 1/s) is what every real call site actually gets.
+    // refill 1/s, reserveForPriority 1) is what every real call site
+    // actually gets. `listOpenOrders` is background (#1419), so each call
+    // needs `1 + reserveForPriority` = 2 tokens present — one instant grant
+    // from the full bucket, then one further grant per 1s refill.
     const client = new SaxoHttpBrokerClient({
       accessToken: FAKE_TOKEN,
       baseUrl: 'https://gateway.example/sim/openapi/',
@@ -582,13 +585,17 @@ describe('SaxoHttpBrokerClient pacing (#1222)', () => {
     });
 
     await client.listOpenOrders();
-    await client.listOpenOrders();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const second = client.listOpenOrders();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await second;
     expect(fetchMock).toHaveBeenCalledTimes(2);
 
     const third = client.listOpenOrders();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-
     await vi.advanceTimersByTimeAsync(1_000);
     await third;
     expect(fetchMock).toHaveBeenCalledTimes(3);
@@ -606,25 +613,28 @@ describe('SaxoHttpBrokerClient pacing (#1222)', () => {
     });
 
     await client.listOpenOrders();
-    await client.listOpenOrders();
-    const third = client.listOpenOrders();
+    const second = client.listOpenOrders();
     await vi.advanceTimersByTimeAsync(2_000);
-    await third;
+    await second;
 
     const waits = logger.entries.filter((entry) => entry.event === 'token_bucket_wait');
     expect(waits).toHaveLength(1);
-    expect(waits[0]?.payload).toMatchObject({ bucket: 'saxo', lane: 'priority' });
+    expect(waits[0]?.payload).toMatchObject({ bucket: 'saxo', lane: 'background' });
   });
 
-  // THE MUTATION THIS KILLS: hoist `await this.rateLimiter.acquire()` out of
-  // `withRetry`'s closure in saxo-http-client.ts, so a retried attempt is
-  // covered by the first attempt's token instead of acquiring its own. Every
-  // test above stays green under that mutation — none of them spies on
-  // `acquire()` and counts calls per attempt, so a missed call is invisible
-  // to them regardless of bucket size. The bucket here is a generous
-  // capacity 1,000 too (it never blocks, on purpose — this test is not
-  // about parking) — it's the SPY on `acquire()`, not the bucket's size,
-  // that catches the mutation.
+  // THE MUTATION THIS KILLS: hoist `await this.rateLimiter.acquireBackground()`
+  // out of `withRetry`'s closure in saxo-http-client.ts, so a retried attempt
+  // is covered by the first attempt's token instead of acquiring its own.
+  // Every test above stays green under that mutation — none of them spies on
+  // `acquireBackground()` and counts calls per attempt, so a missed call is
+  // invisible to them regardless of bucket size. The bucket here is a
+  // generous capacity 1,000 too (it never blocks, on purpose — this test is
+  // not about parking) — it's the SPY on `acquireBackground()`, not the
+  // bucket's size, that catches the mutation. `listOpenOrders` is the
+  // background-lane call site (#1419); the priority lane's own per-attempt
+  // spend has no equivalent retry test — `saxo-per-request-pacing.test.ts`
+  // runs with `maxAttempts: 1` and mocks no failures, so it never issues a
+  // second attempt on either lane.
   it('acquires a second token for a retried request, not just the first attempt', async () => {
     const fetchMock = vi
       .fn()
@@ -632,7 +642,7 @@ describe('SaxoHttpBrokerClient pacing (#1222)', () => {
       .mockResolvedValueOnce(jsonResponse({ Data: [] }));
     vi.stubGlobal('fetch', fetchMock);
     const rateLimiter = new TokenBucket({ capacity: 1_000, refillPerSecond: 1_000 });
-    const acquireSpy = vi.spyOn(rateLimiter, 'acquire');
+    const acquireSpy = vi.spyOn(rateLimiter, 'acquireBackground');
     const client = new SaxoHttpBrokerClient({
       accessToken: FAKE_TOKEN,
       baseUrl: 'https://gateway.example/sim/openapi/',
@@ -647,5 +657,153 @@ describe('SaxoHttpBrokerClient pacing (#1222)', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(acquireSpy).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * #1419: proves `DEFAULT_VENUE_PACING.saxo`'s `reserveForPriority` is now
+ * load-bearing, not inert — mirrors `token-bucket.test.ts`'s "TokenBucket
+ * priority reserve (#391)" block, but through the real client and its own
+ * call-site classification rather than a bare bucket, since the defect this
+ * closes was in the classification (every call spent `acquire()`), not in
+ * `TokenBucket` itself.
+ */
+describe('SaxoHttpBrokerClient priority lane (#1419)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  const OPEN_ORDER_ROW = {
+    OrderId: '1',
+    Status: 'Working',
+    OpenOrderType: 'Limit',
+    Amount: 1,
+    BuySell: 'Buy',
+    Uic: 1,
+    AssetType: 'Etn',
+  };
+
+  function routedFetch(): ReturnType<typeof vi.fn> {
+    return vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const parsed = new URL(String(url));
+      const method = init?.method ?? 'GET';
+      if (method === 'GET' && parsed.pathname.endsWith('/port/v1/accounts/me')) {
+        return jsonResponse(ACCOUNTS);
+      }
+      if (method === 'GET' && parsed.pathname.endsWith('/port/v1/orders/me')) {
+        // First page (no $skip) hands back a `__next` cursor; the second
+        // page (the pagination loop re-requesting with it) ends the sweep.
+        return parsed.searchParams.has('$skip')
+          ? jsonResponse({ Data: [] })
+          : jsonResponse({
+              Data: [OPEN_ORDER_ROW],
+              __next: `${parsed.origin}${parsed.pathname}?$top=500&$skip=500`,
+            });
+      }
+      if (method === 'GET' && parsed.pathname.endsWith('/cs/v1/audit/orderactivities')) {
+        return jsonResponse({ Data: [] });
+      }
+      if (method === 'DELETE' && parsed.pathname.includes('/trade/v2/orders/')) {
+        return jsonResponse(undefined);
+      }
+      throw new Error(`saxo priority lane test: unmocked request ${method} ${parsed.pathname}`);
+    });
+  }
+
+  // Regression test for round-2 review finding on #1419: `resolveIdentity()`
+  // memoises a shared PROMISE (`this.identity ??= ...`), so whichever caller
+  // triggers it first is the one whose request actually goes over the
+  // wire — and in the real wired adapter that's usually a BACKGROUND caller
+  // (`placeIdempotently` awaits `lookup()`, which resolves identity via
+  // `listOrderActivities`, before ever calling `placeOrder`). If identity
+  // inherited its triggering caller's own lane, that one-time bootstrap
+  // would be gated by the background reserve threshold instead of the
+  // priority one — reopening the exact stall #1419 exists to prevent, one
+  // layer removed. `resolveIdentity()` hard-codes `'priority'` regardless of
+  // caller specifically to close this; pinned here independent of timing.
+  it('resolves account identity on the priority lane even when a background caller (listOrderActivities) triggers it first', async () => {
+    const fetchMock = routedFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    const rateLimiter = new TokenBucket({ capacity: 1_000, refillPerSecond: 1_000 });
+    const acquireSpy = vi.spyOn(rateLimiter, 'acquire');
+    const acquireBackgroundSpy = vi.spyOn(rateLimiter, 'acquireBackground');
+    const client = new SaxoHttpBrokerClient({
+      accessToken: FAKE_TOKEN,
+      baseUrl: 'https://gateway.example/sim/openapi',
+      retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
+      rateLimiter,
+      logger: recordingLogger(),
+    });
+
+    await client.listOrderActivities(new Date('2026-01-01T00:00:00Z'));
+
+    // accounts/me (identity) always spends `acquire()`; the activities page
+    // itself is the only `acquireBackground()` spend.
+    expect(acquireSpy).toHaveBeenCalledTimes(1);
+    expect(acquireBackgroundSpy).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('lets cancelOrder through immediately behind a multi-page listOpenOrders sweep that has drained the bucket to the reserve', async () => {
+    const fetchMock = routedFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    // Mirrors DEFAULT_VENUE_PACING.saxo (capacity 2, refill 1/s,
+    // reserveForPriority 1), pinned explicitly so this test does not silently
+    // stop meaning anything if that config is later re-derived.
+    const rateLimiter = new TokenBucket({ capacity: 2, refillPerSecond: 1, reserveForPriority: 1 });
+    const client = new SaxoHttpBrokerClient({
+      accessToken: FAKE_TOKEN,
+      baseUrl: 'https://gateway.example/sim/openapi',
+      retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
+      rateLimiter,
+      logger: recordingLogger(),
+    });
+
+    // Warm account-identity resolution (memoised) via a BACKGROUND caller —
+    // matching the real wired ordering (`placeIdempotently` -> `lookup()` ->
+    // `listOrderActivities` before `placeOrder`/`cancelOrder`) rather than
+    // the favourable case of warming it from a priority call. Because
+    // `resolveIdentity()` always spends `acquire()` regardless of caller,
+    // this still costs only 1 priority token; the page's own
+    // `acquireBackground()` spend needs the bucket at full capacity (2) and
+    // so waits out one refill.
+    const warmup = client.listOrderActivities(new Date('2026-01-01T00:00:00Z'));
+    await vi.advanceTimersByTimeAsync(1_000);
+    await warmup;
+    // Let the bucket refill to full before the real race so the warmup's
+    // spend isn't what the assertions below are measuring.
+    await vi.advanceTimersByTimeAsync(1_000);
+    fetchMock.mockClear();
+
+    // Background sweep: page 1 needs `1 + reserve` = 2 tokens, present from
+    // the full bucket, and spends 1 — leaving exactly the reserve (1) behind.
+    const sweep = client.listOpenOrders();
+    await vi.advanceTimersByTimeAsync(0);
+    // Page 1 landed; the loop's page-2 request is now parked (background
+    // needs 2 tokens present and only the 1-token reserve remains).
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // The protective-leg cancel cuts in: identity is already warm, so this
+    // spends exactly the 1 reserved token — and gets it with NO timer
+    // advance, even though the read sweep is still mid-drain.
+    let cancelled = false;
+    const cancel = client.cancelOrder('protective-leg').then(() => {
+      cancelled = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(cancelled).toBe(true);
+    await cancel;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    // The sweep's second page was still waiting on a refill throughout — the
+    // reserve protected the cancel without needing to wait behind it.
+    await vi.advanceTimersByTimeAsync(2_000);
+    await sweep;
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });
