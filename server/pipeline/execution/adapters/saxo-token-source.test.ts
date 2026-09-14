@@ -139,7 +139,7 @@ describe('SaxoTokenRefresher', () => {
 
     expect(await refresher.getAccessToken()).toBe(SAVED_ACCESS);
     expect(refresher.sessionState()).toMatchObject({ status: 'active', failedAttempts: 0 });
-    refresher.stop();
+    void refresher.stop();
   });
 
   it('schedules the refresh from the returned lifetimes, ahead of the access token expiry', async () => {
@@ -160,7 +160,7 @@ describe('SaxoTokenRefresher', () => {
     // The next window is armed off the NEW response, not the old record.
     expect(scheduled).toHaveLength(2);
     expect(scheduled[1]?.delayMs).toBe(1_200_000 - 60_000);
-    refresher.stop();
+    void refresher.stop();
   });
 
   it('persists the rotated refresh token BEFORE the new access token is observable', async () => {
@@ -197,7 +197,7 @@ describe('SaxoTokenRefresher', () => {
     expect(observed).toEqual([SAVED_REFRESH]);
     expect(readTokenFile(path)?.refreshToken).toBe(ROTATED_REFRESH);
     expect(await refresher.getAccessToken()).toBe(ROTATED_ACCESS);
-    refresher.stop();
+    void refresher.stop();
   });
 
   it('never adopts a token it could not save — a crash at the persist step leaves the old one in use', async () => {
@@ -215,7 +215,7 @@ describe('SaxoTokenRefresher', () => {
     expect(await refresher.getAccessToken()).toBe(SAVED_ACCESS);
     expect(readTokenFile(path)?.refreshToken).toBe(SAVED_REFRESH);
     expect(entries.map((entry) => entry.event)).toContain('saxo_token_persist_failed');
-    refresher.stop();
+    void refresher.stop();
   });
 
   it('survives a restart: a fresh refresher reads back the rotated session', async () => {
@@ -267,7 +267,7 @@ describe('SaxoTokenRefresher', () => {
 
     expect(scheduled).toHaveLength(0);
     expect(await refresher.getAccessToken()).toBe(ROTATED_ACCESS);
-    refresher.stop();
+    void refresher.stop();
   });
 
   it('stops retrying the moment the gateway REJECTS the refresh token', async () => {
@@ -326,7 +326,7 @@ describe('SaxoTokenRefresher', () => {
     refresher.start();
     scheduled[0]?.callback();
     await refresher.whenIdle();
-    refresher.stop();
+    void refresher.stop();
 
     let thrown = '';
     const lost = build({
@@ -378,7 +378,57 @@ describe('SaxoTokenRefresher', () => {
     }
 
     expect(sent).toEqual([`Bearer ${SAVED_ACCESS}`, `Bearer ${ROTATED_ACCESS}`]);
-    refresher.stop();
+    void refresher.stop();
+  });
+
+  /**
+   * Shutdown joins an in-flight rotation. The gateway invalidated the previous
+   * refresh token when it issued this one, so a process that exits between
+   * receipt and `rename` has no working token at all on its next boot — the
+   * operator has to run `yarn saxo:login` again. `stop()` resolving early is
+   * that exit: `buildShutdownHandler` calls `exit(0)` the moment it does.
+   */
+  it('does not resolve stop() until a rotation in flight has been written to disk', async () => {
+    writeTokenFile(path, savedRecord());
+    let releaseGateway = (): void => {};
+    const gatewayAnswered = new Promise<void>((resolve) => {
+      releaseGateway = resolve;
+    });
+    const { refresher, scheduled } = build({
+      fetchImpl: async () => {
+        await gatewayAnswered;
+        return tokenResponse({ access_token: ROTATED_ACCESS, refresh_token: ROTATED_REFRESH });
+      },
+    });
+    refresher.start();
+    scheduled[0]?.callback();
+
+    const stopped = refresher.stop();
+    // The gateway replies AFTER shutdown began — the exact window in which a
+    // non-joining stop would lose the rotated token.
+    releaseGateway();
+    await stopped;
+
+    expect(readTokenFile(path)?.refreshToken).toBe(ROTATED_REFRESH);
+  });
+
+  /**
+   * The refresher is stopped after the orchestrator drains, but the drain
+   * itself still sends Saxo requests. Once stopped it renews nothing, so the
+   * only safe answer to an expired access token is to refuse: a 401 is
+   * deliberately non-retryable, and a drain would read it as a venue failure
+   * rather than as the session having ended.
+   */
+  it('refuses rather than handing out an expired bearer once it has been stopped', async () => {
+    writeTokenFile(path, savedRecord());
+    const { refresher, clock, calls } = build();
+    refresher.start();
+    await refresher.stop();
+    clock.advance(1_200_001);
+
+    await expect(refresher.getAccessToken()).rejects.toBeInstanceOf(SaxoSessionLostError);
+    await expect(refresher.getAccessToken()).rejects.toThrow(/could not be renewed/);
+    expect(calls).toEqual([]);
   });
 });
 

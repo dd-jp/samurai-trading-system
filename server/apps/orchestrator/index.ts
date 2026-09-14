@@ -51,6 +51,7 @@ import { pathToFileURL } from 'node:url';
 import type { SaxoTokenSource } from '../../pipeline/execution/index.js';
 import {
   ALPACA_CREDENTIAL_ENV_VARS,
+  SAXO_APP_CREDENTIAL_ENV_VARS,
   SAXO_CREDENTIAL_ENV_VARS,
   savedSessionExists,
   tokenFilePath,
@@ -337,7 +338,7 @@ function parseMode(raw: string | undefined): ProductionConfig['mode'] {
  * import time. Building the list per call reads them when they are needed
  * instead, which is also the only moment their values matter.
  */
-function credentialRequirements(): readonly {
+export function credentialRequirements(): readonly {
   vars: readonly string[];
   /**
    * True when this run never touches these variables — because the caller
@@ -351,6 +352,13 @@ function credentialRequirements(): readonly {
     mode: ProductionConfig['mode'];
     /** The resolved broker venue (#1400) — what decides whether the Alpaca ORDER path exists at all. */
     venue: BrokerVenue;
+    /**
+     * Whether `yarn saxo:login` has saved a SIM session (#1523). Passed in
+     * rather than read here so the two Saxo entries below — which require
+     * opposite sets of variables on opposite sides of it — are testable
+     * without a token file on the machine running the suite.
+     */
+    savedSaxoSession: boolean;
   }) => boolean;
   /**
    * Names in `vars` that a DIFFERENT variable can satisfy instead, keyed by
@@ -472,11 +480,27 @@ function credentialRequirements(): readonly {
       // same choice in the same order; this stays a report of what that
       // constructor would refuse on.
       vars: [SAXO_CREDENTIAL_ENV_VARS.sim.token],
-      unusedByThisRun: ({ injected, venue }) =>
+      unusedByThisRun: ({ injected, venue, savedSaxoSession }) =>
         venue !== 'saxo' ||
         injected.saxoBrokerClient !== undefined ||
         injected.broker !== undefined ||
-        savedSessionExists(tokenFilePath('sim')),
+        savedSaxoSession,
+    },
+    {
+      // The other half of the entry above: the saved-session branch does NOT
+      // read the pasted token, but it hard-requires the app credentials —
+      // `buildSaxoTokenSource` → `resolveSaxoOAuthConfig` throws
+      // `SAXO_SIM_APP_KEY is not set` — and every refresh re-sends them as
+      // Basic auth. Without this a run with a token file and no app key
+      // passes the pre-flight and fails on the first `getAccessToken`, which
+      // is exactly the drift this list exists to prevent. Only SIM, for the
+      // reason above: live is refused outright.
+      vars: [SAXO_APP_CREDENTIAL_ENV_VARS.sim.appKey, SAXO_APP_CREDENTIAL_ENV_VARS.sim.appSecret],
+      unusedByThisRun: ({ injected, venue, savedSaxoSession }) =>
+        venue !== 'saxo' ||
+        injected.saxoBrokerClient !== undefined ||
+        injected.broker !== undefined ||
+        !savedSaxoSession,
     },
   ];
 }
@@ -565,9 +589,13 @@ export function missingCredentialEnvVars(
   venue: BrokerVenue,
 ): string[] {
   const isSet = (name: string): boolean => (process.env[name] ?? '').trim().length > 0;
+  const savedSaxoSession = savedSessionExists(tokenFilePath('sim'));
 
   return credentialRequirements()
-    .filter((requirement) => !requirement.unusedByThisRun({ injected, alertsMode, mode, venue }))
+    .filter(
+      (requirement) =>
+        !requirement.unusedByThisRun({ injected, alertsMode, mode, venue, savedSaxoSession }),
+    )
     .flatMap((requirement) =>
       requirement.vars.filter(
         (name) => !isSet(name) && !(requirement.alternatives?.[name] ?? []).some(isSet),
@@ -984,12 +1012,22 @@ export async function startFromEnvironment(
 }
 
 /**
- * Folds the token refresher's timer into the orchestrator's own shutdown
- * (#1523). The timer is `unref`'d, so it never holds the process open — what
- * this stops is the NEXT rotation being scheduled. A rotation already in
- * flight still completes and still writes: Saxo invalidated the previous
- * refresh token when it issued this one, so discarding the response would
- * strand the session for the next boot.
+ * Folds the token refresher into the orchestrator's own shutdown (#1523),
+ * AFTER it — in that order for two reasons, both of which cost a live session
+ * if reversed:
+ *
+ * 1. `orchestrator.stop()` drains an in-flight tick, and that drain (flatten,
+ *    cancel) still sends Saxo requests. A refresher stopped first stops
+ *    renewing, so a tick that outlives the ≤60 s refresh lead — routine, since
+ *    a tick is LLM-bound — would be draining on an expired bearer. Stopping
+ *    first buys nothing anyway: the timer is `unref`'d, so it never holds the
+ *    process open.
+ * 2. `stop()` is awaited because it joins an in-flight rotation. Saxo
+ *    invalidated the previous refresh token when it issued the one in flight,
+ *    so exiting between receipt and `rename` strands the session and costs the
+ *    operator a manual `yarn saxo:login`. `buildShutdownHandler` calls
+ *    `effects.exit(0)` the moment this resolves, so the join has to happen
+ *    here or it does not happen at all.
  *
  * A spread rather than a subclass because `buildProductionOrchestrator`
  * returns a plain object literal whose methods close over its own locals, so
@@ -1004,8 +1042,8 @@ export function withSaxoSessionStop(
   return {
     ...orchestrator,
     stop: async () => {
-      tokenSource.stop();
       await orchestrator.stop();
+      await tokenSource.stop();
     },
   };
 }

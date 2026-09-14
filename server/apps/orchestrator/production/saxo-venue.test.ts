@@ -230,7 +230,7 @@ describe('buildSaxoTokenSource', () => {
     });
 
     expect(source).toBeInstanceOf(SaxoTokenRefresher);
-    source.stop();
+    void source.stop();
   });
 
   it('does NOT fall back to the pasted token when the saved session is unusable — it reports the session lost', async () => {
@@ -274,7 +274,78 @@ describe('buildSaxoTokenSource', () => {
     });
 
     expect(source).toBeInstanceOf(SaxoTokenRefresher);
-    source.stop();
+    void source.stop();
+  });
+
+  /**
+   * The no-caller check (#1523): `start()` primes the session at BOOT, so the
+   * state is known before the first order rather than on it. Asserted through
+   * the log line, because a state read here would prime it itself and the test
+   * would pass on a `start()` nothing calls.
+   */
+  it('primes the session at boot and says so, without any request being made', () => {
+    savedSession();
+    const logger = recordingLogger();
+
+    buildSaxoTokenSource('sim', logger, { env: APP_CREDENTIALS, tokenPath });
+
+    expect(logger.entries.map((entry) => entry.event)).toContain('saxo_session_resumed');
+  });
+
+  it('reports an expired saved session at boot rather than on the first order', () => {
+    writeFileSync(
+      tokenPath,
+      JSON.stringify({
+        environment: 'sim',
+        accessToken: 'access-fixture',
+        refreshToken: 'refresh-fixture',
+        accessTokenExpiresAt: new Date(Date.now() - 7_200_000).toISOString(),
+        refreshTokenExpiresAt: new Date(Date.now() - 3_600_000).toISOString(),
+        obtainedAt: new Date(Date.now() - 10_800_000).toISOString(),
+      }),
+      { mode: 0o600 },
+    );
+    const logger = recordingLogger();
+
+    buildSaxoTokenSource('sim', logger, { env: APP_CREDENTIALS, tokenPath });
+
+    // The refresher's own `saxo_session_lost` line, emitted at BOOT because
+    // `start()` primed it — before that call it appeared only once something
+    // asked for a bearer.
+    const lost = logger.entries.find((entry) => entry.event === 'saxo_session_lost');
+    expect(lost?.message).toMatch(/yarn saxo:login --env sim/);
+  });
+
+  /**
+   * A live session on a SIM boot must not be spent: the refresh would rotate
+   * (and so invalidate) the live refresh token against the SIM gateway, which
+   * cannot honour it — the operator would lose the live session to a run that
+   * was never entitled to it.
+   */
+  it('refuses a saved session written for the OTHER gateway', async () => {
+    writeFileSync(
+      tokenPath,
+      JSON.stringify({
+        environment: 'live',
+        accessToken: 'access-fixture',
+        refreshToken: 'refresh-fixture',
+        accessTokenExpiresAt: new Date(Date.now() + 1_200_000).toISOString(),
+        refreshTokenExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+        obtainedAt: new Date().toISOString(),
+      }),
+      { mode: 0o600 },
+    );
+
+    const source = buildSaxoTokenSource('sim', silentLogger, {
+      env: APP_CREDENTIALS,
+      tokenPath,
+    });
+
+    expect(source.sessionState()).toMatchObject({
+      status: 'lost',
+      reason: expect.stringContaining('is for the live gateway, not sim'),
+    });
+    await expect(source.getAccessToken()).rejects.toThrow(/session is lost/);
   });
 
   it('is what the venue client authenticates with — no SAXO_SIM_ACCESS_TOKEN in the environment', () => {
@@ -290,7 +361,7 @@ describe('buildSaxoTokenSource', () => {
       expect(buildSaxoVenueClient(silentLogger, source)).toBeInstanceOf(SaxoHttpBrokerClient);
     } finally {
       if (saved !== undefined) process.env.SAXO_SIM_ACCESS_TOKEN = saved;
-      source.stop();
+      void source.stop();
     }
   });
 });

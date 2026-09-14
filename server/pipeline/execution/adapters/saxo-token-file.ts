@@ -2,7 +2,7 @@
  * The saved Saxo OAuth session: where it lives, how it is written, how it is
  * read back (#1522 wrote it, #1523 rotates it).
  *
- * The write is **atomic** — a temp file beside the target, then `rename` —
+ * The write is **atomic and fsync'd** — a temp file beside the target, then `rename` —
  * because the refresher persists a rotated refresh token before using the
  * access token that came with it. Saxo invalidates the previous refresh token
  * the moment a new one is ISSUED, so a half-written file is a lost session:
@@ -17,8 +17,11 @@
  */
 import {
   chmodSync,
+  closeSync,
   existsSync,
+  fsyncSync,
   mkdirSync,
+  openSync,
   readFileSync,
   renameSync,
   unlinkSync,
@@ -70,15 +73,40 @@ export interface SaxoTokenFileRecord extends SaxoTokenResponse {
   obtainedAt: string;
 }
 
+/**
+ * Replaces the saved session atomically. The temp file is created beside the
+ * target (not in `os.tmpdir()`, which risks `EXDEV` on `rename`) at 0600 from
+ * `O_CREAT` — never world-readable for an instant.
+ *
+ * Durable against power loss, not only against a crashed process: the file's
+ * bytes are `fsync`ed before the `rename`, and the DIRECTORY is `fsync`ed
+ * after it, or the rename itself could still be in the page cache when the
+ * host loses power. That matters here in a way it would not for a cache —
+ * Saxo invalidated the previous refresh token when it issued this one, so a
+ * lost write is a lost session, and the deployment target is a MacBook whose
+ * named risks include power and lid-close (CLAUDE.md, Deployment Target).
+ */
 export function writeTokenFile(path: string, record: SaxoTokenFileRecord): void {
   const dir = dirname(path);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   chmodSync(dir, 0o700);
   const temp = `${path}.tmp-${process.pid}`;
   try {
-    writeFileSync(temp, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+    const fd = openSync(temp, 'w', 0o600);
+    try {
+      writeFileSync(fd, `${JSON.stringify(record, null, 2)}\n`);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
     chmodSync(temp, 0o600);
     renameSync(temp, path);
+    const dirFd = openSync(dir, 'r');
+    try {
+      fsyncSync(dirFd);
+    } finally {
+      closeSync(dirFd);
+    }
   } catch (cause) {
     try {
       unlinkSync(temp);

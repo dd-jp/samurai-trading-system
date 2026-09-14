@@ -357,12 +357,32 @@ export function buildSaxoTokenSource(
   const env = deps.env ?? process.env;
   const path = deps.tokenPath ?? tokenFilePath(environment);
   if (savedSessionExists(path)) {
-    return new SaxoTokenRefresher({
+    const refresher = new SaxoTokenRefresher({
       environment,
       config: resolveSaxoOAuthConfig(environment, env),
       tokenPath: path,
       logger,
     });
+    // Primed HERE rather than on the first order: an expired or unreadable
+    // saved session is an operator problem (`yarn saxo:login` again), and a
+    // boot that stays silent about it defers the news to the first trade of
+    // the session. Not a throw — the precedence above deliberately keeps a
+    // lost refresher instead of falling back to an unrenewable bearer, and
+    // alerting on the state is #1524.
+    const state = refresher.start();
+    // A lost session already logged `saxo_session_lost` from inside `start()`;
+    // restating it here would double every boot failure.
+    if (state.status !== 'lost') {
+      logger.log({
+        trace_id: 'startup',
+        stage: 'orchestrator',
+        event: 'saxo_session_resumed',
+        level: 'info',
+        message: `Saxo ${environment} session resumed from the saved login`,
+        payload: { venue: 'saxo', environment, ...state },
+      });
+    }
+    return refresher;
   }
   const names = SAXO_CREDENTIAL_ENV_VARS[environment];
   const pasted = env[names.token]?.trim();

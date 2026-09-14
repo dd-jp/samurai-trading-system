@@ -57,8 +57,14 @@ export interface SaxoTokenSource {
   /** The bearer to send on the NEXT request. Never memoised by the caller. */
   getAccessToken(): Promise<string>;
   sessionState(): SaxoSessionState;
-  /** Releases any scheduled work. Idempotent. */
-  stop(): void;
+  /**
+   * Releases any scheduled work and RESOLVES ONLY once a rotation already in
+   * flight has finished writing. Async because of that join: Saxo invalidated
+   * the previous refresh token when it issued the one in flight, so a process
+   * that exits between receipt and `rename` strands the session and costs the
+   * operator a manual `yarn saxo:login`. Idempotent.
+   */
+  stop(): Promise<void>;
 }
 
 /**
@@ -78,7 +84,7 @@ export class StaticSaxoTokenSource implements SaxoTokenSource {
     return { status: 'unrefreshable' };
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     // Nothing is scheduled: there is nothing to renew.
   }
 }
@@ -144,9 +150,9 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
   }
 
   /**
-   * Primes the session from disk and arms the schedule, so a boot with no
-   * usable session says so at startup rather than on the first order. Safe to
-   * omit — `getAccessToken` primes it too.
+   * Primes the session from disk and arms the schedule, returning the state
+   * for the caller to report, so a boot with no usable session says so at
+   * startup rather than on the first order. Called by `buildSaxoTokenSource`.
    */
   start(): SaxoSessionState {
     this.load();
@@ -167,12 +173,23 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
     }
     if (Date.parse(record.accessTokenExpiresAt) <= this.clock.now().getTime()) {
       await this.refreshNow();
-      if (this.lostReason !== undefined || this.record === undefined) {
+      const renewed = this.record;
+      if (this.lostReason !== undefined || renewed === undefined) {
         throw new SaxoSessionLostError(
           `Saxo ${this.deps.environment} session is lost: ${this.lostReason ?? 'no saved session'}.`,
         );
       }
-      return this.record.accessToken;
+      // `runRefresh` returns without renewing anything once `stop()` has run,
+      // so the record can still be the expired one. Refusing is the only safe
+      // answer: an expired bearer buys a 401, which is deliberately NOT
+      // retryable, and a shutdown drain would read that as a venue failure
+      // instead of as the session having ended.
+      if (Date.parse(renewed.accessTokenExpiresAt) <= this.clock.now().getTime()) {
+        throw new SaxoSessionLostError(
+          `Saxo ${this.deps.environment} access token expired at ${renewed.accessTokenExpiresAt} and could not be renewed${this.stopped ? ' — the refresher was stopped' : ''}.`,
+        );
+      }
+      return renewed.accessToken;
     }
     return record.accessToken;
   }
@@ -189,9 +206,10 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
     };
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     this.stopped = true;
     this.clearTimer();
+    await this.whenIdle();
   }
 
   /** Resolves once any in-flight rotation has finished — the join point for a caller that must not race one. */
