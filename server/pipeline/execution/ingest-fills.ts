@@ -516,6 +516,7 @@ async function redistributeFlattenFills(
         clientOrderId,
         targetedByThisFlatten,
         positionKeys,
+        failures,
       );
       // EMPTY, not merely absent-from-the-map, is `redistributeOneFlatten`'s
       // ordinary return for a `clientOrderId` that is not a real flatten at
@@ -570,6 +571,8 @@ async function redistributeOneFlatten(
    * `persistUnattributedSplits`, which is the only thing this is for.
    */
   positionKeys: ReadonlySet<string>,
+  /** The caller's accumulator, for the one failure this function does not throw on. */
+  failures: ContainedFailure[],
 ): Promise<void> {
   const { store } = input;
   const attribution = await store.getFlattenAttribution(clientOrderId);
@@ -790,7 +793,7 @@ async function redistributeOneFlatten(
   // make this poll's own write suppress the first-ever warning for a raw fill
   // that both over-fills and names an already-closed lot.
   for (const [lotKey, splitFills] of unattributed) {
-    await persistUnattributedSplits(input, clientOrderId, lotKey, splitFills);
+    await persistUnattributedSplits(input, clientOrderId, lotKey, splitFills, failures);
   }
 
   // #549: the durable "residual observed, protection not confirmed" marker,
@@ -870,22 +873,34 @@ async function redistributeOneFlatten(
  * sale — nothing in this port can correct it, which is why the alert pages
  * rather than merely recording.
  *
- * Best-effort, never throwing, for the reason the over-fill warning and
- * `markResidualsUnprotected` above share: the splits are already pushed and
- * `byLot.delete(clientOrderId)` still has to run, so a store flake must not
- * turn a successful redistribution into a contained failure. It is also safe
- * to swallow because `getFlattenAttribution` does not filter on `swept_at`
- * (sqlite-shared-store.ts) — a failed write is retried, in full, on the next
- * poll's recomputation of the same split.
+ * Never throws — the splits are already pushed and `byLot.delete` still has to
+ * run — but a failed write is NOT swallowed: it is pushed onto the poll's
+ * `failures` under the lot's own key, which is what holds the sweep gate.
+ * `markFlattenFillsSwept` may only run once the fill is durably applied
+ * (`SharedStore.markFlattenFillsSwept`'s doc), and the "the next poll
+ * recomputes the split" recovery does NOT carry here: `since` is the earliest
+ * `opened_at` over the OPEN lots, this lot is closed by construction, and once
+ * no surviving open lot predates the flatten fill `collectFill`'s strict
+ * `filledAt < since` drops it inside the adapter with no recovery path (see
+ * `ingestFills`' own comment on that floor). Retiring the journal row on a
+ * failed write would therefore lose the fill permanently — exactly what the
+ * gate exists to prevent — so the row stays unswept and `getUnresolvedFlattens`
+ * keeps finding it.
  */
 async function persistUnattributedSplits(
   input: FillIngestInput,
   clientOrderId: string,
   lotKey: string,
   splitFills: readonly NormalizedFill[],
+  failures: ContainedFailure[],
 ): Promise<void> {
   const { store } = input;
+  // #842's no-lookahead filter, the one `advanceLot` applies to every fill it
+  // books. A split dated after the poll's clock is left for a later poll
+  // rather than booked early, which only the backtest clock can produce.
+  const now = input.clock.now();
   for (const fill of splitFills) {
+    if (fill.timestamp.getTime() > now.getTime()) continue;
     try {
       if (await store.hasFill({ idempotency_key: lotKey, broker_fill_id: fill.broker_fill_id })) {
         continue;
@@ -916,6 +931,11 @@ async function persistUnattributedSplits(
           qty: fill.qty,
         },
       );
+      // Scoped 'lot-advance' under the LOT's key, which is precisely what the
+      // caller's `failedLotKeys` gate reads to hold `markFlattenFillsSwept`
+      // back — see this function's doc for why retiring the row here would
+      // lose the fill rather than defer it.
+      failures.push({ scope: 'lot-advance', key: lotKey, instrument: null, error });
       continue;
     }
 

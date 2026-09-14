@@ -1605,10 +1605,10 @@ describe('ExecutionImpl.ingestFills', () => {
     // fill? Traced by construction below rather than by reading alone: the
     // set is NOT empty (the existing #525 line populates it straight from the
     // journal's `lot_idempotency_keys`, unconditionally), so the flatten DOES
-    // reach `flattenNamedLots` and IS marked swept — but `advanceLot` is never
-    // called for the closed lot (it is absent from `positions`, the loop's
-    // only source of work), so the fill sitting in `byLot` for it is silently
-    // discarded rather than durably applied.
+    // reach `flattenNamedLots` and IS marked swept. `advanceLot` is still never
+    // called for the closed lot (it is absent from `positions`, the loop's only
+    // source of work) — #1506's `persistUnattributedSplits` is what books the
+    // split instead, which is what the assertions below pin.
     it('marks a flatten swept and BOOKS its fill when its named lot is ALREADY closed at redistribution time', async () => {
       const { store } = openTestExecutionStore();
       await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10, stop: 95 });
@@ -1847,6 +1847,188 @@ describe('ExecutionImpl.ingestFills', () => {
           (entry) => entry.message === UNATTRIBUTED_FLATTEN_FILL_PERSIST_FAILED,
         ),
       ).toEqual([]);
+    });
+
+    // #1506: the persist failing is NOT a swallowable diagnostic. The "next
+    // poll recomputes the split" recovery needs the raw fill re-fetched, and
+    // `since` is the earliest `opened_at` over the OPEN lots — this lot is
+    // closed, so once no surviving open lot predates the flatten fill the
+    // adapter's `filledAt < since` drops it with no recovery path. Retiring
+    // the journal row on a failed write would lose the fill permanently, which
+    // is the outcome `markFlattenFillsSwept`'s own doc gates against.
+    it('holds the flatten sweep back when booking the split against the closed lot fails', async () => {
+      class FailsOnSplitStore extends TestExecutionStore {
+        override async applyLotAdvance(advance: LotAdvance): Promise<void> {
+          if (advance.fills.some((lotFill) => lotFill.broker_fill_id === 'f2:key-1')) {
+            throw new Error('simulated store outage on the unattributed split');
+          }
+          await super.applyLotAdvance(advance);
+        }
+      }
+
+      const { db } = openTestExecutionStore();
+      const store = new FailsOnSplitStore(db);
+      await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10, stop: 95 });
+      await seedPosition(store, {
+        idempotency_key: 'key-other',
+        instrument: 'TSLA',
+        requested_size: 5,
+        stop: 190,
+      });
+      const journalFlatten = async (key: string, held: number): Promise<void> => {
+        await store.writeAheadFlatten({
+          idempotency_key: key,
+          instrument: 'AAPL',
+          asset_class: 'stocks',
+          side: 'sell',
+          size: held,
+          submitted_at: OPENED_AT,
+          lot_held_quantities: [{ idempotency_key: 'key-1', held }],
+          exit_reason: 'flatten',
+          decision_price: null,
+          quote_bid: null,
+          quote_ask: null,
+          quote_mid: null,
+          modelled_cost_breakdown: null,
+          quote_observed_at: null,
+        });
+        await store.resolveFlattenSubmitted(
+          key,
+          { order_state: 'submitted', broker_order_ids: [`${key}:order`] },
+          OPENED_AT,
+        );
+      };
+      await journalFlatten('flatten-1', 10);
+
+      const entry = fill({
+        client_order_id: 'key-1',
+        broker_fill_id: toBrokerFillId('e1'),
+        leg: 'entry',
+        qty: 10,
+      });
+      const firstFlattenFill = fill({
+        client_order_id: 'flatten-1',
+        broker_fill_id: toBrokerFillId('f1'),
+        leg: 'exit',
+        qty: 10,
+        timestamp: new Date('2026-07-20T15:30:00Z'),
+      });
+      const secondFlattenFill = fill({
+        client_order_id: 'flatten-2',
+        broker_fill_id: toBrokerFillId('f2'),
+        leg: 'exit',
+        qty: 4,
+        timestamp: new Date('2026-07-20T15:45:00Z'),
+      });
+      const broker = new ScriptedBroker([entry, firstFlattenFill, secondFlattenFill]);
+      const poll = async (fills: readonly NormalizedFill[]): Promise<void> => {
+        broker.replaceFills([...fills]);
+        await new ExecutionImpl(makeInput(broker, store)).ingestFills();
+      };
+
+      // key-1's own entry and flatten-1's split go through the ordinary
+      // per-position path, which this store leaves alone — only flatten-2's
+      // split, the one nothing but `persistUnattributedSplits` books, is
+      // refused.
+      await poll([entry]);
+      await poll([entry, firstFlattenFill]);
+      expect((await store.getPosition('key-1'))?.order_state).toBe('closed');
+
+      await journalFlatten('flatten-2', 4);
+      store.writeLog.length = 0;
+      await expect(poll([entry, firstFlattenFill, secondFlattenFill])).rejects.toThrow();
+      expect(store.writeLog).not.toContain('mark-flatten-fills-swept:flatten-2');
+      // Why the held row is the only recovery there is. The surviving lot
+      // cannot be seeded ahead of this fill and still have the poll above see
+      // it at all — that is the whole point: raise the floor past the fill and
+      // the adapter stops offering it, so nothing recomputes the split.
+      expect(await broker.fetchNewFills(new Date('2026-07-20T15:50:00Z'))).toEqual([]);
+    });
+
+    // #842's no-lookahead filter reaches this path too — `advanceLot` applies
+    // it to every fill it books, and a split naming a closed lot must not be
+    // the one exception that books ahead of the poll's clock.
+    it('leaves a split dated after the poll clock unbooked', async () => {
+      const { store } = openTestExecutionStore();
+      await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10, stop: 95 });
+      await seedPosition(store, {
+        idempotency_key: 'key-other',
+        instrument: 'TSLA',
+        requested_size: 5,
+        stop: 190,
+      });
+      const journalFlatten = async (key: string, held: number): Promise<void> => {
+        await store.writeAheadFlatten({
+          idempotency_key: key,
+          instrument: 'AAPL',
+          asset_class: 'stocks',
+          side: 'sell',
+          size: held,
+          submitted_at: OPENED_AT,
+          lot_held_quantities: [{ idempotency_key: 'key-1', held }],
+          exit_reason: 'flatten',
+          decision_price: null,
+          quote_bid: null,
+          quote_ask: null,
+          quote_mid: null,
+          modelled_cost_breakdown: null,
+          quote_observed_at: null,
+        });
+        await store.resolveFlattenSubmitted(
+          key,
+          { order_state: 'submitted', broker_order_ids: [`${key}:order`] },
+          OPENED_AT,
+        );
+      };
+      await journalFlatten('flatten-1', 10);
+
+      const entry = fill({
+        client_order_id: 'key-1',
+        broker_fill_id: toBrokerFillId('e1'),
+        leg: 'entry',
+        qty: 10,
+      });
+      const firstFlattenFill = fill({
+        client_order_id: 'flatten-1',
+        broker_fill_id: toBrokerFillId('f1'),
+        leg: 'exit',
+        qty: 10,
+        timestamp: new Date('2026-07-20T15:30:00Z'),
+      });
+      const futureFlattenFill = fill({
+        client_order_id: 'flatten-2',
+        broker_fill_id: toBrokerFillId('f2'),
+        leg: 'exit',
+        qty: 4,
+        timestamp: new Date(NOW.getTime() + 60_000),
+      });
+
+      const alerts = makeUnattributedFlattenFillAlerts();
+      const poll = async (fills: readonly NormalizedFill[]): Promise<void> => {
+        await new ExecutionImpl(
+          makeInput(
+            new ScriptedBroker([...fills]),
+            store,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            alerts,
+          ),
+        ).ingestFills();
+      };
+
+      await poll([entry]);
+      await poll([entry, firstFlattenFill]);
+      await journalFlatten('flatten-2', 4);
+      await poll([entry, firstFlattenFill, futureFlattenFill]);
+
+      expect(await store.getFills('key-1')).toHaveLength(2);
+      expect(alerts.alerts).toEqual([]);
     });
 
     // #1506 x #527: the two conditions overlap on one raw fill — a flatten
