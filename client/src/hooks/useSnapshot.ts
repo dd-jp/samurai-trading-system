@@ -129,13 +129,13 @@ function pollTimeoutMs(intervalMs: number): number {
  * The rail's single health discriminator (#1316's decision comment: "one
  * small state discriminator on the client, not three ad-hoc flags"). Every
  * consumer that needs to know how much of the feed to trust reads THIS field,
- * not `stale/snapshot/error` combined by hand — `stale` is kept on
- * `SnapshotFeed` too (for the rail's border colour, which must react to the
- * raw watchdog even in the `'waiting'` window — see its own field comment
- * for why it is NOT simply `status === 'stale'`), but it is never set
- * independently of `status`'s own inputs, so the two can never disagree
- * about a contract mismatch specifically: `stale` reads false throughout one,
- * by construction.
+ * not `stale/snapshot/error` combined by hand. `SnapshotFeed` carried a
+ * separate `stale` boolean alongside it until #1520; its whole stated
+ * justification was the rail's border colour needing the raw watchdog inside
+ * the `'waiting'` window, and the page-level cold-start gate ended that —
+ * `'waiting'` no longer reaches the rail at all, so within the rail `stale`
+ * was exactly `status === 'stale'`, a second derivation of the discriminator
+ * with nothing left to add and drift to lose.
  *
  * Ranked, highest priority first, because more than one can be true of the
  * underlying facts at once and only one word can be shown:
@@ -151,12 +151,23 @@ function pollTimeoutMs(intervalMs: number): number {
  *    the last one that validated.
  * 4. `'alive'` — the feed is healthy.
  *
- * This is the extension point named for #1520 (cold-start / stale-feed
- * states): a new member added to this union, with its own priority slot in
- * `deriveStatus` below and its own entry in `Rail.tsx`'s `HEALTH` record, is
- * the SAME mechanism this ticket introduces — not a second, parallel flag.
+ * #1520 collapsed its cold-start/stale-feed states INTO this union rather
+ * than adding a second one beside it: the page-level cold-start gate
+ * (`feedView` below) is a narrowing of these same four members by whether a
+ * snapshot has ever landed, not a parallel flag, and `Rail.tsx`'s `HEALTH`
+ * record still answers every member exactly once.
  */
 export type FeedStatus = 'contract-mismatch' | 'waiting' | 'stale' | 'alive';
+
+/**
+ * The two members reachable while no snapshot has EVER validated. `'waiting'`
+ * is the ordinary cold start; `'contract-mismatch'` is a first poll that
+ * answered with a wire shape this client cannot trust — it outranks
+ * `'waiting'` for the same reason it outranks `'stale'` (see above), so the
+ * cold-start page must be able to say MISMATCH rather than reporting silence
+ * the feed is not actually keeping.
+ */
+export type ColdStatus = Exclude<FeedStatus, 'stale' | 'alive'>;
 
 export interface SnapshotFeed {
   /**
@@ -171,20 +182,6 @@ export interface SnapshotFeed {
    */
   snapshot: WireSnapshot | null;
   /**
-   * The watchdog's own reading: two poll intervals have passed with no
-   * successful (matching-contract) poll. NOT simply `status === 'stale'` —
-   * `status` gives `'waiting'` priority over this while no snapshot has ever
-   * landed (nothing to call stale yet), but a caller keying off `stale`
-   * alone (the rail's border colour) still needs to see a watchdog trip that
-   * happens before the first success too. The one guarantee this DOES share
-   * with `status`: it is never true during `'contract-mismatch'` — a
-   * mismatched poll's own staleness is not the fact wrong with it, and
-   * `status` already outranks it for exactly that reason (`deriveStatus`'s
-   * doc comment, #1316's decision comment on why mismatch must outrank
-   * staleness).
-   */
-  stale: boolean;
-  /**
    * Client wall-clock time of the last successful poll — distinct from
    * `snapshot.generated_at`, which the server stamps. The rail's poll clock
    * reads this one; its snapshot clock reads `generated_at`/`as_of` (#1166).
@@ -194,6 +191,66 @@ export interface SnapshotFeed {
   error: string | null;
   /** The rail's health discriminator — see `FeedStatus`'s doc comment. */
   status: FeedStatus;
+}
+
+/**
+ * A feed that has produced at least one validated snapshot, and so always
+ * will: `snapshot` is only ever replaced by a later validated payload, never
+ * cleared (see its field comment above, and the `catch`/mismatch branches in
+ * `poll()` that deliberately leave it alone). That is what makes the
+ * non-nullness a guarantee for the whole life of the session rather than a
+ * momentary reading — #1144's decision turns on exactly that distinction:
+ * gate on "has a snapshot ever arrived", not on "is one present right now".
+ */
+export type LiveFeed = Omit<SnapshotFeed, 'snapshot'> & { snapshot: WireSnapshot };
+
+/** A feed before its first validated snapshot — see `ColdStatus`. */
+export type ColdFeed = Omit<SnapshotFeed, 'snapshot' | 'status'> & {
+  snapshot: null;
+  status: ColdStatus;
+};
+
+/**
+ * The page-level gate (#1520), and the ONLY place in the client that asks
+ * whether a snapshot exists. Everything downstream of a `'live'` view — the
+ * rail and all three tabs — receives `WireSnapshot`, not `WireSnapshot |
+ * null`, so no leaf re-derives an answer to a question the root has already
+ * settled.
+ *
+ * Deliberately NOT keyed on `status === 'waiting'`: a first poll that comes
+ * back version-skewed has no snapshot either, and `deriveStatus` ranks that
+ * as `'contract-mismatch'` (rightly — the diagnosis outranks the silence).
+ * Keying the gate on the status word would send that case down the live
+ * branch with nothing to render. Keying it on nullness keeps ONE question at
+ * the root and leaves the status word free to say which cold state it is.
+ */
+export type FeedView = { kind: 'cold'; feed: ColdFeed } | { kind: 'live'; feed: LiveFeed };
+
+/**
+ * What each `FeedStatus` reads as when no snapshot has arrived. `null` marks
+ * the two that `deriveStatus` cannot produce against a null snapshot — both
+ * require one — and those fall back to `'waiting'`, the honest reading of a
+ * null snapshot anyway.
+ *
+ * A record rather than a ternary so the cold branch carries the same
+ * obligation `HEALTH` does (`components/Rail.tsx`): a new `FeedStatus` member
+ * fails to compile here until someone says whether it is reachable cold and
+ * what it reads as if it is. `ColdStatus` is an `Exclude<>`, so a new member
+ * joins it silently — this is what stops it being reported as WAITING by
+ * default.
+ */
+const COLD_STATUS: { readonly [S in FeedStatus]: ColdStatus | null } = {
+  'contract-mismatch': 'contract-mismatch',
+  waiting: 'waiting',
+  stale: null,
+  alive: null,
+};
+
+export function feedView(feed: SnapshotFeed): FeedView {
+  const { snapshot, status } = feed;
+  if (snapshot !== null) return { kind: 'live', feed: { ...feed, snapshot } };
+  const coldStatus: ColdStatus = COLD_STATUS[status] ?? 'waiting';
+  return { kind: 'cold', feed: { ...feed, snapshot, status: coldStatus } };
 }
 
 export interface UseSnapshotOptions {
@@ -527,11 +584,10 @@ const INITIAL: FeedState = {
 /**
  * The single place `FeedStatus` is computed from the raw booleans above —
  * see `FeedStatus`'s doc comment for the ranking and why mismatch outranks
- * staleness. `SnapshotFeed.stale` is NOT simply `status === 'stale'` (that
- * would make it false throughout `'waiting'`, a real behaviour change from
- * before `FeedStatus` existed — see `stale`'s own comment at the return
- * below); it stays a read of `watchdogStale`, gated only on `contractMismatch`
- * so the two can never disagree about a mismatch specifically.
+ * staleness. It is also the only thing that reads `watchdogStale`, which is
+ * why that flag stayed internal when #1520 removed the `stale` boolean from
+ * `SnapshotFeed`: the watchdog still runs, it just has exactly one consumer
+ * rather than two that could disagree.
  */
 function deriveStatus(state: FeedState): FeedStatus {
   if (state.contractMismatch) return 'contract-mismatch';
@@ -714,16 +770,6 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
     const status = deriveStatus(state);
     return {
       snapshot: state.snapshot,
-      // The raw watchdog reading, not `status === 'stale'`: `deriveStatus`
-      // gives `'waiting'` priority over staleness while no snapshot has ever
-      // landed (there is nothing yet to call stale), but the watchdog can
-      // still be genuinely tripped in that same window — a request that has
-      // hung since mount, say — and callers that key off `stale` alone (the
-      // rail's border colour) must still see that. The one thing this MUST
-      // NOT do is read true during a contract mismatch: a mismatched poll's
-      // own staleness is not the fact wrong with it, and `status` already
-      // outranks it for exactly that reason (`deriveStatus`'s doc comment).
-      stale: state.watchdogStale && !state.contractMismatch,
       lastSuccessAt: state.lastSuccessAt,
       error: state.error,
       status,

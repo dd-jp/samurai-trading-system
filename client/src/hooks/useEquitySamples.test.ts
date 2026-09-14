@@ -26,23 +26,19 @@ function snapshotWithBalance(
 }
 
 describe('useEquitySamples', () => {
-  it('starts empty before any snapshot arrives', () => {
-    const { result } = renderHook(() => useEquitySamples(null));
-    expect(result.current).toEqual([]);
-  });
-
-  it('skips entirely when the balance is absent, and does not fold a null snapshot', () => {
+  it('skips entirely when the balance is absent — an arrived snapshot can still carry none', () => {
     const { result, rerender } = renderHook(
-      ({ snapshot }: { snapshot: WireSnapshot | null }) => useEquitySamples(snapshot),
-      { initialProps: { snapshot: null as WireSnapshot | null } },
+      ({ snapshot }: { snapshot: WireSnapshot }) => useEquitySamples(snapshot),
+      { initialProps: { snapshot: snapshotWithBalance(null, '2026-08-07T12:00:00.000Z') } },
     );
-    rerender({ snapshot: snapshotWithBalance(null, '2026-08-07T12:00:00.000Z') });
+    expect(result.current).toEqual([]);
+    rerender({ snapshot: snapshotWithBalance(null, '2026-08-07T12:00:03.000Z') });
     expect(result.current).toEqual([]);
   });
 
   it('refuses non-finite equity', () => {
     const { result, rerender } = renderHook(
-      ({ snapshot }: { snapshot: WireSnapshot | null }) => useEquitySamples(snapshot),
+      ({ snapshot }: { snapshot: WireSnapshot }) => useEquitySamples(snapshot),
       {
         initialProps: {
           snapshot: snapshotWithBalance(

@@ -321,6 +321,26 @@ main {
   min-width: 0;
 }
 
+/*
+ * The whole page before the first snapshot (#1520). Deliberately not the
+ * dashboard grid with empty cards in it: a cold start is one state, and
+ * showing the rail and three tabs with nothing in them is how "nothing has
+ * arrived yet" gets read as "the book is empty".
+ */
+.cold-start {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 14px;
+  background: var(--bg);
+  text-align: center;
+}
+
 .panel {
   border: 1px solid var(--border);
   border-radius: 8px;

@@ -14,18 +14,13 @@ import {
 import { deployedNotional, openRiskRow, pnlToday } from '../../lib/glance.ts';
 import type { LedgerEntry } from '../../lib/ledger.ts';
 import type { Selection } from '../../lib/resolve-trace.ts';
-import {
-  OUTCOME_WORD,
-  sideWord,
-  stageName,
-  WAITING_FOR_FIRST_SNAPSHOT,
-} from '../../lib/vocabulary.ts';
+import { OUTCOME_WORD, sideWord, stageName } from '../../lib/vocabulary.ts';
 import { Seal } from '../Seal.tsx';
 import { pnlTone } from '../StateWord.tsx';
 import { Track } from '../Track.tsx';
 
 export interface GlanceTabProps {
-  snapshot: WireSnapshot | null;
+  snapshot: WireSnapshot;
   equitySamples: readonly EquitySample[];
   ledger: readonly LedgerEntry[];
   verdictsByTrace: ReadonlyMap<string, VerdictRow>;
@@ -85,14 +80,6 @@ function EquitySparkline({ samples }: { samples: readonly EquitySample[] }) {
 }
 
 function PnlCard({ snapshot, equitySamples }: Pick<GlanceTabProps, 'snapshot' | 'equitySamples'>) {
-  if (snapshot === null) {
-    return (
-      <section className="panel" aria-label="P&L today">
-        <h2>P&amp;L today</h2>
-        <p className="empty-state">{WAITING_FOR_FIRST_SNAPSHOT}</p>
-      </section>
-    );
-  }
   const pnl = pnlToday(snapshot.positions, snapshot.closed_trades, snapshot.as_of);
   const equity = snapshot.providers.alpaca.balance?.equity ?? null;
   const tone = pnlTone(pnl.total);
@@ -141,24 +128,20 @@ function PnlCard({ snapshot, equitySamples }: Pick<GlanceTabProps, 'snapshot' | 
 }
 
 function OpenRiskCard({ snapshot }: Pick<GlanceTabProps, 'snapshot'>) {
-  const positions = snapshot?.positions ?? [];
-  const equity = snapshot?.providers.alpaca.balance?.equity ?? null;
+  const positions = snapshot.positions;
+  const equity = snapshot.providers.alpaca.balance?.equity ?? null;
   const deployed = deployedNotional(positions);
   return (
     <section className="panel" aria-label="Open risk">
       <h2>
         Open risk
-        {snapshot !== null && (
-          <span className="h2-note">
-            {' '}
-            · {formatUsd(deployed)} deployed
-            {equity === null ? '' : ` of ${formatUsd(equity)}`}
-          </span>
-        )}
+        <span className="h2-note">
+          {' '}
+          · {formatUsd(deployed)} deployed
+          {equity === null ? '' : ` of ${formatUsd(equity)}`}
+        </span>
       </h2>
-      {snapshot === null ? (
-        <p className="empty-state">{WAITING_FOR_FIRST_SNAPSHOT}</p>
-      ) : positions.length === 0 ? (
+      {positions.length === 0 ? (
         <p className="empty-state">
           No open position — nothing at risk. This is a reading from the store, not a missing panel.
         </p>
