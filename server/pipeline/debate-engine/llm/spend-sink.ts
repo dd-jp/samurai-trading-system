@@ -104,11 +104,18 @@ export interface LlmSpendRecord {
   /** The model's raw response text, same provenance and same treatment as `prompt`. */
   response?: string | undefined;
   /**
-   * `hashPromptTemplate` (#1514) of the STATIC template this call's stage
-   * sent — not the rendered prompt, which also carries per-request dynamic
-   * content and would make the hash different on every call. Undefined for a
-   * call site that has not been wired to supply one; persisted as NULL rather
-   * than fabricated (migrations/0058).
+   * `hashPromptTemplate("<stageTemplateHash>:<wireEnvelopeHash>")` (#1514,
+   * round-1 review) — the call's stage's STATIC template combined with the
+   * shared wire envelope every call also passes through
+   * (`WIRE_ENVELOPE_TEMPLATE_HASH`, `anthropic-client.ts`), not the rendered
+   * prompt (which also carries per-request dynamic content and would make
+   * the hash different on every call) and not the bare stage hash alone
+   * (which would miss an edit to the shared envelope). The only writer,
+   * `AnthropicLlmClient.recordSpend`, computes this composite via
+   * `withWireEnvelope`; a `LlmSpendRecord` built directly (e.g. in a test)
+   * must supply the same composite to match a real row. Undefined for a call
+   * site that has not been wired to supply a stage hash at all; persisted as
+   * NULL rather than fabricated (migrations/0058).
    */
   prompt_template_hash?: string | undefined;
 }
