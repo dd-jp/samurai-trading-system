@@ -96,8 +96,8 @@ rather than a bespoke check, so the report handles three cases:
   GBP for a pence-quoted line before a fee is ever persisted
   (`saxo-price-unit.ts`), so no live fill is expected to carry a pence
   `fee_currency` — but one must not be summed as pounds if it ever appears.
-- **Anything else** (USD on most of the tradeable pool's lines, per
-  `lse-etp-pool.ts` — occasionally EUR) — this report has no transaction-date
+- **Anything else** (USD on the pool lines the #1220 sterling gate excludes from
+  `tradeableUniverse()` in `lse-etp-pool.ts` — occasionally EUR) — this report has no transaction-date
   FX rate and **does not invent one**. These fills are excluded from every
   matched disposal and every total above, and are listed separately, in
   their own native currency, under **UNCONVERTED — FX rate not captured at

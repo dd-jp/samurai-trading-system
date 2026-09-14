@@ -69,6 +69,55 @@ describe('formatCgtReport', () => {
     // back to "GBX" only, as happened once already in review round 1.
     expect(text).toContain('neither GBP nor a pence sub-unit (GBX/gbx/GBp/p)');
   });
+
+  it('prints the matched acquisition date and flags an in-window Section 104 row as provisional', () => {
+    const disposals = [
+      {
+        instrument: '3USL',
+        disposalDate: new Date('2025-06-10T00:00:00Z'),
+        acquisitionDate: new Date('2025-06-10T00:00:00Z'),
+        quantity: 4,
+        proceeds: 400,
+        allowableCost: 380,
+        gain: 20,
+        rule: 'same-day' as const,
+      },
+      {
+        instrument: '3USL',
+        disposalDate: new Date('2025-06-20T00:00:00Z'),
+        quantity: 6,
+        proceeds: 600,
+        allowableCost: 590,
+        gain: 10,
+        rule: 'section-104' as const,
+      },
+    ];
+    const text = formatCgtReport(
+      cgtReportForTaxYear(disposals, 2025),
+      [],
+      'live',
+      '/tmp/samurai-live.db',
+      new Date('2025-07-01T00:00:00Z'),
+    );
+
+    const row = (t: string, rule: string) =>
+      t.split('\n').find((l) => l.startsWith('  3USL') && l.includes(rule));
+    const sameDayRow = row(text, 'same-day');
+    const poolRow = row(text, 'section-104');
+    expect(sameDayRow).toContain('2025-06-10    2025-06-10');
+    expect(sameDayRow).not.toContain('(provisional)');
+    expect(poolRow).toContain('2025-06-20    -');
+    expect(poolRow).toContain('(provisional)');
+
+    const later = formatCgtReport(
+      cgtReportForTaxYear(disposals, 2025),
+      [],
+      'live',
+      '/tmp/samurai-live.db',
+      new Date('2025-08-01T00:00:00Z'),
+    );
+    expect(row(later, 'section-104')).not.toContain('(provisional)');
+  });
 });
 
 describe('buildCgtReport — the composed read → match → window chain, against :memory:', () => {

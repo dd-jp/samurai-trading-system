@@ -387,7 +387,7 @@ dist/server/apps/supervisor/index.js      # yarn start
 
 ## Scripts
 
-Every script in `package.json`, all 27 of them. There are no others.
+Every script in `package.json`, all 29 of them. There are no others.
 
 | Tier | Script | What it does |
 | --- | --- | --- |

@@ -31,8 +31,8 @@
  * #1465 — GBX/gbx/GBp/p) is normalised ÷100 — defensive rather than
  * reachable today, since the adapter's own `CurrencyCode` already resolves to
  * GBP for a pence-quoted line before a fee is persisted (`saxo-price-unit.ts`'s
- * `price_to_contract_factor`). Anything else (USD on most of the tradeable
- * pool's lines, per `lse-etp-pool.ts`) cannot be priced in sterling without
+ * `price_to_contract_factor`). Anything else (USD on the pool lines the #1220
+ * sterling gate keeps out of `tradeableUniverse()`) cannot be priced in sterling without
  * the transaction-date FX rate, which no fill records — those fills are
  * returned separately, in native currency, rather than guessed into the
  * matched total or used to abort the whole report. Classification reuses
