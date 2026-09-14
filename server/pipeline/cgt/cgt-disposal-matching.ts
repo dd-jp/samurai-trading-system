@@ -73,9 +73,11 @@ export interface CgtFillLeg {
  * A fill the caller could not price in sterling — its `fee_currency` (which
  * also names the currency `grossAmount`/`charges` are denominated in, see
  * `sqlite-cgt-fill-source.ts`) is neither GBP nor a pence sub-unit
- * (GBX/gbx/GBp/p), and this module has no FX rate to convert it with.
- * Carried in native currency so the report can name exactly what is missing
- * rather than guess or drop it silently.
+ * (GBX/gbx/GBp/p), and no venue-applied `fx_rate_to_gbp` (#1521) was stored
+ * on the fill either, so this module has no rate to convert it with. A
+ * non-GBP fill that DOES carry a stored rate is converted by the caller and
+ * never reaches this shape. Carried in native currency so the report can
+ * name exactly what is missing rather than guess or drop it silently.
  */
 export interface UnconvertedCgtFill {
   instrument: string;
