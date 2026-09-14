@@ -3,10 +3,11 @@
  * sim|live`. Runs the Authorization Code Grant
  * (developer.saxo/openapi/learn/oauth-authorization-code-grant) once per
  * environment and saves the resulting access/refresh tokens to a
- * gitignored, owner-only file. Today's only working credential is the
- * developer portal's 24-hour SIM-only token (saxo-http-client.ts) — this
- * command is what makes a LIVE token obtainable at all, and what replaces
- * hand-copying the portal token for SIM.
+ * gitignored, owner-only file. The saved session is what the orchestrator's
+ * refresher renews from (#1523, adapters/saxo-token-source.ts); the developer
+ * portal's 24-hour SIM-only token remains a fallback for an operator who has
+ * not run this command, and is the only credential that ever existed before
+ * it.
  *
  * Every line this command prints goes through `printSafely`, which routes
  * through the shared `maskCredentials` redaction pass (the same one

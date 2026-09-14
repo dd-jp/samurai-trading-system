@@ -986,15 +986,18 @@ export async function startFromEnvironment(
 /**
  * Folds the token refresher's timer into the orchestrator's own shutdown
  * (#1523). The timer is `unref`'d, so it never holds the process open — what
- * this stops is a rotation being scheduled, or landing, after the run has
- * drained: a refresh that completes post-shutdown rewrites the session file
- * for a process that is already gone.
+ * this stops is the NEXT rotation being scheduled. A rotation already in
+ * flight still completes and still writes: Saxo invalidated the previous
+ * refresh token when it issued this one, so discarding the response would
+ * strand the session for the next boot.
  *
  * A spread rather than a subclass because `buildProductionOrchestrator`
  * returns a plain object literal whose methods close over its own locals, so
- * copying them carries no `this` binding to lose.
+ * copying them carries no `this` binding to lose. Exported so that spread —
+ * the one wiring line no `startFromEnvironment` test can reach offline — is
+ * testable.
  */
-function withSaxoSessionStop(
+export function withSaxoSessionStop(
   orchestrator: ProductionOrchestrator,
   tokenSource: SaxoTokenSource,
 ): ProductionOrchestrator {

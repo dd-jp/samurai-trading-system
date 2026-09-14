@@ -12,6 +12,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { SaxoTokenSource } from '../../pipeline/execution/index.js';
 import type { LogEntry } from '../../shared/index.js';
 import {
   assertStorePathMatchesMode,
@@ -23,7 +24,9 @@ import {
   runEntrypointLogRetention,
   startFromEnvironment,
   storePathEncodesTradingMode,
+  withSaxoSessionStop,
 } from './index.js';
+import type { ProductionOrchestrator } from './production.js';
 
 /**
  * See the twin in `startup.test.ts`. Resolve arm of the `.then(…, …)` pairs
@@ -854,5 +857,41 @@ describe('runEntrypointLogRetention (#1116)', () => {
     // asserts against — the guard runs only under `node index.js`, so no
     // in-process test can observe the call's effect instead.
     expect(source.slice(guardIndex)).toMatch(/^\s*runEntrypointLogRetention\(/m);
+  });
+});
+
+/**
+ * #1523. `startFromEnvironment` cannot reach this offline — the Saxo arm needs
+ * the venue resolved and a token source built — so the spread is asserted
+ * directly: it must stop the refresher, keep the orchestrator's own `stop`,
+ * and carry the rest of the surface through untouched.
+ */
+describe('withSaxoSessionStop', () => {
+  it('stops the token refresher before the orchestrator, keeping the rest of the surface', async () => {
+    const calls: string[] = [];
+    const orchestrator = {
+      universe: [{ asset: 'SPY' }],
+      stop: async () => {
+        calls.push('orchestrator');
+      },
+    } as unknown as ProductionOrchestrator;
+    const tokenSource: SaxoTokenSource = {
+      getAccessToken: async () => 'unused-in-this-test',
+      sessionState: () => ({
+        status: 'active',
+        accessTokenExpiresAt: '2026-09-15T12:20:00.000Z',
+        refreshTokenExpiresAt: '2026-09-15T12:40:00.000Z',
+        failedAttempts: 0,
+      }),
+      stop: () => {
+        calls.push('token-source');
+      },
+    };
+
+    const wrapped = withSaxoSessionStop(orchestrator, tokenSource);
+    await wrapped.stop();
+
+    expect(calls).toEqual(['token-source', 'orchestrator']);
+    expect(wrapped.universe).toBe(orchestrator.universe);
   });
 });
