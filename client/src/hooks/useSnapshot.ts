@@ -226,14 +226,30 @@ export type ColdFeed = Omit<SnapshotFeed, 'snapshot' | 'status'> & {
  */
 export type FeedView = { kind: 'cold'; feed: ColdFeed } | { kind: 'live'; feed: LiveFeed };
 
+/**
+ * What each `FeedStatus` reads as when no snapshot has arrived. `null` marks
+ * the two that `deriveStatus` cannot produce against a null snapshot — both
+ * require one — and those fall back to `'waiting'`, the honest reading of a
+ * null snapshot anyway.
+ *
+ * A record rather than a ternary so the cold branch carries the same
+ * obligation `HEALTH` does (`components/Rail.tsx`): a new `FeedStatus` member
+ * fails to compile here until someone says whether it is reachable cold and
+ * what it reads as if it is. `ColdStatus` is an `Exclude<>`, so a new member
+ * joins it silently — this is what stops it being reported as WAITING by
+ * default.
+ */
+const COLD_STATUS: { readonly [S in FeedStatus]: ColdStatus | null } = {
+  'contract-mismatch': 'contract-mismatch',
+  waiting: 'waiting',
+  stale: null,
+  alive: null,
+};
+
 export function feedView(feed: SnapshotFeed): FeedView {
   const { snapshot, status } = feed;
   if (snapshot !== null) return { kind: 'live', feed: { ...feed, snapshot } };
-  // `deriveStatus` cannot report `'stale'`/`'alive'` against a null snapshot
-  // — both require one — so this narrowing loses no state the hook can
-  // produce, and the fallback it picks for the unreachable pair is the
-  // honest reading of a null snapshot anyway: nothing has landed yet.
-  const coldStatus: ColdStatus = status === 'contract-mismatch' ? 'contract-mismatch' : 'waiting';
+  const coldStatus: ColdStatus = COLD_STATUS[status] ?? 'waiting';
   return { kind: 'cold', feed: { ...feed, snapshot, status: coldStatus } };
 }
 
