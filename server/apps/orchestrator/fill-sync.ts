@@ -105,17 +105,31 @@ import type { Logger } from './types.js';
  * this one-shot breadcrumb: a genuine wedge is still reported, by the
  * purpose-built detector rather than this line.
  *
+ * `unrecorded` warns too (#1506). `findUnrecordedVenuePositions`
+ * (reconcile.ts) raises it for "the venue holds a position no open lot in the
+ * store explains" — an unhedged, unsized exposure the Risk Manager cannot see
+ * and no other detector reports, which is the opposite of informational. It
+ * sat at `info` because this docblock grouped it with `rejected` as "carries
+ * no backstop either"; having no backstop is the argument for raising it, not
+ * for leaving it quiet.
+ *
  * Every other case stays at `info`, deliberately: a flatten's `adopted` (
  * `kind: 'flatten'`) writes no `OpenPosition`, so the throttle above cannot
- * see it and there is no backstop to quiet against; `rejected`/`unrecorded`
- * carry no such backstop either. `debug` is dropped unless
+ * see it and there is no backstop to quiet against; `rejected` carries no
+ * such backstop either, but it describes an order the venue refused — no
+ * position exists, so nothing is exposed. `debug` is dropped unless
  * `SAMURAI_LOG_LEVEL=debug` (logger.ts) — using it anywhere the throttle
  * doesn't independently cover would be silent deletion, which #1096
  * explicitly refused ("suppressing it wholesale would have hidden the one
  * real anomaly among the benign ones").
+ *
+ * `warn` is a LOG level, not a page: this feeds `logger.log` and nothing
+ * escalates off it. Making the unrecorded shape audible on a phone needs an
+ * `AlertChannelSlots` channel raised by `findUnrecordedVenuePositions`
+ * itself — named as follow-up work in #1506's PR, not done here.
  */
 function reconcileDivergenceLevel(divergence: ReconcileDivergence): LogLevel {
-  if (divergence.action === 'undetermined') return 'warn';
+  if (divergence.action === 'undetermined' || divergence.action === 'unrecorded') return 'warn';
   if (
     divergence.action === 'adopted' &&
     divergence.kind === 'bracket' &&

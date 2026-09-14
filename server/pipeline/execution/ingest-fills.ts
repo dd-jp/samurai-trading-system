@@ -126,6 +126,27 @@ export const FILLED_ZERO_SIZE_CLEARED =
 export const FEE_CURRENCY_NOT_BOOK_CURRENCY =
   'broker reported a fill fee in a currency that is not the book currency' as const;
 
+/**
+ * #1506. A flatten's split booked against a lot that had already closed — the
+ * venue sold quantity the store's realized record does not contain, so the
+ * account can be holding a REVERSE position no `getOpenPositions()` row
+ * explains. See `persistUnattributedSplits` for what is and is not repaired.
+ */
+export const UNATTRIBUTED_FLATTEN_FILL =
+  'flatten fill booked against an already-closed lot — its closed trade understates the sale' as const;
+
+/** The #1506 persist itself failing: the fill is NOT booked, and will be retried next poll. */
+export const UNATTRIBUTED_FLATTEN_FILL_PERSIST_FAILED =
+  'failed to book a flatten fill against an already-closed lot' as const;
+
+/**
+ * A flatten split carries the FLATTEN's own prorated `cost_breakdown`
+ * (`splitFlattenFills`) and is `leg: 'exit'`, the one leg `modelledLegCostFor`
+ * has no submit-time estimate for — so there is nothing for `toFill` to read
+ * off the (absent) `OpenPosition` on the #1506 path.
+ */
+const NO_MODELLED_LOT_COSTS: ModelledLotCosts = { entry: null, protectiveExit: null };
+
 export async function ingestFills(input: FillIngestInput): Promise<void> {
   const { clock, broker, store } = input;
 
@@ -489,7 +510,13 @@ async function redistributeFlattenFills(
     // function's own doc.
     const targetedByThisFlatten = new Set<string>();
     try {
-      await redistributeOneFlatten(input, byLot, clientOrderId, targetedByThisFlatten);
+      await redistributeOneFlatten(
+        input,
+        byLot,
+        clientOrderId,
+        targetedByThisFlatten,
+        positionKeys,
+      );
       // EMPTY, not merely absent-from-the-map, is `redistributeOneFlatten`'s
       // ordinary return for a `clientOrderId` that is not a real flatten at
       // all — `getFlattenAttribution` returning `null` (its own doc: "not a
@@ -537,6 +564,12 @@ async function redistributeOneFlatten(
    * see the caller's comment.
    */
   namedLots: Set<string>,
+  /**
+   * The caller's `positions` snapshot, by key. A named lot missing from it is
+   * one `ingestFills`' per-position loop will never read a split for — see
+   * `persistUnattributedSplits`, which is the only thing this is for.
+   */
+  positionKeys: ReadonlySet<string>,
 ): Promise<void> {
   const { store } = input;
   const attribution = await store.getFlattenAttribution(clientOrderId);
@@ -628,10 +661,12 @@ async function redistributeOneFlatten(
       : new Map(journalledHeld.map((lot) => [lot.idempotency_key, lot.held]));
 
   const split = splitFlattenFills({ clientOrderId, rawFills, lotKeys, totalShare, attribution });
+  const unattributed: [string, readonly NormalizedFill[]][] = [];
   for (const [lotKey, splitFills] of split.splits) {
     const bucket = byLot.get(lotKey);
     if (bucket === undefined) byLot.set(lotKey, [...splitFills]);
     else bucket.push(...splitFills);
+    if (!positionKeys.has(lotKey)) unattributed.push([lotKey, splitFills]);
   }
   for (const { attributed, leftover } of split.outcomes) {
     // `leftover > 0` here means the flatten filled more than the named lots
@@ -749,6 +784,15 @@ async function redistributeOneFlatten(
     }
   }
 
+  // AFTER the over-fill loop, never inside the split loop: #527's
+  // `alreadyWarned` check tests `hasFill` on the very derived ids this writes,
+  // and reads a hit as "an earlier poll already warned". Booking first would
+  // make this poll's own write suppress the first-ever warning for a raw fill
+  // that both over-fills and names an already-closed lot.
+  for (const [lotKey, splitFills] of unattributed) {
+    await persistUnattributedSplits(input, clientOrderId, lotKey, splitFills);
+  }
+
   // #549: the durable "residual observed, protection not confirmed" marker,
   // written the moment the residual is FIRST knowable — this split's own
   // arithmetic: any named lot whose journalled share was not fully consumed
@@ -783,17 +827,140 @@ async function redistributeOneFlatten(
     },
   );
 
-  // Consumed LAST, not before the split. The split loop above cannot throw —
-  // the split itself is arithmetic over two Maps, and #527's over-fill
-  // warning (plus its `hasFill` dedup check, #527) is the loop's only
-  // I/O, deliberately wrapped so neither can escape (see their own comments)
-  // — but the store reads before it can, and a
+  // Consumed LAST, not before the split. Nothing between the split and here
+  // can throw — the split itself is arithmetic over two Maps, and every piece
+  // of I/O after it (#527's over-fill warning and its `hasFill` check, #1506's
+  // persist, #549's marker) is deliberately wrapped so none can escape (see
+  // their own comments) — but the store reads before it can, and a
   // bucket deleted ahead of a throw would take this poll's copy of the raw
   // fill with it. Deleting only once the splits are in `byLot` is what makes
   // this function all-or-nothing. No lot key can collide with
   // `clientOrderId`: a flatten's key is fresh per `executeExit`, so it is
   // never one of the lots it names.
   byLot.delete(clientOrderId);
+}
+
+/**
+ * #1506: book a split whose named lot is already gone from this poll's
+ * `positions` snapshot, because nothing else ever will.
+ *
+ * `ingestFills`' per-position loop reads `byLot` only through that snapshot,
+ * and a named lot cannot reappear in a later one: `lot_idempotency_keys` is
+ * fixed at the flatten's write-ahead, so a named key absent from the snapshot
+ * is a key that has reached a TERMINAL state, not one that has yet to open.
+ * The "the feed re-offers it next poll" argument the
+ * `getFlattenAttribution` early return above rests on therefore does not
+ * carry here — the re-offer would land in the same Map nothing reads, poll
+ * after poll, while `markFlattenFillsSwept` retires the journal row. That is
+ * the silent drop this exists to close, and the quantity it drops is real:
+ * the venue sold it against a lot the store believes flat.
+ *
+ * `hasFill` on the split's OWN derived id is the whole dedup, and it has to
+ * be: this condition fires on EVERY poll after any ordinary flatten, because
+ * `fetchNewFills` is inclusive of `since` and `getFlattenAttribution` keeps
+ * resolving a swept row, so the same splits recompute against the same
+ * now-closed lots forever. Persisted once, every later recomputation is a row
+ * `hasFill` already knows and this returns in silence — the same
+ * dedup-by-durable-record the #527 over-fill warning above takes.
+ *
+ * Fills-only `applyLotAdvance`: no `position_update` and no `closed_trade`,
+ * both of which would be wrong against a terminal row (the store refuses a
+ * second `closed_trade` for a lot outright, failing the whole advance). The
+ * realized PnL already written for that lot therefore stays SHORT of this
+ * sale — nothing in this port can correct it, which is why the alert pages
+ * rather than merely recording.
+ *
+ * Best-effort, never throwing, for the reason the over-fill warning and
+ * `markResidualsUnprotected` above share: the splits are already pushed and
+ * `byLot.delete(clientOrderId)` still has to run, so a store flake must not
+ * turn a successful redistribution into a contained failure. It is also safe
+ * to swallow because `getFlattenAttribution` does not filter on `swept_at`
+ * (sqlite-shared-store.ts) — a failed write is retried, in full, on the next
+ * poll's recomputation of the same split.
+ */
+async function persistUnattributedSplits(
+  input: FillIngestInput,
+  clientOrderId: string,
+  lotKey: string,
+  splitFills: readonly NormalizedFill[],
+): Promise<void> {
+  const { store } = input;
+  for (const fill of splitFills) {
+    try {
+      if (await store.hasFill({ idempotency_key: lotKey, broker_fill_id: fill.broker_fill_id })) {
+        continue;
+      }
+      // `NO_MODELLED_LOT_COSTS` is not a degradation: a split is `leg: 'exit'`
+      // (flatten-attribution.ts), the one leg `modelledLegCostFor` has no
+      // submit-time estimate for, and its `cost_breakdown` is the FLATTEN's
+      // own capture, already prorated onto the fill by `splitFlattenFills`.
+      await store.applyLotAdvance({
+        idempotency_key: lotKey,
+        fills: [toFill(fill, lotKey, NO_MODELLED_LOT_COSTS)],
+      });
+    } catch (error) {
+      logCaughtFailure(
+        input.logger,
+        {
+          trace_id: input.trace_id,
+          stage: 'execution',
+          event: 'unattributed_flatten_fill_persist_failed',
+          level: 'error',
+          message: UNATTRIBUTED_FLATTEN_FILL_PERSIST_FAILED,
+        },
+        error,
+        {
+          flatten_client_order_id: clientOrderId,
+          idempotency_key: lotKey,
+          broker_fill_id: fill.broker_fill_id,
+          qty: fill.qty,
+        },
+      );
+      continue;
+    }
+
+    safeLog(input.logger, {
+      trace_id: input.trace_id,
+      stage: 'execution',
+      event: 'unattributed_flatten_fill',
+      level: 'error',
+      message: UNATTRIBUTED_FLATTEN_FILL,
+      payload: {
+        flatten_client_order_id: clientOrderId,
+        idempotency_key: lotKey,
+        broker_fill_id: fill.broker_fill_id,
+        qty: fill.qty,
+      },
+    });
+
+    if (input.unattributedFlattenFillAlerts === undefined) continue;
+    try {
+      await input.unattributedFlattenFillAlerts.postUnattributedFlattenFillAlert({
+        trace_id: input.trace_id,
+        flatten_idempotency_key: clientOrderId,
+        lot_idempotency_key: lotKey,
+        broker_fill_id: fill.broker_fill_id,
+        qty: fill.qty,
+        observed_at: input.clock.now(),
+      });
+    } catch {
+      // The channel's own error is read and discarded, never logged — a
+      // Telegram transport failure quotes the request it failed on and that
+      // URL can carry a bot token (#573, `escalateAgedUnpricedFills`'
+      // precedent). The durable record is the persisted fill row and the
+      // `error` line above; this only lost the audible copy.
+      safeLog(input.logger, {
+        trace_id: input.trace_id,
+        stage: 'execution',
+        event: 'unattributed_flatten_fill_alert_send_failed',
+        level: 'warn',
+        message:
+          'postUnattributedFlattenFillAlert delivery failed — see the ' +
+          'unattributed_flatten_fill entry above for the fill this concerns',
+        payload: { idempotency_key: lotKey, broker_fill_id: fill.broker_fill_id },
+      });
+    }
+  }
 }
 
 /**
