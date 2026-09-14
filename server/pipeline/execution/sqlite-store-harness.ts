@@ -156,6 +156,14 @@ export class TestExecutionStore extends SqliteExecutionStore {
     return super.markResidualAlerted(idempotency_key, alerted_at);
   }
 
+  override async markResidualRearmUnsupportedAlerted(
+    idempotency_key: string,
+    alerted_at: Date,
+  ): Promise<boolean> {
+    this.writeLog.push(`mark-residual-rearm-unsupported-alerted:${idempotency_key}`);
+    return super.markResidualRearmUnsupportedAlerted(idempotency_key, alerted_at);
+  }
+
   /**
    * Logged only when it actually deletes something — unlike every other
    * override above, this one is called UNCONDITIONALLY on every `reconcile()`
@@ -193,6 +201,22 @@ export class TestExecutionStore extends SqliteExecutionStore {
       | { unprotected_since: string | null; alerted_at: string | null }
       | undefined;
     return row === undefined ? null : row;
+  }
+
+  /**
+   * Raw read of the #1447 permanent-gap dedup column (migration 0059) — kept
+   * off `getResidualProtectionMarker`'s shape rather than added to it so the
+   * many existing `toEqual({ unprotected_since, alerted_at })` assertions
+   * stay exact instead of needing a third field everywhere.
+   */
+  async getResidualRearmUnsupportedAlertedAt(idempotency_key: string): Promise<string | null> {
+    const row = this.testDb
+      .prepare(
+        `SELECT residual_rearm_unsupported_alerted_at AS alerted_at
+           FROM open_positions WHERE idempotency_key = ?`,
+      )
+      .get(idempotency_key) as { alerted_at: string | null } | undefined;
+    return row === undefined ? null : row.alerted_at;
   }
 
   /** Every state, including terminal — what `getOpenPositions()` deliberately excludes. */

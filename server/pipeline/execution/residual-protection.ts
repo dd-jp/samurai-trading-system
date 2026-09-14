@@ -305,12 +305,24 @@ export async function maybeRearmResidual(
     // delivery (#549) — so the sweep retries the re-arm on cadence
     // without paging again for a page that actually landed (#342), and DOES
     // page again for one a transport outage swallowed.
+    //
+    // #1447: a CONFIRMED venue refusal records against its OWN dedup column,
+    // not the general one the pre-attempt paths above use — the general
+    // column already carries every OTHER reason this function pages
+    // (store-read failure, non-finite residual, an ordinary retryable
+    // failure), and letting any of those consume the one page a permanent
+    // gap needs is exactly the defect this split closes.
     if (
       await alertResidualExposure(input, position, residual, now, {
         rearmUnsupported: unsupported,
       })
     ) {
-      await bestEffortMarkerWrite(input, position, now, 'mark-alerted');
+      await bestEffortMarkerWrite(
+        input,
+        position,
+        now,
+        unsupported ? 'mark-rearm-unsupported-alerted' : 'mark-alerted',
+      );
     }
   }
 }
@@ -346,6 +358,13 @@ const MARKER_WRITES = {
     failureMessage:
       'markResidualAlerted failed — the #549 sweep may page a second time for an episode ' +
       'that was already alerted (noisy, not unsafe)',
+  },
+  'mark-rearm-unsupported-alerted': {
+    write: (input: MarkerInput, key: string, now: Date) =>
+      input.store.markResidualRearmUnsupportedAlerted(key, now),
+    failureMessage:
+      'markResidualRearmUnsupportedAlerted failed — the #549 sweep may page a second time ' +
+      'for a permanent gap that was already alerted (noisy, not unsafe; #1447)',
   },
 } as const;
 

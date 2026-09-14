@@ -40,6 +40,12 @@ export interface OpenPositionRow {
   residual_unprotected_since: string | null;
   /** NULL until that episode's operator alert was posted — migration 0024. */
   residual_rearm_alerted_at: string | null;
+  /**
+   * NULL until the TRUTHFUL permanent-gap page (a confirmed
+   * `ProtectiveRearmUnsupportedError`) was posted for this episode — its own
+   * dedup, independent of `residual_rearm_alerted_at` (migration 0059, #1447).
+   */
+  residual_rearm_unsupported_alerted_at: string | null;
   /** #1001, migration 0037 — see `OpenPosition.decision_price`. */
   decision_price: number | null;
   quote_bid: number | null;

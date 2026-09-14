@@ -436,6 +436,17 @@ async function sweepOne(
  * itself could go out twice (delivery precedes the claim, deliberately —
  * claim-first would re-create the suppressed-page bug the delivery gate
  * above closes); the RECORD never does.
+ *
+ * #1447: `flags.rearmUnsupported` picks which of the two durable dedups this
+ * call checks and records against. A CONFIRMED venue refusal
+ * (`rearmUnsupported: true`, only ever set by the caller in `sweepOne` right
+ * after `isProtectiveRearmUnsupported` returned true) uses
+ * `rearm_unsupported_alerted_at` — its OWN column, never `alerted_at`. Every
+ * other reason this function pages (store-read failure, non-finite residual,
+ * an ordinary retryable re-arm failure) keeps using `alerted_at` exactly as
+ * before. Splitting the dedup, not just the log line, is what stops a
+ * pre-attempt page from ever consuming the one page a permanent gap needs —
+ * the defect #1447 was filed against.
  */
 async function alertResidualExposureOnce(
   input: ResidualSweepInput,
@@ -444,11 +455,27 @@ async function alertResidualExposureOnce(
   now: Date,
   flags: ResidualExposureFlags,
 ): Promise<void> {
-  if (row.alerted_at !== null) return;
+  const dedup = flags.rearmUnsupported
+    ? {
+        alreadyAlerted: row.rearm_unsupported_alerted_at !== null,
+        record: (key: string, at: Date) => input.store.markResidualRearmUnsupportedAlerted(key, at),
+        failureMessage:
+          'markResidualRearmUnsupportedAlerted failed — the next sweep pass may page a second ' +
+          'time for a permanent gap that was already alerted (noisy, not unsafe; #1447)',
+      }
+    : {
+        alreadyAlerted: row.alerted_at !== null,
+        record: (key: string, at: Date) => input.store.markResidualAlerted(key, at),
+        failureMessage:
+          'markResidualAlerted failed — the next sweep pass may page a second time for an ' +
+          'episode that was already alerted (noisy, not unsafe)',
+      };
+
+  if (dedup.alreadyAlerted) return;
   const delivered = await alertResidualExposure(input, row.position, residualQty, now, flags);
   if (!delivered) return;
   try {
-    const recorded = await input.store.markResidualAlerted(row.position.idempotency_key, now);
+    const recorded = await dedup.record(row.position.idempotency_key, now);
     if (!recorded) {
       // Another surface recorded the episode's page between this pass's
       // worklist snapshot and now — the durable dedup already held, this
@@ -471,9 +498,7 @@ async function alertResidualExposureOnce(
         stage: 'execution',
         event: 'residual_alert_mark_failed',
         level: 'warn',
-        message:
-          'markResidualAlerted failed — the next sweep pass may page a second time for an ' +
-          'episode that was already alerted (noisy, not unsafe)',
+        message: dedup.failureMessage,
       },
       error,
       { idempotency_key: row.position.idempotency_key },

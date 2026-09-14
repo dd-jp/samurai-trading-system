@@ -369,13 +369,28 @@ export interface ResidualMarkers {
    */
   markResidualAlerted(idempotency_key: string, alerted_at: Date): Promise<boolean>;
   /**
+   * The TRUTHFUL permanent-gap page's OWN once-per-episode dedup (#1447,
+   * migration 0059) — deliberately a SEPARATE column from
+   * `markResidualAlerted`'s, not a second writer of it. Only the two call
+   * sites that actually observed `ProtectiveRearmUnsupportedError`
+   * (`maybeRearmResidual`'s broker-call catch, `sweepOne`'s via
+   * `alertResidualExposureOnce`) call this — the store-read-failure and
+   * non-finite-residual pre-attempt paths never reach here, so neither can
+   * consume the one page a confirmed venue refusal needs. Same
+   * CONDITIONAL/first-writer-wins contract as `markResidualAlerted`: records
+   * only while `residual_rearm_unsupported_alerted_at IS NULL`, returns
+   * whether THIS call won. Cleared together with the rest of the marker by
+   * `confirmResidualProtected`.
+   */
+  markResidualRearmUnsupportedAlerted(idempotency_key: string, alerted_at: Date): Promise<boolean>;
+  /**
    * The #549 sweep's worklist: every NON-TERMINAL lot still marked
    * unprotected. Bounded the same way `getOpenPositions()` is — a terminal
    * lot's residual is settled by definition (`closed` means round-tripped to
    * flat; `rejected`/`cancelled`/`expired` mean no venue exposure under this
    * lot) — so the sweep never grows with history. Each row carries the full
    * `OpenPosition` (everything a retry needs: instrument, side, stop,
-   * target, requested_size) plus the marker's own two timestamps.
+   * target, requested_size) plus the marker's own timestamps.
    */
   getUnprotectedResidualLots(): Promise<UnprotectedResidualLot[]>;
 }
@@ -468,6 +483,12 @@ export interface UnprotectedResidualLot {
   unprotected_since: Date;
   /** When this episode's operator alert was posted; null if it never was. */
   alerted_at: Date | null;
+  /**
+   * When the TRUTHFUL permanent-gap page (a confirmed venue refusal) was
+   * posted for this episode; null if it never was. Independent of
+   * `alerted_at` (#1447, migration 0059) — see `markResidualRearmUnsupportedAlerted`.
+   */
+  rearm_unsupported_alerted_at: Date | null;
 }
 
 /**
