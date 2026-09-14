@@ -1165,15 +1165,28 @@ Three things make this a live defect rather than a curiosity:
 - It is not an artifact of the offline fixture. Every path to a `go` produces the same 64-character
   key; nothing about the fixture's prices, series or conviction floor changes the key's length.
 
-**It is not a wiring fix, and deliberately was not made here.** The venue reference and the stored
-idempotency key have to be the *same string*: the adapter's venue-enumeration paths read
-`client_order_id` back off `ExternalReference` and match it against stored keys, so adapter-side
-truncation would desynchronise reconcile and fill-sync silently — the #1215 audited-paths hazard.
-Any real fix changes `computeIdempotencyKey`'s own output, or makes it venue-aware. That key is a
-documented invariant restated across CONTEXT.md and the specs by #1487, so it is an owner decision
-with a decision record behind it, not a patch. **It is pinned instead**, by a case in
-`server/apps/orchestrator/saxo-composition-root.test.ts` that drives `startFromEnvironment` to the
-sixth stage and asserts both the refusal and that the venue received nothing.
+**It was not a wiring fix, and was deliberately not made here at the time of writing.** The venue
+reference and the stored idempotency key were assumed to have to be the *same string*: the
+adapter's venue-enumeration paths read `client_order_id` back off `ExternalReference` and match it
+against stored keys, so adapter-side truncation would desynchronise reconcile and fill-sync
+silently — the #1215 audited-paths hazard. Any real fix changes `computeIdempotencyKey`'s own
+output, or makes it venue-aware. That key is a documented invariant restated across CONTEXT.md and
+the specs by #1487, so it was an owner decision with a decision record behind it, not a patch. **It
+was pinned instead**, by a case in `server/apps/orchestrator/saxo-composition-root.test.ts` that
+drove `startFromEnvironment` to the sixth stage and asserted both the refusal and that the venue
+received nothing.
+
+**2026-09-14 update (#1510).** David decided venue-aware: `computeIdempotencyKey` and
+`computeFlattenIdempotencyKey` stay untouched (64-hex, still the store's and Alpaca's key). Only
+`SaxoBrokerAdapter` now derives a separate wire-side reference —
+`saxoExternalReference(clientOrderId)`, the first 40 hex chars of a sha256 digest of the *whole*
+`client_order_id` string (not a truncation of `computeIdempotencyKey`'s own digest, so a retry or
+residual-reflatten suffix still derives a distinct venue reference) — and keeps a
+`wireReferences` reverse-lookup map, rebuilt from `state.loadBrackets('saxo')` on construction and
+updated on every place/read path, to translate a wire `ExternalReference` back to the full
+`client_order_id`. The venue reference and the stored idempotency key are no longer the same
+string; the above paragraph's "have to be" is superseded. The composition-root case now asserts
+the bracket reaches the gateway (`gateway.placed` non-empty), not refusal — see PR #1530.
 
 ### 6.9 What AC3 still lacks, and what it does not
 
