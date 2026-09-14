@@ -428,6 +428,15 @@ export const DEFAULT_LLM_RATE_LIMIT_CONFIG: RateLimiterConfig = {
  * zero cost — no tokens, no burned deadline, an immediate `gate_refused`
  * result and a `no_trade` for that instrument's pass.
  *
+ * A refused instrument costs ONE `warn` line (`debate_refused_gate`) and an
+ * `audit_log` row reading `not_admitted`; no `debate_log` row, no error-level
+ * line, no retry. That is `gateRefusedDebateResult` in `debate-adapter.ts`,
+ * and it had to be built for the sentence above to be true: until review
+ * round 2 of #1080 the refusal threw, so the four refused instruments each
+ * produced two error-level lines, an `audit_log` row reading `crashed`, and a
+ * rescind that retried the bar and re-billed every persona that had already
+ * answered.
+ *
  * **That is the design, not a side effect.** #1080's measurement is that a
  * fast pass producing zero synthesis is worth less than a slow one that
  * decides: the trade this number takes is instrument COVERAGE per tick for

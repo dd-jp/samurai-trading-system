@@ -137,8 +137,11 @@ export const DEGRADED_DECISIONS = {
     'the debate hit its latency budget, or an LLM call it depended on failed outright, mid-debate ' +
     '— the direction is a real but truncated synthesis from the last round that finished',
   not_admitted:
-    'the debate never started — the LLM rate limiter or the spend cap refused it, so no model ' +
-    'was asked anything',
+    'the debate produced no result because something refused it a budget it needed — the LLM ' +
+    'rate limiter, the spend cap, or the account-wide in-flight gate (#1080). The first two ' +
+    'refuse before the debate starts, so no model was asked anything; the gate can also refuse ' +
+    'mid-debate, in which case earlier persona calls were billed and their answers discarded. ' +
+    'Either way nothing was handed downstream',
   // #1393: no producer writes this yet. It exists so that a future fallback
   // producing a neutral `DebateResult` for a reason neither `timed_out` nor
   // `rate_limited` names still glosses as degraded rather than as a genuine

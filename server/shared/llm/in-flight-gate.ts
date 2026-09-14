@@ -46,9 +46,12 @@
  * timer fires at `budgetMs - expectedCallMs` rather than at `budgetMs`. A
  * check on the wait ALONE (what round 1 of #1080's review found here) admits a
  * caller that the estimator itself predicts will finish past its deadline: at
- * cap 1 with a 27,000 ms budget it would admit a caller estimating a 23,200 ms
- * wait, which then burns a full billed call and is recorded as a provider
- * `timeout` — the exact signature the gate exists to remove. The grant path
+ * cap 1 against the debate client's 28,000 ms budget it would admit a caller
+ * estimating a 26,000 ms wait (one call in flight plus one queued, at the
+ * shipped 13,000 ms expectation), which then burns a full billed call and is
+ * recorded as a provider `timeout` — the exact signature the gate exists to
+ * remove. With the call's own duration in the predicate that third caller is
+ * refused instead: 26,000 + 13,000 >= 28,000. The grant path
  * carries no second check by design: the timer above guarantees that any
  * waiter still queued when its room runs out is dropped, so a granted waiter
  * always has at least one expected call's worth of budget left.

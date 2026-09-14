@@ -21,18 +21,34 @@
  *    network backstop, which is not the clock a queue wait actually eats.
  */
 
+import type { AnalystView } from '../../../pipeline/debate-engine/index.js';
+import {
+  AnthropicLlmClient,
+  InMemoryDebateLogStore,
+  RateLimiter,
+  UNCAPPED_SPEND,
+} from '../../../pipeline/debate-engine/index.js';
+import { NousMessagesClient } from '../../../pipeline/debate-engine/llm/nous-messages-client.js';
 import { DEFAULT_TRADER_CONFIG } from '../../../pipeline/trader/index.js';
 import type { LogEntry, Logger } from '../../../shared/index.js';
 import { SimulatedClock } from '../../../shared/index.js';
-import { DEFAULT_NOUS_TIMEOUT_MS } from '../../../shared/llm/index.js';
+import { DEFAULT_NOUS_TIMEOUT_MS, NousAccountInFlightGate } from '../../../shared/llm/index.js';
 import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
+import type { DecisionGate } from '../decision-bar-gate.js';
+import { DebateBarDecisionGate } from '../decision-bar-gate.js';
 import {
   buildProductionComponents,
   DEFAULT_EXPECTED_NOUS_CALL_MS,
   DEFAULT_LLM_CLIENT_CONFIG,
+  DEFAULT_LLM_RATE_LIMIT_CONFIG,
   DEFAULT_MAX_IN_FLIGHT_LLM_CALLS,
   type ProductionConfig,
 } from '../production.js';
+import { SqliteCurrentTickStore } from '../sqlite-current-tick-store.js';
+import { runTickPlan } from '../tick-loop.js';
+import { SequentialTickRunner } from '../tick-runner.js';
+import type { AuditLog, DecisionBar, TickSteps } from '../types.js';
+import { buildDebateStep } from './debate-adapter.js';
 import {
   makeWiringCiiConsumerConfig,
   makeWiringCorrelationConfig,
@@ -319,5 +335,189 @@ describe('in-flight gate wiring (#1080)', () => {
     ]);
     expect(slots).toHaveLength(3);
     for (const slot of slots) slot.release();
+  });
+});
+
+/**
+ * What the account-wide cap actually costs a pass, driven end to end through
+ * the REAL tick loop rather than asserted about a gate in isolation (#1080).
+ *
+ * This is the file's second job and it is a different one from the identity
+ * checks above: those prove every client shares one gate, these prove that
+ * when that gate says no, the pass DEGRADES instead of faulting. Round 2 of
+ * review found it faulting — `LlmAdmissionRefusedError` is in no branch of
+ * `latency-budget.ts`'s `LlmFailure` union, so it propagated out of the debate
+ * step uncaught and each refused instrument produced a `debate_unresolved`
+ * error line, an `instrument_pass_failed` error line, an `audit_log` row
+ * reading `crashed`, and a rescind that retried the bar and re-billed every
+ * persona that had already answered. Under the shipped defaults that was the
+ * designed steady state for four of every six instruments in a pass.
+ *
+ * Nothing stubs the refusal here. A real `NousAccountInFlightGate` holds its
+ * one permit, a real `NousMessagesClient` asks it for another and is refused,
+ * and the refusal travels the real path: `nousChat` -> `LlmInFlightRefusedError`
+ * -> `LlmAdmissionRefusedError` -> `AnthropicLlmClient` -> the persona ->
+ * `runDebate` -> `enforceLatencyBudget` -> `buildDebateStep`'s catch. A test
+ * that threw `LlmAdmissionRefusedError` from a stub client would pass even if
+ * the gate never produced that class.
+ */
+describe('a gate refusal degrades the pass instead of crashing it (#1080)', () => {
+  const RETRIEVAL_LIKE_CALL_MS = 26_000;
+
+  let store: StoreHandle;
+
+  beforeEach(() => {
+    store = openSharedStore(':memory:');
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    store.close();
+  });
+
+  function makeView(overrides: Partial<AnalystView> = {}): AnalystView {
+    return {
+      trace_id: 'trace-1',
+      analyst_id: 'technical-1',
+      analyst_type: 'technical',
+      direction: 'bullish',
+      confidence: 0.8,
+      key_points: ['price above the 50d'],
+      timestamp: NOW,
+      ...overrides,
+    };
+  }
+
+  function recordingAuditLog(): AuditLog & { records: Parameters<AuditLog['record']>[0][] } {
+    return {
+      records: [],
+      record(entry) {
+        this.records.push(entry);
+      },
+    };
+  }
+
+  it('lands as not_admitted with no error line, no crashed row and no rescind', async () => {
+    const clock = new SimulatedClock(NOW);
+    const { logger, entries } = recordingLogger();
+
+    // The contended shape the spec calls out: an MI retrieval call (26,000 ms
+    // expected) holds the only permit, so a 28,000 ms debate budget cannot fit
+    // a 13,000 ms call behind it and is refused on admission.
+    const gate = new NousAccountInFlightGate({
+      maxInFlight: 1,
+      expectedCallMs: DEFAULT_EXPECTED_NOUS_CALL_MS,
+    });
+    const held = await gate.acquire({
+      budgetMs: DEFAULT_NOUS_TIMEOUT_MS,
+      expectedCallMs: RETRIEVAL_LIKE_CALL_MS,
+    });
+
+    // Any call that reaches the wire is a bug in the refusal path, not a
+    // fixture gap — say so where it would happen rather than in a comment.
+    const fetchMock = vi.fn(async () => {
+      throw new Error('unreachable: a refused call must never reach the wire');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const llmClient = new AnthropicLlmClient(
+      new NousMessagesClient({
+        apiKey: 'test-fake-nous-key',
+        baseUrl: 'https://nous.test/v1',
+        timeoutMs: DEFAULT_NOUS_TIMEOUT_MS,
+        gate,
+        gateBudgetMs: DEFAULT_LLM_CLIENT_CONFIG.timeoutMs,
+      }),
+      { ...DEFAULT_LLM_CLIENT_CONFIG, model: 'anthropic/claude-haiku-4.5' },
+    );
+
+    const debate = buildDebateStep(
+      llmClient,
+      new InMemoryDebateLogStore(),
+      new RateLimiter(clock, DEFAULT_LLM_RATE_LIMIT_CONFIG),
+      UNCAPPED_SPEND,
+      logger,
+    );
+    const debated: Awaited<ReturnType<TickSteps['debate']>>[] = [];
+    const steps: TickSteps = {
+      exitCheck: async () => null,
+      analysts: async () => [
+        makeView(),
+        makeView({ analyst_id: 'sentiment-1', direction: 'bearish' }),
+      ],
+      debate: async (input) => {
+        const result = await debate(input);
+        debated.push(result);
+        return result;
+      },
+      // `confidence: 0` is below `conviction_floor`, so the real Trader
+      // declines and the pass short-circuits here with `no_trade`; asserted
+      // against the floor below rather than by wiring a Trader that needs an
+      // account, bars and a book to answer.
+      trader: async () => null,
+      risk: async () => {
+        throw new Error('unreachable: the trader declines a refused debate');
+      },
+      verdict: async () => {
+        throw new Error('unreachable');
+      },
+      execution: async () => {
+        throw new Error('unreachable');
+      },
+    };
+
+    const inner = new DebateBarDecisionGate();
+    const rescind = vi.fn((instrument: string, bar: DecisionBar) => inner.rescind(instrument, bar));
+    const decisionGate: DecisionGate = {
+      claim: (instrument, tickTime) => inner.claim(instrument, tickTime),
+      rescind,
+    };
+    const auditLog = recordingAuditLog();
+
+    const outcomes = await runTickPlan(
+      { tick_time: NOW, instruments: [{ asset: 'SPY', asset_class: 'stocks' }] },
+      new SequentialTickRunner(steps),
+      clock,
+      {
+        max_concurrent_instruments: 1,
+        logger,
+        auditLog,
+        currentTickStore: new SqliteCurrentTickStore(store),
+        decisionGate,
+      },
+    );
+
+    // The pass RESOLVED. Before the fix this outcome carried an error.
+    expect(outcomes[0]?.error).toBeUndefined();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const result = debated[0];
+    expect(result?.rate_limited?.reason).toMatch(/refused admission/);
+    expect(result?.confidence).toBe(0);
+    expect(result?.confidence).toBeLessThan(DEFAULT_TRADER_CONFIG.conviction_floor);
+    expect(result?.direction).toBe('neutral');
+
+    // Attributable (#1080 AC4), and at `warn` — the load-shedding level, not
+    // the fault level.
+    const refusal = entries.find((entry) => entry.event === 'debate_refused_gate');
+    expect(refusal?.level).toBe('warn');
+    expect(refusal?.payload).toMatchObject({
+      instrument: 'SPY',
+      reason: 'admission',
+      in_flight: 1,
+    });
+
+    // None of the four fault signals the throw produced.
+    expect(entries.map((entry) => entry.event)).not.toContain('debate_unresolved');
+    expect(entries.map((entry) => entry.event)).not.toContain('instrument_pass_failed');
+    expect(auditLog.records.map((row) => row.decision)).not.toContain('crashed');
+    expect(rescind).not.toHaveBeenCalled();
+
+    // And the audit row names the cause rather than looking like a debate that
+    // genuinely found nothing.
+    const debateRow = auditLog.records.find((row) => row.stage === 'debate');
+    expect(debateRow?.decision).toBe('not_admitted');
+
+    held.release();
   });
 });
