@@ -138,14 +138,17 @@ export const LIVE_MAX_CAPITAL_ENV_VAR = 'SAMURAI_LIVE_MAX_CAPITAL_USD';
  * ceiling below `min_viable_notional / 0.05` guaranteed `per_trade_size_cap`
  * trimmed every entry below the dust floor — this function's exact job.
  * `max_position_size_fraction_of_equity` now resolves against LIVE EQUITY at
- * evaluate time, not the ceiling, so that specific failure mode has moved:
- * it now depends on whether EQUITY (not the declared ceiling) clears
- * `min_viable_notional / max_position_size_fraction_of_equity` (~£200 at
+ * evaluate time — since #1135, against `min(equity, LIVE_BOOK_SIZING_USD)`,
+ * and under NO reading against this ceiling. So that specific failure mode has
+ * moved: it now depends on whether that clamped base clears
+ * `min_viable_notional / max_position_size_fraction_of_equity` (~$200 at
  * today's fractions) — and nothing enforces that at boot, because equity is
- * observed, not declared. A live account funded inside ADR-0017's £100–200
- * ramp can still boot, spend LLM budget and reject every unclassified entry
- * as dust, ceiling notwithstanding (`d5-trader-cap-agreement.test.ts` asserts
- * this rather than leaving it for a soak to find).
+ * observed, not declared. The declared book ($1,270) clears it, so the hazard
+ * survives #1135 only where the clamp is inert, i.e. equity BELOW the book: a
+ * live account funded inside ADR-0017's £100–200 ramp can still boot, spend
+ * LLM budget and reject every unclassified entry as dust, ceiling
+ * notwithstanding (`d5-trader-cap-agreement.test.ts` asserts this rather than
+ * leaving it for a soak to find).
  *
  * This function is retained anyway, for a narrower and still-valid reason:
  * `sizingEquity` (direct-bind.ts) clamps the Trader's ask to
