@@ -40,6 +40,7 @@
  *   direction is converted, and `SaxoInstrumentRef` carries the factor the
  *   venue itself publishes per instrument.
  */
+import { createHash } from 'node:crypto';
 import type { Clock, Logger } from '../../../shared/index.js';
 import { escalatesAt, safeLog, toBrokerFillId } from '../../../shared/index.js';
 import { SAXO_COMMISSION_RATE } from '../../../tools/backtest/index.js';
@@ -92,23 +93,51 @@ const PLACEMENT_LOOKBACK_MS = 4 * SAXO_DUPLICATE_WINDOW_MS;
 
 /**
  * Saxo's `ExternalReference` limit. `:target` is the longest suffix this
- * adapter itself appends — but the budget belongs to the WHOLE key, and the
- * caller's own suffixes eat into it first: `:retry-N` (execute.ts) and
- * `:residual-reflatten-N` (residual-reflatten.ts, #1214), the latter costing 21
- * characters before this adapter adds anything (and staying 21 for every
- * attempt `MAX_RESIDUAL_REFLATTEN_ATTEMPTS` can reach).
+ * adapter itself appends.
  *
- * The suffix arithmetic is already moot for a flatten, and is written down
- * here rather than acted on: `computeIdempotencyKey` returns a 64-character
- * sha256 hex digest, and `submitFlatten` calls
- * `assertExternalReferenceFits(clientOrderId, 0)`, so a BARE Saxo flatten key
- * overruns this 50-character limit before any suffix is appended. That is
- * latent rather than live only because `SaxoBrokerAdapter` has no production
- * construction site yet — it is not a #1214 regression and is deliberately
- * not fixed here.
+ * `computeIdempotencyKey` returns a 64-character sha256 hex digest, which
+ * alone overruns this before any suffix — `:retry-N` (execute.ts) or
+ * `:residual-reflatten-N` (residual-reflatten.ts, #1214) a caller may have
+ * already appended makes it worse. #1510 (David, 2026-09-14, option 1):
+ * `computeIdempotencyKey` stays 64 hex — it is a documented invariant for the
+ * store and Alpaca (CONTEXT.md, trader-spec.md, #1487) — and this adapter
+ * alone derives a second, narrower venue identity via
+ * `saxoExternalReference`, translating back to the full `client_order_id` on
+ * every read path (`attribute`, via `wireReferences`). No other seam
+ * shortens the key.
  */
 const EXTERNAL_REFERENCE_MAX_CHARS = 50;
 const LEG_SUFFIX_MAX_CHARS = ':target'.length;
+
+/**
+ * Fixed output width of `saxoExternalReference`. Chosen so a leg reference —
+ * the longest suffix this adapter appends — stays inside
+ * `EXTERNAL_REFERENCE_MAX_CHARS` with headroom (40 + 7 = 47 of 50).
+ * Collision risk at 40 hex is 2^160, immaterial at this order rate (#1510
+ * decision) — rejected the alternative of truncating `computeIdempotencyKey`'s
+ * own 64-hex digest for the same reason `saxoExternalReference` hashes the
+ * WHOLE `client_order_id` rather than slicing it: a caller's own retry/
+ * residual-reflatten suffix must still produce a DISTINCT venue reference —
+ * those suffixes exist so a retry is a genuinely new attempt (execute.ts
+ * `resolveExitRetryKey`), and slicing the pre-suffix digest would collapse
+ * every retry of one order onto the same `ExternalReference`.
+ */
+const SAXO_REFERENCE_HEX_CHARS = 40;
+
+/**
+ * The venue-side identity for a `client_order_id` (#1510) — a fixed-width
+ * digest, never a truncation of `computeIdempotencyKey`'s own output (see
+ * `SAXO_REFERENCE_HEX_CHARS`). One-way: nothing recovers `client_order_id`
+ * from this value alone, so every caller that must go the other way reads
+ * `wireReferences` instead (populated by `registerWireReference` wherever a
+ * `client_order_id` first becomes known to this adapter).
+ */
+export function saxoExternalReference(clientOrderId: string): string {
+  return createHash('sha256')
+    .update(clientOrderId)
+    .digest('hex')
+    .slice(0, SAXO_REFERENCE_HEX_CHARS);
+}
 
 /**
  * `OrderDecimals` observed on every pool line's instrument details. Applied
@@ -488,6 +517,14 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
    * unresolvable Uics one process sees.
    */
   private readonly priceUnitDefer = new Map<string, number>();
+  /**
+   * `saxoExternalReference(clientOrderId)` -> `clientOrderId`, the reverse
+   * direction `attribute()` needs and the one-way digest cannot supply on its
+   * own. Populated wherever a `client_order_id` first becomes known to this
+   * process — the constructor's journal replay and every `brackets`/
+   * `flattens` write — never by inverting the hash.
+   */
+  private readonly wireReferences = new Map<string, string>();
 
   constructor(input: SaxoBrokerAdapterInput) {
     this.client = input.client;
@@ -504,7 +541,12 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
         instrument: record.request?.instrument ?? '',
         size: record.request?.size,
       });
+      this.registerWireReference(record.client_order_id);
     }
+  }
+
+  private registerWireReference(clientOrderId: string): void {
+    this.wireReferences.set(saxoExternalReference(clientOrderId), clientOrderId);
   }
 
   private async call<T>(operation: string, fn: () => Promise<T>): Promise<T> {
@@ -518,7 +560,8 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
   async submitBracket(order: NativeBracketRequest): Promise<BrokerAck> {
     const ref = this.resolveOrThrow(order.instrument);
     assertWholeUnits(order.size, order.client_order_id);
-    assertExternalReferenceFits(order.client_order_id, LEG_SUFFIX_MAX_CHARS);
+    const wireReference = saxoExternalReference(order.client_order_id);
+    assertExternalReferenceFits(wireReference, LEG_SUFFIX_MAX_CHARS, order.client_order_id);
 
     const exitSide = toBuySell(order.side === 'buy' ? 'sell' : 'buy');
     const leg = (type: 'StopIfTraded' | 'Limit', price: number, suffix: Leg) => ({
@@ -533,7 +576,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
       // buy nothing except a naked position if flat-by-close ever misses.
       OrderDuration: { DurationType: 'GoodTillCancel' as const },
       ManualOrder: false as const,
-      ExternalReference: legReference(order.client_order_id, suffix),
+      ExternalReference: legReference(wireReference, suffix),
     });
     const request: SaxoOrderRequest = {
       Uic: ref.uic,
@@ -544,13 +587,14 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
       OrderPrice: venueOrderPrice(ref, order.entry),
       OrderDuration: { DurationType: toDuration(order.time_in_force) },
       ManualOrder: false,
-      ExternalReference: order.client_order_id,
+      ExternalReference: wireReference,
       Orders: [leg('StopIfTraded', order.stop, 'stop'), leg('Limit', order.target, 'target')],
     };
 
     const { ids, order_state } = await this.call('submitBracket', () =>
       this.placeIdempotently(order.client_order_id, request, order.instrument),
     );
+    this.registerWireReference(order.client_order_id);
     this.brackets.set(order.client_order_id, { instrument: order.instrument, size: order.size });
     this.state.saveBracket({
       venue: 'saxo',
@@ -576,6 +620,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
       this.lookup(clientOrderId, this.activityLookbackMs, instrument),
     );
     if (order === null) return null;
+    this.registerWireReference(clientOrderId);
     this.brackets.set(clientOrderId, {
       instrument,
       size: this.brackets.get(clientOrderId)?.size ?? order.amount,
@@ -593,6 +638,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
       this.lookup(clientOrderId, this.activityLookbackMs, instrument),
     );
     if (order === null) return null;
+    this.registerWireReference(clientOrderId);
     this.flattens.set(clientOrderId, {
       instrument,
       side: order.side,
@@ -683,7 +729,8 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
   ): Promise<BrokerAck> {
     const ref = this.resolveOrThrow(instrument);
     assertWholeUnits(size, clientOrderId);
-    assertExternalReferenceFits(clientOrderId, 0);
+    const wireReference = saxoExternalReference(clientOrderId);
+    assertExternalReferenceFits(wireReference, 0, clientOrderId);
     const request: SaxoOrderRequest = {
       Uic: ref.uic,
       AssetType: ref.asset_type,
@@ -692,11 +739,12 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
       OrderType: 'Market',
       OrderDuration: { DurationType: 'DayOrder' },
       ManualOrder: false,
-      ExternalReference: clientOrderId,
+      ExternalReference: wireReference,
     };
     const { ids, order_state } = await this.call('submitFlatten', () =>
       this.placeIdempotently(clientOrderId, request, instrument),
     );
+    this.registerWireReference(clientOrderId);
     this.flattens.set(clientOrderId, { instrument, side, size });
     return { client_order_id: clientOrderId, broker_order_ids: orderIdList(ids), order_state };
   }
@@ -723,7 +771,9 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
   async cancel(clientOrderId: string, instrument: string): Promise<void> {
     await this.call('cancel', async () => {
       const open = await this.client.listOpenOrders();
-      const master = open.find((order) => order.ExternalReference === clientOrderId);
+      const master = open.find(
+        (order) => order.ExternalReference === saxoExternalReference(clientOrderId),
+      );
       if (master === undefined) {
         await this.clearLegs(clientOrderId, legRows(open, clientOrderId), instrument, false);
         return;
@@ -1016,7 +1066,8 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
 
   private async findOpen(externalReference: string): Promise<LookedUpOrder | DormantLegs | null> {
     const open = await this.client.listOpenOrders();
-    const master = open.find((order) => order.ExternalReference === externalReference);
+    const wireReference = saxoExternalReference(externalReference);
+    const master = open.find((order) => order.ExternalReference === wireReference);
     if (master !== undefined) {
       const ids: OrderIds = { entry: master.OrderId };
       for (const related of master.RelatedOpenOrders ?? []) {
@@ -1190,10 +1241,11 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     lookbackMs: number,
   ): Promise<SaxoOrderActivity | undefined> {
     const from = new Date(this.clock.now().getTime() - lookbackMs);
+    const wireReference = saxoExternalReference(externalReference);
     const activities = await this.client.listOrderActivities(from);
     let latest: SaxoOrderActivity | undefined;
     for (const activity of activities) {
-      if (activity.ExternalReference !== externalReference) continue;
+      if (activity.ExternalReference !== wireReference) continue;
       if (latest === undefined || activity.ActivityTime >= latest.ActivityTime) latest = activity;
     }
     return latest;
@@ -1328,21 +1380,26 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     return { kind: 'defer', latest };
   }
 
+  /**
+   * `externalReference` here is the actual wire value observed on an
+   * activity row — the one place this adapter must go from a Saxo reference
+   * back to a `client_order_id` (#1510), so it is the one place that reads
+   * `wireReferences` rather than deriving forward with `saxoExternalReference`.
+   */
   private attribute(
     externalReference: string | undefined,
   ): { clientOrderId: string; leg: Leg } | undefined {
     if (externalReference === undefined) return undefined;
-    if (this.flattens.has(externalReference)) {
-      return { clientOrderId: externalReference, leg: 'exit' };
-    }
-    if (this.brackets.has(externalReference)) {
-      return { clientOrderId: externalReference, leg: 'entry' };
+    const direct = this.wireReferences.get(externalReference);
+    if (direct !== undefined) {
+      if (this.flattens.has(direct)) return { clientOrderId: direct, leg: 'exit' };
+      if (this.brackets.has(direct)) return { clientOrderId: direct, leg: 'entry' };
     }
     for (const leg of ['stop', 'target'] as const) {
       const suffix = `:${leg}`;
       if (!externalReference.endsWith(suffix)) continue;
-      const id = externalReference.slice(0, -suffix.length);
-      if (this.brackets.has(id)) return { clientOrderId: id, leg };
+      const id = this.wireReferences.get(externalReference.slice(0, -suffix.length));
+      if (id !== undefined && this.brackets.has(id)) return { clientOrderId: id, leg };
     }
     return undefined;
   }
@@ -1430,11 +1487,12 @@ function dormantLegsUncorroborated(externalReference: string): SaxoBrokerProvide
 }
 
 /** The bracket's protective legs as their own `listOpenOrders` rows, master excluded. */
-function legRows(open: readonly SaxoOpenOrder[], externalReference: string): SaxoOpenOrder[] {
+function legRows(open: readonly SaxoOpenOrder[], clientOrderId: string): SaxoOpenOrder[] {
+  const wireReference = saxoExternalReference(clientOrderId);
   return open.filter(
     (order) =>
-      order.ExternalReference === legReference(externalReference, 'stop') ||
-      order.ExternalReference === legReference(externalReference, 'target'),
+      order.ExternalReference === legReference(wireReference, 'stop') ||
+      order.ExternalReference === legReference(wireReference, 'target'),
   );
 }
 
@@ -1572,11 +1630,21 @@ function assertWholeUnits(size: number, clientOrderId: string): void {
   }
 }
 
-function assertExternalReferenceFits(clientOrderId: string, suffixChars: number): void {
-  if (clientOrderId.length + suffixChars > EXTERNAL_REFERENCE_MAX_CHARS) {
+/**
+ * Always passes today — `saxoExternalReference` fixes `wireReference` at
+ * `SAXO_REFERENCE_HEX_CHARS`. Kept as a guard on that invariant rather than
+ * on caller input, which this no longer bounds (#1510).
+ */
+function assertExternalReferenceFits(
+  wireReference: string,
+  suffixChars: number,
+  clientOrderId: string,
+): void {
+  if (wireReference.length + suffixChars > EXTERNAL_REFERENCE_MAX_CHARS) {
     throw new Error(
-      `Saxo ExternalReference '${clientOrderId}' exceeds ${EXTERNAL_REFERENCE_MAX_CHARS} chars ` +
-        `once the leg suffix is appended (${clientOrderId.length + suffixChars}).`,
+      `Saxo ExternalReference '${wireReference}' (derived from '${clientOrderId}') exceeds ` +
+        `${EXTERNAL_REFERENCE_MAX_CHARS} chars once the leg suffix is appended ` +
+        `(${wireReference.length + suffixChars}).`,
     );
   }
 }
