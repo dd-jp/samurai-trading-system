@@ -176,6 +176,73 @@ describe('RiskManagerImpl.evaluate — exits', () => {
   });
 });
 
+describe('RiskManagerImpl.evaluate — long-only book (#1511)', () => {
+  // The SIM trace's own intent shape (docs/research/44-saxo-data-surface.md
+  // §6.7): control arm, instrument 3LUS, `sell, size 1`, no open lot. Verdict
+  // refused that tick on `stale_feed` before Execution ever saw it — this
+  // suite is what refuses the SAME intent shape at Risk, unconditionally,
+  // rather than relying on a feed staleness that will not always be there.
+  it('refuses a sell entry with no held lot on a Saxo-venue (stocks) instrument', () => {
+    const manager = new RiskManagerImpl(makeConfig());
+    const input = makeInput({
+      intent: makeIntent({
+        instrument: '3LUS',
+        asset_class: 'stocks',
+        side: 'sell',
+        intent_type: 'entry',
+        size: 1,
+      }),
+    });
+
+    const decision = manager.evaluate(input);
+
+    expect(decision.status).toBe('rejected');
+    expect(decision.binding_constraint).toBe('long_only_book');
+    expect(decision.reasons.join(' ')).toMatch(/3LUS/);
+    expect(decision.reasons.join(' ')).toMatch(/#1511/);
+    expect(decision.order_intent).toBeNull();
+  });
+
+  it('refuses a sell scale_in the same way, as defence-in-depth against a short lot ever existing', () => {
+    const manager = new RiskManagerImpl(makeConfig());
+    const input = makeInput({
+      intent: makeIntent({ asset_class: 'stocks', side: 'sell', intent_type: 'scale_in' }),
+    });
+
+    expect(manager.evaluate(input).binding_constraint).toBe('long_only_book');
+  });
+
+  it('does not refuse a sell EXIT — that is a long being closed, not a short being opened', () => {
+    const manager = new RiskManagerImpl(makeConfig());
+    const input = makeInput({
+      intent: makeIntent({ asset_class: 'stocks', side: 'sell', intent_type: 'exit', size: 100 }),
+    });
+
+    const decision = manager.evaluate(input);
+
+    expect(decision.status).toBe('approved');
+    expect(decision.binding_constraint).toBeNull();
+  });
+
+  it('does not refuse a buy entry on a stocks instrument', () => {
+    const manager = new RiskManagerImpl(makeConfig());
+    const input = makeInput({
+      intent: makeIntent({ asset_class: 'stocks', side: 'buy', intent_type: 'entry' }),
+    });
+
+    expect(manager.evaluate(input).status).toBe('approved');
+  });
+
+  it('does not refuse a sell entry on a non-stocks (crypto) instrument — scoped to the Saxo leg', () => {
+    const manager = new RiskManagerImpl(makeConfig());
+    const input = makeInput({
+      intent: makeIntent({ instrument: 'BTC-USD', asset_class: 'crypto', side: 'sell' }),
+    });
+
+    expect(manager.evaluate(input).status).toBe('approved');
+  });
+});
+
 describe('RiskManagerImpl.evaluate — a partly-valued book (#841)', () => {
   it('refuses an ENTRY sized against a book with an unvalued position in it', () => {
     // The composition root only ever asks for a degraded view on the exit

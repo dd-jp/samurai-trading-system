@@ -285,6 +285,40 @@ export class RiskManagerImpl implements RiskManager {
       };
     }
 
+    // #1511: long-only book, David's 2026-09-14 decision. A `sell` intent
+    // reaching HERE (below the exit early-return above) is never a close —
+    // it is `sideFor`'s bearish-direction answer on an instrument with no
+    // held lot (`routeDecision` only ever builds `intent_type: 'entry'` when
+    // `positions.length === 0`, decide.ts), i.e. a short. GIA equities do not
+    // size or cost a short (no borrow, no margin model, ADR-0016/0018 sized
+    // the leveraged-ETP universe long-only), so this refuses unconditionally
+    // rather than sizing one. A "down" thesis belongs on the paired inverse
+    // line if the universe carries it — that routing is a Trader concern, not
+    // this gate's.
+    //
+    // Scoped to `asset_class === 'stocks'` because that is every Saxo-GIA
+    // instrument today (crypto left Samurai's scope, ADR-0015's 2026-08-16
+    // amendment) — no separate per-instrument venue field exists on
+    // `RiskInput`, and adding one would be new plumbing for a distinction
+    // `asset_class` already draws for free.
+    //
+    // Placed here rather than in `ENTRY_CAP_GATES`: this is a structural
+    // refusal, not a sizing cap, so it should not pay for a portfolio/breaker
+    // read it has no use for — and unlike `ENTRY_CAP_GATES`'s monotonic
+    // trim-only contract, this one REJECTS outright, which the gates array
+    // does not otherwise do (the two `PerSubclassCapUnresolvableError` gates
+    // throw instead of returning a decision — this is a genuine `rejected()`
+    // both ends can act on).
+    if (intent.side === 'sell' && intent.asset_class === 'stocks') {
+      const binding = 'long_only_book';
+      return rejected(binding, [
+        `${binding}: refusing a sell ${intent.intent_type} on ${intent.instrument} with no held ` +
+          'lot — #1511 decided a long-only book for the Saxo GIA equity leg. A short is not sized ' +
+          'or costed (no borrow/margin model, ADR-0016/0018 sized this universe long-only); a ' +
+          '"down" thesis routes to the paired inverse line if it is in the universe.',
+      ]);
+    }
+
     // #841: an entry may not be sized against a book that was only partly
     // valued. `computePortfolioView` normally refuses to produce such a view
     // at all, and on the entry path it still does — but the exit path now
