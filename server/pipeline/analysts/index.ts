@@ -15,7 +15,6 @@ export {
   ANALYST_STAGE_WALL_CLOCK_MS,
   AnalystOrchestrator,
   type AnalystOrchestratorDeps,
-  ATTEMPTS_PER_PERSONA,
   DEFAULT_ANALYST_TIMEOUT_MS,
 } from './orchestrator.js';
 export { sentimentAnalyst } from './sentiment-analyst.js';

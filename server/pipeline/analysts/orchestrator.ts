@@ -120,7 +120,7 @@ const ALL_PERSONAS: Analyst[] = [technicalAnalyst, fundamentalAnalyst, sentiment
 export const DEFAULT_ANALYST_TIMEOUT_MS = 30_000;
 
 /** analysts-spec.md story 19: exactly one retry, so a blip is absorbed without a retry storm. */
-export const ATTEMPTS_PER_PERSONA = 2;
+const ATTEMPTS_PER_PERSONA = 2;
 
 /**
  * The analyst stage's worst-case wall clock (#1104) — the figure
