@@ -135,6 +135,8 @@ This is the first falsifiable statement of what the debate layer has to be worth
 
 2. **The replacement is an accuracy threshold, because the anchor is negative.** At the declared brackets, out of sample, per-trade `E_net` is negative on all seven measured underlyings, so there is no positive average for a percentage uplift to be taken over. Break-even is `50% + bar`: **51.29% (PLTR) to 57.16% (MSTR)**, ~53.51% on QQQ at £1,000 of position notional. The revisit condition is correspondingly a **comparison of two accuracies** — is directional accuracy higher on catalyst days than on all days? — rather than a cost trade.
 
+   > **Superseded by the 2026-09-15 amendment at the end of this ADR** — these break-even figures carry no venue commission. Charged against Saxo's measured 16 bps round trip: **52.6% (PLTR) to 58.5% (MSTR)**, ~58.4% on QQQ, before the LLM bill.
+
 3. **Decision 2's cost arithmetic is superseded; Decision 2 is not.** The "28:1", the "gating aims at the wrong 14%", and the £141-against-£5 comparison are all void — post-[#617](https://github.com/dd-jp/samurai-trading-system/issues/617) debate spend is per debate run, so a gate scales the trading term and the bill together and the comparison has no fixed terms left. **Decision 2 rests on the #685 event-day measurement instead**, which is independent of cost and is recorded above.
 
 **#655 continues to hold the revisit bar** in its new form, so the citations at the head of this ADR and in Decision 2 remain live. Doc 52's 126 trials are inherited by any figure above; nothing here is selected or adopted.
@@ -154,3 +156,12 @@ This is the first falsifiable statement of what the debate layer has to be worth
 - **The declared family narrowed under measurement**, from "FOMC/CPI/NFP pooled as one statistic" to "CPI/NFP pooled, FOMC void" — confirmed by David on [#658](https://github.com/dd-jp/samurai-trading-system/issues/658) ("withdraw (a), let #915 decide") as the legitimate reading of his #655 declaration.
 
 **Catalyst gating remains rejected.** The universe trades every day the selector finds a setup, per this ADR's original fallback. Nothing here rules out a future revisit if the sample grows (264 event-days is the full 2016–2026 population, not a selection) or if the exit rule's flatten timing changes.
+
+## Amendment, 2026-09-15 — the revisit bar's break-even range restated for Saxo's charged 16 bps round trip ([#1548](https://github.com/dd-jp/samurai-trading-system/issues/1548), successor of #1218)
+
+- **Amends:** the 2026-08-18 amendment's point 2 — the break-even figures, not the revisit bar's form or the #915 result above.
+- **Source:** [`docs/research/54-capital-economics-vs-signal-accuracy.md`](../research/54-capital-economics-vs-signal-accuracy.md) §5, restated 2026-09-14 by [#1218](https://github.com/dd-jp/samurai-trading-system/issues/1218) from ADR-0015's measured Saxo commission (0.08%/side flat, no per-order minimum — 16 bps round trip); carried to [ADR-0018](0018-intraday-thresholds-sizing-and-the-signal-bar.md)'s own 2026-09-14 amendment.
+
+Point 2's **51.29% (PLTR) to 57.16% (MSTR)**, ~53.51% on QQQ, are doc 54 §2's spread-only figures — no venue commission. Charged against Saxo's measured 16 bps round trip they become **52.6% (PLTR) to 58.5% (MSTR)**, ~58.4% on QQQ, before the LLM bill.
+
+**Direction, not reversal.** [#915](https://github.com/dd-jp/samurai-trading-system/issues/915)'s "does not clear" finding above compared a measured CPI/NFP accuracy delta against the old, lower bar; a higher bar makes that gap harder to close, not easier — the finding is firmer under this restatement, and nothing above is reopened. This amendment restates the bar #915 was measured against; it does not re-run #915.

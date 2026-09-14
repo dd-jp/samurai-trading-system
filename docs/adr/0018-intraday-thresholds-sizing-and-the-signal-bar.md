@@ -286,11 +286,11 @@ No new drawdown measurement is published here. Producing one for the reserved fi
 ## Amendment — 2026-09-14, [#1548](https://github.com/dd-jp/samurai-trading-system/issues/1548): D3's bars restated for Saxo's charged 16 bps round trip (successor of #1218)
 
 - **Amends:** Decision 3's accuracy-edge column and the Consequences paragraph's required-edge line — the **bar**, not the take-profit/stop levels, which are untouched.
-- **Source:** [`docs/research/54-capital-economics-vs-signal-accuracy.md`](../research/54-capital-economics-vs-signal-accuracy.md) §5, restated 2026-09-14 by [#1218](https://github.com/dd-jp/samurai-trading-system/issues/1218) from ADR-0015's measured Saxo commission (0.08%/side flat, no per-order minimum — 16 bps round trip).
+- **Source:** [`docs/research/54-capital-economics-vs-signal-accuracy.md`](../research/54-capital-economics-vs-signal-accuracy.md) §2's amendment (the closed form) and §5 (the per-name break-even table), restated 2026-09-14 by [#1218](https://github.com/dd-jp/samurai-trading-system/issues/1218) from ADR-0015's measured Saxo commission (0.08%/side flat, no per-order minimum — 16 bps round trip).
 
 Decision 3's 0.18% / 0.41% round trips are **spread-only**: doc 18's index quote and ADR-0016's open-items paragraph both source them to an observed spread, and neither names venue commission. Saxo's GIA commission is additive to a spread rather than a substitute for one, so the declared round trips understate what a live fill actually pays by the full 16 bps.
 
-Doc 54 §2's identity is exact and cost-invariant — `bar = cost / width × 100` — so the restatement is closed-form, not a re-simulation:
+Doc 54 §2's identity is `E(p) = (p − 0.5) × width + E_net`; under `E_gross = 0` — a modelling choice doc 59 §3.0 flags `[assumed]`, not a measurement, but the same choice D3's own declared bars were already computed under — it reduces to `bar = cost / width × 100`. That reduced form is cost-invariant, so the restatement is closed-form, not a re-simulation:
 
 ```
 cost' = cost + 0.16                bar' = bar + 0.16 / width × 100
@@ -301,7 +301,9 @@ cost' = cost + 0.16                bar' = bar + 0.16 / width × 100
 | 3× index ETP / ETC | 0.18% → **0.34%** | 4.16% | +4.33 pp | **+8.18 pp** | +0.34%/trade |
 | 3× single-stock ETP | 0.41% → **0.57%** | 12.25% | +3.35 pp | **+4.66 pp** | +0.57%/trade |
 
-The index bar moves further in absolute terms (+3.85 pp) than the single-stock bar (+1.31 pp), because the same flat 16 bps is amortised over a bracket 2.9x narrower — the D3 corollary that narrow brackets demand a large edge is sharper, not reversed. Doc 54 §5's break-even table (per-name, not per-subclass) restates in the same pass: **52.6% (PLTR) to 58.5% (MSTR)** before the LLM bill, widened from the spread-only 51.3%–57.2% this ADR's bar previously implied.
+(Dividing the charged row directly gives 8.17 / 4.65; the published **+8.18 / +4.66** is the sum of the pre-rounded parts — `4.33 + 3.85` and `3.35 + 1.31` — per this amendment's own derivation below, not a rounding error.)
+
+The index bar moves further in absolute terms (+3.85 pp) than the single-stock bar (+1.31 pp), because the same flat 16 bps is amortised over a bracket 2.9x narrower — the D3 corollary that narrow brackets demand a large edge is sharper, not reversed. Doc 54 §5's break-even table (per-name, not per-subclass) restates in the same pass: **52.6% (PLTR) to 58.5% (MSTR)** before the LLM bill, widened from the spread-only **51.29% (PLTR) to 57.16% (MSTR)** doc 54 §2's table (drawn from doc 52's per-name simulation, not a figure this ADR itself ever published) implied.
 
 **Against ADR-0017's ~55% assumed win rate (+5.00 pp), D3's margin survives on one row and fails on the other.** The single-stock bar stays inside it at **+4.66 pp**; the index bar at **+8.18 pp** does not. Decision 3's claim below that both brackets "carry margin against the project's own claim" therefore now holds for the single-stock bracket only. This ADR does not decide what follows from that — doc 54 §5 is explicit that nothing here resolves #655 or #658, only states what each would have to measure.
 
