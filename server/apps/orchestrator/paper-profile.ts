@@ -2880,5 +2880,21 @@ export function paperStartingProfile(
     // and certain fix is preserving the original guarantee, not arguing it
     // away.
     ...(mode === 'backtest' ? { maxConcurrentInstruments: 1 } : {}),
+    // #1511 — long-only book, gated to the ACTUAL Saxo-tradeable set. Same
+    // `bookCurrency === 'GBP'` discriminator as `capitalCeilingUsd` above:
+    // `SAMURAI_BROKER=saxo` is the one caller that supplies both `'GBP'` and
+    // `saxoTradeableUniverse()` as `universe` (`startingProfileForMode`,
+    // index.ts) — so this is the run's actual routed venue, not a proxy for
+    // it. `DEFAULT_UNIVERSE` (every Alpaca run, `bookCurrency: 'USD'`) is
+    // left unmarked: it trades no Saxo instrument, so nothing in it should
+    // ever match `long_only_instruments`.
+    ...(mode === 'paper' && bookCurrency === 'GBP' && universe !== undefined
+      ? {
+          riskConfig: {
+            ...configs.riskConfig,
+            long_only_instruments: new Set(universe.map((instrument) => instrument.asset)),
+          },
+        }
+      : {}),
   };
 }

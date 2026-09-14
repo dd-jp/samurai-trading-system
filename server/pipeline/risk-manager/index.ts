@@ -297,11 +297,15 @@ export class RiskManagerImpl implements RiskManager {
     // line if the universe carries it — that routing is a Trader concern, not
     // this gate's.
     //
-    // Scoped to `asset_class === 'stocks'` because that is every Saxo-GIA
-    // instrument today (crypto left Samurai's scope, ADR-0015's 2026-08-16
-    // amendment) — no separate per-instrument venue field exists on
-    // `RiskInput`, and adding one would be new plumbing for a distinction
-    // `asset_class` already draws for free.
+    // Scoped to `config.long_only_instruments` — the ACTUAL Saxo-venue set
+    // the run is configured to trade (`saxoTradeableUniverse()`,
+    // production/saxo-venue.ts), threaded in from `paperStartingProfile`'s
+    // `bookCurrency === 'GBP'` branch. `asset_class === 'stocks'` was the
+    // first-pass discriminator here and was wrong: it also caught the Alpaca
+    // paper universe (`DEFAULT_UNIVERSE`, also `asset_class: 'stocks'`),
+    // which trades no venue this decision named. See `RiskConfig`'s own doc
+    // comment for why `per_subclass_deployment_cap.subclass_of` is not the
+    // discriminator either (it under-refuses unmeasured Saxo rows).
     //
     // Placed here rather than in `ENTRY_CAP_GATES`: this is a structural
     // refusal, not a sizing cap, so it should not pay for a portfolio/breaker
@@ -310,18 +314,15 @@ export class RiskManagerImpl implements RiskManager {
     // does not otherwise do (the two `PerSubclassCapUnresolvableError` gates
     // throw instead of returning a decision — this is a genuine `rejected()`
     // both ends can act on).
-    if (intent.side === 'sell' && intent.asset_class === 'stocks') {
+    if (intent.side === 'sell' && config.long_only_instruments?.has(intent.instrument)) {
       const binding = 'long_only_book';
-      const positionClaim =
-        intent.intent_type === 'entry'
-          ? 'with no held lot'
-          : `on intent_type '${intent.intent_type}'`;
+      const positionClaim = intent.intent_type === 'entry' ? 'with no held lot' : 'on a scale_in';
       return rejected(binding, [
         `${binding}: refusing a sell ${intent.intent_type} on ${intent.instrument} ${positionClaim} ` +
-          '— #1511 decided a long-only book for the Saxo GIA equity leg (stocks only; crypto left ' +
-          'scope, ADR-0015 2026-08-16). A sell that is not an exit is a short on the long ETP: not ' +
-          'sized or costed (no borrow/margin model, ADR-0016/0018 sized this universe long-only); a ' +
-          '"down" thesis routes to the paired inverse line if it is in the universe.',
+          '— #1511 decided a long-only book for the Saxo GIA equity leg. A sell that is not an ' +
+          'exit is a short on the long ETP: not sized or costed (no borrow/margin model, ' +
+          'ADR-0016/0018 sized this universe long-only); a "down" thesis routes to the paired ' +
+          'inverse line if it is in the universe.',
       ]);
     }
 
