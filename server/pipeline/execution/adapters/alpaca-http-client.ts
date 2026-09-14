@@ -286,6 +286,11 @@ function validateAlpacaOrder(body: unknown, context: string): AlpacaOrder {
   return body as unknown as AlpacaOrder;
 }
 
+function validateAlpacaOrders(body: unknown, context: string): AlpacaOrder[] {
+  if (!Array.isArray(body)) failValidation(context, 'expected an array', body);
+  return body.map((raw) => validateAlpacaOrder(raw, context));
+}
+
 /**
  * One position row. `getOpenPositions` (`alpaca-adapter.ts:283-291`) already
  * guards `qty`/`avg_entry_price` with `Number.isFinite` after parsing — this
@@ -762,6 +767,18 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
       { method: 'GET' },
       'getOrder',
       validateAlpacaOrder,
+    );
+  }
+
+  async listOpenOrders(): Promise<AlpacaOrder[]> {
+    return this.request<AlpacaOrder[]>(
+      // `nested=false` so a bracket's legs arrive as their own rows rather than
+      // hidden inside the parent: the caller matches on `client_order_id`, and
+      // a nested leg would be unreachable to that match.
+      '/v2/orders?status=open&nested=false&limit=500',
+      { method: 'GET' },
+      'listOpenOrders',
+      validateAlpacaOrders,
     );
   }
 

@@ -969,9 +969,12 @@ export class SqliteExecutionStore implements SharedStore {
    * `reconcile()`'s worklist (#519, #526) — see `SharedStore.getUnresolvedFlattens`
    * for the bound this query implements: `'submitting'` outright, or
    * `'submitted'` rows not yet confirmed swept (`fills_swept_at IS NULL`).
-   * `'error'` rows are excluded by the `status` clause itself — that status
-   * means the flatten is provably dead at the venue (never landed, or
-   * terminally refused having filled nothing), so there is nothing left to ask.
+   * `'error'` rows are excluded by the `status` clause itself. That status is
+   * not "provably dead at the venue" — some routes into it are proof, others
+   * are `reconcile()` deciding on bounded evidence that the row may stop
+   * blocking (see `resolveFlattenError`'s callers). What it always means is
+   * SETTLED: this flatten has had its answer, and asking the venue again
+   * changes nothing.
    *
    * `writeAheadFlatten`'s one-flatten-per-instrument guard runs this SAME
    * predicate — see its doc. A change here is a change to what may be

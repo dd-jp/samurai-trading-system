@@ -1183,6 +1183,30 @@ describe('AlpacaHttpBrokerClient — wire validation (#509)', () => {
     );
   });
 
+  it('listOpenOrders reads the ORDER LIST endpoint, not the by-client-order-id one (#1500)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse([ORDER_RESPONSE]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+
+    await expect(client.listOpenOrders()).resolves.toHaveLength(1);
+    // The whole point of the `cancel()` fallback this serves: a DIFFERENT
+    // route to the same order, so an outage of `orders:by_client_order_id`
+    // does not also take out the cancel path.
+    const [url] = fetchMock.mock.calls[0] as [string];
+    expect(url).toContain('/v2/orders?');
+    expect(url).not.toContain('by_client_order_id');
+  });
+
+  it('listOpenOrders rejects a response body that is not an array at all', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ not: 'an array' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+
+    await expect(client.listOpenOrders()).rejects.toBeInstanceOf(AlpacaBrokerProviderError);
+  });
+
   it('getPositions rejects a truncated position missing required fields', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse([{ symbol: 'AAPL' }]));
     vi.stubGlobal('fetch', fetchMock);

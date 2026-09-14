@@ -160,6 +160,9 @@ class FakeVenue {
         const order = this.orders.get(id);
         return order === undefined ? null : { ...order };
       },
+      listOpenOrders: async () => {
+        throw new Error('FakeVenue: listOpenOrders not scripted');
+      },
       getPositions: async () => {
         throw new Error('FakeVenue: getPositions not scripted');
       },
