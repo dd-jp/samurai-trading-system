@@ -57,7 +57,7 @@ table.
 
 ### 2. The boundary is reused, not reinvented — UTC day, from `TradingCalendar.sessionStart`
 
-The sampler lives inside `AlpacaAccountStateProvider.sessionBasisFor`, on the
+The sampler lives inside `BrokerAccountStateProvider.sessionBasisFor`, on the
 same call to `TradingCalendar.sessionStart` (#331) the snapshot already makes.
 No second timer, no second definition of "a day" — the series and the breaker
 cannot drift onto different calendars because there is only one call.
@@ -189,7 +189,7 @@ against a reference nobody measured. Documented at the config site, tracked in
 - **The kill-lines stay unevaluated for ~2 months of running.** This is the
   point, not a regression: they were unevaluated before too, just silently.
   Now the reason is logged daily with the observation count.
-- **`AlpacaAccountStateProviderInput.dailyEquity` is required, not optional.** It
+- **`BrokerAccountStateProviderInput.dailyEquity` is required, not optional.** It
   breaks any out-of-tree construction of the provider. Chosen for that: an
   optional writer makes "we captured nothing for six weeks" a silent condition,
   and there is no recovery from it.

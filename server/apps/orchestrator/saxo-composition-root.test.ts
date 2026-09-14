@@ -34,6 +34,7 @@ import type { StoreHandle } from '../../shared/store/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { startFromEnvironment, startingProfileForMode } from './index.js';
 import { LIVE_BOOK_GBP, LIVE_BOOK_SIZING_USD, paperStartingProfile } from './paper-profile.js';
+import type { AccountFundingSource } from './production/account-state.js';
 import { BROKER_VENUE_ENV_VAR, saxoTradeableUniverse } from './production/saxo-venue.js';
 import type { ProductionConfig, ProductionOrchestrator } from './production.js';
 import { buildTrendingCloses, ConstantResponseLlmClient } from './smoke-run.js';
@@ -184,11 +185,12 @@ function offlineInjections(db: StoreHandle): Partial<ProductionConfig> {
       fetchPriceHistory: async () => [],
     },
     /**
-     * REQUIRED by the Saxo venue, not a convenience: this repo's Saxo client
-     * calls no balances endpoint, and the venue's own
-     * `GET /port/v1/balances/me` answers in EUR on the SIM trial account
-     * (doc 44 §6), so without this the venue refuses rather than size a GBP
-     * book off a foreign-currency account (#949).
+     * REQUIRED by the Saxo venue, not a convenience: the venue refuses to
+     * boot without a funding read of its own rather than size a GBP book off
+     * Alpaca's USD `GET /v2/account` (#949). Since #1509 an `accountFunding`
+     * over `GET /port/v1/balances/me` satisfies the same refusal; this
+     * fixture supplies the whole provider instead, so no wire client is
+     * needed here.
      *
      * The REAL `AccountStateProvider` shape, uncast: a cast fixture here hid
      * the ceiling defect round 1 found, because an invented `equity`/
@@ -489,6 +491,24 @@ describe('startFromEnvironment (broker venue selection, #1400)', () => {
     // the #1511 gate stays inert there by construction, not by an instrument
     // list that happens to be empty.
     expect(paperStartingProfile('paper').riskConfig.long_only_instruments).toBeUndefined();
+  });
+
+  /**
+   * The verification is scoped by VENUE, not by who built the funding source
+   * (#1509 round 2). Injecting the gateway is what makes this discriminating:
+   * the entrypoint then builds no Saxo client and no funding source of its
+   * own, so a check written against the one it builds — `saxoAccountFunding`
+   * rather than `fundingToVerify` — computes no verdict here and this boot
+   * succeeds on EUR.
+   */
+  it('refuses a Saxo boot whose INJECTED accountFunding answers a foreign currency', async () => {
+    const eurFunding: AccountFundingSource = {
+      readFunding: async () => ({ cash: 1_000, equity: 1_000, currency: 'EUR' }),
+    };
+
+    await expect(
+      bootSaxo(fixtureSaxoGateway(), undefined, { accountFunding: eurFunding }),
+    ).rejects.toThrow(/EUR/);
   });
 
   it('leaves the Alpaca paper path in place when the venue is not configured', async () => {

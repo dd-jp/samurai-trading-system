@@ -183,6 +183,44 @@ export interface SaxoNetPosition {
 }
 
 /**
+ * `GET /port/v1/balances/me` — the funding read (#1509).
+ *
+ * `Currency` is VERIFIED on SIM 2026-09-08 (doc 44 §6.3), and it is the only
+ * field this repo has ever observed on this endpoint. It answered `"EUR"`
+ * there, on an `IsTrialAccount: true` account whose `DefaultCurrency` is EUR
+ * (doc 44 §1) — so the observation says the field exists and says NOTHING
+ * about what the live UK GIA reports. Nothing may assume GBP from the venue
+ * identity; `same_currency_verified` is set by comparing this field against
+ * the declared book currency at runtime.
+ *
+ * `CashBalance` and `TotalValue` are UNVERIFIED — reference documentation
+ * only, never observed here. `saxo-http-client.ts` requires both at the
+ * boundary and throws rather than defaulting, because a defaulted funding
+ * figure sizes real orders. `TotalValue` is the account value including open
+ * positions, which is what maps to the `equity` half of `AccountStateProvider`
+ * (`CashBalance` maps to `cash`); `NetEquityForMargin` is a third, different
+ * number and is deliberately not read — this is a cash account.
+ */
+export interface SaxoAccountBalance {
+  readonly Currency: string;
+  readonly CashBalance: number;
+  readonly TotalValue: number;
+}
+
+/**
+ * The funding read, kept separate from `SaxoOpenApiClient` (#1509).
+ *
+ * Narrow rather than folded into the wide interface: the wide one is what
+ * every broker-adapter test fake implements, and an account read is not part
+ * of placing or reconciling an order. Declaring it optional on the wide
+ * interface would be worse than either — the composition root could not then
+ * rely on it being there.
+ */
+export interface SaxoAccountBalanceReader {
+  getBalances(): Promise<SaxoAccountBalance>;
+}
+
+/**
  * The venue seam the adapter is built against. `saxo-http-client.ts` is the
  * real one; tests inject a fake.
  *

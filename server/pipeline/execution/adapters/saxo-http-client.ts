@@ -30,6 +30,8 @@ import {
   SaxoBrokerProviderError,
 } from './saxo-broker-errors.js';
 import type {
+  SaxoAccountBalance,
+  SaxoAccountBalanceReader,
   SaxoAssetType,
   SaxoInstrumentDetails,
   SaxoNetPosition,
@@ -335,6 +337,21 @@ function validateInstrumentDetails(
   };
 }
 
+/**
+ * `/port/v1/balances/me` answers a single object, not a `{Data: [...]}`
+ * envelope, so this does not go through `readData`/`listAll`.
+ */
+function validateBalance(body: unknown, context: string): SaxoAccountBalance {
+  if (!isRecord(body)) failValidation(context, 'expected an object', body);
+  const Currency = requireString(body, 'Currency', context);
+  if (Currency.length === 0) failValidation(context, 'Currency must not be empty', body);
+  return {
+    Currency,
+    CashBalance: requireNumber(body, 'CashBalance', context),
+    TotalValue: requireNumber(body, 'TotalValue', context),
+  };
+}
+
 function validateIdentity(body: unknown, pinnedAccountKey: string | undefined): AccountIdentity {
   const context = 'resolveAccount';
   const rows = readData(body, context).map((row) => {
@@ -365,7 +382,7 @@ function validateIdentity(body: unknown, pinnedAccountKey: string | undefined): 
   return only;
 }
 
-export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
+export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalanceReader {
   private readonly accessToken: string;
   readonly baseUrl: string;
   private readonly pinnedAccountKey: string | undefined;
@@ -612,6 +629,24 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
       `/cs/v1/audit/orderactivities?${query.toString()}`,
       'listOrderActivities',
       validateActivity,
+      'background',
+    );
+  }
+
+  /**
+   * The GBP-native funding read (#1509). No `AccountKey` in the path: `/me`
+   * resolves to the token's own account, the same one `resolveIdentity`
+   * pins, so this cannot drift onto a different account than orders go to.
+   */
+  async getBalances(): Promise<SaxoAccountBalance> {
+    return this.request(
+      '/port/v1/balances/me',
+      { method: 'GET' },
+      'getBalances',
+      validateBalance,
+      // A once-per-boot funding read, not an order path: the priority lane
+      // (#1419) exists for `placeOrder`/`cancelOrder` and the identity call
+      // they depend on, which must not queue behind a portfolio sweep.
       'background',
     );
   }

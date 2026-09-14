@@ -11,7 +11,7 @@
  * so the two arms cannot move each other. But `computeCurrentPortfolioAndBreakers`
  * (direct-bind.ts) combines those control-scoped positions with
  * `deps.accountState.getAccountState(asOf)`, and until this module existed the
- * only `AccountStateProvider` in the tree was `AlpacaAccountStateProvider` —
+ * only `AccountStateProvider` in the tree was `BrokerAccountStateProvider` —
  * ONE instance, constructed in `production.ts`, reading `GET /v2/account`.
  *
  * The control arm never touches the real broker, so that account reflects the
@@ -40,7 +40,7 @@
  * | `daily_basis` | (anchor + realized before the session open) as the denominator, realized since it as the numerator |
  * | `consecutive_losses` | the control's own closed trades, walked backwards |
  *
- * ## Four deliberate divergences from `AlpacaAccountStateProvider`
+ * ## Four deliberate divergences from `BrokerAccountStateProvider`
  *
  * 1. **`peak_equity` is a REALIZED high-water mark, not a marked one.** The
  *    live provider reads Alpaca's mark-to-market `equity` and stores its max,
@@ -159,7 +159,7 @@ export interface ControlArmAccountStateProviderInput {
    * figures are not comparable.
    */
   calendars: { crypto: TradingCalendar; stocks: TradingCalendar };
-  /** As `AlpacaAccountStateProviderInput.lossStreakWindowDays`. Default 365 days. */
+  /** As `BrokerAccountStateProviderInput.lossStreakWindowDays`. Default 365 days. */
   lossStreakWindowDays?: number;
 }
 
@@ -269,7 +269,7 @@ export class ControlArmAccountStateProvider implements AccountStateProvider {
     return { known: true, open_equity: openEquity, realized_pnl: realizedSince };
   }
 
-  /** As `AlpacaAccountStateProvider.consecutiveLosses`, over the control's own rows. */
+  /** As `BrokerAccountStateProvider.consecutiveLosses`, over the control's own rows. */
   private consecutiveLosses(trades: readonly ClosedTrade[], asOf: Date): number {
     const windowDays = this.input.lossStreakWindowDays ?? DEFAULT_LOSS_STREAK_WINDOW_DAYS;
     const from = asOf.getTime() - windowDays * MS_PER_DAY;

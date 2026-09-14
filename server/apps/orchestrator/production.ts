@@ -83,7 +83,7 @@
  * *supplied* through that port rather than computed inline, but a real
  * implementation of it now exists: `SqliteDailyEquityMetricsSource` derives a
  * live `ReturnSeries` from `daily_equity` (migration 0011, #345, ADR-0006),
- * which this file's `AlpacaAccountStateProvider` samples on every tick. It
+ * which this file's `BrokerAccountStateProvider` samples on every tick. It
  * refuses to produce a suite below a justified minimum observation count,
  * because a breach WRITES risk thresholds and a Sharpe over ~10 days is noise.
  * **A paper run now supplies that source too (#379)**, as a factory this root
@@ -251,7 +251,7 @@ import { Heartbeat } from './heartbeat.js';
 import { JsonLogger } from './logger.js';
 import type { OrphanGoVerdict, OrphanVerdictScanner } from './orphan-verdict-scan.js';
 import { LIVE_BOOK_SIZING_USD } from './paper-profile.js';
-import { AlpacaAccountStateProvider } from './production/account-state.js';
+import { alpacaFunding, BrokerAccountStateProvider } from './production/account-state.js';
 import { buildAnalystsStep, composeMarketIntelligence } from './production/analysts-adapter.js';
 import { toCapitalCeilingUsd } from './production/capital-ceiling.js';
 import { buildCarriedLotReporter } from './production/carried-lot-alert.js';
@@ -1071,9 +1071,10 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // LAZY since #1400, and memoized so "one client" still holds. It used to be
   // built unconditionally, on the reasoning that the account-state provider
   // needs it even when `config.broker` is overridden — true, but only while
-  // `config.accountState` is also defaulted. A run that supplies BOTH (which
-  // is what the Saxo venue requires: Saxo's OpenAPI surface has no balances
-  // endpoint, so `accountState` is mandatory there) reaches neither call
+  // `config.accountState` is also defaulted. A run that supplies BOTH — or,
+  // since #1509, a Saxo run that supplies `config.accountFunding` instead of
+  // an `accountState`, so the account ledger comes from
+  // `GET /port/v1/balances/me` — reaches neither call
   // site, and constructing the client anyway made such a run demand
   // `ALPACA_API_KEY` for a transport it never uses.
   let alpacaBrokerClient: AlpacaBrokerClient | undefined;
@@ -1536,8 +1537,11 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // asking the caller to build what this module can compose.
     accountState:
       config.accountState ??
-      new AlpacaAccountStateProvider({
-        client: brokerClient(),
+      new BrokerAccountStateProvider({
+        // #1509: the venue's own ledger, injected when the run is not Alpaca's
+        // (`saxoFunding`, built at the entrypoint from the one Saxo client).
+        // Everything below this line is venue-neutral and shared.
+        funding: config.accountFunding ?? alpacaFunding(brokerClient()),
         store: new SqliteAccountStateStore(guardedStore(config.db, 'orchestrator')),
         // Per-class session-open equity snapshots (#332) — the local
         // replacement for Alpaca's blended `last_equity` (GAP-8).
@@ -2245,9 +2249,10 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
         // Both branches are therefore in the ACCOUNT's currency: a true
         // `same_currency_verified` asserts the account is denominated in the
         // book's currency, which is what makes the raw `book` the right figure
-        // there. Nothing sets that flag today and `risk-manager/types.ts` holds
-        // it refused by design, so that branch needs a live FX feed or a
-        // GBP-native adapter (#946) before it is reachable at all.
+        // there. Since #1509 `armSameCurrencyCeilings` sets it, but only from a
+        // Saxo `GET /port/v1/balances/me` that reports the book's currency —
+        // so on every Alpaca run this branch stays unreachable and the USD
+        // fallback still applies.
         fallbackBook:
           config.riskConfig.live_book_ceiling?.same_currency_verified === true
             ? config.riskConfig.live_book_ceiling.book
