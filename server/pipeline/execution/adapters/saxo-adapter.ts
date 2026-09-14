@@ -42,7 +42,7 @@
  */
 import { createHash } from 'node:crypto';
 import type { Clock, Logger } from '../../../shared/index.js';
-import { escalatesAt, safeLog, toBrokerFillId } from '../../../shared/index.js';
+import { escalatesAt, isBookCurrency, safeLog, toBrokerFillId } from '../../../shared/index.js';
 import { SAXO_COMMISSION_RATE } from '../../../tools/backtest/index.js';
 import { sanitizeBrokerError } from '../broker-error.js';
 import {
@@ -1741,6 +1741,14 @@ function toQuotedFill(
  * and denominated in the line's `CurrencyCode` (USD on most pool lines) —
  * which `fee_currency` states rather than letting a USD figure be summed as
  * GBP. No FX rate is invented here.
+ *
+ * `fx_rate_to_gbp` is likewise never invented: `GET
+ * /cs/v1/audit/orderactivities` — this adapter's only source of fill data
+ * (`toQuotedFill`, above) — carries no conversion-rate field on any real
+ * activity row (SIM, 2026-09-14; see migration 0060's header for the full
+ * probe). A non-book-currency fill therefore always gets an explicit
+ * `fx_rate_to_gbp_source` naming why the rate is absent, never a silently
+ * missing field; a book-currency fill needs no rate at all.
  */
 function toCashFill(fill: QuotedFill, ref: SaxoInstrumentRef): NormalizedFill {
   const price = saxoCashPerShare(ref, fill.quoted_price);
@@ -1752,6 +1760,7 @@ function toCashFill(fill: QuotedFill, ref: SaxoInstrumentRef): NormalizedFill {
     qty: fill.qty,
     fee: price * fill.qty * SAXO_COMMISSION_RATE,
     fee_currency: ref.currency,
+    ...(isBookCurrency(ref.currency) ? {} : { fx_rate_to_gbp_source: 'not_reported_by_venue' }),
     timestamp: fill.timestamp,
   };
 }

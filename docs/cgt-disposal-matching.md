@@ -97,15 +97,49 @@ rather than a bespoke check, so the report handles three cases:
   (`saxo-price-unit.ts`), so no live fill is expected to carry a pence
   `fee_currency` — but one must not be summed as pounds if it ever appears.
 - **Anything else** (USD on the pool lines the #1220 sterling gate excludes from
-  `tradeableUniverse()` in `lse-etp-pool.ts` — occasionally EUR) — this report has no transaction-date
-  FX rate and **does not invent one**. These fills are excluded from every
-  matched disposal and every total above, and are listed separately, in
-  their own native currency, under **UNCONVERTED — FX rate not captured at
-  fill time** on every report. Converting them to sterling by hand, from the
-  operator's own contract notes, is required before they can be included in
-  a return. Capturing the transaction-date FX rate at fill time (so this
-  section becomes unnecessary) is a follow-up, tracked separately from
-  #1518 — no `saxo-adapter.ts` or execution-path change was made for this.
+  `tradeableUniverse()` in `lse-etp-pool.ts` — occasionally EUR) — converts on
+  `fills.fx_rate_to_gbp` (#1521, migration 0060) when the row carries one:
+  `grossAmount`/`charges` multiplied by the venue's own rate, applied
+  verbatim, never re-derived or blended with an independent spot lookup. A
+  row with neither a book currency nor a stored rate still has **no
+  transaction-date FX rate and this report still does not invent one** —
+  it is excluded from every matched disposal and every total above, and
+  listed separately, in its own native currency, under **UNCONVERTED — FX
+  rate not captured at fill time**. Converting such a row to sterling by
+  hand, from the operator's own contract notes, is required before it can be
+  included in a return.
+
+  **#1521's field verification (SIM, 2026-09-14).** `saxo-adapter.ts`'s
+  `toCashFill` is the only place a Saxo fill is built, and its only data
+  source is `GET /cs/v1/audit/orderactivities`. That endpoint was probed
+  against 45 real activity rows on the SIM account (`FinalFill`/`Placed`/
+  `Cancelled`/`Changed` all represented) and carries **no conversion-rate
+  field of any kind** — the full field list observed: `AccountId`,
+  `ActivityTime`, `Amount`, `AssetType`, `AveragePrice`, `BuySell`,
+  `ClientId`, `CorrelationKey`, `Duration`, `ExecutionPrice`,
+  `ExternalReference`, `FillAmount`, `FilledAmount`, `HandledBy`, `LogId`,
+  `OrderId`, `OrderRelation`, `OrderType`, `PositionId`, `Price`,
+  `RelatedOrders`, `Status`, `SubStatus`, `Uic`, `UserId`. `GET
+  /port/v1/positions` and `GET /port/v1/closedpositions` (ClientKey-only and
+  ClientKey+AccountKey) both returned zero rows for the probed account, so
+  their schemas could not be checked against real data either; the four
+  `PositionId`s the activity feed named each 404'd individually against
+  `GET /port/v1/positions/{id}`. `GET /port/v1/activities` and `GET
+  /cs/v1/reports/trades` both 404 outright (not reachable routes for this
+  app key). Reference docs (developer.saxo, **not independently verified
+  against real data**) describe a `ConversionRate` field on "Position
+  Events" and boolean `ConversionRateInstrumentToBase{Opening,Closing}Settled`
+  flags on `ClosedPosition` — neither matches the ticket's assumed
+  `ConversionRateInstrumentToAccountCurrency` name, and neither was found on
+  any endpoint this system actually reads.
+  **Conclusion: no reachable Saxo surface currently supplies this rate**, so
+  `toCashFill` never sets `fx_rate_to_gbp` for a live fill — it sets
+  `fx_rate_to_gbp_source: 'not_reported_by_venue'` instead, and the fill
+  still lands in the unconverted section above exactly as it did before this
+  ticket. The column and the report-side conversion exist for a future Saxo
+  surface, or a widened universe (#1310) that reintroduces non-sterling
+  lines with a rate attached; migration `0060_fills_fx_rate_to_gbp.sql`'s
+  header carries the same record.
 
 ## Refusals, not silent mispricing
 

@@ -1,0 +1,39 @@
+-- Persist the venue-applied GBP conversion rate on a fill, when one is available (#1521).
+--
+-- THE GAP THIS CLOSES. `docs/cgt-disposal-matching.md` (#1518) lists every
+-- non-sterling fill (USD/EUR) under "UNCONVERTED — FX rate not captured at
+-- fill time" because nothing records the transaction-date rate HMRC's
+-- CG78300 series wants. This column is the place to put one.
+--
+-- VERIFIED ON SIM (2026-09-14, this ticket): `GET /cs/v1/audit/orderactivities`
+-- — the ONLY endpoint `saxo-adapter.ts` reads to build a fill, `SaxoOrderActivity`
+-- — carries no conversion-rate field on any of 45 real activity rows probed,
+-- FinalFill rows included. Full field list observed: AccountId, ActivityTime,
+-- Amount, AssetType, AveragePrice, BuySell, ClientId, CorrelationKey, Duration,
+-- ExecutionPrice, ExternalReference, FillAmount, FilledAmount, HandledBy, LogId,
+-- OrderId, OrderRelation, OrderType, PositionId, Price, RelatedOrders, Status,
+-- SubStatus, Uic, UserId. `port/v1/positions` and `port/v1/closedpositions`
+-- returned zero rows for the probed account (nothing to check a field name
+-- against); the four `PositionId`s the activity feed named 404 individually.
+-- So `saxo-adapter.ts`'s `toCashFill` cannot populate this column from any
+-- reachable Saxo surface today — see its own doc comment for what it sets
+-- instead (`fx_rate_to_gbp_source`, explaining why the value is null) and
+-- `docs/cgt-disposal-matching.md` for the field-level record of this probe.
+--
+-- WHY THE COLUMN EXISTS ANYWAY. `tradeableUniverse()` (#1220, David's
+-- 2026-09-08 ruling) already excludes every non-sterling line, so a live fill
+-- in a non-book currency is itself a selection-layer contradiction, the same
+-- reasoning migration 0054 gives `fee_currency`. This column is forensic for
+-- that case and for any pre-#1220 non-sterling row already in the store, and
+-- is the seam a future Saxo endpoint or a widened universe (#1310) can fill
+-- without a further migration. `fx_rate_to_gbp_source` records WHY a row's
+-- rate is null (not just that it is): 'not_reported_by_venue' for the
+-- verified-absent case above, distinct from simply predating this migration.
+--
+-- Nullable, additive, no CHECK — same posture as 0054/0057/0058. NULL is the
+-- honest reading for every row written before this migration, for a
+-- book-currency (GBP/GBX) fill that never needed a rate, and for a
+-- non-book-currency fill the venue reported no rate for.
+
+ALTER TABLE fills ADD COLUMN fx_rate_to_gbp REAL;
+ALTER TABLE fills ADD COLUMN fx_rate_to_gbp_source TEXT;

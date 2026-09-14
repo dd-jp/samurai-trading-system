@@ -185,6 +185,8 @@ CREATE TABLE fills (
   exit_reason              TEXT,
   flatten_idempotency_key  TEXT,
   fee_currency             TEXT,           -- 0054, #1220: the currency the VENUE denominated `fee` in, recorded verbatim and never converted; NULL means the adapter reported none, never "it was GBP"
+  fx_rate_to_gbp           REAL,           -- 0060, #1521: venue-applied rate to convert a fee_currency-denominated price/fee to GBP, when the venue reports one; NULL on a book-currency fill (none needed) or when the venue reported none
+  fx_rate_to_gbp_source    TEXT,           -- 0060, #1521: why fx_rate_to_gbp is NULL, e.g. 'not_reported_by_venue' — absent on a book-currency fill and on any row written before this migration
   PRIMARY KEY (idempotency_key, broker_fill_id)
 );
 CREATE INDEX idx_fills_broker_fill_id ON fills(broker_fill_id);
