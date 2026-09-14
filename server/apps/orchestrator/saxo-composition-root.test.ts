@@ -321,30 +321,16 @@ describe('startFromEnvironment (broker venue selection, #1400)', () => {
    * and never reached the line this case reaches.
    *
    * Driving the SHIPPED composition root with the mark age as a fixture input
-   * gets there, and Execution refuses: `computeIdempotencyKey` returns a
-   * 64-character sha256 hex digest, and `submitBracket` asserts the whole
-   * `ExternalReference` fits Saxo's 50 (saxo-adapter.ts:521, limit at :110).
-   * The adapter's own docblock calls that overrun "latent rather than live
-   * only because `SaxoBrokerAdapter` has no production construction site yet"
-   * — #1400 BUILT that construction site, so it is live now, and no bracket
-   * this composition root produces can leave the process.
-   *
-   * It is not an artifact of the conviction floor moved below: every path to
-   * a `go` produces the same 64-character key. Nor is it entries only —
-   * `submitFlatten` asserts the same limit at suffix 0 (:686), so ADR-0014's
-   * mandatory flat-by-close exit is refused on the same arithmetic.
-   *
-   * Fixing it is NOT wiring, and so not this ticket's. The venue reference
-   * and the stored key must be the SAME string: the venue-enumeration paths
-   * (:1032, :1061, :1145, :1483, :1513) read `client_order_id` back off
-   * `ExternalReference` and match it against stored keys, so adapter-side
-   * truncation desynchronises reconcile and fill-sync silently (#1215's
-   * audited-paths rule). Any real fix changes `computeIdempotencyKey`'s own
-   * output or makes it venue-aware — a documented invariant restated in
-   * CONTEXT.md and the specs by #1487, which is an owner decision with a
-   * decision record behind it.
+   * gets there. Until #1510, Execution refused here: `computeIdempotencyKey`
+   * returns a 64-character sha256 hex digest and `submitBracket` asserted the
+   * whole `ExternalReference` fit Saxo's 50. #1510 (David, 2026-09-14, option
+   * 1) fixed it without touching `computeIdempotencyKey`: the adapter derives
+   * a `<=43`-char venue reference (`saxoExternalReference`) and translates it
+   * back to the real `client_order_id` on every read path, so this case now
+   * pins the opposite of what it pinned before — the bracket reaches the
+   * gateway.
    */
-  it('reaches the sixth stage, where Saxo refuses the 64-character idempotency key', async () => {
+  it('reaches the sixth stage and places the bracket, the 64-character idempotency key fitting the venue reference (#1510)', async () => {
     const clock = new SimulatedClock(NOW);
     const gateway = fixtureSaxoGateway();
     const profile = startingProfileForMode('paper', undefined, 'saxo');
@@ -400,17 +386,17 @@ describe('startFromEnvironment (broker venue selection, #1400)', () => {
     expect(outcome.final_stage).toBe('execution');
     expect(outcome.verdict_status).toBe('go');
 
-    // The refusal, and where it lands. A substring rather than the whole
-    // message: the character count in it is incidental to the constraint.
-    expect(outcome.execution_result?.status).toBe('error');
-    expect(outcome.execution_result?.reason).toContain('ExternalReference');
-    expect(outcome.execution_result?.reason).toContain('exceeds 50 chars');
+    // No refusal: the venue reference derived from the 64-character key fits
+    // Saxo's 50-char field, so `submitBracket` reaches the gateway.
+    expect(outcome.execution_result?.status).not.toBe('error');
 
-    // The load-bearing one: the assert precedes `placeIdempotently`, so
-    // nothing reached the venue. Read off the SAXO gateway itself, because
-    // the control arm executes on a `SimulatedBrokerAdapter` by design
-    // (control-arm-wiring.ts) — "an order was placed" proves nothing.
-    expect(gateway.placed).toHaveLength(0);
+    // The load-bearing one: the bracket actually reached the venue. Read off
+    // the SAXO gateway itself, because the control arm executes on a
+    // `SimulatedBrokerAdapter` by design (control-arm-wiring.ts) — "an order
+    // was placed" against the control arm would prove nothing about this one.
+    expect(gateway.placed).not.toHaveLength(0);
+    const order = gateway.placed[0];
+    expect(order?.ExternalReference?.length).toBeLessThanOrEqual(43);
   });
 
   /**

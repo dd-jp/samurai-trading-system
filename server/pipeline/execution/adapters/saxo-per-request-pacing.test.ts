@@ -17,22 +17,32 @@ import type { DormantLegsUnresolvedAlertChannel } from '../dormant-legs-unresolv
 import type { LegResizeUnverifiedAlertChannel } from '../leg-resize-unverified-alert.js';
 import type { NativeBracketRequest } from '../types.js';
 import type { UnresolvedPriceUnitAlertChannel } from '../unresolved-price-unit-alert.js';
-import { SaxoBrokerAdapter, type SaxoInstrumentResolver } from './saxo-adapter.js';
+import {
+  SaxoBrokerAdapter,
+  type SaxoInstrumentResolver,
+  saxoExternalReference,
+} from './saxo-adapter.js';
 import { SaxoHttpBrokerClient } from './saxo-http-client.js';
+
+/** The wire value the adapter sends for `'key-3usl-0930'`'s bracket master / a leg — see #1510. */
+function wireRef(clientOrderId = 'key-3usl-0930', leg?: 'stop' | 'target'): string {
+  const base = saxoExternalReference(clientOrderId);
+  return leg === undefined ? base : `${base}:${leg}`;
+}
 
 const ACCOUNTS = { Data: [{ AccountKey: 'acct-key', ClientKey: 'client-key' }] };
 const PLACEMENT = {
-  ExternalReference: 'key-3usl-0930',
+  ExternalReference: wireRef(),
   OrderId: '5040047177',
   Orders: [
-    { ExternalReference: 'key-3usl-0930:target', OrderId: '5040047179' },
-    { ExternalReference: 'key-3usl-0930:stop', OrderId: '5040047178' },
+    { ExternalReference: wireRef(undefined, 'target'), OrderId: '5040047179' },
+    { ExternalReference: wireRef(undefined, 'stop'), OrderId: '5040047178' },
   ],
 };
 const BRACKET_OPEN_ORDERS = [
   {
     OrderId: '5040047177',
-    ExternalReference: 'key-3usl-0930',
+    ExternalReference: wireRef(),
     Status: 'Working',
     OpenOrderType: 'Limit',
     Amount: 3,
@@ -42,7 +52,7 @@ const BRACKET_OPEN_ORDERS = [
   },
   {
     OrderId: '5040047178',
-    ExternalReference: 'key-3usl-0930:stop',
+    ExternalReference: wireRef(undefined, 'stop'),
     Status: 'NotWorking',
     OpenOrderType: 'StopIfTraded',
     Amount: 3,
@@ -52,7 +62,7 @@ const BRACKET_OPEN_ORDERS = [
   },
   {
     OrderId: '5040047179',
-    ExternalReference: 'key-3usl-0930:target',
+    ExternalReference: wireRef(undefined, 'target'),
     Status: 'NotWorking',
     OpenOrderType: 'Limit',
     Amount: 3,

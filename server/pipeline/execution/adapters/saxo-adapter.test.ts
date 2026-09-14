@@ -41,6 +41,7 @@ import {
   PRICE_UNIT_ALERT_REPEAT_EVERY,
   SaxoBrokerAdapter,
   type SaxoInstrumentResolver,
+  saxoExternalReference,
   saxoInstrumentResolverFromVenue,
 } from './saxo-adapter.js';
 import { SaxoBrokerProviderError } from './saxo-broker-errors.js';
@@ -119,6 +120,16 @@ function detailsClient(
   };
 }
 
+/** The wire value the adapter sends for `clientOrderId`'s bracket master / bare flatten — see #1510. */
+function wireRef(clientOrderId: string): string {
+  return saxoExternalReference(clientOrderId);
+}
+
+/** The wire value for one of `clientOrderId`'s bracket legs. */
+function wireLegRef(clientOrderId: string, leg: 'stop' | 'target'): string {
+  return `${wireRef(clientOrderId)}:${leg}`;
+}
+
 function makeBracket(overrides: Partial<NativeBracketRequest> = {}): NativeBracketRequest {
   return {
     client_order_id: 'key-3usl-0930',
@@ -136,11 +147,11 @@ function makeBracket(overrides: Partial<NativeBracketRequest> = {}): NativeBrack
 
 function placement(overrides: Partial<SaxoOrderPlacement> = {}): SaxoOrderPlacement {
   return {
-    ExternalReference: 'key-3usl-0930',
+    ExternalReference: wireRef('key-3usl-0930'),
     OrderId: '5040047177',
     Orders: [
-      { ExternalReference: 'key-3usl-0930:target', OrderId: '5040047179' },
-      { ExternalReference: 'key-3usl-0930:stop', OrderId: '5040047178' },
+      { ExternalReference: wireLegRef('key-3usl-0930', 'target'), OrderId: '5040047179' },
+      { ExternalReference: wireLegRef('key-3usl-0930', 'stop'), OrderId: '5040047178' },
     ],
     ...overrides,
   };
@@ -149,7 +160,7 @@ function placement(overrides: Partial<SaxoOrderPlacement> = {}): SaxoOrderPlacem
 function workingMaster(overrides: Partial<SaxoOpenOrder> = {}): SaxoOpenOrder {
   return {
     OrderId: '5040047177',
-    ExternalReference: 'key-3usl-0930',
+    ExternalReference: wireRef('key-3usl-0930'),
     Status: 'Working',
     OpenOrderType: 'Limit',
     OrderRelation: 'IfDoneMaster',
@@ -188,7 +199,7 @@ function workingMaster(overrides: Partial<SaxoOpenOrder> = {}): SaxoOpenOrder {
 function dormantLeg(overrides: Partial<SaxoOpenOrder> = {}): SaxoOpenOrder {
   return {
     OrderId: '5040047178',
-    ExternalReference: 'key-3usl-0930:stop',
+    ExternalReference: wireLegRef('key-3usl-0930', 'stop'),
     Status: 'NotWorking',
     OpenOrderType: 'StopIfTraded',
     Price: 9,
@@ -204,7 +215,7 @@ function dormantLeg(overrides: Partial<SaxoOpenOrder> = {}): SaxoOpenOrder {
 function targetLeg(overrides: Partial<SaxoOpenOrder> = {}): SaxoOpenOrder {
   return dormantLeg({
     OrderId: '5040047179',
-    ExternalReference: 'key-3usl-0930:target',
+    ExternalReference: wireLegRef('key-3usl-0930', 'target'),
     OpenOrderType: 'Limit',
     Price: 12,
     ...overrides,
@@ -216,7 +227,7 @@ function activity(overrides: Partial<SaxoOrderActivity> = {}): SaxoOrderActivity
     ActivityTime: '2026-09-05T08:30:00.000000Z',
     LogId: 'log-1',
     OrderId: '5040047177',
-    ExternalReference: 'key-3usl-0930',
+    ExternalReference: wireRef('key-3usl-0930'),
     Status: 'Placed',
     Amount: 3,
     BuySell: 'Buy',
@@ -356,7 +367,7 @@ describe('SaxoBrokerAdapter.submitBracket', () => {
       OrderPrice: 10,
       OrderDuration: { DurationType: 'DayOrder' },
       ManualOrder: false,
-      ExternalReference: 'key-3usl-0930',
+      ExternalReference: wireRef('key-3usl-0930'),
     });
     expect(request?.Orders).toEqual([
       expect.objectContaining({
@@ -365,13 +376,13 @@ describe('SaxoBrokerAdapter.submitBracket', () => {
         BuySell: 'Sell',
         Amount: 3,
         OrderDuration: { DurationType: 'GoodTillCancel' },
-        ExternalReference: 'key-3usl-0930:stop',
+        ExternalReference: wireLegRef('key-3usl-0930', 'stop'),
       }),
       expect.objectContaining({
         OrderType: 'Limit',
         OrderPrice: 12,
         BuySell: 'Sell',
-        ExternalReference: 'key-3usl-0930:target',
+        ExternalReference: wireLegRef('key-3usl-0930', 'target'),
       }),
     ]);
     expect(ack).toEqual({
@@ -413,7 +424,7 @@ describe('SaxoBrokerAdapter.submitBracket', () => {
         dormantLeg(),
         dormantLeg({
           OrderId: '5040047179',
-          ExternalReference: 'key-3usl-0930:target',
+          ExternalReference: wireLegRef('key-3usl-0930', 'target'),
           OpenOrderType: 'Limit',
           Price: 12,
           BuySell: 'Sell',
@@ -457,7 +468,7 @@ describe('SaxoBrokerAdapter.submitBracket', () => {
         dormantLeg(),
         dormantLeg({
           OrderId: '5040047179',
-          ExternalReference: 'key-3usl-0930:target',
+          ExternalReference: wireLegRef('key-3usl-0930', 'target'),
           OpenOrderType: 'Limit',
           Price: 12,
           BuySell: 'Sell',
@@ -616,7 +627,7 @@ describe('SaxoBrokerAdapter.getOrder', () => {
       listOpenOrders: vi.fn().mockResolvedValue([
         workingMaster({
           OrderId: '5040047178',
-          ExternalReference: 'key-3usl-0930:stop',
+          ExternalReference: wireLegRef('key-3usl-0930', 'stop'),
           OpenOrderType: 'StopIfTraded',
           OrderRelation: 'Oco',
           RelatedOpenOrders: [],
@@ -637,7 +648,7 @@ describe('SaxoBrokerAdapter.getOrder', () => {
         dormantLeg(),
         dormantLeg({
           OrderId: '5040047179',
-          ExternalReference: 'key-3usl-0930:target',
+          ExternalReference: wireLegRef('key-3usl-0930', 'target'),
           OpenOrderType: 'Limit',
           Price: 12,
           BuySell: 'Sell',
@@ -666,7 +677,7 @@ describe('SaxoBrokerAdapter.getOrder', () => {
         dormantLeg(),
         dormantLeg({
           OrderId: '5040047179',
-          ExternalReference: 'key-3usl-0930:target',
+          ExternalReference: wireLegRef('key-3usl-0930', 'target'),
           OpenOrderType: 'Limit',
           Price: 12,
           BuySell: 'Sell',
@@ -695,7 +706,7 @@ describe('SaxoBrokerAdapter.getOrder', () => {
         dormantLeg(),
         dormantLeg({
           OrderId: '5040047179',
-          ExternalReference: 'key-3usl-0930:target',
+          ExternalReference: wireLegRef('key-3usl-0930', 'target'),
           OpenOrderType: 'Limit',
           Price: 12,
           BuySell: 'Sell',
@@ -919,7 +930,7 @@ describe('SaxoBrokerAdapter.getOrder', () => {
         dormantLeg({ Status: 'Working' }),
         dormantLeg({
           OrderId: '5040047179',
-          ExternalReference: 'key-3usl-0930:target',
+          ExternalReference: wireLegRef('key-3usl-0930', 'target'),
           OpenOrderType: 'Limit',
           Price: 12,
           BuySell: 'Sell',
@@ -1016,7 +1027,7 @@ describe('SaxoBrokerAdapter flatten', () => {
       .mockResolvedValueOnce([
         workingMaster({
           OrderId: '777',
-          ExternalReference: 'flat-1',
+          ExternalReference: wireRef('flat-1'),
           OpenOrderType: 'Market',
           OrderRelation: 'StandAlone',
           BuySell: 'Sell',
@@ -1025,7 +1036,9 @@ describe('SaxoBrokerAdapter flatten', () => {
       ]);
     const client = makeClient({
       listOpenOrders,
-      placeOrder: vi.fn().mockResolvedValue({ OrderId: '777', ExternalReference: 'flat-1' }),
+      placeOrder: vi
+        .fn()
+        .mockResolvedValue({ OrderId: '777', ExternalReference: wireRef('flat-1') }),
     });
     const { adapter } = makeAdapter(client);
 
@@ -1038,7 +1051,7 @@ describe('SaxoBrokerAdapter flatten', () => {
       BuySell: 'Sell',
       Amount: 3,
       OrderDuration: { DurationType: 'DayOrder' },
-      ExternalReference: 'flat-1',
+      ExternalReference: wireRef('flat-1'),
     });
     expect(first.broker_order_ids).toEqual(['777']);
     expect(second.broker_order_ids).toEqual(['777']);
@@ -1057,7 +1070,7 @@ describe('SaxoBrokerAdapter flatten', () => {
       .mockResolvedValue([
         activity({
           OrderId: '777',
-          ExternalReference: 'flat-1',
+          ExternalReference: wireRef('flat-1'),
           Status: 'Filled',
           BuySell: 'Sell',
           FillAmount: 3,
@@ -1091,7 +1104,7 @@ describe('SaxoBrokerAdapter flatten', () => {
       .mockResolvedValue([
         activity({
           OrderId: '777',
-          ExternalReference: 'flat-1',
+          ExternalReference: wireRef('flat-1'),
           Status: 'Cancelled',
           BuySell: 'Sell',
         }),
@@ -1134,7 +1147,7 @@ describe('SaxoBrokerAdapter flatten', () => {
       .mockResolvedValue([
         activity({
           OrderId: '777',
-          ExternalReference: 'flat-1',
+          ExternalReference: wireRef('flat-1'),
           Status: 'Cancelled',
           ActivityTime: '2026-09-05T08:59:00.000000Z',
         }),
@@ -1183,7 +1196,7 @@ describe('SaxoBrokerAdapter flatten', () => {
             ? [
                 activity({
                   OrderId: '777',
-                  ExternalReference: 'flat-1',
+                  ExternalReference: wireRef('flat-1'),
                   Status: 'Filled',
                   FillAmount: 3,
                   AveragePrice: 10,
@@ -1675,7 +1688,7 @@ describe('SaxoBrokerAdapter.fetchNewFills', () => {
         activity({
           LogId: 'log-stop',
           OrderId: '5040047178',
-          ExternalReference: 'key-3usl-0930:stop',
+          ExternalReference: wireLegRef('key-3usl-0930', 'stop'),
           Status: 'Filled',
           FillAmount: 3,
           AveragePrice: 8.98,
@@ -1722,12 +1735,14 @@ describe('SaxoBrokerAdapter.fetchNewFills', () => {
 
   it("books a flatten's fill as an 'exit' leg", async () => {
     const client = makeClient({
-      placeOrder: vi.fn().mockResolvedValue({ OrderId: '777', ExternalReference: 'flat-1' }),
+      placeOrder: vi
+        .fn()
+        .mockResolvedValue({ OrderId: '777', ExternalReference: wireRef('flat-1') }),
       listOrderActivities: vi.fn().mockResolvedValue([
         activity({
           LogId: 'log-flat',
           OrderId: '777',
-          ExternalReference: 'flat-1',
+          ExternalReference: wireRef('flat-1'),
           Status: 'Filled',
           BuySell: 'Sell',
           FillAmount: 3,
@@ -1788,7 +1803,7 @@ describe('SaxoBrokerAdapter.fetchNewFills', () => {
         activity({
           LogId: 'log-stop',
           OrderId: '5040047178',
-          ExternalReference: 'key-3usl-0930:stop',
+          ExternalReference: wireLegRef('key-3usl-0930', 'stop'),
           Status: 'Filled',
           FillAmount: 3,
           AveragePrice: 8.98,
@@ -1845,7 +1860,7 @@ describe('SaxoBrokerAdapter.fetchNewFills', () => {
         activity({
           LogId: 'log-old',
           OrderId: '3',
-          ExternalReference: 'key-old:target',
+          ExternalReference: wireLegRef('key-old', 'target'),
           Status: 'Filled',
           FillAmount: 3,
           AveragePrice: 12,
@@ -1956,11 +1971,17 @@ describe('SaxoBrokerAdapter GBX price unit (#1302)', () => {
 
   function gbxPlacement(): SaxoOrderPlacement {
     return {
-      ExternalReference: GBX_BRACKET.client_order_id,
+      ExternalReference: wireRef(GBX_BRACKET.client_order_id),
       OrderId: '5040047200',
       Orders: [
-        { ExternalReference: 'key-lqq3-0930:target', OrderId: '5040047202' },
-        { ExternalReference: 'key-lqq3-0930:stop', OrderId: '5040047201' },
+        {
+          ExternalReference: wireLegRef(GBX_BRACKET.client_order_id, 'target'),
+          OrderId: '5040047202',
+        },
+        {
+          ExternalReference: wireLegRef(GBX_BRACKET.client_order_id, 'stop'),
+          OrderId: '5040047201',
+        },
       ],
     };
   }
@@ -1988,7 +2009,7 @@ describe('SaxoBrokerAdapter GBX price unit (#1302)', () => {
         .mockResolvedValueOnce([])
         .mockResolvedValue([
           activity({
-            ExternalReference: GBX_BRACKET.client_order_id,
+            ExternalReference: wireRef(GBX_BRACKET.client_order_id),
             Uic: GBX_REF.uic,
             Status: 'Filled',
             Amount: 1,
@@ -2053,7 +2074,7 @@ describe('SaxoBrokerAdapter GBX price unit (#1302)', () => {
         .mockResolvedValueOnce([])
         .mockResolvedValue([
           activity({
-            ExternalReference: GBX_BRACKET.client_order_id,
+            ExternalReference: wireRef(GBX_BRACKET.client_order_id),
             Uic: 999999,
             Status: 'Filled',
             Amount: 1,
@@ -2105,7 +2126,7 @@ describe('SaxoBrokerAdapter GBX price unit (#1302)', () => {
           return [
             activity({
               LogId: `log-${row}`,
-              ExternalReference: GBX_BRACKET.client_order_id,
+              ExternalReference: wireRef(GBX_BRACKET.client_order_id),
               Uic: 999999,
               Status: 'Filled',
               Amount: 1,
@@ -2140,7 +2161,7 @@ describe('SaxoBrokerAdapter GBX price unit (#1302)', () => {
   /** One episode per Uic: a second unresolvable line pages at once, not on the first one's cadence. */
   it('pages a different unresolvable Uic immediately', async () => {
     const filled = {
-      ExternalReference: GBX_BRACKET.client_order_id,
+      ExternalReference: wireRef(GBX_BRACKET.client_order_id),
       Status: 'Filled' as const,
       Amount: 1,
       FillAmount: 1,
@@ -2216,13 +2237,13 @@ describe('SaxoBrokerAdapter GBX price unit (#1302)', () => {
         .mockResolvedValue([
           activity({
             LogId: 'log-stale',
-            ExternalReference: GBX_BRACKET.client_order_id,
+            ExternalReference: wireRef(GBX_BRACKET.client_order_id),
             Uic: 999999,
             Status: 'Placed',
           }),
           activity({
             LogId: 'log-fill',
-            ExternalReference: other.client_order_id,
+            ExternalReference: wireRef(other.client_order_id),
             Uic: GBX_REF.uic,
             Status: 'Filled',
             Amount: 1,
@@ -2363,5 +2384,139 @@ describe('saxoInstrumentResolverFromVenue quote units (#1302)', () => {
     const resolver = await saxoInstrumentResolverFromVenue(GBX_ROW, client);
 
     expect(resolver.resolve('LQQ3')?.price_to_contract_factor).toBe(1);
+  });
+});
+
+/**
+ * #1510 — `computeIdempotencyKey`'s real 64-character sha256 hex digest
+ * overflows Saxo's 50-char `ExternalReference`. `saxoExternalReference`
+ * derives a fixed-width venue reference from it and every read path
+ * translates back, so this suite drives the adapter under the SHAPE
+ * `computeIdempotencyKey` actually produces, not the short test-fixture ids
+ * the rest of this file uses.
+ */
+describe('SaxoBrokerAdapter Saxo ExternalReference derivation (#1510)', () => {
+  /** A real `computeIdempotencyKey` output shape: 64 lowercase hex chars. */
+  const HEX_64_KEY = 'a'.repeat(64);
+
+  it('derives a fixed 40-hex reference, well inside the 50-char venue field even with a leg suffix', () => {
+    const ref = saxoExternalReference(HEX_64_KEY);
+
+    expect(ref).toMatch(/^[0-9a-f]{40}$/);
+    expect(`${ref}:target`.length).toBeLessThanOrEqual(50);
+  });
+
+  it('derives DISTINCT references for a retry/residual-reflatten suffix, never truncating the base digest', () => {
+    // execute.ts's resolveExitRetryKey and residual-reflatten.ts append these
+    // suffixes to the SAME base key precisely so a retry is a genuinely new
+    // attempt — slicing computeIdempotencyKey's own digest instead of hashing
+    // the whole client_order_id would have collapsed every retry of one
+    // order onto the same ExternalReference.
+    const base = saxoExternalReference(HEX_64_KEY);
+    const retry1 = saxoExternalReference(`${HEX_64_KEY}:retry-1`);
+    const retry2 = saxoExternalReference(`${HEX_64_KEY}:retry-2`);
+    const residual = saxoExternalReference(`${HEX_64_KEY}:residual-reflatten-1`);
+
+    expect(new Set([base, retry1, retry2, residual]).size).toBe(4);
+  });
+
+  it('places a bracket under the real 64-character idempotency key without refusing', async () => {
+    const client = makeClient({
+      placeOrder: vi.fn().mockResolvedValue({
+        OrderId: '9000',
+        ExternalReference: saxoExternalReference(HEX_64_KEY),
+        Orders: [
+          { OrderId: '9001', ExternalReference: `${saxoExternalReference(HEX_64_KEY)}:stop` },
+          { OrderId: '9002', ExternalReference: `${saxoExternalReference(HEX_64_KEY)}:target` },
+        ],
+      }),
+    });
+    const { adapter } = makeAdapter(client);
+
+    const ack = await adapter.submitBracket(makeBracket({ client_order_id: HEX_64_KEY }));
+
+    expect(ack).toEqual({
+      client_order_id: HEX_64_KEY,
+      broker_order_ids: ['9000', '9001', '9002'],
+      order_state: 'submitted',
+    });
+    const [request] = vi.mocked(client.placeOrder).mock.calls[0] ?? [];
+    expect(request?.ExternalReference).toBe(saxoExternalReference(HEX_64_KEY));
+    expect(request?.ExternalReference.length).toBeLessThanOrEqual(50);
+  });
+
+  it('flattens under the real 64-character idempotency key without refusing', async () => {
+    const client = makeClient({
+      placeOrder: vi.fn().mockResolvedValue({
+        OrderId: '9100',
+        ExternalReference: saxoExternalReference(HEX_64_KEY),
+      }),
+    });
+    const { adapter } = makeAdapter(client);
+
+    const ack = await adapter.submitFlatten('3USL', 'sell', 3, HEX_64_KEY);
+
+    expect(ack).toEqual({
+      client_order_id: HEX_64_KEY,
+      broker_order_ids: ['9100'],
+      order_state: 'submitted',
+    });
+  });
+
+  /**
+   * Reconcile / fill-sync / `getOrder` / `resumeFlatten` round-trip: a fresh
+   * process (fresh adapter, journal-only knowledge of the bracket) must map
+   * the Saxo-observed `ExternalReference` back to the full 64-char
+   * `client_order_id` — never the wire value itself, which is what a
+   * translation bug would leak into `NormalizedOrder.client_order_id` and
+   * `NormalizedFill.client_order_id`.
+   */
+  it('maps the Saxo wire reference back to the full 64-character client_order_id on getOrder, after a restart', async () => {
+    const state = new InMemoryBrokerStateStore();
+    state.saveBracket({
+      venue: 'saxo',
+      client_order_id: HEX_64_KEY,
+      phase: 'armed',
+      entry_order_id: '9000',
+      stop_order_id: '9001',
+      target_order_id: '9002',
+      request: null,
+      armed_qty: null,
+      arming_qty: null,
+      arm_attempt: 0,
+    });
+    const client = makeClient({
+      listOpenOrders: vi.fn().mockResolvedValue([
+        workingMaster({
+          OrderId: '9000',
+          ExternalReference: saxoExternalReference(HEX_64_KEY),
+        }),
+      ]),
+    });
+    const { adapter } = makeAdapter(client, state);
+
+    const order = await adapter.getOrder(HEX_64_KEY, '3USL');
+
+    expect(order?.client_order_id).toBe(HEX_64_KEY);
+  });
+
+  it('attributes a fill-sweep activity under the derived reference back to the full client_order_id', async () => {
+    const client = makeClient({
+      listOrderActivities: vi.fn().mockResolvedValue([
+        activity({
+          ExternalReference: saxoExternalReference(HEX_64_KEY),
+          Status: 'Filled',
+          FillAmount: 3,
+          AveragePrice: 10,
+        }),
+      ]),
+    });
+    const { adapter } = makeAdapter(client);
+    await adapter.submitBracket(makeBracket({ client_order_id: HEX_64_KEY }));
+
+    const [fill] = await adapter.fetchNewFills(new Date('2026-09-05T08:00:00Z'));
+
+    expect(fill?.client_order_id).toBe(HEX_64_KEY);
+    expect(fill?.leg).toBe('entry');
   });
 });

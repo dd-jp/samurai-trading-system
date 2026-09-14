@@ -26,7 +26,7 @@
  * text or response body reaches it.
  */
 export interface DormantLegsUnresolvedAlert {
-  /** The bracket's own `client_order_id` — the master's `ExternalReference`. */
+  /** The bracket's own `client_order_id`. */
   client_order_id: string;
   instrument: string;
   /**
