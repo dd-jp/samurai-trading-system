@@ -62,7 +62,9 @@ const ALL_PERSONAS: Analyst[] = [technicalAnalyst, fundamentalAnalyst, sentiment
  * token bucket shared with the order path (`shared/http/venue-pacing.ts`),
  * which holds 20 tokens above the order path's reserve and refills at 2.0/s,
  * while one sweep of the 20-instrument universe reaches the venue for up to
- * four distinct windows per instrument. A fetch that cannot get a token has not
+ * four distinct windows per instrument — a WARM-STORE count; a first-ever tick
+ * against an empty store asks eight and drains for 70s, which this deadline
+ * does not cover (analysts-spec.md, "Module: Failure Handling"). A fetch that cannot get a token has not
  * started, so a deadline under the drain times the back of every sweep out by
  * construction — the 2026-09-10 19:56 burst measured 91 of 133 fetches past
  * 10,000ms with a median of 21,338ms, which is #1080's instance 2: `technical
@@ -74,7 +76,13 @@ const ALL_PERSONAS: Analyst[] = [technicalAnalyst, fundamentalAnalyst, sentiment
  * pinned from the pacing side by `production/rate-limit-wiring.test.ts`, which
  * is where the bucket's constants live. `ATTEMPTS_PER_PERSONA` is 2, so the
  * per-persona wall clock is up to 60,000ms — half the two-minute tick cadence,
- * which is the bound `paper-profile.ts`'s pass-duration arithmetic uses.
+ * which is the bound `paper-profile.ts`'s pass-duration arithmetic uses. Those
+ * two attempts may be waiting on the SAME fetch: the retry carries no
+ * `AbortSignal`, so attempt 1's request is still in flight and attempt 2 joins
+ * it through `MarketDataServiceImpl.inFlightBarFetches` instead of re-asking
+ * the venue. Against a queue — which is what this deadline is sized for — that
+ * is the right trade; liveness against a stuck fetch comes from
+ * `fetchWithTimeout`, not from the retry.
  *
  * The other half of #1080's instance 2 is upstream of this number: concurrent
  * callers asking for the SAME window no longer each spend a token

@@ -91,6 +91,12 @@ export const MAX_ROUNDS_BY_ASSET_CLASS: Record<AssetClass, number> = {
  * per-attempt timeout writes no row at all (see AC5 on #1080) — so these are a
  * lower bound on the true tail, which is the direction that matters here.
  *
+ * Those two sessions are the sample ON PURPOSE, not all 266 post-fan-out rows
+ * in the store: the wider set mixes in 2026-09-03/04 rows taken under the flat
+ * 30,000ms client default #1103 replaced, which is the whole of its tail above
+ * 28,000ms (14 rows, max 29,979ms). Mixing them moves the censoring level, not
+ * the shape of the distribution this constant is sized against.
+ *
  * `DEFAULT_LLM_TIMEOUT_MS` (production/defaults.ts) recovers this number by
  * dividing the budget below by the same call count, so a call cannot exceed it
  * without the per-attempt timeout firing.

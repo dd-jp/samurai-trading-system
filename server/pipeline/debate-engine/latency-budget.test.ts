@@ -756,9 +756,12 @@ describe('enforceLatencyBudget', () => {
 /**
  * #1080. The stocks budget derives from the round cap, so an assertion that
  * recovers the budget from the cap is an identity and pins nothing. What is
- * pinnable is the pair of values the derivation resolves to, and the per-call
- * ceiling implied by dividing one by the other — a change to either side has to
- * be re-read here rather than silently absorbed.
+ * pinnable is the pair of values the derivation resolves to — a change to
+ * either side has to be re-read here rather than silently absorbed. The
+ * per-call ceiling those two imply is pinned where it is USED, by
+ * `production.test.ts`'s assertion on `DEFAULT_LLM_CLIENT_CONFIG.timeoutMs`;
+ * dividing one of these literals by the other here would restate the identity
+ * this doc just called worthless.
  */
 describe('the stocks debate budget against the calls the debate issues (#1080)', () => {
   it('counts three persona calls per round plus one disagreement detection per debate', () => {
@@ -769,8 +772,5 @@ describe('the stocks debate budget against the calls the debate issues (#1080)',
   it('affords every sequential call a stocks debate issues at the measured per-call ceiling', () => {
     expect(MAX_ROUNDS_BY_ASSET_CLASS.stocks).toBe(1);
     expect(LATENCY_BUDGET_MS.stocks).toBe(112_000);
-    expect(LATENCY_BUDGET_MS.stocks / llmCallsPerDebate(MAX_ROUNDS_BY_ASSET_CLASS.stocks)).toBe(
-      28_000,
-    );
   });
 });

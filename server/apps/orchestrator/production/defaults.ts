@@ -170,10 +170,15 @@ const DEBATE_BUDGET_MS = LATENCY_BUDGET_MS.stocks;
  * `llmCallsPerDebate(maxRounds)` strictly sequential calls (three personas a
  * round plus one disagreement detection), so the constraint is per-debate, not
  * per-call. The invariant is `llmCallsPerDebate(MAX_ROUNDS_BY_ASSET_CLASS.stocks)
- * * timeoutMs <= DEBATE_BUDGET_MS`, pinned by a test. It holds by construction
- * in both directions: `LATENCY_BUDGET_MS.stocks` is itself derived from
- * `MAX_ROUNDS_BY_ASSET_CLASS.stocks`, so moving the round cap moves the budget
- * and this timeout together and the three cannot drift apart.
+ * * timeoutMs <= DEBATE_BUDGET_MS`, pinned by a test — and that test is what
+ * enforces it, not this expression. Substituting the budget's own definition
+ * cancels the call count on both sides, so this division reduces to
+ * `MEASURED_DEBATE_CALL_CEILING_MS` for ANY cap and the inequality can never
+ * fail. What the derivation buys is that the two move together; what pins
+ * their VALUES is three hand-maintained literals — the cap here, the ceiling
+ * in `latency-budget.ts`, and `production.test.ts`'s `timeoutMs` assertion.
+ * Raising the cap without re-measuring the ceiling is what the cap-mutation
+ * tests catch: seven fail.
  *
  * `maxAttempts` is not a factor here, and that is a deliberate reading of what
  * the budget bounds. `enforceLatencyBudget` races the WHOLE debate and aborts
@@ -188,7 +193,12 @@ const DEBATE_BUDGET_MS = LATENCY_BUDGET_MS.stocks;
  * just above the measured p95 of a returning debate call (#1080: 27,510ms over
  * 113 rows, p90 26,999ms). Those percentiles are right-censored by this very
  * timeout, so they are a lower bound on the tail — which is why the budget is
- * sized at the timeout rather than at the measured p95 itself.
+ * sized at the timeout rather than at the measured p95 itself. The censoring
+ * is checkable rather than asserted: across the two sessions this timeout was
+ * in force (2026-09-07, 2026-09-10) no `stage: 'debate'` row reaches 28,000ms
+ * at all. The rows above it elsewhere in the store are 2026-09-03/04, taken
+ * under the flat 30,000ms client default #1103 replaced with this derivation,
+ * and they stop at 29,979ms — censored one level up, not uncensored.
  */
 const DEFAULT_LLM_TIMEOUT_MS =
   DEBATE_BUDGET_MS / llmCallsPerDebate(MAX_ROUNDS_BY_ASSET_CLASS.stocks);

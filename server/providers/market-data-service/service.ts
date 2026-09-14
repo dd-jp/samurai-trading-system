@@ -86,6 +86,17 @@ export class MarketDataServiceImpl implements MarketDataService {
    *    about what a short read means (`alpaca-http-client.ts`), and a caller
    *    that wanted the throw would silently receive a short window instead.
    *
+   * An analyst RETRY joins one of these rather than re-issuing, and that is the
+   * intended reading rather than an accident. `AnalystOrchestrator` runs its
+   * second attempt without an `AbortSignal`, so attempt 1's fetch is still in
+   * flight, and `barIndex` is unchanged across a 30s gap at 5m or 1h — so
+   * attempt 2 lands on this key. Re-asking the venue would put a second request
+   * behind the same token queue that made attempt 1 slow; joining costs no
+   * token and settles when the first settles, which `fetchWithTimeout`
+   * (10,000ms, inside a bounded `withRetry`) bounds independently of anything
+   * here. The price is that analysts-spec.md story 19's retry absorbs a
+   * transient FAULT and not a transient QUEUE, which that spec now says.
+   *
    * Entries are removed in a `finally`, so a rejection cannot poison the key —
    * the next caller re-fetches rather than replaying a stale error.
    */

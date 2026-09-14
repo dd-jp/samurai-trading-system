@@ -519,26 +519,29 @@ export class AnthropicLlmClient implements LlmClient {
    * separately, which is correct: each attempt is separately billed.
    *
    * #1080 MEASURED THAT FLOOR for the first time, and the number is not
-   * negligible. In the 2026-09-03 paper session, at least nine of the 26
-   * timed-out debates contained a full 30s attempt that timed out and was
-   * retried — provably, because a single attempt is bounded by
-   * `config.timeoutMs`, so any interval between one logged call and the next
-   * that exceeds it must contain one. One debate (`9d9e505f3493`) burned its
-   * entire 60s budget with ZERO rows in `llm_spend` at all. At the session's
-   * mean metered debate-call cost of $0.002332, those nine attempts are a
-   * floor of ~$0.021 the cap could not see — small against ADR-0008's $50, but
-   * unbounded in principle, since nothing counted them.
+   * negligible. Across the two soak sessions running the 28,000ms deadline
+   * (2026-09-08, 2026-09-10) `onRetryAttempt` recorded 38 attempts that spent
+   * the full deadline and wrote no row — 37 at `stage: 'debate'` — and two
+   * further debate calls gave up with `failure_cause: 'timeout'`, their second
+   * attempt unmetered too. At those sessions' mean metered debate-call cost of
+   * $0.002297, those 39 debate attempts are a floor of ~$0.090 against $0.2595
+   * metered over 113 rows: `llm_spend` sees 113 of 152 debate attempts. It is
+   * a floor and not a total — 17 more calls gave up `cancelled`, the budget
+   * aborting a request already on the wire, and wrote nothing either.
+   * ADR-0008 carries the working.
    *
-   * They are counted now: `AnthropicLlmClientConfig.onRetryAttempt` logs each
-   * retried attempt with its elapsed time, so the gap between billed and
-   * metered is readable from the log rather than inferable from timestamps.
-   * The rows are still not written — there is still no usage block on a failed
-   * call — so this remains a floor, but a floor whose size can be checked.
+   * They are counted because `onRetryAttempt` logs each retried attempt with
+   * its elapsed time, which is the ONLY source: inference from `llm_spend`
+   * timestamps cannot see these at all, since none of the 37 debate attempts
+   * sits between two metered rows of its own debate. The rows are still not
+   * written — there is still no usage block on a failed call — so this remains
+   * a floor, but a floor whose size can be read off the log.
    *
-   * That measurement was taken while a `deadline` timeout was retried. It is
-   * not any more (`isRetryable`), so the largest single contributor to the
-   * floor — a full deadline billed twice for one logical call — cannot recur;
-   * what remains is one unmetered attempt per call that fails.
+   * A `deadline` timeout is no longer retried (`isRetryable`), which halves
+   * the worst case per failing call from two unmetered attempts to one. That
+   * does not remove the floor: every measured attempt above is a FIRST
+   * attempt, which still expires and still writes nothing, and a terminal
+   * deadline can make failing calls more numerous rather than fewer.
    *
    * `latency_ms` (#326) is the SAME number returned to the caller on
    * `LlmResponse` — measured once, around `callWithTimeout`, and passed in
@@ -596,8 +599,9 @@ export class AnthropicLlmClient implements LlmClient {
    * only on a timed-out debate):
    *
    *  - The per-call timeout now aborts its own in-flight request. Before, a
-   *    timed-out call kept running and was RETRIED underneath itself
-   *    (`LlmTimeoutError` is retryable), so one slow call could hold two or
+   *    timed-out call kept running and was RETRIED underneath itself (every
+   *    `LlmTimeoutError` was retryable then; since #1080 only a `'status'` one
+   *    is), so one slow call could hold two or
    *    three concurrent requests open against the provider's rate limit and
    *    bill for all of them while at most one answer was ever read.
    *  - `callerSignal` (the debate's latency budget) is combined with that

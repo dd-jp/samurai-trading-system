@@ -222,13 +222,14 @@ export const DEFAULT_VENUE_PACING: VenuePacingConfig = {
    *   The sweep asks for up to four VENUE-REACHING bar windows per instrument
    *   (`5m/260`, `1h/57`, `1h/20`, `1d/30`, with `5m/112` a fifth shape across
    *   the universe), and before #1080 concurrent callers asking for the SAME
-   *   window each spent a token, because the bar cache writes on completion and
-   *   cannot see a request in flight — the 2026-09-10 19:56 burst issued 133
-   *   fetches over 34 distinct windows, **~2.85 tok/s**. Deduped by
-   *   `MarketDataServiceImpl`'s single-flight coalescing it is **~0.73 tok/s**,
+   *   window each spend a token undeduped, because the bar cache writes on
+   *   completion and cannot see a request in flight — the 2026-09-10 19:56
+   *   burst measured that shape directly: 133 fetches over 34 distinct
+   *   windows, **~2.85 tok/s**. Coalesced onto the 34 by
+   *   `MarketDataServiceImpl`'s single flight it is **~0.73 tok/s**,
    *   and it is this term that `DEFAULT_ANALYST_TIMEOUT_MS`
    *   (`pipeline/analysts/orchestrator.ts`) is derived against. Total ~0.95
-   *   tok/s deduped, ~3.05 tok/s before the fix. `refillPerSecond` is
+   *   tok/s coalesced, ~3.05 tok/s undeduped. `refillPerSecond` is
    *   deliberately NOT raised on the measurement: buying the analyst deadline
    *   that way would need Alpaca's data-API and trading-API quotas to be
    *   separate budgets, which this file's 200/min ceiling does not establish.
@@ -240,7 +241,8 @@ export const DEFAULT_VENUE_PACING: VenuePacingConfig = {
    * `1.8` — the value the "restore exactly 75%" arithmetic suggests — stretches
    * that drain to 33s, and the failure it invites is the same silent trade-loss
    * this universe widening exists to avoid, arriving by a different door: bar
-   * fetches starve behind the 20-token priority reserve, `withRetry` backs off,
+   * fetches starve against the 20 tokens of background headroom the 21-token
+   * priority reserve leaves them, `withRetry` backs off,
    * marks go stale, and Verdict refuses on `max_mark_age`. `2.0` drains in 30s
    * at `41 + 120 = 161/min`, i.e. 80% of the ceiling rather than 75%.
    *

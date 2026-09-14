@@ -772,7 +772,7 @@ describe("Alpaca's burst covers one fill-poll sweep of the configured universe (
   /**
    * #1080. The cold-start derivation above counts ONE bars fetch per
    * instrument; the soak measured up to four (see
-   * `DISTINCT_BAR_WINDOWS_PER_INSTRUMENT`). So a cold sweep issues up to 80
+   * `DISTINCT_BAR_WINDOWS_PER_INSTRUMENT`). So a warm sweep issues up to 80
    * requests against 20 tokens of background headroom — `capacity` 41 less the
    * order path's `reserveForPriority` 21 — and the remaining 60 arrive at
    * `refillPerSecond`.
@@ -784,10 +784,32 @@ describe("Alpaca's burst covers one fill-poll sweep of the configured universe (
    * — which is exactly #1080's instance 2 (57% of main-arm runs missing quorum,
    * every one attributing to `technical did not answer within 10000ms`).
    *
+   * WARM STORE, and therefore not the worst sweep the system can issue. A
+   * first-ever tick against an empty store has no stored history to serve the
+   * wider specs from and asks the eight windows `MarketDataServiceImpl`
+   * documents, which is `(20 * 8 - 20) / 2.0` = 70s of drain against a
+   * 30,000ms deadline: the back of that sweep misses quorum and the tick
+   * records a no-trade it never measured. It self-heals from the sweep's own
+   * fetches as they land, and this deadline makes it 3x shorter than the
+   * 10,000ms one did — better, not safe.
+   *
+   * Raising the deadline is not the fix available: two attempts per persona at
+   * 70,000ms is 140s of analyst wall clock against a 120,000ms tick, which
+   * `paper-profile.ts`'s pass-duration tripwire refuses. The fix is warming the
+   * store OFF the tick path, and no boot-time bar prefetch exists today; it is
+   * recorded as declined-for-now on #1080 (analysts-spec.md, "Module: Failure
+   * Handling"), because the starvation #1080 measured is steady-state.
+   *
+   * If it does not self-heal, `consecutive_misses` plus the quorum-skip alert
+   * is the surface. Single-flight coalescing moved that counter from per-caller
+   * to per-fetch-group — smaller and truer: it counts ticks that missed rather
+   * than callers that joined one miss, so a cold store reads as a streak across
+   * ticks instead of one fan-out-inflated spike.
+   *
    * The literal is the shipped constants' value, pinned so a change to either
    * side has to be re-read here rather than silently absorbed.
    */
-  it("affords the analyst deadline the deduped cold sweep's drain at this pacing (#1080)", () => {
+  it("affords the analyst deadline the deduped warm sweep's drain at this pacing (#1080)", () => {
     const { capacity, refillPerSecond, reserveForPriority } = DEFAULT_VENUE_PACING.alpaca;
     const backgroundHeadroom = capacity - (reserveForPriority ?? 0);
     const sweepRequests = DEFAULT_UNIVERSE.length * DISTINCT_BAR_WINDOWS_PER_INSTRUMENT;
