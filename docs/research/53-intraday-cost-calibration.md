@@ -259,6 +259,57 @@ the two 1bp structural floors (~4 bps round trip), not by the spread calibration
 moves the charged cost by 3-9%. Filing rather than acting on it — the floors are a Principle-1 guard and #875 does
 not have a mandate to touch them, and the criterion above explicitly excludes them.
 
+> **Amended 2026-09-14 by [#1218](https://github.com/dd-jp/samurai-trading-system/issues/1218): the commission
+> floor no longer binds on the intraday path, and the paragraph immediately above is withdrawn as the level
+> claim.** Every number in the two tables above was measured before the intraday grid stamped a venue.
+> `run-stage2.ts` now stamps `venue: 'saxo'` on the stock universe whenever the timeframe is not daily, and
+> `CALIBRATED_INTRADAY_COST_CONFIG` carries `venues.saxo.commissionRate = SAXO_COMMISSION_RATE = 0.0008`. Since
+> `resolveAssetConfig` merges a venue override field-by-field, that override reaches **`commissionRate` and
+> nothing else**. Restated in full below; the measurement that establishes it is
+> [`archive/raw/2026-09-14-1218-saxo-venue-stamp-cost-restatement.md`](archive/raw/2026-09-14-1218-saxo-venue-stamp-cost-restatement.md).
+>
+> | symbol | commission was | commission now | per fill was | per fill now | round trip was | round trip now |
+> | --- | --- | --- | --- | --- | --- | --- |
+> | SPY | 1.0000 | **8.0000** | 2.0750 | **9.0750** | 4.1500 | **18.1500** |
+> | QQQ | 1.0000 | **8.0000** | 2.0780 | **9.0780** | 4.1560 | **18.1560** |
+> | AAPL | 1.0000 | **8.0000** | 2.1174 | **9.1174** | 4.2348 | **18.2348** |
+> | TSLA | 1.0000 | **8.0000** | 2.2238 | **9.2238** | 4.4476 | **18.4476** |
+>
+> **The correct level statement is now the opposite of the withdrawn one: intraday cost is governed by a venue
+> commission RATE, not by the floors.** Only the spread floor still binds. The commission floor is inert — 8 bps
+> is 80x it — so a coefficient error in the spread fit moves the charged cost by well under 1% rather than the
+> 3-9% recorded above.
+>
+> **Only the INTRADAY-cfg column moves.** `CALIBRATED_COST_CONFIG` declares no `venues` key at all, so the stamp
+> is inert under it: the "1m bars, DAILY cfg" and "1d bars, DAILY cfg" columns are unchanged, and adding 7 bps to
+> them would be wrong. The restatement log re-prices both configs to show this rather than asserting it.
+>
+> **G2's delta column therefore does NOT survive as printed — but its verdict does.** Because only one of the two
+> configs declares a `venues` key, the stamp does not cancel across the comparison: the instrument is stamped in
+> both arms, but only the intraday arm has an override to honour. As the code now runs it the deltas become
+> **+7.0687 (SPY), +7.0686 (QQQ), +7.1031 (AAPL), +7.1354 (TSLA)** on the *2017-03-15 snapshot* basis, or
+> **+7.0688 / +7.0686 / +7.1031 / +7.1837** on the *published five-session-median* basis of the table above —
+> every symbol roughly 28x over the 0.25 bps bar either way. **Mind the basis**: the two differ only on TSLA, by
+> the 0.0483 bps the restatement log records as doc 53's own snapshot-vs-median gap, and the flat +7.0000 carries
+> through both identically. That is not a repricing of the spread calibration. It is the two timeframe-keyed
+> configs now differing on **two axes rather than one**, so the delta no longer isolates what it was built to
+> isolate. Hold `venues` equal across both arms and the published deltas come back on their own basis — the
+> log's snapshot figures 0.0687 / 0.0686 / 0.1031 / 0.1354 against this table's 0.0688 / 0.0686 / 0.1031 /
+> 0.1837, and the largest of the four, TSLA's 0.1837, is still under the 0.25 bps bar — so the coefficient
+> comparison is intact, **"roughly an order of magnitude" stays withdrawn**, and G3 and G4 are untouched (for G1
+> see its residual 1 below, amended by the same ticket). **Any future re-run of G2 must equalize `venues` across the two
+> arms, or it measures the venue override instead of the calibration.** Part 4 of the restatement log prices both
+> ways rather than arguing it.
+>
+> **16 bps is a FLOOR on the live charge, not an estimate of it.** Saxo's live GIA commission was measured
+> 2026-09-14 at **0.08%/side flat with no per-order minimum** (ADR-0015's amendment, `1d155b7e`) — so the
+> round-trip commission is 16 bps and the earlier SIM-tariff £8 minimum does not apply. Two costs sit on top and
+> neither is modelled here. The **FX conversion margin** is a recorded deferral, not an oversight: #1220 (David's
+> 2026-09-08 ruling) declined to model it and excluded non-sterling lines instead, which is sound for the live
+> GBP LSE universe but *not* for this document — every symbol measured here is a **USD-quoted US equity**, exactly
+> the case `CostConfig.venues`' docstring warns is "missing the FX leg entirely". And the LSE ETP spread remains
+> unmeasured (G4 below, #1053). The restated figures are therefore a lower bound in both directions that matter.
+
 ## G3 — one `stocks` coefficient is NOT defensible: fires, and is filed
 
 p90 across symbols 0.2272 (TSLA) against a median of 0.0697 is **3.3x**, above the declared 2x threshold. Recorded
@@ -279,7 +330,10 @@ charged cost for every symbol (the floor is invariant while slippage still shrin
 G4 proxy gap is uncovered. So the WARNING narrows, and its replacement states three named residuals:
 
 1. charged half-spread is at the structural floor at both resolutions and under both configs, so the floor governs
-   what a fill is charged, not this calibration;
+   what a fill is charged, not this calibration; **amended 2026-09-14 by
+   [#1218](https://github.com/dd-jp/samurai-trading-system/issues/1218) — the first clause stands, the second no
+   longer does on the intraday path. The *spread* floor still binds, but what governs a fill's charge there is now
+   `venues.saxo.commissionRate` (8 bps/side), which dwarfs both floors. See the amendment box in G2;**
 2. one per-asset-class coefficient under-charges the wide names (G3, TSLA at 3.3x the median);
 3. the fit is a **US-equity proxy**; the live universe is GBP LSE-listed leveraged ETPs (ADR-0016) with no free
    quote source.
@@ -312,6 +366,9 @@ than a US mega-cap's — so the proxy errs optimistic, which is the direction th
   them needs realised fills, and they are explicitly out of this ticket's scope. **ANSWERED 2026-09-02 by doc 58
   §F4: they are under-sized and flattering for the live universe, in sign if not in every cited magnitude.**
   Saxo charges 8 bps per side (ADR-0015:201) against a 1 bp commission floor — F4's argument is sign-only and
-  needs no per-instrument spread measurement to hold. The "all 30 of 30 pool lines show a half-spread above the
+  needs no per-instrument spread measurement to hold. **Superseded in part 2026-09-14 by #1218: on the intraday
+  path the commission floor no longer dominates anything, because the venue stamp replaced it with the 8 bps rate
+  outright — see the G2 amendment. The remaining open question is the SPREAD floor alone, which still binds on
+  every symbol here and is still validated only by fills nobody has.** The "all 30 of 30 pool lines show a half-spread above the
   1 bp spread floor" count is doc 58 §F6's, **RETRACTED 2026-09-08 by [#1036](https://github.com/dd-jp/samurai-trading-system/issues/1036)**
   (LSE Terms §8, #999) — it is not currently evidenced.
