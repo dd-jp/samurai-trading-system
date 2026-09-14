@@ -31,6 +31,14 @@ or `open_positions` (a still-open one) carries the row — see
 `server/pipeline/cgt/sqlite-cgt-fill-source.ts`'s header for why both tables
 must be read.
 
+One qualification to "already captured": `fills.fee` is not a broker-
+reported charge. The Saxo activity feed carries no commission field, so
+`saxo-adapter.ts`'s `toCashFill` MODELS it — the published 0.08% GBP-ETP
+tariff applied to the fill's own cash amount, per ADR-0015 §"Saxo". This
+report's allowable cost and proceeds therefore rest on a modelled charge, not
+a contract-note one; verifying against the operator's actual contract notes
+(the disclaimer above) is not optional polish for that figure specifically.
+
 ## How matching works
 
 `server/pipeline/cgt/cgt-disposal-matching.ts` is a pure module implementing
@@ -62,6 +70,43 @@ boundary, so bucketing by UTC calendar date is equivalent to Europe/London
 bucketing for this venue — see `cgt-disposal-matching.ts`'s `dayKey` doc. A
 future non-LSE venue would need this re-derived.
 
+### Disposals can be provisional for up to 30 days
+
+The 30-day rule looks **forward** from a disposal. A disposal priced by the
+Section 104 pool today can still be reclassified to a `30-day` match — with a
+different rule, allowable cost and gain — if an acquisition of the same
+instrument arrives before that disposal's 30-day window closes. The report
+marks every such row `(provisional)` and states the run's own "generated"
+timestamp so the reader knows which disposals that applies to; treat a
+`(provisional)` row as final only once you re-run the report after its
+window has closed. A `same-day` or `30-day` match is never provisional — it
+was already matched against a specific acquisition that exists.
+
+## Currency: GBP, GBX, and everything else
+
+`fills.fee_currency` also names the currency `fills.price` is denominated
+in (both come off Saxo's `CurrencyCode` for the line — see
+`sqlite-cgt-fill-source.ts`'s header). Classification reuses
+`isPenceCurrency`/`BOOK_CURRENCY` (`server/shared/book-currency.ts`, #1465)
+rather than a bespoke check, so the report handles three cases:
+
+- **GBP** — the common case, used as-is.
+- **Pence** (`GBX`/`gbx`/`GBp`/`p`) — normalised ÷100. Defensive rather than
+  reachable today: the Saxo adapter's own `CurrencyCode` already resolves to
+  GBP for a pence-quoted line before a fee is ever persisted
+  (`saxo-price-unit.ts`), so no live fill is expected to carry a pence
+  `fee_currency` — but one must not be summed as pounds if it ever appears.
+- **Anything else** (USD on most of the tradeable pool's lines, per
+  `lse-etp-pool.ts` — occasionally EUR) — this report has no transaction-date
+  FX rate and **does not invent one**. These fills are excluded from every
+  matched disposal and every total above, and are listed separately, in
+  their own native currency, under **UNCONVERTED — FX rate not captured at
+  fill time** on every report. Converting them to sterling by hand, from the
+  operator's own contract notes, is required before they can be included in
+  a return. Capturing the transaction-date FX rate at fill time (so this
+  section becomes unnecessary) is a follow-up, tracked separately from
+  #1518 — no `saxo-adapter.ts` or execution-path change was made for this.
+
 ## Refusals, not silent mispricing
 
 The matcher and its data source throw rather than produce a confidently wrong
@@ -70,10 +115,23 @@ number:
 - A fill attributable to neither `closed_trades` nor `open_positions`.
 - A `side = 'sell'` lot — short-sale CGT treatment differs from this
   long-only model and is not implemented.
-- A fee reported in a currency other than GBP (`fills.fee_currency`) — this
-  report sums charges as GBP and has no FX model to convert one.
 - A disposal that exceeds every acquisition the Section 104 pool has ever
   recorded for that instrument — a data-integrity fault, not a zero.
+- `--tax-year` before the tax year `ANNUAL_EXEMPT_AMOUNT_GBP` is sourced for
+  (2024/25) — an earlier year used a different Annual Exempt Amount this
+  report does not have on file, so it refuses rather than print the current
+  figure under a year it may not apply to.
+- `SAMURAI_MODE` is not `live` — a paper/backtest store's rows are not CGT
+  events at all, and every other integrity fault here refuses rather than
+  mis-report, so this one does too.
+- The store the report would open is missing a table or column it needs
+  (see "Running the report" below) — named explicitly rather than read
+  against a schema this report was not written against.
+
+A non-GBP, non-GBX fee currency is **not** in this list any more (round 1
+review, finding 1): earlier drafts refused the whole report on it, which
+would have aborted on the majority of the tradeable pool's USD-denominated
+lines. See "Currency" above.
 
 ## Running the report
 
@@ -82,9 +140,19 @@ yarn report:cgt                      # current UK tax year, against SAMURAI_MODE
 yarn report:cgt -- --tax-year 2024-25
 ```
 
-The report prints the store mode and path on every run — a paper-mode
-store's rows are not CGT events at all, and misreading one as the live book
-would be the worst failure this tool could produce silently.
+The report prints the store mode and path on every run, and refuses outright
+if `SAMURAI_MODE` is not `live` — a paper-mode store's rows are not CGT
+events at all, and misreading one as the live book would be the worst
+failure this tool could produce silently.
+
+It opens the store **read-only** (`openReadOnlyCgtStore`) and never runs
+migrations against it — unlike most `server/tools/*.ts` reports, which open
+the shared store read-write via `openSharedStore`. A live-money store must
+never take a write handle from a reporting tool, and must never have
+migrations run against it by a process that is not the orchestrator,
+possibly while the orchestrator holds the same file open. If the store
+predates a migration this report needs, it refuses and names the missing
+table or column rather than reading a schema it was not written against.
 
 ## Known gap, deliberately not closed here
 

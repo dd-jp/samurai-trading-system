@@ -79,7 +79,7 @@ describe('SqliteCgtFillSource — resolves instrument/arm across closed AND open
     seedFill(db, 'closed-1', 'f1', 'entry', 100, 10, 1, new Date('2025-06-02T08:05:00Z'));
     seedFill(db, 'closed-1', 'f2', 'target', 120, 10, 2, new Date('2025-06-02T14:00:00Z'));
 
-    const legs = new SqliteCgtFillSource(db).getLiveEquityFillLegs();
+    const { legs } = new SqliteCgtFillSource(db).getLiveEquityFillLegs();
 
     expect(legs).toHaveLength(2);
     expect(legs.every((l) => l.instrument === 'LSE:TEST')).toBe(true);
@@ -87,7 +87,7 @@ describe('SqliteCgtFillSource — resolves instrument/arm across closed AND open
     expect(legs.find((l) => l.kind === 'disposal')?.grossAmount).toBe(1200);
   });
 
-  it('reads a still-open lot via open_positions — the AC1 gap the pure-closed_trades join would silently drop', () => {
+  it('reads a still-open lot via open_positions — the pure-closed_trades join would silently drop this', () => {
     const db = openSharedStore(':memory:');
     seedOpenPosition(db, {
       idempotency_key: 'open-1',
@@ -99,11 +99,33 @@ describe('SqliteCgtFillSource — resolves instrument/arm across closed AND open
     });
     seedFill(db, 'open-1', 'f1', 'entry', 50, 20, 1, new Date('2025-06-03T08:00:00Z'));
 
-    const legs = new SqliteCgtFillSource(db).getLiveEquityFillLegs();
+    const { legs } = new SqliteCgtFillSource(db).getLiveEquityFillLegs();
 
     expect(legs).toHaveLength(1);
     expect(legs[0].instrument).toBe('LSE:OPEN');
     expect(legs[0].kind).toBe('acquisition');
+  });
+
+  it('prefers closed_trades over open_positions when a key names a row in both, without duplicating legs', () => {
+    const db = openSharedStore(':memory:');
+    seedClosedTrade(db, 'both-1', 'LSE:CLOSED', 'stocks', 'buy', 'live');
+    seedOpenPosition(db, {
+      idempotency_key: 'both-1',
+      instrument: 'LSE:STALE-OPEN-ROW',
+      asset_class: 'stocks',
+      side: 'buy',
+      arm: 'live',
+      order_state: 'filled',
+    });
+    seedFill(db, 'both-1', 'f1', 'entry', 100, 10, 1, new Date('2025-06-02T08:05:00Z'));
+    seedFill(db, 'both-1', 'f2', 'target', 120, 10, 2, new Date('2025-06-02T14:00:00Z'));
+
+    const { legs } = new SqliteCgtFillSource(db).getLiveEquityFillLegs();
+
+    // Both PKs are single-column on idempotency_key, so the two LEFT JOINs
+    // cannot fan out — 2 legs, not 4 — and closed_trades wins the `??`.
+    expect(legs).toHaveLength(2);
+    expect(legs.every((l) => l.instrument === 'LSE:CLOSED')).toBe(true);
   });
 
   it('excludes the control arm even when it shares the instrument with a live lot', () => {
@@ -112,7 +134,7 @@ describe('SqliteCgtFillSource — resolves instrument/arm across closed AND open
     seedFill(db, 'control-1', 'f1', 'entry', 100, 10, 1, new Date('2025-06-02T08:05:00Z'));
     seedFill(db, 'control-1', 'f2', 'target', 120, 10, 2, new Date('2025-06-02T14:00:00Z'));
 
-    const legs = new SqliteCgtFillSource(db).getLiveEquityFillLegs();
+    const { legs } = new SqliteCgtFillSource(db).getLiveEquityFillLegs();
 
     expect(legs).toHaveLength(0);
   });
@@ -123,7 +145,7 @@ describe('SqliteCgtFillSource — resolves instrument/arm across closed AND open
     seedFill(db, 'crypto-1', 'f1', 'entry', 100, 10, 1, new Date('2025-06-02T08:05:00Z'));
     seedFill(db, 'crypto-1', 'f2', 'target', 120, 10, 2, new Date('2025-06-02T14:00:00Z'));
 
-    const legs = new SqliteCgtFillSource(db).getLiveEquityFillLegs();
+    const { legs } = new SqliteCgtFillSource(db).getLiveEquityFillLegs();
 
     expect(legs).toHaveLength(0);
   });
@@ -136,19 +158,66 @@ describe('SqliteCgtFillSource — resolves instrument/arm across closed AND open
     expect(() => new SqliteCgtFillSource(db).getLiveEquityFillLegs()).toThrow(/short/i);
   });
 
-  it('throws on a fee reported in a non-book currency rather than booking it as GBP', () => {
-    const db = openSharedStore(':memory:');
-    seedClosedTrade(db, 'usd-fee-1', 'LSE:TEST', 'stocks', 'buy', 'live');
-    seedFill(db, 'usd-fee-1', 'f1', 'entry', 100, 10, 1, new Date('2025-06-02T08:05:00Z'), 'USD');
-
-    expect(() => new SqliteCgtFillSource(db).getLiveEquityFillLegs()).toThrow(/currency/i);
-  });
-
   it('throws on a fill whose lot is in neither closed_trades nor open_positions', () => {
     const db = openSharedStore(':memory:');
     seedFill(db, 'orphan-1', 'f1', 'exit', 100, 10, 1, new Date('2025-06-02T08:05:00Z'));
 
     expect(() => new SqliteCgtFillSource(db).getLiveEquityFillLegs()).toThrow(/instrument/i);
+  });
+});
+
+describe('SqliteCgtFillSource — currency handling (#1518 review round 1, finding 1)', () => {
+  it('normalises a GBX (pence) fee/price to GBP rather than summing pence as pounds', () => {
+    const db = openSharedStore(':memory:');
+    seedClosedTrade(db, 'gbx-1', 'LSE:TEST', 'stocks', 'buy', 'live');
+    seedFill(db, 'gbx-1', 'f1', 'entry', 100, 10, 1, new Date('2025-06-02T08:05:00Z'), 'GBX');
+
+    const { legs, unconverted } = new SqliteCgtFillSource(db).getLiveEquityFillLegs();
+
+    expect(unconverted).toHaveLength(0);
+    expect(legs).toHaveLength(1);
+    expect(legs[0].grossAmount).toBe(10); // (100 * 10) / 100
+    expect(legs[0].charges).toBeCloseTo(0.01); // 1 / 100
+  });
+
+  it('normalises GBp (lowercase p, vendor pence spelling) the same as GBX — pence-first check, not swallowed by a case-insensitive GBP match', () => {
+    const db = openSharedStore(':memory:');
+    seedClosedTrade(db, 'gbp-lower-1', 'LSE:TEST', 'stocks', 'buy', 'live');
+    seedFill(db, 'gbp-lower-1', 'f1', 'entry', 100, 10, 1, new Date('2025-06-02T08:05:00Z'), 'GBp');
+
+    const { legs, unconverted } = new SqliteCgtFillSource(db).getLiveEquityFillLegs();
+
+    expect(unconverted).toHaveLength(0);
+    expect(legs).toHaveLength(1);
+    expect(legs[0].grossAmount).toBe(10); // (100 * 10) / 100, not 1000 — 'GBp'.toUpperCase() === 'GBP' would 100x this if pence weren't checked first
+    expect(legs[0].charges).toBeCloseTo(0.01);
+  });
+
+  it('routes a non-GBP/GBX fee (e.g. USD) to the unconverted list, in native currency, rather than aborting the report or inventing an FX rate', () => {
+    const db = openSharedStore(':memory:');
+    seedClosedTrade(db, 'usd-1', 'LSE:TEST', 'stocks', 'buy', 'live');
+    seedFill(db, 'usd-1', 'f1', 'entry', 100, 10, 1, new Date('2025-06-02T08:05:00Z'), 'USD');
+    seedFill(db, 'usd-1', 'f2', 'target', 120, 10, 2, new Date('2025-06-02T14:00:00Z'), 'USD');
+
+    const { legs, unconverted } = new SqliteCgtFillSource(db).getLiveEquityFillLegs();
+
+    expect(legs).toHaveLength(0);
+    expect(unconverted).toHaveLength(2);
+    expect(unconverted.every((f) => f.currency === 'USD')).toBe(true);
+    expect(unconverted.find((f) => f.kind === 'acquisition')?.grossAmount).toBe(1000);
+    expect(unconverted.find((f) => f.kind === 'disposal')?.grossAmount).toBe(1200);
+  });
+
+  it('treats a null fee_currency (pre-#1220 legacy fills) as GBP, unchanged from before', () => {
+    const db = openSharedStore(':memory:');
+    seedClosedTrade(db, 'legacy-1', 'LSE:TEST', 'stocks', 'buy', 'live');
+    seedFill(db, 'legacy-1', 'f1', 'entry', 100, 10, 1, new Date('2025-06-02T08:05:00Z'), null);
+
+    const { legs, unconverted } = new SqliteCgtFillSource(db).getLiveEquityFillLegs();
+
+    expect(unconverted).toHaveLength(0);
+    expect(legs).toHaveLength(1);
+    expect(legs[0].grossAmount).toBe(1000);
   });
 });
 
@@ -159,7 +228,7 @@ describe('SqliteCgtFillSource + matchDisposals — cross-check against closed_tr
     seedFill(db, 'closed-1', 'f1', 'entry', 100, 10, 1, new Date('2025-06-02T08:05:00Z'));
     seedFill(db, 'closed-1', 'f2', 'target', 120, 10, 2, new Date('2025-06-02T14:00:00Z'));
 
-    const legs = new SqliteCgtFillSource(db).getLiveEquityFillLegs();
+    const { legs } = new SqliteCgtFillSource(db).getLiveEquityFillLegs();
     const matched = matchDisposals(legs);
     const totalGain = matched.reduce((sum, m) => sum + m.gain, 0);
 

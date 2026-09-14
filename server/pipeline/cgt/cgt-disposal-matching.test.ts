@@ -1,13 +1,16 @@
 import {
   ANNUAL_EXEMPT_AMOUNT_GBP,
+  ANNUAL_EXEMPT_AMOUNT_SOURCED_FROM_TAX_YEAR,
   type CgtFillLeg,
   cgtReportForTaxYear,
+  disposalStillInThirtyDayWindow,
   HMRC_30_DAY_RULE_CITATION,
   HMRC_SAME_DAY_RULE_CITATION,
   HMRC_SECTION_104_CITATION,
   matchDisposals,
   ukTaxYearBounds,
   ukTaxYearLabel,
+  unconvertedCgtFillsInTaxYear,
 } from './cgt-disposal-matching.js';
 
 function leg(overrides: Partial<CgtFillLeg> & Pick<CgtFillLeg, 'kind' | 'date'>): CgtFillLeg {
@@ -232,6 +235,135 @@ describe('matchDisposals — Section 104 pool (CG51575)', () => {
     ];
 
     expect(() => matchDisposals(fills)).toThrow(/pool/i);
+  });
+});
+
+describe('matchDisposals — 30-day window boundary', () => {
+  it('matches an acquisition exactly 30 days after the disposal (inclusive)', () => {
+    const fills: CgtFillLeg[] = [
+      leg({
+        kind: 'acquisition',
+        date: new Date('2025-01-01T08:00:00Z'),
+        quantity: 10,
+        grossAmount: 500,
+        charges: 0,
+        idempotency_key: 'acq-pool',
+      }),
+      leg({
+        kind: 'disposal',
+        date: new Date('2025-06-01T00:00:00Z'),
+        quantity: 10,
+        grossAmount: 1000,
+        charges: 0,
+        idempotency_key: 'disp-1',
+      }),
+      leg({
+        kind: 'acquisition',
+        date: new Date('2025-07-01T00:00:00Z'), // exactly +30 days
+        quantity: 10,
+        grossAmount: 900,
+        charges: 0,
+        idempotency_key: 'acq-plus30',
+      }),
+    ];
+
+    const matched = matchDisposals(fills);
+
+    expect(matched).toHaveLength(1);
+    expect(matched[0].rule).toBe('30-day');
+  });
+
+  it('does NOT match an acquisition 31 days after the disposal', () => {
+    const fills: CgtFillLeg[] = [
+      leg({
+        kind: 'acquisition',
+        date: new Date('2025-01-01T08:00:00Z'),
+        quantity: 10,
+        grossAmount: 500,
+        charges: 0,
+        idempotency_key: 'acq-pool',
+      }),
+      leg({
+        kind: 'disposal',
+        date: new Date('2025-06-01T00:00:00Z'),
+        quantity: 10,
+        grossAmount: 1000,
+        charges: 0,
+        idempotency_key: 'disp-1',
+      }),
+      leg({
+        kind: 'acquisition',
+        date: new Date('2025-07-02T00:00:00Z'), // +31 days
+        quantity: 10,
+        grossAmount: 900,
+        charges: 0,
+        idempotency_key: 'acq-plus31',
+      }),
+    ];
+
+    const matched = matchDisposals(fills);
+
+    expect(matched).toHaveLength(1);
+    expect(matched[0].rule).toBe('section-104');
+  });
+});
+
+describe('disposalStillInThirtyDayWindow', () => {
+  it('is true up to and including the +30-day boundary, false the day after', () => {
+    const disposalDate = new Date('2025-06-01T00:00:00.000Z');
+    expect(disposalStillInThirtyDayWindow(disposalDate, new Date('2025-06-15T00:00:00Z'))).toBe(
+      true,
+    );
+    expect(disposalStillInThirtyDayWindow(disposalDate, new Date('2025-07-01T00:00:00Z'))).toBe(
+      true,
+    );
+    expect(disposalStillInThirtyDayWindow(disposalDate, new Date('2025-07-02T00:00:00Z'))).toBe(
+      false,
+    );
+  });
+});
+
+describe('cgtReportForTaxYear — Annual Exempt Amount sourcing', () => {
+  it('refuses a tax year before the AEA is sourced for, rather than printing £3,000 under it', () => {
+    expect(() => cgtReportForTaxYear([], ANNUAL_EXEMPT_AMOUNT_SOURCED_FROM_TAX_YEAR - 1)).toThrow(
+      /sourced/i,
+    );
+  });
+
+  it('accepts the first sourced tax year', () => {
+    expect(() => cgtReportForTaxYear([], ANNUAL_EXEMPT_AMOUNT_SOURCED_FROM_TAX_YEAR)).not.toThrow();
+  });
+});
+
+describe('unconvertedCgtFillsInTaxYear', () => {
+  it('windows unconverted fills the same way cgtReportForTaxYear windows disposals', () => {
+    const fills = [
+      {
+        instrument: 'LSE:USD',
+        kind: 'acquisition' as const,
+        date: new Date('2025-04-05T23:59:00Z'),
+        quantity: 10,
+        grossAmount: 1000,
+        charges: 1,
+        currency: 'USD',
+        idempotency_key: 'k1',
+        broker_fill_id: 'f1',
+      },
+      {
+        instrument: 'LSE:USD',
+        kind: 'acquisition' as const,
+        date: new Date('2025-04-06T00:00:00Z'),
+        quantity: 10,
+        grossAmount: 1000,
+        charges: 1,
+        currency: 'USD',
+        idempotency_key: 'k2',
+        broker_fill_id: 'f2',
+      },
+    ];
+
+    expect(unconvertedCgtFillsInTaxYear(fills, 2024)).toHaveLength(1);
+    expect(unconvertedCgtFillsInTaxYear(fills, 2025)).toHaveLength(1);
   });
 });
 

@@ -1,18 +1,21 @@
 /**
  * The one read behind #1518's CGT report: every fill on the LIVE arm's Saxo
- * GIA equity book, joined to its instrument/side.
+ * GIA equity book, joined to its instrument/side, split into GBP-priced legs
+ * ready for `matchDisposals` and the fills this report cannot price in
+ * sterling without inventing an FX rate.
  *
  * `fills` carries no `instrument` column (`server/shared/types/records.ts`) —
  * it joins to whichever of `closed_trades` (a round-tripped lot) or
  * `open_positions` (a still-open one) shares its `idempotency_key`. BOTH are
  * read, not `closed_trades` alone: an open lot's entry fill is a real
  * acquisition the Section 104 pool must know about, and a partially-flattened
- * open lot has real disposal fills of its own — `closed_trades` sees neither
- * (#1518 code review). The two tables cannot both match a fill's key with a
- * nonzero row — `closedTrade()` (ingest-fills.ts) is the only writer of
- * `closed_trades` and never deletes the matching `open_positions` row (the
- * #1088 `LotRetirement` doc: "`closed` is deliberately never swept"), so
- * `closed_trades` is preferred by construction whenever a key is in both.
+ * open lot has real disposal fills of its own — `closed_trades` sees neither.
+ * A key CAN be in both tables at once — `closedTrade()` (ingest-fills.ts)
+ * never deletes the matching `open_positions` row (the #1088 `LotRetirement`
+ * doc: "`closed` is deliberately never swept"). Both PKs are single-column on
+ * `idempotency_key`, so the two LEFT JOINs cannot fan out into duplicate rows
+ * even then; the `??` below simply prefers `closed_trades` whenever a key
+ * names a row in both (`sqlite-cgt-fill-source.test.ts` pins this case).
  *
  * Scoped to `arm = 'live'` (the control arm is simulated, never a real
  * disposal — CLAUDE.md's live/control split) and `asset_class = 'stocks'`
@@ -20,10 +23,28 @@
  * disposal is a real historical CGT event too, but this ticket does not
  * cover it, and silently blending the two asset classes into one pool would
  * misstate both).
+ *
+ * Currency: `fee_currency` also names the currency `fills.price` (hence
+ * `grossAmount`) is denominated in — both come off the same Saxo
+ * `CurrencyCode` (`saxo-adapter.ts`'s `toCashFill`). GBP rows pass straight
+ * through; a pence row (`isPenceCurrency`, `server/shared/book-currency.ts`
+ * #1465 — GBX/gbx/GBp/p) is normalised ÷100 — defensive rather than
+ * reachable today, since the adapter's own `CurrencyCode` already resolves to
+ * GBP for a pence-quoted line before a fee is persisted (`saxo-price-unit.ts`'s
+ * `price_to_contract_factor`). Anything else (USD on most of the tradeable
+ * pool's lines, per `lse-etp-pool.ts`) cannot be priced in sterling without
+ * the transaction-date FX rate, which no fill records — those fills are
+ * returned separately, in native currency, rather than guessed into the
+ * matched total or used to abort the whole report. Classification reuses
+ * `isPenceCurrency`/`BOOK_CURRENCY` rather than a local GBP/GBX string
+ * comparison — `book-currency.ts` checks pence FIRST specifically because
+ * `GBp` (pence) upper-cases to `GBP` and a naive case-insensitive pound test
+ * would 100x it.
  */
 
+import { BOOK_CURRENCY, type Fill, isPenceCurrency } from '../../shared/index.js';
 import { type FillRow, fromFillRow, type StoreHandle } from '../../shared/store/index.js';
-import type { CgtFillLeg } from './cgt-disposal-matching.js';
+import type { CgtFillLeg, UnconvertedCgtFill } from './cgt-disposal-matching.js';
 
 interface FillJoinRow extends FillRow {
   c_instrument: string | null;
@@ -36,17 +57,23 @@ interface FillJoinRow extends FillRow {
   o_arm: 'live' | 'control' | null;
 }
 
+export interface CgtFillLegs {
+  legs: CgtFillLeg[];
+  /** Fills whose currency is neither GBP nor GBX — see this file's header. */
+  unconverted: UnconvertedCgtFill[];
+}
+
 export class SqliteCgtFillSource {
   constructor(private readonly db: StoreHandle) {}
 
   /**
-   * Every fill this instrument report needs, classified into `matchDisposals`'s
-   * `CgtFillLeg` shape. Refuses rather than mis-reporting (advisor review):
-   * an unattributable fill, a short-sale lot, or a non-GBP fee would each
-   * otherwise produce a confidently wrong number on a document headed for
-   * HMRC rather than a missing one.
+   * Every fill this report needs, classified into `matchDisposals`'s
+   * `CgtFillLeg` shape (or set aside as `unconverted`). Refuses rather than
+   * mis-reporting on two integrity faults that are not currency-related: an
+   * unattributable fill, and a short-sale lot (this long-only matcher cannot
+   * price one).
    */
-  getLiveEquityFillLegs(): CgtFillLeg[] {
+  getLiveEquityFillLegs(): CgtFillLegs {
     const rows = this.db
       .prepare(
         `SELECT f.idempotency_key AS idempotency_key,
@@ -76,6 +103,7 @@ export class SqliteCgtFillSource {
       .all() as FillJoinRow[];
 
     const legs: CgtFillLeg[] = [];
+    const unconverted: UnconvertedCgtFill[] = [];
     for (const row of rows) {
       const instrument = row.c_instrument ?? row.o_instrument;
       const assetClass = row.c_asset_class ?? row.o_asset_class;
@@ -95,29 +123,59 @@ export class SqliteCgtFillSource {
             `short-sale CGT treatment differs from this long-only matcher and is not implemented.`,
         );
       }
-      if (row.fee_currency !== null && !isGbp(row.fee_currency)) {
-        throw new Error(
-          `CGT: fill ${row.idempotency_key}/${row.broker_fill_id} reports a ${row.fee_currency} fee — ` +
-            `this report sums fees as GBP and cannot convert a non-book-currency charge.`,
-        );
-      }
 
       const fill = fromFillRow(row);
-      legs.push({
-        instrument,
-        kind: fill.leg === 'entry' ? 'acquisition' : 'disposal',
-        date: fill.timestamp,
-        quantity: fill.qty,
-        grossAmount: fill.price * fill.qty,
-        charges: fill.fee,
-        idempotency_key: fill.idempotency_key,
-        broker_fill_id: fill.broker_fill_id,
-      });
+      const kind = fill.leg === 'entry' ? 'acquisition' : 'disposal';
+      const currency = (row.fee_currency ?? BOOK_CURRENCY).trim();
+      const rawGrossAmount = fill.price * fill.qty;
+      const rawCharges = fill.fee;
+
+      // Pence FIRST — see this file's header on why a case-insensitive GBP
+      // comparison run first would swallow `GBp` and 100x it.
+      const divisor = isPenceCurrency(currency)
+        ? PENCE_PER_GBP
+        : currency.toUpperCase() === BOOK_CURRENCY
+          ? 1
+          : undefined;
+
+      if (divisor === undefined) {
+        unconverted.push({
+          instrument,
+          kind,
+          date: fill.timestamp,
+          quantity: fill.qty,
+          grossAmount: rawGrossAmount,
+          charges: rawCharges,
+          currency,
+          idempotency_key: fill.idempotency_key,
+          broker_fill_id: fill.broker_fill_id,
+        });
+      } else {
+        legs.push(toLeg(fill, instrument, kind, rawGrossAmount / divisor, rawCharges / divisor));
+      }
     }
-    return legs;
+    return { legs, unconverted };
   }
 }
 
-function isGbp(currency: string): boolean {
-  return currency.trim().toUpperCase() === 'GBP';
+/** ISO 4217 minor unit: 100 pence (GBX/gbx/GBp/p, see `isPenceCurrency`) makes 1 GBP. */
+const PENCE_PER_GBP = 100;
+
+function toLeg(
+  fill: Fill,
+  instrument: string,
+  kind: CgtFillLeg['kind'],
+  grossAmount: number,
+  charges: number,
+): CgtFillLeg {
+  return {
+    instrument,
+    kind,
+    date: fill.timestamp,
+    quantity: fill.qty,
+    grossAmount,
+    charges,
+    idempotency_key: fill.idempotency_key,
+    broker_fill_id: fill.broker_fill_id,
+  };
 }
