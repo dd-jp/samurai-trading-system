@@ -300,17 +300,21 @@ export async function enforceLatencyBudget(params: {
   // handlers to `debate`, so the late rejection is handled-and-ignored rather
   // than reaching `process.on('unhandledRejection')`. Pinned by the
   // "swallows the cancelled debate rejection" test, which listens for one.
-  const result = await Promise.race([
-    debate,
-    new Promise<{ status: 'timed_out' }>((resolve) => {
-      timer = setTimeout(() => resolve({ status: 'timed_out' }), budget_ms);
-    }),
-  ]);
-
-  // Cleared on BOTH paths. The debate winning the race used to leave the
-  // budget timer pending until it fired for nothing — one leaked timer per
-  // tick, every tick, for the length of the soak.
-  clearTimeout(timer);
+  // Cleared on EVERY exit, the rejecting one included: a non-`LlmFailure`
+  // throw (a gate refusal, #1080's steady state for most of a pass) escapes
+  // the race and used to leave the budget timer pending until it fired for
+  // nothing — one leaked handle per refused instrument, every tick.
+  let result: Awaited<typeof debate> | { status: 'timed_out' };
+  try {
+    result = await Promise.race([
+      debate,
+      new Promise<{ status: 'timed_out' }>((resolve) => {
+        timer = setTimeout(() => resolve({ status: 'timed_out' }), budget_ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 
   if (result.status === 'completed') {
     return result.result;
