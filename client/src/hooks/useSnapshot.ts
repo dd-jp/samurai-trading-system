@@ -130,9 +130,12 @@ function pollTimeoutMs(intervalMs: number): number {
  * small state discriminator on the client, not three ad-hoc flags"). Every
  * consumer that needs to know how much of the feed to trust reads THIS field,
  * not `stale/snapshot/error` combined by hand — `stale` is kept on
- * `SnapshotFeed` too, but it is derived FROM `status`, never set
- * independently, so the two can never disagree about what state the page is
- * in.
+ * `SnapshotFeed` too (for the rail's border colour, which must react to the
+ * raw watchdog even in the `'waiting'` window — see its own field comment
+ * for why it is NOT simply `status === 'stale'`), but it is never set
+ * independently of `status`'s own inputs, so the two can never disagree
+ * about a contract mismatch specifically: `stale` reads false throughout one,
+ * by construction.
  *
  * Ranked, highest priority first, because more than one can be true of the
  * underlying facts at once and only one word can be shown:
@@ -524,9 +527,11 @@ const INITIAL: FeedState = {
 /**
  * The single place `FeedStatus` is computed from the raw booleans above —
  * see `FeedStatus`'s doc comment for the ranking and why mismatch outranks
- * staleness. `SnapshotFeed.stale` is DERIVED from this (`status === 'stale'`)
- * rather than read off `watchdogStale` directly, so the two can never
- * disagree about what state a caller sees.
+ * staleness. `SnapshotFeed.stale` is NOT simply `status === 'stale'` (that
+ * would make it false throughout `'waiting'`, a real behaviour change from
+ * before `FeedStatus` existed — see `stale`'s own comment at the return
+ * below); it stays a read of `watchdogStale`, gated only on `contractMismatch`
+ * so the two can never disagree about a mismatch specifically.
  */
 function deriveStatus(state: FeedState): FeedStatus {
   if (state.contractMismatch) return 'contract-mismatch';

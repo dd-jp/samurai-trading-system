@@ -5,12 +5,15 @@
  * skew. The property under test is narrow and deliberate: the hash must be
  * CONTENT-SENSITIVE to the field list it is derived from, so that a rename
  * of a top-level `DashboardSnapshot` field is impossible to ship silently —
- * `_assertDashboardSnapshotFieldNamesCoverAllKeys` (this file's sibling,
- * enforced at `yarn typecheck` time) is what stops the field list itself
- * from drifting from the interface; this suite is what proves the value
- * derived from that list actually moves when the list does.
+ * `DASHBOARD_SNAPSHOT_FIELD_NAMES`'s `as const satisfies` clause plus
+ * `_assertDashboardSnapshotFieldNamesCoverAllKeys` (this file's siblings,
+ * enforced at `yarn typecheck` time) are together what stop the field list
+ * itself from drifting from the interface in either direction — a listed
+ * name that isn't a real field, or a real field that's missing from the
+ * list; this suite is what proves the value derived from that list actually
+ * moves when the list does.
  */
-import { CONTRACT_VERSION, contractVersionOf } from './snapshot.js';
+import { CONTRACT_VERSION, contractVersionOf, DASHBOARD_SNAPSHOT_FIELD_NAMES } from './snapshot.js';
 
 describe('contractVersionOf', () => {
   it('is deterministic for the same field list', () => {
@@ -48,7 +51,11 @@ describe('contractVersionOf', () => {
     // rather than a fixed array) — every real client build and every real
     // server process must derive the exact same value from the exact same
     // source for the comparison in `useSnapshot.ts` to mean anything.
-    expect(CONTRACT_VERSION).toBe(CONTRACT_VERSION);
+    // Re-derives CONTRACT_VERSION independently from the same field list
+    // rather than comparing the constant to itself (a tautology that can
+    // never fail) — this actually exercises `contractVersionOf` a second
+    // time against the real field list, not a hand-picked one.
+    expect(contractVersionOf(DASHBOARD_SNAPSHOT_FIELD_NAMES)).toBe(CONTRACT_VERSION);
     expect(typeof CONTRACT_VERSION).toBe('string');
     expect(CONTRACT_VERSION.length).toBeGreaterThan(0);
   });

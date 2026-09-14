@@ -773,12 +773,19 @@ export interface DashboardSnapshot {
    * integer is exactly the kind of edit `docs/coding-standards.md`-style
    * "remember to also update X" conventions are prone to silently skipping.
    * This value is instead DERIVED from `DASHBOARD_SNAPSHOT_FIELD_NAMES`, whose
-   * own coverage of `keyof DashboardSnapshot` is enforced by
-   * `_assertDashboardSnapshotFieldNamesCoverAllKeys` below at `yarn
-   * typecheck` time — so adding, removing or renaming a top-level field here
-   * fails the build unless the name list is updated too, and updating the
-   * name list is what moves this value. A rename cannot be forgotten because
-   * forgetting it does not compile.
+   * coverage of `keyof DashboardSnapshot` is enforced in BOTH directions at
+   * `yarn typecheck` time (the two-part idiom `alert-transport.ts` uses for
+   * `AlertChannelSlots`, after ten silent misses taught that lesson there):
+   * `as const satisfies readonly (keyof DashboardSnapshot)[]` rejects a name
+   * in the list that isn't a real field (catches a stale rename OF a listed
+   * name), and `_assertDashboardSnapshotFieldNamesCoverAllKeys` below rejects
+   * a real field that's missing FROM the list (catches an added-but-
+   * unlisted field, and a field renamed to something not yet listed). Either
+   * direction alone leaves a hole: `satisfies` alone cannot see a field that
+   * was simply never added to the list, so a field could be added, later
+   * renamed, and never once produce a stale literal — the exact composite
+   * gap this pairing closes. A rename cannot be forgotten because forgetting
+   * it does not compile.
    *
    * Deliberately shallow: the hash covers only this interface's OWN top-level
    * field names, not the shapes nested inside `providers`, `llm_spend`,
@@ -799,11 +806,19 @@ export interface DashboardSnapshot {
  * own (different) compiled-in constant.
  *
  * This is the ONE place the list is written by hand — everywhere else derives
- * from it. Keep it declared as a mutable array of `keyof DashboardSnapshot`
- * (not `as const`) so the exhaustiveness assertion below can compare its
- * element type directly against the interface's key union.
+ * from it. `as const satisfies readonly (keyof DashboardSnapshot)[]` (not a
+ * mutable `readonly (keyof DashboardSnapshot)[]` annotation — that widens
+ * `(typeof …)[number]` back to the whole `keyof DashboardSnapshot` union,
+ * which makes the exhaustiveness check below compare the union against
+ * itself and pass unconditionally, catching nothing; confirmed by
+ * temporarily adding `brand_new_field?: number` to `DashboardSnapshot` under
+ * the old annotation and observing `yarn typecheck` pass with the hash
+ * unchanged) keeps this a literal-string tuple, so TypeScript can reject a
+ * listed name that ISN'T a real key. It cannot, by itself, catch a real key
+ * that's simply missing from the list — see
+ * `_assertDashboardSnapshotFieldNamesCoverAllKeys` below for that direction.
  */
-const DASHBOARD_SNAPSHOT_FIELD_NAMES: readonly (keyof DashboardSnapshot)[] = [
+export const DASHBOARD_SNAPSHOT_FIELD_NAMES = [
   'generated_at',
   'as_of',
   'mode',
@@ -823,30 +838,35 @@ const DASHBOARD_SNAPSHOT_FIELD_NAMES: readonly (keyof DashboardSnapshot)[] = [
   'llm_spend',
   'pipeline',
   'contract_version',
-];
+] as const satisfies readonly (keyof DashboardSnapshot)[];
 
 /**
- * Fails `yarn typecheck` if `DASHBOARD_SNAPSHOT_FIELD_NAMES` above stops
- * covering every key of `DashboardSnapshot` — the enforcement that makes a
- * field rename "impossible to forget" (#1316's decision comment). `never`
- * would collapse a missing name to an opaque type error with no name in it;
- * this instead types the const as the tuple of names still missing, so a
- * broken build's error message names exactly which key(s) were not added
- * to the list above.
+ * The other half of the exhaustiveness check (mirrors `alert-transport.ts`'s
+ * `ALL_ALERT_CHANNEL_FIELDS_COVERED`, adopted here after a reviewer proved
+ * the single-list version above was vacuous — `satisfies` alone can reject a
+ * bad name but not detect an added-and-never-listed one, so a field could be
+ * added without touching the list, later renamed with no stale literal to
+ * catch it, and `CONTRACT_VERSION` would never move). If
+ * `DASHBOARD_SNAPSHOT_FIELD_NAMES` (exported so a test can re-derive
+ * `CONTRACT_VERSION` from it independently, rather than only comparing the
+ * constant to itself) stops covering every key of
+ * `DashboardSnapshot`, the mapped type below gains a required key for each
+ * missing field name, so `{}` no longer satisfies it and `yarn typecheck`
+ * fails, naming the missing key(s) in the error.
+ *
+ * Verified non-vacuous the same way: with `brand_new_field?: number` added
+ * to `DashboardSnapshot` and NOT added here, `yarn typecheck` fails on this
+ * line with:
+ *   Property 'brand_new_field' is missing in type '{}' but required in type
+ *   '{ brand_new_field: never; }'.
  */
 type _MissingDashboardSnapshotFieldNames = Exclude<
   keyof DashboardSnapshot,
   (typeof DASHBOARD_SNAPSHOT_FIELD_NAMES)[number]
 >;
-const _assertDashboardSnapshotFieldNamesCoverAllKeys: [
-  _MissingDashboardSnapshotFieldNames,
-] extends [never]
-  ? true
-  : _MissingDashboardSnapshotFieldNames = true as [_MissingDashboardSnapshotFieldNames] extends [
-  never,
-]
-  ? true
-  : _MissingDashboardSnapshotFieldNames;
+const _assertDashboardSnapshotFieldNamesCoverAllKeys: {
+  [K in _MissingDashboardSnapshotFieldNames]: never;
+} = {};
 
 /**
  * FNV-1a, 32-bit, hex-encoded. Chosen over `node:crypto` because this file is

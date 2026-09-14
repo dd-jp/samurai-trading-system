@@ -33,38 +33,58 @@ export interface RailProps {
  * `Rail.tsx` recomputed waiting/stale/alive from `feed.snapshot`/`feed.stale`
  * by hand, which is exactly the kind of second, parallel derivation that
  * asks to drift from the hook's own. Reading `feed.status` directly is the
- * fix, and is also the extension point #1520 can add its states to: a new
- * `FeedStatus` member needs only a new `HEALTH` entry here, not a new
- * boolean threaded through both files.
+ * fix, and is also the extension point #1520 can add its states to.
+ *
+ * A new `FeedStatus` member needs a new `HEALTH` entry — `Record<FeedStatus,
+ * …>` already forces that much — but `word`/`note` alone don't ask the
+ * question that actually matters for #1520's cold-start/stale-feed states:
+ * may this state's six tiles compute a reading off `snapshot`? Before
+ * `rendersHealthTiles` existed, `Rail()` answered that with its own
+ * `status === 'contract-mismatch'` check, a second literal comparison
+ * outside this record — exactly the kind of parallel derivation the
+ * paragraph above warns about, and exactly how a future state that also
+ * should not trust `snapshot` (a #1520 case reusing a stale/incomplete
+ * bundle) could fall through to the healthy branch by simply not being
+ * `'contract-mismatch'`. `rendersHealthTiles` makes that a required field of
+ * every entry here, so a new `FeedStatus` member forces a typed decision at
+ * `yarn typecheck` time instead of an implicit "yes" by omission.
  */
-const HEALTH: Readonly<Record<FeedStatus, { word: string; note: (feed: SnapshotFeed) => string }>> =
-  {
-    // Ranked ahead of every other state in `useSnapshot.ts`'s `deriveStatus` —
-    // see that function's doc comment for why a contract mismatch must outrank
-    // staleness rather than merely being folded into it.
-    'contract-mismatch': {
-      word: 'MISMATCH',
-      note: ({ error }) => error ?? 'served bundle disagrees with the server contract',
-    },
-    waiting: {
-      word: 'WAITING',
-      note: ({ error }) =>
-        error === null
-          ? WAITING_FOR_FIRST_SNAPSHOT
-          : `no snapshot yet — last attempt failed: ${error}`,
-    },
-    stale: {
-      word: 'STALE',
-      note: ({ snapshot, error }) =>
-        `stale — last update ${formatClockUtc(snapshot?.generated_at ?? '')}${
-          error === null ? '' : ` · ${error}`
-        }`,
-    },
-    alive: {
-      word: 'ALIVE',
-      note: ({ lastSuccessAt }) => `polled ${formatClockUtc(lastSuccessAt ?? '')}`,
-    },
-  };
+const HEALTH: Readonly<
+  Record<
+    FeedStatus,
+    { word: string; note: (feed: SnapshotFeed) => string; rendersHealthTiles: boolean }
+  >
+> = {
+  // Ranked ahead of every other state in `useSnapshot.ts`'s `deriveStatus` —
+  // see that function's doc comment for why a contract mismatch must outrank
+  // staleness rather than merely being folded into it.
+  'contract-mismatch': {
+    word: 'MISMATCH',
+    note: ({ error }) => error ?? 'served bundle disagrees with the server contract',
+    rendersHealthTiles: false,
+  },
+  waiting: {
+    word: 'WAITING',
+    note: ({ error }) =>
+      error === null
+        ? WAITING_FOR_FIRST_SNAPSHOT
+        : `no snapshot yet — last attempt failed: ${error}`,
+    rendersHealthTiles: true,
+  },
+  stale: {
+    word: 'STALE',
+    note: ({ snapshot, error }) =>
+      `stale — last update ${formatClockUtc(snapshot?.generated_at ?? '')}${
+        error === null ? '' : ` · ${error}`
+      }`,
+    rendersHealthTiles: true,
+  },
+  alive: {
+    word: 'ALIVE',
+    note: ({ lastSuccessAt }) => `polled ${formatClockUtc(lastSuccessAt ?? '')}`,
+    rendersHealthTiles: true,
+  },
+};
 
 function HealthBlock({ feed }: { feed: SnapshotFeed }) {
   const { status } = feed;
@@ -558,6 +578,13 @@ export function Rail(props: RailProps) {
   const { feed, tab, onTab } = props;
   const { snapshot, stale, status, lastSuccessAt } = feed;
   const mismatched = status === 'contract-mismatch';
+  // The tile gate, not `mismatched`: this is the field #1520 must set on any
+  // new `HEALTH` entry, so a state that also shouldn't trust `snapshot` gets
+  // caught by the compiler rather than falling through to the healthy
+  // branch by default. `mismatched` above stays a literal check because it
+  // drives ONLY this state's own visual styling (`rail-mismatch`,
+  // `data-contract-mismatch`), not the six tiles' render gate.
+  const renderHealthTiles = HEALTH[status].rendersHealthTiles;
   const onTabKey = (event: React.KeyboardEvent<HTMLDivElement>) => {
     const next = tabForKey(event.key, tab);
     if (next === null) return;
@@ -595,46 +622,48 @@ export function Rail(props: RailProps) {
         </div>
       </nav>
       {/*
-       * Six health-derived tiles below, each gated on `mismatched` the same
-       * way (#1316's decision comment): while the served bundle disagrees
-       * with the server's contract, none of them may compute a reading off
-       * `snapshot` — the wire shape underneath it is exactly what is in
-       * question, and rendering as usual is how #1316 itself happened
-       * (`AlertDeliveryBlock`'s `?? 0` reading an absent field as a healthy
-       * zero). `MismatchBlock` replaces each with an explicit "unknown"
-       * tile instead of hiding it — see that component's doc comment.
+       * Six health-derived tiles below, each gated on `renderHealthTiles`
+       * (`HEALTH[status].rendersHealthTiles`, not a literal `status` check —
+       * see that field's doc comment): whenever the current `FeedStatus`
+       * says it must not, none of them may compute a reading off `snapshot`
+       * — the wire shape underneath it is exactly what is in question during
+       * a contract mismatch, and rendering as usual is how #1316 itself
+       * happened (`AlertDeliveryBlock`'s `?? 0` reading an absent field as a
+       * healthy zero). `MismatchBlock` replaces each with an explicit
+       * "unknown" tile instead of hiding it — see that component's doc
+       * comment.
        */}
       <div className="rail-status">
         <HealthBlock feed={feed} />
-        {mismatched ? (
-          <MismatchBlock label="Mode" dataField="mode" />
-        ) : (
+        {renderHealthTiles ? (
           <ModeBlock snapshot={snapshot} />
-        )}
-        {mismatched ? (
-          <MismatchBlock label="Live tick" dataField="live-tick" />
         ) : (
+          <MismatchBlock label="Mode" dataField="mode" />
+        )}
+        {renderHealthTiles ? (
           <LiveTickBlock snapshot={snapshot} />
-        )}
-        {mismatched ? (
-          <MismatchBlock label="Alert channel" dataField="alert-delivery-failures" />
         ) : (
+          <MismatchBlock label="Live tick" dataField="live-tick" />
+        )}
+        {renderHealthTiles ? (
           <AlertDeliveryBlock snapshot={snapshot} />
-        )}
-        {mismatched ? (
-          <MismatchBlock label="Providers" dataField="providers" />
         ) : (
+          <MismatchBlock label="Alert channel" dataField="alert-delivery-failures" />
+        )}
+        {renderHealthTiles ? (
           <ProvidersBlock snapshot={snapshot} />
-        )}
-        {mismatched ? (
-          <MismatchBlock label="LLM cap" dataField="llm-cap" />
         ) : (
+          <MismatchBlock label="Providers" dataField="providers" />
+        )}
+        {renderHealthTiles ? (
           <SpendBlock snapshot={snapshot} />
-        )}
-        {mismatched ? (
-          <MismatchBlock label="Drawdown" dataField="drawdown" />
         ) : (
+          <MismatchBlock label="LLM cap" dataField="llm-cap" />
+        )}
+        {renderHealthTiles ? (
           <DrawdownBlock metrics={snapshot?.metrics ?? null} />
+        ) : (
+          <MismatchBlock label="Drawdown" dataField="drawdown" />
         )}
       </div>
       <div className="rail-foot mono muted" data-field="snapshot-clock">
