@@ -100,9 +100,9 @@ export function closedTrade(
  * the drop-rate differential #1301's round-2 finding names survives this
  * widening unchanged — it is a property of which submissions get captured, not
  * of which legs are covered, and Option 1 (David, 2026-09-14) was chosen over
- * the control-arm bracket path knowing that. See `toFill`'s "What this still
- * does not cover" (ingest-fills.ts) and the filter of the same name in
- * `sqlite-arm-comparison-source.ts`.
+ * the control-arm bracket path knowing that. #1546 owns that surviving term.
+ * See `toFill`'s "What this still does not cover" (ingest-fills.ts) and the
+ * filter of the same name in `sqlite-arm-comparison-source.ts`.
  *
  * The control arm always answers `true`: `SimulatedBrokerAdapter` prices its
  * own fills and stamps `cost_breakdown` on every one of them.

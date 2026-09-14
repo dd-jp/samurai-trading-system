@@ -314,6 +314,13 @@ interface SubmitSnapshot {
  * allows a single derivation per priced event; deriving it at ingest would be
  * a second one, against a different instant's market.
  *
+ * What this capture does NOT equalize is how many successful captures each
+ * exit type needs: a protective exit's legs are all covered by THIS one, while
+ * a flatten additionally needs the flatten submission's own, so the two exit
+ * types still drop out of the arm comparison at different rates. That
+ * selection term is #1546's, not #1301's — see `modelledCostCharged`
+ * (closed-trade.ts).
+ *
  * ONE breakdown covers BOTH protective legs, and it is not a shortcut. The
  * stop and the target are OCO — at most one ever fills — and `CostModel.fill`
  * reads only `size` and `side` off the request (`order_type` and

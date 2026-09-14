@@ -265,7 +265,7 @@ export class SqliteArmComparisonSource {
  * a charge priced off the ENTRY snapshot needs no capture of its own, so
  * protective exits still need the entry captures alone and flattens still need
  * one more. The differential is a deliberate residual of the chosen option,
- * not an open question.
+ * not an open question — and it is #1546's to answer, not #1301's.
  *
  * The floor covers the AUTOMATED reader only. `tools/report-arm-comparison.ts`
  * has no floor — it prints `trade_count` per arm to an operator, who would

@@ -1266,10 +1266,17 @@ async function cumulativeTopUp(
  * SAME `captureSubmitSnapshot` pass as the entry's. Both arms are therefore on
  * one cost basis on every leg either can close on, and the under-charge — a
  * whole exit commission under an adapter reporting `fee: 0` — is gone rather
- * than merely bounded. What remains on that leg under a real venue is the
- * same PRICE-BASIS difference the flatten leg already carries: the venue
- * charges at the fill price, the model estimated at the submit-time mid. That
- * difference has no fixed sign and is not a missing charge.
+ * than merely bounded. What remains on that leg under a real venue is a
+ * PRICE-BASIS difference — the venue charges at the fill price, the model
+ * estimated at a mid — and it is WIDER here than the flatten leg's, not the
+ * same one. A flatten's estimate is captured at the flatten's own submission,
+ * moments before its fill; a protective leg's is captured at the ENTRY's
+ * submission, a whole holding period and a bracket width earlier. The
+ * magnitude is that bracket width times the commission rate
+ * (`SAXO_COMMISSION_RATE`, 8 bp/side), it has no fixed sign, and it roughly
+ * cancels across a
+ * population of stops (mid above the fill) and targets (mid below it). It is a
+ * basis error, not a missing charge.
  *
  * WHAT #1301 DID NOT CLOSE, and could not. The same ticket's round-2 finding
  * is a SELECTION effect, not an under-charge: `modelledCostCharged`
@@ -1281,7 +1288,9 @@ async function cumulativeTopUp(
  * still weakly higher, and the surviving live population is still enriched in
  * bracket exits. That survives BY CONSTRUCTION of the option David chose on
  * 2026-09-14 (price the protective legs at submit, one derivation) over giving
- * the control arm a bracket-exit path — see `modelledCostCharged`'s doc and
+ * the control arm a bracket-exit path. #1546 owns that surviving selection
+ * term; #1301 owned only the under-charge, which is closed. See
+ * `modelledCostCharged`'s doc and
  * `sqlite-arm-comparison-source.ts`'s `modelledCostCharged` filter, which
  * carry the same limit from their own side.
  */
