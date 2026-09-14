@@ -337,7 +337,8 @@ export const DEFAULT_VENUE_PACING: VenuePacingConfig = {
   //
   // #1419 classifies every SaxoHttpBrokerClient call site into the two
   // lanes #391 built for exactly this: `placeOrder`/`cancelOrder` (and the
-  // identity lookup gating them) spend `acquire()`, the priority lane;
+  // identity lookup, ALWAYS regardless of which caller triggers it — see
+  // `resolveIdentity()`'s own doc) spend `acquire()`, the priority lane;
   // `listOpenOrders`/`listOrderActivities`/`listNetPositions` and their
   // `listAll()` pagination spend `acquireBackground()`. A multi-page read
   // sweep can now drain only down to the reserve below, leaving a pending
@@ -353,13 +354,18 @@ export const DEFAULT_VENUE_PACING: VenuePacingConfig = {
   // off the docs, and no live account to calibrate one against. At
   // `capacity: 2` the only two honest choices are 0 (today's inert
   // pre-#1419 default, which is the bug this ticket fixes) or 1: reserving
-  // 1 guarantees `acquire()` always has a token available without ever
-  // starving `acquireBackground()` entirely (reserving 2 would do that —
-  // background could never spend a token, which is its own failure mode).
-  // 1 also covers `placeOrder`/`cancelOrder`'s steady-state cost exactly:
-  // `resolveIdentity()` is memoised, so once warm each spends a single
-  // token. Revisit this the same way `alpaca.reserveForPriority` was
-  // re-derived (#1080) once a real Saxo account/tier exists to measure
+  // 1 stops `acquireBackground()` from ever draining the bucket to 0 —
+  // `acquire()`'s own `needed` is always 1, so ANY reserve above 0 already
+  // leaves it a token to draw on against a background caller that has
+  // spent down to the floor; it does NOT mean a priority call never waits —
+  // a SECOND concurrent `acquire()` racing the first still parks on the
+  // 1/s refill same as always, reserves only defend against
+  // `acquireBackground()` contention. Reserving 2 (== capacity) would be
+  // the failure mode in the other direction: background could never spend
+  // a token at all. 1 also covers `placeOrder`/`cancelOrder`'s steady-state
+  // cost exactly: `resolveIdentity()` is memoised, so once warm each spends
+  // a single token. Revisit this the same way `alpaca.reserveForPriority`
+  // was re-derived (#1080) once a real Saxo account/tier exists to measure
   // fan-out and refill against.
   saxo: { capacity: 2, refillPerSecond: 1, reserveForPriority: 1 },
 };
