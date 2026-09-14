@@ -1,0 +1,62 @@
+
+=== anthropic/claude-haiku-4.5 ===
+  seq[0] status=200 ms=6385 jsonValid=true err=
+  seq[1] status=200 ms=5581 jsonValid=true err=
+  seq[2] status=200 ms=5764 jsonValid=true err=
+  burst status=200 ms=4145 jsonValid=true err=
+  burst status=200 ms=12759 jsonValid=true err=
+  burst status=200 ms=18912 jsonValid=true err=
+  burst status=200 ms=25687 jsonValid=true err=
+  running total spend: $0.0325
+
+=== deepseek/deepseek-v4-flash-0731 ===
+  seq[0] status=200 ms=6810 jsonValid=false err=
+  seq[1] status=200 ms=6195 jsonValid=false err=
+  seq[2] status=200 ms=6390 jsonValid=false err=
+  burst status=200 ms=6024 jsonValid=false err=
+  burst status=200 ms=11037 jsonValid=false err=
+  burst status=200 ms=14433 jsonValid=false err=
+  burst status=200 ms=20951 jsonValid=false err=
+  running total spend: $0.0336
+
+=== google/gemini-3.8-flash ===
+  seq[0] status=200 ms=8339 jsonValid=false err=
+  seq[1] status=200 ms=2649 jsonValid=false err=
+  seq[2] status=200 ms=5981 jsonValid=false err=
+  burst status=200 ms=7864 jsonValid=false err=
+  burst status=200 ms=12897 jsonValid=false err=
+  burst status=200 ms=19560 jsonValid=false err=
+  burst status=200 ms=38338 jsonValid=false err=
+  running total spend: $0.0651
+
+=== z-ai/glm-5.3-flash ===
+  seq[0] status=200 ms=7476 jsonValid=false err=
+  seq[1] status=200 ms=7254 jsonValid=false err=
+  seq[2] status=200 ms=5813 jsonValid=false err=
+  burst status=200 ms=9856 jsonValid=false err=
+  burst status=200 ms=16965 jsonValid=false err=
+  burst status=200 ms=24229 jsonValid=false err=
+  burst status=200 ms=33385 jsonValid=false err=
+  running total spend: $0.0672
+
+=== qwen/qwen3.8-flash ===
+  seq[0] status=200 ms=11259 jsonValid=false err=
+  seq[1] status=200 ms=34882 jsonValid=false err=
+  seq[2] status=200 ms=8379 jsonValid=false err=
+  burst status=200 ms=5494 jsonValid=true err=
+  burst status=200 ms=18372 jsonValid=false err=
+  burst status=200 ms=34609 jsonValid=false err=
+  burst status=ERR ms=45016 jsonValid=false err=timeout
+  running total spend: $0.0722
+
+=== openai/gpt-5.4-mini ===
+  seq[0] status=200 ms=6738 jsonValid=true err=
+  seq[1] status=200 ms=6855 jsonValid=true err=
+  seq[2] status=200 ms=6697 jsonValid=true err=
+  burst status=200 ms=7627 jsonValid=true err=
+  burst status=200 ms=19870 jsonValid=true err=
+  burst status=200 ms=26959 jsonValid=true err=
+  burst status=200 ms=33560 jsonValid=true err=
+  running total spend: $0.0920
+
+TOTAL PROBE SPEND: $0.0920

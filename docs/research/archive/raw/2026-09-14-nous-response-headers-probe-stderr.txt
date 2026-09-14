@@ -1,0 +1,28 @@
+NOUS_BASE_URL present (len=41), NOUS_DEBATE_API_KEY present (len=40).
+  access-control-allow-origin: *
+  cf-cache-status: DYNAMIC
+  cf-ray: a3b0ec80ef6c6306-MAN
+  content-encoding: gzip
+  content-type: application/json
+  date: Mon, 14 Sep 2026 16:56:18 GMT
+  host: oscar
+  ratelimit: "fairshare";r=600;t=60
+  ratelimit-policy: "fairshare";q=240000000000000;qu="tokens";w=60
+  server: cloudflare
+  set-cookie: [redacted]
+  vary: accept-encoding
+  x-hikari-trace: lhr1.4rsz
+  x-railway-edge: lhr1
+  x-railway-request-id: MlwXPiCPQJuGO7mCwUFZXw
+  x-ratelimit-limit-requests: 400
+  x-ratelimit-limit-requests-1h: 16800
+  x-ratelimit-limit-tokens: 4000000
+  x-ratelimit-limit-tokens-1h: 168000000
+  x-ratelimit-remaining-requests: 399
+  x-ratelimit-remaining-requests-1h: 16799
+  x-ratelimit-remaining-tokens: 3996260
+  x-ratelimit-remaining-tokens-1h: 167996260
+  x-ratelimit-reset-requests: 59.999
+  x-ratelimit-reset-requests-1h: 3599.999
+  x-ratelimit-reset-tokens: 56.249
+  x-ratelimit-reset-tokens-1h: 3596.249
