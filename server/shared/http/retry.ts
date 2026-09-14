@@ -71,6 +71,24 @@ function backoffDelayMs(attempt: number, config: RetryConfig): number {
 }
 
 /**
+ * Upper bound on how long one call through `withRetry` can take: every
+ * attempt runs the full `timeoutMs` before failing, and `backoffDelayMs`'s
+ * jitter is a draw from `[0, cap]`, so its own cap is the worst case (#1542).
+ *
+ * `withRetry`'s loop sleeps between attempts only, not after the last one:
+ * `config.maxAttempts` timeouts plus `config.maxAttempts - 1` backoff caps.
+ * Colocated with `backoffDelayMs` rather than living with a caller, since it
+ * restates that same cap formula and would drift from it silently otherwise.
+ */
+export function worstCaseFetchMs(timeoutMs: number, config: RetryConfig): number {
+  let backoffCapMs = 0;
+  for (let attempt = 1; attempt < config.maxAttempts; attempt++) {
+    backoffCapMs += Math.min(config.baseDelayMs * 2 ** (attempt - 1), config.maxDelayMs);
+  }
+  return timeoutMs * config.maxAttempts + backoffCapMs;
+}
+
+/**
  * A retryable error may carry a provider-supplied hint for how long to wait
  * before the next attempt (e.g. a rate-limit error's `Retry-After`). When
  * present and a finite non-negative number, it overrides the computed

@@ -185,6 +185,8 @@ import {
 } from '../../pipeline/verdict/index.js';
 import type { MarketDataService } from '../../providers/market-data-service/index.js';
 import {
+  ALPACA_BARS_RETRY_CONFIG,
+  ALPACA_BARS_TIMEOUT_MS,
   AlwaysOpenCalendar,
   LseRegularHoursCalendar,
   MarketDataServiceImpl,
@@ -216,6 +218,7 @@ import {
   logCaughtFailure,
   resolveVenuePacing,
   TokenBucket,
+  worstCaseFetchMs,
 } from '../../shared/index.js';
 import type { LlmInFlightGate } from '../../shared/llm/index.js';
 import { NousAccountInFlightGate, tryNousCredentials } from '../../shared/llm/index.js';
@@ -1278,8 +1281,34 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    * derivation against it here ties the live deadline to what the fetches
    * actually queue behind, instead of leaving it pinned to a default the
    * override no longer describes.
+   *
+   * `alpacaFetchBoundMs` is the worst-case single bars fetch once a token IS
+   * granted — `ALPACA_BARS_TIMEOUT_MS`/`ALPACA_BARS_RETRY_CONFIG` are the same
+   * constants `AlpacaHttpDataClient` defaults its own `timeoutMs`/`retry` to,
+   * so this bound cannot silently drift from what the client actually runs.
+   * Without it, `deriveAnalystTimeoutMs` alone floors at 0ms the moment
+   * headroom already covers the sweep (the shipped 5-instrument Saxo
+   * profile: sweep 20, headroom 41-21=20) — a 0ms deadline on a fetch that
+   * still has to run its full timeout, not a healthy fast path.
+   *
+   * `venuePacing.alpaca` is read unconditionally here even when
+   * `buildAlpacaDataSource` below is about to route the SAME universe to
+   * `LseMarkDataSource` instead (a Saxo/LSE-routed universe, `startingProfileForMode`).
+   * That source's `buildLseMarkSourceIfNeeded` takes no `rateLimiter` — there
+   * is no token-bucket pacing model anywhere in this codebase for the LSE
+   * mark path (#895 is still open on even choosing that vendor) — so there is
+   * no venue-specific queue-wait signal to select instead. On that profile
+   * `deriveAnalystDrainMs` is 0 regardless (a 5-instrument sweep sits inside
+   * this bucket's headroom too), so the deadline reduces to `alpacaFetchBoundMs`
+   * alone: a real, bounded number rather than a wrong one, even though the
+   * bucket it was read from is not what actually paces those fetches.
    */
-  const analystTimeoutMs = deriveAnalystTimeoutMs(venuePacing.alpaca, universe.length);
+  const alpacaFetchBoundMs = worstCaseFetchMs(ALPACA_BARS_TIMEOUT_MS, ALPACA_BARS_RETRY_CONFIG);
+  const analystTimeoutMs = deriveAnalystTimeoutMs(
+    venuePacing.alpaca,
+    universe.length,
+    alpacaFetchBoundMs,
+  );
 
   const analysts = new AnalystOrchestrator(
     {
