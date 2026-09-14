@@ -14,8 +14,9 @@ import { SqliteDailyEquityStore } from '../sqlite-daily-equity-store.js';
 import { SqliteSessionEquityStore } from '../sqlite-session-equity-store.js';
 import type { LogEntry, Logger } from '../types.js';
 import {
-  AlpacaAccountStateProvider,
-  type AlpacaAccountStateProviderInput,
+  alpacaFunding,
+  BrokerAccountStateProvider,
+  type BrokerAccountStateProviderInput,
   type ClosedTradeReader,
 } from './account-state.js';
 
@@ -147,10 +148,15 @@ function insertClosedTrade(
 
 function makeProvider(
   harness: Harness,
-  overrides: Partial<AlpacaAccountStateProviderInput> = {},
-): AlpacaAccountStateProvider {
-  return new AlpacaAccountStateProvider({
-    client: makeClient(),
+  // `client` rather than `funding`: every fixture below varies the Alpaca
+  // account body, and `alpacaFunding` is the adapter under test on that path.
+  overrides: Partial<Omit<BrokerAccountStateProviderInput, 'funding'>> & {
+    client?: AlpacaBrokerClient;
+  } = {},
+): BrokerAccountStateProvider {
+  const { client, ...rest } = overrides;
+  return new BrokerAccountStateProvider({
+    funding: alpacaFunding(client ?? makeClient()),
     store: harness.store,
     sessionEquity: harness.sessionEquity,
     dailyEquity: harness.dailyEquity,
@@ -161,7 +167,7 @@ function makeProvider(
     // Well before every boundary these fixtures use — the healthy case, where
     // the process was already running when the session opened.
     startedAt: new Date('2026-07-01T00:00:00.000Z'),
-    ...overrides,
+    ...rest,
   });
 }
 
@@ -371,7 +377,7 @@ describe('SqliteSessionEquityStore', () => {
   });
 });
 
-describe('AlpacaAccountStateProvider — account scalars', () => {
+describe('BrokerAccountStateProvider — account scalars', () => {
   it('sources cash from the account ledger and peak_equity from the durable store', async () => {
     const harness = openStore();
     try {
@@ -462,7 +468,7 @@ describe('AlpacaAccountStateProvider — account scalars', () => {
   });
 });
 
-describe('AlpacaAccountStateProvider — session boundaries (#332)', () => {
+describe('BrokerAccountStateProvider — session boundaries (#332)', () => {
   /**
    * THE acceptance test: a weekend spanning a crypto boundary must measure the
    * crypto figure from 00:00 UTC Saturday, not from Friday's 16:00 ET close.
@@ -602,7 +608,7 @@ describe('AlpacaAccountStateProvider — session boundaries (#332)', () => {
   });
 });
 
-describe('AlpacaAccountStateProvider — cold start (#332)', () => {
+describe('BrokerAccountStateProvider — cold start (#332)', () => {
   it('seeds from current equity and warns, in paper mode', async () => {
     const harness = openStore();
     try {
@@ -762,7 +768,7 @@ describe('AlpacaAccountStateProvider — cold start (#332)', () => {
   });
 });
 
-describe('AlpacaAccountStateProvider — trace_id (#1280)', () => {
+describe('BrokerAccountStateProvider — trace_id (#1280)', () => {
   it('falls back to the account-state constant outside a tick — live mode', async () => {
     const harness = openStore();
     try {
@@ -840,7 +846,7 @@ describe('AlpacaAccountStateProvider — trace_id (#1280)', () => {
   });
 });
 
-describe('AlpacaAccountStateProvider — GAP-8 retired (#332)', () => {
+describe('BrokerAccountStateProvider — GAP-8 retired (#332)', () => {
   it('never reads last_equity, and no longer warns about an unverified boundary', async () => {
     const harness = openStore();
     try {
@@ -862,7 +868,7 @@ describe('AlpacaAccountStateProvider — GAP-8 retired (#332)', () => {
   });
 });
 
-describe('AlpacaAccountStateProvider — calendar wiring', () => {
+describe('BrokerAccountStateProvider — calendar wiring', () => {
   it('asks each class its own calendar for the boundary', async () => {
     const harness = openStore();
     try {
@@ -904,7 +910,7 @@ describe('AlpacaAccountStateProvider — calendar wiring', () => {
  * Every test drives time through `asOf` and `startedAt`. Nothing here waits on
  * a wall clock.
  */
-describe('AlpacaAccountStateProvider — daily equity series', () => {
+describe('BrokerAccountStateProvider — daily equity series', () => {
   const DAY_1 = new Date('2026-08-01T00:00:00.000Z');
   const DAY_2 = new Date('2026-08-02T00:00:00.000Z');
 

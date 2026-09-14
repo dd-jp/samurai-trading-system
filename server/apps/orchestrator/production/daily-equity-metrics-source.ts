@@ -200,7 +200,7 @@ export class SqliteDailyEquityMetricsSource implements DailyMetricsSource {
    * Called once per feedback cycle by the orchestrator, which is why the
    * skip-reason below is logged unconditionally: once per cycle is once per day,
    * not the ~20,000 lines a per-tick log would put into an unattended soak. The
-   * per-tick side of this feature — the sampler in `AlpacaAccountStateProvider`
+   * per-tick side of this feature — the sampler in `BrokerAccountStateProvider`
    * — logs nothing at all.
    */
   getDailyMetrics(): DailyMetricsSample | undefined {

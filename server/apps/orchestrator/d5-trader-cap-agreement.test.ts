@@ -306,8 +306,9 @@ describe('#800 — the Trader intent and the D5 cap agree by construction', () =
     // against the gate in per-subclass-deployment-cap.test.ts's "#888"
     // describe block) required `same_currency_verified: true` to run at all,
     // once #949 added that guard — and `d5EnvelopeFor` (paper-profile.ts)
-    // never sets it, because no FX-rate provider or same-currency broker
-    // adapter exists yet (#946). So on the ACTUAL shipped live profile this
+    // never sets it: the only caller that may is `armSameCurrencyCeilings`
+    // (#1509), from a Saxo account read, on a venue that refuses `live`. So
+    // on the ACTUAL shipped live profile this
     // clamp can never fire: `liveBookCeiling` (which sits first in
     // `ENTRY_CAP_GATES` and is unconditional once `live_book_ceiling` is
     // set) refuses on currency mismatch before `perSubclassDeploymentCap`'s

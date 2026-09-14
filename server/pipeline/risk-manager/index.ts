@@ -824,9 +824,9 @@ const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
           "this comparison with it: a rate error is proportional at the Trader's ask and " +
           'absolute here, where it decides a total refusal against a few percent of tolerance. ' +
           'Refusing to arm rather than silently compare GBP to USD. Resolve with a live FX-rate ' +
-          'feed or a same-currency (GBP-native) broker adapter, then set ' +
-          'equity_ceiling.same_currency_verified once the comparison is known to hold ' +
-          'like-for-like.',
+          "feed, or by running a venue whose account read reports the book's own currency — " +
+          'Saxo GET /port/v1/balances/me, wired as saxoFunding (#1509), which arms ' +
+          'equity_ceiling.same_currency_verified via armSameCurrencyCeilings when it does.',
         intent.instrument,
         `per_subclass_deployment_cap:currency_mismatch:${intent.instrument}`,
       );
@@ -933,9 +933,9 @@ const liveBookCeiling: EntryCapGate = (config, intent, portfolio) => {
         'where it decides a total refusal against a few percent of tolerance. So this ' +
         'account-level check (#888 review fix-up, arms regardless of whether any instrument is ' +
         'D5-classified yet) refuses to arm rather than silently compare GBP to USD. Resolve with ' +
-        'a live FX-rate feed or a same-currency (GBP-native) broker adapter, then set ' +
-        'live_book_ceiling.same_currency_verified once the comparison is known to hold ' +
-        'like-for-like.',
+        "a live FX-rate feed, or by running a venue whose account read reports the book's own " +
+        'currency — Saxo GET /port/v1/balances/me, wired as saxoFunding (#1509), which arms ' +
+        'live_book_ceiling.same_currency_verified via armSameCurrencyCeilings when it does.',
       intent.instrument,
       `live_book_ceiling:currency_mismatch:${intent.instrument}`,
     );

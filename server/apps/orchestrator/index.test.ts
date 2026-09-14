@@ -179,6 +179,9 @@ describe('missingCredentialEnvVars', () => {
     // SATISFY `NOUS_API_KEY`, so one left behind would mask a missing key.
     'NOUS_DEBATE_API_KEY',
     'NOUS_SENTIMENT_API_KEY',
+    // Required only by the `saxo` venue cases below, cleared with the rest so
+    // one left behind cannot mask a missing token.
+    'SAXO_SIM_ACCESS_TOKEN',
     'TELEGRAM_BOT_TOKEN',
     'TELEGRAM_CHAT_ID',
     'TELEGRAM_HEARTBEAT_CHAT_ID',
@@ -310,6 +313,41 @@ describe('missingCredentialEnvVars', () => {
         'log-only',
         'paper',
         'alpaca',
+      ),
+    ).toEqual(['ALPACA_API_KEY', 'ALPACA_API_SECRET']);
+  });
+
+  it('does not demand Alpaca keys for a Saxo run that builds its own funding read (#1509)', () => {
+    // Before #1509 a Saxo run had to be handed a whole `accountState`, so this
+    // pre-flight keyed the Alpaca pair off that. A Saxo run now builds its own
+    // GBP-native funding read, and `buildProductionComponents` constructs the
+    // Alpaca wire client lazily — so demanding the pair here would block a boot
+    // on keys for a transport the run never opens (#1400's complaint).
+    process.env.NOUS_API_KEY = 'set';
+    process.env.NOUS_BASE_URL = 'set';
+    process.env.SAXO_SIM_ACCESS_TOKEN = 'set';
+
+    // `dataSource` covers the OTHER half of the pair — Alpaca still serves
+    // this run's bars otherwise (#895 owes the LSE mark source), and that half
+    // is a real requirement, not the one under test here.
+    expect(
+      missingCredentialEnvVars({ dataSource: {} as never }, 'log-only', 'paper', 'saxo'),
+    ).toEqual([]);
+  });
+
+  it('demands Alpaca keys again when an injected Saxo client suppresses that read', () => {
+    // `startFromEnvironment` builds the funding read only when it also built
+    // the client. A caller that injected its own wire client gets neither, so
+    // the account read falls back to Alpaca's and the keys are live again.
+    process.env.NOUS_API_KEY = 'set';
+    process.env.NOUS_BASE_URL = 'set';
+
+    expect(
+      missingCredentialEnvVars(
+        { saxoBrokerClient: {} as never, dataSource: {} as never },
+        'log-only',
+        'paper',
+        'saxo',
       ),
     ).toEqual(['ALPACA_API_KEY', 'ALPACA_API_SECRET']);
   });

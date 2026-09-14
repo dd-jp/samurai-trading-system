@@ -132,7 +132,7 @@ export interface ControlArmWiringDeps {
   /**
    * The control arm's own `cash` / `peak_equity` / `daily_basis` /
    * `consecutive_losses` — a `ControlArmAccountStateProvider`, never the live
-   * arm's `AlpacaAccountStateProvider`.
+   * arm's `BrokerAccountStateProvider`.
    *
    * Required rather than defaulted, and typed on this interface rather than
    * left to fall through from `deps.trader`/`deps.risk`/`deps.verdict`: an

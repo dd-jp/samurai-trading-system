@@ -310,6 +310,45 @@ describe('SaxoHttpBrokerClient', () => {
     ]);
   });
 
+  describe('getBalances (#1509)', () => {
+    it('reads the account-currency funding figures off a single object, not a Data envelope', async () => {
+      // A correctly funded live book: £1,000 in GBP, ADR-0015's 2026-08-18
+      // amendment. Nothing here is measured against the live GIA.
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          jsonResponse({ Currency: 'GBP', CashBalance: 1_000, TotalValue: 1_000 }),
+        );
+      const client = makeClient(fetchMock);
+
+      expect(await client.getBalances()).toEqual({
+        Currency: 'GBP',
+        CashBalance: 1_000,
+        TotalValue: 1_000,
+      });
+      expect(calledPath(fetchMock, 0)).toBe(
+        'https://gateway.example/sim/openapi/port/v1/balances/me',
+      );
+      expect(calledInit(fetchMock, 0).method).toBe('GET');
+    });
+
+    it('throws rather than defaulting when a funding figure is missing', async () => {
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ Currency: 'GBP' }));
+      const client = makeClient(fetchMock, { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 });
+
+      await expect(client.getBalances()).rejects.toThrow(/CashBalance/);
+    });
+
+    it('throws rather than assuming a currency when the venue reports none', async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(jsonResponse({ CashBalance: 1_000, TotalValue: 1_000 }));
+      const client = makeClient(fetchMock, { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 });
+
+      await expect(client.getBalances()).rejects.toThrow(/Currency/);
+    });
+  });
+
   it('reads a line quote unit off instrument details, account-free (#1302)', async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(
       jsonResponse({
