@@ -129,7 +129,11 @@ CREATE INDEX idx_cii_snapshots_captured_at ON cii_snapshots(captured_at);
 -- execution-spec.md retired a lot to the 'abandoned' terminal OrderState),
 -- residual_rearm_unsupported_alerted_at (0059, #1447 — the truthful
 -- permanent-gap page's OWN once-per-episode dedup, independent of
--- residual_rearm_alerted_at so a pre-attempt page can never consume it).
+-- residual_rearm_alerted_at so a pre-attempt page can never consume it),
+-- modelled_protective_exit_cost_breakdown_json (0061, #1301 — the submit-time
+-- modelled cost for the lot's stop/target legs, priced in the same
+-- captureSubmitSnapshot pass as modelled_cost_breakdown_json so a live
+-- protective-leg exit is charged the modelled commission the control arm pays).
 CREATE TABLE open_positions (
   idempotency_key              TEXT PRIMARY KEY,
   debate_id                    TEXT NOT NULL,
@@ -160,7 +164,8 @@ CREATE TABLE open_positions (
   modelled_cost_breakdown_json TEXT,
   sizing_capital_ceiling       REAL,
   abandon_reason               TEXT,
-  residual_rearm_unsupported_alerted_at TEXT
+  residual_rearm_unsupported_alerted_at TEXT,
+  modelled_protective_exit_cost_breakdown_json TEXT
 );
 
 CREATE INDEX idx_open_positions_instrument ON open_positions(instrument, asset_class);

@@ -5,16 +5,29 @@
  * tab has selected — so a 3-second re-render never resets any of it. The
  * verdict ledger and equity series live in `useLedger`/`useEquitySamples`.
  * Everything below is a pure function of `snapshot` plus that state.
+ *
+ * It is also where the client decides, once, whether a snapshot exists at all
+ * (#1520): before the first one lands this renders `ColdStart` and nothing
+ * else, and after it the rail and all three tabs are handed a non-null
+ * `WireSnapshot`. That is a guarantee rather than a reading, because the feed
+ * never clears a snapshot it has accepted — see `feedView` in
+ * `hooks/useSnapshot.ts`.
  */
 import type { VerdictRow } from '@contracts';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ColdStart } from './components/ColdStart.tsx';
 import { Rail, TABS, type Tab } from './components/Rail.tsx';
 import { GlanceTab } from './components/tabs/GlanceTab.tsx';
 import { LiveTab } from './components/tabs/LiveTab.tsx';
 import { ReviewTab } from './components/tabs/ReviewTab.tsx';
 import { useEquitySamples } from './hooks/useEquitySamples.ts';
 import { useLedger } from './hooks/useLedger.ts';
-import { type UseSnapshotOptions, useSnapshot } from './hooks/useSnapshot.ts';
+import {
+  feedView,
+  type LiveFeed,
+  type UseSnapshotOptions,
+  useSnapshot,
+} from './hooks/useSnapshot.ts';
 import {
   resolveDashboardToken,
   stripTokenParam,
@@ -72,6 +85,67 @@ function safeSessionStorage(): TokenStorage {
   };
 }
 
+interface DashboardProps {
+  live: LiveFeed;
+  tab: Tab;
+  onTab: (next: Tab) => void;
+  onOpenTrace: (selection: Selection) => void;
+  liveSelection: Selection | null;
+  onSelectLive: (selection: Selection) => void;
+  reviewKey: string | null;
+  onSelectReview: (key: string | null) => void;
+}
+
+/**
+ * Everything downstream of the cold-start gate (#1520). The snapshot-derived
+ * hooks live here rather than in `App` so they take a non-null `WireSnapshot`
+ * — `App` could only hand them `WireSnapshot | null`, which would put the
+ * null test the gate exists to remove back into three more places.
+ *
+ * Nothing is lost by mounting them late: both accumulate ACROSS polls, and
+ * there is nothing to accumulate before the first snapshot. This mounts on
+ * the poll that ends the cold start and, because the feed never clears a
+ * snapshot it has accepted, never unmounts — so neither accumulator is reset
+ * by a later stale or mismatched poll. Which tab is open and what it has
+ * selected stay in `App`, above the gate, for the same reason they always
+ * did.
+ */
+function Dashboard(props: DashboardProps) {
+  const { live, tab, onTab, onOpenTrace, liveSelection, onSelectLive, reviewKey, onSelectReview } =
+    props;
+  const { snapshot } = live;
+
+  const ledger = useLedger(snapshot);
+  const equitySamples = useEquitySamples(snapshot);
+  const verdictsByTrace = useMemo(
+    () => new Map<string, VerdictRow>(snapshot.verdicts.map((v) => [v.trace_id, v])),
+    [snapshot],
+  );
+
+  return (
+    <div className={`app app-${tab}`}>
+      <Rail feed={live} tab={tab} onTab={onTab} />
+      <main id={`panel-${tab}`} role="tabpanel" aria-labelledby={`tab-${tab}`}>
+        {tab === 'glance' && (
+          <GlanceTab
+            snapshot={snapshot}
+            equitySamples={equitySamples}
+            ledger={ledger}
+            verdictsByTrace={verdictsByTrace}
+            onOpenTrace={onOpenTrace}
+          />
+        )}
+        {tab === 'live' && (
+          <LiveTab snapshot={snapshot} selection={liveSelection} onSelect={onSelectLive} />
+        )}
+        {tab === 'review' && (
+          <ReviewTab snapshot={snapshot} selectedKey={reviewKey} onSelect={onSelectReview} />
+        )}
+      </main>
+    </div>
+  );
+}
+
 export interface AppProps {
   snapshotOptions?: UseSnapshotOptions;
 }
@@ -110,7 +184,6 @@ export function App({ snapshotOptions }: AppProps = {}) {
   }, []);
 
   const feed = useSnapshot({ authToken, ...snapshotOptions });
-  const { snapshot } = feed;
 
   const [tab, setTab] = useState<Tab>(tabFromHash);
   useEffect(() => {
@@ -135,37 +208,25 @@ export function App({ snapshotOptions }: AppProps = {}) {
     [openTab],
   );
 
-  const ledger = useLedger(snapshot);
-  const equitySamples = useEquitySamples(snapshot);
-
-  const verdictsByTrace = useMemo(
-    () =>
-      new Map<string, VerdictRow>(
-        (snapshot?.verdicts ?? []).map((verdict) => [verdict.trace_id, verdict]),
-      ),
-    [snapshot],
-  );
+  // The one place the client asks whether a snapshot exists (#1520). Below
+  // this line every leaf has one, for the rest of the session — see
+  // `feedView`. Every hook above it runs unconditionally: the cold branch
+  // returns early, and a hook after it would change the hook order on the
+  // poll that ends the cold start. The snapshot-derived hooks live in
+  // `Dashboard` instead, where the snapshot is already non-null.
+  const view = feedView(feed);
+  if (view.kind === 'cold') return <ColdStart feed={view.feed} />;
 
   return (
-    <div className={`app app-${tab}`}>
-      <Rail feed={feed} tab={tab} onTab={openTab} />
-      <main id={`panel-${tab}`} role="tabpanel" aria-labelledby={`tab-${tab}`}>
-        {tab === 'glance' && (
-          <GlanceTab
-            snapshot={snapshot}
-            equitySamples={equitySamples}
-            ledger={ledger}
-            verdictsByTrace={verdictsByTrace}
-            onOpenTrace={openTrace}
-          />
-        )}
-        {tab === 'live' && (
-          <LiveTab snapshot={snapshot} selection={liveSelection} onSelect={setLiveSelection} />
-        )}
-        {tab === 'review' && (
-          <ReviewTab snapshot={snapshot} selectedKey={reviewKey} onSelect={setReviewKey} />
-        )}
-      </main>
-    </div>
+    <Dashboard
+      live={view.feed}
+      tab={tab}
+      onTab={openTab}
+      onOpenTrace={openTrace}
+      liveSelection={liveSelection}
+      onSelectLive={setLiveSelection}
+      reviewKey={reviewKey}
+      onSelectReview={setReviewKey}
+    />
   );
 }

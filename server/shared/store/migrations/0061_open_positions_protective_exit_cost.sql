@@ -1,0 +1,33 @@
+-- #1301: the submit-time modelled cost for a lot's PROTECTIVE exit legs.
+--
+-- THE GAP THIS CLOSES. #1121 put both arms on one cost basis by charging the
+-- live arm the modelled commission wherever a modelled estimate existed —
+-- which was the entry leg (`open_positions.modelled_cost_breakdown_json`,
+-- migration 0037) and the flatten leg (`flatten_submissions`, same migration).
+-- A live lot that exits on its STOP or TARGET leg had no estimate at all, so
+-- `chargeTopUpTo` had nothing to top the venue's report up to and the lot was
+-- under-charged by one exit commission on any venue reporting `fee: 0`. The
+-- control arm has no bracket-exit path (`simulated-adapter.ts` emits
+-- `leg: 'entry'` only), so every control close is a flatten and pays on both
+-- legs — a bias in the live arm's favour, the same direction as the defect
+-- #1121 closed.
+--
+-- WHY A COLUMN AND NOT A DERIVATION AT INGEST. #1121 AC6 allows exactly one
+-- cost derivation per priced event. Pricing a protective leg inside
+-- `ingest-fills.ts` would be a second one, with its own MarketState read at a
+-- different instant. This column carries the estimate `captureSubmitSnapshot`
+-- (execute.ts) already produces in the same pass, off the same MarketState,
+-- as David's 2026-09-14 ruling on #1301 directs.
+--
+-- ONE COLUMN FOR TWO LEGS. The stop and the target are OCO: at most one ever
+-- fills. `CostModel.fill` reads only `size` and `side` from the request —
+-- `order_type` and `limit_price` are never consulted — so under today's model
+-- both legs price identically against one MarketState, and a second column
+-- would store a duplicate.
+--
+-- Nullable, additive, no CHECK — the posture of 0054/0057/0058/0060. NULL is
+-- the honest reading for a row predating this migration, for an order whose
+-- submit-time capture failed, and for any row whose entry estimate is also
+-- NULL (the two are priced under one try/catch).
+
+ALTER TABLE open_positions ADD COLUMN modelled_protective_exit_cost_breakdown_json TEXT NULL;

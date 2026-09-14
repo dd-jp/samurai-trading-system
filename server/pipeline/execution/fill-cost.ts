@@ -1,7 +1,8 @@
 /**
  * Fill cost accounting shared by every path that turns a venue fill into a
  * persisted `Fill` row — `toFill` and `cumulativeTopUp` (ingest-fills.ts) for
- * entry legs, `splitFlattenFills` (flatten-attribution.ts) for flatten legs.
+ * entry and protective (stop/target) legs, `splitFlattenFills`
+ * (flatten-attribution.ts) for flatten legs.
  * Pure: how the modelled estimate is prorated and how the venue's reported fee
  * is topped up to it, with nothing about where either number came from.
  */
@@ -85,20 +86,65 @@ export function prorateCostBreakdown(
 }
 
 /**
- * #1001's fallback source for an `'entry'` leg's modelled cost breakdown —
- * `OpenPosition.modelled_cost_breakdown`, captured once at submit time
- * (`execute.ts`'s `captureSubmitSnapshot`) against the lot's whole
- * `requested_size`. `null` when the lot carries none (pre-migration-0037 row,
- * or the submit-time capture failed) — `toFill`'s caller then leaves
- * `cost_breakdown` unset, exactly as before this ticket.
+ * A submit-time modelled breakdown plus the size it was priced against —
+ * `toFill`'s fallback source for a leg the venue reports no breakdown for,
+ * prorated by that fill's share of `requestedSize`. Both breakdowns a lot
+ * carries have this shape (#1001's entry estimate, #1301's protective-exit
+ * one); `requestedSize` is the same denominator for both, since
+ * `captureSubmitSnapshot` prices each against the lot's whole `order.size`.
  */
-export interface ModelledEntryCost {
+export interface ModelledLegCost {
   breakdown: NonNullable<Fill['cost_breakdown']>;
   requestedSize: number;
 }
 
-export function modelledEntryCostFor(position: OpenPosition): ModelledEntryCost | null {
+/**
+ * #1001: the `'entry'` leg's estimate, `OpenPosition.modelled_cost_breakdown`.
+ * `null` when the lot carries none (pre-migration-0037 row, or the submit-time
+ * capture failed) — `toFill` then leaves `cost_breakdown` unset, exactly as
+ * before that ticket.
+ */
+function modelledEntryCostFor(position: OpenPosition): ModelledLegCost | null {
   return position.modelled_cost_breakdown === undefined
     ? null
     : { breakdown: position.modelled_cost_breakdown, requestedSize: position.requested_size };
+}
+
+/**
+ * #1301: the `'stop'`/`'target'` legs' estimate,
+ * `OpenPosition.modelled_protective_exit_cost_breakdown` — one breakdown for
+ * both legs, since they are OCO and price identically (see
+ * `captureSubmitSnapshot`'s doc). `null` on a pre-migration-0061 row and
+ * whenever the entry's is null too: the pair is priced under one try/catch.
+ */
+function modelledProtectiveExitCostFor(position: OpenPosition): ModelledLegCost | null {
+  return position.modelled_protective_exit_cost_breakdown === undefined
+    ? null
+    : {
+        breakdown: position.modelled_protective_exit_cost_breakdown,
+        requestedSize: position.requested_size,
+      };
+}
+
+/**
+ * Both of a lot's submit-time estimates, read together — what `toFill` selects
+ * from by the fill's own leg. Carried as one value so a caller cannot pass the
+ * entry's estimate where the protective one belongs: the two are structurally
+ * identical, and under today's cost model numerically identical on the
+ * component that is actually spent, so nothing downstream could catch the swap.
+ *
+ * `'exit'` (flatten) legs are absent by design — their estimate is the
+ * flatten's OWN submit-time capture, prorated per lot by `splitFlattenFills`
+ * (flatten-attribution.ts), not anything the entry submission priced.
+ */
+export interface ModelledLotCosts {
+  entry: ModelledLegCost | null;
+  protectiveExit: ModelledLegCost | null;
+}
+
+export function modelledLotCostsFor(position: OpenPosition): ModelledLotCosts {
+  return {
+    entry: modelledEntryCostFor(position),
+    protectiveExit: modelledProtectiveExitCostFor(position),
+  };
 }

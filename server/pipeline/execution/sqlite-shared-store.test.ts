@@ -331,6 +331,15 @@ describe('SqliteExecutionStore', () => {
             slippage: 0.05,
             market_impact: 0.01,
           },
+          // #1301, migration 0061 — deliberately unequal to the entry's in
+          // every component, so a store that wrote one column from the other
+          // fails here.
+          modelled_protective_exit_cost_breakdown: {
+            spread_cost: 0.3,
+            commission: 0.4,
+            slippage: 0.15,
+            market_impact: 0.02,
+          },
         }),
       );
 
@@ -346,6 +355,12 @@ describe('SqliteExecutionStore', () => {
         slippage: 0.05,
         market_impact: 0.01,
       });
+      expect(position?.modelled_protective_exit_cost_breakdown).toEqual({
+        spread_cost: 0.3,
+        commission: 0.4,
+        slippage: 0.15,
+        market_impact: 0.02,
+      });
     });
 
     it('reads back a legacy/best-effort-failed open_positions row (every new field absent) with no error', async () => {
@@ -353,6 +368,7 @@ describe('SqliteExecutionStore', () => {
       await store.writeAheadPosition(makePosition());
 
       const [position] = await store.getOpenPositions();
+      expect(position?.modelled_protective_exit_cost_breakdown).toBeUndefined();
       expect(position?.decision_price).toBeUndefined();
       expect(position?.quote_bid).toBeUndefined();
       expect(position?.quote_ask).toBeUndefined();

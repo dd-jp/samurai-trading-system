@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { makeClosedTrade, makePosition, makeSnapshot } from '../../test-fixtures.ts';
 import { GlanceTab } from './GlanceTab.tsx';
 
-function renderGlance(snapshot: ReturnType<typeof makeSnapshot> | null, equity: number[] = []) {
+function renderGlance(snapshot: ReturnType<typeof makeSnapshot>, equity: number[] = []) {
   return render(
     <GlanceTab
       snapshot={snapshot}
@@ -86,10 +86,5 @@ describe('open risk', () => {
   it('names an empty book rather than drawing nothing', () => {
     renderGlance(makeSnapshot({ positions: [] }));
     expect(screen.getByText(/No open position — nothing at risk/)).toBeTruthy();
-  });
-
-  it('waits for the first snapshot in words', () => {
-    renderGlance(null);
-    expect(screen.getAllByText('waiting for the first snapshot')).toHaveLength(2);
   });
 });

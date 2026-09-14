@@ -26,14 +26,14 @@ import {
 } from '../../lib/format.ts';
 import { resolveTrade, type TradeDetail, tradeDebate } from '../../lib/resolve-trace.ts';
 import { presentCloseReason } from '../../lib/state-presentation.ts';
-import { sideWord, WAITING_FOR_FIRST_SNAPSHOT } from '../../lib/vocabulary.ts';
+import { sideWord } from '../../lib/vocabulary.ts';
 import { Seal } from '../Seal.tsx';
 import { pnlTone, StateWord } from '../StateWord.tsx';
 import { DebateSection, FillsList, GatesSection, Timeline } from '../TraceSections.tsx';
 import { Track } from '../Track.tsx';
 
 export interface ReviewTabProps {
-  snapshot: WireSnapshot | null;
+  snapshot: WireSnapshot;
   /** The selected closed trade's `idempotency_key`. */
   selectedKey: string | null;
   onSelect: (key: string) => void;
@@ -113,42 +113,40 @@ function restOfSuite(metrics: MetricsSuiteWire): Tile[] {
   ];
 }
 
-function MetricsCard({ metrics }: { metrics: MetricsSuiteWire | null }) {
+/**
+ * Takes the suite, not `MetricsSuiteWire | null`: `metrics` is required and
+ * non-nullable on the wire (`contracts/snapshot.ts`), and `hasWireShape`
+ * rejects a payload where it is not a non-null object, so the "no metrics on
+ * this snapshot" empty state this card used to carry could only ever be
+ * reached through a null SNAPSHOT — the cold start `App.tsx` now states once,
+ * for the whole page (#1520). A suite that ran and reported an unusable
+ * figure is still named per tile below.
+ */
+function MetricsCard({ metrics }: { metrics: MetricsSuiteWire }) {
   return (
     <section className="card" aria-label="Metrics suite">
       <h3>Metrics suite</h3>
-      {metrics === null ? (
-        <p className="empty-state">
-          No metrics on this snapshot — the Feedback Loop reports its suite daily, so an empty card
-          means no daily run has landed yet.
-        </p>
-      ) : (
-        <>
-          <ul className="tile-grid">
-            {headlineTiles(metrics).map((tile) => (
-              <li key={tile.label} className="tile">
-                <span className="label">{tile.label}</span>
-                <b className={`tile-value mono${tile.tone === 'warn' ? ' warn' : ''}`}>
-                  {tile.value}
-                </b>
-                {tile.note !== undefined && <span className="muted small">{tile.note}</span>}
-              </li>
-            ))}
-          </ul>
-          <dl className="kv-list">
-            {restOfSuite(metrics).map((tile) => (
-              <div key={tile.label} className="kv">
-                <dt>{tile.label}</dt>
-                <dd className="mono">
-                  {tile.value}
-                  {tile.note !== undefined && <span className="muted"> · {tile.note}</span>}
-                </dd>
-              </div>
-            ))}
-          </dl>
-          <p className="muted small">daily suite — reported together, never one number</p>
-        </>
-      )}
+      <ul className="tile-grid">
+        {headlineTiles(metrics).map((tile) => (
+          <li key={tile.label} className="tile">
+            <span className="label">{tile.label}</span>
+            <b className={`tile-value mono${tile.tone === 'warn' ? ' warn' : ''}`}>{tile.value}</b>
+            {tile.note !== undefined && <span className="muted small">{tile.note}</span>}
+          </li>
+        ))}
+      </ul>
+      <dl className="kv-list">
+        {restOfSuite(metrics).map((tile) => (
+          <div key={tile.label} className="kv">
+            <dt>{tile.label}</dt>
+            <dd className="mono">
+              {tile.value}
+              {tile.note !== undefined && <span className="muted"> · {tile.note}</span>}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      <p className="muted small">daily suite — reported together, never one number</p>
     </section>
   );
 }
@@ -474,15 +472,13 @@ function TradeRow(props: {
 
 function TradesTable(props: ReviewTabProps) {
   const { snapshot, selectedKey, onSelect } = props;
-  const trades = snapshot?.closed_trades ?? [];
+  const trades = snapshot.closed_trades;
   return (
     <section className="trades" aria-label="Closed trades">
       <div className="section-head">
         <h2>Closed trades</h2>
         <span className="muted small">
-          {snapshot === null
-            ? WAITING_FOR_FIRST_SNAPSHOT
-            : `${trades.length} on this snapshot · newest first · select a row for the full trace`}
+          {`${trades.length} on this snapshot · newest first · select a row for the full trace`}
         </span>
       </div>
       <div className="trade-row trade-header" aria-hidden="true">
@@ -494,9 +490,7 @@ function TradesTable(props: ReviewTabProps) {
         <span className="label">Why it was taken</span>
         <span className="label trade-pnl">P&amp;L</span>
       </div>
-      {snapshot === null ? (
-        <ul className="trade-list" />
-      ) : trades.length === 0 ? (
+      {trades.length === 0 ? (
         <p className="empty-state">
           No closed trade in the recent-history window. A round trip appears here once it flattens —
           this is a reading, not a missing panel.
@@ -527,17 +521,14 @@ const NO_TIMELINE: Readonly<Record<NonNullable<TradeDetail['absence']['trace']>,
 };
 
 function TradeDrawer({ snapshot, selectedKey }: Pick<ReviewTabProps, 'snapshot' | 'selectedKey'>) {
-  const detail =
-    snapshot === null || selectedKey === null ? null : resolveTrade(snapshot, selectedKey);
-  if (snapshot === null || detail === null) {
+  const detail = selectedKey === null ? null : resolveTrade(snapshot, selectedKey);
+  if (detail === null) {
     return (
       <aside className="drawer" aria-label="Trade detail">
         <p className="empty-state">
-          {snapshot === null
-            ? WAITING_FOR_FIRST_SNAPSHOT
-            : selectedKey === null
-              ? 'No trade selected — choose a closed trade to see why it was taken and how it ended.'
-              : 'The selected trade is no longer in the recent-history window.'}
+          {selectedKey === null
+            ? 'No trade selected — choose a closed trade to see why it was taken and how it ended.'
+            : 'The selected trade is no longer in the recent-history window.'}
         </p>
       </aside>
     );
@@ -611,18 +602,16 @@ export function ReviewTab(props: ReviewTabProps) {
         <div className="section-head">
           <h2 className="display review-title">Review</h2>
           <span className="muted small">
-            {snapshot === null
-              ? WAITING_FOR_FIRST_SNAPSHOT
-              : `as of ${formatDateUtc(snapshot.as_of)} ${formatClockUtc(snapshot.as_of)}`}
+            {`as of ${formatDateUtc(snapshot.as_of)} ${formatClockUtc(snapshot.as_of)}`}
           </span>
         </div>
         <div className="review-cards">
-          <MetricsCard metrics={snapshot?.metrics ?? null} />
+          <MetricsCard metrics={snapshot.metrics} />
           <div className="review-arms">
-            <ArmCard comparisons={snapshot?.arm_comparison ?? []} />
-            <BenchmarksCard benchmarks={snapshot?.outside_benchmarks ?? []} />
+            <ArmCard comparisons={snapshot.arm_comparison} />
+            <BenchmarksCard benchmarks={snapshot.outside_benchmarks} />
           </div>
-          <AnalystsCard analysts={snapshot?.analysts ?? []} />
+          <AnalystsCard analysts={snapshot.analysts} />
         </div>
         <TradesTable {...props} />
       </div>

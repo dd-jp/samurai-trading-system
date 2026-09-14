@@ -11,8 +11,10 @@ import { App } from './App.tsx';
 import { doneThrough, makeLane, makeView } from './lib/test-support.ts';
 import {
   fakeFetch,
+  HANGS,
   makeCondition,
   makeDebate,
+  makePosition,
   makeRiskCritic,
   makeSnapshot,
   makeSpend,
@@ -66,8 +68,10 @@ function laneView() {
   });
 }
 
-function openTab(name: 'Glance' | 'Live' | 'Review') {
-  fireEvent.click(screen.getByRole('tab', { name }));
+async function openTab(name: 'Glance' | 'Live' | 'Review') {
+  // Awaited: since #1520 the tablist does not exist until the first snapshot
+  // lands — the page is the cold-start state until then.
+  fireEvent.click(await screen.findByRole('tab', { name }));
 }
 
 afterEach(() => {
@@ -95,7 +99,7 @@ describe('rail', () => {
       ],
       () => Date.parse('2026-08-07T12:00:05.000Z'),
     );
-    const rail = screen.getByRole('complementary', { name: 'Rail' });
+    const rail = await screen.findByRole('complementary', { name: 'Rail' });
     expect(await within(rail).findByText('ALIVE')).toBeTruthy();
     expect(within(rail).getByText('polled 12:00:05Z')).toBeTruthy();
     expect(within(rail).queryByText('polled 12:00:00Z')).toBeNull();
@@ -117,7 +121,7 @@ describe('rail', () => {
 
   it('marks the page STALE after two missed polls and keeps the last clock', async () => {
     renderApp([makeSnapshot(), null]);
-    const rail = screen.getByRole('complementary', { name: 'Rail' });
+    const rail = await screen.findByRole('complementary', { name: 'Rail' });
     await within(rail).findByText('ALIVE');
     await waitFor(() => expect(within(rail).getByText('STALE')).toBeTruthy(), {
       timeout: 2_000,
@@ -138,14 +142,14 @@ describe('rail', () => {
 
   it('reads live, not idle, when a trace is running but tick_status is absent', async () => {
     renderApp([makeSnapshot({ pipeline: laneView(), tick_status: null })]);
-    const rail = screen.getByRole('complementary', { name: 'Rail' });
+    const rail = await screen.findByRole('complementary', { name: 'Rail' });
     expect(await within(rail).findByText(/live — a trace is running/)).toBeTruthy();
     expect(within(rail).queryByText(/idle — no tick in progress/)).toBeNull();
   });
 
   it('degrades the LLM meter to words when the spend summary is missing or malformed', async () => {
     renderApp([{ ...makeSnapshot(), llm_spend: [] }]);
-    const rail = screen.getByRole('complementary', { name: 'Rail' });
+    const rail = await screen.findByRole('complementary', { name: 'Rail' });
     expect(
       await within(rail).findByText('no spend figure on this snapshot — meter not drawable'),
     ).toBeTruthy();
@@ -156,10 +160,25 @@ describe('rail', () => {
   // it was never armed, or that it's deliberately uncapped, is as false as
   // drawing a meter against an invented one — "unknown" must outrank both
   // (#1140's priority order, sharpened by #1196's two new claims it could
-  // make from zero information).
+  // make from zero information). Since #1520 the page answers this by not
+  // rendering the meter at all before the first snapshot, which is the same
+  // claim made one level up.
   it('does not claim the budget is armed, unarmed, or uncapped before the first poll lands', () => {
-    renderApp([makeSnapshot()]);
-    const rail = screen.getByRole('complementary', { name: 'Rail' });
+    renderApp([HANGS]);
+
+    expect(screen.queryByRole('img', { name: /LLM budget used/ })).toBeNull();
+    expect(screen.queryByText(/never armed/)).toBeNull();
+    expect(screen.queryByText(/deliberately uncapped/)).toBeNull();
+    expect(screen.queryByText(/meter not drawable/)).toBeNull();
+  });
+
+  it('degrades the LLM meter to words when the wire carries no spend summary at all', async () => {
+    const withoutSpend = Object.fromEntries(
+      Object.entries(makeSnapshot()).filter(([key]) => key !== 'llm_spend'),
+    );
+    renderApp([withoutSpend]);
+    const rail = await screen.findByRole('complementary', { name: 'Rail' });
+
     expect(
       within(rail).getByText('no spend figure on this snapshot — meter not drawable'),
     ).toBeTruthy();
@@ -174,7 +193,7 @@ describe('rail', () => {
     const spend = makeSpend({ cap_usd: 200 });
     spend.all_time = { ...spend.all_time, cost_usd: 50 };
     renderApp([makeSnapshot({ llm_spend: spend })]);
-    const rail = screen.getByRole('complementary', { name: 'Rail' });
+    const rail = await screen.findByRole('complementary', { name: 'Rail' });
 
     expect(await within(rail).findByText('$50.00 / $200.00')).toBeTruthy();
     expect(
@@ -187,7 +206,7 @@ describe('rail', () => {
     const spend = makeSpend({ cap_usd: 20 });
     spend.all_time = { ...spend.all_time, cost_usd: 25 };
     renderApp([makeSnapshot({ llm_spend: spend })]);
-    const rail = screen.getByRole('complementary', { name: 'Rail' });
+    const rail = await screen.findByRole('complementary', { name: 'Rail' });
 
     expect(await within(rail).findByText(/over cap/)).toBeTruthy();
   });
@@ -197,7 +216,7 @@ describe('rail', () => {
   // one — the rail must say so, never "never armed" or "ambiguous".
   it('names the reason instead of drawing a meter when the run is armed uncapped', async () => {
     renderApp([makeSnapshot({ llm_spend: makeSpend({ cap_usd: null }) })]);
-    const rail = screen.getByRole('complementary', { name: 'Rail' });
+    const rail = await screen.findByRole('complementary', { name: 'Rail' });
 
     expect(
       await within(rail).findByText('LLM spend is deliberately uncapped — meter not drawable'),
@@ -218,7 +237,7 @@ describe('rail', () => {
     // @ts-expect-error simulating a malformed wire value (e.g. corrupted storage)
     spend.cap_usd = '50';
     renderApp([makeSnapshot({ llm_spend: spend })]);
-    const rail = screen.getByRole('complementary', { name: 'Rail' });
+    const rail = await screen.findByRole('complementary', { name: 'Rail' });
 
     expect(
       await within(rail).findByText(
@@ -236,7 +255,7 @@ describe('rail', () => {
   // operator choice) — collapsing both into the same sentence is the defect.
   it('names "never armed" distinctly from "armed uncapped", and never claims a budget is merely unconfigured', async () => {
     renderApp([makeSnapshot({ llm_spend: makeSpend({ cap_usd: null, cap_armed_at: null }) })]);
-    const rail = screen.getByRole('complementary', { name: 'Rail' });
+    const rail = await screen.findByRole('complementary', { name: 'Rail' });
 
     expect(
       await within(rail).findByText('LLM spend cap was never armed — meter not drawable'),
@@ -258,7 +277,7 @@ describe('rail', () => {
     // @ts-expect-error simulating a pre-#1196 server's wire shape
     delete spend.cap_armed_at;
     renderApp([makeSnapshot({ llm_spend: spend })]);
-    const rail = screen.getByRole('complementary', { name: 'Rail' });
+    const rail = await screen.findByRole('complementary', { name: 'Rail' });
 
     expect(
       await within(rail).findByText(
@@ -283,7 +302,7 @@ describe('rail', () => {
     delete spend.cap_armed_at;
     spend.all_time = { ...spend.all_time, cost_usd: 12.5 };
     renderApp([makeSnapshot({ llm_spend: spend })]);
-    const rail = screen.getByRole('complementary', { name: 'Rail' });
+    const rail = await screen.findByRole('complementary', { name: 'Rail' });
 
     expect(await within(rail).findByText('$12.50 / $50.00')).toBeTruthy();
     expect(
@@ -299,7 +318,7 @@ describe('rail', () => {
     const spend = makeSpend({ cap_usd: 0 });
     spend.all_time = { ...spend.all_time, cost_usd: 0 };
     renderApp([makeSnapshot({ llm_spend: spend })]);
-    const rail = screen.getByRole('complementary', { name: 'Rail' });
+    const rail = await screen.findByRole('complementary', { name: 'Rail' });
 
     expect(await within(rail).findByText(/LLM spend cap is \$0/)).toBeTruthy();
     expect(within(rail).queryByText(/deliberately uncapped/)).toBeNull();
@@ -310,7 +329,7 @@ describe('rail', () => {
     const spend = makeSpend({ cap_usd: 0 });
     spend.all_time = { ...spend.all_time, cost_usd: 0.01 };
     renderApp([makeSnapshot({ llm_spend: spend })]);
-    const rail = screen.getByRole('complementary', { name: 'Rail' });
+    const rail = await screen.findByRole('complementary', { name: 'Rail' });
 
     expect(await within(rail).findByText(/LLM spend cap is \$0.*already over/)).toBeTruthy();
     expect(within(rail).getByText(/^over cap/)).toBeTruthy();
@@ -325,7 +344,7 @@ describe('rail', () => {
       balance: null,
     };
     renderApp([snapshot]);
-    const rail = screen.getByRole('complementary', { name: 'Rail' });
+    const rail = await screen.findByRole('complementary', { name: 'Rail' });
     expect(await within(rail).findByText('unauthorized')).toBeTruthy();
     expect(within(rail).getByText('equity unavailable — key rejected')).toBeTruthy();
   });
@@ -339,7 +358,7 @@ describe('rail', () => {
 
   it('says nothing about the alert channel when nothing has failed to deliver', async () => {
     renderApp([makeSnapshot()]);
-    const rail = screen.getByRole('complementary', { name: 'Rail' });
+    const rail = await screen.findByRole('complementary', { name: 'Rail' });
     await within(rail).findByText('ALIVE');
     expect(within(rail).queryByText(/failed to deliver/)).toBeNull();
   });
@@ -349,28 +368,92 @@ describe('rail', () => {
   // the tile itself does not overclaim a lifetime total.
   it('surfaces a nonzero alert_delivery_failures_24h count as a degraded channel', async () => {
     renderApp([makeSnapshot({ alert_delivery_failures_24h: 4 })]);
-    const rail = screen.getByRole('complementary', { name: 'Rail' });
+    const rail = await screen.findByRole('complementary', { name: 'Rail' });
     expect(
       await within(rail).findByText('4 alerts failed to deliver in the last 24h'),
     ).toBeTruthy();
   });
 });
 
+/**
+ * #1520 (decided in #1144): the page answers "has a snapshot ever arrived"
+ * ONCE, at the root, instead of letting 22 leaves each answer "is one present
+ * right now". The three states below have to stay distinguishable from each
+ * other — a cold start must not be dressed as an empty book, and a stale feed
+ * must not be dressed as a cold start, which would throw away the last known
+ * state of the book at exactly the moment an operator is reaching for it.
+ *
+ * The cold-start states are the SAME `FeedStatus` machine the rail reads
+ * (#1316's discriminator), not a second one beside it — which is what the
+ * MISMATCH case below pins: a first poll that answers with a wire contract
+ * this client cannot read is a cold start whose word is MISMATCH, not
+ * WAITING.
+ */
+describe('cold start (#1520)', () => {
+  it('gates the whole dashboard on the first snapshot: one waiting state, no rail and no tabs', () => {
+    renderApp([HANGS]);
+
+    expect(screen.getByText('WAITING')).toBeTruthy();
+    expect(screen.getByText('waiting for the first snapshot')).toBeTruthy();
+    // Not a half-rendered dashboard: no rail, no tablist, no empty cards that
+    // an operator could read as a book with nothing in it.
+    expect(screen.queryByRole('complementary', { name: 'Rail' })).toBeNull();
+    expect(screen.queryByRole('tablist')).toBeNull();
+    expect(screen.queryByRole('tabpanel')).toBeNull();
+    expect(screen.queryByLabelText('Open risk')).toBeNull();
+  });
+
+  it('says MISMATCH, not WAITING, when the very first poll disagrees about the wire contract', async () => {
+    renderApp([makeSnapshot({ contract_version: 'not-this-clients-version' })]);
+
+    expect(await screen.findByText('MISMATCH')).toBeTruthy();
+    expect(screen.queryByText('WAITING')).toBeNull();
+    expect(screen.getByRole('status').textContent).toMatch(/wire contract/);
+    expect(screen.queryByRole('complementary', { name: 'Rail' })).toBeNull();
+  });
+
+  it('replaces the waiting state with the dashboard once the first snapshot lands', async () => {
+    renderApp([makeSnapshot()]);
+
+    const rail = await screen.findByRole('complementary', { name: 'Rail' });
+    expect(within(rail).getByText('ALIVE')).toBeTruthy();
+    expect(screen.queryByText('waiting for the first snapshot')).toBeNull();
+    expect(screen.getByRole('tabpanel')).toBeTruthy();
+  });
+
+  it('keeps the last known book on screen when the feed goes stale — a stale feed is never a cold start', async () => {
+    renderApp([makeSnapshot({ positions: [makePosition({ instrument: 'SPY' })] }), null]);
+
+    const rail = await screen.findByRole('complementary', { name: 'Rail' });
+    await within(rail).findByText('ALIVE');
+    await waitFor(() => expect(within(rail).getByText('STALE')).toBeTruthy(), { timeout: 2_000 });
+
+    expect(screen.queryByText('waiting for the first snapshot')).toBeNull();
+    expect(screen.queryByText('WAITING')).toBeNull();
+    // The numbers themselves stay: staleness is a label and a border, never a
+    // disappearance (dashboard-spec.md, "Layout — the Rail").
+    expect(within(screen.getByLabelText('Open risk')).getByText('SPY')).toBeTruthy();
+    expect(within(rail).getByText('snapshot 12:00:00Z')).toBeTruthy();
+  });
+});
+
 describe('tabs', () => {
   it('opens on Glance, switches by tab, and reflects the tab in the hash', async () => {
     renderApp([makeSnapshot()]);
-    expect(screen.getByRole('tab', { name: 'Glance' }).getAttribute('aria-selected')).toBe('true');
+    expect((await screen.findByRole('tab', { name: 'Glance' })).getAttribute('aria-selected')).toBe(
+      'true',
+    );
     await screen.findByRole('region', { name: 'P&L today' });
-    openTab('Review');
+    await openTab('Review');
     expect(window.location.hash).toBe('#review');
     expect(screen.getByRole('region', { name: 'Closed trades' })).toBeTruthy();
-    openTab('Live');
+    await openTab('Live');
     expect(screen.getByRole('region', { name: 'Lanes' })).toBeTruthy();
   });
 
   it('moves the selected tab with the arrow keys and keeps focus on it', async () => {
     renderApp([makeSnapshot()]);
-    const glance = screen.getByRole('tab', { name: 'Glance' });
+    const glance = await screen.findByRole('tab', { name: 'Glance' });
     glance.focus();
     fireEvent.keyDown(glance, { key: 'ArrowDown' });
     const live = screen.getByRole('tab', { name: 'Live' });
@@ -445,7 +528,7 @@ describe('glance → live', () => {
 describe('live', () => {
   it('names every lane’s outcome and stage in words, and reads a stopped cell’s decision', async () => {
     renderApp([makeSnapshot({ pipeline: laneView() })]);
-    openTab('Live');
+    await openTab('Live');
     expect(
       await screen.findByRole('button', { name: 'BTC-USD, crypto, in flight, at Debate' }),
     ).toBeTruthy();
@@ -474,7 +557,7 @@ describe('live', () => {
         debates: [makeDebate({ instrument: 'QQQ' })],
       }),
     ]);
-    openTab('Live');
+    await openTab('Live');
     fireEvent.click(await screen.findByRole('button', { name: /QQQ, stocks, stopped/ }));
     const drawer = screen.getByRole('complementary', { name: 'Trace detail' });
     expect(drawer.querySelector('[data-condition="shown-trace-condition"]')).toBeTruthy();
@@ -488,7 +571,7 @@ describe('live', () => {
 
   it('names its empty states: no selection, an idle lane, no debate, no Risk decision', async () => {
     renderApp([makeSnapshot({ pipeline: laneView(), debates: [], positions: [] })]);
-    openTab('Live');
+    await openTab('Live');
     const drawer = screen.getByRole('complementary', { name: 'Trace detail' });
     expect(await within(drawer).findByText(/No lane selected/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /SPY, stocks, idle/ }));
@@ -510,7 +593,7 @@ describe('live', () => {
         generated_at: '2026-08-07T12:00:03.000Z',
       }),
     ]);
-    openTab('Live');
+    await openTab('Live');
     const lane = await screen.findByRole('button', { name: /QQQ, stocks, stopped/ });
     lane.focus();
     await screen.findByText('snapshot 12:00:03Z');
@@ -521,7 +604,7 @@ describe('live', () => {
     const hostile = '<img src=x onerror="alert(1)">';
     const lane = doneThrough(hostile, 'trace-x', 'verdict', { outcome: 'no_go' });
     renderApp([makeSnapshot({ pipeline: makeView([lane]), positions: [], debates: [] })]);
-    openTab('Live');
+    await openTab('Live');
     const button = await screen.findByRole('button', { name: /img src=x/ });
     const name = button.querySelector('.lane-instrument');
     expect(name?.textContent).toBe(hostile);
@@ -568,7 +651,7 @@ describe('degraded stages on the page (#1080)', () => {
 
   it('explains a starved sub-budget in the drawer instead of showing a bare word', async () => {
     renderApp([makeSnapshot({ pipeline: starvedLaneView() })]);
-    openTab('Live');
+    await openTab('Live');
     fireEvent.click(await screen.findByRole('button', { name: /QQQ, stocks, stopped/ }));
 
     const drawer = screen.getByRole('complementary', { name: 'Trace detail' });
@@ -592,7 +675,7 @@ describe('degraded stages on the page (#1080)', () => {
   // renderer the drawer test above does not touch.
   it('explains a starved sub-budget in the LANE MATRIX too, not only the drawer', async () => {
     renderApp([makeSnapshot({ pipeline: starvedLaneView() })]);
-    openTab('Live');
+    await openTab('Live');
 
     // aria-label overrides inner text for assistive tech (LiveTab.tsx's
     // button), so the lane's own accessible name has to say "degraded" too —
@@ -630,7 +713,7 @@ describe('degraded stages on the page (#1080)', () => {
 
   it('gives the drawer ONE answer for why a debate degraded, not one per section', async () => {
     renderApp([makeSnapshot({ pipeline: starvedLaneView(), debates: [llmFailureDebate] })]);
-    openTab('Live');
+    await openTab('Live');
     fireEvent.click(await screen.findByRole('button', { name: /QQQ, stocks, stopped/ }));
 
     const drawer = screen.getByRole('complementary', { name: 'Trace detail' });
@@ -640,7 +723,7 @@ describe('degraded stages on the page (#1080)', () => {
 
   it('carries the cause to the lane matrix cell an operator scans first', async () => {
     renderApp([makeSnapshot({ pipeline: starvedLaneView(), debates: [llmFailureDebate] })]);
-    openTab('Live');
+    await openTab('Live');
 
     const qqq = await screen.findByRole('button', { name: /QQQ, stocks, stopped, .*degraded/ });
     const decisionSpan = qqq.querySelector('[data-stage="debate"] .lane-decision');

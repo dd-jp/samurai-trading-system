@@ -70,19 +70,39 @@ export function closedTrade(
  * could be".
  *
  * Derived from the fills, not stamped as a literal, because going through
- * `toFill` is not the same as being charged by it: `modelledEntryCostFor` is
- * nullable (no submit-time snapshot) and `redistributeOneFlatten`'s is too, so
- * a live lot can close having paid nothing. Stamping `1` on those said the
- * opposite of what happened — worse than the pre-fix state, since the row then
- * certifies a cost basis it is not on.
+ * `toFill` is not the same as being charged by it: `modelledLotCostsFor` is
+ * nullable on both legs (no submit-time snapshot) and
+ * `redistributeOneFlatten`'s is too, so a live lot can close having paid
+ * nothing. Stamping `1` on those said the opposite of what happened — worse
+ * than the pre-fix state, since the row then certifies a cost basis it is not
+ * on.
  *
- * COVERAGE, and why `'stop'`/`'target'` legs do not veto: no modelled estimate
- * exists for a protective leg on either arm (see `toFill`'s "What this still
- * does not cover", #1301). Vetoing on them would drop live trades BECAUSE they
- * exited on a stop — selection on outcome, since stops are the losers, which is
- * a worse and far less visible bias than the exit-leg under-charge it would be
- * papering over. So coverage is the entry legs plus flatten (`'exit'`) legs,
- * which is exactly the set both arms price.
+ * COVERAGE IS NOW EVERY LEG (#1301, migration 0061). It was the entry legs
+ * plus flatten (`'exit'`) legs while no modelled estimate existed for a
+ * protective leg on either arm; `captureSubmitSnapshot` now prices the
+ * protective exit alongside the entry, so a `'stop'`/`'target'` fill carries a
+ * `cost_breakdown` exactly as the others do and there is nothing left to
+ * exclude.
+ *
+ * Widening coverage adds NO new way to stamp 0 on a lot opened after that
+ * migration: the entry and protective estimates are assigned together in one
+ * try/catch (`readSubmitSnapshot`, execute.ts), so a lot whose protective
+ * fills lack a breakdown is one whose entry fills lack one too, and it
+ * stamped 0 already. The one transitional case it does add is a lot OPEN
+ * ACROSS the deploy — written with the entry column and without the protective
+ * one — which now closes 0 on a bracket exit where it would have closed 1.
+ * That is the honest answer for it: its stop leg genuinely was not charged.
+ *
+ * WHAT THIS STILL DOES NOT EQUALIZE. Each covered leg needs its own successful
+ * best-effort capture, and the two exit types do not need the same NUMBER of
+ * them: a protective exit's legs are all covered by the entry submission's
+ * single capture, while a flatten exit needs that one AND the flatten's. So
+ * the drop-rate differential #1301's round-2 finding names survives this
+ * widening unchanged — it is a property of which submissions get captured, not
+ * of which legs are covered, and Option 1 (David, 2026-09-14) was chosen over
+ * the control-arm bracket path knowing that. #1546 owns that surviving term.
+ * See `toFill`'s "What this still does not cover" (ingest-fills.ts) and the
+ * filter of the same name in `sqlite-arm-comparison-source.ts`.
  *
  * The control arm always answers `true`: `SimulatedBrokerAdapter` prices its
  * own fills and stamps `cost_breakdown` on every one of them.
@@ -91,7 +111,5 @@ export function modelledCostCharged(
   entryFills: readonly Fill[],
   exitFills: readonly ExitFill[],
 ): boolean {
-  return [...entryFills, ...exitFills.filter((fill) => fill.leg === 'exit')].every(
-    (fill) => fill.cost_breakdown !== undefined,
-  );
+  return [...entryFills, ...exitFills].every((fill) => fill.cost_breakdown !== undefined);
 }
