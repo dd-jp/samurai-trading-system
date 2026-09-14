@@ -65,6 +65,7 @@ import type { CostConfig, SqliteStage2SelectionStore } from '../../../tools/back
 import type { HeartbeatChannel } from '../heartbeat.js';
 import type { OrphanAlertChannel } from '../orphan-verdict-scan.js';
 import type { Logger, UniverseInstrument } from '../types.js';
+import type { AccountFundingSource } from './account-state.js';
 import type { AnalystSkipAlertChannel } from './analysts-adapter.js';
 import type { CalendarFallbackAlertChannel } from './calendar-fallback-alert.js';
 import type { CapitalCeilingUsd } from './capital-ceiling.js';
@@ -552,14 +553,32 @@ export interface ProductionConfig extends AlertChannelSlots {
   ciiScoreProvider?: CiiScoreProvider;
   /**
    * Account accounting scalars. Optional since #276: when omitted this module
-   * builds an `AlpacaAccountStateProvider` over `alpacaBrokerClient`'s
-   * `GET /v2/account`, the durable `account_state` table, and the existing
-   * `ClosedTrade` store — the three sources transport-layer-spec.md's
-   * "Module: AccountStateProvider" names. Same override shape as
-   * `broker`/`dataSource`/`llmClient`, for tests and for a future non-Alpaca
-   * account ledger.
+   * builds a `BrokerAccountStateProvider` over a funding read, the durable
+   * `account_state` table, and the existing `ClosedTrade` store — the three
+   * sources transport-layer-spec.md's "Module: AccountStateProvider" names.
+   * Same override shape as `broker`/`dataSource`/`llmClient`.
+   *
+   * To change only WHERE cash and equity are read from, supply
+   * `accountFunding` instead: this field replaces the session-boundary,
+   * peak-equity and loss-streak machinery too.
    */
   accountState?: AccountStateProvider;
+  /**
+   * The venue ledger `cash`/`equity` are read from, when it is not Alpaca's
+   * `GET /v2/account` (#1509).
+   *
+   * Narrower than `accountState` on purpose. The Saxo venue needs a GBP-native
+   * funding read and nothing else about the account provider changes — the
+   * per-class session boundaries (#332), the persisted high-water mark and the
+   * loss streak are all venue-neutral, and a second copy of them is how the
+   * two arms drift. `saxoFunding` (production/saxo-funding.ts) builds this
+   * from the same Saxo client the broker uses, so there is one token budget
+   * against the account's one rate limit.
+   *
+   * Ignored when `accountState` is supplied — that field replaces the whole
+   * provider, this one only its funding source.
+   */
+  accountFunding?: AccountFundingSource;
   /** Realized-vol reading for the volatility breaker tier — no in-repo indicator (#234). */
   volatility?: VolatilityReadingProvider;
 

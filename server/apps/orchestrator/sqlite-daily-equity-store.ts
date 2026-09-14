@@ -7,7 +7,7 @@
  * daily-loss breaker, and overwrites itself every boundary. This one answers
  * "what has equity been, day by day", and never overwrites anything. They share
  * the boundary (`TradingCalendar.sessionStart`, #331) and the writer — see
- * `AlpacaAccountStateProvider` — so the series cannot drift onto a different
+ * `BrokerAccountStateProvider` — so the series cannot drift onto a different
  * definition of "a day" than the breaker uses.
  */
 

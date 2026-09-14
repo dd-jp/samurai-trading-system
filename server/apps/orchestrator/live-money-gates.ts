@@ -79,18 +79,30 @@
  * `liveBookCeiling` and `perSubclassDeploymentCap`'s `equity_ceiling`
  * (risk-manager/index.ts) refuse to arm ANY live entry whenever
  * `RiskConfig['live_book_ceiling']`/`SubclassDeploymentCap['equity_ceiling']`
- * are set without `same_currency_verified: true` — which is every live tick
- * today, because the declared book is GBP and the only funding read this
- * codebase has (Alpaca's `GET /v2/account`, `production/account-state.ts:129`)
- * is USD, with no FX conversion and no same-currency broker adapter (#946 is
- * that eventual adapter). This is NOT a `LIVE_MONEY_GATES` entry: it is not an
+ * are set without `same_currency_verified: true` — which is still every live
+ * tick today, because the declared book is GBP and the funding read on every
+ * path that can reach `live` is Alpaca's USD `GET /v2/account`
+ * (`alpacaFunding`, `production/account-state.ts`), with no FX conversion.
+ *
+ * **#1509 built the same-currency read, and did not lift this.** Saxo's
+ * `GET /port/v1/balances/me` is wired as `saxoFunding`, and
+ * `armSameCurrencyCeilings` (`production/saxo-funding.ts`) sets the flag when
+ * that read reports the account denominated in the book's currency. It cannot
+ * fire on a live boot: the Saxo venue refuses `SAMURAI_MODE=live` outright
+ * (saxo-venue.ts), and the paper profile declares no ceiling to arm. So the
+ * mechanism now exists and has never run against the live UK GIA, whose
+ * currency this repo has never observed — SIM answers `EUR` (doc 44 §6.3),
+ * and doc 44 §1 rules that account-shaped SIM facts do not carry.
+ *
+ * This is NOT a `LIVE_MONEY_GATES` entry, for the reason it never was: it is not an
  * open issue whose closure changes anything here, it is a standing structural
  * refusal in the code itself that this list cannot express and
  * `yarn check:live-gates` cannot verify. **The two are coupled and must not be
  * decoupled**: lifting this file's blanket refusal does NOT by itself unblock
  * a single live entry — the currency-mismatch guard still refuses every one,
- * correctly, until a real FX-rate provider or a same-currency (GBP-native)
- * broker adapter exists and `same_currency_verified` is set. Whoever next
+ * correctly, until a real FX-rate provider exists, or a same-currency account
+ * read runs on a path that reaches `live` and sets `same_currency_verified`.
+ * Whoever next
  * revisits this file's refusal should check that guard's state too, not
  * assume it moved in step.
  */

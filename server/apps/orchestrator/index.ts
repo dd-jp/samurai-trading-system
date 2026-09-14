@@ -81,8 +81,15 @@ import { buildEntrypointLogger, JsonLogger } from './logger.js';
 import { paperStartingProfile } from './paper-profile.js';
 import { LSE_TICKERS } from './production/defaults.js';
 import {
+  armSameCurrencyCeilings,
+  hasSameCurrencyCeiling,
+  saxoFunding,
+  verifySameCurrency,
+} from './production/saxo-funding.js';
+import {
   type BrokerVenue,
   buildSaxoBroker,
+  buildSaxoVenueClient,
   resolveBrokerVenue,
   saxoTradeableUniverse,
 } from './production/saxo-venue.js';
@@ -776,12 +783,37 @@ export async function startFromEnvironment(
   // gate's `SimulatedBrokerAdapter`, a test's) has already chosen, and
   // overriding that from an environment variable would make the seam
   // unfalsifiable.
+  //
+  // ONE Saxo client per run (#1509): the broker and the funding read share it,
+  // because the venue's pacing budget belongs to the account and two clients
+  // would be two budgets against one limit. Built only when neither an adapter
+  // nor a client was injected — a caller that passed either has already chosen
+  // its transport, and the funding read must not open a second one behind it.
+  const saxoClient =
+    venue === 'saxo' && injected.broker === undefined && injected.saxoBrokerClient === undefined
+      ? buildSaxoVenueClient(logger)
+      : undefined;
+
+  // The GBP-native funding read. Skipped when the caller supplied a whole
+  // `accountState` or its own funding source, so this never fires under a test
+  // that already stubbed the account — and, with `saxoClient` above, never
+  // under one that injected a broker or a wire client either.
+  const saxoAccountFunding =
+    saxoClient !== undefined &&
+    injected.accountState === undefined &&
+    injected.accountFunding === undefined
+      ? saxoFunding(saxoClient)
+      : undefined;
+  const accountFunding = injected.accountFunding ?? saxoAccountFunding;
+  const saxoWireClient = injected.saxoBrokerClient ?? saxoClient;
+
   const saxoBroker =
     venue === 'saxo' && injected.broker === undefined
       ? await buildSaxoBroker({
           mode,
           universe: injected.universe ?? [],
           accountState: injected.accountState,
+          ...(accountFunding === undefined ? {} : { accountFunding }),
           db,
           logger,
           clock,
@@ -802,7 +834,7 @@ export async function startFromEnvironment(
             injected.priceUnitAlerts ??
             alertChannels.priceUnitAlerts ??
             loggingAlertChannel('priceUnitAlerts', logger),
-          ...(injected.saxoBrokerClient === undefined ? {} : { client: injected.saxoBrokerClient }),
+          ...(saxoWireClient === undefined ? {} : { client: saxoWireClient }),
         })
       : undefined;
 
@@ -822,9 +854,44 @@ export async function startFromEnvironment(
       ? new LseRegularHoursCalendar()
       : undefined;
 
+  // #949's guard, armed from the real read or not at all (#1509).
+  //
+  // The ceilings are static config and the funding read is async, so this is
+  // the one moment both exist: a single extra read at boot, gated on there
+  // BEING a ceiling to arm, so a profile that declares none makes no call
+  // whose answer changes nothing. What arms it is the account's own
+  // `Currency` matching the declared book's — never the venue being Saxo UK.
+  //
+  // No reachable configuration exercises the armed branch today:
+  // `paperStartingProfile` declares no ceiling, and `liveStartingProfile`,
+  // which does, is on the mode the Saxo venue refuses outright.
+  const declaredRiskConfig = injected.riskConfig;
+  const sameCurrency =
+    accountFunding !== undefined &&
+    declaredRiskConfig !== undefined &&
+    hasSameCurrencyCeiling(declaredRiskConfig)
+      ? verifySameCurrency(await accountFunding.readFunding())
+      : undefined;
+  if (sameCurrency !== undefined) {
+    logger.log({
+      trace_id: 'startup',
+      stage: 'orchestrator',
+      event: 'same_currency_verified',
+      level: sameCurrency.verified ? 'info' : 'warn',
+      message: sameCurrency.verified
+        ? 'account currency matches the declared book; live book ceilings armed'
+        : 'account currency does not match the declared book; every live entry stays refused',
+      payload: { ...sameCurrency },
+    });
+  }
+
   const orchestrator = buildProductionOrchestrator({
     ...alertChannels,
     ...(injected as ProductionConfig),
+    ...(accountFunding === undefined ? {} : { accountFunding }),
+    ...(sameCurrency === undefined || declaredRiskConfig === undefined
+      ? {}
+      : { riskConfig: armSameCurrencyCeilings(declaredRiskConfig, sameCurrency) }),
     ...(saxoBroker === undefined ? {} : { broker: saxoBroker }),
     ...(saxoCalendar === undefined ? {} : { tradingCalendar: saxoCalendar }),
     logger,

@@ -184,11 +184,12 @@ function offlineInjections(db: StoreHandle): Partial<ProductionConfig> {
       fetchPriceHistory: async () => [],
     },
     /**
-     * REQUIRED by the Saxo venue, not a convenience: this repo's Saxo client
-     * calls no balances endpoint, and the venue's own
-     * `GET /port/v1/balances/me` answers in EUR on the SIM trial account
-     * (doc 44 §6), so without this the venue refuses rather than size a GBP
-     * book off a foreign-currency account (#949).
+     * REQUIRED by the Saxo venue, not a convenience: the venue refuses to
+     * boot without a funding read of its own rather than size a GBP book off
+     * Alpaca's USD `GET /v2/account` (#949). Since #1509 an `accountFunding`
+     * over `GET /port/v1/balances/me` satisfies the same refusal; this
+     * fixture supplies the whole provider instead, so no wire client is
+     * needed here.
      *
      * The REAL `AccountStateProvider` shape, uncast: a cast fixture here hid
      * the ceiling defect round 1 found, because an invented `equity`/

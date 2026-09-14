@@ -128,10 +128,23 @@ describe('buildSaxoBroker', () => {
     await expect(buildSaxoBroker(saxoDeps(db, { mode: 'live' }))).rejects.toThrow(/live/i);
   });
 
-  it('refuses without an injected accountState — Alpaca USD equity must not size a GBP book', async () => {
+  it('refuses with no funding read at all — Alpaca USD equity must not size a GBP book', async () => {
     await expect(buildSaxoBroker(saxoDeps(db, { accountState: undefined }))).rejects.toThrow(
-      /accountState/,
+      /accountFunding/,
     );
+  });
+
+  it('accepts a GBP-native funding read in place of a whole accountState (#1509)', async () => {
+    const broker = await buildSaxoBroker(
+      saxoDeps(db, {
+        accountState: undefined,
+        accountFunding: {
+          readFunding: async () => ({ cash: 1_000, equity: 1_000, currency: 'GBP' }),
+        },
+      }),
+    );
+
+    expect(broker).toBeInstanceOf(SaxoBrokerAdapter);
   });
 
   it('refuses a universe holding an instrument the Saxo venue does not trade', async () => {
