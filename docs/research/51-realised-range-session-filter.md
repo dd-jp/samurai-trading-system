@@ -93,7 +93,7 @@ Not trials, and why:
 
 | Fixed thing | Where it comes from |
 |---|---|
-| Bracket geometry (+2.00/−2.16 index, +6.00/−6.25 single-stock; costs 0.18%/0.41%) | ADR-0018 D3/D4 — frozen, #787 forbids tuning it |
+| Bracket geometry (+2.00/−2.16 index, +6.00/−6.25 single-stock; costs 0.18%/0.41% spread-only, **0.34%/0.57% charged round trip per doc 54 §5**) | ADR-0018 D3/D4 — frozen, #787 forbids tuning it |
 | Arming instant `t0 = 30` | #706's window midpoint |
 | 20-session range lookback | `18-entry-time-brackets.py`, unchanged |
 | IS/OOS split at 2022/2023 | `18-threshold-study.py`, unchanged |
@@ -155,7 +155,10 @@ which reduces the headline to a two-sample gross-expectancy gap between **disjoi
 script computes the reduction both ways and asserts they agree.
 
 *Cost cancels from the headline.* `bar = (cost − E_gross)/W`, and both arms share `cost` and `W`,
-so the on/off **delta** is invariant to the 0.18% / 0.41% spread assumptions. A real per-subclass
+so the on/off **delta** is invariant to the 0.18% / 0.41% **spread-only** assumptions — and, by the
+same cancellation, invariant too to the 0.34% / 0.57% charged round trip doc 54 §5 restates them as.
+**Premise-label fix only** (per #1548): 0.18% / 0.41% are spread-only, not the full round trip;
+the headline result this paragraph describes does not change either way. A real per-subclass
 spread measurement — never delivered; [#666](https://github.com/dd-jp/samurai-trading-system/issues/666)
 closed 2026-08-27 out of scope without doing so, [#750](https://github.com/dd-jp/samurai-trading-system/issues/750)
 now gates on it instead, and [#1053](https://github.com/dd-jp/samurai-trading-system/issues/1053)
@@ -376,7 +379,10 @@ bootstrap over. That is a deliberate consequence of keeping the grid small, not 
    resolution. Re-running the index arm at 1-minute is the cheap sensitivity nobody has run.
 6. **Costs are per-subclass constants applied to names they were not measured on.** 0.18% and
    0.41% come from ADR-0018, quoted off SPY and TSLA, and are applied here to QQQ, MSTR, NVDA and
-   PLTR. Per §5 this **cancels from the on/off delta** and cannot move the verdict; it does move
+   PLTR. **These are spread-only, not the charged round trip** — doc 54 §5 restates them as 0.34% /
+   0.57% against Saxo's measured 16 bps commission; §5's cancellation applies to that restatement
+   the same way (premise-label fix, per #1548, not a results change). Per §5 this **cancels from the
+   on/off delta** and cannot move the verdict; it does move
    every absolute bar in §6.3. The real spreads remain unmeasured: [#666](https://github.com/dd-jp/samurai-trading-system/issues/666),
    which would have measured them, closed 2026-08-27 out of scope without delivering that
    measurement; [#750](https://github.com/dd-jp/samurai-trading-system/issues/750) now gates on it
