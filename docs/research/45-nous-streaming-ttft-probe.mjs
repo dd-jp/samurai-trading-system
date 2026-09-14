@@ -55,7 +55,8 @@ Do not include any text outside the JSON object. Do not use markdown code fences
 // Prompt-token count drives the prefill term §2.3 of doc 45 says this probe
 // cannot separate from queue wait, so the filler bars are seeded rather than
 // Math.random() -- a re-run should build the identical prompt, not a random
-// one of similar shape.
+// one of similar shape. The archived 2026-09-14 results predate this seeding
+// and the summary sort below; they came from an unseeded prompt of the same shape.
 function mulberry32(seed) {
   let a = seed;
   return () => {

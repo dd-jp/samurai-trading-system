@@ -152,13 +152,14 @@ five structurally different models, and gated on total account-wide in-flight de
 per-key rate limits or the debate engine's own code. What it does not do is split one slow call into
 a queue-wait component and a generation component — every number above is a single wall-clock span.
 
-**Cost-basis note (not in the original probe text):** cross-checking the cost column against
-`server/shared/llm/pricing.ts`'s `MODEL_RATES` (the Nous portal's own rates, $0.80/$4.00 per M
-tokens in/out for haiku, $0.60/$3.60 for `gpt-5.4-mini`) against the probe's reported prompt-token
-counts reproduces figures close to the quoted per-call costs above. The quoted text labels the total
-as "list-price basis," but the per-call numbers are consistent with Nous's discounted portal rates,
-not the underlying vendors' list prices — a labeling looseness in the original probe's report, left
-as written above since this doc reproduces that report rather than correcting it in place.
+**Cost-basis note (not in the original probe text):** the cost column is on the vendors' list-price
+basis, as the reproduced report labels it — the archived producer
+(`45-nous-five-model-latency-probe.mjs`) prices haiku at $1.00/$5.00 and `gpt-5.4-mini` at
+$0.75/$4.50 per M tokens in/out, and recomputing from the archived usage (haiku 3,511 in / 226 out)
+gives $0.00464 and $0.00279, matching the quoted $0.00465 and $0.00283. Nous's actual portal rates
+(`server/shared/llm/pricing.ts`'s `MODEL_RATES`: $0.80/$4.00 haiku, $0.60/$3.60 `gpt-5.4-mini`) put
+the real per-call cost ~20–25% lower than the column shows; anyone pricing a model swap off this
+table should apply that discount.
 
 ## 2. A real decomposition: the streaming TTFT probe (this doc, 2026-09-14)
 
@@ -291,8 +292,7 @@ answer in valid JSON):
   burst max, 4/4 valid) — an improvement on ADR-0009's 2026-08-06 table, where none of the three
   non-haiku candidates it tested cleared their bar. It is, in fact, cheaper than haiku on Nous's own
   posted rates (`server/shared/llm/pricing.ts`: $0.60/$3.60 per M in/out vs. haiku's $0.80/$4.00,
-  cheaper on both input and output, consistent with the probe's $0.00283 vs. $0.00465 per-call
-  figures) — cost is not the reason to prefer haiku. **Tail latency is.** ADR-0009's own stated
+  cheaper on both input and output) — cost is not the reason to prefer haiku. **Tail latency is.** ADR-0009's own stated
   decision criterion for this role is the tail, not the median or the price, because the tail is
   what a 1-round debate's budget has to survive: `gpt-5.4-mini` is slower than haiku at every
   measured point (seq max 6.86 s vs. 6.39 s; burst p50 27.0 s vs. 18.9 s; burst max 33.6 s vs.
