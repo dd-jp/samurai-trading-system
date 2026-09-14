@@ -335,17 +335,33 @@ export const DEFAULT_VENUE_PACING: VenuePacingConfig = {
   // leg) — ~2s of the ~1s/leg refill after the burst. No hard deadline is
   // known to bind on either path today.
   //
-  // Every Saxo request, read or write, spends this same pool through
-  // `acquire()` (the priority lane) — `reserveForPriority: 0` reserves
-  // nothing back FOR that lane against a `acquireBackground()` caller,
-  // because there is no `acquireBackground()` caller here to reserve
-  // against. A multi-page poll sweep (listOpenOrders/listOrderActivities)
-  // can therefore still drain the bucket ahead of a protective-leg
-  // placement queued behind it — the same failure mode #391's
-  // `reserveForPriority` exists to prevent for Alpaca, just not yet solved
-  // here: doing so needs Saxo's read and write calls classified into two
-  // lanes first, which #1222 did not do (see its PR body's follow-up).
-  saxo: { capacity: 2, refillPerSecond: 1, reserveForPriority: 0 },
+  // #1419 classifies every SaxoHttpBrokerClient call site into the two
+  // lanes #391 built for exactly this: `placeOrder`/`cancelOrder` (and the
+  // identity lookup gating them) spend `acquire()`, the priority lane;
+  // `listOpenOrders`/`listOrderActivities`/`listNetPositions` and their
+  // `listAll()` pagination spend `acquireBackground()`. A multi-page read
+  // sweep can now drain only down to the reserve below, leaving a pending
+  // placement/cancel a token to go through on rather than parking it behind
+  // the 1/s refill.
+  //
+  // `reserveForPriority: 1` — UNVERIFIED, a deliberate conservative
+  // placeholder in the ccxt entry's style, not a Saxo-published figure.
+  // developer.saxo/openapi/learn/rate-limiting documents the ceilings this
+  // file already cites (120/min service-group, the 1/s session throttle
+  // capacity models) but says nothing about reserving part of that budget
+  // for order placement specifically — there is no per-lane split to read
+  // off the docs, and no live account to calibrate one against. At
+  // `capacity: 2` the only two honest choices are 0 (today's inert
+  // pre-#1419 default, which is the bug this ticket fixes) or 1: reserving
+  // 1 guarantees `acquire()` always has a token available without ever
+  // starving `acquireBackground()` entirely (reserving 2 would do that —
+  // background could never spend a token, which is its own failure mode).
+  // 1 also covers `placeOrder`/`cancelOrder`'s steady-state cost exactly:
+  // `resolveIdentity()` is memoised, so once warm each spends a single
+  // token. Revisit this the same way `alpaca.reserveForPriority` was
+  // re-derived (#1080) once a real Saxo account/tier exists to measure
+  // fan-out and refill against.
+  saxo: { capacity: 2, refillPerSecond: 1, reserveForPriority: 1 },
 };
 
 /**

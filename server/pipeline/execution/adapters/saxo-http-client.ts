@@ -74,6 +74,13 @@ export interface SaxoHttpBrokerClientOptions {
    * `fetchWithTimeout` call (#1222 — a public operation like `submitBracket`
    * or `cancel` can fan out to several, so pacing lives at the transport
    * boundary rather than the caller). Defaults to `DEFAULT_VENUE_PACING.saxo`.
+   *
+   * Since #1419, each call site spends one of two lanes on this same bucket
+   * (`SaxoRequestPriority`): `placeOrder`/`cancelOrder` (and the identity
+   * lookup gating them) go through `acquire()`, everything else — polling,
+   * pagination, reference-data reads — through `acquireBackground()`, so
+   * `DEFAULT_VENUE_PACING.saxo`'s `reserveForPriority` protects a pending
+   * placement/cancel from a draining read sweep.
    */
   rateLimiter?: TokenBucket;
   /**
@@ -111,6 +118,18 @@ interface AccountIdentity {
  * picking up retries it never asked for.
  */
 type SaxoRequestInit = Omit<RequestInit, 'method'> & { method: SaxoHttpMethod };
+
+/**
+ * Which `TokenBucket` lane a request spends (#1419). `'priority'` is for
+ * anything that arms or removes a protective leg or flattens a position —
+ * `placeOrder`/`cancelOrder`, and the identity lookup that gates them so it
+ * cannot itself be parked behind a background sweep. Everything else
+ * (position/order/activity polling, pagination, reference-data reads) is
+ * `'background'`, so a multi-page sweep can drain down to
+ * `DEFAULT_VENUE_PACING.saxo`'s reserve without delaying a pending
+ * placement/cancel.
+ */
+type SaxoRequestPriority = 'priority' | 'background';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -391,6 +410,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
     init: SaxoRequestInit,
     context: string,
     validate: (body: unknown, context: string) => T,
+    priority: SaxoRequestPriority,
     retry: RetryConfig = this.retry,
     extraHeaders: Record<string, string> = {},
   ): Promise<T> {
@@ -399,7 +419,11 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
         // One token per attempt (#1222): a retried request is a second
         // upstream call and must be paced as one, not covered by the first
         // attempt's token.
-        await this.rateLimiter.acquire();
+        if (priority === 'priority') {
+          await this.rateLimiter.acquire();
+        } else {
+          await this.rateLimiter.acquireBackground();
+        }
         let response: Response;
         try {
           response = await fetchWithTimeout(
@@ -442,12 +466,13 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
     );
   }
 
-  private resolveIdentity(): Promise<AccountIdentity> {
+  private resolveIdentity(priority: SaxoRequestPriority): Promise<AccountIdentity> {
     this.identity ??= this.request(
       '/port/v1/accounts/me',
       { method: 'GET' },
       'resolveAccount',
       (body) => validateIdentity(body, this.pinnedAccountKey),
+      priority,
     ).catch((cause: unknown) => {
       this.identity = undefined;
       throw cause;
@@ -459,6 +484,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
     firstPath: string,
     context: string,
     validateRow: (raw: unknown, context: string) => T,
+    priority: SaxoRequestPriority,
   ): Promise<T[]> {
     const rows: T[] = [];
     let path: string | undefined = firstPath;
@@ -471,6 +497,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
           rows: readData(body, context).map((row) => validateRow(row, context)),
           next: readNext(body),
         }),
+        priority,
       );
       rows.push(...page.rows);
       // `__next` is absolute on the gateway; strip the base so `request` re-prefixes it.
@@ -491,6 +518,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
       { method: 'GET' },
       'getInstrumentDetails',
       (body, context) => validateInstrumentDetails(body, context, { uic, assetType }),
+      'background',
     );
   }
 
@@ -513,24 +541,26 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
    * classifier alone.
    */
   async placeOrder(request: SaxoOrderRequest, requestId: string): Promise<SaxoOrderPlacement> {
-    const { accountKey } = await this.resolveIdentity();
+    const { accountKey } = await this.resolveIdentity('priority');
     return this.request(
       '/trade/v2/orders',
       { method: 'POST', body: JSON.stringify({ AccountKey: accountKey, ...request }) },
       'placeOrder',
       validatePlacement,
+      'priority',
       { ...this.retry, maxAttempts: 1 },
       { 'x-request-id': requestId },
     );
   }
 
   async cancelOrder(orderId: string): Promise<void> {
-    const { accountKey } = await this.resolveIdentity();
+    const { accountKey } = await this.resolveIdentity('priority');
     await this.request(
       `/trade/v2/orders/${encodeURIComponent(orderId)}?AccountKey=${encodeURIComponent(accountKey)}`,
       { method: 'DELETE' },
       'cancelOrder',
       () => undefined,
+      'priority',
     );
   }
 
@@ -539,11 +569,12 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
       `/port/v1/orders/me?$top=${PAGE_SIZE}`,
       'listOpenOrders',
       validateOpenOrder,
+      'background',
     );
   }
 
   async listOrderActivities(from: Date): Promise<SaxoOrderActivity[]> {
-    const { clientKey } = await this.resolveIdentity();
+    const { clientKey } = await this.resolveIdentity('background');
     const query = new URLSearchParams({
       ClientKey: clientKey,
       FromDateTime: from.toISOString(),
@@ -553,6 +584,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
       `/cs/v1/audit/orderactivities?${query.toString()}`,
       'listOrderActivities',
       validateActivity,
+      'background',
     );
   }
 
@@ -561,6 +593,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient {
       `/port/v1/netpositions/me?FieldGroups=NetPositionBase,NetPositionView,DisplayAndFormat&$top=${PAGE_SIZE}`,
       'listNetPositions',
       validateNetPosition,
+      'background',
     );
   }
 }
