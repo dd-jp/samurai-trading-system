@@ -5,16 +5,24 @@
  * tab has selected — so a 3-second re-render never resets any of it. The
  * verdict ledger and equity series live in `useLedger`/`useEquitySamples`.
  * Everything below is a pure function of `snapshot` plus that state.
+ *
+ * It is also where the client decides, once, whether a snapshot exists at all
+ * (#1520): before the first one lands this renders `ColdStart` and nothing
+ * else, and after it the rail and all three tabs are handed a non-null
+ * `WireSnapshot`. That is a guarantee rather than a reading, because the feed
+ * never clears a snapshot it has accepted — see `feedView` in
+ * `hooks/useSnapshot.ts`.
  */
 import type { VerdictRow } from '@contracts';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ColdStart } from './components/ColdStart.tsx';
 import { Rail, TABS, type Tab } from './components/Rail.tsx';
 import { GlanceTab } from './components/tabs/GlanceTab.tsx';
 import { LiveTab } from './components/tabs/LiveTab.tsx';
 import { ReviewTab } from './components/tabs/ReviewTab.tsx';
 import { useEquitySamples } from './hooks/useEquitySamples.ts';
 import { useLedger } from './hooks/useLedger.ts';
-import { type UseSnapshotOptions, useSnapshot } from './hooks/useSnapshot.ts';
+import { feedView, type UseSnapshotOptions, useSnapshot } from './hooks/useSnapshot.ts';
 import {
   resolveDashboardToken,
   stripTokenParam,
@@ -146,13 +154,22 @@ export function App({ snapshotOptions }: AppProps = {}) {
     [snapshot],
   );
 
+  // The one place the client asks whether a snapshot exists (#1520). Below
+  // this line every leaf has one, for the rest of the session — see
+  // `feedView`. It is also why every hook above runs unconditionally first:
+  // the cold branch returns early, and a hook after it would change the hook
+  // order on the poll that ends the cold start.
+  const view = feedView(feed);
+  if (view.kind === 'cold') return <ColdStart feed={view.feed} />;
+  const live = view.feed;
+
   return (
     <div className={`app app-${tab}`}>
-      <Rail feed={feed} tab={tab} onTab={openTab} />
+      <Rail feed={live} tab={tab} onTab={openTab} />
       <main id={`panel-${tab}`} role="tabpanel" aria-labelledby={`tab-${tab}`}>
         {tab === 'glance' && (
           <GlanceTab
-            snapshot={snapshot}
+            snapshot={live.snapshot}
             equitySamples={equitySamples}
             ledger={ledger}
             verdictsByTrace={verdictsByTrace}
@@ -160,10 +177,10 @@ export function App({ snapshotOptions }: AppProps = {}) {
           />
         )}
         {tab === 'live' && (
-          <LiveTab snapshot={snapshot} selection={liveSelection} onSelect={setLiveSelection} />
+          <LiveTab snapshot={live.snapshot} selection={liveSelection} onSelect={setLiveSelection} />
         )}
         {tab === 'review' && (
-          <ReviewTab snapshot={snapshot} selectedKey={reviewKey} onSelect={setReviewKey} />
+          <ReviewTab snapshot={live.snapshot} selectedKey={reviewKey} onSelect={setReviewKey} />
         )}
       </main>
     </div>
