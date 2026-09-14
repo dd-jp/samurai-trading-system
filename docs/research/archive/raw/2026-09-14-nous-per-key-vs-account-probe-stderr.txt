@@ -1,0 +1,31 @@
+
+=== A1 (3x concurrent, all NOUS_DEBATE_API_KEY) (keys: NOUS_DEBATE_API_KEY, NOUS_DEBATE_API_KEY, NOUS_DEBATE_API_KEY) ===
+  key=NOUS_DEBATE_API_KEY status=200 ms=12776 jsonValid=true err=
+  key=NOUS_DEBATE_API_KEY status=200 ms=8256 jsonValid=true err=
+  key=NOUS_DEBATE_API_KEY status=200 ms=8948 jsonValid=true err=
+  burst wall time: 12777ms | running spend: $0.0137
+
+=== B1 (3x concurrent, one per key) (keys: NOUS_API_KEY, NOUS_DEBATE_API_KEY, NOUS_SENTIMENT_API_KEY) ===
+  key=NOUS_API_KEY status=200 ms=8573 jsonValid=true err=
+  key=NOUS_DEBATE_API_KEY status=200 ms=15657 jsonValid=true err=
+  key=NOUS_SENTIMENT_API_KEY status=200 ms=23777 jsonValid=true err=
+  burst wall time: 23779ms | running spend: $0.0273
+
+=== C (2x concurrent, NOUS_DEBATE_API_KEY) (keys: NOUS_DEBATE_API_KEY, NOUS_DEBATE_API_KEY) ===
+  key=NOUS_DEBATE_API_KEY status=200 ms=7684 jsonValid=true err=
+  key=NOUS_DEBATE_API_KEY status=200 ms=18342 jsonValid=true err=
+  burst wall time: 18344ms | running spend: $0.0364
+
+=== A2 (3x concurrent, all NOUS_DEBATE_API_KEY, repeat) (keys: NOUS_DEBATE_API_KEY, NOUS_DEBATE_API_KEY, NOUS_DEBATE_API_KEY) ===
+  key=NOUS_DEBATE_API_KEY status=200 ms=8753 jsonValid=true err=
+  key=NOUS_DEBATE_API_KEY status=200 ms=16791 jsonValid=true err=
+  key=NOUS_DEBATE_API_KEY status=200 ms=27432 jsonValid=true err=
+  burst wall time: 27433ms | running spend: $0.0502
+
+=== B2 (3x concurrent, one per key, repeat) (keys: NOUS_API_KEY, NOUS_DEBATE_API_KEY, NOUS_SENTIMENT_API_KEY) ===
+  key=NOUS_API_KEY status=200 ms=8226 jsonValid=true err=
+  key=NOUS_DEBATE_API_KEY status=200 ms=41551 jsonValid=true err=
+  key=NOUS_SENTIMENT_API_KEY status=ERR ms=45023 jsonValid=false err=timeout
+  burst wall time: 45024ms | running spend: $0.0592
+
+TOTAL FOLLOWUP SPEND: $0.0592

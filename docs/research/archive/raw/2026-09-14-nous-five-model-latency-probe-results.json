@@ -1,0 +1,280 @@
+{
+  "results": [
+    {
+      "model": "anthropic/claude-haiku-4.5",
+      "allSeqFailed": false,
+      "burstSkipped": false,
+      "seqStats": {
+        "attempted": 3,
+        "ok": 3,
+        "p50": 5763.985083,
+        "max": 6385.260582999999,
+        "jsonValidRate": 1
+      },
+      "burstStats": {
+        "attempted": 4,
+        "ok": 4,
+        "p50": 18912.221290999998,
+        "max": 25686.862541000002,
+        "jsonValidRate": 1
+      },
+      "avgCostPerCall": 0.0046474285714285715,
+      "modelSpend": 0.032532,
+      "sampleUsage": {
+        "prompt_tokens": 3511,
+        "completion_tokens": 226,
+        "total_tokens": 3737,
+        "cost": 0.004641,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.004641,
+          "upstream_inference_prompt_cost": 0.003511,
+          "upstream_inference_completions_cost": 0.00113
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      },
+      "errors": []
+    },
+    {
+      "model": "deepseek/deepseek-v4-flash-0731",
+      "allSeqFailed": false,
+      "burstSkipped": false,
+      "seqStats": {
+        "attempted": 3,
+        "ok": 3,
+        "p50": 6390.293250000002,
+        "max": 6809.861666999997,
+        "jsonValidRate": 0
+      },
+      "burstStats": {
+        "attempted": 4,
+        "ok": 4,
+        "p50": 14432.534666999993,
+        "max": 20950.672750000005,
+        "jsonValidRate": 0
+      },
+      "avgCostPerCall": 0.00015408000000000002,
+      "modelSpend": 0.0010785600000000001,
+      "sampleUsage": {
+        "prompt_tokens": 3102,
+        "completion_tokens": 300,
+        "total_tokens": 3402,
+        "cost": 0.00005,
+        "is_byok": true,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.00176088,
+          "upstream_inference_prompt_cost": 0.00136488,
+          "upstream_inference_completions_cost": 0.000396
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 230,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      },
+      "errors": []
+    },
+    {
+      "model": "google/gemini-3.8-flash",
+      "allSeqFailed": false,
+      "burstSkipped": false,
+      "seqStats": {
+        "attempted": 3,
+        "ok": 3,
+        "p50": 5981.252875000006,
+        "max": 8339.369625000007,
+        "jsonValidRate": 0
+      },
+      "burstStats": {
+        "attempted": 4,
+        "ok": 4,
+        "p50": 19559.90225,
+        "max": 38338.23291600001,
+        "jsonValidRate": 0
+      },
+      "avgCostPerCall": 0.00449625,
+      "modelSpend": 0.03147375,
+      "sampleUsage": {
+        "prompt_tokens": 4515,
+        "completion_tokens": 296,
+        "total_tokens": 4811,
+        "cost": 0.00449625,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.00449625,
+          "upstream_inference_prompt_cost": 0.00338625,
+          "upstream_inference_completions_cost": 0.00111
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 286,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      },
+      "errors": []
+    },
+    {
+      "model": "z-ai/glm-5.3-flash",
+      "allSeqFailed": false,
+      "burstSkipped": false,
+      "seqStats": {
+        "attempted": 3,
+        "ok": 3,
+        "p50": 7253.778209000011,
+        "max": 7475.602333999996,
+        "jsonValidRate": 0
+      },
+      "burstStats": {
+        "attempted": 4,
+        "ok": 4,
+        "p50": 24228.817375000013,
+        "max": 33385.489917,
+        "jsonValidRate": 0
+      },
+      "avgCostPerCall": 0.00029879,
+      "modelSpend": 0.00209153,
+      "sampleUsage": {
+        "prompt_tokens": 3197,
+        "completion_tokens": 300,
+        "total_tokens": 3497,
+        "cost": 0.00005,
+        "is_byok": true,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.00062955,
+          "upstream_inference_prompt_cost": 0.00047955,
+          "upstream_inference_completions_cost": 0.00015
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 297,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      },
+      "errors": []
+    },
+    {
+      "model": "qwen/qwen3.8-flash",
+      "allSeqFailed": false,
+      "burstSkipped": false,
+      "seqStats": {
+        "attempted": 3,
+        "ok": 3,
+        "p50": 11259.191499999986,
+        "max": 34882.07254200001,
+        "jsonValidRate": 0
+      },
+      "burstStats": {
+        "attempted": 4,
+        "ok": 3,
+        "p50": 18372.318792000005,
+        "max": 34608.843124999985,
+        "jsonValidRate": 0.3333333333333333
+      },
+      "avgCostPerCall": 0.0008297316666666665,
+      "modelSpend": 0.004978389999999999,
+      "sampleUsage": {
+        "prompt_tokens": 4614,
+        "completion_tokens": 300,
+        "total_tokens": 4914,
+        "cost": 0.00005,
+        "is_byok": true,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.0008331,
+          "upstream_inference_prompt_cost": 0.0006921,
+          "upstream_inference_completions_cost": 0.000141
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 300,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      },
+      "errors": [
+        {
+          "status": null,
+          "err": "timeout"
+        }
+      ]
+    },
+    {
+      "model": "openai/gpt-5.4-mini",
+      "allSeqFailed": false,
+      "burstSkipped": false,
+      "seqStats": {
+        "attempted": 3,
+        "ok": 3,
+        "p50": 6738.33508400002,
+        "max": 6855.379291999969,
+        "jsonValidRate": 1
+      },
+      "burstStats": {
+        "attempted": 4,
+        "ok": 4,
+        "p50": 26959.469249999966,
+        "max": 33559.908958000015,
+        "jsonValidRate": 1
+      },
+      "avgCostPerCall": 0.002834464285714286,
+      "modelSpend": 0.01984125,
+      "sampleUsage": {
+        "prompt_tokens": 3031,
+        "completion_tokens": 115,
+        "total_tokens": 3146,
+        "cost": 0.00279075,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.00279075,
+          "upstream_inference_prompt_cost": 0.00227325,
+          "upstream_inference_completions_cost": 0.0005175
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      },
+      "errors": []
+    }
+  ],
+  "totalSpend": 0.09199547999999996
+}

@@ -1,0 +1,443 @@
+{
+  "results": [
+    {
+      "label": "A1 (3x concurrent, all NOUS_DEBATE_API_KEY)",
+      "keyNames": ["NOUS_DEBATE_API_KEY", "NOUS_DEBATE_API_KEY", "NOUS_DEBATE_API_KEY"],
+      "skipped": false,
+      "wallMsBurst": 12776.535208,
+      "calls": [
+        {
+          "keyName": "NOUS_DEBATE_API_KEY",
+          "wallMs": 12776.406625000001,
+          "status": 200,
+          "usage": {
+            "prompt_tokens": 3511,
+            "completion_tokens": 192,
+            "total_tokens": 3703,
+            "cost": 0.004471,
+            "is_byok": false,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0,
+              "video_tokens": 0
+            },
+            "cost_details": {
+              "upstream_inference_cost": 0.004471,
+              "upstream_inference_prompt_cost": 0.003511,
+              "upstream_inference_completions_cost": 0.00096
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0,
+              "image_tokens": 0,
+              "audio_tokens": 0
+            }
+          },
+          "jsonValid": true,
+          "errorMsg": null
+        },
+        {
+          "keyName": "NOUS_DEBATE_API_KEY",
+          "wallMs": 8255.994875,
+          "status": 200,
+          "usage": {
+            "prompt_tokens": 3511,
+            "completion_tokens": 194,
+            "total_tokens": 3705,
+            "cost": 0.004481,
+            "is_byok": false,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0,
+              "video_tokens": 0
+            },
+            "cost_details": {
+              "upstream_inference_cost": 0.004481,
+              "upstream_inference_prompt_cost": 0.003511,
+              "upstream_inference_completions_cost": 0.00097
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0,
+              "image_tokens": 0,
+              "audio_tokens": 0
+            }
+          },
+          "jsonValid": true,
+          "errorMsg": null
+        },
+        {
+          "keyName": "NOUS_DEBATE_API_KEY",
+          "wallMs": 8948.440708,
+          "status": 200,
+          "usage": {
+            "prompt_tokens": 3511,
+            "completion_tokens": 245,
+            "total_tokens": 3756,
+            "cost": 0.004736,
+            "is_byok": false,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0,
+              "video_tokens": 0
+            },
+            "cost_details": {
+              "upstream_inference_cost": 0.004736,
+              "upstream_inference_prompt_cost": 0.003511,
+              "upstream_inference_completions_cost": 0.001225
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0,
+              "image_tokens": 0,
+              "audio_tokens": 0
+            }
+          },
+          "jsonValid": true,
+          "errorMsg": null
+        }
+      ]
+    },
+    {
+      "label": "B1 (3x concurrent, one per key)",
+      "keyNames": ["NOUS_API_KEY", "NOUS_DEBATE_API_KEY", "NOUS_SENTIMENT_API_KEY"],
+      "skipped": false,
+      "wallMsBurst": 23778.982541999998,
+      "calls": [
+        {
+          "keyName": "NOUS_API_KEY",
+          "wallMs": 8572.953167,
+          "status": 200,
+          "usage": {
+            "prompt_tokens": 3511,
+            "completion_tokens": 214,
+            "total_tokens": 3725,
+            "cost": 0.004581,
+            "is_byok": false,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0,
+              "video_tokens": 0
+            },
+            "cost_details": {
+              "upstream_inference_cost": 0.004581,
+              "upstream_inference_prompt_cost": 0.003511,
+              "upstream_inference_completions_cost": 0.00107
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0,
+              "image_tokens": 0,
+              "audio_tokens": 0
+            }
+          },
+          "jsonValid": true,
+          "errorMsg": null
+        },
+        {
+          "keyName": "NOUS_DEBATE_API_KEY",
+          "wallMs": 15656.73025,
+          "status": 200,
+          "usage": {
+            "prompt_tokens": 3511,
+            "completion_tokens": 195,
+            "total_tokens": 3706,
+            "cost": 0.004486,
+            "is_byok": false,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0,
+              "video_tokens": 0
+            },
+            "cost_details": {
+              "upstream_inference_cost": 0.004486,
+              "upstream_inference_prompt_cost": 0.003511,
+              "upstream_inference_completions_cost": 0.000975
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0,
+              "image_tokens": 0,
+              "audio_tokens": 0
+            }
+          },
+          "jsonValid": true,
+          "errorMsg": null
+        },
+        {
+          "keyName": "NOUS_SENTIMENT_API_KEY",
+          "wallMs": 23776.952542,
+          "status": 200,
+          "usage": {
+            "prompt_tokens": 3511,
+            "completion_tokens": 203,
+            "total_tokens": 3714,
+            "cost": 0.004526,
+            "is_byok": false,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0,
+              "video_tokens": 0
+            },
+            "cost_details": {
+              "upstream_inference_cost": 0.004526,
+              "upstream_inference_prompt_cost": 0.003511,
+              "upstream_inference_completions_cost": 0.001015
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0,
+              "image_tokens": 0,
+              "audio_tokens": 0
+            }
+          },
+          "jsonValid": true,
+          "errorMsg": null
+        }
+      ]
+    },
+    {
+      "label": "C (2x concurrent, NOUS_DEBATE_API_KEY)",
+      "keyNames": ["NOUS_DEBATE_API_KEY", "NOUS_DEBATE_API_KEY"],
+      "skipped": false,
+      "wallMsBurst": 18343.637833,
+      "calls": [
+        {
+          "keyName": "NOUS_DEBATE_API_KEY",
+          "wallMs": 7683.619500000001,
+          "status": 200,
+          "usage": {
+            "prompt_tokens": 3511,
+            "completion_tokens": 182,
+            "total_tokens": 3693,
+            "cost": 0.004421,
+            "is_byok": false,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0,
+              "video_tokens": 0
+            },
+            "cost_details": {
+              "upstream_inference_cost": 0.004421,
+              "upstream_inference_prompt_cost": 0.003511,
+              "upstream_inference_completions_cost": 0.00091
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0,
+              "image_tokens": 0,
+              "audio_tokens": 0
+            }
+          },
+          "jsonValid": true,
+          "errorMsg": null
+        },
+        {
+          "keyName": "NOUS_DEBATE_API_KEY",
+          "wallMs": 18341.735834,
+          "status": 200,
+          "usage": {
+            "prompt_tokens": 3511,
+            "completion_tokens": 245,
+            "total_tokens": 3756,
+            "cost": 0.004736,
+            "is_byok": false,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0,
+              "video_tokens": 0
+            },
+            "cost_details": {
+              "upstream_inference_cost": 0.004736,
+              "upstream_inference_prompt_cost": 0.003511,
+              "upstream_inference_completions_cost": 0.001225
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0,
+              "image_tokens": 0,
+              "audio_tokens": 0
+            }
+          },
+          "jsonValid": true,
+          "errorMsg": null
+        }
+      ]
+    },
+    {
+      "label": "A2 (3x concurrent, all NOUS_DEBATE_API_KEY, repeat)",
+      "keyNames": ["NOUS_DEBATE_API_KEY", "NOUS_DEBATE_API_KEY", "NOUS_DEBATE_API_KEY"],
+      "skipped": false,
+      "wallMsBurst": 27432.780458,
+      "calls": [
+        {
+          "keyName": "NOUS_DEBATE_API_KEY",
+          "wallMs": 8752.862500000003,
+          "status": 200,
+          "usage": {
+            "prompt_tokens": 3511,
+            "completion_tokens": 202,
+            "total_tokens": 3713,
+            "cost": 0.004521,
+            "is_byok": false,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0,
+              "video_tokens": 0
+            },
+            "cost_details": {
+              "upstream_inference_cost": 0.004521,
+              "upstream_inference_prompt_cost": 0.003511,
+              "upstream_inference_completions_cost": 0.00101
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0,
+              "image_tokens": 0,
+              "audio_tokens": 0
+            }
+          },
+          "jsonValid": true,
+          "errorMsg": null
+        },
+        {
+          "keyName": "NOUS_DEBATE_API_KEY",
+          "wallMs": 16791.249541999998,
+          "status": 200,
+          "usage": {
+            "prompt_tokens": 3511,
+            "completion_tokens": 196,
+            "total_tokens": 3707,
+            "cost": 0.004491,
+            "is_byok": false,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0,
+              "video_tokens": 0
+            },
+            "cost_details": {
+              "upstream_inference_cost": 0.004491,
+              "upstream_inference_prompt_cost": 0.003511,
+              "upstream_inference_completions_cost": 0.00098
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0,
+              "image_tokens": 0,
+              "audio_tokens": 0
+            }
+          },
+          "jsonValid": true,
+          "errorMsg": null
+        },
+        {
+          "keyName": "NOUS_DEBATE_API_KEY",
+          "wallMs": 27431.988332999994,
+          "status": 200,
+          "usage": {
+            "prompt_tokens": 3511,
+            "completion_tokens": 245,
+            "total_tokens": 3756,
+            "cost": 0.004736,
+            "is_byok": false,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0,
+              "video_tokens": 0
+            },
+            "cost_details": {
+              "upstream_inference_cost": 0.004736,
+              "upstream_inference_prompt_cost": 0.003511,
+              "upstream_inference_completions_cost": 0.001225
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0,
+              "image_tokens": 0,
+              "audio_tokens": 0
+            }
+          },
+          "jsonValid": true,
+          "errorMsg": null
+        }
+      ]
+    },
+    {
+      "label": "B2 (3x concurrent, one per key, repeat)",
+      "keyNames": ["NOUS_API_KEY", "NOUS_DEBATE_API_KEY", "NOUS_SENTIMENT_API_KEY"],
+      "skipped": false,
+      "wallMsBurst": 45023.881959000006,
+      "calls": [
+        {
+          "keyName": "NOUS_API_KEY",
+          "wallMs": 8225.734792000003,
+          "status": 200,
+          "usage": {
+            "prompt_tokens": 3511,
+            "completion_tokens": 202,
+            "total_tokens": 3713,
+            "cost": 0.004521,
+            "is_byok": false,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0,
+              "video_tokens": 0
+            },
+            "cost_details": {
+              "upstream_inference_cost": 0.004521,
+              "upstream_inference_prompt_cost": 0.003511,
+              "upstream_inference_completions_cost": 0.00101
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0,
+              "image_tokens": 0,
+              "audio_tokens": 0
+            }
+          },
+          "jsonValid": true,
+          "errorMsg": null
+        },
+        {
+          "keyName": "NOUS_DEBATE_API_KEY",
+          "wallMs": 41550.526625,
+          "status": 200,
+          "usage": {
+            "prompt_tokens": 3511,
+            "completion_tokens": 190,
+            "total_tokens": 3701,
+            "cost": 0.004461,
+            "is_byok": false,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0,
+              "video_tokens": 0
+            },
+            "cost_details": {
+              "upstream_inference_cost": 0.004461,
+              "upstream_inference_prompt_cost": 0.003511,
+              "upstream_inference_completions_cost": 0.00095
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0,
+              "image_tokens": 0,
+              "audio_tokens": 0
+            }
+          },
+          "jsonValid": true,
+          "errorMsg": null
+        },
+        {
+          "keyName": "NOUS_SENTIMENT_API_KEY",
+          "wallMs": 45023.2665,
+          "status": null,
+          "usage": null,
+          "jsonValid": false,
+          "errorMsg": "timeout"
+        }
+      ]
+    }
+  ],
+  "totalSpend": 0.05916799999999999
+}

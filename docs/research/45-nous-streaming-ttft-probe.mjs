@@ -11,18 +11,24 @@
 // this with `node --env-file=.env.local <this file>`, the same pattern the
 // orchestrator process itself uses. No key value or .env content is ever
 // printed, logged, or written; the only confirmation of key presence is its
-// length.
+// length. Response headers are inspectable via `--headers-only` (see below);
+// that path never prints `authorization` or any `cookie`/`set-cookie` header.
 //
 // Budget: at most 8 calls total (5 sequential, concurrency 1, then one
-// burst of 3), matching the ticket's cap. A paper soak runs against the
-// same Nous account concurrently with this probe, which is why the burst
-// is kept to one and run once rather than swept.
+// burst of 3) -- the implementer's brief for #1023 set this cap; the issue
+// itself does not state one. A paper soak runs against the same Nous account
+// concurrently with this probe, which is why the burst is kept to one and
+// run once rather than swept. `--headers-only` (run separately, once, for
+// review round 1) adds exactly one further sequential call and does not
+// re-run the 8-call probe above.
 
 const MODEL = 'anthropic/claude-haiku-4.5';
 const TIMEOUT_MS = 45_000;
 const MAX_TOKENS = 300;
 const SEQUENTIAL_CALLS = 5;
 const BURST_CALLS = 3;
+const HEADERS_ONLY = process.argv.includes('--headers-only');
+const SENSITIVE_HEADERS = new Set(['authorization', 'cookie', 'set-cookie']);
 
 const BASE_URL = process.env.NOUS_BASE_URL;
 const API_KEY = process.env.NOUS_DEBATE_API_KEY;
@@ -39,23 +45,40 @@ process.stderr.write(
   `NOUS_BASE_URL present (len=${BASE_URL.length}), NOUS_DEBATE_API_KEY present (len=${API_KEY.length}).\n`,
 );
 
-// Same prompt shape as the #1080 probe (probe.js) so TTFT/total numbers here
-// are comparable to that probe's non-streaming p50/max, not a fresh unknown.
+// Same prompt shape as 45-nous-five-model-latency-probe.mjs so TTFT/total
+// numbers here are comparable to that probe's non-streaming p50/max, not a
+// fresh unknown.
 const SYSTEM_PROMPT = `You are the Trader agent in a multi-agent equities debate pipeline. You are given the views of three analysts (Fundamental, Technical, Sentiment) on a single LSE-listed leveraged ETP, plus recent market context. Weigh the three views, resolve disagreement, and output STRICT JSON only, matching exactly this shape:
 {"stance": "long" | "short" | "flat", "rationale": string, "confidence": number between 0 and 1}
 Do not include any text outside the JSON object. Do not use markdown code fences.`;
 
+// Prompt-token count drives the prefill term §2.3 of doc 45 says this probe
+// cannot separate from queue wait, so the filler bars are seeded rather than
+// Math.random() -- a re-run should build the identical prompt, not a random
+// one of similar shape.
+function mulberry32(seed) {
+  let a = seed;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 function buildFillerBars(lineCount) {
+  const rand = mulberry32(1023);
   const lines = [];
   let price = 123.45;
   for (let i = 0; i < lineCount; i++) {
     const t = new Date(Date.UTC(2026, 8, 10, 9, 0, 0) + i * 60_000).toISOString();
     const o = price;
-    const h = price + Math.random() * 0.3;
-    const l = price - Math.random() * 0.3;
-    const c = price + (Math.random() - 0.5) * 0.2;
-    const v = 8000 + Math.floor(Math.random() * 5000);
-    const rsi = (40 + Math.random() * 20).toFixed(1);
+    const h = price + rand() * 0.3;
+    const l = price - rand() * 0.3;
+    const c = price + (rand() - 0.5) * 0.2;
+    const v = 8000 + Math.floor(rand() * 5000);
+    const rsi = (40 + rand() * 20).toFixed(1);
     const ema20 = (price - 0.3).toFixed(2);
     const ema50 = (price - 0.6).toFixed(2);
     lines.push(
@@ -168,12 +191,16 @@ async function callOnceStreaming() {
   return { status, ttfbMs, ttftMs, totalMs, chunkCount, contentLength, finishReason, errorMsg };
 }
 
+// Each field below is that field's own sorted distribution across the ok
+// calls -- ttfb_ms[i]/ttft_ms[i]/total_ms[i]/generation_only_ms[i] are NOT
+// the same call at a shared index i; read `raw` for per-call, row-aligned
+// values.
 function summarize(label, calls) {
   const ok = calls.filter((c) => c.status === 200 && c.ttftMs !== null);
   const ttft = ok.map((c) => c.ttftMs).sort((a, b) => a - b);
   const total = ok.map((c) => c.totalMs).sort((a, b) => a - b);
   const ttfb = ok.map((c) => c.ttfbMs).sort((a, b) => a - b);
-  const genOnly = ok.map((c) => c.totalMs - c.ttftMs);
+  const genOnly = ok.map((c) => c.totalMs - c.ttftMs).sort((a, b) => a - b);
   return {
     label,
     n: calls.length,
@@ -185,7 +212,53 @@ function summarize(label, calls) {
   };
 }
 
+/**
+ * One call, headers only: does Nous expose any server-side timing telemetry
+ * (a queue-depth, admission, or processing-time header)? Never prints
+ * `authorization` or any `cookie`/`set-cookie` header -- see SENSITIVE_HEADERS.
+ */
+async function probeResponseHeaders() {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    const res = await fetch(`${BASE_URL.replace(/\/$/, '')}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        temperature: 0,
+        max_tokens: MAX_TOKENS,
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'user', content: USER_PROMPT },
+        ],
+      }),
+      signal: controller.signal,
+    });
+    await res.text();
+    const headerEntries = [];
+    for (const [name, value] of res.headers.entries()) {
+      headerEntries.push([name, SENSITIVE_HEADERS.has(name.toLowerCase()) ? '[redacted]' : value]);
+    }
+    return { status: res.status, headers: headerEntries };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function main() {
+  if (HEADERS_ONLY) {
+    const result = await probeResponseHeaders();
+    for (const [name, value] of result.headers) {
+      process.stderr.write(`  ${name}: ${value}\n`);
+    }
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
   const sequential = [];
   process.stderr.write(`\n=== sequential (n=${SEQUENTIAL_CALLS}, concurrency 1) ===\n`);
   for (let i = 0; i < SEQUENTIAL_CALLS; i++) {
