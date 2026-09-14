@@ -582,6 +582,7 @@ export class AnthropicLlmClient implements LlmClient {
         timestamp: new Date(),
         prompt,
         response: responseText,
+        prompt_template_hash: request.context.attribution?.prompt_template_hash,
       });
     } catch {
       // The sink contract says `record` must not throw, and the SQLite

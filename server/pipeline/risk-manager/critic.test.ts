@@ -37,6 +37,7 @@ import {
 import type { RiskCriticRequest } from './critic.js';
 import {
   buildRiskCriticProducer,
+  CRITIC_PROMPT_TEMPLATE_HASH,
   LlmRiskCriticProducer,
   parseCriticVerdict,
   ReplayRiskCriticProducer,
@@ -639,11 +640,14 @@ describe('LlmRiskCriticProducer spend metering (#957 acceptance: meters into llm
       marketData: stubMarketData(),
     }).produce(makeRequest());
 
-    const rows = db.prepare('SELECT trace_id, stage, debate_id, cost_usd FROM llm_spend').all() as {
+    const rows = db
+      .prepare('SELECT trace_id, stage, debate_id, cost_usd, prompt_template_hash FROM llm_spend')
+      .all() as {
       trace_id: string;
       stage: string;
       debate_id: string | null;
       cost_usd: number;
+      prompt_template_hash: string | null;
     }[];
 
     expect(rows).toHaveLength(1);
@@ -653,6 +657,9 @@ describe('LlmRiskCriticProducer spend metering (#957 acceptance: meters into llm
     // Priced, so it counts against ADR-0008's ceiling. An unpriced row would
     // contribute zero and silently widen the cap.
     expect(rows[0]?.cost_usd).toBeGreaterThan(0);
+    // #1514: the row this ticket's AC needs — "which prompt version produced
+    // decision X" reads straight off this column, joined by debate_id above.
+    expect(rows[0]?.prompt_template_hash).toBe(CRITIC_PROMPT_TEMPLATE_HASH);
   });
 });
 

@@ -93,6 +93,7 @@ describe('detectDisagreements', () => {
       trace_id: 'trace-7',
       stage: 'debate',
       debate_id: 'debate-abc',
+      prompt_template_hash: expect.stringMatching(/^[0-9a-f]{64}$/) as unknown as string,
     });
   });
 

@@ -93,6 +93,7 @@ import type { MarketDataService } from '../../providers/market-data-service/inde
 import { INDICATOR_KINDS } from '../../providers/market-data-service/index.js';
 import type { LogEventCode, Logger, OrderIntent } from '../../shared/index.js';
 import { describeThrownSafely } from '../../shared/index.js';
+import { hashPromptTemplate } from '../../shared/llm/prompt-template-hash.js';
 import type { FailureCause, LlmClient, SpendCap } from '../debate-engine/index.js';
 import {
   BARE_JSON_INSTRUCTION,
@@ -191,6 +192,59 @@ function unavailable(reason: string): RiskCriticVerdict {
  * cheap guarantee worth keeping is that no data block can ever read as an
  * instruction (#208).
  */
+/**
+ * The static half of `renderCriticPrompt` — everything request-invariant,
+ * split out so `hashPromptTemplate` (#1514) has stable text to hash. The
+ * `INDICATOR_KINDS`/`MAX_INVALIDATION_LOOKBACK` interpolations are compile-time
+ * constants, not per-request data, so this string is identical on every call
+ * within one build — a real "template version" the way a source edit to it
+ * changes the hash, but a book-context change never does.
+ */
+const CRITIC_PROMPT_TEMPLATE = [
+  'You are a risk critic on a live-money intraday trading system. Argue why the',
+  'proposed trade below should be TRIMMED or REJECTED. Restrict yourself to',
+  'NARRATIVE and QUALITATIVE risk: a shared macro or event catalyst across the',
+  'book, a thesis that depends on something already priced in, an instrument',
+  'whose structure makes the stated thesis unlikely to pay. Position caps,',
+  'exposure caps, portfolio drawdown, circuit breakers and pairwise price',
+  'correlation are ALREADY enforced mechanically — do not restate them.',
+  '',
+  'If you find no narrative risk, answer "pass". That is a complete and useful',
+  'answer; inventing an objection to fill the field is worse than passing.',
+  '',
+  'SEPARATELY, name 3 to 5 INVALIDATION CONDITIONS: measurable facts which, if',
+  'already true right now, would mean the thesis behind this trade has already',
+  'failed. You do NOT evaluate them — you only name what to check. They are',
+  'measured by code against market data, so a condition that names something',
+  'unmeasurable is discarded.',
+  '',
+  'Reply with JSON only:',
+  '{"verdict":"pass"|"trim"|"reject","max_notional":number|null,"reasoning":string,',
+  ' "conditions":[{"id":string,"observable":Observable,"comparator":"<"|"<="|">"|">=",',
+  '                "threshold":number,"rationale":string}]}',
+  '- "trim" requires "max_notional": the notional this position should be capped',
+  '  at, strictly greater than 0. It can only reduce the position, never raise it.',
+  '- "pass" and "reject" must set "max_notional" to null.',
+  '- "reasoning" is one or two sentences, and is recorded verbatim in the audit log.',
+  '- Observable is exactly one of:',
+  '    {"kind":"mark"}  — the instrument\'s current price',
+  `    {"kind":"indicator","spec":{"indicator":<one of ${INDICATOR_KINDS.join('|')}>,`,
+  `                               "params":{"period":number},"lookback":number (<= ${MAX_INVALIDATION_LOOKBACK}),"timeframe":"1h"}}`,
+  `    {"kind":"bars","window":{"timeframe":"1h","lookback":number (<= ${MAX_INVALIDATION_LOOKBACK})},"measure":"volume_ratio"}`,
+  "  — the latest bar's volume over the mean of the preceding bars.",
+  '- A condition must fire when the thesis is FAILING, not when it is working:',
+  '  for a "buy" that means price/momentum observables BELOW a threshold, for a',
+  '  "sell" ABOVE one; volume_ratio is always "<" (thinning participation).',
+  '- Give NO severity, weight, confidence or evaluation state. Conditions are',
+  '  predicates; the state is measured, never asserted.',
+  '- An empty or omitted "conditions" list is accepted and recorded. It does not',
+  '  change the verdict above; do not invent conditions to fill it.',
+  BARE_JSON_INSTRUCTION,
+].join('\n');
+
+/** sha256 of `CRITIC_PROMPT_TEMPLATE` (#1514), computed once at module load. */
+export const CRITIC_PROMPT_TEMPLATE_HASH = hashPromptTemplate(CRITIC_PROMPT_TEMPLATE);
+
 export function renderCriticPrompt(request: RiskCriticRequest): string {
   const { intent, portfolio } = request;
   const notional = intent.size * intent.entry;
@@ -202,45 +256,7 @@ export function renderCriticPrompt(request: RiskCriticRequest): string {
           .join(', ');
 
   return [
-    'You are a risk critic on a live-money intraday trading system. Argue why the',
-    'proposed trade below should be TRIMMED or REJECTED. Restrict yourself to',
-    'NARRATIVE and QUALITATIVE risk: a shared macro or event catalyst across the',
-    'book, a thesis that depends on something already priced in, an instrument',
-    'whose structure makes the stated thesis unlikely to pay. Position caps,',
-    'exposure caps, portfolio drawdown, circuit breakers and pairwise price',
-    'correlation are ALREADY enforced mechanically — do not restate them.',
-    '',
-    'If you find no narrative risk, answer "pass". That is a complete and useful',
-    'answer; inventing an objection to fill the field is worse than passing.',
-    '',
-    'SEPARATELY, name 3 to 5 INVALIDATION CONDITIONS: measurable facts which, if',
-    'already true right now, would mean the thesis behind this trade has already',
-    'failed. You do NOT evaluate them — you only name what to check. They are',
-    'measured by code against market data, so a condition that names something',
-    'unmeasurable is discarded.',
-    '',
-    'Reply with JSON only:',
-    '{"verdict":"pass"|"trim"|"reject","max_notional":number|null,"reasoning":string,',
-    ' "conditions":[{"id":string,"observable":Observable,"comparator":"<"|"<="|">"|">=",',
-    '                "threshold":number,"rationale":string}]}',
-    '- "trim" requires "max_notional": the notional this position should be capped',
-    '  at, strictly greater than 0. It can only reduce the position, never raise it.',
-    '- "pass" and "reject" must set "max_notional" to null.',
-    '- "reasoning" is one or two sentences, and is recorded verbatim in the audit log.',
-    '- Observable is exactly one of:',
-    '    {"kind":"mark"}  — the instrument\'s current price',
-    `    {"kind":"indicator","spec":{"indicator":<one of ${INDICATOR_KINDS.join('|')}>,`,
-    `                               "params":{"period":number},"lookback":number (<= ${MAX_INVALIDATION_LOOKBACK}),"timeframe":"1h"}}`,
-    `    {"kind":"bars","window":{"timeframe":"1h","lookback":number (<= ${MAX_INVALIDATION_LOOKBACK})},"measure":"volume_ratio"}`,
-    "  — the latest bar's volume over the mean of the preceding bars.",
-    '- A condition must fire when the thesis is FAILING, not when it is working:',
-    '  for a "buy" that means price/momentum observables BELOW a threshold, for a',
-    '  "sell" ABOVE one; volume_ratio is always "<" (thinning participation).',
-    '- Give NO severity, weight, confidence or evaluation state. Conditions are',
-    '  predicates; the state is measured, never asserted.',
-    '- An empty or omitted "conditions" list is accepted and recorded. It does not',
-    '  change the verdict above; do not invent conditions to fill it.',
-    BARE_JSON_INSTRUCTION,
+    CRITIC_PROMPT_TEMPLATE,
     '',
     wrapUntrusted(
       [
@@ -455,7 +471,15 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
             // `stage: 'risk_critic'` keeps this call attributable in
             // `llm_spend` instead of landing inside the debate's cost; the
             // `debate_id` still joins it to the decision it belongs to.
-            attribution: { trace_id: request.trace_id, stage: 'risk_critic', debate_id },
+            // `prompt_template_hash` (#1514) is `CRITIC_PROMPT_TEMPLATE_HASH`,
+            // not a hash of the rendered prompt above — see that constant's
+            // doc comment.
+            attribution: {
+              trace_id: request.trace_id,
+              stage: 'risk_critic',
+              debate_id,
+              prompt_template_hash: CRITIC_PROMPT_TEMPLATE_HASH,
+            },
           },
           parseResponse: parseCriticVerdict,
           signal: controller.signal,

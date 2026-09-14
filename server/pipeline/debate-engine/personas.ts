@@ -9,6 +9,7 @@
  * and termination (#34) build on top of these, not the other way around.
  */
 
+import { hashPromptTemplate } from '../../shared/llm/prompt-template-hash.js';
 import { BARE_JSON_INSTRUCTION, unwrapFencedJson } from './llm/json-response.js';
 import { wrapUntrusted } from './llm/prompt-safety.js';
 import type { LlmClient, LlmRequestContext } from './llm/types.js';
@@ -136,11 +137,21 @@ function renderAnalystViews(views: AnalystView[]): string {
  * can bill each persona call to the debate that issued it. That envelope never
  * reaches the prompt (`anthropic-client.ts:promptContextOf`), so a persona's
  * model input is byte-for-byte what it was before this existed.
+ *
+ * `templateHash` (#1514) is the sha256 of that persona's STATIC template
+ * (below), computed once at module load — never of the rendered `prompt`,
+ * which also carries the request's analyst views and would make the hash
+ * different on every call instead of identifying the template version.
  */
-function buildContext(input: PersonaInput): LlmRequestContext {
+function buildContext(input: PersonaInput, templateHash: string): LlmRequestContext {
   const base: LlmRequestContext = {
     analyst_views: input.analyst_views,
-    attribution: { trace_id: input.trace_id, stage: 'debate', debate_id: input.debate_id },
+    attribution: {
+      trace_id: input.trace_id,
+      stage: 'debate',
+      debate_id: input.debate_id,
+      prompt_template_hash: templateHash,
+    },
   };
   if (input.debate_state !== undefined) {
     base.debate_state = input.debate_state;
@@ -148,51 +159,70 @@ function buildContext(input: PersonaInput): LlmRequestContext {
   return base;
 }
 
+/**
+ * The Bull persona's static instructions — split out from `runBullPersona`
+ * only so `hashPromptTemplate` has something request-invariant to hash;
+ * `runBullPersona` joins it with the dynamic analyst-views block exactly as
+ * before, so the rendered prompt is unchanged.
+ */
+const BULL_PROMPT_TEMPLATE = [
+  'You are the Bull persona in a trading debate. Argue for the optimistic',
+  'interpretation of the following analyst views, emphasizing positive',
+  'signals and opportunities. Respond as JSON: {"stance": "bullish"|"bearish"|"neutral", "rationale": string}.',
+  BARE_JSON_INSTRUCTION,
+].join('\n');
+const BULL_PROMPT_TEMPLATE_HASH = hashPromptTemplate(BULL_PROMPT_TEMPLATE);
+
 /** Bull persona: argues for optimistic interpretation, emphasizes positive signals. */
 export async function runBullPersona(
   client: LlmClient,
   input: PersonaInput,
 ): Promise<PersonaResponse> {
-  const prompt = [
-    'You are the Bull persona in a trading debate. Argue for the optimistic',
-    'interpretation of the following analyst views, emphasizing positive',
-    'signals and opportunities. Respond as JSON: {"stance": "bullish"|"bearish"|"neutral", "rationale": string}.',
-    BARE_JSON_INSTRUCTION,
-    '',
-    renderAnalystViews(input.analyst_views),
-  ].join('\n');
+  const prompt = [BULL_PROMPT_TEMPLATE, '', renderAnalystViews(input.analyst_views)].join('\n');
 
   const response = await client.complete<PersonaResponse>({
     prompt,
-    context: buildContext(input),
+    context: buildContext(input, BULL_PROMPT_TEMPLATE_HASH),
     parseResponse: parsePersonaResponse,
     signal: input.signal,
   });
   return response.data;
 }
+
+/** See `BULL_PROMPT_TEMPLATE`'s doc comment — same reasoning, Bear's own text. */
+const BEAR_PROMPT_TEMPLATE = [
+  'You are the Bear persona in a trading debate. Argue for the pessimistic',
+  'interpretation of the following analyst views, emphasizing risks and',
+  'downside. Respond as JSON: {"stance": "bullish"|"bearish"|"neutral", "rationale": string}.',
+  BARE_JSON_INSTRUCTION,
+].join('\n');
+const BEAR_PROMPT_TEMPLATE_HASH = hashPromptTemplate(BEAR_PROMPT_TEMPLATE);
 
 /** Bear persona: argues for pessimistic interpretation, emphasizes risks and downside. */
 export async function runBearPersona(
   client: LlmClient,
   input: PersonaInput,
 ): Promise<PersonaResponse> {
-  const prompt = [
-    'You are the Bear persona in a trading debate. Argue for the pessimistic',
-    'interpretation of the following analyst views, emphasizing risks and',
-    'downside. Respond as JSON: {"stance": "bullish"|"bearish"|"neutral", "rationale": string}.',
-    BARE_JSON_INSTRUCTION,
-    '',
-    renderAnalystViews(input.analyst_views),
-  ].join('\n');
+  const prompt = [BEAR_PROMPT_TEMPLATE, '', renderAnalystViews(input.analyst_views)].join('\n');
 
   const response = await client.complete<PersonaResponse>({
     prompt,
-    context: buildContext(input),
+    context: buildContext(input, BEAR_PROMPT_TEMPLATE_HASH),
     parseResponse: parsePersonaResponse,
     signal: input.signal,
   });
   return response.data;
 }
+
+/** See `BULL_PROMPT_TEMPLATE`'s doc comment — same reasoning, Mediator's own text. */
+const MEDIATOR_PROMPT_TEMPLATE = [
+  'You are the Mediator persona in a trading debate. Arbitrate between the',
+  'Bull and Bear arguments below, evaluate whether material disagreement',
+  'remains, and signal convergence if the debate can terminate. Respond as',
+  'JSON: {"stance": "bullish"|"bearish"|"neutral", "rationale": string, "converged": boolean}.',
+  BARE_JSON_INSTRUCTION,
+].join('\n');
+const MEDIATOR_PROMPT_TEMPLATE_HASH = hashPromptTemplate(MEDIATOR_PROMPT_TEMPLATE);
 
 /**
  * Mediator persona: arbitrates between Bull and Bear, evaluates whether
@@ -208,11 +238,7 @@ export async function runMediatorPersona(
   ].join('\n');
 
   const prompt = [
-    'You are the Mediator persona in a trading debate. Arbitrate between the',
-    'Bull and Bear arguments below, evaluate whether material disagreement',
-    'remains, and signal convergence if the debate can terminate. Respond as',
-    'JSON: {"stance": "bullish"|"bearish"|"neutral", "rationale": string, "converged": boolean}.',
-    BARE_JSON_INSTRUCTION,
+    MEDIATOR_PROMPT_TEMPLATE,
     '',
     wrapUntrusted(bullBearBlock),
     '',
@@ -222,7 +248,7 @@ export async function runMediatorPersona(
 
   const response = await client.complete<MediatorResponse>({
     prompt,
-    context: buildContext(input),
+    context: buildContext(input, MEDIATOR_PROMPT_TEMPLATE_HASH),
     parseResponse: parseMediatorResponse,
     signal: input.signal,
   });

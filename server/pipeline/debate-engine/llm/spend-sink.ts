@@ -103,6 +103,14 @@ export interface LlmSpendRecord {
   prompt?: string | undefined;
   /** The model's raw response text, same provenance and same treatment as `prompt`. */
   response?: string | undefined;
+  /**
+   * `hashPromptTemplate` (#1514) of the STATIC template this call's stage
+   * sent — not the rendered prompt, which also carries per-request dynamic
+   * content and would make the hash different on every call. Undefined for a
+   * call site that has not been wired to supply one; persisted as NULL rather
+   * than fabricated (migrations/0058).
+   */
+  prompt_template_hash?: string | undefined;
 }
 
 /**
@@ -225,8 +233,9 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
              trace_id, stage, debate_id, model,
              input_tokens, output_tokens,
              cache_creation_input_tokens, cache_read_input_tokens,
-             cost_usd, server_tool_calls, latency_ms, ttfb_ms, timestamp
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             cost_usd, server_tool_calls, latency_ms, ttfb_ms, timestamp,
+             prompt_template_hash
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           entry.trace_id,
@@ -246,6 +255,7 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
           entry.latency_ms,
           entry.ttfb_ms ?? null,
           toStoredTimestamp(entry.timestamp),
+          entry.prompt_template_hash ?? null,
         );
 
       // Reached only once the spend row has landed, so `spend_id` is always a
