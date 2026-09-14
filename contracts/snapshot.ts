@@ -753,4 +753,154 @@ export interface DashboardSnapshot {
    * a second endpoint would let the two views disagree about `as_of`.
    */
   pipeline: PipelineView;
+  /**
+   * The server's stamp of its own wire shape (#1316), compared by the client
+   * on every poll (`useSnapshot.ts`) against the SAME constant its own build
+   * computes. A mismatch means the served client bundle and the running
+   * server were built from different `DashboardSnapshot` shapes — reachable
+   * in both directions on this deployment, because `server.ts` serves
+   * `dist/client/` per request with `Cache-Control: no-cache` rather than
+   * resolving it once at boot: a `yarn build` while the process keeps running
+   * serves new client code with no restart (new-client/old-server), and a
+   * long-lived operator tab or a browser cache can just as easily hold an old
+   * client against a server that has since restarted on new code
+   * (old-client/new-server). Before this field, that skew was undetectable —
+   * a renamed or dropped field just read as absent, and `AlertDeliveryBlock`'s
+   * `?? 0` (the bug #1316 is named for) rendered that absence identical to a
+   * healthy, zero-failure channel.
+   *
+   * Computed as `CONTRACT_VERSION` below, not hand-bumped: a hand-bumped
+   * integer is exactly the kind of edit `docs/coding-standards.md`-style
+   * "remember to also update X" conventions are prone to silently skipping.
+   * This value is instead DERIVED from `DASHBOARD_SNAPSHOT_FIELD_NAMES`, whose
+   * coverage of `keyof DashboardSnapshot` is enforced in BOTH directions at
+   * `yarn typecheck` time (the two-part idiom `alert-transport.ts` uses for
+   * `AlertChannelSlots`, after ten silent misses taught that lesson there):
+   * `as const satisfies readonly (keyof DashboardSnapshot)[]` rejects a name
+   * in the list that isn't a real field (catches a stale rename OF a listed
+   * name), and `_assertDashboardSnapshotFieldNamesCoverAllKeys` below rejects
+   * a real field that's missing FROM the list (catches an added-but-
+   * unlisted field, and a field renamed to something not yet listed). Either
+   * direction alone leaves a hole: `satisfies` alone cannot see a field that
+   * was simply never added to the list, so a field could be added, later
+   * renamed, and never once produce a stale literal — the exact composite
+   * gap this pairing closes. A rename cannot be forgotten because forgetting
+   * it does not compile.
+   *
+   * Deliberately shallow: the hash covers only this interface's OWN top-level
+   * field names, not the shapes nested inside `providers`, `llm_spend`,
+   * `DebateRow` and the rest — a rename inside one of those nested types does
+   * NOT move this value. Extending the mechanism to nested shapes is
+   * out of scope for #1316 (it would need per-type field lists or a
+   * schema-walking codegen step, not a one-line addition); this field only
+   * ever claims to detect skew in `DashboardSnapshot`'s own field set.
+   */
+  contract_version: string;
 }
+
+/**
+ * `DashboardSnapshot`'s own field names, in declaration order — the input
+ * `CONTRACT_VERSION` below is hashed from. `contract_version` is included: a
+ * server that dropped or renamed the version field itself is exactly the
+ * skew this mechanism must still be able to signal about, via the client's
+ * own (different) compiled-in constant.
+ *
+ * This is the ONE place the list is written by hand — everywhere else derives
+ * from it. `as const satisfies readonly (keyof DashboardSnapshot)[]` (not a
+ * mutable `readonly (keyof DashboardSnapshot)[]` annotation — that widens
+ * `(typeof …)[number]` back to the whole `keyof DashboardSnapshot` union,
+ * which makes the exhaustiveness check below compare the union against
+ * itself and pass unconditionally, catching nothing; confirmed by
+ * temporarily adding `brand_new_field?: number` to `DashboardSnapshot` under
+ * the old annotation and observing `yarn typecheck` pass with the hash
+ * unchanged) keeps this a literal-string tuple, so TypeScript can reject a
+ * listed name that ISN'T a real key. It cannot, by itself, catch a real key
+ * that's simply missing from the list — see
+ * `_assertDashboardSnapshotFieldNamesCoverAllKeys` below for that direction.
+ */
+export const DASHBOARD_SNAPSHOT_FIELD_NAMES = [
+  'generated_at',
+  'as_of',
+  'mode',
+  'tick_status',
+  'positions',
+  'closed_trades',
+  'fills',
+  'debates',
+  'verdicts',
+  'risk_critics',
+  'analysts',
+  'metrics',
+  'arm_comparison',
+  'outside_benchmarks',
+  'alert_delivery_failures_24h',
+  'providers',
+  'llm_spend',
+  'pipeline',
+  'contract_version',
+] as const satisfies readonly (keyof DashboardSnapshot)[];
+
+/**
+ * The other half of the exhaustiveness check (mirrors `alert-transport.ts`'s
+ * `ALL_ALERT_CHANNEL_FIELDS_COVERED`, adopted here after a reviewer proved
+ * the single-list version above was vacuous — `satisfies` alone can reject a
+ * bad name but not detect an added-and-never-listed one, so a field could be
+ * added without touching the list, later renamed with no stale literal to
+ * catch it, and `CONTRACT_VERSION` would never move). If
+ * `DASHBOARD_SNAPSHOT_FIELD_NAMES` (exported so a test can re-derive
+ * `CONTRACT_VERSION` from it independently, rather than only comparing the
+ * constant to itself) stops covering every key of
+ * `DashboardSnapshot`, the mapped type below gains a required key for each
+ * missing field name, so `{}` no longer satisfies it and `yarn typecheck`
+ * fails, naming the missing key(s) in the error.
+ *
+ * Verified non-vacuous the same way: with `brand_new_field?: number` added
+ * to `DashboardSnapshot` and NOT added here, `yarn typecheck` fails on this
+ * line with:
+ *   Property 'brand_new_field' is missing in type '{}' but required in type
+ *   '{ brand_new_field: never; }'.
+ */
+type _MissingDashboardSnapshotFieldNames = Exclude<
+  keyof DashboardSnapshot,
+  (typeof DASHBOARD_SNAPSHOT_FIELD_NAMES)[number]
+>;
+const _assertDashboardSnapshotFieldNamesCoverAllKeys: {
+  [K in _MissingDashboardSnapshotFieldNames]: never;
+} = {};
+
+/**
+ * FNV-1a, 32-bit, hex-encoded. Chosen over `node:crypto` because this file is
+ * bundled into the browser client too (`contracts/` is imported by both
+ * runtimes, CLAUDE.md) — `node:crypto` is not available there. FNV-1a is not
+ * cryptographic and does not need to be: the only property this mechanism
+ * needs is "the field list changing changes the output", which a 32-bit
+ * non-cryptographic hash already gives with a collision risk irrelevant at
+ * this input size (19 short field names).
+ */
+function fnv1aHex(input: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+/**
+ * Exported (not just `CONTRACT_VERSION` below) so a test can prove this
+ * mechanism is actually content-sensitive — hash a field list that differs
+ * from the real one and assert the output differs — without touching the
+ * `DashboardSnapshot` interface itself to do it (mutation evidence, #1316).
+ */
+export function contractVersionOf(fieldNames: readonly string[]): string {
+  return fnv1aHex(fieldNames.join(','));
+}
+
+/**
+ * The server's stamp of its own wire shape, and the client's own point of
+ * comparison (`useSnapshot.ts`) — both computed by this SAME function from
+ * the SAME source list, since both runtimes import `contracts/`. See
+ * `DashboardSnapshot.contract_version`'s doc comment for what a mismatch
+ * means and why this is derived rather than hand-bumped.
+ */
+export const CONTRACT_VERSION = contractVersionOf(DASHBOARD_SNAPSHOT_FIELD_NAMES);

@@ -11,7 +11,7 @@
  * what actually filled. Recent-history window is fixed
  * (`RECENT_DEBATES_LIMIT` / `RECENT_VERDICTS_LIMIT`), no config surface yet.
  */
-import { toProfitFactorWire } from '../../../contracts/index.js';
+import { CONTRACT_VERSION, toProfitFactorWire } from '../../../contracts/index.js';
 import type { AnalystContribution, Direction } from '../../pipeline/debate-engine/index.js';
 import { OUTSIDE_BENCHMARKS } from '../../pipeline/outside-benchmark/index.js';
 import {
@@ -430,5 +430,10 @@ export function buildSnapshot(
     pipeline: buildPipelineView(
       store.getPipelineActivity(PIPELINE_MAX_LANES, PIPELINE_LOOKBACK_MS, asOf),
     ),
+    // The running server's stamp of its own wire shape (#1316) — always this
+    // process's own compiled-in constant, never read from the store, so a
+    // rebuild-without-restart (`server.ts` serves `dist/client/` per request)
+    // is exactly what changes it.
+    contract_version: CONTRACT_VERSION,
   };
 }

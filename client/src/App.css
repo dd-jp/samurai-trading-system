@@ -99,6 +99,17 @@ code {
   border-right-color: var(--amber);
 }
 
+/*
+ * Distinct from `.rail-stale` on purpose (#1316): staleness means "the
+ * numbers are old"; a contract mismatch means "this client cannot trust
+ * what these numbers mean at all". Vermilion, not amber — the rail's
+ * existing "something is wrong, not just aging" colour (reject/over-cap
+ * states below), so the two never look like variants of the same state.
+ */
+.rail-mismatch {
+  border-right-color: var(--vermilion);
+}
+
 .brand {
   font-family: var(--font-accent);
   font-weight: 700;
@@ -170,6 +181,22 @@ code {
 
 .rail-health-waiting {
   color: var(--muted);
+}
+
+.rail-health-contract-mismatch {
+  color: var(--vermilion);
+}
+
+/* Replaces a health-derived tile's value in the mismatch state — never
+ * hidden (a blank field reads as zero, dashboard-spec.md "Layout — the
+ * Rail"), always this explicit "unknown" reading (#1316). */
+.rail-contract-mismatch {
+  border-left: 2px solid var(--vermilion);
+  padding-left: var(--space-2);
+}
+
+.rail-mismatch-value {
+  color: var(--vermilion);
 }
 
 .rail-note {

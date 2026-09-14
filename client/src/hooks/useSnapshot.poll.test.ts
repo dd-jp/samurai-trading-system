@@ -9,6 +9,7 @@
 // a dashboard that stopped polling looks exactly like a dashboard whose server
 // went quiet. A hung request must therefore be abandoned by the CLIENT, not
 // waited on indefinitely.
+import { CONTRACT_VERSION } from '@contracts';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { fakeFetch, HANGS, makeSnapshot } from '../test-fixtures.ts';
@@ -276,6 +277,130 @@ function recordingFetch(payload: unknown): {
   }) as typeof fetch;
   return { fetchImpl, lastInit: () => lastInit };
 }
+
+/**
+ * #1316: the served client bundle and the answering server can disagree
+ * about the wire shape in either direction — a rebuild-without-restart
+ * serving a newer client against an older running server (`server.ts` serves
+ * `dist/client/` per request with `Cache-Control: no-cache`), or a
+ * long-lived operator tab holding an old client against a server that has
+ * since restarted on new code. Before this field existed, that skew was
+ * silent: a renamed or dropped field simply read as absent, and
+ * `Rail.tsx`'s `AlertDeliveryBlock` collapsed that absence into a healthy
+ * zero (`?? 0`) — the bug #1316 is named for. These tests are the mutation
+ * evidence: each fails against `useSnapshot.ts` as it stood before this
+ * change (no `contract_version` comparison existed at all — every payload
+ * below would have been accepted as a normal, healthy poll) and passes
+ * after.
+ */
+describe('useSnapshot — contract mismatch (#1316)', () => {
+  it('is a healthy poll when the payload carries the client’s own contract_version', async () => {
+    const { result } = renderHook(() =>
+      useSnapshot({ fetchImpl: fakeFetch([makeSnapshot()]), intervalMs: INTERVAL_MS }),
+    );
+
+    await waitFor(() => expect(result.current.snapshot).not.toBeNull());
+    expect(result.current.status).toBe('alive');
+    expect(result.current.error).toBeNull();
+  });
+
+  it('reports contract-mismatch, not a healthy zero, when contract_version is absent (old-server/new-client)', async () => {
+    const staleServerPayload = makeSnapshot() as unknown as Record<string, unknown>;
+    delete staleServerPayload.contract_version;
+    // Old-server behaviour, pinned directly: `alert_delivery_failures_24h`
+    // absent too would already fail `hasWireShape`'s literal field checks in
+    // other ways, so this payload otherwise validates — the ONLY thing wrong
+    // with it is the missing version, which is exactly the skew this test
+    // exists to catch rather than let fall through as a healthy read.
+    expect(staleServerPayload.alert_delivery_failures_24h).toBe(0);
+
+    const { result } = renderHook(() =>
+      useSnapshot({ fetchImpl: fakeFetch([staleServerPayload]), intervalMs: INTERVAL_MS }),
+    );
+
+    await waitFor(() => expect(result.current.status).toBe('contract-mismatch'));
+    // Not routed through the generic "did not match the wire shape" rejection
+    // — the error names the skew specifically, not a proxy/captive-portal-
+    // shaped failure.
+    expect(result.current.error).toMatch(/contract/i);
+    expect(result.current.error).not.toMatch(/did not match the wire shape/);
+    // Never silently treated as healthy: no snapshot is admitted from a
+    // payload this client could not validate the shape of.
+    expect(result.current.snapshot).toBeNull();
+    expect(result.current.stale).toBe(false);
+  });
+
+  it('reports contract-mismatch when contract_version is present but does not equal this client’s constant (new-server/old-client)', async () => {
+    const newerServerPayload = makeSnapshot({
+      contract_version: `${CONTRACT_VERSION}-different`,
+    });
+
+    const { result } = renderHook(() =>
+      useSnapshot({ fetchImpl: fakeFetch([newerServerPayload]), intervalMs: INTERVAL_MS }),
+    );
+
+    await waitFor(() => expect(result.current.status).toBe('contract-mismatch'));
+    expect(result.current.error).toContain(CONTRACT_VERSION);
+    expect(result.current.snapshot).toBeNull();
+  });
+
+  it('diagnoses the mismatch specifically even when the same skew would ALSO fail the structural check', async () => {
+    // A renamed field is exactly what #1316's decision comment names as the
+    // motivating case: it fails `hasWireShape` too (no `positions` array),
+    // and the version check must win the race to explain why, rather than
+    // the generic structural rejection masking a diagnosable skew.
+    const renamed = makeSnapshot() as unknown as Record<string, unknown>;
+    renamed.open_positions = renamed.positions;
+    delete renamed.positions;
+    delete renamed.contract_version;
+
+    const { result } = renderHook(() =>
+      useSnapshot({ fetchImpl: fakeFetch([renamed]), intervalMs: INTERVAL_MS }),
+    );
+
+    await waitFor(() => expect(result.current.status).toBe('contract-mismatch'));
+    expect(result.current.error).toMatch(/contract/i);
+  });
+
+  it('clears a mismatch and resumes reading the feed once a poll lands with the matching contract_version', async () => {
+    // Fake timers, like the file's other multi-poll tests above: under real
+    // timers this raced flaky (the healthy poll's state landing observed
+    // before the mismatched poll's had fully settled) — the same flake class
+    // `pollDrivenClock`'s doc comment exists to explain, one poll earlier.
+    vi.useFakeTimers();
+    try {
+      const staleServerPayload = makeSnapshot() as unknown as Record<string, unknown>;
+      delete staleServerPayload.contract_version;
+      const healthy = makeSnapshot();
+
+      const { result } = renderHook(() =>
+        useSnapshot({
+          fetchImpl: fakeFetch([staleServerPayload, healthy]),
+          intervalMs: INTERVAL_MS,
+        }),
+      );
+
+      await stepFakeTimersUntil(() => result.current.status === 'contract-mismatch');
+      await stepFakeTimersUntil(() => result.current.status === 'alive');
+      expect(result.current.snapshot).not.toBeNull();
+      expect(result.current.error).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not advance lastSuccessAt on a mismatched poll — it is not a success by either measure', async () => {
+    const staleServerPayload = makeSnapshot() as unknown as Record<string, unknown>;
+    delete staleServerPayload.contract_version;
+
+    const { result } = renderHook(() =>
+      useSnapshot({ fetchImpl: fakeFetch([staleServerPayload]), intervalMs: INTERVAL_MS }),
+    );
+
+    await waitFor(() => expect(result.current.status).toBe('contract-mismatch'));
+    expect(result.current.lastSuccessAt).toBeNull();
+  });
+});
 
 describe('useSnapshot — Authorization header (#1038)', () => {
   it('sends no Authorization header when authToken is absent — the default, no-credential path', async () => {

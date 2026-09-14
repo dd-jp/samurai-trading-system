@@ -6,6 +6,8 @@
  * Also asserts the read-only contract is structural: the fake store exposes
  * no setters, and the snapshot function calls only get-* methods.
  */
+
+import { CONTRACT_VERSION } from '../../../contracts/index.js';
 import type { AnalystContribution } from '../../pipeline/debate-engine/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
 import type { ClosedTrade, DebateLog, Fill, OpenPosition } from '../../shared/index.js';
@@ -514,6 +516,20 @@ describe('buildSnapshot', () => {
 
     expect(snap.alert_delivery_failures_24h).toBe(4);
     expect(asked).toEqual(AS_OF);
+  });
+
+  // #1316: the running server's own stamp of its wire shape, so a client
+  // polling it (`useSnapshot.ts`) can tell a served-bundle-vs-server skew
+  // apart from a healthy read. Always this process's OWN compiled-in
+  // constant — never read off the store — because the whole mechanism this
+  // field exists for is detecting a REBUILD, and `server.ts` serves
+  // `dist/client/` per request without a restart, so only a value baked into
+  // the running process (not the store, which does not change on rebuild)
+  // can move when that happens.
+  it("stamps the snapshot with the server's own CONTRACT_VERSION, regardless of the store", () => {
+    const snap = buildSnapshot(fakeStore(), AS_OF, 'paper');
+
+    expect(snap.contract_version).toBe(CONTRACT_VERSION);
   });
 
   // #1140: the enforced cap rides the same payload as the spend it bounds, so
