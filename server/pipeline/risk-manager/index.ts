@@ -2,10 +2,11 @@
  * Risk Manager (Stage 4) — core check pipeline (ticket #76).
  * See docs/specs/risk-manager-spec.md (Module: Check Pipeline).
  *
- * Ordered, monotonic risk-reducing gate: breakers -> per-trade -> per-asset
- * -> per-asset-class -> portfolio -> concentration -> min-size. Every step
- * trims notional exposure or hard-rejects; nothing ever increases size or
- * loosens a stop. Exits skip every entry gate and pass through verbatim.
+ * Ordered, monotonic risk-reducing gate: long-only book -> breakers ->
+ * per-trade -> per-asset -> per-asset-class -> portfolio -> concentration ->
+ * min-size. Every step trims notional exposure or hard-rejects; nothing ever
+ * increases size or loosens a stop. Exits skip every entry gate and pass
+ * through verbatim.
  *
  * `PortfolioView` (#78), `BreakerState` (#77), and `CorrelationEstimate`
  * (#50, correlation.ts) are consumed as pre-built inputs — this pipeline
@@ -311,10 +312,15 @@ export class RiskManagerImpl implements RiskManager {
     // both ends can act on).
     if (intent.side === 'sell' && intent.asset_class === 'stocks') {
       const binding = 'long_only_book';
+      const positionClaim =
+        intent.intent_type === 'entry'
+          ? 'with no held lot'
+          : `on intent_type '${intent.intent_type}'`;
       return rejected(binding, [
-        `${binding}: refusing a sell ${intent.intent_type} on ${intent.instrument} with no held ` +
-          'lot — #1511 decided a long-only book for the Saxo GIA equity leg. A short is not sized ' +
-          'or costed (no borrow/margin model, ADR-0016/0018 sized this universe long-only); a ' +
+        `${binding}: refusing a sell ${intent.intent_type} on ${intent.instrument} ${positionClaim} ` +
+          '— #1511 decided a long-only book for the Saxo GIA equity leg (stocks only; crypto left ' +
+          'scope, ADR-0015 2026-08-16). A sell that is not an exit is a short on the long ETP: not ' +
+          'sized or costed (no borrow/margin model, ADR-0016/0018 sized this universe long-only); a ' +
           '"down" thesis routes to the paired inverse line if it is in the universe.',
       ]);
     }

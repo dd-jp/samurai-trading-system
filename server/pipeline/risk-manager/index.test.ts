@@ -200,6 +200,10 @@ describe('RiskManagerImpl.evaluate — long-only book (#1511)', () => {
     expect(decision.binding_constraint).toBe('long_only_book');
     expect(decision.reasons.join(' ')).toMatch(/3LUS/);
     expect(decision.reasons.join(' ')).toMatch(/#1511/);
+    // "with no held lot" is the true, load-bearing fact for an entry — this
+    // is the row a reviewer reads to confirm the refusal reason is honest
+    // about position state, not just present.
+    expect(decision.reasons.join(' ')).toMatch(/with no held lot/);
     expect(decision.order_intent).toBeNull();
   });
 
@@ -209,7 +213,13 @@ describe('RiskManagerImpl.evaluate — long-only book (#1511)', () => {
       intent: makeIntent({ asset_class: 'stocks', side: 'sell', intent_type: 'scale_in' }),
     });
 
-    expect(manager.evaluate(input).binding_constraint).toBe('long_only_book');
+    const decision = manager.evaluate(input);
+
+    expect(decision.binding_constraint).toBe('long_only_book');
+    // A scale_in has a held lot by construction, so the reason must not
+    // claim "no held lot" here — that would misstate position state on the
+    // exact case this test covers.
+    expect(decision.reasons.join(' ')).not.toMatch(/with no held lot/);
   });
 
   it('does not refuse a sell EXIT — that is a long being closed, not a short being opened', () => {
