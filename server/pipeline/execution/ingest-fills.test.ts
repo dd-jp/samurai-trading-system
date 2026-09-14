@@ -4217,6 +4217,78 @@ describe('a non-sterling fee is a loud contradiction, not a silent GBP sum (#122
   });
 });
 
+// #1521: `fx_rate_to_gbp`/`fx_rate_to_gbp_source` carried through `toFill`
+// the same way `fee_currency` is — verbatim, never derived here.
+describe('fx_rate_to_gbp is carried through verbatim (#1521)', () => {
+  it('persists a rate an adapter reports, alongside its source', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 5 });
+    const broker = new ScriptedBroker([
+      fill({
+        broker_fill_id: toBrokerFillId('usd-1'),
+        qty: 5,
+        fee: 0.8,
+        fee_currency: 'USD',
+        fx_rate_to_gbp: 0.79,
+        fx_rate_to_gbp_source: 'venue',
+      }),
+    ]);
+
+    await new ExecutionImpl(makeInput(broker, store)).ingestFills();
+
+    const [persisted] = await store.getFills('key-1');
+    expect(persisted?.fx_rate_to_gbp).toBe(0.79);
+    expect(persisted?.fx_rate_to_gbp_source).toBe('venue');
+  });
+
+  it('logs the reason on the same fee_currency_not_book_currency line when no rate is reported', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 5 });
+    const broker = new ScriptedBroker([
+      fill({
+        broker_fill_id: toBrokerFillId('usd-1'),
+        qty: 5,
+        fee: 0.8,
+        fee_currency: 'USD',
+        fx_rate_to_gbp_source: 'not_reported_by_venue',
+      }),
+    ]);
+    const logger = recordingLogger();
+
+    await new ExecutionImpl(makeInput(broker, store, undefined, undefined, logger)).ingestFills();
+
+    expect(logger.entries).toContainEqual(
+      expect.objectContaining({
+        level: 'error',
+        message: FEE_CURRENCY_NOT_BOOK_CURRENCY,
+        payload: expect.objectContaining({
+          broker_fill_id: 'usd-1',
+          fx_rate_to_gbp: undefined,
+          fx_rate_to_gbp_source: 'not_reported_by_venue',
+        }),
+      }),
+    );
+
+    const [persisted] = await store.getFills('key-1');
+    expect(persisted?.fx_rate_to_gbp).toBeUndefined();
+    expect(persisted?.fx_rate_to_gbp_source).toBe('not_reported_by_venue');
+  });
+
+  it('omits both fields for a book-currency fill, no adapter having reported either', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { requested_size: 2 });
+    const broker = new ScriptedBroker([
+      fill({ broker_fill_id: toBrokerFillId('gbp-1'), qty: 2, fee: 0.1, fee_currency: 'GBP' }),
+    ]);
+
+    await new ExecutionImpl(makeInput(broker, store)).ingestFills();
+
+    const [persisted] = await store.getFills('key-1');
+    expect(persisted?.fx_rate_to_gbp).toBeUndefined();
+    expect(persisted?.fx_rate_to_gbp_source).toBeUndefined();
+  });
+});
+
 // #1465: #1220 recorded the fee and raised it at `error`, but wired no
 // channel — the only sink was `ExecutionInput.logger`, a rotating file
 // nobody escalates. This closes the other half.

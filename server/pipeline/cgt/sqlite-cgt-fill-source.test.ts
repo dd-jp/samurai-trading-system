@@ -65,11 +65,22 @@ function seedFill(
   fee: number,
   timestamp: Date,
   feeCurrency: string | null = null,
+  fxRateToGbp: number | null = null,
 ): void {
   db.prepare(
-    `INSERT INTO fills (idempotency_key, broker_fill_id, leg, price, qty, fee, timestamp, fee_currency)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(key, brokerFillId, leg, price, qty, fee, toStoredTimestamp(timestamp), feeCurrency);
+    `INSERT INTO fills (idempotency_key, broker_fill_id, leg, price, qty, fee, timestamp, fee_currency, fx_rate_to_gbp)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    key,
+    brokerFillId,
+    leg,
+    price,
+    qty,
+    fee,
+    toStoredTimestamp(timestamp),
+    feeCurrency,
+    fxRateToGbp,
+  );
 }
 
 describe('SqliteCgtFillSource — resolves instrument/arm across closed AND open lots', () => {
@@ -206,6 +217,43 @@ describe('SqliteCgtFillSource — currency handling (#1518 review round 1, findi
     expect(unconverted.every((f) => f.currency === 'USD')).toBe(true);
     expect(unconverted.find((f) => f.kind === 'acquisition')?.grossAmount).toBe(1000);
     expect(unconverted.find((f) => f.kind === 'disposal')?.grossAmount).toBe(1200);
+  });
+
+  it('converts a USD fill on the stored venue rate instead of listing it unconverted (#1521)', () => {
+    const db = openSharedStore(':memory:');
+    seedClosedTrade(db, 'usd-rated-1', 'LSE:TEST', 'stocks', 'buy', 'live');
+    seedFill(
+      db,
+      'usd-rated-1',
+      'f1',
+      'entry',
+      100,
+      10,
+      1,
+      new Date('2025-06-02T08:05:00Z'),
+      'USD',
+      0.8,
+    );
+    seedFill(
+      db,
+      'usd-rated-1',
+      'f2',
+      'target',
+      120,
+      10,
+      2,
+      new Date('2025-06-02T14:00:00Z'),
+      'USD',
+      0.8,
+    );
+
+    const { legs, unconverted } = new SqliteCgtFillSource(db).getLiveEquityFillLegs();
+
+    expect(unconverted).toHaveLength(0);
+    expect(legs).toHaveLength(2);
+    expect(legs.find((l) => l.kind === 'acquisition')?.grossAmount).toBeCloseTo(800); // 1000 USD * 0.8
+    expect(legs.find((l) => l.kind === 'acquisition')?.charges).toBeCloseTo(0.8); // 1 USD * 0.8
+    expect(legs.find((l) => l.kind === 'disposal')?.grossAmount).toBeCloseTo(960); // 1200 USD * 0.8
   });
 
   it('treats a null fee_currency (pre-#1220 legacy fills) as GBP, unchanged from before', () => {

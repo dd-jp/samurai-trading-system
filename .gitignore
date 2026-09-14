@@ -242,6 +242,9 @@ coverage/
 *.sqlite-shm
 *.sqlite-wal
 
+# Saxo OAuth login tokens (#1522) — access/refresh tokens, owner-only, never committed.
+data/saxo-tokens/
+
 # Durable structured-log sink (#325). The whole directory, not just *.log:
 # rotated generations are named `orchestrator.log.1`, which `*.log` does not
 # match. Log payloads are diagnostic detail from a real run — never committed.

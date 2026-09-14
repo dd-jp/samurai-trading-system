@@ -82,3 +82,7 @@ export type {
   TradingArmWire,
   VerdictRow,
 } from './snapshot.js';
+export {
+  CONTRACT_VERSION,
+  contractVersionOf,
+} from './snapshot.js';

@@ -77,8 +77,8 @@ const ALL_PERSONAS: Analyst[] = [technicalAnalyst, fundamentalAnalyst, sentiment
  * 4 windows - 20 tokens of headroom) / 2.0 per second`. The derivation is
  * pinned from the pacing side by `production/rate-limit-wiring.test.ts`, which
  * is where the bucket's constants live. `ATTEMPTS_PER_PERSONA` is 2, so the
- * per-persona wall clock is up to 60,000ms — half the two-minute tick cadence,
- * which is the bound `paper-profile.ts`'s pass-duration arithmetic uses. Those
+ * per-persona wall clock is up to `ANALYST_STAGE_WALL_CLOCK_MS`, which is what
+ * `paper-profile.test.ts`'s pass-duration arithmetic consumes. Those
  * two attempts may be waiting on the SAME fetch: the retry carries no
  * `AbortSignal`, so attempt 1's request is still in flight and attempt 2 joins
  * it through `MarketDataServiceImpl.inFlightBarFetches` instead of re-asking
@@ -94,11 +94,48 @@ const ALL_PERSONAS: Analyst[] = [technicalAnalyst, fundamentalAnalyst, sentiment
  * The point of having a timeout at all is that `Promise.all` below has no
  * deadline of its own: one persona whose fetch never settles hangs the whole
  * analyst stage forever, and an unattended run has nobody to notice.
+ *
+ * **There is no enclosing analyst-stage budget for this number to be divided
+ * out of, and #1104 resolves that deliberately rather than inventing one.**
+ * The debate arm's per-attempt timeout is a division: a logical LLM call runs
+ * inside `LATENCY_BUDGET_MS`, so `maxAttempts x (timeoutMs + maxDelayMs) <=
+ * LATENCY_BUDGET_MS.stocks` fixes it from above. Nothing downstream measures
+ * the analyst stage's wall clock, and specifically not the two gates
+ * `paper-profile.ts`'s `maxConcurrentInstruments` comment names: Verdict's
+ * gate 1 measures `now - orderIntent.decided_at` (verdict/index.ts), and
+ * `decided_at` is `clock.now()` read inside that instrument's OWN Trader step
+ * (decide.ts, `const asOf = clock.now()`), so an instrument's position in the
+ * `ceil(universe / width)` walk does not enter it; gate 2 measures
+ * `Mark.observed_at` on a mark `getMark` re-reads at gate time
+ * (verdict/index.ts, `marketData.getMark(orderIntent.instrument, now)`) behind
+ * a 5,000ms TTL (`MarketDataServiceImpl`'s `markTtlMs`, passed explicitly in
+ * production.ts), so it too carries no walk position. A pass therefore
+ * overruns the 120,000ms tick cadence by design (#1080) with no gate to catch
+ * it. So this deadline is sized against the data source alone, and
+ * `ANALYST_STAGE_WALL_CLOCK_MS` below is an OUTPUT of that sizing, not a
+ * ceiling imposed on it. The human tripwire on `maxConcurrentInstruments` is
+ * what is left, which is why that comment still says to revisit rather than
+ * assume.
  */
 export const DEFAULT_ANALYST_TIMEOUT_MS = 30_000;
 
 /** analysts-spec.md story 19: exactly one retry, so a blip is absorbed without a retry storm. */
 const ATTEMPTS_PER_PERSONA = 2;
+
+/**
+ * The analyst stage's worst-case wall clock (#1104) — the figure
+ * `paper-profile.test.ts`'s pass-duration arithmetic and `paper-profile.ts`'s
+ * tripwire comment each used to restate by hand as
+ * "`DEFAULT_ANALYST_TIMEOUT_MS` twice".
+ *
+ * Exact rather than an upper bound, because `runAnalysts` fans the personas out
+ * under one `Promise.all`: the stage settles when the slowest persona does, and
+ * the slowest possible persona is one that exhausts every attempt. Pinned
+ * behaviourally by `analyst-stage-wall-clock.test.ts` so a change to the fan-out
+ * shape or the attempt count cannot leave this constant describing code that no
+ * longer exists.
+ */
+export const ANALYST_STAGE_WALL_CLOCK_MS = ATTEMPTS_PER_PERSONA * DEFAULT_ANALYST_TIMEOUT_MS;
 
 export interface AnalystOrchestratorDeps {
   market_intelligence: MarketIntelligenceStore;

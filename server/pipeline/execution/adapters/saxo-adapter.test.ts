@@ -1718,6 +1718,7 @@ describe('SaxoBrokerAdapter.fetchNewFills', () => {
         qty: 3,
         fee: expect.closeTo(0.024048, 6),
         fee_currency: 'USD',
+        fx_rate_to_gbp_source: 'not_reported_by_venue',
         timestamp: new Date('2026-09-05T08:31:00Z'),
       },
       {
@@ -1728,6 +1729,7 @@ describe('SaxoBrokerAdapter.fetchNewFills', () => {
         qty: 3,
         fee: expect.closeTo(0.021552, 6),
         fee_currency: 'USD',
+        fx_rate_to_gbp_source: 'not_reported_by_venue',
         timestamp: new Date('2026-09-05T10:00:00Z'),
       },
     ]);
@@ -2026,6 +2028,9 @@ describe('SaxoBrokerAdapter GBX price unit (#1302)', () => {
     expect(fill?.price).toBeCloseTo(311.51, 8);
     expect(fill?.fee).toBeCloseTo(311.51 * SAXO_COMMISSION_RATE, 8);
     expect(fill?.fee_currency).toBe('GBP');
+    // #1521: a book-currency fill never needed a rate, so neither field is set.
+    expect(fill?.fx_rate_to_gbp).toBeUndefined();
+    expect(fill?.fx_rate_to_gbp_source).toBeUndefined();
   });
 
   it('reports an open position average price in cash', async () => {
@@ -2283,6 +2288,11 @@ describe('SaxoBrokerAdapter GBX price unit (#1302)', () => {
     expect(vi.mocked(client.placeOrder).mock.calls[0]?.[0].OrderPrice).toBe(10);
     expect(fill?.price).toBe(10.25);
     expect(fill?.fee_currency).toBe('USD');
+    // #1521: no reachable Saxo surface carries this rate (verified on SIM,
+    // migration 0060's header) — a non-book-currency fill gets an explicit
+    // source naming why, never a silently missing rate.
+    expect(fill?.fx_rate_to_gbp).toBeUndefined();
+    expect(fill?.fx_rate_to_gbp_source).toBe('not_reported_by_venue');
   });
 
   /**

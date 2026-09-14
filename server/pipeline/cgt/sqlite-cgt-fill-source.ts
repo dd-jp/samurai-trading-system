@@ -32,14 +32,16 @@
  * reachable today, since the adapter's own `CurrencyCode` already resolves to
  * GBP for a pence-quoted line before a fee is persisted (`saxo-price-unit.ts`'s
  * `price_to_contract_factor`). Anything else (USD on the pool lines the #1220
- * sterling gate keeps out of `tradeableUniverse()`) cannot be priced in sterling without
- * the transaction-date FX rate, which no fill records — those fills are
- * returned separately, in native currency, rather than guessed into the
- * matched total or used to abort the whole report. Classification reuses
- * `isPenceCurrency`/`BOOK_CURRENCY` rather than a local GBP/GBX string
- * comparison — `book-currency.ts` checks pence FIRST specifically because
- * `GBp` (pence) upper-cases to `GBP` and a naive case-insensitive pound test
- * would 100x it.
+ * sterling gate keeps out of `tradeableUniverse()`) converts on `fills.fx_rate_to_gbp`
+ * when a row carries one (#1521, migration 0060) — `grossAmount`/`charges`
+ * multiplied by the stored rate, never re-derived or looked up here. A row
+ * with neither a book currency nor a stored rate cannot be priced in sterling
+ * without inventing an FX rate, so it is returned separately, in native
+ * currency, rather than guessed into the matched total or used to abort the
+ * whole report. Classification reuses `isPenceCurrency`/`BOOK_CURRENCY`
+ * rather than a local GBP/GBX string comparison — `book-currency.ts` checks
+ * pence FIRST specifically because `GBp` (pence) upper-cases to `GBP` and a
+ * naive case-insensitive pound test would 100x it.
  */
 
 import { BOOK_CURRENCY, type Fill, isPenceCurrency } from '../../shared/index.js';
@@ -87,6 +89,8 @@ export class SqliteCgtFillSource {
                 f.exit_reason     AS exit_reason,
                 f.flatten_idempotency_key AS flatten_idempotency_key,
                 f.fee_currency    AS fee_currency,
+                f.fx_rate_to_gbp  AS fx_rate_to_gbp,
+                f.fx_rate_to_gbp_source AS fx_rate_to_gbp_source,
                 c.instrument      AS c_instrument,
                 c.asset_class     AS c_asset_class,
                 c.side            AS c_side,
@@ -138,7 +142,21 @@ export class SqliteCgtFillSource {
           ? 1
           : undefined;
 
-      if (divisor === undefined) {
+      if (divisor !== undefined) {
+        legs.push(toLeg(fill, instrument, kind, rawGrossAmount / divisor, rawCharges / divisor));
+      } else if (fill.fx_rate_to_gbp !== undefined) {
+        // #1521: the venue's own rate, applied verbatim — never re-derived,
+        // never blended with a spot lookup. See this file's header.
+        legs.push(
+          toLeg(
+            fill,
+            instrument,
+            kind,
+            rawGrossAmount * fill.fx_rate_to_gbp,
+            rawCharges * fill.fx_rate_to_gbp,
+          ),
+        );
+      } else {
         unconverted.push({
           instrument,
           kind,
@@ -150,8 +168,6 @@ export class SqliteCgtFillSource {
           idempotency_key: fill.idempotency_key,
           broker_fill_id: fill.broker_fill_id,
         });
-      } else {
-        legs.push(toLeg(fill, instrument, kind, rawGrossAmount / divisor, rawCharges / divisor));
       }
     }
     return { legs, unconverted };

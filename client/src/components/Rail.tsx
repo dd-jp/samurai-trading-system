@@ -1,5 +1,5 @@
 import type { AlpacaBalanceWire, MetricsSuiteWire } from '@contracts';
-import type { SnapshotFeed, WireSnapshot } from '../hooks/useSnapshot.ts';
+import type { FeedStatus, SnapshotFeed, WireSnapshot } from '../hooks/useSnapshot.ts';
 import { formatClockUtc, formatPercent, formatUsd, UNKNOWN } from '../lib/format.ts';
 import { providerStateWord, WAITING_FOR_FIRST_SNAPSHOT } from '../lib/vocabulary.ts';
 import { CapMeter } from './CapMeter.tsx';
@@ -26,17 +26,50 @@ export interface RailProps {
   onTab: (tab: Tab) => void;
 }
 
-type HealthState = 'waiting' | 'stale' | 'alive';
-
+/**
+ * `FeedStatus` (`useSnapshot.ts`) IS this component's health state — it is
+ * not re-derived here. #1316's decision comment asked for "one small state
+ * discriminator on the client, not three ad-hoc flags": before this change,
+ * `Rail.tsx` recomputed waiting/stale/alive from `feed.snapshot`/`feed.stale`
+ * by hand, which is exactly the kind of second, parallel derivation that
+ * asks to drift from the hook's own. Reading `feed.status` directly is the
+ * fix, and is also the extension point #1520 can add its states to.
+ *
+ * A new `FeedStatus` member needs a new `HEALTH` entry — `Record<FeedStatus,
+ * …>` already forces that much — but `word`/`note` alone don't ask the
+ * question that actually matters for #1520's cold-start/stale-feed states:
+ * may this state's six tiles compute a reading off `snapshot`? Before
+ * `rendersHealthTiles` existed, `Rail()` answered that with its own
+ * `status === 'contract-mismatch'` check, a second literal comparison
+ * outside this record — exactly the kind of parallel derivation the
+ * paragraph above warns about, and exactly how a future state that also
+ * should not trust `snapshot` (a #1520 case reusing a stale/incomplete
+ * bundle) could fall through to the healthy branch by simply not being
+ * `'contract-mismatch'`. `rendersHealthTiles` makes that a required field of
+ * every entry here, so a new `FeedStatus` member forces a typed decision at
+ * `yarn typecheck` time instead of an implicit "yes" by omission.
+ */
 const HEALTH: Readonly<
-  Record<HealthState, { word: string; note: (feed: SnapshotFeed) => string }>
+  Record<
+    FeedStatus,
+    { word: string; note: (feed: SnapshotFeed) => string; rendersHealthTiles: boolean }
+  >
 > = {
+  // Ranked ahead of every other state in `useSnapshot.ts`'s `deriveStatus` —
+  // see that function's doc comment for why a contract mismatch must outrank
+  // staleness rather than merely being folded into it.
+  'contract-mismatch': {
+    word: 'MISMATCH',
+    note: ({ error }) => error ?? 'served bundle disagrees with the server contract',
+    rendersHealthTiles: false,
+  },
   waiting: {
     word: 'WAITING',
     note: ({ error }) =>
       error === null
         ? WAITING_FOR_FIRST_SNAPSHOT
         : `no snapshot yet — last attempt failed: ${error}`,
+    rendersHealthTiles: true,
   },
   stale: {
     word: 'STALE',
@@ -44,22 +77,50 @@ const HEALTH: Readonly<
       `stale — last update ${formatClockUtc(snapshot?.generated_at ?? '')}${
         error === null ? '' : ` · ${error}`
       }`,
+    rendersHealthTiles: true,
   },
   alive: {
     word: 'ALIVE',
     note: ({ lastSuccessAt }) => `polled ${formatClockUtc(lastSuccessAt ?? '')}`,
+    rendersHealthTiles: true,
   },
 };
 
 function HealthBlock({ feed }: { feed: SnapshotFeed }) {
-  const state: HealthState = feed.snapshot === null ? 'waiting' : feed.stale ? 'stale' : 'alive';
-  const { word, note } = HEALTH[state];
+  const { status } = feed;
+  const { word, note } = HEALTH[status];
   return (
-    <div className="rail-block" data-field="health" data-health={state}>
+    <div className="rail-block" data-field="health" data-health={status}>
       <span className="label">Bot</span>
-      <span className={`rail-health rail-health-${state}`}>{word}</span>
-      <span className="rail-note" role={state === 'stale' ? 'status' : undefined}>
+      <span className={`rail-health rail-health-${status}`}>{word}</span>
+      <span
+        className="rail-note"
+        role={status === 'stale' || status === 'contract-mismatch' ? 'status' : undefined}
+      >
         {note(feed)}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * What a health-derived tile becomes while `status === 'contract-mismatch'`
+ * (#1316's decision comment: "the Rail refuses to render health-derived
+ * tiles — they read as unknown, not calm"). NEVER simply omitted: a hidden
+ * tile is indistinguishable from a healthy tile that has nothing to report —
+ * the exact bug this issue is named for, one level up — and dashboard-spec.md
+ * ("Layout — the Rail") states the general rule this follows: "a blank field
+ * reads as zero". So every tile a mismatch would otherwise disable stays
+ * present, with its value replaced by this explicit, visually distinct
+ * reading instead of a computed one this client can no longer trust the
+ * shape behind.
+ */
+function MismatchBlock({ label, dataField }: { label: string; dataField: string }) {
+  return (
+    <div className="rail-block rail-contract-mismatch" data-field={dataField}>
+      <span className="label">{label}</span>
+      <span className="rail-value rail-mismatch-value" data-contract-mismatch="true">
+        unknown — contract mismatch
       </span>
     </div>
   );
@@ -515,7 +576,15 @@ function tabForKey(key: string, current: Tab): Tab | null {
 
 export function Rail(props: RailProps) {
   const { feed, tab, onTab } = props;
-  const { snapshot, stale, lastSuccessAt } = feed;
+  const { snapshot, stale, status, lastSuccessAt } = feed;
+  const mismatched = status === 'contract-mismatch';
+  // The tile gate, not `mismatched`: this is the field #1520 must set on any
+  // new `HEALTH` entry, so a state that also shouldn't trust `snapshot` gets
+  // caught by the compiler rather than falling through to the healthy
+  // branch by default. `mismatched` above stays a literal check because it
+  // drives ONLY this state's own visual styling (`rail-mismatch`,
+  // `data-contract-mismatch`), not the six tiles' render gate.
+  const renderHealthTiles = HEALTH[status].rendersHealthTiles;
   const onTabKey = (event: React.KeyboardEvent<HTMLDivElement>) => {
     const next = tabForKey(event.key, tab);
     if (next === null) return;
@@ -524,7 +593,12 @@ export function Rail(props: RailProps) {
     document.getElementById(`tab-${next}`)?.focus();
   };
   return (
-    <aside className={stale ? 'rail rail-stale' : 'rail'} aria-label="Rail" data-stale={stale}>
+    <aside
+      className={mismatched ? 'rail rail-mismatch' : stale ? 'rail rail-stale' : 'rail'}
+      aria-label="Rail"
+      data-stale={stale}
+      data-contract-mismatch={mismatched}
+    >
       <span className="brand">
         <i aria-hidden="true">侍</i> SAMURAI
       </span>
@@ -547,14 +621,50 @@ export function Rail(props: RailProps) {
           ))}
         </div>
       </nav>
+      {/*
+       * Six health-derived tiles below, each gated on `renderHealthTiles`
+       * (`HEALTH[status].rendersHealthTiles`, not a literal `status` check —
+       * see that field's doc comment): whenever the current `FeedStatus`
+       * says it must not, none of them may compute a reading off `snapshot`
+       * — the wire shape underneath it is exactly what is in question during
+       * a contract mismatch, and rendering as usual is how #1316 itself
+       * happened (`AlertDeliveryBlock`'s `?? 0` reading an absent field as a
+       * healthy zero). `MismatchBlock` replaces each with an explicit
+       * "unknown" tile instead of hiding it — see that component's doc
+       * comment.
+       */}
       <div className="rail-status">
         <HealthBlock feed={feed} />
-        <ModeBlock snapshot={snapshot} />
-        <LiveTickBlock snapshot={snapshot} />
-        <AlertDeliveryBlock snapshot={snapshot} />
-        <ProvidersBlock snapshot={snapshot} />
-        <SpendBlock snapshot={snapshot} />
-        <DrawdownBlock metrics={snapshot?.metrics ?? null} />
+        {renderHealthTiles ? (
+          <ModeBlock snapshot={snapshot} />
+        ) : (
+          <MismatchBlock label="Mode" dataField="mode" />
+        )}
+        {renderHealthTiles ? (
+          <LiveTickBlock snapshot={snapshot} />
+        ) : (
+          <MismatchBlock label="Live tick" dataField="live-tick" />
+        )}
+        {renderHealthTiles ? (
+          <AlertDeliveryBlock snapshot={snapshot} />
+        ) : (
+          <MismatchBlock label="Alert channel" dataField="alert-delivery-failures" />
+        )}
+        {renderHealthTiles ? (
+          <ProvidersBlock snapshot={snapshot} />
+        ) : (
+          <MismatchBlock label="Providers" dataField="providers" />
+        )}
+        {renderHealthTiles ? (
+          <SpendBlock snapshot={snapshot} />
+        ) : (
+          <MismatchBlock label="LLM cap" dataField="llm-cap" />
+        )}
+        {renderHealthTiles ? (
+          <DrawdownBlock metrics={snapshot?.metrics ?? null} />
+        ) : (
+          <MismatchBlock label="Drawdown" dataField="drawdown" />
+        )}
       </div>
       <div className="rail-foot mono muted" data-field="snapshot-clock">
         <span>snapshot {snapshot === null ? UNKNOWN : formatClockUtc(snapshot.as_of)}</span>
