@@ -1,6 +1,6 @@
 import type { AlpacaBalanceWire, MetricsSuiteWire } from '@contracts';
-import type { FeedStatus, SnapshotFeed, WireSnapshot } from '../hooks/useSnapshot.ts';
-import { formatClockUtc, formatPercent, formatUsd, UNKNOWN } from '../lib/format.ts';
+import type { FeedStatus, LiveFeed, SnapshotFeed, WireSnapshot } from '../hooks/useSnapshot.ts';
+import { formatClockUtc, formatPercent, formatUsd } from '../lib/format.ts';
 import { providerStateWord, WAITING_FOR_FIRST_SNAPSHOT } from '../lib/vocabulary.ts';
 import { CapMeter } from './CapMeter.tsx';
 
@@ -21,7 +21,16 @@ export const TABS: readonly { id: Tab; label: string }[] = [
 ];
 
 export interface RailProps {
-  feed: SnapshotFeed;
+  /**
+   * A feed that has already produced a snapshot (#1520). The rail reports on
+   * the FRESHNESS of the feed, which is not the same job as reporting its
+   * absence: a cold start is the page-level state `App.tsx` renders instead
+   * of the dashboard, and never reaches here. What does reach here is a
+   * snapshot plus the connection state around it — a feed going stale, or
+   * answering with a contract this client cannot read — which the rail says
+   * on top of the last-known snapshot rather than by blanking it.
+   */
+  feed: LiveFeed;
   tab: Tab;
   onTab: (tab: Tab) => void;
 }
@@ -48,13 +57,32 @@ export interface RailProps {
  * `'contract-mismatch'`. `rendersHealthTiles` makes that a required field of
  * every entry here, so a new `FeedStatus` member forces a typed decision at
  * `yarn typecheck` time instead of an implicit "yes" by omission.
+ *
+ * `announce` is that same lesson applied to the one literal comparison still
+ * left outside this record after #1316 — `HealthBlock`'s `role=` attribute,
+ * which decided by hand which states are urgent enough to interrupt a screen
+ * reader. #1520 folded it in: a new state now has to say whether it
+ * announces, rather than inheriting silence by not being named in a
+ * condition elsewhere in this file.
+ *
+ * SHARED with the page-level cold-start state (`ColdStart.tsx`), which is why
+ * this is exported: the cold states and the freshness states are ONE machine
+ * (`FeedStatus`) read by two surfaces, not two vocabularies that have to be
+ * kept saying the same words. `note` is typed per member — `'stale'` and
+ * `'alive'` are reachable only with a snapshot in hand, so their notes take
+ * `LiveFeed` and need no null branch, while the two cold-reachable members
+ * take the wider feed.
  */
-const HEALTH: Readonly<
-  Record<
-    FeedStatus,
-    { word: string; note: (feed: SnapshotFeed) => string; rendersHealthTiles: boolean }
-  >
-> = {
+type HealthFeed<S extends FeedStatus> = S extends 'stale' | 'alive' ? LiveFeed : SnapshotFeed;
+
+export const HEALTH: {
+  readonly [S in FeedStatus]: {
+    word: string;
+    note: (feed: HealthFeed<S>) => string;
+    rendersHealthTiles: boolean;
+    announce: boolean;
+  };
+} = {
   // Ranked ahead of every other state in `useSnapshot.ts`'s `deriveStatus` —
   // see that function's doc comment for why a contract mismatch must outrank
   // staleness rather than merely being folded into it.
@@ -62,6 +90,7 @@ const HEALTH: Readonly<
     word: 'MISMATCH',
     note: ({ error }) => error ?? 'served bundle disagrees with the server contract',
     rendersHealthTiles: false,
+    announce: true,
   },
   waiting: {
     word: 'WAITING',
@@ -70,33 +99,36 @@ const HEALTH: Readonly<
         ? WAITING_FOR_FIRST_SNAPSHOT
         : `no snapshot yet — last attempt failed: ${error}`,
     rendersHealthTiles: true,
+    // The cold-start page is the whole screen, so it is already unmissable;
+    // announcing it as a live region would re-read the page a reader has
+    // just landed on.
+    announce: false,
   },
   stale: {
     word: 'STALE',
     note: ({ snapshot, error }) =>
-      `stale — last update ${formatClockUtc(snapshot?.generated_at ?? '')}${
+      `stale — last update ${formatClockUtc(snapshot.generated_at)}${
         error === null ? '' : ` · ${error}`
       }`,
     rendersHealthTiles: true,
+    announce: true,
   },
   alive: {
     word: 'ALIVE',
     note: ({ lastSuccessAt }) => `polled ${formatClockUtc(lastSuccessAt ?? '')}`,
     rendersHealthTiles: true,
+    announce: false,
   },
 };
 
-function HealthBlock({ feed }: { feed: SnapshotFeed }) {
+function HealthBlock({ feed }: { feed: LiveFeed }) {
   const { status } = feed;
-  const { word, note } = HEALTH[status];
+  const { word, note, announce } = HEALTH[status];
   return (
     <div className="rail-block" data-field="health" data-health={status}>
       <span className="label">Bot</span>
       <span className={`rail-health rail-health-${status}`}>{word}</span>
-      <span
-        className="rail-note"
-        role={status === 'stale' || status === 'contract-mismatch' ? 'status' : undefined}
-      >
+      <span className="rail-note" role={announce ? 'status' : undefined}>
         {note(feed)}
       </span>
     </div>
@@ -126,8 +158,8 @@ function MismatchBlock({ label, dataField }: { label: string; dataField: string 
   );
 }
 
-function ModeBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
-  const mode = snapshot?.mode;
+function ModeBlock({ snapshot }: { snapshot: WireSnapshot }) {
+  const mode = snapshot.mode;
   const known = mode === 'paper' || mode === 'live';
   return (
     <div className="rail-block" data-field="mode">
@@ -141,10 +173,10 @@ function ModeBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
   );
 }
 
-function LiveTickBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
-  const tick = snapshot?.tick_status ?? null;
-  const enteredAt = snapshot?.pipeline.live_entered_at ?? null;
-  const traceId = tick?.trace_id ?? snapshot?.pipeline.live_trace_id ?? null;
+function LiveTickBlock({ snapshot }: { snapshot: WireSnapshot }) {
+  const tick = snapshot.tick_status ?? null;
+  const enteredAt = snapshot.pipeline.live_entered_at ?? null;
+  const traceId = tick?.trace_id ?? snapshot.pipeline.live_trace_id ?? null;
   return (
     <div className="rail-block" data-field="live-tick">
       <span className="label">Live tick</span>
@@ -176,9 +208,9 @@ function balanceFigures(balance: AlpacaBalanceWire) {
   ];
 }
 
-function ProvidersBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
-  const alpaca = snapshot?.providers.alpaca;
-  const polygon = snapshot?.providers.polygon;
+function ProvidersBlock({ snapshot }: { snapshot: WireSnapshot }) {
+  const alpaca = snapshot.providers.alpaca;
+  const polygon = snapshot.providers.polygon;
   const rows = [
     { name: 'Alpaca', tile: alpaca },
     { name: 'Polygon', tile: polygon },
@@ -267,8 +299,8 @@ function ProvidersBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
  * against a channel that has been dead the whole time. This tile answers "a
  * failure was observed recently", never "the channel is currently reachable".
  */
-function AlertDeliveryBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
-  const count = snapshot?.alert_delivery_failures_24h ?? 0;
+function AlertDeliveryBlock({ snapshot }: { snapshot: WireSnapshot }) {
+  const count = snapshot.alert_delivery_failures_24h;
   if (count === 0) return null;
   return (
     <div className="rail-block rail-alert-degraded" data-field="alert-delivery-failures">
@@ -298,8 +330,8 @@ function AlertDeliveryBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
  * just keeps the real number in the head (`$spent / $0.00`) instead of an
  * em dash, and `capReasonOf` below names $0 specifically in the empty state.
  */
-function capOf(snapshot: WireSnapshot | null): number | null | undefined {
-  const cap = snapshot?.llm_spend?.cap_usd;
+function capOf(snapshot: WireSnapshot): number | null | undefined {
+  const cap = snapshot.llm_spend?.cap_usd;
   if (cap === null) return null;
   return typeof cap === 'number' && Number.isFinite(cap) ? cap : undefined;
 }
@@ -323,8 +355,8 @@ function capOf(snapshot: WireSnapshot | null): number | null | undefined {
  * affirmative false claim about enforcement — collapsing those two with `??`
  * was exactly this ticket's own defect, one level up (review round 2).
  */
-function capArmedAtOf(snapshot: WireSnapshot | null): string | null | undefined {
-  return snapshot?.llm_spend?.cap_armed_at;
+function capArmedAtOf(snapshot: WireSnapshot): string | null | undefined {
+  return snapshot.llm_spend?.cap_armed_at;
 }
 
 type CapReason =
@@ -413,8 +445,8 @@ function zeroCapEmptyState(capUsd: number): string {
   return `LLM spend cap is ${formatUsd(capUsd)} — meter not drawable`;
 }
 
-function SpendBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
-  const allTime = snapshot?.llm_spend?.all_time;
+function SpendBlock({ snapshot }: { snapshot: WireSnapshot }) {
+  const allTime = snapshot.llm_spend?.all_time;
   const spent = allTime?.cost_usd;
   const cap = capOf(snapshot);
   // `CapMeter`'s `cap` prop is `number | null` — it has no concept of
@@ -429,7 +461,7 @@ function SpendBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
   const reason = capReasonOf(spendKnown, cap, armedAt);
   const unpriced = allTime?.unpriced_calls ?? 0;
   const unattributed = allTime?.per_debate.unattributed_calls ?? 0;
-  const windows = snapshot?.llm_spend;
+  const windows = snapshot.llm_spend;
   // A $0 cap with any recorded spend is already breached, but `CapMeter`
   // never divides by a cap `<= 0` (0/0 and x/0 are both unjustifiable), so
   // this is stated directly rather than left for a fabricated `over` flag.
@@ -474,7 +506,18 @@ function SpendBlock({ snapshot }: { snapshot: WireSnapshot | null }) {
   );
 }
 
-type DrawdownReason = 'absent' | 'unreadable' | 'drawn';
+/**
+ * `'absent'` — "no daily suite yet" — was removed by #1520 along with the
+ * only state that could produce it: it meant `metrics === null`, which this
+ * component saw only because `Rail` used to pass `snapshot?.metrics ?? null`
+ * through a nullable snapshot. `metrics` is required and non-nullable on the
+ * wire (`contracts/snapshot.ts`) and `hasWireShape` rejects a payload where
+ * it is not a non-null object, so with the snapshot itself now guaranteed
+ * (`LiveFeed`), "no suite has run" has no wire representation to read. A
+ * suite that ran and returned an unusable figure is `'unreadable'`, which is
+ * what #1264 was actually about.
+ */
+type DrawdownReason = 'unreadable' | 'drawn';
 
 /**
  * The finite number to hand `CapMeter`, or `undefined` when the field cannot
@@ -500,43 +543,22 @@ type DrawdownReason = 'absent' | 'unreadable' | 'drawn';
  * refuse to draw (`meter === null` on a non-finite fraction), rendering no
  * sentence at all once the caller assumes "readable" means "drawn".
  */
-function drawdownValueOf(metrics: MetricsSuiteWire | null): number | undefined {
-  if (metrics === null) return undefined;
+function drawdownValueOf(metrics: MetricsSuiteWire): number | undefined {
   const value = metrics.max_drawdown;
   if (typeof value !== 'number') return undefined;
   return Number.isFinite(value / DRAWDOWN_TOLERANCE) ? value : undefined;
 }
 
-/**
- * `metrics === null` and `drawdownValueOf(metrics) === undefined` are BOTH
- * "no value to draw", but they are different facts: the first means no
- * snapshot has ever polled successfully — through this server, `metrics` is
- * required and non-nullable on the wire type, and `useSnapshot.ts`'s
- * `hasWireShape` rejects any payload where it is not a non-null object, so a
- * live snapshot's `metrics` is never itself `null`; the second means a
- * snapshot exists and `max_drawdown` in it could not be read. Collapsing them
- * told the operator "nothing to show yet" for a state that, were
- * `max_drawdown` ever to actually go non-finite, would mean a run happened
- * and returned a broken figure (#1264).
- */
-function drawdownReasonOf(
-  metrics: MetricsSuiteWire | null,
-  value: number | undefined,
-): DrawdownReason {
-  if (metrics === null) return 'absent';
-  return value === undefined ? 'unreadable' : 'drawn';
-}
-
 const DRAWDOWN_EMPTY_STATE: Readonly<Record<Exclude<DrawdownReason, 'drawn'>, string>> = {
-  absent: 'no daily suite yet — meter not drawable',
-  // Says the figure could not be read, not that no suite ran — the opposite
-  // claim `absent` above makes for the genuinely-no-report case (#1264).
+  // Says the figure could not be read — never "no daily suite yet", which
+  // would be an affirmative claim that nothing has run, made about a suite
+  // that did (#1264).
   unreadable: 'daily suite drawdown figure could not be read — meter not drawable',
 };
 
-function DrawdownBlock({ metrics }: { metrics: MetricsSuiteWire | null }) {
+function DrawdownBlock({ metrics }: { metrics: MetricsSuiteWire }) {
   const value = drawdownValueOf(metrics);
-  const reason = drawdownReasonOf(metrics, value);
+  const reason: DrawdownReason = value === undefined ? 'unreadable' : 'drawn';
   return (
     <CapMeter
       dataField="drawdown"
@@ -576,8 +598,12 @@ function tabForKey(key: string, current: Tab): Tab | null {
 
 export function Rail(props: RailProps) {
   const { feed, tab, onTab } = props;
-  const { snapshot, stale, status, lastSuccessAt } = feed;
+  const { snapshot, status, lastSuccessAt } = feed;
   const mismatched = status === 'contract-mismatch';
+  // Read off `status`, not off a `stale` boolean carried beside it (#1520):
+  // inside the rail the two were the same reading, and the second one existed
+  // only to cover the cold-start window the page-level gate now owns.
+  const stale = status === 'stale';
   // The tile gate, not `mismatched`: this is the field #1520 must set on any
   // new `HEALTH` entry, so a state that also shouldn't trust `snapshot` gets
   // caught by the compiler rather than falling through to the healthy
@@ -661,13 +687,13 @@ export function Rail(props: RailProps) {
           <MismatchBlock label="LLM cap" dataField="llm-cap" />
         )}
         {renderHealthTiles ? (
-          <DrawdownBlock metrics={snapshot?.metrics ?? null} />
+          <DrawdownBlock metrics={snapshot.metrics} />
         ) : (
           <MismatchBlock label="Drawdown" dataField="drawdown" />
         )}
       </div>
       <div className="rail-foot mono muted" data-field="snapshot-clock">
-        <span>snapshot {snapshot === null ? UNKNOWN : formatClockUtc(snapshot.as_of)}</span>
+        <span>snapshot {formatClockUtc(snapshot.as_of)}</span>
         {/* Not a duplicate of HealthBlock's visible "polled" note: this one
             renders in every health state, so it still reaches a screen reader
             once the visible note has switched to STALE's "last update" line. */}

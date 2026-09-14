@@ -160,9 +160,9 @@ describe('useSnapshot polling', () => {
       // have moved: the hang pushed the injected clock a full horizon past the
       // last success, so the watchdog had genuinely marked it stale before the
       // recovery landed and cleared it (#709).
-      expect(result.current.stale).toBe(false);
+      expect(result.current.status).toBe('alive');
       // Keeps the line above honest. If the injected clock ever stopped being
-      // read — a renamed option, a default reinstated — `stale` would sit false
+      // read — a renamed option, a default reinstated — the status would sit alive
       // for want of elapsed time and the assertion would pass while testing
       // nothing. This fails in that case, because time only moves here when a
       // poll is issued.
@@ -250,9 +250,10 @@ describe('useSnapshot polling', () => {
     // `pollTimeoutMs` to its own formula would only fail if someone edited the
     // implementation on purpose (PR #607 review round 1).
     expect(result.current.error).toBe(`snapshot request timed out after ${INTERVAL_MS * 2}ms`);
-    // The clock-based watchdog is unchanged by any of this: a hang is stale
-    // for the same reason a rejection is.
-    await waitFor(() => expect(result.current.stale).toBe(true), { timeout: 2_000 });
+    // Still WAITING, never STALE: nothing has ever landed, so there are no
+    // numbers to call old — the honest reading, and the one the page-level
+    // cold start renders (#1520). The timeout above is what names the failure.
+    expect(result.current.status).toBe('waiting');
   });
 });
 
@@ -327,7 +328,6 @@ describe('useSnapshot — contract mismatch (#1316)', () => {
     // Never silently treated as healthy: no snapshot is admitted from a
     // payload this client could not validate the shape of.
     expect(result.current.snapshot).toBeNull();
-    expect(result.current.stale).toBe(false);
   });
 
   it('reports contract-mismatch when contract_version is present but does not equal this client’s constant (new-server/old-client)', async () => {

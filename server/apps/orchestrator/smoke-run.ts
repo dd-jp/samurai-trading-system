@@ -6886,6 +6886,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // `ingest-fills.test.ts`'s "#1465" suite, which drives the alert end to
       // end against a scripted broker.
       nonSterlingFeeAlerts: { postNonSterlingFeeAlert: async () => {} },
+      unattributedFlattenFillAlerts: { postUnattributedFlattenFillAlert: async () => {} },
     } satisfies Required<AlertChannels>;
 
     const orchestrator = await startFromEnvironment({

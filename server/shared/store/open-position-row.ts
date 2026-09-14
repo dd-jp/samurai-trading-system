@@ -53,6 +53,8 @@ export interface OpenPositionRow {
   quote_mid: number | null;
   quote_observed_at: string | null;
   modelled_cost_breakdown_json: string | null;
+  /** #1301, migration 0061 — see `OpenPosition.modelled_protective_exit_cost_breakdown`. */
+  modelled_protective_exit_cost_breakdown_json: string | null;
   /** #1186, migration 0056 — set only when `order_state = 'abandoned'`. */
   abandon_reason: string | null;
 }
@@ -108,6 +110,9 @@ export function parseModelledCostBreakdownColumn(raw: string | null): ModelledCo
 
 export function fromOpenPositionRow(row: OpenPositionRow): OpenPosition {
   const modelledCostBreakdown = parseModelledCostBreakdownColumn(row.modelled_cost_breakdown_json);
+  const modelledProtectiveExitCostBreakdown = parseModelledCostBreakdownColumn(
+    row.modelled_protective_exit_cost_breakdown_json,
+  );
 
   return {
     idempotency_key: row.idempotency_key,
@@ -137,6 +142,9 @@ export function fromOpenPositionRow(row: OpenPositionRow): OpenPosition {
       ? {}
       : { quote_observed_at: fromStoredTimestamp(row.quote_observed_at) }),
     ...(modelledCostBreakdown === null ? {} : { modelled_cost_breakdown: modelledCostBreakdown }),
+    ...(modelledProtectiveExitCostBreakdown === null
+      ? {}
+      : { modelled_protective_exit_cost_breakdown: modelledProtectiveExitCostBreakdown }),
     ...(row.abandon_reason === null ? {} : { abandon_reason: row.abandon_reason }),
   };
 }

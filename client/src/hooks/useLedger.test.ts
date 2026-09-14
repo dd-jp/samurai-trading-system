@@ -18,8 +18,8 @@ function snapshotWith(overrides: Partial<WireSnapshot> = {}): WireSnapshot {
 }
 
 describe('useLedger', () => {
-  it('starts empty before any snapshot arrives', () => {
-    const { result } = renderHook(() => useLedger(null));
+  it('starts empty when the first snapshot has settled nothing', () => {
+    const { result } = renderHook(() => useLedger(snapshotWith()));
     expect(result.current).toEqual([]);
   });
 
@@ -32,7 +32,7 @@ describe('useLedger', () => {
   it('appends a newly-settled lane on a later poll, never stamping the same trace twice', () => {
     const settled = doneThrough('ETH-USD', 'trace-eth', 'execution', { outcome: 'go' });
     const { result, rerender } = renderHook(
-      ({ snapshot }: { snapshot: WireSnapshot | null }) => useLedger(snapshot),
+      ({ snapshot }: { snapshot: WireSnapshot }) => useLedger(snapshot),
       { initialProps: { snapshot: snapshotWith({ pipeline: makeView([settled]) }) } },
     );
     expect(result.current.map((e) => e.trace_id)).toEqual(['trace-eth']);
@@ -55,15 +55,5 @@ describe('useLedger', () => {
       }),
     });
     expect(result.current.map((e) => e.trace_id)).toEqual(['trace-btc', 'trace-eth']);
-  });
-
-  it('does not fold a null snapshot — nothing to accumulate yet', () => {
-    const { result, rerender } = renderHook(
-      ({ snapshot }: { snapshot: WireSnapshot | null }) => useLedger(snapshot),
-      { initialProps: { snapshot: null as WireSnapshot | null } },
-    );
-    expect(result.current).toEqual([]);
-    rerender({ snapshot: null });
-    expect(result.current).toEqual([]);
   });
 });

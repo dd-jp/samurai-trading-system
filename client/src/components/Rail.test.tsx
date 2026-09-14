@@ -7,7 +7,7 @@
  */
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import type { SnapshotFeed } from '../hooks/useSnapshot.ts';
+import type { LiveFeed } from '../hooks/useSnapshot.ts';
 import { makeMetrics, makeSnapshot } from '../test-fixtures.ts';
 import { Rail } from './Rail.tsx';
 
@@ -19,10 +19,14 @@ const GENERATED_AT = '2026-08-07T12:00:00.000Z';
  */
 const SNAPSHOT_AS_OF = '2026-08-07T11:59:40.000Z';
 
-function makeFeed(overrides: Partial<SnapshotFeed> = {}): SnapshotFeed {
+/**
+ * A `LiveFeed`, not a `SnapshotFeed`: since #1520 the rail is only ever
+ * rendered once a snapshot has landed — the cold start is `App.tsx`'s
+ * page-level state — so there is no `snapshot: null` case to construct here.
+ */
+function makeFeed(overrides: Partial<LiveFeed> = {}): LiveFeed {
   return {
     snapshot: makeSnapshot({ generated_at: GENERATED_AT, as_of: SNAPSHOT_AS_OF }),
-    stale: false,
     lastSuccessAt: '2026-08-07T12:00:05.000Z',
     error: null,
     status: 'alive',
@@ -30,7 +34,7 @@ function makeFeed(overrides: Partial<SnapshotFeed> = {}): SnapshotFeed {
   };
 }
 
-function renderRail(feed: SnapshotFeed) {
+function renderRail(feed: LiveFeed) {
   return render(<Rail feed={feed} tab="glance" onTab={() => {}} />);
 }
 
@@ -66,9 +70,7 @@ describe('Rail — poll clock', () => {
   });
 
   it('dates a STALE rail by the server generated_at, not by the client poll clock', () => {
-    renderRail(
-      makeFeed({ stale: true, status: 'stale', lastSuccessAt: '2026-08-07T12:00:35.000Z' }),
-    );
+    renderRail(makeFeed({ status: 'stale', lastSuccessAt: '2026-08-07T12:00:35.000Z' }));
 
     expect(screen.getByText(/stale — last update 12:00:00Z/)).toBeTruthy();
     expect(screen.queryByText(/last update 12:00:35Z/)).toBeNull();
@@ -87,18 +89,16 @@ describe('Rail — poll clock', () => {
  * which is the exact defect #1316 is named for).
  */
 describe('Rail — contract mismatch (#1316)', () => {
-  function mismatchedFeed(overrides: Partial<SnapshotFeed> = {}): SnapshotFeed {
+  function mismatchedFeed(overrides: Partial<LiveFeed> = {}): LiveFeed {
     return makeFeed({
       status: 'contract-mismatch',
-      stale: false,
-      snapshot: null,
       error:
         "served bundle disagrees with the server's wire contract (server sent no contract_version; this client expects abc123)",
       ...overrides,
     });
   }
 
-  it('renders the MISMATCH word, not ALIVE, STALE or WAITING', () => {
+  it('renders the MISMATCH word, not ALIVE, STALE or WAITING, on top of the last-known snapshot', () => {
     renderRail(mismatchedFeed());
 
     expect(screen.getByText('MISMATCH')).toBeTruthy();
@@ -172,16 +172,17 @@ describe('Rail — contract mismatch (#1316)', () => {
     expect(aside?.getAttribute('data-stale')).toBe('false');
   });
 
-  it('outranks staleness: a poll that is BOTH mismatched and watchdog-stale still reads MISMATCH, never STALE', () => {
-    // `useSnapshot.ts`'s `deriveStatus` never actually produces this
-    // combination (mismatch always implies `stale: false`), but `Rail.tsx`
-    // must not derive its own, second opinion from the raw booleans either —
-    // it must read `status` and trust it. This pins that Rail has no local
-    // fallback path that would disagree.
-    renderRail(mismatchedFeed({ stale: true }));
+  it('outranks staleness: the rail reads the ranked status and never re-derives its own opinion', () => {
+    // `deriveStatus` ranks a mismatch above staleness, and since #1520 that
+    // ranking is the ONLY thing the rail reads — the `stale` boolean it used
+    // to carry alongside `status` is gone, so there is no second input left
+    // that could disagree with the word on screen. This pins the outcome that
+    // ranking exists to produce.
+    renderRail(mismatchedFeed());
 
     expect(screen.getByText('MISMATCH')).toBeTruthy();
     expect(screen.queryByText('STALE')).toBeNull();
+    expect(document.querySelector('aside')?.getAttribute('data-stale')).toBe('false');
   });
 });
 
@@ -212,17 +213,12 @@ describe('Rail — drawdown meter', () => {
     expect(screen.queryByText(/over tolerance/)).toBeNull();
   });
 
-  it('pins the empty state shown before any daily suite has run', () => {
-    renderRail(makeFeed({ snapshot: null }));
-
-    expect(screen.getByText('no daily suite yet — meter not drawable')).toBeTruthy();
-    expect(screen.queryByText(/over tolerance/)).toBeNull();
-  });
-
   /**
    * #1264: `metrics` present (a suite DID run) but `max_drawdown` unreadable
-   * must not read as "no daily suite yet" — that sentence is reserved for
-   * `metrics === null`, asserted by the pinned test above.
+   * must not read as "no daily suite yet". #1520 removed that sentence
+   * altogether along with the only state that could reach it — a null
+   * SNAPSHOT, which the page-level cold start now owns — so every case below
+   * is a suite that ran and reported a figure this client cannot use.
    *
    * `drawdownValueOf` has two independent gates, and the routes below split
    * across both: a `typeof value !== 'number'` check (catches the wrong-typed
@@ -244,7 +240,6 @@ describe('Rail — drawdown meter', () => {
     expect(
       screen.getByText('daily suite drawdown figure could not be read — meter not drawable'),
     ).toBeTruthy();
-    expect(screen.queryByText('no daily suite yet — meter not drawable')).toBeNull();
   });
 
   it('says the drawdown figure could not be read when max_drawdown is +Infinity', () => {
@@ -259,7 +254,6 @@ describe('Rail — drawdown meter', () => {
     expect(
       screen.getByText('daily suite drawdown figure could not be read — meter not drawable'),
     ).toBeTruthy();
-    expect(screen.queryByText('no daily suite yet — meter not drawable')).toBeNull();
   });
 
   it('says the drawdown figure could not be read when max_drawdown is -Infinity', () => {
@@ -274,7 +268,6 @@ describe('Rail — drawdown meter', () => {
     expect(
       screen.getByText('daily suite drawdown figure could not be read — meter not drawable'),
     ).toBeTruthy();
-    expect(screen.queryByText('no daily suite yet — meter not drawable')).toBeNull();
   });
 
   it('says the drawdown figure could not be read when max_drawdown is wrong-typed on the wire', () => {
@@ -289,7 +282,6 @@ describe('Rail — drawdown meter', () => {
     expect(
       screen.getByText('daily suite drawdown figure could not be read — meter not drawable'),
     ).toBeTruthy();
-    expect(screen.queryByText('no daily suite yet — meter not drawable')).toBeNull();
   });
 
   /**
@@ -330,7 +322,6 @@ describe('Rail — drawdown meter', () => {
     expect(
       screen.getByText('daily suite drawdown figure could not be read — meter not drawable'),
     ).toBeTruthy();
-    expect(screen.queryByText('no daily suite yet — meter not drawable')).toBeNull();
   });
 
   /**
@@ -349,6 +340,5 @@ describe('Rail — drawdown meter', () => {
     expect(
       screen.getByText('daily suite drawdown figure could not be read — meter not drawable'),
     ).toBeTruthy();
-    expect(screen.queryByText('no daily suite yet — meter not drawable')).toBeNull();
   });
 });

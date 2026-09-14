@@ -15,7 +15,7 @@ import {
 import { ReviewTab } from './ReviewTab.tsx';
 
 function renderReview(
-  snapshot: ReturnType<typeof makeSnapshot> | null,
+  snapshot: ReturnType<typeof makeSnapshot>,
   selectedKey: string | null = null,
 ) {
   let key = selectedKey;
@@ -141,11 +141,6 @@ describe('summary cards', () => {
     expect(screen.getByText(/has not measured an outside benchmark yet/)).toBeTruthy();
     expect(screen.getByText(/No analyst weights on this snapshot/)).toBeTruthy();
   });
-
-  it('names the missing suite before the first snapshot', () => {
-    renderReview(null);
-    expect(screen.getByText(/No metrics on this snapshot/)).toBeTruthy();
-  });
 });
 
 /**
@@ -186,16 +181,21 @@ describe('profit factor tile', () => {
     expect(within(metrics).getByText('could not be read')).toBeTruthy();
   });
 
-  it('renders "no losing trades" differently from a wholly absent metrics suite', () => {
+  // The card's "no metrics on this snapshot" empty state went with #1520: it
+  // was reachable only through a null SNAPSHOT (`metrics` is required and
+  // non-nullable on the wire), which is now the page-level cold start. What
+  // must stay distinct is the pair below — a flawless window against an
+  // unreadable figure — since both are suites that DID run.
+  it('renders "no losing trades" differently from an unreadable profit factor', () => {
     const { unmount } = renderReview(
       makeSnapshot({ metrics: makeMetrics({ profit_factor: { kind: 'no_losses' } }) }),
     );
-    expect(screen.queryByText(/No metrics on this snapshot/)).toBeNull();
     expect(screen.getByText('no losing trades')).toBeTruthy();
+    expect(screen.queryByText('could not be read')).toBeNull();
     unmount();
 
-    renderReview(null);
-    expect(screen.getByText(/No metrics on this snapshot/)).toBeTruthy();
+    renderReview(makeSnapshot({ metrics: makeMetrics({ profit_factor: { kind: 'unreadable' } }) }));
+    expect(screen.getByText('could not be read')).toBeTruthy();
     expect(screen.queryByText('no losing trades')).toBeNull();
   });
 

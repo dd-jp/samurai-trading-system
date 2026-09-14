@@ -3,6 +3,10 @@
  * `observed_at` AND same `equity`), refuses non-finite equity, skips when
  * the balance is absent, and caps the series at `MAX_EQUITY_SAMPLES` by
  * dropping from the front. Previously reachable only by rendering `<App/>`.
+ *
+ * Takes a non-null `WireSnapshot` (#1520): it runs below the root's
+ * cold-start gate, so "no snapshot yet" is not a state it can observe. An
+ * absent BALANCE still is — that is a field on a snapshot that did arrive.
  */
 import { useEffect, useState } from 'react';
 import type { WireSnapshot } from './useSnapshot.ts';
@@ -14,11 +18,10 @@ export interface EquitySample {
   equity: number;
 }
 
-export function useEquitySamples(snapshot: WireSnapshot | null): readonly EquitySample[] {
+export function useEquitySamples(snapshot: WireSnapshot): readonly EquitySample[] {
   const [samples, setSamples] = useState<readonly EquitySample[]>([]);
 
   useEffect(() => {
-    if (snapshot === null) return;
     const alpaca = snapshot.providers.alpaca;
     const balance = alpaca.balance;
     if (balance === null || !Number.isFinite(balance.equity)) return;

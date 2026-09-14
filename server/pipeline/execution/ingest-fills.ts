@@ -73,8 +73,9 @@ import { closedTrade } from './closed-trade.js';
 import { cumulativeIncrement } from './cumulative-feed.js';
 import {
   chargeTopUpTo,
-  type ModelledEntryCost,
-  modelledEntryCostFor,
+  type ModelledLegCost,
+  type ModelledLotCosts,
+  modelledLotCostsFor,
   prorateCostBreakdown,
 } from './fill-cost.js';
 import { splitFlattenFills } from './flatten-attribution.js';
@@ -124,6 +125,27 @@ export const FILLED_ZERO_SIZE_CLEARED =
  */
 export const FEE_CURRENCY_NOT_BOOK_CURRENCY =
   'broker reported a fill fee in a currency that is not the book currency' as const;
+
+/**
+ * #1506. A flatten's split booked against a lot that had already closed — the
+ * venue sold quantity the store's realized record does not contain, so the
+ * account can be holding a REVERSE position no `getOpenPositions()` row
+ * explains. See `persistUnattributedSplits` for what is and is not repaired.
+ */
+export const UNATTRIBUTED_FLATTEN_FILL =
+  'flatten fill booked against an already-closed lot — its closed trade understates the sale' as const;
+
+/** The #1506 persist itself failing: the fill is NOT booked, and will be retried next poll. */
+export const UNATTRIBUTED_FLATTEN_FILL_PERSIST_FAILED =
+  'failed to book a flatten fill against an already-closed lot' as const;
+
+/**
+ * A flatten split carries the FLATTEN's own prorated `cost_breakdown`
+ * (`splitFlattenFills`) and is `leg: 'exit'`, the one leg `modelledLegCostFor`
+ * has no submit-time estimate for — so there is nothing for `toFill` to read
+ * off the (absent) `OpenPosition` on the #1506 path.
+ */
+const NO_MODELLED_LOT_COSTS: ModelledLotCosts = { entry: null, protectiveExit: null };
 
 export async function ingestFills(input: FillIngestInput): Promise<void> {
   const { clock, broker, store } = input;
@@ -488,7 +510,14 @@ async function redistributeFlattenFills(
     // function's own doc.
     const targetedByThisFlatten = new Set<string>();
     try {
-      await redistributeOneFlatten(input, byLot, clientOrderId, targetedByThisFlatten);
+      await redistributeOneFlatten(
+        input,
+        byLot,
+        clientOrderId,
+        targetedByThisFlatten,
+        positionKeys,
+        failures,
+      );
       // EMPTY, not merely absent-from-the-map, is `redistributeOneFlatten`'s
       // ordinary return for a `clientOrderId` that is not a real flatten at
       // all — `getFlattenAttribution` returning `null` (its own doc: "not a
@@ -536,6 +565,14 @@ async function redistributeOneFlatten(
    * see the caller's comment.
    */
   namedLots: Set<string>,
+  /**
+   * The caller's `positions` snapshot, by key. A named lot missing from it is
+   * one `ingestFills`' per-position loop will never read a split for — see
+   * `persistUnattributedSplits`, which is the only thing this is for.
+   */
+  positionKeys: ReadonlySet<string>,
+  /** The caller's accumulator, for the one failure this function does not throw on. */
+  failures: ContainedFailure[],
 ): Promise<void> {
   const { store } = input;
   const attribution = await store.getFlattenAttribution(clientOrderId);
@@ -627,10 +664,12 @@ async function redistributeOneFlatten(
       : new Map(journalledHeld.map((lot) => [lot.idempotency_key, lot.held]));
 
   const split = splitFlattenFills({ clientOrderId, rawFills, lotKeys, totalShare, attribution });
+  const unattributed: [string, readonly NormalizedFill[]][] = [];
   for (const [lotKey, splitFills] of split.splits) {
     const bucket = byLot.get(lotKey);
     if (bucket === undefined) byLot.set(lotKey, [...splitFills]);
     else bucket.push(...splitFills);
+    if (!positionKeys.has(lotKey)) unattributed.push([lotKey, splitFills]);
   }
   for (const { attributed, leftover } of split.outcomes) {
     // `leftover > 0` here means the flatten filled more than the named lots
@@ -748,6 +787,15 @@ async function redistributeOneFlatten(
     }
   }
 
+  // AFTER the over-fill loop, never inside the split loop: #527's
+  // `alreadyWarned` check tests `hasFill` on the very derived ids this writes,
+  // and reads a hit as "an earlier poll already warned". Booking first would
+  // make this poll's own write suppress the first-ever warning for a raw fill
+  // that both over-fills and names an already-closed lot.
+  for (const [lotKey, splitFills] of unattributed) {
+    await persistUnattributedSplits(input, clientOrderId, lotKey, splitFills, failures);
+  }
+
   // #549: the durable "residual observed, protection not confirmed" marker,
   // written the moment the residual is FIRST knowable — this split's own
   // arithmetic: any named lot whose journalled share was not fully consumed
@@ -782,17 +830,157 @@ async function redistributeOneFlatten(
     },
   );
 
-  // Consumed LAST, not before the split. The split loop above cannot throw —
-  // the split itself is arithmetic over two Maps, and #527's over-fill
-  // warning (plus its `hasFill` dedup check, #527) is the loop's only
-  // I/O, deliberately wrapped so neither can escape (see their own comments)
-  // — but the store reads before it can, and a
+  // Consumed LAST, not before the split. Nothing between the split and here
+  // can throw — the split itself is arithmetic over two Maps, and every piece
+  // of I/O after it (#527's over-fill warning and its `hasFill` check, #1506's
+  // persist, #549's marker) is deliberately wrapped so none can escape (see
+  // their own comments) — but the store reads before it can, and a
   // bucket deleted ahead of a throw would take this poll's copy of the raw
   // fill with it. Deleting only once the splits are in `byLot` is what makes
   // this function all-or-nothing. No lot key can collide with
   // `clientOrderId`: a flatten's key is fresh per `executeExit`, so it is
   // never one of the lots it names.
   byLot.delete(clientOrderId);
+}
+
+/**
+ * #1506: book a split whose named lot is already gone from this poll's
+ * `positions` snapshot, because nothing else ever will.
+ *
+ * `ingestFills`' per-position loop reads `byLot` only through that snapshot,
+ * and a named lot cannot reappear in a later one: `lot_idempotency_keys` is
+ * fixed at the flatten's write-ahead, so a named key absent from the snapshot
+ * is a key that has reached a TERMINAL state, not one that has yet to open.
+ * The "the feed re-offers it next poll" argument the
+ * `getFlattenAttribution` early return above rests on therefore does not
+ * carry here — the re-offer would land in the same Map nothing reads, poll
+ * after poll, while `markFlattenFillsSwept` retires the journal row. That is
+ * the silent drop this exists to close, and the quantity it drops is real:
+ * the venue sold it against a lot the store believes flat.
+ *
+ * `hasFill` on the split's OWN derived id is the whole dedup, and it has to
+ * be: this condition fires on EVERY poll after any ordinary flatten, because
+ * `fetchNewFills` is inclusive of `since` and `getFlattenAttribution` keeps
+ * resolving a swept row, so the same splits recompute against the same
+ * now-closed lots forever. Persisted once, every later recomputation is a row
+ * `hasFill` already knows and this returns in silence — the same
+ * dedup-by-durable-record the #527 over-fill warning above takes.
+ *
+ * Fills-only `applyLotAdvance`: no `position_update` and no `closed_trade`,
+ * both of which would be wrong against a terminal row (the store refuses a
+ * second `closed_trade` for a lot outright, failing the whole advance). The
+ * realized PnL already written for that lot therefore stays SHORT of this
+ * sale — nothing in this port can correct it, which is why the alert pages
+ * rather than merely recording.
+ *
+ * Never throws — the splits are already pushed and `byLot.delete` still has to
+ * run — but a failed write is NOT swallowed: it is pushed onto the poll's
+ * `failures` under the lot's own key, which is what holds the sweep gate.
+ * `markFlattenFillsSwept` may only run once the fill is durably applied
+ * (`SharedStore.markFlattenFillsSwept`'s doc), and the "the next poll
+ * recomputes the split" recovery does NOT carry here: `since` is the earliest
+ * `opened_at` over the OPEN lots, this lot is closed by construction, and once
+ * no surviving open lot predates the flatten fill `collectFill`'s strict
+ * `filledAt < since` drops it inside the adapter with no recovery path (see
+ * `ingestFills`' own comment on that floor). Retiring the journal row on a
+ * failed write would therefore lose the fill permanently — exactly what the
+ * gate exists to prevent — so the row stays unswept and `getUnresolvedFlattens`
+ * keeps finding it.
+ */
+async function persistUnattributedSplits(
+  input: FillIngestInput,
+  clientOrderId: string,
+  lotKey: string,
+  splitFills: readonly NormalizedFill[],
+  failures: ContainedFailure[],
+): Promise<void> {
+  const { store } = input;
+  // #842's no-lookahead filter, the one `advanceLot` applies to every fill it
+  // books. A split dated after the poll's clock is left for a later poll
+  // rather than booked early, which only the backtest clock can produce.
+  const now = input.clock.now();
+  for (const fill of splitFills) {
+    if (fill.timestamp.getTime() > now.getTime()) continue;
+    try {
+      if (await store.hasFill({ idempotency_key: lotKey, broker_fill_id: fill.broker_fill_id })) {
+        continue;
+      }
+      // `NO_MODELLED_LOT_COSTS` is not a degradation: a split is `leg: 'exit'`
+      // (flatten-attribution.ts), the one leg `modelledLegCostFor` has no
+      // submit-time estimate for, and its `cost_breakdown` is the FLATTEN's
+      // own capture, already prorated onto the fill by `splitFlattenFills`.
+      await store.applyLotAdvance({
+        idempotency_key: lotKey,
+        fills: [toFill(fill, lotKey, NO_MODELLED_LOT_COSTS)],
+      });
+    } catch (error) {
+      logCaughtFailure(
+        input.logger,
+        {
+          trace_id: input.trace_id,
+          stage: 'execution',
+          event: 'unattributed_flatten_fill_persist_failed',
+          level: 'error',
+          message: UNATTRIBUTED_FLATTEN_FILL_PERSIST_FAILED,
+        },
+        error,
+        {
+          flatten_client_order_id: clientOrderId,
+          idempotency_key: lotKey,
+          broker_fill_id: fill.broker_fill_id,
+          qty: fill.qty,
+        },
+      );
+      // Scoped 'lot-advance' under the LOT's key, which is precisely what the
+      // caller's `failedLotKeys` gate reads to hold `markFlattenFillsSwept`
+      // back — see this function's doc for why retiring the row here would
+      // lose the fill rather than defer it.
+      failures.push({ scope: 'lot-advance', key: lotKey, instrument: null, error });
+      continue;
+    }
+
+    safeLog(input.logger, {
+      trace_id: input.trace_id,
+      stage: 'execution',
+      event: 'unattributed_flatten_fill',
+      level: 'error',
+      message: UNATTRIBUTED_FLATTEN_FILL,
+      payload: {
+        flatten_client_order_id: clientOrderId,
+        idempotency_key: lotKey,
+        broker_fill_id: fill.broker_fill_id,
+        qty: fill.qty,
+      },
+    });
+
+    if (input.unattributedFlattenFillAlerts === undefined) continue;
+    try {
+      await input.unattributedFlattenFillAlerts.postUnattributedFlattenFillAlert({
+        trace_id: input.trace_id,
+        flatten_idempotency_key: clientOrderId,
+        lot_idempotency_key: lotKey,
+        broker_fill_id: fill.broker_fill_id,
+        qty: fill.qty,
+        observed_at: input.clock.now(),
+      });
+    } catch {
+      // The channel's own error is read and discarded, never logged — a
+      // Telegram transport failure quotes the request it failed on and that
+      // URL can carry a bot token (#573, `escalateAgedUnpricedFills`'
+      // precedent). The durable record is the persisted fill row and the
+      // `error` line above; this only lost the audible copy.
+      safeLog(input.logger, {
+        trace_id: input.trace_id,
+        stage: 'execution',
+        event: 'unattributed_flatten_fill_alert_send_failed',
+        level: 'warn',
+        message:
+          'postUnattributedFlattenFillAlert delivery failed — see the ' +
+          'unattributed_flatten_fill entry above for the fill this concerns',
+        payload: { idempotency_key: lotKey, broker_fill_id: fill.broker_fill_id },
+      });
+    }
+  }
 }
 
 /**
@@ -851,10 +1039,10 @@ async function advanceLot(
    * fills the feed re-offered.
    */
   const cumulativeReoffers: NormalizedFill[] = [];
-  // #1001: read once per call, reused by every `toFill`/`cumulativeTopUp`
+  // #1001/#1301: read once per call, reused by every `toFill`/`cumulativeTopUp`
   // call below rather than re-derived per fill — it is a pure function of
   // `position`, which does not change within this call.
-  const modelledEntryCost = modelledEntryCostFor(position);
+  const modelledLotCosts = modelledLotCostsFor(position);
   let ingestedEntry = false;
   let ingestedExit = false;
   for (const fill of lotFills) {
@@ -867,7 +1055,7 @@ async function advanceLot(
       if (fill.qty_is_cumulative === true) cumulativeReoffers.push(fill);
       continue;
     }
-    newFills.push(toFill(fill, position.idempotency_key, modelledEntryCost));
+    newFills.push(toFill(fill, position.idempotency_key, modelledLotCosts));
     // Inside the loop, BELOW the dedup gate on purpose: `fetchNewFills` is
     // inclusive of `since`, so every adapter re-offers the same fill
     // forever, and a check above the gate would re-announce this
@@ -1142,10 +1330,12 @@ async function cumulativeTopUp(
       fee: increment.fee,
     },
     position.idempotency_key,
-    // #1001: same fallback `advanceLot`'s own `toFill` call uses — a
-    // cumulative top-up is still an `'entry'`-leg fill (Alpaca's only
-    // cumulative feed), just a later increment of it.
-    modelledEntryCostFor(position),
+    // #1001: same fallbacks `advanceLot`'s own `toFill` call uses. Both of a
+    // lot's estimates are passed rather than the entry's alone because the
+    // parameter is the pair, not because this path reaches the protective one:
+    // `qty_is_cumulative` is Alpaca-only and Alpaca reports it on the entry
+    // leg, so the protective member is unexercised here.
+    modelledLotCostsFor(position),
   );
 }
 
@@ -1159,14 +1349,16 @@ async function cumulativeTopUp(
  * "this is a running total" flag would be a lie that every later rebuild of
  * `filled_size` would have to re-litigate.
  *
- * `modelledEntryCost` (#1001) is the FALLBACK for a real-broker `'entry'`
- * fill, which arrives with `fill.cost_breakdown === undefined` — the venue
- * reports no breakdown of its own. Applied ONLY to `'entry'` legs, prorated
- * by this fill's share of `requestedSize`: the Simulated adapter never
- * modelled `'stop'`/`'target'` fills either (`simulated-adapter.ts`'s
- * `submitBracket` prices only the entry leg), so there is no precedent —
- * modelled or otherwise — to fall back to for those, and none is invented
- * here.
+ * `modelledLotCosts` (#1001, #1301) is the FALLBACK for a real-broker fill,
+ * which arrives with `fill.cost_breakdown === undefined` — the venue reports
+ * no breakdown of its own. `modelledLegCostFor` picks which of the lot's two
+ * submit-time estimates this fill's leg is charged from (`'entry'` from the
+ * entry's, `'stop'`/`'target'` from the protective exit's, `'exit'` from
+ * neither — a flatten carries the flatten submission's own), and it is
+ * prorated by this fill's share of `requestedSize`. Both estimates come from
+ * ONE `captureSubmitSnapshot` pass off ONE `MarketState` (execute.ts), which
+ * is what keeps this a single derivation per priced event (#1121 AC6) with
+ * nothing invented at ingest.
  *
  * ## #1121: the fallback's `commission` is CHARGED, not just recorded
  *
@@ -1176,10 +1368,9 @@ async function cumulativeTopUp(
  * FL's live-vs-modelled divergence check (GAP-F). The control arm's
  * `SimulatedBrokerAdapter` prices its own fills through the same `CostModel`
  * and stamps the result straight onto `fee` (`simulated-adapter.ts`); the
- * live arm must match it. On a live ENTRY leg, and on a live FLATTEN exit,
- * the two arms' `realized_pnl_net` are only on the same cost basis if the
- * live arm charges the modelled commission — see "What this still does not
- * cover" below for the leg where they still are not — which is exactly the
+ * live arm must match it. On every leg — entry, protective exit (#1301) and
+ * flatten — the two arms' `realized_pnl_net` are only on the same cost basis
+ * if the live arm charges the modelled commission, which is exactly the
  * comparison `docs/research/12-edge-hypothesis-critique.md` D4 and #636 rule
  * out: a matched control has to be matched on cost too, not only on window.
  *
@@ -1256,30 +1447,39 @@ async function cumulativeTopUp(
  *
  * ## What this still does not cover
  *
- * A live `'stop'`/`'target'` fill gets no MODELLED charge: the fallback below
- * is gated on `fill.leg === 'entry'`, and `captureSubmitSnapshot` prices only
- * the entry and the flatten, so there is no modelled estimate for a protective
- * leg to spend (inventing one would be a SECOND derivation, which is what AC6
- * forbids). The control arm has no bracket-exit path at all
- * (`simulated-adapter.ts` emits `leg: 'entry'` only), so every control close is
- * a flatten and pays a modelled commission on both legs.
+ * #1301 closed the protective-leg gap this section used to describe: a live
+ * `'stop'`/`'target'` fill is now charged the modelled commission from
+ * `modelled_protective_exit_cost_breakdown` (migration 0061), priced in the
+ * SAME `captureSubmitSnapshot` pass as the entry's. Both arms are therefore on
+ * one cost basis on every leg either can close on, and the under-charge — a
+ * whole exit commission under an adapter reporting `fee: 0` — is gone rather
+ * than merely bounded. What remains on that leg under a real venue is a
+ * PRICE-BASIS difference — the venue charges at the fill price, the model
+ * estimated at a mid — and it is WIDER here than the flatten leg's, not the
+ * same one. A flatten's estimate is captured at the flatten's own submission,
+ * moments before its fill; a protective leg's is captured at the ENTRY's
+ * submission, a whole holding period and a bracket width earlier. The
+ * magnitude is that bracket width times the commission rate
+ * (`SAXO_COMMISSION_RATE`, 8 bp/side), it has no fixed sign, and it roughly
+ * cancels across a
+ * population of stops (mid above the fill) and targets (mid below it). It is a
+ * basis error, not a missing charge.
  *
- * What the live arm pays on that leg is therefore whatever its ADAPTER
- * reports, and `chargeTopUpTo` passes it straight through with nothing to top
- * up to. That is ADAPTER-DEPENDENT, and the size of the residual with it:
- * `alpaca-order-normalization.ts` reports `fee: 0`, so the leg is charged
- * NOTHING and the lot is under-charged by a whole exit commission — the case
- * that holds for the soak, and observed on 1 of the 3 live closes in the soak
- * DB (not re-verified here; the soak store is not in the repo).
- * `saxo-adapter.ts` reports `price * qty * SAXO_COMMISSION_RATE` on EVERY
- * leg, so under Saxo the leg does pay a commission and the residual is
- * no longer a commission at all — it collapses to a PRICE-BASIS difference,
- * venue at the fill price against the control's modelled cost at submit-time
- * mid, which is the same quantity `production.ts` names on the flatten leg
- * and has no fixed sign. Only the Alpaca reading is the live-arm-favouring
- * whole commission; do not carry that magnitude across the venue switch.
- * Removing the residual outright needs a modelled exit cost for bracket legs;
- * that is #1301's, not this ticket's.
+ * WHAT #1301 DID NOT CLOSE, and could not. The same ticket's round-2 finding
+ * is a SELECTION effect, not an under-charge: `modelledCostCharged`
+ * (closed-trade.ts) needs one successful submit-time capture per covered leg,
+ * and a protective exit's legs are all priced by the ENTRY's single capture
+ * while a flatten exit additionally needs the flatten's own. So a flatten exit
+ * still needs two captures where a protective exit needs one, its drop rate
+ * under `SqliteArmComparisonSource`'s `modelled_cost_charged = 0` filter is
+ * still weakly higher, and the surviving live population is still enriched in
+ * bracket exits. That survives BY CONSTRUCTION of the option David chose on
+ * 2026-09-14 (price the protective legs at submit, one derivation) over giving
+ * the control arm a bracket-exit path. #1546 owns that surviving selection
+ * term; #1301 owned only the under-charge, which is closed. See
+ * `modelledCostCharged`'s doc and
+ * `sqlite-arm-comparison-source.ts`'s `modelledCostCharged` filter, which
+ * carry the same limit from their own side.
  */
 /**
  * Raises `FEE_CURRENCY_NOT_BOOK_CURRENCY` for a fill whose venue-reported fee
@@ -1352,14 +1552,12 @@ async function warnOnNonSterlingFee(
 function toFill(
   fill: NormalizedFill,
   idempotencyKey: string,
-  modelledEntryCost: ModelledEntryCost | null = null,
+  modelledLotCosts: ModelledLotCosts,
 ): Fill {
+  const modelledLegCost = modelledLegCostFor(fill.leg, modelledLotCosts);
   const fallbackCostBreakdown =
-    fill.cost_breakdown === undefined && fill.leg === 'entry' && modelledEntryCost !== null
-      ? prorateCostBreakdown(
-          modelledEntryCost.breakdown,
-          fill.qty / modelledEntryCost.requestedSize,
-        )
+    fill.cost_breakdown === undefined && modelledLegCost !== null
+      ? prorateCostBreakdown(modelledLegCost.breakdown, fill.qty / modelledLegCost.requestedSize)
       : undefined;
   const chargedFee = chargeTopUpTo(fill.fee, fallbackCostBreakdown?.commission);
 
@@ -1397,6 +1595,31 @@ function toFill(
       ? {}
       : { fx_rate_to_gbp_source: fill.fx_rate_to_gbp_source }),
   };
+}
+
+/**
+ * Which submit-time estimate a fill's leg is charged from, or `null` for a leg
+ * this lot's own submission never priced.
+ *
+ * `'exit'` is null here and not an oversight: a flatten's estimate belongs to
+ * the FLATTEN's submit-time capture, prorated across the lots it named by
+ * `splitFlattenFills` (flatten-attribution.ts), and is attached there. Reading
+ * the entry lot's estimate for it would charge an exit the price of an entry
+ * priced at a different instant.
+ */
+function modelledLegCostFor(
+  leg: NormalizedFill['leg'],
+  costs: ModelledLotCosts,
+): ModelledLegCost | null {
+  switch (leg) {
+    case 'entry':
+      return costs.entry;
+    case 'stop':
+    case 'target':
+      return costs.protectiveExit;
+    case 'exit':
+      return null;
+  }
 }
 
 function earliest(dates: readonly Date[]): Date {

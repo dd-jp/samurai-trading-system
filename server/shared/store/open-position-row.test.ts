@@ -6,6 +6,13 @@ import {
 import { toStoredTimestamp } from './sqlite-utils.js';
 
 const BREAKDOWN = { spread_cost: 1, commission: 0.5, slippage: 0.25, market_impact: 0 };
+// Deliberately distinct from BREAKDOWN so a mapper crossing the two columns fails.
+const PROTECTIVE_BREAKDOWN = {
+  spread_cost: 2,
+  commission: 0.75,
+  slippage: 0.5,
+  market_impact: 0.125,
+};
 
 function row(overrides: Partial<OpenPositionRow> = {}): OpenPositionRow {
   return {
@@ -35,6 +42,7 @@ function row(overrides: Partial<OpenPositionRow> = {}): OpenPositionRow {
     quote_mid: null,
     quote_observed_at: null,
     modelled_cost_breakdown_json: null,
+    modelled_protective_exit_cost_breakdown_json: null,
     abandon_reason: null,
     ...overrides,
   };
@@ -49,10 +57,11 @@ describe('fromOpenPositionRow', () => {
     expect(position.broker_order_ids).toEqual(['broker-1']);
     expect('decision_price' in position).toBe(false);
     expect('modelled_cost_breakdown' in position).toBe(false);
+    expect('modelled_protective_exit_cost_breakdown' in position).toBe(false);
     expect('abandon_reason' in position).toBe(false);
   });
 
-  it('carries every migration-0037 and 0056 column when present', () => {
+  it('carries every migration-0037, 0056 and 0061 column when present', () => {
     const position = fromOpenPositionRow(
       row({
         decision_price: 100.5,
@@ -61,6 +70,7 @@ describe('fromOpenPositionRow', () => {
         quote_mid: 100.5,
         quote_observed_at: toStoredTimestamp(new Date(400)),
         modelled_cost_breakdown_json: JSON.stringify(BREAKDOWN),
+        modelled_protective_exit_cost_breakdown_json: JSON.stringify(PROTECTIVE_BREAKDOWN),
         abandon_reason: 'wedged_zero_fill',
         order_state: 'abandoned',
       }),
@@ -68,6 +78,7 @@ describe('fromOpenPositionRow', () => {
     expect(position.decision_price).toBe(100.5);
     expect(position.quote_observed_at).toEqual(new Date(400));
     expect(position.modelled_cost_breakdown).toEqual(BREAKDOWN);
+    expect(position.modelled_protective_exit_cost_breakdown).toEqual(PROTECTIVE_BREAKDOWN);
     expect(position.abandon_reason).toBe('wedged_zero_fill');
   });
 });

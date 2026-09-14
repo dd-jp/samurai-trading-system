@@ -21,18 +21,13 @@ import {
   type Selection,
   type TraceDetail,
 } from '../../lib/resolve-trace.ts';
-import {
-  OUTCOME_WORD,
-  sideWord,
-  stageName,
-  WAITING_FOR_FIRST_SNAPSHOT,
-} from '../../lib/vocabulary.ts';
+import { OUTCOME_WORD, sideWord, stageName } from '../../lib/vocabulary.ts';
 import { Seal } from '../Seal.tsx';
 import { StateWord } from '../StateWord.tsx';
 import { DebateSection, FillsList, GatesSection, Timeline } from '../TraceSections.tsx';
 
 export interface LiveTabProps {
-  snapshot: WireSnapshot | null;
+  snapshot: WireSnapshot;
   selection: Selection | null;
   onSelect: (selection: Selection) => void;
 }
@@ -115,17 +110,15 @@ function LaneRow(props: {
 
 function LaneList(props: LiveTabProps) {
   const { snapshot, selection, onSelect } = props;
-  const lanes = snapshot?.pipeline.lanes ?? [];
-  const debates = snapshot?.debates ?? [];
+  const lanes = snapshot.pipeline.lanes;
+  const debates = snapshot.debates;
   const running = lanes.filter((lane) => lane.outcome === 'in_flight').length;
   return (
     <section className="lanes" aria-label="Lanes">
       <div className="section-head">
         <h2>Lanes</h2>
         <span className="muted small">
-          {snapshot === null
-            ? WAITING_FOR_FIRST_SNAPSHOT
-            : `${lanes.length} in the 15-minute window · ${running} running`}
+          {`${lanes.length} in the 15-minute window · ${running} running`}
         </span>
       </div>
       <div className="lane lane-header" aria-hidden="true">
@@ -136,7 +129,7 @@ function LaneList(props: LiveTabProps) {
           </span>
         ))}
       </div>
-      {snapshot !== null && lanes.length === 0 ? (
+      {lanes.length === 0 ? (
         <p className="empty-state">
           No lane on this snapshot — no instrument has a trace inside the 15-minute window and none
           is configured idle. An empty universe reads as empty, not as quiet.
@@ -197,13 +190,11 @@ function OrderSection({ position, fills }: { position: PositionRow; fills: reado
 
 function TraceDrawer(props: LiveTabProps) {
   const { snapshot, selection } = props;
-  if (snapshot === null || selection === null) {
+  if (selection === null) {
     return (
       <aside className="drawer" aria-label="Trace detail">
         <p className="empty-state">
-          {snapshot === null
-            ? WAITING_FOR_FIRST_SNAPSHOT
-            : 'No lane selected — choose a lane, or a verdict row on Glance, to see its trace.'}
+          No lane selected — choose a lane, or a verdict row on Glance, to see its trace.
         </p>
       </aside>
     );

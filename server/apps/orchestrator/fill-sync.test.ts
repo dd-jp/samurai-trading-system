@@ -654,6 +654,56 @@ describe('startFillSync', () => {
       await sync.stop();
     });
 
+    // #1506: the shape `findUnrecordedVenuePositions` raises means the VENUE
+    // holds a position no open lot explains — exposure invisible to Risk's
+    // caps, with no backstop detector anywhere else, which is the argument
+    // for raising the level rather than the one this docblock used to give
+    // for leaving it at `info` alongside `rejected`.
+    it('warns on an unrecorded venue position, and leaves a rejected divergence at info', async () => {
+      const logger = makeLogger();
+      const unrecorded = {
+        idempotency_key: '',
+        instrument: 'AAPL',
+        store_state: 'pending' as const,
+        broker_state: null,
+        action: 'unrecorded' as const,
+        kind: 'unrecorded' as const,
+        reason: 'venue holds 4 AAPL (buy) with no open lot in the store',
+      };
+      const rejected = {
+        idempotency_key: 'key-tsla-1',
+        instrument: 'TSLA',
+        store_state: 'pending' as const,
+        broker_state: null,
+        action: 'rejected' as const,
+        kind: 'bracket' as const,
+        reason: 'venue has no such order',
+      };
+      const execution = makeExecution({
+        reconcile: vi
+          .fn()
+          .mockResolvedValueOnce(makeReport({ divergences: [unrecorded, rejected] }))
+          .mockResolvedValue(makeReport()),
+      });
+      const sync = startFillSync({
+        execution,
+        clock: { now: () => new Date() },
+        logger,
+        fillPollIntervalMs: 1_000,
+        reconcileTraceId: 'test-reconcile',
+        fillSyncTraceId: 'test-fill-sync',
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      const divergenceLines = logger.entries.filter(
+        (entry) => entry.message === 'reconcile divergence',
+      );
+      expect(divergenceLines.map((entry) => entry.level)).toEqual(['warn', 'info']);
+
+      await sync.stop();
+    });
+
     // #1088: the sweep runs unconditionally on every periodic reconcile()
     // pass but is not a divergence, so it needed its own trace at this call
     // site too — otherwise a DELETE against open_positions happened on every

@@ -547,6 +547,27 @@ export interface OpenPosition {
     market_impact: number;
   };
   /**
+   * #1301, migration 0061: the same submit-time estimate for the lot's
+   * PROTECTIVE exit — the stop/target legs the bracket arms alongside the
+   * entry. Priced in the same `captureSubmitSnapshot` pass, off the same
+   * `MarketState`, with the closing side and `order_type: 'market'`, so a live
+   * `'stop'`/`'target'` fill has a modelled commission to be topped up to
+   * exactly as an entry fill does. One estimate covers both legs: only one of
+   * them can ever fill (they are OCO), and the cost model prices them
+   * identically (see `captureSubmitSnapshot`'s doc).
+   *
+   * Absent on a pre-migration-0061 row, on an `intent_type: 'exit'` order
+   * (a flatten arms no protective legs), and whenever the entry's own
+   * `modelled_cost_breakdown` is absent — the two are priced under one
+   * try/catch and are present or absent together.
+   */
+  modelled_protective_exit_cost_breakdown?: {
+    spread_cost: number;
+    commission: number;
+    slippage: number;
+    market_impact: number;
+  };
+  /**
    * #1186, migration 0056 — set only when `order_state === 'abandoned'`: why
    * `wedged-zero-fill-sweep.ts` retired this lot without ever seeing a fill.
    * Absent on every other row, including one abandoned before this column

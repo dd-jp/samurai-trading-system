@@ -1,0 +1,64 @@
+#1218 — the venue stamp against doc 53's published intraday cost decomposition
+notional per fill: $10000. All figures are bps.
+config: CALIBRATED_INTRADAY_COST_CONFIG
+  stocks: spreadVolatilityCoefficient=0.0697 commissionRate=0 slippageCoefficient=0.017425 impactK=0.05
+  venues.saxo.commissionRate=0.0008
+
+=== PART 1: reconstruction of doc 53's published G2 component table ===
+
+symbol       spread commission   slippage     impact  2017-03-15   charged
+SPY        1.0000     1.0000     0.0726     0.0024     2.0750     2.0750
+QQQ        1.0000     1.0000     0.0724     0.0056     2.0780     2.0780
+AAPL       1.0000     1.0000     0.1089     0.0085     2.1174     2.1174
+TSLA       1.0000     1.0000     0.1430     0.0325     2.1755     2.2238
+
+Every component reconstructs exactly. The last two columns are DIFFERENT quantities:
+  '2017-03-15' is the component breakdown's single bar; 'charged' is doc 53's
+  run-level charged cost. They coincide for SPY/QQQ/AAPL because those three sit
+  on the spread floor on every bar, so the snapshot IS the run. TSLA is the one
+  name whose 1m volatility moves it off the floor, so its run figure exceeds its
+  2017-03-15 snapshot by 0.0483 bps. That gap is doc 53's, not this check's,
+  and it is unaffected by the venue stamp: commission is a flat RATE on notional,
+  identical on every bar, so the restatement below is +7.0000 bps on either basis.
+
+=== PART 2: the same states, stamped venue=saxo ===
+
+symbol       spread commission   slippage     impact      total      delta
+SPY        1.0000     8.0000     0.0726     0.0024     9.0750     7.0000
+QQQ        1.0000     8.0000     0.0724     0.0056     9.0780     7.0000
+AAPL       1.0000     8.0000     0.1089     0.0085     9.1174     7.0000
+TSLA       1.0000     8.0000     0.1430     0.0325     9.1755     7.0000
+
+=== Doc 53's charged-cost column, restated (published + 7.0000 per fill) ===
+
+symbol   was/fill  now/fill  was round trip  now round trip
+SPY        2.0750     9.0750     4.1500    18.1500
+QQQ        2.0780     9.0780     4.1560    18.1560
+AAPL       2.1174     9.1174     4.2348    18.2348
+TSLA       2.2238     9.2238     4.4476    18.4476
+
+=== PART 3: the daily config carries no `venues` key, so the stamp is inert ===
+
+symbol   unstamped     stamped
+SPY        2.0063     2.0063
+QQQ        2.0094     2.0094
+AAPL       2.0143     2.0143
+TSLA       2.0401     2.0401
+
+CALIBRATED_COST_CONFIG.venues = undefined
+
+=== PART 4: G2's delta column, as the code now runs it vs with `venues` equalized ===
+
+symbol  daily cfg  intraday    delta |  daily+saxo  intraday    delta
+SPY        2.0063     9.0750     7.0687 |     9.0063     9.0750     0.0687
+QQQ        2.0094     9.0780     7.0686 |     9.0094     9.0780     0.0686
+AAPL       2.0143     9.1174     7.1031 |     9.0143     9.1174     0.1031
+TSLA       2.0401     9.1755     7.1354 |     9.0401     9.1755     0.1354
+
+The left block is what G2's comparison now measures: the two timeframe-keyed configs
+  differ on TWO axes, not one, because only the intraday config declares `venues`.
+  The right block holds `venues` equal across both arms and recovers the published
+  calibration deltas. Any future re-run of G2 must equalize `venues` or it measures
+  the venue override instead of the spread/slippage/impact calibration.
+
+ALL ASSERTIONS PASSED

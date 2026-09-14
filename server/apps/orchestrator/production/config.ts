@@ -15,6 +15,7 @@ import type {
   OcoDoubleFillAlertChannel,
   ResidualExposureAlertChannel,
   SaxoOpenApiClient,
+  UnattributedFlattenFillAlertChannel,
   UnpricedFillAlertChannel,
   UnresolvedPriceUnitAlertChannel,
 } from '../../../pipeline/execution/index.js';
@@ -495,6 +496,20 @@ export interface AlertChannelSlots {
    * not a transient data glitch.
    */
   nonSterlingFeeAlerts?: NonSterlingFeeAlertChannel;
+  /**
+   * #1506's unattributed-flatten-fill page — `redistributeOneFlatten`
+   * (pipeline/execution/ingest-fills.ts) posts here after booking a flatten
+   * split against a lot that had already closed. Absent = log-only, with
+   * deliberately NO log-only form behind it (`UNLOGGED_ALERT_IDS`) for the
+   * reason `nonSterlingFeeAlerts` above documents: the `error` line carrying
+   * these fields is already written before this port is reached.
+   *
+   * The condition means the venue sold quantity the lot's `closed_trade` does
+   * not contain, so the account may hold a REVERSE position no
+   * `getOpenPositions()` row explains — the exposure #429/#1122 left at
+   * `info` from the reconcile side.
+   */
+  unattributedFlattenFillAlerts?: UnattributedFlattenFillAlertChannel;
 }
 
 /**

@@ -27,6 +27,8 @@ import {
   FEE_CURRENCY_NOT_BOOK_CURRENCY,
   FILLED_WITH_ZERO_SIZE,
   FILLED_ZERO_SIZE_CLEARED,
+  UNATTRIBUTED_FLATTEN_FILL,
+  UNATTRIBUTED_FLATTEN_FILL_PERSIST_FAILED,
 } from './ingest-fills.js';
 import { ProtectiveRearmUnsupportedError } from './protective-rearm-unsupported.js';
 import { openTestExecutionStore, TestExecutionStore } from './sqlite-store-harness.js';
@@ -47,6 +49,8 @@ import type {
   ResidualExposureAlert,
   ResidualExposureAlertChannel,
   SharedStore,
+  UnattributedFlattenFillAlert,
+  UnattributedFlattenFillAlertChannel,
 } from './types.js';
 
 /**
@@ -255,6 +259,19 @@ function makeNonSterlingFeeAlerts(): NonSterlingFeeAlertChannel & {
   };
 }
 
+/** Records every #1506 page — never posted while every named lot is still open. */
+function makeUnattributedFlattenFillAlerts(): UnattributedFlattenFillAlertChannel & {
+  alerts: UnattributedFlattenFillAlert[];
+} {
+  const alerts: UnattributedFlattenFillAlert[] = [];
+  return {
+    alerts,
+    async postUnattributedFlattenFillAlert(alert: UnattributedFlattenFillAlert): Promise<void> {
+      alerts.push(alert);
+    },
+  };
+}
+
 function makeInput(
   broker: BrokerAdapter,
   store: TestExecutionStore,
@@ -282,6 +299,10 @@ function makeInput(
   // re-flatten stands down. Open by default — every scenario that predates
   // #1214 was written against a venue that never refuses on session grounds.
   sessionCalendars: Record<AssetClass, TradingCalendar> = openSessionCalendars(),
+  // #1506: absent by default for the same reason `nonSterlingFeeAlerts` is —
+  // the channel is OPTIONAL on `ExecutionInput`, and a scenario whose named
+  // lots are all open never reaches it.
+  unattributedFlattenFillAlerts?: UnattributedFlattenFillAlertChannel,
 ): ExecutionInput {
   const config: ExecutionConfig = {
     simulated: {
@@ -306,6 +327,7 @@ function makeInput(
     residualExposureAlerts,
     flattenOverfillAlerts,
     ...(nonSterlingFeeAlerts === undefined ? {} : { nonSterlingFeeAlerts }),
+    ...(unattributedFlattenFillAlerts === undefined ? {} : { unattributedFlattenFillAlerts }),
     // #519: `ingestFills()` never reconciles, so this is never posted to.
     flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
     logger,
@@ -1583,11 +1605,11 @@ describe('ExecutionImpl.ingestFills', () => {
     // fill? Traced by construction below rather than by reading alone: the
     // set is NOT empty (the existing #525 line populates it straight from the
     // journal's `lot_idempotency_keys`, unconditionally), so the flatten DOES
-    // reach `flattenNamedLots` and IS marked swept — but `advanceLot` is never
-    // called for the closed lot (it is absent from `positions`, the loop's
-    // only source of work), so the fill sitting in `byLot` for it is silently
-    // discarded rather than durably applied.
-    it('marks a flatten swept (and silently drops its fill) when its named lot is ALREADY closed at redistribution time', async () => {
+    // reach `flattenNamedLots` and IS marked swept. `advanceLot` is still never
+    // called for the closed lot (it is absent from `positions`, the loop's only
+    // source of work) — #1506's `persistUnattributedSplits` is what books the
+    // split instead, which is what the assertions below pin.
+    it('marks a flatten swept and BOOKS its fill when its named lot is ALREADY closed at redistribution time', async () => {
       const { store } = openTestExecutionStore();
       await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10, stop: 95 });
       // A SECOND, unrelated lot that stays open throughout — without it,
@@ -1677,16 +1699,447 @@ describe('ExecutionImpl.ingestFills', () => {
       // pass — the "noisy but safe rescan forever" the review comment
       // hypothesized does not happen either.
       expect(await store.getUnresolvedFlattens()).toEqual([]);
-      // The fill itself was never applied anywhere: key-1's own fill record
-      // is unchanged (still just its original two fills), and no OTHER lot
-      // exists to have received it. This is the actual behaviour — silently
-      // dropped, not silently leaked — and is not a NEW defect: the fill
-      // would have been dropped exactly the same way before this PR, since
-      // `advanceLot` was never reachable for a closed lot either way. This
-      // PR's `markFlattenFillsSwept` only recognises that nothing more will
-      // ever happen to it and stops rescanning — it does not change whether
-      // the fill gets applied.
+      // #1506: the fill is BOOKED against the closed lot rather than dropped.
+      // It used to vanish here — `advanceLot` is unreachable for a lot absent
+      // from `positions`, and the sweep above retires the only row that leads
+      // back to it — which left the venue's sale in no store record at all.
+      const booked = await store.getFills('key-1');
+      expect(booked).toHaveLength(3);
+      // The SPLIT's own derived id (`splitFill`, flatten-attribution.ts), not
+      // the raw feed id — which is what makes the `hasFill` dedup below the
+      // same identity the ordinary per-position path would have written.
+      expect(booked.at(-1)).toMatchObject({ broker_fill_id: 'fo1:key-1', leg: 'exit', qty: 10 });
+    });
+
+    // #1506: the reachable shape of the above, and the one #1214's
+    // unresolvable-flatten re-arm creates. A first flatten's fill CLOSES the
+    // lot; a SECOND flatten — journalled while the lot still held a residual,
+    // then re-armed by #1214 — has its own fill arrive a poll later, against
+    // a lot no `getOpenPositions()` snapshot will ever name again.
+    it("books and pages a second flatten's fill when the FIRST flatten closed the lot between them", async () => {
+      const { store } = openTestExecutionStore();
+      await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10, stop: 95 });
+      // Keeps the poll alive after key-1 closes: `ingestFills()` returns at
+      // its "no open positions" guard before redistribution otherwise, and
+      // the drop under test would be unreachable rather than fixed. That
+      // guard is exactly why the last-open-lot case needs reconcile.ts's
+      // `findUnrecordedVenuePositions` line instead — see execution-spec.md.
+      await seedPosition(store, {
+        idempotency_key: 'key-other',
+        instrument: 'TSLA',
+        requested_size: 5,
+        stop: 190,
+      });
+      // One at a time: `writeAheadFlatten` refuses a second live flatten on
+      // the same instrument (#516), so flatten-2 can only be journalled once
+      // flatten-1 has resolved — which is precisely #1214's re-arm, firing
+      // against a residual it observed before flatten-1's fill landed.
+      const journalFlatten = async (key: string, held: number): Promise<void> => {
+        await store.writeAheadFlatten({
+          idempotency_key: key,
+          instrument: 'AAPL',
+          asset_class: 'stocks',
+          side: 'sell',
+          size: held,
+          submitted_at: OPENED_AT,
+          lot_held_quantities: [{ idempotency_key: 'key-1', held }],
+          exit_reason: 'flatten',
+          decision_price: null,
+          quote_bid: null,
+          quote_ask: null,
+          quote_mid: null,
+          modelled_cost_breakdown: null,
+          quote_observed_at: null,
+        });
+        await store.resolveFlattenSubmitted(
+          key,
+          { order_state: 'submitted', broker_order_ids: [`${key}:order`] },
+          OPENED_AT,
+        );
+      };
+      await journalFlatten('flatten-1', 10);
+
+      const entry = fill({
+        client_order_id: 'key-1',
+        broker_fill_id: toBrokerFillId('e1'),
+        leg: 'entry',
+        qty: 10,
+      });
+      const firstFlattenFill = fill({
+        client_order_id: 'flatten-1',
+        broker_fill_id: toBrokerFillId('f1'),
+        leg: 'exit',
+        qty: 10,
+        timestamp: new Date('2026-07-20T15:30:00Z'),
+      });
+      const secondFlattenFill = fill({
+        client_order_id: 'flatten-2',
+        broker_fill_id: toBrokerFillId('f2'),
+        leg: 'exit',
+        qty: 4,
+        timestamp: new Date('2026-07-20T15:45:00Z'),
+      });
+
+      const alerts = makeUnattributedFlattenFillAlerts();
+      const logger = recordingLogger();
+      const poll = async (fills: readonly NormalizedFill[]): Promise<void> => {
+        await new ExecutionImpl(
+          makeInput(
+            new ScriptedBroker([...fills]),
+            store,
+            undefined,
+            undefined,
+            logger,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            alerts,
+          ),
+        ).ingestFills();
+      };
+
+      await poll([entry]);
+      await poll([entry, firstFlattenFill]);
+      expect((await store.getPosition('key-1'))?.order_state).toBe('closed');
+      expect(alerts.alerts).toEqual([]);
+
+      await journalFlatten('flatten-2', 4);
+      await poll([entry, firstFlattenFill, secondFlattenFill]);
+
+      // Durable: the venue's second sale is on the lot's fill record, where
+      // before this it was written into a Map nothing read and dropped.
+      expect(await store.getFills('key-1')).toMatchObject([
+        { broker_fill_id: 'e1', leg: 'entry', qty: 10 },
+        { broker_fill_id: 'f1:key-1', leg: 'exit', qty: 10 },
+        { broker_fill_id: 'f2:key-1', leg: 'exit', qty: 4 },
+      ]);
+      // Visible: paged, with the flatten and the lot both named.
+      expect(alerts.alerts).toMatchObject([
+        {
+          trace_id: 'trace-1',
+          flatten_idempotency_key: 'flatten-2',
+          lot_idempotency_key: 'key-1',
+          broker_fill_id: 'f2:key-1',
+          qty: 4,
+        },
+      ]);
+      expect(
+        logger.entries.filter((entry) => entry.message === UNATTRIBUTED_FLATTEN_FILL),
+      ).toHaveLength(1);
+
+      // And quiet from here on. The condition recurs on EVERY later poll —
+      // `fetchNewFills` is inclusive of `since` and `getFlattenAttribution`
+      // still resolves a swept row — so without the `hasFill` gate this
+      // would page forever, the #342 "line repeated daily is a line nobody
+      // reads" failure the #527 warning already guards against.
+      await poll([entry, firstFlattenFill, secondFlattenFill]);
+      expect(await store.getFills('key-1')).toHaveLength(3);
+      expect(alerts.alerts).toHaveLength(1);
+      // Quiet on BOTH lines, not just the page. Without the `hasFill` gate
+      // the re-offer reaches `applyLotAdvance`, which refuses the duplicate
+      // row — so the page would stay silent while an `error` line claiming a
+      // failed booking fired on every poll forever, for a fill that is in
+      // fact already booked.
+      expect(
+        logger.entries.filter(
+          (entry) => entry.message === UNATTRIBUTED_FLATTEN_FILL_PERSIST_FAILED,
+        ),
+      ).toEqual([]);
+    });
+
+    // #1506: the persist failing is NOT a swallowable diagnostic. The "next
+    // poll recomputes the split" recovery needs the raw fill re-fetched, and
+    // `since` is the earliest `opened_at` over the OPEN lots — this lot is
+    // closed, so once no surviving open lot predates the flatten fill the
+    // adapter's `filledAt < since` drops it with no recovery path. Retiring
+    // the journal row on a failed write would lose the fill permanently, which
+    // is the outcome `markFlattenFillsSwept`'s own doc gates against.
+    it('holds the flatten sweep back when booking the split against the closed lot fails', async () => {
+      class FailsOnSplitStore extends TestExecutionStore {
+        override async applyLotAdvance(advance: LotAdvance): Promise<void> {
+          if (advance.fills.some((lotFill) => lotFill.broker_fill_id === 'f2:key-1')) {
+            throw new Error('simulated store outage on the unattributed split');
+          }
+          await super.applyLotAdvance(advance);
+        }
+      }
+
+      const { db } = openTestExecutionStore();
+      const store = new FailsOnSplitStore(db);
+      await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10, stop: 95 });
+      await seedPosition(store, {
+        idempotency_key: 'key-other',
+        instrument: 'TSLA',
+        requested_size: 5,
+        stop: 190,
+      });
+      const journalFlatten = async (key: string, held: number): Promise<void> => {
+        await store.writeAheadFlatten({
+          idempotency_key: key,
+          instrument: 'AAPL',
+          asset_class: 'stocks',
+          side: 'sell',
+          size: held,
+          submitted_at: OPENED_AT,
+          lot_held_quantities: [{ idempotency_key: 'key-1', held }],
+          exit_reason: 'flatten',
+          decision_price: null,
+          quote_bid: null,
+          quote_ask: null,
+          quote_mid: null,
+          modelled_cost_breakdown: null,
+          quote_observed_at: null,
+        });
+        await store.resolveFlattenSubmitted(
+          key,
+          { order_state: 'submitted', broker_order_ids: [`${key}:order`] },
+          OPENED_AT,
+        );
+      };
+      await journalFlatten('flatten-1', 10);
+
+      const entry = fill({
+        client_order_id: 'key-1',
+        broker_fill_id: toBrokerFillId('e1'),
+        leg: 'entry',
+        qty: 10,
+      });
+      const firstFlattenFill = fill({
+        client_order_id: 'flatten-1',
+        broker_fill_id: toBrokerFillId('f1'),
+        leg: 'exit',
+        qty: 10,
+        timestamp: new Date('2026-07-20T15:30:00Z'),
+      });
+      const secondFlattenFill = fill({
+        client_order_id: 'flatten-2',
+        broker_fill_id: toBrokerFillId('f2'),
+        leg: 'exit',
+        qty: 4,
+        timestamp: new Date('2026-07-20T15:45:00Z'),
+      });
+      const broker = new ScriptedBroker([entry, firstFlattenFill, secondFlattenFill]);
+      const poll = async (fills: readonly NormalizedFill[]): Promise<void> => {
+        broker.replaceFills([...fills]);
+        await new ExecutionImpl(makeInput(broker, store)).ingestFills();
+      };
+
+      // key-1's own entry and flatten-1's split go through the ordinary
+      // per-position path, which this store leaves alone — only flatten-2's
+      // split, the one nothing but `persistUnattributedSplits` books, is
+      // refused.
+      await poll([entry]);
+      await poll([entry, firstFlattenFill]);
+      expect((await store.getPosition('key-1'))?.order_state).toBe('closed');
+
+      await journalFlatten('flatten-2', 4);
+      store.writeLog.length = 0;
+      const outcome = await poll([entry, firstFlattenFill, secondFlattenFill]).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      expect(store.writeLog).not.toContain('mark-flatten-fills-swept:flatten-2');
+      expect(outcome).not.toBeNull();
+      // Why the held row is the only recovery there is. The surviving lot
+      // cannot be seeded ahead of this fill and still have the poll above see
+      // it at all — that is the whole point: raise the floor past the fill and
+      // the adapter stops offering it, so nothing recomputes the split.
+      expect(await broker.fetchNewFills(new Date('2026-07-20T15:50:00Z'))).toEqual([]);
+    });
+
+    // #842's no-lookahead filter reaches this path too — `advanceLot` applies
+    // it to every fill it books, and a split naming a closed lot must not be
+    // the one exception that books ahead of the poll's clock.
+    it('leaves a split dated after the poll clock unbooked', async () => {
+      const { store } = openTestExecutionStore();
+      await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10, stop: 95 });
+      await seedPosition(store, {
+        idempotency_key: 'key-other',
+        instrument: 'TSLA',
+        requested_size: 5,
+        stop: 190,
+      });
+      const journalFlatten = async (key: string, held: number): Promise<void> => {
+        await store.writeAheadFlatten({
+          idempotency_key: key,
+          instrument: 'AAPL',
+          asset_class: 'stocks',
+          side: 'sell',
+          size: held,
+          submitted_at: OPENED_AT,
+          lot_held_quantities: [{ idempotency_key: 'key-1', held }],
+          exit_reason: 'flatten',
+          decision_price: null,
+          quote_bid: null,
+          quote_ask: null,
+          quote_mid: null,
+          modelled_cost_breakdown: null,
+          quote_observed_at: null,
+        });
+        await store.resolveFlattenSubmitted(
+          key,
+          { order_state: 'submitted', broker_order_ids: [`${key}:order`] },
+          OPENED_AT,
+        );
+      };
+      await journalFlatten('flatten-1', 10);
+
+      const entry = fill({
+        client_order_id: 'key-1',
+        broker_fill_id: toBrokerFillId('e1'),
+        leg: 'entry',
+        qty: 10,
+      });
+      const firstFlattenFill = fill({
+        client_order_id: 'flatten-1',
+        broker_fill_id: toBrokerFillId('f1'),
+        leg: 'exit',
+        qty: 10,
+        timestamp: new Date('2026-07-20T15:30:00Z'),
+      });
+      const futureFlattenFill = fill({
+        client_order_id: 'flatten-2',
+        broker_fill_id: toBrokerFillId('f2'),
+        leg: 'exit',
+        qty: 4,
+        timestamp: new Date(NOW.getTime() + 60_000),
+      });
+
+      const alerts = makeUnattributedFlattenFillAlerts();
+      const poll = async (fills: readonly NormalizedFill[]): Promise<void> => {
+        await new ExecutionImpl(
+          makeInput(
+            new ScriptedBroker([...fills]),
+            store,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            alerts,
+          ),
+        ).ingestFills();
+      };
+
+      await poll([entry]);
+      await poll([entry, firstFlattenFill]);
+      await journalFlatten('flatten-2', 4);
+      await poll([entry, firstFlattenFill, futureFlattenFill]);
+
       expect(await store.getFills('key-1')).toHaveLength(2);
+      expect(alerts.alerts).toEqual([]);
+    });
+
+    // #1506 x #527: the two conditions overlap on one raw fill — a flatten
+    // that names an already-closed lot AND over-fills what that lot was
+    // journalled as holding. #527 reads a `hasFill` hit on the split's derived
+    // id as "an earlier poll already warned", so booking the split before that
+    // check would suppress the first-ever over-fill warning with a row this
+    // same poll wrote.
+    it("warns on an over-fill AND books the split when the flatten's named lot is already closed", async () => {
+      const { store } = openTestExecutionStore();
+      await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10, stop: 95 });
+      await seedPosition(store, {
+        idempotency_key: 'key-other',
+        instrument: 'TSLA',
+        requested_size: 5,
+        stop: 190,
+      });
+      const journalFlatten = async (key: string, held: number): Promise<void> => {
+        await store.writeAheadFlatten({
+          idempotency_key: key,
+          instrument: 'AAPL',
+          asset_class: 'stocks',
+          side: 'sell',
+          size: held,
+          submitted_at: OPENED_AT,
+          lot_held_quantities: [{ idempotency_key: 'key-1', held }],
+          exit_reason: 'flatten',
+          decision_price: null,
+          quote_bid: null,
+          quote_ask: null,
+          quote_mid: null,
+          modelled_cost_breakdown: null,
+          quote_observed_at: null,
+        });
+        await store.resolveFlattenSubmitted(
+          key,
+          { order_state: 'submitted', broker_order_ids: [`${key}:order`] },
+          OPENED_AT,
+        );
+      };
+      await journalFlatten('flatten-1', 10);
+
+      const entry = fill({
+        client_order_id: 'key-1',
+        broker_fill_id: toBrokerFillId('e1'),
+        leg: 'entry',
+        qty: 10,
+      });
+      const firstFlattenFill = fill({
+        client_order_id: 'flatten-1',
+        broker_fill_id: toBrokerFillId('f1'),
+        leg: 'exit',
+        qty: 10,
+        timestamp: new Date('2026-07-20T15:30:00Z'),
+      });
+      // 6 against a journalled 4: 4 splits onto key-1, 2 is genuine surplus.
+      const overFill = fill({
+        client_order_id: 'flatten-2',
+        broker_fill_id: toBrokerFillId('f2'),
+        leg: 'exit',
+        qty: 6,
+        timestamp: new Date('2026-07-20T15:45:00Z'),
+      });
+
+      const alerts = makeUnattributedFlattenFillAlerts();
+      const overfillAlerts = makeFlattenOverfillAlerts();
+      const poll = async (fills: readonly NormalizedFill[]): Promise<void> => {
+        await new ExecutionImpl(
+          makeInput(
+            new ScriptedBroker([...fills]),
+            store,
+            undefined,
+            overfillAlerts,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            alerts,
+          ),
+        ).ingestFills();
+      };
+
+      await poll([entry]);
+      await poll([entry, firstFlattenFill]);
+      expect(overfillAlerts.warnings).toEqual([]);
+
+      await journalFlatten('flatten-2', 4);
+      await poll([entry, firstFlattenFill, overFill]);
+
+      expect(overfillAlerts.warnings).toMatchObject([
+        { idempotency_key: 'flatten-2', unattributed_qty: 2 },
+      ]);
+      expect(await store.getFills('key-1')).toMatchObject([
+        { broker_fill_id: 'e1', leg: 'entry', qty: 10 },
+        { broker_fill_id: 'f1:key-1', leg: 'exit', qty: 10 },
+        { broker_fill_id: 'f2:key-1', leg: 'exit', qty: 4 },
+      ]);
+      expect(alerts.alerts).toHaveLength(1);
+
+      // Both dedups hold on the re-offer: the booked row is what #527 reads to
+      // suppress its repeat, and what #1506's `hasFill` reads to skip its own.
+      await poll([entry, firstFlattenFill, overFill]);
+      expect(overfillAlerts.warnings).toHaveLength(1);
+      expect(await store.getFills('key-1')).toHaveLength(3);
+      expect(alerts.alerts).toHaveLength(1);
     });
 
     // PR #603 review (deepseek): `markFlattenFillsSwept` throwing was
@@ -2329,11 +2782,10 @@ describe('ExecutionImpl.ingestFills — cumulative partial fills (#842)', () => 
  * own (`fill.cost_breakdown === undefined`, always true for a real broker)
  * and `toFill()` falls back to the submit-time modelled snapshot instead:
  * `OpenPosition.modelled_cost_breakdown` for an `'entry'` leg,
- * `FlattenAttribution.modelled_cost_breakdown` for a flatten's `'exit'` leg
- * — each prorated by this fill's share of the size the snapshot was modelled
- * against. Scoped to entry + flatten-exit only, deliberately: the Simulated
- * adapter itself never models `'stop'`/`'target'` fills either
- * (`simulated-adapter.ts`), so there is no fallback for those.
+ * `OpenPosition.modelled_protective_exit_cost_breakdown` for a `'stop'`/
+ * `'target'` leg (#1301), `FlattenAttribution.modelled_cost_breakdown` for a
+ * flatten's `'exit'` leg — each prorated by this fill's share of the size the
+ * snapshot was modelled against.
  */
 describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#1001)', () => {
   const modelledCostBreakdown = {
@@ -2341,6 +2793,18 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
     commission: 1,
     slippage: 0.25,
     market_impact: 0.1,
+  };
+  /**
+   * #1301's protective-exit snapshot. Distinct from the entry's in EVERY
+   * component so a test cannot pass on the wrong one — under today's cost model
+   * the real pair coincides on `commission` (see `captureSubmitSnapshot`), which
+   * is exactly what would hide a crossed wire in production.
+   */
+  const modelledProtectiveExitCostBreakdown = {
+    spread_cost: 2,
+    commission: 3,
+    slippage: 1,
+    market_impact: 2,
   };
 
   /** Float-tolerant equality — `prorateCostBreakdown` multiplies by a share, so exact decimal equality is not guaranteed. */
@@ -2431,12 +2895,51 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
     expect(fills[0]?.cost_breakdown).toEqual(ownBreakdown);
   });
 
-  it('never falls back for a stop/target leg fill, even when the lot carries a modelled entry snapshot', async () => {
+  // #1301: a protective leg falls back to the lot's PROTECTIVE snapshot, never
+  // the entry's — the two are separate `CostModel.fill` calls and a crossed
+  // wire is invisible under today's model, where their `commission` components
+  // coincide. `modelledProtectiveExitCostBreakdown` is deliberately distinct
+  // from `modelledCostBreakdown` in every component so the cross fails here.
+  it.each([
+    'stop',
+    'target',
+  ] as const)('prorates the modelled PROTECTIVE exit cost breakdown onto a %s leg fill', async (leg) => {
     const { store } = openTestExecutionStore();
     await seedPosition(store, {
       requested_size: 10,
       side: 'buy',
-      stop: 95,
+      modelled_cost_breakdown: modelledCostBreakdown,
+      modelled_protective_exit_cost_breakdown: modelledProtectiveExitCostBreakdown,
+    });
+    const broker = new ScriptedBroker([
+      fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 10 }),
+      fill({
+        broker_fill_id: toBrokerFillId('x1'),
+        leg,
+        qty: 4,
+        price: 95,
+        timestamp: new Date('2026-07-20T15:30:00Z'),
+      }),
+    ]);
+
+    await new ExecutionImpl(makeInput(broker, store)).ingestFills();
+
+    const fills = await store.getFills('key-1');
+    // share = 4/10 of the protective snapshot, linearly.
+    expectCostBreakdownCloseTo(fills.find((row) => row.broker_fill_id === 'x1')?.cost_breakdown, {
+      spread_cost: 0.8,
+      commission: 1.2,
+      slippage: 0.4,
+      market_impact: 0.8,
+    });
+  });
+
+  it('leaves cost_breakdown unset on a protective leg fill when the lot carries no protective snapshot', async () => {
+    const { store } = openTestExecutionStore();
+    // Entry snapshot only — a lot opened before migration 0061.
+    await seedPosition(store, {
+      requested_size: 10,
+      side: 'buy',
       modelled_cost_breakdown: modelledCostBreakdown,
     });
     const broker = new ScriptedBroker([
@@ -2453,8 +2956,42 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
     await new ExecutionImpl(makeInput(broker, store)).ingestFills();
 
     const fills = await store.getFills('key-1');
-    const stopFill = fills.find((row) => row.broker_fill_id === 's1');
-    expect(stopFill?.cost_breakdown).toBeUndefined();
+    expect(fills.find((row) => row.broker_fill_id === 's1')?.cost_breakdown).toBeUndefined();
+  });
+
+  // #1301's whole point: the estimate is SPENT, not merely recorded. A venue
+  // reporting `fee: 0` on the protective leg (Alpaca paper) left the lot
+  // under-charged by a whole exit commission against a control arm that pays
+  // one on every close.
+  it('charges the modelled protective commission on a stop fill the venue reported no fee for', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, {
+      requested_size: 10,
+      side: 'buy',
+      modelled_cost_breakdown: modelledCostBreakdown,
+      modelled_protective_exit_cost_breakdown: modelledProtectiveExitCostBreakdown,
+    });
+    const broker = new ScriptedBroker([
+      fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 10, fee: 0 }),
+      fill({
+        broker_fill_id: toBrokerFillId('s1'),
+        leg: 'stop',
+        qty: 10,
+        price: 95,
+        fee: 0,
+        timestamp: new Date('2026-07-20T15:30:00Z'),
+      }),
+    ]);
+
+    await new ExecutionImpl(makeInput(broker, store)).ingestFills();
+
+    const fills = await store.getFills('key-1');
+    expect(fills.find((row) => row.broker_fill_id === 's1')?.fee).toBeCloseTo(
+      modelledProtectiveExitCostBreakdown.commission,
+      9,
+    );
+    const closed = await store.getClosedTrades();
+    expect(closed[0]?.modelled_cost_charged).toBe(true);
   });
 
   it('prorates the flatten own modelled cost breakdown across a FIFO split exit fill, by each lot share of the raw fill', async () => {
@@ -3587,27 +4124,60 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
   });
 
   /**
-   * ROUND-1 REVIEW, finding 3 — the residual, PINNED rather than fixed
-   * (#1301). No MODELLED estimate exists for a protective leg on either arm,
-   * so the live lot is charged whatever its adapter reports on that leg and
-   * `chargeTopUpTo` has nothing to top it up to.
+   * ROUND-1 REVIEW, finding 3 — the residual, now CLOSED by #1301. It was
+   * pinned by this test in the form "a live protective-leg exit is charged
+   * whatever its adapter reports, and `chargeTopUpTo` has nothing to top it up
+   * to". `captureSubmitSnapshot` prices the protective legs at submit time
+   * (migration 0061), so there is something to top up to and the round trip is
+   * charged on BOTH legs, exactly as the control arm's flatten close is.
    *
-   * Round 5, finding 1: what that costs is ADAPTER-DEPENDENT, and this
-   * fixture pins one adapter, not the mechanism. The `fee: 0` below is the
-   * Alpaca shape (`alpaca-order-normalization.ts`), where the exit commission
-   * goes unpaid entirely. `saxo-adapter.ts` reports
-   * `price * qty * SAXO_COMMISSION_RATE` on EVERY leg, so under Saxo the leg
-   * does pay and the residual is a price-basis difference instead — see
-   * `toFill`'s "What this still does not cover" for both readings. Do not
-   * read "uncharged" in this test's name as a venue-independent property.
-   *
-   * The flag stays `true`: vetoing on it would drop live trades BECAUSE they
-   * exited on a stop, which selects on outcome (stops are the losers). This
-   * test exists so the residual cannot be quietly forgotten — it fails the
-   * moment bracket legs start being charged, which is where #1301 has to
-   * update it.
+   * The `fee: 0` below is the Alpaca shape
+   * (`alpaca-order-normalization.ts`) — the venue report that used to leave the
+   * exit commission unpaid entirely, and the one the soak ran on. Under
+   * `saxo-adapter.ts` (`price * qty * SAXO_COMMISSION_RATE` on every leg) the
+   * venue's own number would simply win the `max` where it is the larger.
    */
-  it('leaves a live protective-leg (stop) exit uncharged — the known residual, #1301', async () => {
+  it('charges a live protective-leg (stop) exit the modelled commission, same as the entry leg', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, {
+      requested_size: 10,
+      side: 'buy',
+      modelled_cost_breakdown: modelledCostBreakdown,
+      modelled_protective_exit_cost_breakdown: modelledCostBreakdown,
+    });
+    await new ExecutionImpl(
+      makeInput(
+        new ScriptedBroker([
+          fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 10, price: 100, fee: 0 }),
+          fill({
+            broker_fill_id: toBrokerFillId('s1'),
+            leg: 'stop',
+            qty: 10,
+            price: 95,
+            fee: 0,
+            timestamp: new Date('2026-07-20T15:30:00Z'),
+          }),
+        ]),
+        store,
+      ),
+    ).ingestFills();
+
+    const stop = (await store.getFills('key-1')).find((row) => row.leg === 'stop');
+    expect(stop?.fee).toBeCloseTo(modelledCostBreakdown.commission, 9);
+    expect(stop?.cost_breakdown).toBeDefined();
+    const closed = (await store.getClosedTrades())[0];
+    expect(closed.fees_total).toBeCloseTo(modelledCostBreakdown.commission * 2, 9);
+    expect(closed.modelled_cost_charged).toBe(true);
+  });
+
+  /**
+   * The transitional case #1301's widened coverage creates, asserted rather
+   * than left to be discovered: a lot OPEN ACROSS the deploy carries the entry
+   * snapshot and no protective one, so its protective leg is still uncharged —
+   * and the row now says so (`modelled_cost_charged = false`) instead of
+   * certifying a cost basis it is not on.
+   */
+  it('stamps modelled_cost_charged false on a pre-0061 lot that exits on a protective leg', async () => {
     const { store } = openTestExecutionStore();
     await seedPosition(store, {
       requested_size: 10,
@@ -3635,10 +4205,8 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
     expect(stop?.fee).toBe(0);
     expect(stop?.cost_breakdown).toBeUndefined();
     const closed = (await store.getClosedTrades())[0];
-    // Entry commission only: the round trip is charged one leg where the
-    // control arm's equivalent flatten close is charged two.
     expect(closed.fees_total).toBeCloseTo(modelledCostBreakdown.commission, 9);
-    expect(closed.modelled_cost_charged).toBe(true);
+    expect(closed.modelled_cost_charged).toBe(false);
   });
 });
 
