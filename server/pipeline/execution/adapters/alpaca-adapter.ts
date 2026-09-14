@@ -203,6 +203,9 @@ export interface AlpacaBrokerAdapterInput {
   logger: Logger;
 }
 
+/** One by-client-order-id lookup's outcome: the venue's answer, or why there is none. */
+type LookedUpOrderId = { id: string | null } | { error: unknown };
+
 export class AlpacaBrokerAdapter implements BrokerAdapter {
   /** client_order_id -> the bracket parent's Alpaca order id. */
   private readonly brackets = new Map<string, string>();
@@ -591,8 +594,8 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * otherwise throw the same way and kill the path just as dead.
    *
    * It is a FALLBACK, not the primary: the direct lookup is one small response
-   * against a paging endpoint, and it alone can find an order that is no longer
-   * open. A transport-level outage takes both down, and then `cancel()` still
+   * against a 500-row open-order page, and it alone can find an order that is
+   * no longer open. A transport-level outage takes both down, and then `cancel()` still
    * throws — correctly: the row keeps blocking rather than release on a cancel
    * that never reached the venue.
    */
@@ -600,32 +603,57 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     clientOrderId: string,
   ): Promise<{ order: string | null; rearmedOrder: string | null }> {
     const inProcessRearm = this.rearmedLegs.get(clientOrderId) ?? null;
+    const order = await this.lookupOpenOrderId(clientOrderId);
+    // A direct lookup that FAILED answers for neither id — the list below is
+    // asked for both from one snapshot, and asking the same failing endpoint
+    // again first would only cost a round trip to fail the same way.
+    const rearmed: LookedUpOrderId =
+      'error' in order
+        ? order
+        : inProcessRearm !== null
+          ? { id: inProcessRearm }
+          : await this.lookupOpenOrderId(`${clientOrderId}:rearm`);
+    if (!('error' in order) && !('error' in rearmed)) {
+      return { order: order.id, rearmedOrder: rearmed.id };
+    }
+
+    // Whichever lookup answered is KEPT. Only the unanswered one is re-derived
+    // from the list: a `:rearm` lookup that failed on its own says nothing
+    // about the original's id, and discarding that id would turn a partial
+    // outage into a full re-derivation, with a `null` for anything the list
+    // cannot see (a filled order is not open).
+    const lookupError = 'error' in order ? order.error : (rearmed as { error: unknown }).error;
+    let open: readonly AlpacaOrder[];
+    try {
+      open = await this.call('cancel', () => this.input.client.listOpenOrders());
+    } catch {
+      // The FIRST failure is the one rethrown: it is the cause the caller
+      // and the alert should name, and a fallback that also failed says
+      // nothing more than "the venue is unreachable" already did.
+      throw lookupError;
+    }
+    const idOf = (key: string): string | null =>
+      open.find((candidate) => candidate.client_order_id === key)?.id ?? null;
+    return {
+      order: 'error' in order ? idOf(clientOrderId) : order.id,
+      rearmedOrder: 'error' in rearmed ? idOf(`${clientOrderId}:rearm`) : rearmed.id,
+    };
+  }
+
+  /**
+   * One by-client-order-id lookup, with its failure returned rather than
+   * thrown so `resolveCancelTargets` can keep whichever of the two ids did
+   * answer. `id: null` is the venue answering "no such open order" — an
+   * ordinary result, and a different thing from the endpoint failing.
+   */
+  private async lookupOpenOrderId(clientOrderId: string): Promise<LookedUpOrderId> {
     try {
       const order = await this.call('cancel', () =>
         this.input.client.getOrderByClientOrderId(clientOrderId),
       );
-      if (inProcessRearm !== null)
-        return { order: order?.id ?? null, rearmedOrder: inProcessRearm };
-      const rearmOrder = await this.call('cancel', () =>
-        this.input.client.getOrderByClientOrderId(`${clientOrderId}:rearm`),
-      );
-      return { order: order?.id ?? null, rearmedOrder: rearmOrder?.id ?? null };
-    } catch (lookupError) {
-      let open: readonly AlpacaOrder[];
-      try {
-        open = await this.call('cancel', () => this.input.client.listOpenOrders());
-      } catch {
-        // The FIRST failure is the one rethrown: it is the cause the caller
-        // and the alert should name, and a fallback that also failed says
-        // nothing more than "the venue is unreachable" already did.
-        throw lookupError;
-      }
-      const idOf = (key: string): string | null =>
-        open.find((candidate) => candidate.client_order_id === key)?.id ?? null;
-      return {
-        order: idOf(clientOrderId),
-        rearmedOrder: inProcessRearm ?? idOf(`${clientOrderId}:rearm`),
-      };
+      return { id: order?.id ?? null };
+    } catch (error) {
+      return { error };
     }
   }
 

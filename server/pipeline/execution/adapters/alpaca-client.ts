@@ -215,6 +215,10 @@ export interface AlpacaBrokerClient {
    * for the bracket AND its `:rearm`, so the fallback costs one round trip
    * rather than two and keeps `cancel()`'s "every lookup above every
    * destructive call" ordering (#867) intact.
+   *
+   * ONE page, oldest first, bounded at Alpaca's 500-row maximum — see the
+   * request in `alpaca-http-client.ts` for why that ordering is what makes
+   * the bound safe for this caller.
    */
   listOpenOrders(): Promise<AlpacaOrder[]>;
   /**

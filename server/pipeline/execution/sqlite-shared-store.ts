@@ -992,7 +992,8 @@ export class SqliteExecutionStore implements SharedStore {
   async getUnresolvedFlattens(): Promise<UnresolvedFlattenSubmission[]> {
     const rows = this.db
       .prepare(
-        `SELECT idempotency_key, instrument, status, submitted_at, order_state, cancel_attempted_at
+        `SELECT idempotency_key, instrument, status, submitted_at, order_state, cancel_attempted_at,
+                terminal_unswept_checked_at
            FROM flatten_submissions
           WHERE arm = ?
             AND (status = 'submitting'
@@ -1005,6 +1006,7 @@ export class SqliteExecutionStore implements SharedStore {
       submitted_at: string;
       order_state: OrderState | null;
       cancel_attempted_at: string | null;
+      terminal_unswept_checked_at: string | null;
     }>;
 
     return rows.map((row) => ({
@@ -1015,6 +1017,8 @@ export class SqliteExecutionStore implements SharedStore {
       order_state: row.order_state,
       cancel_attempted_at:
         row.cancel_attempted_at === null ? null : new Date(row.cancel_attempted_at),
+      terminal_unswept_checked_at:
+        row.terminal_unswept_checked_at === null ? null : new Date(row.terminal_unswept_checked_at),
     }));
   }
 
@@ -1052,6 +1056,25 @@ export class SqliteExecutionStore implements SharedStore {
     if (result.changes === 0) {
       throw new Error(
         `SqliteExecutionStore.markFlattenCancelAttempted: no flatten_submissions row for ` +
+          `'${idempotency_key}'`,
+      );
+    }
+  }
+
+  /** Migration 0063's window start and throttle — see `SharedStore.markFlattenTerminalUnsweptChecked`. */
+  async markFlattenTerminalUnsweptChecked(
+    idempotency_key: string,
+    checked_at: Date,
+  ): Promise<void> {
+    const result = this.db
+      .prepare(
+        'UPDATE flatten_submissions SET terminal_unswept_checked_at = ? WHERE idempotency_key = ?',
+      )
+      .run(toStoredTimestamp(checked_at), idempotency_key);
+
+    if (result.changes === 0) {
+      throw new Error(
+        `SqliteExecutionStore.markFlattenTerminalUnsweptChecked: no flatten_submissions row for ` +
           `'${idempotency_key}'`,
       );
     }

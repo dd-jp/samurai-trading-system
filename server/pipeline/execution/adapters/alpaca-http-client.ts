@@ -775,7 +775,18 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
       // `nested=false` so a bracket's legs arrive as their own rows rather than
       // hidden inside the parent: the caller matches on `client_order_id`, and
       // a nested leg would be unreachable to that match.
-      '/v2/orders?status=open&nested=false&limit=500',
+      //
+      // `direction=asc` against Alpaca's `desc` default, and that is
+      // load-bearing at the 500 cap (#1500 review): this is ONE page, not a
+      // paged walk, so past 500 open orders the far end of the sort is
+      // dropped. The caller is looking for a flatten wedged long enough for
+      // reconcile to have reached it — the OLDEST open order there is — and
+      // `desc` drops exactly that one first. Oldest-first means the rows lost
+      // at the cap are the newest, which this lookup is never about. Paging
+      // properly needs an `after` cursor over a timestamp `AlpacaOrder` does
+      // not carry; if the open book can ever exceed 500 this needs that
+      // cursor, not a bigger limit (500 is Alpaca's own maximum).
+      '/v2/orders?status=open&nested=false&direction=asc&limit=500',
       { method: 'GET' },
       'listOpenOrders',
       validateAlpacaOrders,

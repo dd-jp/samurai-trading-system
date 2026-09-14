@@ -1,0 +1,36 @@
+-- Bounds the terminal-with-unswept-fills check, and gives it a clock that
+-- starts when the shape APPEARS rather than when the flatten was submitted
+-- (#1500 review round 5, findings 1 and 2).
+--
+-- `reconcileFlatten` releases a terminal flatten whose fills were never swept,
+-- on the venue's own book. Two things that column-less design got wrong:
+--
+-- 1. The window was measured from `submitted_at`. A row submitted 30 minutes
+--    ago that goes terminal-with-fills NOW is already past such a bound, so it
+--    was examined within one fill-sync poll (#921, 15s) of the fill itself —
+--    against a venue position view that may still lag its own fill processing.
+--    That is the same lag `cancelNeverConfirmedFlatten` reads AFTER its cancel
+--    to avoid, and reading it too early reads coverage as true and releases a
+--    row whose replacement then goes out at full size (#516/#1389 over-sell).
+--    Measured from this column instead, the row must have SAT terminal with
+--    its fills unswept for the whole window before any release is considered.
+--
+-- 2. Nothing throttled the check. Reaching a verdict costs a
+--    `getOpenPositions()` and, when the row keeps blocking, a real page — and
+--    `alert-catalogue.ts` does not dedup those. Per-pass, that is the ~240
+--    reads and ~240 pages per hour per row migration 0062 exists to prevent.
+--    Bumped again on every pass that looks and does not release, so the check
+--    costs at most one venue read and one page per window per row.
+--
+-- Durable rather than process-local for migration 0062's reason: a crash loop
+-- or an operator restart would otherwise re-arm a per-pass read-and-page, and
+-- would restart the ordering window from zero on a row that had already sat
+-- terminal for long enough.
+--
+-- NOT evidence about the venue, and nothing may read it as such: permission to
+-- release the row comes only from the venue book covering what the store still
+-- holds. NULL means "no pass has seen this row terminal with fills unswept" —
+-- every row written before this migration, and every healthy flatten since.
+-- There is nothing to backfill: a NULL row simply starts its window on the
+-- first pass that sees the shape.
+ALTER TABLE flatten_submissions ADD COLUMN terminal_unswept_checked_at TEXT NULL;

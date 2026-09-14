@@ -1196,6 +1196,12 @@ describe('AlpacaHttpBrokerClient — wire validation (#509)', () => {
     const [url] = fetchMock.mock.calls[0] as [string];
     expect(url).toContain('/v2/orders?');
     expect(url).not.toContain('by_client_order_id');
+    // One page at Alpaca's maximum, OLDEST first. The caller is looking for a
+    // flatten wedged long enough for reconcile to have reached it — the oldest
+    // open order there is — and Alpaca's `desc` default would drop exactly
+    // that one at the cap.
+    expect(url).toContain('direction=asc');
+    expect(url).toContain('limit=500');
   });
 
   it('listOpenOrders rejects a response body that is not an array at all', async () => {

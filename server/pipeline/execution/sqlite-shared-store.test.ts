@@ -1002,6 +1002,7 @@ describe('SqliteExecutionStore', () => {
           submitted_at: OPENED_AT,
           order_state: null,
           cancel_attempted_at: null,
+          terminal_unswept_checked_at: null,
         },
       ]);
     });
@@ -1025,6 +1026,7 @@ describe('SqliteExecutionStore', () => {
           submitted_at: OPENED_AT,
           order_state: 'submitted',
           cancel_attempted_at: null,
+          terminal_unswept_checked_at: null,
         },
       ]);
     });
@@ -1049,6 +1051,7 @@ describe('SqliteExecutionStore', () => {
           submitted_at: OPENED_AT,
           order_state: null,
           cancel_attempted_at: attemptedAt,
+          terminal_unswept_checked_at: null,
         },
       ]);
     });

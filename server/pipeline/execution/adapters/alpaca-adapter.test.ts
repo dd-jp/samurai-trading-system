@@ -2320,19 +2320,54 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       expect(cancelOrder).not.toHaveBeenCalled();
     });
 
+    it('keeps the id the direct lookup DID answer with when only the :rearm lookup breaks', async () => {
+      // The `:rearm` lookup alone failing says nothing about the original's
+      // id, and that id is already in hand — only the unanswered one is
+      // re-derived from the list.
+      const getOrderByClientOrderId = vi.fn(async (clientOrderId: string) => {
+        if (clientOrderId === 'key-1') return { ...acceptedOrder(), id: 'bracket-venue-id' };
+        throw new Error('order-details 503 on the :rearm key');
+      });
+      const listOpenOrders = vi
+        .fn()
+        .mockResolvedValue([
+          { ...acceptedOrder(), id: 'rearm-venue-id', client_order_id: 'key-1:rearm' },
+        ]);
+      const cancelOrder = vi.fn().mockResolvedValue(undefined);
+      const adapter = adapterWith(
+        makeClient({ getOrderByClientOrderId, listOpenOrders, cancelOrder }),
+      );
+
+      await adapter.cancel('key-1', 'AAPL');
+
+      expect(cancelOrder.mock.calls.map(([id]) => id)).toEqual([
+        'rearm-venue-id',
+        'bracket-venue-id',
+      ]);
+    });
+
     it('still refuses, naming the original cause, when the venue is unreachable on BOTH endpoints', async () => {
       const cancelOrder = vi.fn();
       const adapter = adapterWith(
         makeClient({
-          getOrderByClientOrderId: vi.fn().mockRejectedValue(new Error('order-details 503')),
-          listOpenOrders: vi.fn().mockRejectedValue(new Error('list endpoint 503')),
+          getOrderByClientOrderId: vi
+            .fn()
+            .mockRejectedValue(Object.assign(new Error('order-details 503'), { status: 503 })),
+          listOpenOrders: vi
+            .fn()
+            .mockRejectedValue(Object.assign(new Error('list endpoint 502'), { status: 502 })),
           cancelOrder,
         }),
       );
 
       // #867 unchanged: a lookup outage leaves the lot's protection fully
       // intact, and the caller's fail-closed refusal is still the safe answer.
-      await expect(adapter.cancel('key-1', 'AAPL')).rejects.toThrow();
+      //
+      // Which failure it names is the assertion: the DIRECT lookup's, not the
+      // fallback's. `sanitizeBrokerError` strips the original message by
+      // design (broker-error.ts's credential boundary), so the status it
+      // carried is what survives to say which cause this is.
+      await expect(adapter.cancel('key-1', 'AAPL')).rejects.toMatchObject({ statusCode: 503 });
       expect(cancelOrder).not.toHaveBeenCalled();
     });
 

@@ -92,6 +92,7 @@ import { coversQty, describeThrownSafely, heldQuantitiesFor, safeLog } from '../
 import { TERMINAL_ORDER_STATES } from '../../shared/store/index.js';
 import { sweepResidualProtection } from './residual-protection-sweep.js';
 import type {
+  NormalizedOrder,
   NormalizedPosition,
   ReconcileDivergence,
   ReconcileInput,
@@ -250,10 +251,19 @@ export const FLATTEN_CANCEL_RETRY_EVERY_MS = 30 * 60 * 1_000;
  * instrument's mandatory flat-by-close for as long as the store exists, across
  * restarts, with no operator path but hand-editing SQLite.
  *
- * The bound is measured from `submitted_at`, the only timestamp the row
- * carries, and is long relative to the 15s fill poll so that a flatten sweeping
- * NORMALLY is never examined here: by the time it applies, a working sweep has
- * had well over a hundred chances.
+ * Measured from `terminal_unswept_checked_at` (migration 0063) — the first
+ * pass that saw the row TERMINAL with its fills unswept — not from
+ * `submitted_at`. Two different failures rule that out: a row that has been
+ * alive for hours and goes terminal NOW is already past any submission-based
+ * bound, so it would be judged within one 15s poll of the fill itself, against
+ * a venue position view that may still lag its own fill processing (the lag
+ * `cancelNeverConfirmedFlatten` reads AFTER its cancel to avoid). Judged too
+ * early, coverage reads true on a venue that has simply not caught up, and the
+ * replacement flatten goes out at full size — the #516/#1389 over-sell.
+ *
+ * Half an hour of the row sitting in that shape is long relative to the 15s
+ * fill poll, so a flatten sweeping NORMALLY is never examined here: a working
+ * sweep has had well over a hundred chances by then.
  */
 export const UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS = 30 * 60 * 1_000;
 
@@ -533,63 +543,6 @@ async function reconcileFlatten(
     };
   }
 
-  // #1500: the terminal row whose fills were never swept. `filled_qty > 0`
-  // here (the branch above took the zero case), so `ingestFills()` owes this
-  // row a `markFlattenFillsSwept` it has not delivered, and past
-  // `UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS` it is not going to: the fills have
-  // aged past its `since` floor, so the flatten key is never iterated again.
-  //
-  // Released on the same evidence `cancelNeverConfirmedFlatten` uses, never on
-  // age: the venue's own book still covering everything the store considers
-  // held means the fills WERE applied to the store and only the sweep mark was
-  // lost — so there is nothing left to sweep and nothing a replacement could
-  // double-sell. A venue holding LESS is the case where the fills are real and
-  // unbooked; no venue number can say which lot each belongs to, so that one
-  // keeps blocking and pages for hand attribution.
-  if (
-    TERMINAL_ORDER_STATES.includes(order.order_state) &&
-    now.getTime() - row.submitted_at.getTime() >= UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS
-  ) {
-    const age = Math.round((now.getTime() - row.submitted_at.getTime()) / 1_000);
-    const provenance =
-      `the venue reports this flatten '${order.order_state}' having filled ${order.filled_qty}, ` +
-      `and ${age}s after submission ingestFills has still not swept its fills — past the ` +
-      `${UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS / 60_000}min bound`;
-    const coverage = await venueCoversStoreHeld(input, row, storePositions);
-    if (!coverage.covered) {
-      const reason =
-        `${provenance}. ${coverage.note}, so the fills this flatten produced are real and not ` +
-        'in the store, and no venue number can say which lot each belongs to. The row keeps ' +
-        'blocking: attribute them by hand';
-      await postFlattenReconcileAlert(input, row, reason, now);
-      return {
-        idempotency_key: row.idempotency_key,
-        instrument: row.instrument,
-        store_state: storeState,
-        broker_state: order.order_state,
-        action: 'undetermined',
-        kind: 'flatten',
-        reason,
-      };
-    }
-    const reason =
-      `${provenance}. ${coverage.note} — so its fills were applied to the store and only the ` +
-      'sweep mark was lost, leaving nothing to sweep. The journal row is resolved rather than ' +
-      'left blocking every later flatten on the instrument. This is an INFERENCE from the ' +
-      "venue's book, not a completed sweep";
-    await postFlattenReconcileAlert(input, row, reason, now);
-    await store.resolveFlattenError(row.idempotency_key, reason, now);
-    return {
-      idempotency_key: row.idempotency_key,
-      instrument: row.instrument,
-      store_state: storeState,
-      broker_state: order.order_state,
-      action: 'rejected',
-      kind: 'flatten',
-      reason,
-    };
-  }
-
   if (row.status === 'submitting') {
     // The genuine first resolution of this write-ahead's ambiguity —
     // `resolveFlattenSubmitted` is the right write here (sets `resolved_at`,
@@ -610,6 +563,33 @@ async function reconcileFlatten(
   }
 
   const adopted = `flatten journal said '${row.status}'; broker reports '${order.order_state}'`;
+
+  // #1500: the terminal row whose fills were never swept. `filled_qty > 0`
+  // here (the branch above took the zero case), so `ingestFills()` owes this
+  // row a `markFlattenFillsSwept` it has not delivered, and once the row has
+  // sat in that shape past `UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS` it is not
+  // going to: the fills have aged past its `since` floor, so the flatten key
+  // is never iterated again.
+  //
+  // Below the record/resolve writes above on purpose, not merely after them:
+  // the venue state that motivates the release is written to the row BEFORE
+  // any pass can release on it, including for a `'submitting'` row whose ack
+  // this is (`resolveFlattenSubmitted` — `broker_order_ids` and `resolved_at`
+  // would otherwise never be written for a row released here).
+  //
+  // The window starts at the FIRST pass that saw this shape and the same
+  // column throttles the verdict's cost — see the constant, and migration
+  // 0063. A pass inside the window does nothing at all: no venue read, no
+  // page, and the row falls through to the 'adopted' answer it had before
+  // this branch existed.
+  if (TERMINAL_ORDER_STATES.includes(order.order_state)) {
+    const firstSeen = row.terminal_unswept_checked_at;
+    if (firstSeen === null) {
+      await store.markFlattenTerminalUnsweptChecked(row.idempotency_key, now);
+    } else if (now.getTime() - firstSeen.getTime() >= UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS) {
+      return await judgeTerminalUnsweptFlatten(input, row, order, storePositions, storeState, now);
+    }
+  }
 
   // #1500 — cancel-then-replace, the only path that reaches the shape #1500
   // was filed for. Every acked row carries a WORKING `order_state`
@@ -870,6 +850,73 @@ async function postFlattenReconcileAlert(
   }
 }
 
+/**
+ * The verdict on a row that has sat TERMINAL with unswept fills for the whole
+ * `UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS` window — reached at most once per
+ * window per row, since every outcome that leaves the row standing re-arms the
+ * throttle this is gated on.
+ *
+ * Released on the same evidence `cancelNeverConfirmedFlatten` uses, never on
+ * age: the venue's own book agreeing with everything the store considers held
+ * means the fills WERE applied to the store and only the sweep mark was lost —
+ * so there is nothing left to sweep and nothing a replacement could
+ * double-sell. Any disagreement is the case where the fills are real and
+ * unbooked; no venue number can say which lot each belongs to, so that one
+ * keeps blocking and pages for hand attribution.
+ */
+async function judgeTerminalUnsweptFlatten(
+  input: ReconcileInput,
+  row: UnresolvedFlattenSubmission,
+  order: NormalizedOrder,
+  storePositions: readonly OpenPosition[],
+  storeState: OrderState,
+  now: Date,
+): Promise<ReconcileDivergence> {
+  const sat = Math.round(
+    (now.getTime() - (row.terminal_unswept_checked_at?.getTime() ?? 0)) / 1_000,
+  );
+  const provenance =
+    `the venue reports this flatten '${order.order_state}' having filled ${order.filled_qty}, ` +
+    `and ${sat}s after this sweep first saw it terminal ingestFills has still not swept its ` +
+    `fills — past the ${UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS / 60_000}min bound`;
+  const coverage = await venueCoversStoreHeld(input, row, storePositions);
+  if (!coverage.covered) {
+    const reason =
+      `${provenance}. ${coverage.note}, so the fills this flatten produced are real and not ` +
+      'in the store, and no venue number can say which lot each belongs to. The row keeps ' +
+      'blocking: attribute them by hand';
+    // Re-armed for the row that stays: the next look — one venue read, one
+    // page — is a window away, not one 15s poll away (migration 0063).
+    await input.store.markFlattenTerminalUnsweptChecked(row.idempotency_key, now);
+    await postFlattenReconcileAlert(input, row, reason, now);
+    return {
+      idempotency_key: row.idempotency_key,
+      instrument: row.instrument,
+      store_state: storeState,
+      broker_state: order.order_state,
+      action: 'undetermined',
+      kind: 'flatten',
+      reason,
+    };
+  }
+  const reason =
+    `${provenance}. ${coverage.note} — so its fills were applied to the store and only the ` +
+    'sweep mark was lost, leaving nothing to sweep. The journal row is resolved rather than ' +
+    'left blocking every later flatten on the instrument. This is an INFERENCE from the ' +
+    "venue's book, not a completed sweep";
+  await postFlattenReconcileAlert(input, row, reason, now);
+  await input.store.resolveFlattenError(row.idempotency_key, reason, now);
+  return {
+    idempotency_key: row.idempotency_key,
+    instrument: row.instrument,
+    store_state: storeState,
+    broker_state: order.order_state,
+    action: 'rejected',
+    kind: 'flatten',
+    reason,
+  };
+}
+
 /** Held quantity of one instrument's lots on one OPENING side, per lot, never netted across sides. */
 function sumHeld(
   lots: readonly OpenPosition[],
@@ -882,11 +929,12 @@ function sumHeld(
 }
 
 /**
- * Does the venue's own book still cover everything the store thinks it holds
+ * Does the venue's own book AGREE with everything the store thinks it holds
  * for this row's instrument? The single piece of evidence both #1500 release
  * paths rest on: if this flatten closed any quantity the store has not booked,
  * the venue holds LESS than `heldQuantitiesFor` says, and a replacement sized
- * off the store would sell that difference twice (#516/#1389).
+ * off the store would sell that difference twice (#516/#1389). A surplus is
+ * refused too, for the reason given at the test itself.
  *
  * `note` is the evidence in words for the caller's `reason`/alert; the caller
  * appends what it then did. NOT covered is returned for ignorance as well as
@@ -950,6 +998,25 @@ async function venueCoversStoreHeld(
       note:
         `the venue holds ${venueQty} ${row.instrument} against ${storeHeld} the store still ` +
         'considers held, so something filled that the store has not booked',
+    };
+  }
+  // A SURPLUS is not coverage either, though it passes the test above. The
+  // venue holding MORE than the store thinks it holds means some of that book
+  // is quantity the store has no lot for (`findUnrecordedVenuePositions`
+  // reports exactly this), and an unbooked exit fill up to the size of that
+  // surplus hides inside it: the sum still covers, while the lot it belonged
+  // to is over-stated. That is the same fills-not-booked state as a short
+  // venue — no over-sell, since a replacement would be sized off the store's
+  // smaller number, but a released row whose fills are missing from the
+  // journal, and the PnL and CGT record with them. Coverage is therefore
+  // agreement, tested both ways under the one flatness tolerance.
+  if (!coversQty(storeHeld, venueQty)) {
+    return {
+      covered: false,
+      note:
+        `the venue holds ${venueQty} ${row.instrument} against ${storeHeld} the store considers ` +
+        'held — a surplus the store has no lot for, which an unbooked exit fill of its size ' +
+        'would hide inside, so this book cannot corroborate the store',
     };
   }
   return {
