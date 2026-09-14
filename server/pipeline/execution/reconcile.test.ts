@@ -1073,6 +1073,24 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     ]);
   });
 
+  /** A venue book on the OTHER side of the store's is the #516/#1389 over-sell, not coverage. */
+  it('keeps a never-confirmed flatten blocking when the venue holds the same size SHORT against a long lot', async () => {
+    const { store } = openTestExecutionStore();
+    await heldLot(store, 10);
+    await writeAheadFlatten(store, {
+      submitted_at: new Date(NOW.getTime() - (UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1)),
+    });
+    const broker = makeBroker();
+    broker.failFlattenLookup = 'order-details endpoint 503';
+    broker.venuePositions = [{ instrument: 'AAPL', qty: -10, side: 'sell', avg_entry_price: 100 }];
+
+    await new ExecutionImpl(makeInput(store, broker)).reconcile();
+
+    expect((await store.getUnresolvedFlattens()).map((row) => row.idempotency_key)).toEqual([
+      FLATTEN_KEY,
+    ]);
+  });
+
   it('keeps a never-confirmed flatten blocking when the venue refuses the cancel', async () => {
     const { store } = openTestExecutionStore();
     await heldLot(store, 10);
@@ -1172,11 +1190,12 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
    * branch got.
    *
    * A `resumeFlatten` that throws is ignorance, not evidence: nothing observed
-   * the venue's answer, so forcing the row terminal would write a finding into
-   * the journal that nobody made. It also buys nothing operationally — an
-   * adapter that cannot reach the venue to ask about this flatten cannot submit
-   * a replacement one either. Its resolution path is the next pass on which the
-   * adapter CAN answer, and that path terminates, which is what this proves.
+   * the venue's answer, so forcing the row terminal on age would write a
+   * finding into the journal that nobody made. Its resolution path is the next
+   * pass on which the adapter CAN answer, and that path terminates, which is
+   * what this proves. A row whose lookup NEVER answers is not left to it —
+   * `cancelNeverConfirmedFlatten` (#1500) takes that shape past the bound, on
+   * venue evidence rather than on age.
    *
    * THE MUTATION THIS KILLS: extend the age bound to cover the catch branch
    * too. This test still passes (the row resolves either way), so it is paired

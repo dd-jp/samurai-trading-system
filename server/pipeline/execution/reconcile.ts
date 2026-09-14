@@ -88,13 +88,7 @@
  */
 
 import type { OpenPosition, OrderState } from '../../shared/index.js';
-import {
-  coversQty,
-  describeThrownSafely,
-  heldQuantitiesFor,
-  safeLog,
-  totalHeldQuantity,
-} from '../../shared/index.js';
+import { coversQty, describeThrownSafely, heldQuantitiesFor, safeLog } from '../../shared/index.js';
 import { TERMINAL_ORDER_STATES } from '../../shared/store/index.js';
 import { sweepResidualProtection } from './residual-protection-sweep.js';
 import type {
@@ -734,17 +728,25 @@ async function cancelNeverConfirmedFlatten(
     return blocked(reason);
   }
 
-  const venueQty = Math.abs(
+  const lots = storePositions.filter((position) => position.instrument === row.instrument);
+  const held = await heldQuantitiesFor(lots, (keys) => input.store.getExitFillSizes(keys));
+  // Both sides signed the same way (long positive) before they are compared:
+  // `NormalizedPosition.qty` carries the venue's direction, `held` never does.
+  // A venue book that has crossed to the other side of the store's — the
+  // #516/#1389 over-sell state — must not read as "still holds everything",
+  // which is exactly what comparing magnitudes would say.
+  const heldByKey = new Map(held.map((lot) => [lot.idempotency_key, lot.held]));
+  const signedStoreHeld = lots.reduce(
+    (sum, lot) => sum + (lot.side === 'sell' ? -1 : 1) * (heldByKey.get(lot.idempotency_key) ?? 0),
+    0,
+  );
+  const direction = signedStoreHeld < 0 ? -1 : 1;
+  const storeHeld = direction * signedStoreHeld;
+  const venueQty =
+    direction *
     venue.positions
       .filter((position) => position.instrument === row.instrument)
-      .reduce((sum, position) => sum + position.qty, 0),
-  );
-  const storeHeld = totalHeldQuantity(
-    await heldQuantitiesFor(
-      storePositions.filter((position) => position.instrument === row.instrument),
-      (keys) => input.store.getExitFillSizes(keys),
-    ),
-  );
+      .reduce((sum, position) => sum + position.qty, 0);
   if (!coversQty(venueQty, storeHeld)) {
     const reason =
       `${provenance}. It was CANCELLED at the venue, but the venue holds ${venueQty} ` +
