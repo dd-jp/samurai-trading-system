@@ -62,6 +62,52 @@ AAPL's row is read per doc 52 §5: at a 9.5% resolve rate the bracket is a time 
 the bar stops describing the job the signal is being asked to do. **The identity behind this table assumes the
 bracket resolves, so every row is a lower bound that loosens as its resolve rate falls — see §6.6.**
 
+> **Amended 2026-09-14 by [#1218](https://github.com/dd-jp/samurai-trading-system/issues/1218): the round trips
+> above are SPREAD ONLY and carry no commission, so every bar in this table is understated by Saxo's 16 bps.**
+>
+> Doc 52's `COST = {index: 0.18, single: 0.41}` is ADR-0018 D3's, and D3's is doc 18's — where it is stated as
+> *"one observed **0.18% spread** quote for 3USL"* (doc 18, Known weaknesses). It is a spread, not a blended
+> total. Saxo's live GIA commission was measured 2026-09-14 at **0.08%/side flat, no per-order minimum**
+> (ADR-0015's amendment, `1d155b7e`), which is **0.16% round trip** and additive to it. So `cost' = cost + 0.16`:
+> **0.34% index, 0.57% single-stock.**
+>
+> **Nothing needs re-simulating.** In `52-exit-geometry-and-subclass-odds.py` cost enters only as a terminal
+> subtraction (`out.append(res - cost_pct)`), and the declared bracket is an ADR-0018 constant frozen by #739
+> rather than re-solved, so hit rates, resolve rates, widths and `E_gross` are all cost-invariant. The two
+> identities then give the restatement in closed form:
+>
+> ```
+> E_net' = E_net − 0.16              bar' = bar + 0.16 / width × 100
+> ```
+>
+> i.e. **+3.85 pp on every index bar** (0.16 / 4.16 × 100) and **+1.31 pp on every single-stock bar**
+> (0.16 / 12.25 × 100).
+>
+> | name | subclass | `E_net` %/session | bar (pp) | **break-even accuracy** |
+> | --- | --- | --- | --- | --- |
+> | AAPL | single | −0.2801 | 2.29 | 52.29% *(degenerate — 9.5% resolve)* |
+> | PLTR | single | −0.3184 | 2.60 | **52.60%** |
+> | NVDA | single | −0.5078 | 4.15 | **54.15%** |
+> | TSLA | single | −0.6319 | 5.16 | 55.16% |
+> | QQQ | index | −0.2831 | 6.81 | **56.81%** |
+> | SPY | index | −0.3345 | 8.04 | 58.04% |
+> | MSTR | single | −1.0372 | 8.47 | 58.47% |
+>
+> **The substantive consequence is a widened subclass separation, not a reordering.** A flat commission charged
+> against a **4.16-wide** bracket costs 2.9x what it costs against a **12.25-wide** one, so the index penalty is
+> 2.9x the single-stock one: the index mean bar goes 3.58 → **7.43 pp** while the single-stock mean goes 3.22 →
+> **4.53 pp**. **The narrow bracket is the one commission punishes**, and §2's "narrow brackets demand a large
+> edge" trade-off is sharper than doc 52 measured it. Be precise about what does *not* change: the ranking is
+> almost unmoved — SPY was already the second-hardest name before the restatement, and the only rank change is
+> **QQQ overtaking TSLA**. Nor do the index rows separate cleanly at subclass level: they sat inside the
+> single-stock range (below MSTR) before and still do. This is a widening, not an inversion.
+>
+> **This is a floor, not the charge.** The FX conversion margin on USD-quoted settlement is unmodelled — a
+> recorded deferral (#1220, David's 2026-09-08 ruling, which excluded non-sterling lines rather than pricing
+> them) and not an oversight — and the LSE ETP's own spread is still the single unmeasured 3USL quote that
+> §6.3 and #1053 describe. Both push the same way. Nothing here re-opens #666's measurement; it adds the one
+> cost component that *is* now measured.
+
 ## 3. The LLM bill, rebuilt equities-only
 
 **#658's £864/yr, the corrected £252/yr, the post-#617 £89/yr and the £12/£5 equity-leg figures are all
@@ -187,7 +233,16 @@ column already used — so every figure here is an upper bound if more than one 
 half of QQQ's 2.96 pp geometry bar and ~38% of SPY's 4.19 pp; including it, QQQ's break-even is **54.54%**,
 not the 53.51% the £1,000 illustration gives. On the single-stock bracket it stays small — 0.75 pp against
 bars of 1.29 (PLTR) to 7.16 (MSTR) — because the wider bracket and the larger `E_net` magnitudes both
-dominate it. **The unqualified claim that the bill is second-order holds only at the £1,000-notional
+dominate it.
+
+> **Amended 2026-09-14 by [#1218](https://github.com/dd-jp/samurai-trading-system/issues/1218).** The Δp table
+> and the 1.58/0.75 pp figures are **unchanged** — they divide the bill by `N × notional × width`, and the
+> commission restatement in §2 moves none of those three. What changes is the geometry bar each is compared
+> *against*. Against §2's restated bars the bill is now a **smaller** share, not a larger one: 1.58 pp against
+> QQQ's 6.81 pp rather than its 2.96 pp, and ~20% of SPY's 8.04 pp rather than ~38% of 4.19 pp. **QQQ's
+> break-even including the bill becomes 58.39%** (56.81 + 1.58), not 54.54%. The claim that the bill is not
+> second-order on the index bracket survives, but it is no longer the largest correction on that bracket —
+> commission is, by roughly 2.4x. **The unqualified claim that the bill is second-order holds only at the £1,000-notional
 illustration, and not at the notional D5 actually resolves to.**
 
 ## 5. What this says about gating — and what it cannot say
@@ -213,7 +268,11 @@ sessions traded reduces the loss. #658's (a) ruling loses the support it was giv
 **Follows.** The absolute bar is unchanged by gating: whatever `g` is, the system needs
 `p ≥ 50% + bar + Δp` to make money at all — **51.3% (PLTR) to 57.2% (MSTR)** before the bill, and
 **~52.0% (PLTR) to ~57.9% (MSTR)** with it, alongside **~54.5% on QQQ**, each carrying the bill at the
-notional D5 resolves to (£250 single-stock, £350 index) rather than at the £1,000 illustration. This is the replacement for the withdrawn *"catalyst days must deliver ≥ 0.312%/trade against the
+notional D5 resolves to (£250 single-stock, £350 index) rather than at the £1,000 illustration.
+**Restated 2026-09-14 by [#1218](https://github.com/dd-jp/samurai-trading-system/issues/1218) for Saxo's 16 bps
+round-trip commission (§2's amendment): 52.6% (PLTR) to 58.5% (MSTR) before the bill, ~53.4% to ~59.2% with it,
+and ~58.4% on QQQ. The shape of the argument below is unaffected — the bar rises, and it is still a bar rather
+than a cost trade.** This is the replacement for the withdrawn *"catalyst days must deliver ≥ 0.312%/trade against the
 0.195% all-day average — a 60% uplift"* bar handed to
 [#655](https://github.com/dd-jp/samurai-trading-system/issues/655). **The shape is different: the old bar was
 a percentage uplift over a positive average; the anchor is negative, so the replacement is an accuracy
@@ -240,7 +299,11 @@ is profitable or unprofitable."* `p_u` and `p_g` are both unmeasured because the
    [#1053](https://github.com/dd-jp/samurai-trading-system/issues/1053) (open) owns delivering it.
    [`53-intraday-cost-calibration.md`](53-intraday-cost-calibration.md) calibrates the *backtest* cost model
    at 1-minute resolution on a US-equity proxy; it does not supply an LSE ETP round trip either, so it
-   narrows nothing here.
+   narrows nothing here. **Narrowed in part 2026-09-14 by
+   [#1218](https://github.com/dd-jp/samurai-trading-system/issues/1218): the SPREAD half is still a single
+   unmeasured quote and #1053 still owns it, but the COMMISSION half is now measured rather than assumed —
+   0.08%/side flat at Saxo, additive to both subclass round trips, and applied in §2's amendment. The two
+   halves are separable precisely because one is a venue rate and the other is an instrument property.**
 4. **Deployment is open** ([#798](https://github.com/dd-jp/samurai-trading-system/issues/798)) — hence
    per-£1,000 throughout, with the D5-resolved £350/£250 row alongside it. The book itself is no longer open:
    #800 settled it at £1,000, all equity.
