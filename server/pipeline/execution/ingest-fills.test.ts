@@ -1936,8 +1936,12 @@ describe('ExecutionImpl.ingestFills', () => {
 
       await journalFlatten('flatten-2', 4);
       store.writeLog.length = 0;
-      await expect(poll([entry, firstFlattenFill, secondFlattenFill])).rejects.toThrow();
+      const outcome = await poll([entry, firstFlattenFill, secondFlattenFill]).then(
+        () => null,
+        (error: unknown) => error,
+      );
       expect(store.writeLog).not.toContain('mark-flatten-fills-swept:flatten-2');
+      expect(outcome).not.toBeNull();
       // Why the held row is the only recovery there is. The surviving lot
       // cannot be seeded ahead of this fill and still have the poll above see
       // it at all — that is the whole point: raise the floor past the fill and
