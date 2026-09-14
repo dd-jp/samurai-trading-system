@@ -18,6 +18,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MarketDataService } from '../../providers/market-data-service/index.js';
 import type { Logger, OrderIntent } from '../../shared/index.js';
 import { runWithTraceId } from '../../shared/index.js';
+import { hashPromptTemplate } from '../../shared/llm/prompt-template-hash.js';
 import { openSharedStore, type StoreHandle } from '../../shared/store/index.js';
 import type {
   AnthropicMessageRequest,
@@ -33,6 +34,7 @@ import {
   LlmRefusalError,
   SqliteLlmSpendStore,
   UNCAPPED_SPEND,
+  WIRE_ENVELOPE_TEMPLATE_HASH,
 } from '../debate-engine/index.js';
 import type { RiskCriticRequest } from './critic.js';
 import {
@@ -659,7 +661,13 @@ describe('LlmRiskCriticProducer spend metering (#957 acceptance: meters into llm
     expect(rows[0]?.cost_usd).toBeGreaterThan(0);
     // #1514: the row this ticket's AC needs — "which prompt version produced
     // decision X" reads straight off this column, joined by debate_id above.
-    expect(rows[0]?.prompt_template_hash).toBe(CRITIC_PROMPT_TEMPLATE_HASH);
+    // Combined with WIRE_ENVELOPE_TEMPLATE_HASH (round-1 review finding 1),
+    // not the bare CRITIC_PROMPT_TEMPLATE_HASH: the persisted value must also
+    // change if the shared wire envelope (renderMessageContent's Context:
+    // wrap) changes, not only if this stage's own template does.
+    expect(rows[0]?.prompt_template_hash).toBe(
+      hashPromptTemplate(`${CRITIC_PROMPT_TEMPLATE_HASH}:${WIRE_ENVELOPE_TEMPLATE_HASH}`),
+    );
   });
 });
 

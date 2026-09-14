@@ -182,23 +182,16 @@ function unavailable(reason: string): RiskCriticVerdict {
 }
 
 /**
- * The prompt. Deliberately narrow: the critic is told what the mechanical
- * steps already cover so it does not spend its one pass re-deriving an
- * exposure cap, and it is told that "pass" is a full answer — an adversarial
- * frame with no way to say "nothing here" manufactures objections.
- *
- * The book context is wrapped by `wrapUntrusted` even though none of it is
- * ingested free text today: instrument ids come from a pool file, and the one
- * cheap guarantee worth keeping is that no data block can ever read as an
- * instruction (#208).
- */
-/**
  * The static half of `renderCriticPrompt` — everything request-invariant,
  * split out so `hashPromptTemplate` (#1514) has stable text to hash. The
  * `INDICATOR_KINDS`/`MAX_INVALIDATION_LOOKBACK` interpolations are compile-time
  * constants, not per-request data, so this string is identical on every call
  * within one build — a real "template version" the way a source edit to it
- * changes the hash, but a book-context change never does.
+ * changes the hash, but a book-context change never does. Deliberately
+ * narrow: the critic is told what the mechanical steps already cover so it
+ * does not spend its one pass re-deriving an exposure cap, and it is told
+ * that "pass" is a full answer — an adversarial frame with no way to say
+ * "nothing here" manufactures objections.
  */
 const CRITIC_PROMPT_TEMPLATE = [
   'You are a risk critic on a live-money intraday trading system. Argue why the',
@@ -245,6 +238,12 @@ const CRITIC_PROMPT_TEMPLATE = [
 /** sha256 of `CRITIC_PROMPT_TEMPLATE` (#1514), computed once at module load. */
 export const CRITIC_PROMPT_TEMPLATE_HASH = hashPromptTemplate(CRITIC_PROMPT_TEMPLATE);
 
+/**
+ * The book context is wrapped by `wrapUntrusted` even though none of it is
+ * ingested free text today: instrument ids come from a pool file, and the one
+ * cheap guarantee worth keeping is that no data block can ever read as an
+ * instruction (#208).
+ */
 export function renderCriticPrompt(request: RiskCriticRequest): string {
   const { intent, portfolio } = request;
   const notional = intent.size * intent.entry;

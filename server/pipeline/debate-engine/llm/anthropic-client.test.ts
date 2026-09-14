@@ -1,10 +1,11 @@
+import { hashPromptTemplate } from '../../../shared/llm/prompt-template-hash.js';
 import type {
   AnthropicMessageRequest,
   AnthropicMessageResponse,
   AnthropicMessagesClient,
   LlmCallFailureReport,
 } from './anthropic-client.js';
-import { AnthropicLlmClient } from './anthropic-client.js';
+import { AnthropicLlmClient, WIRE_ENVELOPE_TEMPLATE_HASH } from './anthropic-client.js';
 import {
   LlmCancelledError,
   LlmMalformedResponseError,
@@ -477,6 +478,59 @@ describe('AnthropicLlmClient spend metering', () => {
     // grouping every stray call into one fictional debate.
     expect(sink.records[0]?.debate_id).toBeUndefined();
     expect(sink.records[0]?.trace_id).toBe('unattributed');
+  });
+
+  /**
+   * #1514 round-1 review, finding 1: `renderMessageContent` wraps every
+   * request's `contextJson` in a fixed scaffold (`\n\nContext:\n` plus
+   * `wrapUntrusted`'s preamble/tags) OUTSIDE `request.prompt`, so an edit to
+   * that scaffold changes what the model sees on every call while a bare
+   * per-stage `prompt_template_hash` stays byte-identical. `recordSpend` must
+   * fold `WIRE_ENVELOPE_TEMPLATE_HASH` into the persisted value so it reacts
+   * to both halves, not just the caller's own template.
+   */
+  it('folds the wire envelope hash into the persisted prompt_template_hash', async () => {
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi.fn().mockResolvedValue(usageResponse('good')),
+    };
+    const sink = recordingSink();
+    const client = new AnthropicLlmClient(
+      wire,
+      { model: 'openai/gpt-5.6-luna', max_tokens: 100, timeoutMs: 1000, retry: NO_RETRY },
+      sink,
+    );
+
+    const callTemplateHash = 'a'.repeat(64);
+    const attributedRequest = request();
+    attributedRequest.context.attribution = {
+      trace_id: 'trace-envelope',
+      stage: 'debate',
+      prompt_template_hash: callTemplateHash,
+    };
+
+    await client.complete(attributedRequest);
+
+    expect(sink.records[0]?.prompt_template_hash).toBeDefined();
+    expect(sink.records[0]?.prompt_template_hash).not.toBe(callTemplateHash);
+    expect(sink.records[0]?.prompt_template_hash).toBe(
+      hashPromptTemplate(`${callTemplateHash}:${WIRE_ENVELOPE_TEMPLATE_HASH}`),
+    );
+  });
+
+  it('leaves prompt_template_hash undefined when the caller supplies none', async () => {
+    const wire: AnthropicMessagesClient = {
+      createMessage: vi.fn().mockResolvedValue(usageResponse('good')),
+    };
+    const sink = recordingSink();
+    const client = new AnthropicLlmClient(
+      wire,
+      { model: 'openai/gpt-5.6-luna', max_tokens: 100, timeoutMs: 1000, retry: NO_RETRY },
+      sink,
+    );
+
+    await client.complete(request());
+
+    expect(sink.records[0]?.prompt_template_hash).toBeUndefined();
   });
 
   /**
