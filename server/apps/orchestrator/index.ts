@@ -447,7 +447,7 @@ function credentialRequirements(): readonly {
     {
       // #1400. The SIM gateway's 24-hour bearer, and only the SIM one: the
       // Saxo venue refuses `SAMURAI_MODE=live` outright (saxo-venue.ts), so
-      // `SAXO_LIVE_OPENAPI_TOKEN` is a variable no run this repo can start will
+      // `SAXO_LIVE_ACCESS_TOKEN` is a variable no run this repo can start will
       // ever read and is deliberately absent from this list.
       //
       // Named from the client's own table rather than restated, for the reason

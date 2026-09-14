@@ -84,15 +84,15 @@ describe('camelCase/underscore keys, Basic/Token auth and DSN passwords (#1367)'
         // Real env names, grepped from this repo's `process.env.*` reads —
         // not just the one Alpaca `_SECRET_KEY` name above. `_SECRET` and
         // `_TOKEN` are real suffixes here (`ALPACA_API_SECRET`,
-        // `SAXO_OPENAPI_TOKEN`), not just `_SECRET_KEY`/`_API_KEY`.
+        // `SAXO_SIM_ACCESS_TOKEN`), not just `_SECRET_KEY`/`_API_KEY`.
         name: 'real env-var key: ALPACA_API_SECRET (_SECRET suffix)',
         input: '{"region":"eu-west-2","ALPACA_API_SECRET":"skFAKE0000"}',
         secret: 'skFAKE0000',
         survives: '"region":"eu-west-2"',
       },
       {
-        name: 'real env-var key: SAXO_OPENAPI_TOKEN (_TOKEN suffix)',
-        input: '{"venue":"saxo","SAXO_OPENAPI_TOKEN":"skFAKE0000"}',
+        name: 'real env-var key: SAXO_SIM_ACCESS_TOKEN (_TOKEN suffix)',
+        input: '{"venue":"saxo","SAXO_SIM_ACCESS_TOKEN":"skFAKE0000"}',
         secret: 'skFAKE0000',
         survives: '"venue":"saxo"',
       },
@@ -358,14 +358,14 @@ describe('camelCase/underscore keys, Basic/Token auth and DSN passwords (#1367)'
       // `_token` suffix, because that would re-catch `next_page_token`. A
       // lowercase or mixed-case name ending only in `_token` is an
       // intentional, documented residual gap, not an oversight.
-      name: 'residual gap: lowercase _token-suffixed name (saxo_openapi_token)',
-      input: 'saxo_openapi_token=skFAKE0000',
+      name: 'residual gap: lowercase _token-suffixed name (saxo_session_token)',
+      input: 'saxo_session_token=skFAKE0000',
       where:
         "not found as a real lowercase field in server/ — the residual gap this row pins is deliberate, see this row's comment",
     },
     {
-      name: 'residual gap: mixed-case _token-suffixed name (Saxo_Openapi_Token)',
-      input: 'Saxo_Openapi_Token=skFAKE0000',
+      name: 'residual gap: mixed-case _token-suffixed name (Saxo_Session_Token)',
+      input: 'Saxo_Session_Token=skFAKE0000',
       where:
         'same residual gap as the row above — neither the all-caps branch (mixed case) nor the lowercase branch (bare _token) reaches it',
     },
