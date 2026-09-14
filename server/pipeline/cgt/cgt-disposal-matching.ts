@@ -78,8 +78,9 @@ function dayKey(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
+/** Derived from `dayKey`, not computed independently — a `MatchedDisposal.disposalDate` that disagreed with the day `dayKey` grouped it under would misfile a disposal into the wrong tax year with no test able to see the two had drifted apart. */
 function dayStart(date: Date): Date {
-  return new Date(Math.floor(date.getTime() / MS_PER_DAY) * MS_PER_DAY);
+  return new Date(`${dayKey(date)}T00:00:00.000Z`);
 }
 
 interface DayLot {

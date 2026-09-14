@@ -332,6 +332,13 @@ describe('tax-year windowing', () => {
     expect(report2425.disposals[0].proceeds).toBe(600);
     expect(report2526.disposals).toHaveLength(1);
     expect(report2526.disposals[0].proceeds).toBe(700);
+
+    // The filter cgtReportForTaxYear applies reads disposalDate directly, so
+    // pin that field itself (not just which report a proceeds figure lands
+    // in) — disposalDate is derived from dayKey via dayStart, and the two
+    // must never be allowed to drift apart at a tax-year boundary.
+    expect(report2425.disposals[0].disposalDate.toISOString()).toBe('2025-04-05T00:00:00.000Z');
+    expect(report2526.disposals[0].disposalDate.toISOString()).toBe('2025-04-06T00:00:00.000Z');
   });
 
   it('carries the annual exempt amount and HMRC citations as sourced constants, never a computed tax figure', () => {
