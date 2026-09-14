@@ -473,6 +473,24 @@ describe('startFromEnvironment (broker venue selection, #1400)', () => {
     expect(startingProfileForMode('paper').capitalCeilingUsd).toBe(LIVE_BOOK_SIZING_USD);
   });
 
+  // #1511 round-2 review: nothing outside risk-manager/ pinned the ONE line
+  // (`paperStartingProfile`'s `bookCurrency === 'GBP'` branch) that actually
+  // arms `RiskConfig.long_only_instruments` — the risk-manager suite drives
+  // the hand-built `makeConfig()` fixture, which proves the gate logic but
+  // not that the composition root ever wires the config the gate reads.
+  it('arms long_only_instruments with the Saxo tradeable set, and only on the Saxo path', () => {
+    const saxoProfile = paperStartingProfile('paper', saxoTradeableUniverse(), 'GBP');
+
+    expect(saxoProfile.riskConfig.long_only_instruments).toEqual(
+      new Set(saxoTradeableUniverse().map((instrument) => instrument.asset)),
+    );
+
+    // The Alpaca path — every shipped run today — carries no such field, so
+    // the #1511 gate stays inert there by construction, not by an instrument
+    // list that happens to be empty.
+    expect(paperStartingProfile('paper').riskConfig.long_only_instruments).toBeUndefined();
+  });
+
   it('leaves the Alpaca paper path in place when the venue is not configured', async () => {
     delete process.env[BROKER_VENUE_ENV_VAR];
 

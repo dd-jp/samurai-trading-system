@@ -2,10 +2,11 @@
  * Risk Manager (Stage 4) — core check pipeline (ticket #76).
  * See docs/specs/risk-manager-spec.md (Module: Check Pipeline).
  *
- * Ordered, monotonic risk-reducing gate: breakers -> per-trade -> per-asset
- * -> per-asset-class -> portfolio -> concentration -> min-size. Every step
- * trims notional exposure or hard-rejects; nothing ever increases size or
- * loosens a stop. Exits skip every entry gate and pass through verbatim.
+ * Ordered, monotonic risk-reducing gate: long-only book -> breakers ->
+ * per-trade -> per-asset -> per-asset-class -> portfolio -> concentration ->
+ * min-size. Every step trims notional exposure or hard-rejects; nothing ever
+ * increases size or loosens a stop. Exits skip every entry gate and pass
+ * through verbatim.
  *
  * `PortfolioView` (#78), `BreakerState` (#77), and `CorrelationEstimate`
  * (#50, correlation.ts) are consumed as pre-built inputs — this pipeline
@@ -283,6 +284,46 @@ export class RiskManagerImpl implements RiskManager {
         reasons: ['exit: bypasses all entry gates, passes through verbatim'],
         ...decisionBase,
       };
+    }
+
+    // #1511: long-only book, David's 2026-09-14 decision. A `sell` intent
+    // reaching HERE (below the exit early-return above) is never a close —
+    // it is `sideFor`'s bearish-direction answer on an instrument with no
+    // held lot (`routeDecision` only ever builds `intent_type: 'entry'` when
+    // `positions.length === 0`, decide.ts), i.e. a short. GIA equities do not
+    // size or cost a short (no borrow, no margin model, ADR-0016/0018 sized
+    // the leveraged-ETP universe long-only), so this refuses unconditionally
+    // rather than sizing one. A "down" thesis belongs on the paired inverse
+    // line if the universe carries it — that routing is a Trader concern, not
+    // this gate's.
+    //
+    // Scoped to `config.long_only_instruments` — the ACTUAL Saxo-venue set
+    // the run is configured to trade (`saxoTradeableUniverse()`,
+    // production/saxo-venue.ts), threaded in from `paperStartingProfile`'s
+    // `bookCurrency === 'GBP'` branch. `asset_class === 'stocks'` was the
+    // first-pass discriminator here and was wrong: it also caught the Alpaca
+    // paper universe (`DEFAULT_UNIVERSE`, also `asset_class: 'stocks'`),
+    // which trades no venue this decision named. See `RiskConfig`'s own doc
+    // comment for why `per_subclass_deployment_cap.subclass_of` is not the
+    // discriminator either (it under-refuses unmeasured Saxo rows).
+    //
+    // Placed here rather than in `ENTRY_CAP_GATES`: this is a structural
+    // refusal, not a sizing cap, so it should not pay for a portfolio/breaker
+    // read it has no use for — and unlike `ENTRY_CAP_GATES`'s monotonic
+    // trim-only contract, this one REJECTS outright, which the gates array
+    // does not otherwise do (the two `PerSubclassCapUnresolvableError` gates
+    // throw instead of returning a decision — this is a genuine `rejected()`
+    // both ends can act on).
+    if (intent.side === 'sell' && config.long_only_instruments?.has(intent.instrument)) {
+      const binding = 'long_only_book';
+      const positionClaim = intent.intent_type === 'entry' ? 'with no held lot' : 'on a scale_in';
+      return rejected(binding, [
+        `${binding}: refusing a sell ${intent.intent_type} on ${intent.instrument} ${positionClaim} ` +
+          '— #1511 decided a long-only book for the Saxo GIA equity leg. A sell that is not an ' +
+          'exit is a short on the long ETP: not sized or costed (no borrow/margin model, ' +
+          'ADR-0016/0018 sized this universe long-only); a "down" thesis routes to the paired ' +
+          'inverse line if it is in the universe.',
+      ]);
     }
 
     // #841: an entry may not be sized against a book that was only partly

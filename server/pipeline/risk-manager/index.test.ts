@@ -176,6 +176,129 @@ describe('RiskManagerImpl.evaluate — exits', () => {
   });
 });
 
+describe('RiskManagerImpl.evaluate — long-only book (#1511)', () => {
+  // A stand-in for the run's actual Saxo-tradeable set — `saxoTradeableUniverse()`'s
+  // asset list, not `asset_class`. See `RiskConfig.long_only_instruments`'s
+  // doc comment for why `asset_class === 'stocks'` alone is the wrong
+  // discriminator: it also catches the Alpaca paper universe below.
+  const saxoConfig = () => makeConfig({ long_only_instruments: new Set(['3LUS']) });
+
+  // The SIM trace's own intent shape (docs/research/44-saxo-data-surface.md
+  // §6.7): control arm, instrument 3LUS, `sell, size 1`, no open lot. Verdict
+  // refused that tick on `stale_feed` before Execution ever saw it — this
+  // suite is what refuses the SAME intent shape at Risk, unconditionally,
+  // rather than relying on a feed staleness that will not always be there.
+  it('refuses a sell entry with no held lot on a Saxo-venue instrument', () => {
+    const manager = new RiskManagerImpl(saxoConfig());
+    const input = makeInput({
+      intent: makeIntent({
+        instrument: '3LUS',
+        asset_class: 'stocks',
+        side: 'sell',
+        intent_type: 'entry',
+        size: 1,
+      }),
+    });
+
+    const decision = manager.evaluate(input);
+
+    expect(decision.status).toBe('rejected');
+    expect(decision.binding_constraint).toBe('long_only_book');
+    expect(decision.reasons.join(' ')).toMatch(/3LUS/);
+    expect(decision.reasons.join(' ')).toMatch(/#1511/);
+    // "with no held lot" is the true, load-bearing fact for an entry — this
+    // is the row a reviewer reads to confirm the refusal reason is honest
+    // about position state, not just present.
+    expect(decision.reasons.join(' ')).toMatch(/with no held lot/);
+    expect(decision.order_intent).toBeNull();
+  });
+
+  it('refuses a sell scale_in the same way, as defence-in-depth against a short lot ever existing', () => {
+    const manager = new RiskManagerImpl(saxoConfig());
+    const input = makeInput({
+      intent: makeIntent({
+        instrument: '3LUS',
+        asset_class: 'stocks',
+        side: 'sell',
+        intent_type: 'scale_in',
+      }),
+    });
+
+    const decision = manager.evaluate(input);
+
+    expect(decision.binding_constraint).toBe('long_only_book');
+    // A scale_in has a held lot by construction, so the reason must not
+    // claim "no held lot" here — that would misstate position state on the
+    // exact case this test covers.
+    expect(decision.reasons.join(' ')).not.toMatch(/with no held lot/);
+  });
+
+  it('does not refuse a sell EXIT — that is a long being closed, not a short being opened', () => {
+    const manager = new RiskManagerImpl(saxoConfig());
+    const input = makeInput({
+      intent: makeIntent({
+        instrument: '3LUS',
+        asset_class: 'stocks',
+        side: 'sell',
+        intent_type: 'exit',
+        size: 100,
+      }),
+    });
+
+    const decision = manager.evaluate(input);
+
+    expect(decision.status).toBe('approved');
+    expect(decision.binding_constraint).toBeNull();
+  });
+
+  it('does not refuse a buy entry on a Saxo-venue instrument', () => {
+    const manager = new RiskManagerImpl(saxoConfig());
+    const input = makeInput({
+      intent: makeIntent({
+        instrument: '3LUS',
+        asset_class: 'stocks',
+        side: 'buy',
+        intent_type: 'entry',
+      }),
+    });
+
+    expect(manager.evaluate(input).status).toBe('approved');
+  });
+
+  it('does not refuse a sell entry on crypto, which is never a member of long_only_instruments', () => {
+    const manager = new RiskManagerImpl(saxoConfig());
+    const input = makeInput({
+      intent: makeIntent({ instrument: 'BTC-USD', asset_class: 'crypto', side: 'sell' }),
+    });
+
+    expect(manager.evaluate(input).status).toBe('approved');
+  });
+
+  // Round-1 review finding (MAJOR): `asset_class === 'stocks'` also matches
+  // the Alpaca paper universe, which trades no Saxo venue and was never named
+  // in David's decision — the running 14-day paper soak measured ~2/3 of its
+  // bearish entry intents removed on BOTH arms by that mistake. This pins the
+  // fix: an instrument absent from `long_only_instruments` (the config never
+  // set at all is the default — `makeConfig()` with no override — reproducing
+  // every shipped Alpaca run) is never refused, regardless of asset_class.
+  it('does not refuse a sell entry on an Alpaca-paper stocks instrument — not in long_only_instruments', () => {
+    const manager = new RiskManagerImpl(makeConfig());
+    const input = makeInput({
+      intent: makeIntent({
+        instrument: 'AAPL',
+        asset_class: 'stocks',
+        side: 'sell',
+        intent_type: 'entry',
+      }),
+    });
+
+    const decision = manager.evaluate(input);
+
+    expect(decision.status).toBe('approved');
+    expect(decision.binding_constraint).not.toBe('long_only_book');
+  });
+});
+
 describe('RiskManagerImpl.evaluate — a partly-valued book (#841)', () => {
   it('refuses an ENTRY sized against a book with an unvalued position in it', () => {
     // The composition root only ever asks for a degraded view on the exit
