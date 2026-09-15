@@ -1472,7 +1472,7 @@
         "stage": "debate",
         "event": "llm_failure_rate_elevated",
         "level": "warn",
-        "message": "llm_failure rate 41.7% over the last 2h (5/12 truncated-or-gate-refused) — SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.",
+        "message": "llm_failure rate 41.7% over the last 2h (5/12 truncations) — SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.",
         "payload": {
           "rate": 0.4167,
           "llm_failure_count": 5,
@@ -1486,7 +1486,7 @@
         "stage": "debate",
         "event": "llm_failure_rate_elevated",
         "level": "warn",
-        "message": "llm_failure rate 41.7% over the last 2h (5/12 truncated-or-gate-refused) — SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.",
+        "message": "llm_failure rate 41.7% over the last 2h (5/12 truncations) — SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.",
         "payload": {
           "rate": 0.4167,
           "llm_failure_count": 5,
@@ -1495,7 +1495,43 @@
           "reported_at": "2026-09-10T08:15:00.000Z"
         }
       },
-      "text": "Samurai LLM FAILURE RATE ELEVATED: 41.7% of debates over the last 2h (5/12) ended in an outright LLM call failure or were refused admission by the in-flight gate, as of 2026-09-10T08:15:00.000Z.\nCheck the LLM provider status and the rate-limited client for sustained 429s/5xxs, AND whether maxInFlightLlmCalls is sized under the pass width — a debate log row alone cannot tell provider trouble from a spend-cap refusal from a gate refusal.",
+      "text": "Samurai LLM FAILURE RATE ELEVATED: 41.7% of truncations over the last 2h (5/12) truncated on an outright LLM call failure, as of 2026-09-10T08:15:00.000Z.\nCheck the LLM provider status and the rate-limited client for sustained 429s/5xxs — a debate log row alone cannot tell live provider trouble from a spend-cap refusal.",
+      "rejected": "telegram 502",
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    }
+  ],
+  "gateRefusalRateAlerts": [
+    {
+      "log": {
+        "trace_id": "gate-refusal-rate",
+        "stage": "debate",
+        "event": "gate_refusal_rate_elevated",
+        "level": "warn",
+        "message": "in-flight gate refused 97.2% of debates over the last 24h (350/360 refused or run) — SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.",
+        "payload": {
+          "rate": 0.9722,
+          "gate_refused_count": 350,
+          "decision_count": 360,
+          "window_ms": 86400000,
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "logInTrace": {
+        "trace_id": "gate-refusal-rate",
+        "stage": "debate",
+        "event": "gate_refusal_rate_elevated",
+        "level": "warn",
+        "message": "in-flight gate refused 97.2% of debates over the last 24h (350/360 refused or run) — SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.",
+        "payload": {
+          "rate": 0.9722,
+          "gate_refused_count": 350,
+          "decision_count": 360,
+          "window_ms": 86400000,
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "text": "Samurai GATE REFUSAL RATE ELEVATED: the in-flight LLM gate refused 97.2% of debates over the last 24h (350 refused of 360 refused-or-run), as of 2026-09-10T08:15:00.000Z.\nRefusing most of a pass is DESIGNED (maxInFlightLlmCalls admits two of six concurrent instruments); refusing nearly all of one is not — check whether a permit is stuck, whether per-call latency has risen past expectedLlmCallMs, and how few debates reached debate_log at all. This threshold is provisional and unmeasured (#1427).",
       "rejected": "telegram 502",
       "sendFailed": null,
       "sendFailedInTrace": null

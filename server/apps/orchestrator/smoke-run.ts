@@ -6876,6 +6876,9 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // a real rate — log-only is enough, same posture as the other channels
       // above that this run never exercises.
       llmFailureRateAlerts: loggingAlertChannel('llmFailureRateAlerts', logger),
+      // #1533. Same posture, same reason: the smoke fixture's gate refuses
+      // nothing, so no window here can reach `GATE_REFUSAL_RATE_THRESHOLD`.
+      gateRefusalRateAlerts: loggingAlertChannel('gateRefusalRateAlerts', logger),
       // #1400 — the Saxo adapter's three. This run is Alpaca/simulated-broker
       // only (`SAMURAI_BROKER` is never read here, the same posture as
       // `SAMURAI_MODE`), so no Saxo adapter exists to post any of them and

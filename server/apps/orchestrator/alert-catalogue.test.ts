@@ -318,6 +318,15 @@ const FIXTURES: { readonly [K in AlertId]: readonly AlertOf<K>[] } = {
       reported_at: AT,
     },
   ],
+  gateRefusalRateAlerts: [
+    {
+      rate: 0.9722,
+      gate_refused_count: 350,
+      decision_count: 360,
+      window_ms: 86_400_000,
+      reported_at: AT,
+    },
+  ],
   nonSterlingFeeAlerts: [
     {
       trace_id: 'fill-sync',
@@ -366,6 +375,7 @@ const INVOKE: { readonly [K in AlertId]: (port: AlertPort<K>, alert: AlertOf<K>)
   promptTierAlerts: (port, alert) => port.postPromptTierAlert(alert),
   lseCalendarCoverageAlerts: (port, alert) => port.postLseCalendarCoverageAlert(alert),
   llmFailureRateAlerts: (port, alert) => port.postLlmFailureRateAlert(alert),
+  gateRefusalRateAlerts: (port, alert) => port.postGateRefusalRateAlert(alert),
   nonSterlingFeeAlerts: (port, alert) => port.postNonSterlingFeeAlert(alert),
   unattributedFlattenFillAlerts: (port, alert) => port.postUnattributedFlattenFillAlert(alert),
 };

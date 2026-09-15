@@ -1046,7 +1046,7 @@ CREATE INDEX idx_debate_round_log_debate_id ON debate_round_log(debate_id);
 
 #### `llm_gate_refusals` (migration `0065`, [#1533](https://github.com/dd-jp/samurai-trading-system/issues/1533))
 
-Owned by the Debate Engine (`SqliteDebateLogStore.recordGateRefusal`). A gate-refused debate — the in-flight LLM cap's `admission`/`queue_deadline` refusal (#1080) — writes NO `debate_log` row at all: `debate_id` is a content hash of (instrument, bar, views) and the PK, so a refusal occupying that key would permanently block the real retry's row. That correctly-absent row also made a gate-refused debate invisible to `LlmFailureRateGuard`'s window read, so a soak where every debate was refused read as an empty, healthy window instead of the outage it was. This table exists only so that guard has something to sum — an append-only counter, no FK to `debate_log` (there usually isn't a row to reference) and no instrument/reason/trace_id, mirroring `llm_call_log`'s no-FK posture (migration 0039) rather than `debate_round_log`'s FK'd one: richer detail already lives on the `debate_refused_gate` log line the call site writes immediately before this insert.
+Owned by the Debate Engine (`SqliteDebateLogStore.recordGateRefusal`). A gate-refused debate — the in-flight LLM cap's `admission`/`queue_deadline` refusal (#1080) — writes NO `debate_log` row at all: `debate_id` is a content hash of (instrument, bar, views) and the PK, so a refusal occupying that key would permanently block the real retry's row. That correctly-absent row leaves a refusal invisible to every `debate_log` aggregate, so a soak where every debate was refused read as an empty, healthy window instead of the outage it was. This table is where refusals are counted instead, read by `getGateRefusalWindowCounts` for the gate-refusal-rate signal (`production/gate-refusal-rate-guard.ts`) — a signal of its own, **not** a term folded into `LlmFailureRateGuard`'s truncation rate, whose denominator is deliberately narrow (see that guard and `getTerminationCauseWindowCounts`). An append-only counter, no FK to `debate_log` (there usually isn't a row to reference) and no instrument/reason/trace_id, mirroring `llm_call_log`'s no-FK posture (migration 0039) rather than `debate_round_log`'s FK'd one: richer detail already lives on the `debate_refused_gate` log line the call site writes immediately before this insert. **No retention job.** `llm_call_log` has `prune-llm-call-log.ts`; this table has nothing equivalent, so it grows unboundedly at roughly 384 rows/day at the shipped cadence — one row is two small columns, so the size is not urgent, and a pruner is a tracked follow-up rather than part of #1533.
 
 ```sql
 CREATE TABLE llm_gate_refusals (
@@ -1144,7 +1144,8 @@ Feedback Loop       → analyst_weights, strategy_params, risk_thresholds, dial_
                       cosine_setups (labels only; Trader writes)
 Trader              → cosine_setups (writes; FL labels), trader_log
 Risk                → breaker_state, risk_log, risk_critic_log
-Debate Engine       → debate_log, llm_spend, llm_call_log
+Debate Engine       → debate_log, debate_round_log, llm_spend, llm_call_log,
+                      llm_gate_refusals
 Verdict             → verdict_log
 Orchestrator        → audit_log, current_tick, daily_equity, llm_spend_cap, alert_delivery_failures
 Transport Layer     → account_state (AccountStateProvider, peak_equity)

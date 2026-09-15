@@ -55,19 +55,6 @@
  * (feedback-loop/arm-comparison-cycle.ts) for the same "not enough samples
  * to mean anything" floor.
  *
- * ## Gate refusals count too (#1533)
- *
- * `gateRefusedDebateResult` (debate-adapter.ts) writes no `debate_log` row at
- * all — the content-hashed `debate_id` must stay free for a real retry, so a
- * refusal cannot occupy it the way a `termination_cause` value would. Left
- * out of this window entirely, a soak where every debate is gate-refused
- * would read as a perfectly healthy, perfectly EMPTY window (`total: 0`)
- * rather than the outage it is. `getTerminationCauseWindowCounts`'s optional
- * `gate_refused` count (from the separate `llm_gate_refusals` rollup,
- * `SqliteDebateLogStore`) is folded into both the numerator and the
- * denominator below, so a 100%-refused window reads as a 100% rate on real
- * evidence, not as no evidence at all.
- *
  * ## Re-arming below the floor (review round 2 finding 1)
  *
  * The floor above and the rate's window are the SAME trailing window, so a
@@ -95,10 +82,7 @@ export const LLM_FAILURE_RATE_WINDOW_MS = 24 * 60 * 60 * 1000;
  */
 export const LLM_FAILURE_RATE_THRESHOLD = 0.25;
 
-/**
- * Mirrors `MIN_TRADES_PER_ARM_FOR_DIVERGENCE` — below this many truncations
- * PLUS gate refusals (#1533), a rate is noise, not a measurement.
- */
+/** Mirrors `MIN_TRADES_PER_ARM_FOR_DIVERGENCE` — below this many truncations, a rate is noise, not a measurement. */
 export const MIN_TRUNCATIONS_FOR_LLM_FAILURE_RATE = 5;
 
 /** How often `llm_failure_rate_check_failed` repeats while the window read keeps failing (review round 2 finding 8). */
@@ -107,15 +91,6 @@ export const CHECK_FAILURE_LOG_EVERY = 20;
 export interface LlmFailureRateWindowCounts {
   llm_failure: number;
   total: number;
-  /**
-   * Gate-refused debates in the window (#1533), from the separate
-   * `llm_gate_refusals` rollup — `debate_log` itself carries no row for them
-   * (see this file's "Gate refusals count too" doc). OPTIONAL so every
-   * existing `{ llm_failure, total }` test literal in this suite keeps
-   * compiling and keeps meaning what it always meant: a source that reports
-   * no refusals behaves exactly as it did before this field existed.
-   */
-  gate_refused?: number;
 }
 
 /** The one method this guard calls on `SqliteDebateLogStore` — declared here so the guard depends on a capability, not a concrete class. */
@@ -137,19 +112,6 @@ export interface LlmFailureRateAlertChannel {
 }
 
 /**
- * Where a gate-refused debate (#1080's admission/queue_deadline refusal) is
- * recorded so the rate guard's window can see it (#1533). Declared beside its
- * caller, the same convention `LlmFailureRateAlertChannel` above sets.
- * `SqliteDebateLogStore` implements this directly, the same "bolted onto the
- * concrete class, not the shared `DebateLogStore` port" precedent
- * `LlmFailureRateWindowSource` already follows (see that interface's doc and
- * #785).
- */
-export interface LlmGateRefusalSink {
-  recordGateRefusal(occurred_at: Date): void;
-}
-
-/**
  * Edge-triggered latch over the computed rate (see file doc). In-memory and
  * restart-clean, the same posture `MiCoverageMonitor` takes: a process that
  * just restarted has no evidence about the previous process's window.
@@ -165,21 +127,16 @@ export class LlmFailureRateMonitor {
    * evidence either way" for a rate specifically, so it neither fires nor
    * clears the latch through the rate branch below.
    *
-   * `failureLikeCount` reaching zero clears the latch independently of
+   * `llmFailureCount` reaching zero clears the latch independently of
    * `hasEnoughSamples` (review round 2 finding 1): a window holding zero
    * `llm_failure` rows is zero evidence of an ongoing failure however few
    * truncations it holds, which is not the same claim as "the rate is
    * trustworthy" — so it re-arms a latch the floor alone would otherwise
    * hold forever once the storm's failing rows age out of the trailing
    * window ahead of enough clean truncations to read a rate under threshold.
-   *
-   * The caller (#1533) passes `llm_failure + gate_refused`, not raw
-   * `llm_failure` alone — a window that is 100% gate refusals and zero
-   * `llm_failure` rows must still count as evidence and must NOT re-arm the
-   * latch through this zero-clears-it branch.
    */
-  observe(rate: number, hasEnoughSamples: boolean, failureLikeCount: number): { alert: boolean } {
-    if (failureLikeCount === 0) {
+  observe(rate: number, hasEnoughSamples: boolean, llmFailureCount: number): { alert: boolean } {
+    if (llmFailureCount === 0) {
       this.#firing = false;
       return { alert: false };
     }
@@ -239,27 +196,19 @@ export interface CheckLlmFailureRateDeps {
  * discipline as the alert POST, not just the awaited half.
  */
 export async function checkLlmFailureRate(deps: CheckLlmFailureRateDeps, now: Date): Promise<void> {
-  let failureLike: number;
-  let sampleSize: number;
+  let llm_failure: number;
+  let total: number;
   let rate: number;
   let alert: boolean;
   try {
     const from = new Date(now.getTime() - LLM_FAILURE_RATE_WINDOW_MS);
-    const counts = deps.windowSource.getTerminationCauseWindowCounts(from, now);
+    ({ llm_failure, total } = deps.windowSource.getTerminationCauseWindowCounts(from, now));
     deps.monitor.recordCheckSuccess();
-    // Gate refusals (#1533) fold into BOTH the numerator and the denominator:
-    // a refused debate wrote no `debate_log` row, so leaving it out of `total`
-    // too would make a 100%-refused window read as a healthy, empty window
-    // rather than the outage it is (see this file's "Gate refusals count too"
-    // doc).
-    const gate_refused = counts.gate_refused ?? 0;
-    failureLike = counts.llm_failure + gate_refused;
-    sampleSize = counts.total + gate_refused;
-    rate = sampleSize === 0 ? 0 : failureLike / sampleSize;
+    rate = total === 0 ? 0 : llm_failure / total;
     ({ alert } = deps.monitor.observe(
       rate,
-      sampleSize >= MIN_TRUNCATIONS_FOR_LLM_FAILURE_RATE,
-      failureLike,
+      total >= MIN_TRUNCATIONS_FOR_LLM_FAILURE_RATE,
+      llm_failure,
     ));
   } catch (error) {
     if (deps.monitor.recordCheckFailure()) {
@@ -282,8 +231,8 @@ export async function checkLlmFailureRate(deps: CheckLlmFailureRateDeps, now: Da
   try {
     await deps.alertChannel?.postLlmFailureRateAlert({
       rate,
-      llm_failure_count: failureLike,
-      total_count: sampleSize,
+      llm_failure_count: llm_failure,
+      total_count: total,
       window_ms: LLM_FAILURE_RATE_WINDOW_MS,
       reported_at: now,
     });
@@ -296,8 +245,8 @@ export async function checkLlmFailureRate(deps: CheckLlmFailureRateDeps, now: Da
       message: 'LLM-failure-rate alert could not be delivered — the rate is still elevated',
       payload: {
         rate,
-        llm_failure_count: failureLike,
-        total_count: sampleSize,
+        llm_failure_count: llm_failure,
+        total_count: total,
         error: describeThrownSafely(error),
       },
     });

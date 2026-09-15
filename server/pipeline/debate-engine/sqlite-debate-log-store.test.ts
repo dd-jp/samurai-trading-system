@@ -329,7 +329,7 @@ describe('SqliteDebateLogStore.getTerminationCauseWindowCounts (#1396)', () => {
       new Date('2026-07-14T08:00:00Z'),
       new Date('2026-07-14T10:00:00Z'),
     );
-    expect(counts).toEqual({ llm_failure: 1, total: 1, gate_refused: 0 });
+    expect(counts).toEqual({ llm_failure: 1, total: 1 });
   });
 
   it('counts a budget truncation as non-failure', () => {
@@ -348,7 +348,7 @@ describe('SqliteDebateLogStore.getTerminationCauseWindowCounts (#1396)', () => {
       new Date('2026-07-14T08:00:00Z'),
       new Date('2026-07-14T10:00:00Z'),
     );
-    expect(counts).toEqual({ llm_failure: 0, total: 1, gate_refused: 0 });
+    expect(counts).toEqual({ llm_failure: 0, total: 1 });
   });
 
   it('counts a truncated row with a pre-migration-0051 NULL termination_cause as non-failure (AC3)', () => {
@@ -369,7 +369,7 @@ describe('SqliteDebateLogStore.getTerminationCauseWindowCounts (#1396)', () => {
       new Date('2026-07-14T08:00:00Z'),
       new Date('2026-07-14T10:00:00Z'),
     );
-    expect(counts).toEqual({ llm_failure: 0, total: 1, gate_refused: 0 });
+    expect(counts).toEqual({ llm_failure: 0, total: 1 });
   });
 
   // review round 1 F2: the denominator is truncations (`termination =
@@ -392,7 +392,7 @@ describe('SqliteDebateLogStore.getTerminationCauseWindowCounts (#1396)', () => {
       new Date('2026-07-14T08:00:00Z'),
       new Date('2026-07-14T10:00:00Z'),
     );
-    expect(counts).toEqual({ llm_failure: 0, total: 0, gate_refused: 0 });
+    expect(counts).toEqual({ llm_failure: 0, total: 0 });
   });
 
   it('excludes a non-converged (real disagreement, non-truncated) row from total', () => {
@@ -411,7 +411,7 @@ describe('SqliteDebateLogStore.getTerminationCauseWindowCounts (#1396)', () => {
       new Date('2026-07-14T08:00:00Z'),
       new Date('2026-07-14T10:00:00Z'),
     );
-    expect(counts).toEqual({ llm_failure: 0, total: 0, gate_refused: 0 });
+    expect(counts).toEqual({ llm_failure: 0, total: 0 });
   });
 
   it('excludes a pre-migration-0041 row (termination itself NULL) from total', () => {
@@ -428,7 +428,7 @@ describe('SqliteDebateLogStore.getTerminationCauseWindowCounts (#1396)', () => {
       new Date('2026-07-14T08:00:00Z'),
       new Date('2026-07-14T10:00:00Z'),
     );
-    expect(counts).toEqual({ llm_failure: 0, total: 0, gate_refused: 0 });
+    expect(counts).toEqual({ llm_failure: 0, total: 0 });
   });
 
   it('excludes rows outside the (from, to] window', () => {
@@ -455,7 +455,7 @@ describe('SqliteDebateLogStore.getTerminationCauseWindowCounts (#1396)', () => {
       new Date('2026-07-14T08:00:00Z'),
       new Date('2026-07-14T10:00:00Z'),
     );
-    expect(counts).toEqual({ llm_failure: 1, total: 1, gate_refused: 0 });
+    expect(counts).toEqual({ llm_failure: 1, total: 1 });
   });
 
   it('returns zero counts for an empty window rather than NULL/NaN', () => {
@@ -466,11 +466,11 @@ describe('SqliteDebateLogStore.getTerminationCauseWindowCounts (#1396)', () => {
       new Date('2026-07-14T08:00:00Z'),
       new Date('2026-07-14T10:00:00Z'),
     );
-    expect(counts).toEqual({ llm_failure: 0, total: 0, gate_refused: 0 });
+    expect(counts).toEqual({ llm_failure: 0, total: 0 });
   });
 });
 
-describe('SqliteDebateLogStore.recordGateRefusal / gate_refused (#1533)', () => {
+describe('SqliteDebateLogStore.recordGateRefusal / getGateRefusalWindowCounts (#1533)', () => {
   it('counts a recorded refusal even though no debate_log row exists at all', () => {
     // The scenario the migration's header names: a gate-refused debate never
     // resolves to a `debate_id`, so there is no `debate_log` row for it to
@@ -479,14 +479,19 @@ describe('SqliteDebateLogStore.recordGateRefusal / gate_refused (#1533)', () => 
     const store = new SqliteDebateLogStore(db);
     store.recordGateRefusal(new Date('2026-07-14T09:00:00Z'));
 
-    const counts = store.getTerminationCauseWindowCounts(
-      new Date('2026-07-14T08:00:00Z'),
-      new Date('2026-07-14T10:00:00Z'),
-    );
-    expect(counts).toEqual({ llm_failure: 0, total: 0, gate_refused: 1 });
+    expect(
+      store.getGateRefusalWindowCounts(
+        new Date('2026-07-14T08:00:00Z'),
+        new Date('2026-07-14T10:00:00Z'),
+      ),
+    ).toEqual({ gate_refused: 1, debates_logged: 0 });
   });
 
-  it('blends with genuine debate_log truncations rather than replacing them', () => {
+  // Review round 1 F1: the refusal count must NOT reach the truncation rate.
+  // At the shipped gate settings four of every six concurrent debates are
+  // refused by design, so a truncation rate that counted them would sit at
+  // ~1.0 on every healthy window and latch its alert permanently.
+  it('leaves getTerminationCauseWindowCounts completely unmoved', () => {
     const db = openSharedStore(':memory:');
     const store = new SqliteDebateLogStore(db);
     store.writeLog(
@@ -494,32 +499,74 @@ describe('SqliteDebateLogStore.recordGateRefusal / gate_refused (#1533)', () => 
         debate_id: 'd1',
         created_at: new Date('2026-07-14T09:00:00Z'),
         termination: 'latency_truncated',
+        termination_cause: 'budget',
+      }),
+    );
+    const before = store.getTerminationCauseWindowCounts(
+      new Date('2026-07-14T08:00:00Z'),
+      new Date('2026-07-14T10:00:00Z'),
+    );
+
+    for (let i = 0; i < 50; i += 1) {
+      store.recordGateRefusal(new Date('2026-07-14T09:05:00Z'));
+    }
+
+    expect(
+      store.getTerminationCauseWindowCounts(
+        new Date('2026-07-14T08:00:00Z'),
+        new Date('2026-07-14T10:00:00Z'),
+      ),
+    ).toEqual(before);
+    expect(before).toEqual({ llm_failure: 0, total: 1 });
+  });
+
+  // `debates_logged` is every debate that RAN, not the truncated subset the
+  // sibling read narrows to — a refusal displaces a whole debate, so the
+  // population it is measured against is whole debates.
+  it('counts converged and truncated debate_log rows alike as debates_logged', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+    store.writeLog(
+      makeLog({
+        debate_id: 'd1',
+        created_at: new Date('2026-07-14T09:00:00Z'),
+        termination: 'converged',
+        converged: true,
+      }),
+    );
+    store.writeLog(
+      makeLog({
+        debate_id: 'd2',
+        created_at: new Date('2026-07-14T09:01:00Z'),
+        termination: 'latency_truncated',
         termination_cause: 'llm_failure',
       }),
     );
     store.recordGateRefusal(new Date('2026-07-14T09:05:00Z'));
-    store.recordGateRefusal(new Date('2026-07-14T09:06:00Z'));
 
-    const counts = store.getTerminationCauseWindowCounts(
-      new Date('2026-07-14T08:00:00Z'),
-      new Date('2026-07-14T10:00:00Z'),
-    );
-    expect(counts).toEqual({ llm_failure: 1, total: 1, gate_refused: 2 });
+    expect(
+      store.getGateRefusalWindowCounts(
+        new Date('2026-07-14T08:00:00Z'),
+        new Date('2026-07-14T10:00:00Z'),
+      ),
+    ).toEqual({ gate_refused: 1, debates_logged: 2 });
   });
 
-  it("excludes a refusal outside the (from, to] window, matching debate_log's own boundary", () => {
+  it("excludes rows outside the (from, to] window, matching debate_log's own boundary", () => {
     const db = openSharedStore(':memory:');
     const store = new SqliteDebateLogStore(db);
     store.recordGateRefusal(new Date('2026-07-14T07:59:59Z')); // before `from`
     store.recordGateRefusal(new Date('2026-07-14T08:00:00Z')); // exactly `from` — excluded, `>` not `>=`
     store.recordGateRefusal(new Date('2026-07-14T09:00:00Z')); // in window
     store.recordGateRefusal(new Date('2026-07-14T10:00:00Z')); // exactly `to` — included, `<=`
+    store.writeLog(makeLog({ debate_id: 'd1', created_at: new Date('2026-07-14T10:00:01Z') }));
 
-    const counts = store.getTerminationCauseWindowCounts(
-      new Date('2026-07-14T08:00:00Z'),
-      new Date('2026-07-14T10:00:00Z'),
-    );
-    expect(counts.gate_refused).toBe(2);
+    expect(
+      store.getGateRefusalWindowCounts(
+        new Date('2026-07-14T08:00:00Z'),
+        new Date('2026-07-14T10:00:00Z'),
+      ),
+    ).toEqual({ gate_refused: 2, debates_logged: 0 });
   });
 
   it('does not write any debate_log row as a side effect', () => {
@@ -530,6 +577,12 @@ describe('SqliteDebateLogStore.recordGateRefusal / gate_refused (#1533)', () => 
     store.recordGateRefusal(new Date('2026-07-14T09:00:00Z'));
 
     expect(store.getByDebateId('debate-1')).toBeUndefined();
+    expect(
+      store.getGateRefusalWindowCounts(
+        new Date('2026-07-14T08:00:00Z'),
+        new Date('2026-07-14T10:00:00Z'),
+      ).debates_logged,
+    ).toBe(0);
   });
 });
 

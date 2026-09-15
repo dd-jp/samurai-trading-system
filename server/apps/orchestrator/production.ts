@@ -292,6 +292,7 @@ import {
   assertFlattenGraceWithinMarkAge,
   assertFlattenWindowCoversTickInterval,
 } from './production/flatten-tick-coupling.js';
+import { GateRefusalRateMonitor } from './production/gate-refusal-rate-guard.js';
 import { LlmFailureRateMonitor } from './production/llm-failure-rate-guard.js';
 import { assertLseCalendarCoverage } from './production/lse-calendar-coverage-guard.js';
 import { MiCoverageMonitor } from './production/mi-coverage.js';
@@ -1270,6 +1271,9 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // share the same instance over the same `config.db` handle, rather than the
   // guard opening a second connection to a table the step below already owns.
   const llmFailureRateMonitor = new LlmFailureRateMonitor();
+  // #1533: its own monitor, because its own latch — the two signals cross
+  // their thresholds independently (see `gate-refusal-rate-guard.ts`).
+  const gateRefusalRateMonitor = new GateRefusalRateMonitor();
   const debateLogStore = new SqliteDebateLogStore(guardedStore(config.db, 'debate-engine'));
 
   /**
@@ -2373,13 +2377,21 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       tuningStore,
       // #1396: the llm-failure-rate window read + monitor + alert channel.
       // `windowSource` is `debateLogStore` itself — see its hoist above.
-      // `gateRefusalSink` (#1533) is the SAME store: `SqliteDebateLogStore`
-      // implements both capabilities directly (see that class's doc).
       {
         windowSource: debateLogStore,
         monitor: llmFailureRateMonitor,
         alertChannel:
           config.llmFailureRateAlerts ?? loggingAlertChannel('llmFailureRateAlerts', logger),
+      },
+      // #1533: the gate-refusal-rate bundle. The same `debateLogStore` serves
+      // all three roles — `SqliteDebateLogStore` implements both window reads
+      // and the refusal sink directly (see that class's doc) — but the monitor,
+      // the threshold and the channel are this signal's own.
+      {
+        windowSource: debateLogStore,
+        monitor: gateRefusalRateMonitor,
+        alertChannel:
+          config.gateRefusalRateAlerts ?? loggingAlertChannel('gateRefusalRateAlerts', logger),
         gateRefusalSink: debateLogStore,
       },
     ),

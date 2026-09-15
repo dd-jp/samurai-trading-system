@@ -40,16 +40,23 @@ import type {
 import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import {
   buildDebateStep,
+  type GateRefusalRateGuardDeps,
   type LlmFailureRateGuardDeps,
   persistDebateLog,
 } from './debate-adapter.js';
 import {
+  type GateRefusalRateAlert,
+  type GateRefusalRateAlertChannel,
+  GateRefusalRateMonitor,
+  type GateRefusalWindowCounts,
+  type GateRefusalWindowSource,
+  type LlmGateRefusalSink,
+} from './gate-refusal-rate-guard.js';
+import {
   type LlmFailureRateAlert,
   type LlmFailureRateAlertChannel,
   LlmFailureRateMonitor,
-  type LlmFailureRateWindowCounts,
   type LlmFailureRateWindowSource,
-  type LlmGateRefusalSink,
 } from './llm-failure-rate-guard.js';
 
 const NOW = new Date('2026-07-28T14:00:00Z');
@@ -1457,7 +1464,7 @@ describe('buildDebateStep spend-cap refusal wording (#1372)', () => {
   });
 });
 
-describe('buildDebateStep gate refusal feeds the LlmFailureRateGuard (#1533)', () => {
+describe('buildDebateStep gate refusal feeds its OWN refusal-rate guard (#1533)', () => {
   /** Stands in for the in-flight gate refusing every call this debate would make. */
   function gateRefusingLlmClient(): LlmClient {
     return {
@@ -1474,30 +1481,14 @@ describe('buildDebateStep gate refusal feeds the LlmFailureRateGuard (#1533)', (
     };
   }
 
-  function fixedWindowSource(counts: LlmFailureRateWindowCounts): {
-    source: LlmFailureRateWindowSource;
-    calls: Array<{ from: Date; to: Date }>;
+  function capturingRefusalChannel(): {
+    channel: GateRefusalRateAlertChannel;
+    posted: GateRefusalRateAlert[];
   } {
-    const calls: Array<{ from: Date; to: Date }> = [];
-    return {
-      source: {
-        getTerminationCauseWindowCounts: (from, to) => {
-          calls.push({ from, to });
-          return counts;
-        },
-      },
-      calls,
-    };
-  }
-
-  function capturingAlertChannel(): {
-    channel: LlmFailureRateAlertChannel;
-    posted: LlmFailureRateAlert[];
-  } {
-    const posted: LlmFailureRateAlert[] = [];
+    const posted: GateRefusalRateAlert[] = [];
     return {
       channel: {
-        postLlmFailureRateAlert: (alert) => {
+        postGateRefusalRateAlert: (alert) => {
           posted.push(alert);
         },
       },
@@ -1521,161 +1512,180 @@ describe('buildDebateStep gate refusal feeds the LlmFailureRateGuard (#1533)', (
     };
   }
 
-  it(
-    'records the refusal on gateRefusalSink and still returns a no-position, ' +
-      'no-debate_log-row result (AC1 wiring)',
-    async () => {
-      const { logger, entries } = recordingLogger();
-      const store = new InMemoryDebateLogStore();
-      const { sink, recorded } = spySink();
-      const { source } = fixedWindowSource({ llm_failure: 0, total: 0, gate_refused: 0 });
-      const guard: LlmFailureRateGuardDeps = {
-        windowSource: source,
-        monitor: new LlmFailureRateMonitor(),
-        alertChannel: undefined,
-        gateRefusalSink: sink,
-      };
-      const step = buildDebateStep(
-        gateRefusingLlmClient(),
-        store,
-        unlimited(),
-        UNCAPPED_SPEND,
-        logger,
-        undefined,
-        guard,
-      );
+  function refusalGuard(
+    counts: GateRefusalWindowCounts,
+    channel: GateRefusalRateAlertChannel | undefined,
+    sink: LlmGateRefusalSink,
+  ): GateRefusalRateGuardDeps {
+    const windowSource: GateRefusalWindowSource = {
+      getGateRefusalWindowCounts: () => counts,
+    };
+    return {
+      windowSource,
+      monitor: new GateRefusalRateMonitor(),
+      alertChannel: channel,
+      gateRefusalSink: sink,
+    };
+  }
 
-      const result = await step({
-        trace_id: 'trace-1',
-        instrument: 'AAPL',
-        views: [makeView()],
-        asset_class: ASSET_CLASS,
-        clock: CLOCK,
-        bar: NOW,
-      });
+  const REFUSED_STEP_INPUT = {
+    trace_id: 'trace-1',
+    instrument: 'AAPL',
+    views: [makeView()],
+    asset_class: ASSET_CLASS,
+    clock: CLOCK,
+    bar: NOW,
+  };
 
-      expect(result.position).toContain('No position');
-      expect(store.getByDebateId(result.debate_id)).toBeUndefined();
+  it('records the refusal on the sink and still returns a no-position, no-debate_log-row result', async () => {
+    const { logger, entries } = recordingLogger();
+    const store = new InMemoryDebateLogStore();
+    const { sink, recorded } = spySink();
+    const step = buildDebateStep(
+      gateRefusingLlmClient(),
+      store,
+      unlimited(),
+      UNCAPPED_SPEND,
+      logger,
+      undefined,
+      undefined,
+      refusalGuard({ gate_refused: 0, debates_logged: 0 }, undefined, sink),
+    );
 
-      expect(recorded).toEqual([NOW]);
+    const result = await step(REFUSED_STEP_INPUT);
 
-      const refusal = entries.find((entry) => entry.event === 'debate_refused_gate');
-      expect(refusal).toBeDefined();
-      expect(refusal?.level).toBe('warn');
-    },
-  );
+    expect(result.position).toContain('No position');
+    expect(store.getByDebateId(result.debate_id)).toBeUndefined();
+    expect(recorded).toEqual([NOW]);
 
-  it(
-    'trips the failure-rate alert on a soak window that is entirely gate refusals ' +
-      '(AC1): before #1533 this call site never even reached checkLlmFailureRate ' +
-      'on the refusal path, so a real 100%-refused window would not have posted here',
-    async () => {
-      const { logger } = recordingLogger();
-      const { sink } = spySink();
-      // Below MIN_TRUNCATIONS_FOR_LLM_FAILURE_RATE (5) on llm_failure/total
-      // alone, but gate_refused folds into both the numerator and the
-      // denominator (checkLlmFailureRate), so 6 refusals clears the floor at
-      // rate 1.0.
-      const { source } = fixedWindowSource({ llm_failure: 0, total: 0, gate_refused: 6 });
-      const { channel, posted } = capturingAlertChannel();
-      const guard: LlmFailureRateGuardDeps = {
-        windowSource: source,
-        monitor: new LlmFailureRateMonitor(),
-        alertChannel: channel,
-        gateRefusalSink: sink,
-      };
-      const step = buildDebateStep(
-        gateRefusingLlmClient(),
-        new InMemoryDebateLogStore(),
-        unlimited(),
-        UNCAPPED_SPEND,
-        logger,
-        undefined,
-        guard,
-      );
+    const refusal = entries.find((entry) => entry.event === 'debate_refused_gate');
+    expect(refusal).toBeDefined();
+    expect(refusal?.level).toBe('warn');
+  });
 
-      await step({
-        trace_id: 'trace-1',
-        instrument: 'AAPL',
-        views: [makeView()],
-        asset_class: ASSET_CLASS,
-        clock: CLOCK,
-        bar: NOW,
-      });
+  it('alerts on a window that is entirely gate refusals, where debate_log reports nothing at all', async () => {
+    const { logger } = recordingLogger();
+    const { sink } = spySink();
+    const { channel, posted } = capturingRefusalChannel();
+    const step = buildDebateStep(
+      gateRefusingLlmClient(),
+      new InMemoryDebateLogStore(),
+      unlimited(),
+      UNCAPPED_SPEND,
+      logger,
+      undefined,
+      undefined,
+      refusalGuard({ gate_refused: 40, debates_logged: 0 }, channel, sink),
+    );
 
-      expect(posted).toHaveLength(1);
-      expect(posted[0]?.rate).toBe(1);
-      expect(posted[0]?.total_count).toBe(6);
-      expect(posted[0]?.llm_failure_count).toBe(6);
-    },
-  );
+    await step(REFUSED_STEP_INPUT);
 
-  it(
-    'does not crash the tick when the sink itself throws, and logs ' +
-      'llm_gate_refusal_record_failed instead',
-    async () => {
-      const { logger, entries } = recordingLogger();
-      const { sink } = spySink({ throws: true });
-      const { source } = fixedWindowSource({ llm_failure: 0, total: 0, gate_refused: 0 });
-      const guard: LlmFailureRateGuardDeps = {
-        windowSource: source,
-        monitor: new LlmFailureRateMonitor(),
-        alertChannel: undefined,
-        gateRefusalSink: sink,
-      };
-      const step = buildDebateStep(
-        gateRefusingLlmClient(),
-        new InMemoryDebateLogStore(),
-        unlimited(),
-        UNCAPPED_SPEND,
-        logger,
-        undefined,
-        guard,
-      );
+    expect(posted).toHaveLength(1);
+    expect(posted[0]?.rate).toBe(1);
+    expect(posted[0]).toMatchObject({ gate_refused_count: 40, decision_count: 40 });
+  });
 
-      const result = await step({
-        trace_id: 'trace-1',
-        instrument: 'AAPL',
-        views: [makeView()],
-        asset_class: ASSET_CLASS,
-        clock: CLOCK,
-        bar: NOW,
-      });
+  // The false-positive half, and the whole reason this is a separate signal:
+  // four of every six concurrent debates refused is the SHIPPED DESIGN
+  // (production/defaults.ts), not a fault. A day of it must post nothing.
+  it('stays silent at the designed four-of-six refusal ratio, however large the volume', async () => {
+    const { logger } = recordingLogger();
+    const { sink } = spySink();
+    const { channel, posted } = capturingRefusalChannel();
+    const step = buildDebateStep(
+      gateRefusingLlmClient(),
+      new InMemoryDebateLogStore(),
+      unlimited(),
+      UNCAPPED_SPEND,
+      logger,
+      undefined,
+      undefined,
+      // ~384 refusals against ~192 debates over 24h at a 15-min cadence: the
+      // steady state defaults.ts describes, ratio 0.667.
+      refusalGuard({ gate_refused: 384, debates_logged: 192 }, channel, sink),
+    );
 
-      // Still degrades, not faults — the whole point of the guard write being
-      // best-effort.
-      expect(result.position).toContain('No position');
+    await step(REFUSED_STEP_INPUT);
 
-      const failure = entries.find((entry) => entry.event === 'llm_gate_refusal_record_failed');
-      expect(failure).toBeDefined();
-      expect(failure?.level).toBe('error');
-    },
-  );
+    expect(posted).toHaveLength(0);
+  });
 
-  it(
-    'is a false-positive guard: with no LlmFailureRateGuardDeps supplied at all, a gate ' +
-      'refusal still degrades cleanly with no crash and no attempt to touch a sink',
-    async () => {
-      const { logger, entries } = recordingLogger();
-      const step = buildDebateStep(
-        gateRefusingLlmClient(),
-        new InMemoryDebateLogStore(),
-        unlimited(),
-        UNCAPPED_SPEND,
-        logger,
-      );
+  // Review round 1 F1, at the call site: a refusal must not reach the
+  // truncation-rate guard in any way — not its window read, not its alert.
+  it('never touches the llm-failure-rate guard on the refusal path', async () => {
+    const { logger } = recordingLogger();
+    const { sink } = spySink();
+    const truncationWindowReads: Array<{ from: Date; to: Date }> = [];
+    const truncationSource: LlmFailureRateWindowSource = {
+      getTerminationCauseWindowCounts: (from, to) => {
+        truncationWindowReads.push({ from, to });
+        // Would cross LLM_FAILURE_RATE_THRESHOLD outright if it were ever read.
+        return { llm_failure: 9, total: 10 };
+      },
+    };
+    const truncationPosted: LlmFailureRateAlert[] = [];
+    const truncationChannel: LlmFailureRateAlertChannel = {
+      postLlmFailureRateAlert: (alert) => {
+        truncationPosted.push(alert);
+      },
+    };
+    const failureRateGuard: LlmFailureRateGuardDeps = {
+      windowSource: truncationSource,
+      monitor: new LlmFailureRateMonitor(),
+      alertChannel: truncationChannel,
+    };
+    const step = buildDebateStep(
+      gateRefusingLlmClient(),
+      new InMemoryDebateLogStore(),
+      unlimited(),
+      UNCAPPED_SPEND,
+      logger,
+      undefined,
+      failureRateGuard,
+      refusalGuard({ gate_refused: 40, debates_logged: 0 }, undefined, sink),
+    );
 
-      const result = await step({
-        trace_id: 'trace-1',
-        instrument: 'AAPL',
-        views: [makeView()],
-        asset_class: ASSET_CLASS,
-        clock: CLOCK,
-        bar: NOW,
-      });
+    await step(REFUSED_STEP_INPUT);
 
-      expect(result.position).toContain('No position');
-      expect(entries.some((entry) => entry.event === 'llm_gate_refusal_record_failed')).toBe(false);
-    },
-  );
+    expect(truncationWindowReads).toEqual([]);
+    expect(truncationPosted).toEqual([]);
+  });
+
+  it('does not crash the tick when the sink itself throws, and logs llm_gate_refusal_record_failed instead', async () => {
+    const { logger, entries } = recordingLogger();
+    const { sink } = spySink({ throws: true });
+    const step = buildDebateStep(
+      gateRefusingLlmClient(),
+      new InMemoryDebateLogStore(),
+      unlimited(),
+      UNCAPPED_SPEND,
+      logger,
+      undefined,
+      undefined,
+      refusalGuard({ gate_refused: 0, debates_logged: 0 }, undefined, sink),
+    );
+
+    const result = await step(REFUSED_STEP_INPUT);
+
+    expect(result.position).toContain('No position');
+    const failure = entries.find((entry) => entry.event === 'llm_gate_refusal_record_failed');
+    expect(failure).toBeDefined();
+    expect(failure?.level).toBe('error');
+  });
+
+  it('degrades cleanly with no guard supplied at all, touching no sink', async () => {
+    const { logger, entries } = recordingLogger();
+    const step = buildDebateStep(
+      gateRefusingLlmClient(),
+      new InMemoryDebateLogStore(),
+      unlimited(),
+      UNCAPPED_SPEND,
+      logger,
+    );
+
+    const result = await step(REFUSED_STEP_INPUT);
+
+    expect(result.position).toContain('No position');
+    expect(entries.some((entry) => entry.event === 'llm_gate_refusal_record_failed')).toBe(false);
+  });
 });
