@@ -4215,28 +4215,36 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
    * need a DIFFERENT NUMBER of successful submit-time captures to be counted in
    * the live arm.
    *
-   * Both lots below carry the identical successful entry capture — one
-   * `captureSubmitSnapshot` that priced the entry AND the protective exit
-   * (they are assigned together, `readSubmitSnapshot` in execute.ts). The ONLY
-   * difference is the exit: the first lot's stop is already covered by that one
-   * capture, while the second lot's flatten needs a SECOND capture of its own
-   * and does not get it. One capture failure on the flatten path therefore
-   * removes a row the same failure on the protective path cannot touch.
+   * The entry's `captureSubmitSnapshot` prices the entry AND the protective
+   * exit under one try/catch (they are assigned together, `readSubmitSnapshot`
+   * in execute.ts), so a protective close is covered once that single capture
+   * succeeds and is dropped when it fails. A flatten close needs that same
+   * entry capture PLUS a second one of its own, taken at flatten submission
+   * under the #826 exit budget — so a capture failure removes a flatten the
+   * identical failure cannot remove from the protective class.
    *
-   * Asserted as one statement rather than left implicit across the two tests
-   * above: mutating `modelledCostCharged` or moving the flatten's fallback to
-   * the entry's protective estimate changes exactly this pair of answers, and
-   * #1546 chose to MEASURE the resulting selection (`cost_basis_drops`) rather
-   * than level it.
+   * Driven on each path rather than asserted only on the flatten side:
+   * mutating `modelledCostCharged` or moving the flatten's fallback to the
+   * entry's protective estimate changes exactly these four answers, and #1546
+   * chose to MEASURE the resulting selection (`cost_basis_drops`) rather than
+   * level it.
    */
   it('#1546: a protective exit needs one successful capture, a flatten needs two', async () => {
-    async function closeOn(exit: 'stop' | 'flatten'): Promise<boolean> {
+    async function closeOn(
+      exit: 'stop' | 'flatten',
+      captures: { entry: boolean; flatten?: boolean },
+    ): Promise<boolean> {
       const { store } = openTestExecutionStore();
       await seedPosition(store, {
         requested_size: 10,
         side: 'buy',
-        modelled_cost_breakdown: modelledCostBreakdown,
-        modelled_protective_exit_cost_breakdown: modelledCostBreakdown,
+        // A failed entry capture writes neither estimate: one try/catch covers both.
+        ...(captures.entry
+          ? {
+              modelled_cost_breakdown: modelledCostBreakdown,
+              modelled_protective_exit_cost_breakdown: modelledCostBreakdown,
+            }
+          : {}),
       });
       const entryFill = fill({
         broker_fill_id: toBrokerFillId('e1'),
@@ -4248,9 +4256,8 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
       await new ExecutionImpl(makeInput(new ScriptedBroker([entryFill]), store)).ingestFills();
 
       if (exit === 'flatten') {
-        // The flatten's OWN capture failed — `modelled_cost_breakdown: null`,
-        // which is what `captureSubmitSnapshot` writes when its exit budget
-        // (#826) expires or the feed is dark.
+        // `modelled_cost_breakdown: null` is what `captureSubmitSnapshot`
+        // writes when its exit budget (#826) expires or the feed is dark.
         await store.writeAheadFlatten({
           idempotency_key: 'flatten-1',
           instrument: 'AAPL',
@@ -4265,7 +4272,7 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
           quote_ask: null,
           quote_mid: null,
           quote_observed_at: null,
-          modelled_cost_breakdown: null,
+          modelled_cost_breakdown: captures.flatten === true ? modelledCostBreakdown : null,
         });
       }
 
@@ -4300,8 +4307,10 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
       return closed.modelled_cost_charged;
     }
 
-    expect(await closeOn('stop')).toBe(true);
-    expect(await closeOn('flatten')).toBe(false);
+    expect(await closeOn('stop', { entry: true })).toBe(true);
+    expect(await closeOn('stop', { entry: false })).toBe(false);
+    expect(await closeOn('flatten', { entry: true, flatten: true })).toBe(true);
+    expect(await closeOn('flatten', { entry: true, flatten: false })).toBe(false);
   });
 });
 
