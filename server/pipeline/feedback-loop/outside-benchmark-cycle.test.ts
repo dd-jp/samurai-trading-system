@@ -12,6 +12,7 @@
  *  - one benchmark's failure does not cost the operator the other's.
  */
 import type { ArmComparison } from '../control-arm/index.js';
+import { noCostBasisDrops } from '../control-arm/index.js';
 import type { BenchmarkObservation, BenchmarkSeriesSource } from '../outside-benchmark/index.js';
 import { InMemoryOutsideBenchmarkSampleStore } from './fixture-stores.js';
 import { runOutsideBenchmarkCycle } from './outside-benchmark-cycle.js';
@@ -34,6 +35,7 @@ const COMPARISON: ArmComparison = {
     return_pct: 0.0215,
     max_drawdown_pct: 0.04,
     refused_pass_count: 0,
+    cost_basis_drops: noCostBasisDrops(),
   },
   control: {
     arm: 'control',
@@ -42,6 +44,7 @@ const COMPARISON: ArmComparison = {
     return_pct: 0.004,
     max_drawdown_pct: 0.02,
     refused_pass_count: 0,
+    cost_basis_drops: noCostBasisDrops(),
   },
 };
 

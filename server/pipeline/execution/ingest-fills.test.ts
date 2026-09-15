@@ -16,7 +16,7 @@ import { recordingLogger } from '../../shared/recording-logger.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import type { CostConfig, CostModel, MarketState } from '../../tools/backtest/index.js';
 import { CostModelImpl, SAXO_COMMISSION_RATE } from '../../tools/backtest/index.js';
-import { buildArmComparison } from '../control-arm/arm-comparison.js';
+import { buildArmComparison, noCostBasisDrops } from '../control-arm/arm-comparison.js';
 import { SqliteArmComparisonSource } from '../control-arm/sqlite-arm-comparison-source.js';
 import { ExecutionImpl } from './execute.js';
 import {
@@ -687,7 +687,7 @@ describe('ExecutionImpl.ingestFills', () => {
         expect.objectContaining({
           level: 'error',
           event: 'residual_rearm_unsupported',
-          message: expect.stringContaining('cannot arm protective legs at all'),
+          message: expect.stringContaining('permanently refused'),
         }),
       );
       // #1214's decision: the refusal triggers a re-flatten of the residual,
@@ -3705,12 +3705,13 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
 
     const from = new Date('2026-07-20T00:00:00Z');
     const to = new Date('2026-07-21T00:00:00Z');
-    const trades = new SqliteArmComparisonSource(db).getClosedTradesBetween(from, to);
+    const trades = new SqliteArmComparisonSource(db).getClosedTradeWindowBetween(from, to).trades;
     expect(trades.map((t) => t.idempotency_key).sort()).toEqual(['control-key', 'live-key']);
 
     const comparison = buildArmComparison({
       trades,
       refused_passes: { live: 0, control: 0 },
+      cost_basis_drops: { live: noCostBasisDrops(), control: noCostBasisDrops() },
       from,
       to,
       basis: 1000,
@@ -4207,6 +4208,109 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
     const closed = (await store.getClosedTrades())[0];
     expect(closed.fees_total).toBeCloseTo(modelledCostBreakdown.commission, 9);
     expect(closed.modelled_cost_charged).toBe(false);
+  });
+
+  /**
+   * #1546, the rule this ticket pins rather than changes: the two exit classes
+   * need a DIFFERENT NUMBER of successful submit-time captures to be counted in
+   * the live arm.
+   *
+   * The entry's `captureSubmitSnapshot` prices the entry AND the protective
+   * exit under one try/catch (they are assigned together, `readSubmitSnapshot`
+   * in execute.ts), so a protective close is covered once that single capture
+   * succeeds and is dropped when it fails. A flatten close needs that same
+   * entry capture PLUS a second one of its own, taken at flatten submission
+   * under the #826 exit budget — so a capture failure removes a flatten the
+   * identical failure cannot remove from the protective class.
+   *
+   * Driven on each path rather than asserted only on the flatten side:
+   * mutating `modelledCostCharged` or moving the flatten's fallback to the
+   * entry's protective estimate changes exactly these four answers, and #1546
+   * chose to MEASURE the resulting selection (`cost_basis_drops`) rather than
+   * level it.
+   */
+  it('#1546: a protective exit needs one successful capture, a flatten needs two', async () => {
+    async function closeOn(
+      exit: 'stop' | 'flatten',
+      captures: { entry: boolean; flatten?: boolean },
+    ): Promise<boolean> {
+      const { store } = openTestExecutionStore();
+      await seedPosition(store, {
+        requested_size: 10,
+        side: 'buy',
+        // A failed entry capture writes neither estimate: one try/catch covers both.
+        ...(captures.entry
+          ? {
+              modelled_cost_breakdown: modelledCostBreakdown,
+              modelled_protective_exit_cost_breakdown: modelledCostBreakdown,
+            }
+          : {}),
+      });
+      const entryFill = fill({
+        broker_fill_id: toBrokerFillId('e1'),
+        leg: 'entry',
+        qty: 10,
+        price: 100,
+        fee: 0,
+      });
+      await new ExecutionImpl(makeInput(new ScriptedBroker([entryFill]), store)).ingestFills();
+
+      if (exit === 'flatten') {
+        // `modelled_cost_breakdown: null` is what `captureSubmitSnapshot`
+        // writes when its exit budget (#826) expires or the feed is dark.
+        await store.writeAheadFlatten({
+          idempotency_key: 'flatten-1',
+          instrument: 'AAPL',
+          asset_class: 'stocks',
+          side: 'sell',
+          size: 10,
+          submitted_at: OPENED_AT,
+          lot_held_quantities: [{ idempotency_key: 'key-1', held: 10 }],
+          exit_reason: 'flatten',
+          decision_price: 110,
+          quote_bid: null,
+          quote_ask: null,
+          quote_mid: null,
+          quote_observed_at: null,
+          modelled_cost_breakdown: captures.flatten === true ? modelledCostBreakdown : null,
+        });
+      }
+
+      await new ExecutionImpl(
+        makeInput(
+          new ScriptedBroker([
+            entryFill,
+            exit === 'stop'
+              ? fill({
+                  broker_fill_id: toBrokerFillId('s1'),
+                  leg: 'stop',
+                  qty: 10,
+                  price: 95,
+                  fee: 0,
+                  timestamp: new Date('2026-07-20T15:30:00Z'),
+                })
+              : fill({
+                  client_order_id: 'flatten-1',
+                  broker_fill_id: toBrokerFillId('f1'),
+                  leg: 'exit',
+                  qty: 10,
+                  price: 110,
+                  fee: 0,
+                  timestamp: new Date('2026-07-20T15:30:00Z'),
+                }),
+          ]),
+          store,
+        ),
+      ).ingestFills();
+
+      const closed = (await store.getClosedTrades())[0];
+      return closed.modelled_cost_charged;
+    }
+
+    expect(await closeOn('stop', { entry: true })).toBe(true);
+    expect(await closeOn('stop', { entry: false })).toBe(false);
+    expect(await closeOn('flatten', { entry: true, flatten: true })).toBe(true);
+    expect(await closeOn('flatten', { entry: true, flatten: false })).toBe(false);
   });
 });
 

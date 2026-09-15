@@ -15,7 +15,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { basename, dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { INDICATOR_UNAVAILABLE_COUNTER } from '../../pipeline/analysts/index.js';
-import { buildArmComparison } from '../../pipeline/control-arm/index.js';
+import { buildArmComparison, noCostBasisDrops } from '../../pipeline/control-arm/index.js';
 import {
   AnthropicLlmClient,
   LATENCY_BUDGET_MS,
@@ -8628,6 +8628,7 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
     const preFixPnl = 0.135 * LIVE_BOOK_GBP;
     const preFix = buildArmComparison({
       refused_passes: { live: 0, control: 0 },
+      cost_basis_drops: { live: noCostBasisDrops(), control: noCostBasisDrops() },
       trades: [tradeWith(preFixPnl)],
       ...window,
       basis: LIVE_BOOK_GBP,
@@ -8637,6 +8638,7 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
     const postFixPnl = preFixPnl / SIZING_INFLATION;
     const postFix = buildArmComparison({
       refused_passes: { live: 0, control: 0 },
+      cost_basis_drops: { live: noCostBasisDrops(), control: noCostBasisDrops() },
       trades: [tradeWith(postFixPnl)],
       ...window,
       basis: LIVE_BOOK_GBP,

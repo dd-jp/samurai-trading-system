@@ -2,11 +2,13 @@
 
 **Status:** MEASURED on the SIM gateway, 2026-09-05, for [#1032](https://github.com/dd-jp/samurai-trading-system/issues/1032) item 4 (successor to [#946](https://github.com/dd-jp/samurai-trading-system/issues/946)). Read this before touching `server/pipeline/execution/adapters/saxo-adapter.ts`'s placement path.
 
+**Scope note — the filename says Saxo; round 3 does not.** This doc's question is "does the VENUE dedup a duplicate submit", and it was opened against Saxo because Saxo is where the answer was in doubt. The Alpaca half of that question was asserted here in passing and never measured, so [#1346](https://github.com/dd-jp/samurai-trading-system/issues/1346) measured it and the result is recorded in **Round 3** below rather than in a new doc: it is the same question, the same shape of evidence, and the "What this means for the adapter" section already compares the two venues line by line. Anything in rounds 1-2 is Saxo SIM; round 3 is Alpaca paper. The file is not renamed — `yarn check:citations` and the inbound references cite it by name.
+
 **One-line verdict:** Saxo OpenAPI has **no durable client-supplied idempotency key**. `ExternalReference` is echoed back but never uniqueness-checked; the only duplicate protection is a **rolling ~15-second window** keyed on the request body plus the `x-request-id` header, which answers `409 Conflict` with an empty body and then forgets. A retry after the window places a **second, live order**. The adapter therefore treats every placement as *adopt-or-place* and sends `x-request-id = client_order_id`, and `execution-spec.md`'s story 9 ("the venue itself dedups a duplicate submit the local check missed") is **not honoured by this venue** beyond 15 seconds — the local store is the only durable dedup.
 
 ## Question
 
-Story 9 of `docs/specs/execution-spec.md` and `CONTEXT.md`'s "double idempotency" invariant assume the venue enforces client-order-id uniqueness (Alpaca does: a duplicate `client_order_id` is a 422). Does Saxo OpenAPI `POST /trade/v2/orders` support a client-supplied idempotency key, and what happens when the same order is submitted twice?
+Story 9 of `docs/specs/execution-spec.md` and `CONTEXT.md`'s "double idempotency" invariant assume the venue enforces client-order-id uniqueness (Alpaca does, **permanently**: a duplicate `client_order_id` is a 422 whatever state the prior order is in, and the id is never released — measured in round 3 below, #1346; when this line was first written the Alpaca half was an assertion, not a measurement). Does Saxo OpenAPI `POST /trade/v2/orders` support a client-supplied idempotency key, and what happens when the same order is submitted twice?
 
 ## Method
 
@@ -62,9 +64,54 @@ Related, verified in the same session and relied on by the adapter:
 
 **Cleanup.** Every trial tore down in a `finally`: cancel every probe order, market-flatten any position, re-read. Final state after the session: `/port/v1/orders/me`, `/port/v1/netpositions/me` and `/port/v1/positions/me` each returned `{"__count":0,"Data":[]}`.
 
+## Round 3 — Alpaca's `client_order_id`: how long is it spent for? (2026-09-15)
+
+**Status:** MEASURED on the real Alpaca **PAPER** venue (`https://paper-api.alpaca.markets`, account `PA3II2VV2I1B`, `status: ACTIVE`, `trading_blocked: false`, equity 99878.66 USD), 2026-09-15 12:12-12:15Z, for [#1346](https://github.com/dd-jp/samurai-trading-system/issues/1346) under David's 2026-09-14 authorization to probe the paper venue. No live capital. Every probe order was a 1-share `SPY` `limit` `gtc` at 10.00 — far below market, so nothing could fill — and every probe id is prefixed `probe1346-<epoch>-`; teardown was scoped to those ids. Final state: open orders `[]`, positions `[]`.
+
+**The question.** `AlpacaBrokerAdapter.rearmProtectiveLegs` places a residual's protective OCO under a derived wire id and, finding a prior one there, adopts it or cancels it and places again *under the same id*. That fall-through assumed — never measured — that a reused `client_order_id` would be refused once the prior order was terminal. Two facts were asked for: **(1)** is a reused `client_order_id` accepted after the prior order went terminal, and **(2)** what does `GET /v2/orders:by_client_order_id` return when two orders share an id.
+
+**Fact 1: the id is consumed permanently. Four trials, four refusals.**
+
+| Trial | State of the prior order | Response to the reuse `POST /v2/orders` |
+|---|---|---|
+| T1.2 | `accepted`, resting on the book, 115 ms after placement | `HTTP 422` `{"code":42210000,"message":"client_order_id must be unique"}` |
+| T2.3 | `canceled`, **0 ms** after the terminal status was confirmed | `HTTP 422` `{"code":40010001,"message":"client_order_id must be unique"}` |
+| T4.1 | `canceled`, **~90 s** later, same id | `HTTP 422` `{"code":40010001,"message":"client_order_id must be unique"}` |
+| T6.1 | `canceled` **13 days** earlier (`repro-1003-SPY-1788327559145`, created 2026-09-02, cancelled 2026-09-02T05:53Z) | `HTTP 422` `{"code":40010001,"message":"client_order_id must be unique"}` |
+
+The `code` differs between a resting prior (`42210000`) and a terminal one (`40010001`); the `message` and the refusal do not. There is no window: this is the opposite of Saxo's rolling ~15 s guard. **An Alpaca `client_order_id` is spent the moment an order is accepted under it, and stays spent.**
+
+**Fact 2: unprobeable by construction — and that is the answer.** Two orders can never share a `client_order_id`, because fact 1 refuses the second one. The lookup for the probe id returned the single canceled row, and a full `GET /v2/orders?status=all` scan confirmed exactly one row carries it:
+
+```
+GET /v2/orders:by_client_order_id?client_order_id=probe1346-1789474336-a
+HTTP 200
+{"id":"aed39ed2-876d-4b10-851f-00b183e49b14","client_order_id":"probe1346-1789474336-a", ... ,"canceled_at":"2026-09-15T12:12:17.580269617Z", ... ,"status":"canceled", ... }
+
+ROWS WITH client_order_id=probe1346-1789474336-a: [ 1 row — the canceled one above ]
+```
+
+So the ambiguity the ticket asked the adapter to handle explicitly does not exist at this venue. There is no ordering to depend on, because there is never a second row.
+
+**Corollary, and the reason one terminal status is still unmeasured: a submit the venue REFUSES leaves no row and does not consume the id.** The oversized-buy probe was refused at submit time and its id stayed free:
+
+```
+POST /v2/orders  {"symbol":"SPY","qty":"1000000","side":"buy","type":"limit","limit_price":"900.00","time_in_force":"gtc","client_order_id":"probe1346-1789474509-c"}
+HTTP 403
+{"buying_power":"399514.64","code":40310000,"cost_basis":"900000003","message":"insufficient buying power"}
+
+GET /v2/orders:by_client_order_id?client_order_id=probe1346-1789474509-c
+HTTP 404
+{"code":40410000,"message":"order not found for probe1346-1789474509-c"}
+```
+
+An earlier attempt to manufacture a `rejected` row the same way was refused for its own reason (`HTTP 422 {"code":42210000,"message":"take_profit.limit_price must be < stop_loss.stop_price"}`) and likewise left no row — the id was then reusable and a plain `POST` under it returned `HTTP 200`. **So reuse after a genuinely `rejected` or `expired` ROW is NOT measured**: paper refused every attempt to produce one at submit time, which is precisely the case that consumes nothing. It does not change the fix — a spent id is spent whatever terminal status its row carries, and the adapter advances past any id the venue answers for.
+
+**What this changed in the code (#1346).** The ticket's premise — that the fall-through could place a *second* OCO under one residual marker — is **disproved**: the venue makes a duplicate impossible. The real defect is the mirror image. A single `:rearm` id could protect a lot exactly **once**: the re-arm places its OCO, the next `executeExit` cancels it (#516), that flatten partially fills, the fresh residual marks the same lot, and the sweep's next re-arm 422s — and 422s identically on every later pass, so `confirmResidualProtected` is never reached, the marker never clears, and **the residual is never protected**. A permanent protection gap that reads as a transient venue error. `rearmProtectiveLegs` now walks attempt-indexed wire ids (`${key}:rearm`, `${key}:rearm-1`, …, bounded, mirroring `resolveExitRetryKey`'s `:retry-N`), adopting or retiring what it finds and placing under the first id the lot has not spent.
+
 ## What this means for the adapter
 
-1. **Durable idempotency is ours, not the venue's.** `open_positions.idempotency_key` (local write-ahead) is the only dedup that survives 15 seconds. Story 9's second layer is real for Alpaca and **absent** for Saxo.
+1. **Durable idempotency is ours, not the venue's — on Saxo.** `open_positions.idempotency_key` (local write-ahead) is the only dedup that survives 15 seconds there. Story 9's second layer is real for Alpaca and **absent** for Saxo. Measured on both sides now (round 3): Alpaca's layer is not merely real but *permanent*, which cuts the other way as well — an id Alpaca has accepted can never be submitted under again, so any scheme that derives a venue id per lot must be able to derive a *fresh* one, not just a deterministic one.
 2. **Adopt-or-place.** Before every `POST`, the adapter looks the `ExternalReference` up on open orders and then on the audit trail; only if neither knows it does it place. On a `409` it looks again — the window remembering the request means the first attempt's order exists.
 3. **`x-request-id = client_order_id`.** Inside the window this makes a true retry (same intent, same body) a `409` rather than a double, at zero cost. It is not relied on beyond that.
 4. **No transport retry on placement.** `withRetry` is disabled for `placeOrder` (single attempt): a retry after a slow reply is exactly the probe-4 shape. Reads and cancels retry normally.
@@ -74,7 +121,9 @@ Related, verified in the same session and relied on by the adapter:
 
 - ~~**Fill fields on the activity feed.**~~ **Closed 2026-09-10** by round 2 above: `FillAmount` and `AveragePrice` are the right names, observed on real fills.
 - ~~**Position row shapes.**~~ **Closed 2026-09-10** by round 2 above: `NetPositionBase.Amount`/`Uic` and `NetPositionView.AverageOpenPrice` observed on a real open position.
-- **Live gateway.** Every figure is SIM. Saxo documents SIM and live as behaviourally equivalent for order handling, but the 15-second window and the 120/min limit were measured on `/sim/` only.
+- **Alpaca reuse after a `rejected` or `expired` ROW** (round 3). Measured for `accepted` and for `canceled` at 0 ms, 90 s and 13 days. Paper would not produce a `rejected` row: every attempt was refused at submit time, and a submit-time refusal leaves no row and frees the id. `expired` needs a `day` order to survive to the close, which this session did not run.
+- **Alpaca LIVE.** Round 3 is the paper venue only, per the authorization it was run under.
+- **Live gateway.** Every Saxo figure is SIM. Saxo documents SIM and live as behaviourally equivalent for order handling, but the 15-second window and the 120/min limit were measured on `/sim/` only.
 - **Behaviour on partial fill of an IfDone master** — whether the related orders resize, and what `Status` a partial-fill activity row carries. Never observed; round 2's fills were all 1-unit and instant.
 - **`LSE_ETF` order handling.** Round 2 measured `Etf`/NASDAQ because the LSE session was closed. The fill/cancel shapes above have not been re-measured on a pool line.
 - **A DELETE landing inside the fill itself.** The fill took 8 ms; one HTTP round trip is 127-334 ms. `404` is measured for a settled filled master, not for one mid-fill.
