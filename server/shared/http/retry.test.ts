@@ -226,25 +226,24 @@ describe('withRetry (generic)', () => {
     await expect(promise).resolves.toBe('ok');
   });
 
-  it.each([
-    Number.NaN,
-    Number.POSITIVE_INFINITY,
-    -1,
-  ])('falls back to computed backoff when retryAfterMs is invalid (%s)', async (invalidHint) => {
-    const fn = vi
-      .fn()
-      .mockRejectedValueOnce(new RetryableError('rate limited', invalidHint))
-      .mockResolvedValueOnce('ok');
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, -1])(
+    'falls back to computed backoff when retryAfterMs is invalid (%s)',
+    async (invalidHint) => {
+      const fn = vi
+        .fn()
+        .mockRejectedValueOnce(new RetryableError('rate limited', invalidHint))
+        .mockResolvedValueOnce('ok');
 
-    const promise = withRetry(fn, CONFIG, isRetryable);
+      const promise = withRetry(fn, CONFIG, isRetryable);
 
-    await vi.advanceTimersByTimeAsync(CONFIG.baseDelayMs - 1);
-    expect(fn).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(fn).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(CONFIG.baseDelayMs - 1);
+      expect(fn).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fn).toHaveBeenCalledTimes(2);
 
-    await expect(promise).resolves.toBe('ok');
-  });
+      await expect(promise).resolves.toBe('ok');
+    },
+  );
 
   it('falls back to computed backoff when retryAfterMs is absent', async () => {
     const fn = vi

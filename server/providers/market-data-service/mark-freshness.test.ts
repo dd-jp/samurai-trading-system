@@ -69,18 +69,19 @@ describe('classifyMarkFreshness', () => {
   // such offset at any pass duration — these cases are the ticket's
   // acceptance criterion, run at the magnitudes the soak actually produced
   describe('pass latency is not a forward offset against the read instant (#1111)', () => {
-    it.each([
-      149, 1_083, 55_815, 83_993, 145_000,
-    ])('passes a mark read %sms into a pass, its own age well inside the bound', (passLatencyMs) => {
-      const asOf = new Date(READ_AT.getTime() - passLatencyMs);
-      const mark = markObservedAt(new Date(READ_AT.getTime() - 50).toISOString());
+    it.each([149, 1_083, 55_815, 83_993, 145_000])(
+      'passes a mark read %sms into a pass, its own age well inside the bound',
+      (passLatencyMs) => {
+        const asOf = new Date(READ_AT.getTime() - passLatencyMs);
+        const mark = markObservedAt(new Date(READ_AT.getTime() - 50).toISOString());
 
-      // Under the pre-#1111 coordinate this is the refusal: the mark is
-      // `passLatencyMs - 50` AHEAD of `asOf`
-      expect(markAgeMs(mark, asOf)).toBeLessThan(0);
+        // Under the pre-#1111 coordinate this is the refusal: the mark is
+        // `passLatencyMs - 50` AHEAD of `asOf`
+        expect(markAgeMs(mark, asOf)).toBeLessThan(0);
 
-      expect(classifyMarkFreshness(mark, READ_AT, 900_000)).toMatchObject({ status: 'fresh' });
-    });
+        expect(classifyMarkFreshness(mark, READ_AT, 900_000)).toMatchObject({ status: 'fresh' });
+      },
+    );
 
     it('still refuses a mark genuinely older than its bound, however long the pass took', () => {
       const mark = markObservedAt('2026-08-15T11:40:00.000Z');

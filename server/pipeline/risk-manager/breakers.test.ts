@@ -359,28 +359,28 @@ describe('CircuitBreakers', () => {
    * PERMANENT — and persisted (`breaker_state`, reloaded into the constructor
    * at boot), so it outlived a restart too. These two are the regression pins.
    */
-  it.each([
-    'live',
-    'paper',
-  ] as const)('auto-re-arms the hard drawdown breaker on recovery in %s mode — ADR-0013 left no operator to call reArm()', (mode) => {
-    const breakers = new CircuitBreakers(
-      makeConfig({
-        max_drawdown_pct: 0.2,
-        auto_rearm: { recovery_drawdown_pct: 0.1, max_days_tripped: 999 },
-      }),
-    );
-    breakers.evaluate(makeInput({ portfolio: makePortfolio({ drawdown_pct: 0.25 }), mode }));
+  it.each(['live', 'paper'] as const)(
+    'auto-re-arms the hard drawdown breaker on recovery in %s mode — ADR-0013 left no operator to call reArm()',
+    (mode) => {
+      const breakers = new CircuitBreakers(
+        makeConfig({
+          max_drawdown_pct: 0.2,
+          auto_rearm: { recovery_drawdown_pct: 0.1, max_days_tripped: 999 },
+        }),
+      );
+      breakers.evaluate(makeInput({ portfolio: makePortfolio({ drawdown_pct: 0.25 }), mode }));
 
-    const insideBand = breakers.evaluate(
-      makeInput({ portfolio: makePortfolio({ drawdown_pct: 0.15 }), mode }),
-    );
-    expect(insideBand.portfolio_tripped).toBe(true);
+      const insideBand = breakers.evaluate(
+        makeInput({ portfolio: makePortfolio({ drawdown_pct: 0.15 }), mode }),
+      );
+      expect(insideBand.portfolio_tripped).toBe(true);
 
-    const recovered = breakers.evaluate(
-      makeInput({ portfolio: makePortfolio({ drawdown_pct: 0.05 }), mode }),
-    );
-    expect(recovered.portfolio_tripped).toBe(false);
-  });
+      const recovered = breakers.evaluate(
+        makeInput({ portfolio: makePortfolio({ drawdown_pct: 0.05 }), mode }),
+      );
+      expect(recovered.portfolio_tripped).toBe(false);
+    },
+  );
 
   /**
    * `max_days_tripped` is the one half of the policy that stays backtest-only.
@@ -388,36 +388,36 @@ describe('CircuitBreakers', () => {
    * drew down past the threshold would otherwise resume entries on day 2 while
    * still fully down, which is the opposite of #634's "re-arm on recovery".
    */
-  it.each([
-    'live',
-    'paper',
-  ] as const)('does NOT re-arm on elapsed time alone in %s mode while the drawdown persists', (mode) => {
-    const breakers = new CircuitBreakers(
-      makeConfig({
-        max_drawdown_pct: 0.2,
-        auto_rearm: { recovery_drawdown_pct: 0.1, max_days_tripped: 1 },
-      }),
-    );
-    breakers.evaluate(
-      makeInput({
-        portfolio: makePortfolio({ drawdown_pct: 0.25 }),
-        mode,
-        clock: makeClock('2026-07-01T00:00:00Z'),
-      }),
-    );
+  it.each(['live', 'paper'] as const)(
+    'does NOT re-arm on elapsed time alone in %s mode while the drawdown persists',
+    (mode) => {
+      const breakers = new CircuitBreakers(
+        makeConfig({
+          max_drawdown_pct: 0.2,
+          auto_rearm: { recovery_drawdown_pct: 0.1, max_days_tripped: 1 },
+        }),
+      );
+      breakers.evaluate(
+        makeInput({
+          portfolio: makePortfolio({ drawdown_pct: 0.25 }),
+          mode,
+          clock: makeClock('2026-07-01T00:00:00Z'),
+        }),
+      );
 
-    // A month later, and still 25% down: the timeout arm would have cleared
-    // this many times over in backtest
-    const stillTripped = breakers.evaluate(
-      makeInput({
-        portfolio: makePortfolio({ drawdown_pct: 0.25 }),
-        mode,
-        clock: makeClock('2026-08-01T00:00:00Z'),
-      }),
-    );
-    expect(stillTripped.portfolio_tripped).toBe(true);
-    expect(stillTripped.armed_breakers).toContain('portfolio_drawdown_hard');
-  });
+      // A month later, and still 25% down: the timeout arm would have cleared
+      // this many times over in backtest
+      const stillTripped = breakers.evaluate(
+        makeInput({
+          portfolio: makePortfolio({ drawdown_pct: 0.25 }),
+          mode,
+          clock: makeClock('2026-08-01T00:00:00Z'),
+        }),
+      );
+      expect(stillTripped.portfolio_tripped).toBe(true);
+      expect(stillTripped.armed_breakers).toContain('portfolio_drawdown_hard');
+    },
+  );
 
   it('clears the hard drawdown breaker on an explicit reArm() without waiting for the recovery threshold', () => {
     // The operator override that survives #634. What it buys over auto-re-arm

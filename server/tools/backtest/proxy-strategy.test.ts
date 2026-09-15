@@ -153,22 +153,22 @@ describe('proxySignal', () => {
     { atrStopMult: 2, atrTargetMult: 3 },
     { atrStopMult: 1.5, atrTargetMult: 2 },
     { atrStopMult: 3, atrTargetMult: 4 },
-  ])('computes stop/target from the ATR at entry scaled by the config multipliers ($atrStopMult x / $atrTargetMult x)', ({
-    atrStopMult,
-    atrTargetMult,
-  }) => {
-    const bars = buildTrendingBars(10, 100, 1);
-    const config = { ...BASE_CONFIG, atrStopMult, atrTargetMult };
+  ])(
+    'computes stop/target from the ATR at entry scaled by the config multipliers ($atrStopMult x / $atrTargetMult x)',
+    ({ atrStopMult, atrTargetMult }) => {
+      const bars = buildTrendingBars(10, 100, 1);
+      const config = { ...BASE_CONFIG, atrStopMult, atrTargetMult };
 
-    const signal = proxySignal(bars, config, '1d');
-    const lastClose = bars[bars.length - 1].close;
-    const atrSpec = proxyAtrSpec(config, '1d');
-    const atrValue = computeIndicator(bars.slice(-atrSpec.lookback), atrSpec);
+      const signal = proxySignal(bars, config, '1d');
+      const lastClose = bars[bars.length - 1].close;
+      const atrSpec = proxyAtrSpec(config, '1d');
+      const atrValue = computeIndicator(bars.slice(-atrSpec.lookback), atrSpec);
 
-    expect(signal.direction).toBe('long');
-    expect(signal.stop).toBeCloseTo(lastClose - atrValue * atrStopMult, 5);
-    expect(signal.target).toBeCloseTo(lastClose + atrValue * atrTargetMult, 5);
-  });
+      expect(signal.direction).toBe('long');
+      expect(signal.stop).toBeCloseTo(lastClose - atrValue * atrStopMult, 5);
+      expect(signal.target).toBeCloseTo(lastClose + atrValue * atrTargetMult, 5);
+    },
+  );
 
   it('places the stop below and target above entry for a long signal', () => {
     const bars = buildTrendingBars(10, 100, 1);

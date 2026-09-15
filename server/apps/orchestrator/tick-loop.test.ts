@@ -419,36 +419,37 @@ describe('runTickPlan', () => {
     expect(finished).toEqual(['QQQ', 'AAPL', 'SPY']);
   });
 
-  it.each([
-    1, 6,
-  ])('supplies the portfolio-tail turnstile to every instrument at width %i (#1040)', async (width) => {
-    // This repo's dominant defect is a mechanism nothing calls. The runner's
-    // `await ctx.beginPortfolioTail?.()` is optional-chained, so a loop that
-    // stopped supplying it would go silently back to a concurrent tail — and
-    // every existing test in this file would still pass. Asserted at BOTH
-    // widths because the narrow one is the replay path: it must take the
-    // same route through the runner, not a second untested one
-    const seen: Array<TickContext['beginPortfolioTail']> = [];
-    const runner: TickRunner = {
-      async runInstrument(_signal, ctx) {
-        seen.push(ctx.beginPortfolioTail);
-        await ctx.beginPortfolioTail?.();
-        return { trace_id: ctx.trace_id, final_stage: 'position_check' };
-      },
-    };
+  it.each([1, 6])(
+    'supplies the portfolio-tail turnstile to every instrument at width %i (#1040)',
+    async (width) => {
+      // This repo's dominant defect is a mechanism nothing calls. The runner's
+      // `await ctx.beginPortfolioTail?.()` is optional-chained, so a loop that
+      // stopped supplying it would go silently back to a concurrent tail — and
+      // every existing test in this file would still pass. Asserted at BOTH
+      // widths because the narrow one is the replay path: it must take the
+      // same route through the runner, not a second untested one
+      const seen: Array<TickContext['beginPortfolioTail']> = [];
+      const runner: TickRunner = {
+        async runInstrument(_signal, ctx) {
+          seen.push(ctx.beginPortfolioTail);
+          await ctx.beginPortfolioTail?.();
+          return { trace_id: ctx.trace_id, final_stage: 'position_check' };
+        },
+      };
 
-    await runTickPlan(makePlan('SPY', 'QQQ', 'AAPL'), runner, CLOCK, {
-      max_concurrent_instruments: width,
-      newTraceId: countingTraceIds(),
-      logger: LOGGER,
-      auditLog: makeAuditLog(),
-      currentTickStore: makeCurrentTickStore(),
-      decisionGate: new DebateBarDecisionGate(),
-    });
+      await runTickPlan(makePlan('SPY', 'QQQ', 'AAPL'), runner, CLOCK, {
+        max_concurrent_instruments: width,
+        newTraceId: countingTraceIds(),
+        logger: LOGGER,
+        auditLog: makeAuditLog(),
+        currentTickStore: makeCurrentTickStore(),
+        decisionGate: new DebateBarDecisionGate(),
+      });
 
-    expect(seen).toHaveLength(3);
-    expect(seen.every((turnstile) => typeof turnstile === 'function')).toBe(true);
-  });
+      expect(seen).toHaveLength(3);
+      expect(seen.every((turnstile) => typeof turnstile === 'function')).toBe(true);
+    },
+  );
 
   it('handles an empty plan (stocks closed, no crypto configured)', async () => {
     const runner: TickRunner = { runInstrument: vi.fn() };

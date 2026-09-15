@@ -1124,23 +1124,26 @@ describe('SqliteRiskCriticStore', () => {
       'a breach with no measurement behind it',
       '[{"condition":{"id":"c","observable":{"kind":"mark"},"comparator":"<","threshold":95,"rationale":"r"},"state":"breached","observed":null}]',
     ],
-  ])('collapses a persisted conditions list containing %s to no_conditions, never a half-trusted breach', (_case, stored) => {
-    // The column is TEXT and its contents are whatever a past process — or a
-    // hand-edit — left there. A cast on read would let `[{}]` throw inside
-    // `evaluate()` and let a bare `{"state":"breached"}` hard-reject a trade
-    // with NOTHING measured behind it, handing the storage layer the
-    // authority the types deny the model
-    db.prepare(
-      `INSERT INTO risk_critic_log
+  ])(
+    'collapses a persisted conditions list containing %s to no_conditions, never a half-trusted breach',
+    (_case, stored) => {
+      // The column is TEXT and its contents are whatever a past process — or a
+      // hand-edit — left there. A cast on read would let `[{}]` throw inside
+      // `evaluate()` and let a bare `{"state":"breached"}` hard-reject a trade
+      // with NOTHING measured behind it, handing the storage layer the
+      // authority the types deny the model
+      db.prepare(
+        `INSERT INTO risk_critic_log
            (debate_id, verdict, max_notional, reasoning, created_at, conditions_json)
          VALUES (?, 'pass', NULL, 'prose stands', ?, ?)`,
-    ).run(DEBATE_ID, NOW.toISOString(), stored);
+      ).run(DEBATE_ID, NOW.toISOString(), stored);
 
-    const verdict = readStoredVerdict(db);
-    expect(verdict.conditions).toBeUndefined();
-    expect(breachedConditions(verdict)).toEqual([]);
-    expect(invalidationReasons(verdict)).toContain(NO_CONDITIONS_REASON);
-  });
+      const verdict = readStoredVerdict(db);
+      expect(verdict.conditions).toBeUndefined();
+      expect(breachedConditions(verdict)).toEqual([]);
+      expect(invalidationReasons(verdict)).toContain(NO_CONDITIONS_REASON);
+    },
+  );
 
   it('keeps the surviving subset of a partially-malformed conditions list and surfaces the drop via the logger (#1068)', () => {
     const survivor = {

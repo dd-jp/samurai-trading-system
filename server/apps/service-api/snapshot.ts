@@ -293,6 +293,7 @@ function buildPnlHeadline(
     },
     rate_usd_per_gbp: SIZING_USD_PER_GBP,
     rate_source: PNL_RATE_SOURCE,
+    book_gbp: LIVE_BOOK_GBP,
   };
 }
 

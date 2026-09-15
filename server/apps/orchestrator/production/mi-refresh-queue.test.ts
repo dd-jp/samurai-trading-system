@@ -202,44 +202,43 @@ describe('MiRefreshQueue (#1085)', () => {
   it.each([
     { first: 'ingest', second: 'grok', instrument: 'TSLA' },
     { first: 'grok', second: 'ingest', instrument: 'AAPL' },
-  ] as const)('holds the pair inside the budget with $first composed first, now that both self-gate (#1106)', async ({
-    first,
-    second,
-    instrument,
-  }) => {
-    // Before #1106, `MiIngestAgent` billed through the shared `LlmClient`
-    // and read no cap of its own, so ingest-first was the only safe
-    // ordering at the composition root. Now both agents read the cap
-    // before they call (the `labeledCapReadingRefresher` shape on both
-    // sides), so the SAME pair spends the same total whichever one runs
-    // first: the first call is admitted and bills, the second reads the
-    // post-bill total and refuses — which one that is DOES flip with
-    // order, and `labeledCapReadingRefresher`'s label is what makes that
-    // flip observable rather than the two composed calls being
-    // indistinguishable
-    const cap = meteredCap(1);
-    const calls: string[] = [];
-    const queue = new MiRefreshQueue({
-      spendCap: cap,
-      refresher: composePair(
-        labeledCapReadingRefresher(first, cap, 1, calls),
-        labeledCapReadingRefresher(second, cap, 1, calls),
-      ),
-    });
+  ] as const)(
+    'holds the pair inside the budget with $first composed first, now that both self-gate (#1106)',
+    async ({ first, second, instrument }) => {
+      // Before #1106, `MiIngestAgent` billed through the shared `LlmClient`
+      // and read no cap of its own, so ingest-first was the only safe
+      // ordering at the composition root. Now both agents read the cap
+      // before they call (the `labeledCapReadingRefresher` shape on both
+      // sides), so the SAME pair spends the same total whichever one runs
+      // first: the first call is admitted and bills, the second reads the
+      // post-bill total and refuses — which one that is DOES flip with
+      // order, and `labeledCapReadingRefresher`'s label is what makes that
+      // flip observable rather than the two composed calls being
+      // indistinguishable
+      const cap = meteredCap(1);
+      const calls: string[] = [];
+      const queue = new MiRefreshQueue({
+        spendCap: cap,
+        refresher: composePair(
+          labeledCapReadingRefresher(first, cap, 1, calls),
+          labeledCapReadingRefresher(second, cap, 1, calls),
+        ),
+      });
 
-    await queue.refresh('tick-1', instrument, 'stocks');
-    await settle();
+      await queue.refresh('tick-1', instrument, 'stocks');
+      await settle();
 
-    // The FIRST-composed side bills, the second reads the post-bill total
-    // and refuses — pinned by label, not just by count, so this cannot
-    // pass for a pair that billed twice or for the wrong side billing
-    // once
-    expect(calls).toEqual([`${first}:${instrument}`]);
-    // EXACTLY the budget, not "at most" — `<= 1` would also pass for a
-    // pass that spent nothing at all, which is what a queue refusing
-    // everything looks like
-    expect(cap.spentUsd).toBe(1);
-  });
+      // The FIRST-composed side bills, the second reads the post-bill total
+      // and refuses — pinned by label, not just by count, so this cannot
+      // pass for a pair that billed twice or for the wrong side billing
+      // once
+      expect(calls).toEqual([`${first}:${instrument}`]);
+      // EXACTLY the budget, not "at most" — `<= 1` would also pass for a
+      // pass that spent nothing at all, which is what a queue refusing
+      // everything looks like
+      expect(cap.spentUsd).toBe(1);
+    },
+  );
 
   it('refuses a queued refresh once the cap is reached, logging the first then every Nth', async () => {
     // The queue's own `#dispatch` check, exercised directly against a

@@ -382,7 +382,7 @@ export type PnlRateSource = 'static_sizing_rate';
 export interface PnlOverallWire {
   /** Cumulative realized `realized_pnl_net` plus current open unrealized, in GBP. Signed. */
   net_gbp: number;
-  /** `net_gbp` as a signed fraction of the £1,000 declared book (`LIVE_BOOK_GBP`) — 0.05 is 5% */
+  /** `net_gbp` as a signed fraction of the declared book (`PnlHeadlineWire.book_gbp`) — 0.05 is 5% */
   net_pct_of_book: number;
   /** Peak-to-trough fall of the REALIZED series only, as a positive fraction of the declared book. Zero when the series never fell below a prior peak. */
   max_drawdown_pct: number;
@@ -413,7 +413,7 @@ export interface PnlOverallWire {
 export interface PnlTodayWire {
   /** `realized_gbp + unrealized_gbp`, signed */
   net_gbp: number;
-  /** `net_gbp` as a signed fraction of the £1,000 declared book */
+  /** `net_gbp` as a signed fraction of the declared book (`PnlHeadlineWire.book_gbp`) */
   net_pct_of_book: number;
   /** Sum of `realized_pnl_net` for trades closed today, in GBP. Signed. */
   realized_gbp: number;
@@ -440,6 +440,14 @@ export interface PnlHeadlineWire {
   /** USD per GBP — `SIZING_USD_PER_GBP` (`paper-profile.ts`), the same static rate `ArmComparisonRow.basis` is converted at */
   rate_usd_per_gbp: number;
   rate_source: PnlRateSource;
+  /**
+   * The declared book both `net_pct_of_book` fields are a fraction of, in GBP
+   * — `LIVE_BOOK_GBP` (`paper-profile.ts`) — carried for the same reason
+   * `rate_usd_per_gbp` is: this figure has already moved once (£1,500 →
+   * £1,000, ADR-0015's 2026-08-18 amendment), and a renderer that hard-coded
+   * it would keep stating the old book the moment it moves again (#1620)
+   */
+  book_gbp: number;
 }
 
 /**

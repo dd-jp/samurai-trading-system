@@ -328,6 +328,7 @@ export function makePnlHeadline(overrides: Partial<PnlHeadlineWire> = {}): PnlHe
     },
     rate_usd_per_gbp: 1.27,
     rate_source: 'static_sizing_rate',
+    book_gbp: 1_000,
     ...overrides,
   };
 }

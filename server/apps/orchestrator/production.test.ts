@@ -2577,7 +2577,7 @@ describe('tickSkipAlerts is wired by the composition root (#1084)', () => {
 
   /**
    * Same shape as `blockingRunner` (the `startTickLoop` suite, above): every claimed
-   *  instrument stays "busy" until the test explicitly releases it
+   * instrument stays "busy" until the test explicitly releases it
    */
   function blockingTickRunner() {
     const releases: Array<() => void> = [];
@@ -7795,33 +7795,36 @@ describe('risk critic in backtest mode is replay-only at the composition root (#
   it.each([
     ['an element with no fields at all', '[{}]'],
     ['a bare model-shaped state assertion', '[{"state":"breached"}]'],
-  ])('#994: a persisted conditions column holding %s neither throws nor rejects on the replay path', async (_case, stored) => {
-    // The threat is the storage layer, not the model: a TEXT column read
-    // with a cast would hand `evaluate()` an object with no `observable`
-    // (a TypeError inside the risk stage, i.e. a dead tick) or an
-    // unmeasured `breached` (a hard reject with nothing behind it)
-    const clock = new SimulatedClock(START);
-    const intent = goVerdict().order as OrderIntent;
-    db.prepare(
-      `INSERT INTO risk_critic_log
+  ])(
+    '#994: a persisted conditions column holding %s neither throws nor rejects on the replay path',
+    async (_case, stored) => {
+      // The threat is the storage layer, not the model: a TEXT column read
+      // with a cast would hand `evaluate()` an object with no `observable`
+      // (a TypeError inside the risk stage, i.e. a dead tick) or an
+      // unmeasured `breached` (a hard reject with nothing behind it)
+      const clock = new SimulatedClock(START);
+      const intent = goVerdict().order as OrderIntent;
+      db.prepare(
+        `INSERT INTO risk_critic_log
            (debate_id, verdict, max_notional, reasoning, created_at, conditions_json)
          VALUES (?, 'pass', NULL, 'prose stands', ?, ?)`,
-    ).run(intent.metadata.debate_id, START.toISOString(), stored);
+      ).run(intent.metadata.debate_id, START.toISOString(), stored);
 
-    const config = stubConfig(db, {
-      ...REAL_CONFIGS,
-      mode: 'backtest',
-      clock,
-      llmClient: { complete: vi.fn() } as unknown as NonNullable<ProductionConfig['llmClient']>,
-    });
-    const { steps } = buildProductionComponents(config);
+      const config = stubConfig(db, {
+        ...REAL_CONFIGS,
+        mode: 'backtest',
+        clock,
+        llmClient: { complete: vi.fn() } as unknown as NonNullable<ProductionConfig['llmClient']>,
+      });
+      const { steps } = buildProductionComponents(config);
 
-    const decision = await steps.risk({ trace_id: 'trace-994-corrupt', intent, clock });
+      const decision = await steps.risk({ trace_id: 'trace-994-corrupt', intent, clock });
 
-    expect(decision.status).toBe('approved');
-    expect(decision.binding_constraint).not.toBe('risk_critic:invalidated');
-    expect(decision.reasons.join(' ')).toContain('no_conditions');
-  });
+      expect(decision.status).toBe('approved');
+      expect(decision.binding_constraint).not.toBe('risk_critic:invalidated');
+      expect(decision.reasons.join(' ')).toContain('no_conditions');
+    },
+  );
 
   it('#994: drop reasons and `no_conditions` reach the PERSISTED `risk_log` row of an APPROVED decision', async () => {
     // Surfacing is what makes "the conditions half never fires" noticeable, and

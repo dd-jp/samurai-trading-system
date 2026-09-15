@@ -101,14 +101,15 @@ describe('RateLimiter refuses a misconfigured budget at construction', () => {
 describe('RateLimiter.reserve is total over AssetClass', () => {
   const assetClasses = ['crypto', 'stocks'] as const;
 
-  it.each(
-    assetClasses,
-  )('returns a result for %s when only `default` is configured', (assetClass) => {
-    const limiter = new RateLimiter(new SimulatedClock(start), makeConfig());
+  it.each(assetClasses)(
+    'returns a result for %s when only `default` is configured',
+    (assetClass) => {
+      const limiter = new RateLimiter(new SimulatedClock(start), makeConfig());
 
-    expect(() => limiter.reserve(assetClass, 4)).not.toThrow();
-    expect(limiter.reserve(assetClass, 4)).toEqual({ granted: true });
-  });
+      expect(() => limiter.reserve(assetClass, 4)).not.toThrow();
+      expect(limiter.reserve(assetClass, 4)).toEqual({ granted: true });
+    },
+  );
 
   it('falls back to `default` for a class absent from perAssetClass, rather than throwing', () => {
     const limiter = new RateLimiter(new SimulatedClock(start), {

@@ -5,6 +5,7 @@ import {
   formatCount,
   formatDateUtc,
   formatFixed,
+  formatGbpWhole,
   formatHeld,
   formatPercent,
   formatPrice,
@@ -117,6 +118,23 @@ describe('formatSignedGbp', () => {
     expect(formatSignedGbp(Number.NaN)).toBe('—');
     expect(formatSignedGbp(Number.POSITIVE_INFINITY)).toBe('—');
     expect(formatSignedGbp(Number.NEGATIVE_INFINITY)).toBe('—');
+  });
+});
+
+describe('formatGbpWhole', () => {
+  it('groups thousands with no decimal places', () => {
+    expect(formatGbpWhole(1_000)).toBe('£1,000');
+    expect(formatGbpWhole(1_234_567)).toBe('£1,234,567');
+  });
+
+  it('rounds a fractional value rather than truncating', () => {
+    expect(formatGbpWhole(999.6)).toBe('£1,000');
+  });
+
+  it('renders non-finite input as an em dash', () => {
+    expect(formatGbpWhole(Number.NaN)).toBe('—');
+    expect(formatGbpWhole(Number.POSITIVE_INFINITY)).toBe('—');
+    expect(formatGbpWhole(Number.NEGATIVE_INFINITY)).toBe('—');
   });
 });
 
