@@ -57,10 +57,12 @@ export const GATE_REFUSAL_RATE_WINDOW_MS = 24 * 60 * 60 * 1000;
  *
  * 0.95 is chosen to clear the by-design `(N - 2) / N` baseline at every width
  * this system plausibly runs: 0.667 at the shipped `maxConcurrentInstruments`
- * of 6 (28 pp of headroom), 0.90 at the 20-name sweep `defaults.ts` and the
- * debate-engine spec both reason about (5 pp). The headroom runs out at N = 40,
+ * of 6 (28 pp of headroom), 0.90 if that cap were ever widened to 20 (5 pp).
+ * Universe SIZE does not move the baseline — the 20-name sweep `defaults.ts`
+ * and the debate-engine spec both reason about runs at width 6, so it is four
+ * waves at 0.667, not one at 0.90. The headroom runs out at a width of 40,
  * where the designed baseline IS 0.95 and this would alert on healthy
- * operation; a universe that wide needs #1427's derived predicate first, not a
+ * operation; a cap that wide needs #1427's derived predicate first, not a
  * larger flat number.
  */
 export const GATE_REFUSAL_RATE_THRESHOLD = 0.95;
