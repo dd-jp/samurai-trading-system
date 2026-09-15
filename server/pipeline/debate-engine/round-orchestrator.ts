@@ -21,7 +21,7 @@ import type { Clock } from '../../shared/index.js';
 import type { AnalystRoundStance } from './analyst-contribution.js';
 import { buildAnalystContributions } from './analyst-contribution.js';
 import { computeDebateId } from './debate-id.js';
-import type { AnalystView, DebateResult, Direction } from './types.js';
+import type { AnalystView, DebateResult, Direction, RoundVerdict } from './types.js';
 
 /** Hard cap on debate rounds (spec: "hard cap of 3 rounds maximum"). */
 export const MAX_ROUNDS = 3;
@@ -149,8 +149,11 @@ export interface RunDebateOptions {
 
 /**
  * Runs the round-robin debate to convergence or the hard cap and returns the
- * compact Trader-facing `DebateResult`. The ephemeral round-by-round state is
- * not returned (spec: compact payload, no transcript; no persistence).
+ * compact Trader-facing `DebateResult`. The ephemeral round-by-round
+ * TRANSCRIPT (arguments, prior-round context) is not returned (spec: compact
+ * payload, no transcript; no persistence, decision #10) — `round_verdicts`
+ * is a narrow exception: just the mediator's direction/confidence per round,
+ * for #1517's flip-rate measurement, not the transcript decision #10 is about.
  */
 export async function runDebate(
   input: DebateInput,
@@ -174,6 +177,7 @@ export async function runDebate(
 
   let roundsCompleted = 0;
   let lastAssessment: MediatorAssessment | undefined;
+  const roundVerdicts: RoundVerdict[] = [];
 
   for (let round = 1; round <= maxRounds; round++) {
     signal?.throwIfAborted();
@@ -193,6 +197,11 @@ export async function runDebate(
     for (const stance of assessment.stances) {
       roundStances.push({ analyst_id: stance.analyst_id, round, stance: stance.stance });
     }
+    roundVerdicts.push({
+      round,
+      direction: assessment.synthesis.direction,
+      confidence: assessment.synthesis.confidence,
+    });
 
     if (assessment.converged) {
       break;
@@ -230,6 +239,7 @@ export async function runDebate(
     rounds_completed: roundsCompleted,
     latency_ms: clock.now().getTime() - startedAt,
     direction: synthesis.direction,
+    round_verdicts: roundVerdicts,
     debate_id: computeDebateId(instrument, bar, views),
     // The SAME `bar` that was just hashed into `debate_id`, carried forward to
     // the Trader so it never floors a second clock read of its own (#687).

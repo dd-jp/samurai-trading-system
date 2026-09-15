@@ -149,6 +149,42 @@ describe('runDebate', () => {
     ]);
   });
 
+  it("captures round_verdicts with each round's direction and confidence, in round order", async () => {
+    const calls: string[] = [];
+    const mediator: MediatorPersona = {
+      assess: vi.fn(async (context: RoundContext): Promise<MediatorAssessment> => {
+        calls.push(`mediator:${context.round}`);
+        const converged = context.round === 3;
+        const perRound: Record<number, { direction: Direction; confidence: number }> = {
+          1: { direction: 'bearish', confidence: 0.3 },
+          2: { direction: 'neutral', confidence: 0.5 },
+          3: { direction: 'bullish', confidence: 0.8 },
+        };
+        return {
+          converged,
+          stances: context.views.map((v) => ({ analyst_id: v.analyst_id, stance: v.direction })),
+          synthesis: makeSynthesis({
+            ...perRound[context.round],
+            open_items: converged ? [] : ['unresolved'],
+          }),
+        };
+      }),
+    };
+
+    const result = await runDebate(makeInput(), {
+      bull: stubDebater('bull', calls),
+      bear: stubDebater('bear', calls),
+      mediator,
+      clock: new SimulatedClock(new Date('2026-07-14T09:00:00Z')),
+    });
+
+    expect(result.round_verdicts).toEqual([
+      { round: 1, direction: 'bearish', confidence: 0.3 },
+      { round: 2, direction: 'neutral', confidence: 0.5 },
+      { round: 3, direction: 'bullish', confidence: 0.8 },
+    ]);
+  });
+
   describe('maxRounds option (#581)', () => {
     it('caps a non-converging debate at maxRounds=1 with converged=false and non-empty open_items', async () => {
       const calls: string[] = [];

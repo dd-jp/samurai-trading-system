@@ -5,7 +5,7 @@
  * ("Debate log write"). The real SQLite-backed store is
  * `SqliteDebateLogStore` (#200, server/pipeline/debate-engine/sqlite-debate-log-store.ts).
  */
-import type { DebateLog, DebateLogStore } from '../../shared/index.js';
+import type { DebateLog, DebateLogStore, DebateRoundLogEntry } from '../../shared/index.js';
 import type { DebateResult } from './types.js';
 
 /**
@@ -68,6 +68,25 @@ export function buildDebateLog(
     // old row) genuinely has no cause to report.
     ...(result.timed_out?.cause === undefined ? {} : { termination_cause: result.timed_out.cause }),
   };
+}
+
+/**
+ * Projects `result.round_verdicts` (#1517) into `debate_round_log` rows,
+ * keyed by `result.debate_id`. Empty input (a producer with no round data,
+ * or `round_verdicts` absent entirely) yields an empty array rather than
+ * throwing — same "nothing to write" convention `writeRoundLog` follows.
+ */
+export function buildDebateRoundLogRows(
+  result: DebateResult,
+  created_at: Date,
+): DebateRoundLogEntry[] {
+  return (result.round_verdicts ?? []).map((verdict) => ({
+    debate_id: result.debate_id,
+    round: verdict.round,
+    direction: verdict.direction,
+    confidence: verdict.confidence,
+    created_at,
+  }));
 }
 
 /**
@@ -190,4 +209,12 @@ export class InMemoryDebateLogStore implements DebateLogStore {
   getByDebateId(debate_id: string): DebateLog | undefined {
     return this.rows.get(debate_id);
   }
+
+  // No reader exists on this in-memory store (#1517's flip-rate tool reads
+  // SqliteDebateLogStore only, matching getTerminationCauseWindowCounts'
+  // precedent of a concrete-class-only accessor) — accepting and discarding
+  // the rows keeps this a real DebateLogStore implementation for every test
+  // fixture that constructs one, rather than throwing on a method the port
+  // now requires.
+  writeRoundLog(_entries: DebateRoundLogEntry[]): void {}
 }

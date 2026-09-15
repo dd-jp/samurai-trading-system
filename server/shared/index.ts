@@ -112,6 +112,7 @@ export type {
   ClosedTradeStore,
   DebateLog,
   DebateLogStore,
+  DebateRoundLogEntry,
   DebateTermination,
   DebateTerminationCause,
   ExitReason,

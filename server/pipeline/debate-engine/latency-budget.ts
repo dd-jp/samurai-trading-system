@@ -25,7 +25,7 @@ import { type DebateTerminationCause, describeThrownSafely } from '../../shared/
 import type { DebateLogger } from './debate-logger.js';
 import { LlmMalformedResponseError, LlmRateLimitError, LlmTimeoutError } from './llm/errors.js';
 import type { AssetClass } from './rate-limiter.js';
-import type { DebateResult, Direction } from './types.js';
+import type { DebateResult, Direction, RoundVerdict } from './types.js';
 
 export type { AssetClass };
 
@@ -141,6 +141,8 @@ export interface PartialDebateState {
   rounds_completed: number;
   direction: Direction;
   debate_id: string;
+  /** Every round completed so far, in round order (#1517) — see `DebateResult.round_verdicts`. */
+  round_verdicts: RoundVerdict[];
 }
 
 const LOW_CONFIDENCE_FALLBACK = {
@@ -369,6 +371,7 @@ export async function enforceLatencyBudget(params: {
       rounds_completed: partial.rounds_completed,
       latency_ms: elapsed_ms,
       direction: partial.direction,
+      round_verdicts: partial.round_verdicts,
       debate_id: partial.debate_id,
       // From the caller, not from `partial`: a timed-out debate is still a
       // decision for the bar the tick was taken in, and the two shapes below
@@ -393,6 +396,7 @@ export async function enforceLatencyBudget(params: {
     rounds_completed: 0,
     latency_ms: elapsed_ms,
     direction: LOW_CONFIDENCE_FALLBACK.direction,
+    round_verdicts: [],
     debate_id,
     bar_timestamp: bar,
     // `timed_out` already makes `debateWasDegraded` true; see

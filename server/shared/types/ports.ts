@@ -4,7 +4,14 @@
  * changes when a consumer's needs change, a record when the domain does, and
  * they rarely move together.
  */
-import type { ClosedTrade, DebateLog, SetupNeighbor, SetupVector, VerdictLog } from './records.js';
+import type {
+  ClosedTrade,
+  DebateLog,
+  DebateRoundLogEntry,
+  SetupNeighbor,
+  SetupVector,
+  VerdictLog,
+} from './records.js';
 
 /**
  * Owned by the Feedback Loop (Stage 6, `docs/wayfinder/feedback-loop-map.md`
@@ -42,6 +49,17 @@ export interface DebateLogStore {
   writeLog(entry: DebateLog): void;
   /** FL's attribution join point — absent for a debate never completed. */
   getByDebateId(debate_id: string): DebateLog | undefined;
+  /**
+   * Persists this debate's per-round verdicts (#1517) — called once,
+   * alongside `writeLog`, in the same non-duplicate branch. On the port
+   * (not left to `SqliteDebateLogStore` alone, unlike the read-only
+   * aggregates below it) because it is a WRITE on the primary path, the same
+   * ownership `writeLog` already has — every implementer that can accept a
+   * `DebateLog` row must be able to accept its round rows too. `entries` may
+   * be empty (a producer with no round data); implementations should treat
+   * that as a no-op, not an error.
+   */
+  writeRoundLog(entries: DebateRoundLogEntry[]): void;
 }
 
 /**

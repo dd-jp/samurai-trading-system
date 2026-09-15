@@ -32,6 +32,7 @@
     "check:live-gates": "tsx server/tools/check-live-money-gates.ts",
     "report:arms": "tsx server/tools/report-arm-comparison.ts",
     "report:cgt": "tsx server/tools/report-cgt-disposals.ts",
+    "report:debate-flip-rate": "tsx server/tools/report-debate-round-flip-rate.ts",
     "classify:debate-termination": "tsx server/tools/classify-debate-termination.ts",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",

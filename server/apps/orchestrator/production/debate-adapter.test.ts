@@ -297,6 +297,14 @@ describe('buildDebateStep', () => {
       .get(result.debate_id) as { n: number };
     expect(count.n).toBe(1);
 
+    // #1517 — the per-round verdicts persistDebateLog now writes alongside
+    // the debate_log row, one per round the fake mediator actually ran.
+    const roundRows = db
+      .prepare('SELECT round, direction FROM debate_round_log WHERE debate_id = ? ORDER BY round')
+      .all(result.debate_id) as { round: number; direction: string }[];
+    expect(roundRows.length).toBe(result.rounds_completed);
+    expect(roundRows[roundRows.length - 1]?.direction).toBe(result.direction);
+
     const row = store.getByDebateId(result.debate_id);
     expect(row).toBeDefined();
     expect(row?.instrument).toBe('AAPL');
@@ -756,6 +764,9 @@ describe('buildDebateStep', () => {
     const racing: DebateLogStore = {
       writeLog: (log) => {
         store.writeLog(log);
+      },
+      writeRoundLog: (entries) => {
+        store.writeRoundLog(entries);
       },
       getByDebateId: (id) => {
         reads += 1;

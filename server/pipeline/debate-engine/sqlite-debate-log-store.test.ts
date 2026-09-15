@@ -469,3 +469,79 @@ describe('SqliteDebateLogStore.getTerminationCauseWindowCounts (#1396)', () => {
     expect(counts).toEqual({ llm_failure: 0, total: 0 });
   });
 });
+
+describe('SqliteDebateLogStore.writeRoundLog / listRoundVerdicts (#1517)', () => {
+  it('persists rows and reads them back in round order, joined by debate_id', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+    store.writeLog(makeLog({ debate_id: 'debate-1' }));
+
+    store.writeRoundLog([
+      {
+        debate_id: 'debate-1',
+        round: 1,
+        direction: 'bearish',
+        confidence: 0.3,
+        created_at: new Date('2026-07-14T09:00:08Z'),
+      },
+      {
+        debate_id: 'debate-1',
+        round: 2,
+        direction: 'bullish',
+        confidence: 0.7,
+        created_at: new Date('2026-07-14T09:00:08Z'),
+      },
+    ]);
+
+    const rows = store.listRoundVerdicts(
+      new Date('2026-07-14T08:00:00Z'),
+      new Date('2026-07-14T10:00:00Z'),
+    );
+    expect(rows).toEqual([
+      {
+        debate_id: 'debate-1',
+        round: 1,
+        direction: 'bearish',
+        confidence: 0.3,
+        created_at: new Date('2026-07-14T09:00:08Z'),
+      },
+      {
+        debate_id: 'debate-1',
+        round: 2,
+        direction: 'bullish',
+        confidence: 0.7,
+        created_at: new Date('2026-07-14T09:00:08Z'),
+      },
+    ]);
+  });
+
+  it('is a no-op on an empty array', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+    store.writeLog(makeLog({ debate_id: 'debate-1' }));
+
+    expect(() => store.writeRoundLog([])).not.toThrow();
+    expect(
+      store.listRoundVerdicts(new Date('2026-07-14T08:00:00Z'), new Date('2026-07-14T10:00:00Z')),
+    ).toEqual([]);
+  });
+
+  it('excludes rows outside the (from, to] window', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+    store.writeLog(makeLog({ debate_id: 'debate-1' }));
+    store.writeRoundLog([
+      {
+        debate_id: 'debate-1',
+        round: 1,
+        direction: 'bullish',
+        confidence: 0.5,
+        created_at: new Date('2026-07-14T07:59:59Z'),
+      },
+    ]);
+
+    expect(
+      store.listRoundVerdicts(new Date('2026-07-14T08:00:00Z'), new Date('2026-07-14T10:00:00Z')),
+    ).toEqual([]);
+  });
+});

@@ -77,6 +77,7 @@ import {
   applyAnalystWeights,
   buildAnalystContributions,
   buildDebateLog,
+  buildDebateRoundLogRows,
   computeConvictionScore,
   computeDebateId,
   type DebatePersonas,
@@ -95,6 +96,7 @@ import {
   type RateLimiter,
   type RoundContext,
   type RoundStance,
+  type RoundVerdict,
   runBearPersona,
   runBullPersona,
   runDebate,
@@ -215,6 +217,7 @@ export function buildDebatePersonas(
   let lastBull: PersonaResponse | undefined;
   let lastBear: PersonaResponse | undefined;
   const accumulatedStances: AnalystRoundStance[] = [];
+  const roundVerdicts: RoundVerdict[] = [];
   let currentState: PartialDebateState | undefined;
 
   const bull: DebaterPersona = {
@@ -293,6 +296,7 @@ export function buildDebatePersonas(
       // bull and bear argue the side they were assigned, so their stance says
       // nothing about conviction (see `computeDirectionalConsensus`).
       const confidence = computeConvictionScore(context.views, accumulatedStances, response.stance);
+      roundVerdicts.push({ round: context.round, direction: response.stance, confidence });
 
       // Recorded AFTER the round's LLM calls returned, so this is always a
       // completed round (#374). `debate_id` is required by
@@ -320,6 +324,12 @@ export function buildDebatePersonas(
               : ['debate did not converge before the latency budget fired'],
           rounds_completed: context.round,
           direction: response.stance,
+          // Snapshot rather than the live array, matching `contributions`
+          // above (`buildAnalystContributions` over a fresh copy of
+          // `accumulatedStances`) — a caller holding an old `currentState`
+          // reads what had completed AT THAT SNAPSHOT, not whatever
+          // `roundVerdicts` grows to later.
+          round_verdicts: [...roundVerdicts],
           debate_id,
         };
       }
@@ -451,7 +461,13 @@ function persistDebateLog(params: {
   // within the same bar carries a FRESH trace against the same content-hashed
   // `debate_id` and must not overwrite the attribution of the debate it did
   // not run.
-  store.writeLog(buildDebateLog(result, instrument, clock.now(), trace_id));
+  const written_at = clock.now();
+  store.writeLog(buildDebateLog(result, instrument, written_at, trace_id));
+  // Same call, same non-duplicate branch, same clock read as the debate_log
+  // row above — so debate_round_log's FK (migration 0064) always resolves,
+  // and both rows carry an identical created_at rather than two clock reads
+  // that could straddle a millisecond.
+  store.writeRoundLog(buildDebateRoundLogRows(result, written_at));
 
   return undefined;
 }

@@ -105,7 +105,7 @@ export const STAGE_OWNED_TABLES: Record<StoreOwnerStage, readonly string[]> = {
   // Reader only: the control arm's comparison source reads both arms' rows and
   // writes none — the samples it feeds are written by the Feedback Loop.
   'control-arm': [],
-  'debate-engine': ['debate_log', 'llm_call_log', 'llm_spend'],
+  'debate-engine': ['debate_log', 'debate_round_log', 'llm_call_log', 'llm_spend'],
   // Cross-spec §4's three, plus the flatten write-ahead and the broker
   // reconciliation tables the same stage owns.
   execution: [
