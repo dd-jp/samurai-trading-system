@@ -395,6 +395,25 @@ describe('computePortfolioView — equity and drawdown', () => {
     expect(view.equity).toBe(9_000);
     expect(view.drawdown_pct).toBeCloseTo(0.1);
   });
+
+  it('never surfaces the raw cash figure on the returned view (#1572)', async () => {
+    const marketData = makeMarketData({ AAPL: 100 });
+    const input = makeInput({
+      positions: [makePosition({ filled_size: 10 })],
+      marketData,
+      cash: 50_000,
+    });
+
+    const view = await computePortfolioView(input);
+
+    // `cash` is consumed once, above, to fold into `equity` — it is not a
+    // field on `PortfolioView` (types.ts). No `EntryCapGate` in
+    // risk-manager/index.ts can bind on it because there is nothing to read:
+    // this is what makes #1572's "a cap that happens to bind on available
+    // cash rather than exposure" premise false against this tree, not merely
+    // unexercised by today's config.
+    expect(view).not.toHaveProperty('cash');
+  });
 });
 
 describe('computePortfolioView — pass-through fields', () => {
