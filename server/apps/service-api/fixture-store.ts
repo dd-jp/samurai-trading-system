@@ -880,6 +880,11 @@ export class InMemoryQueryStore implements DashboardQueryStore {
     return CLOSED_TRADES.slice(0, limit);
   }
 
+  /** #1595: same arm-insensitive limitation as `getRecentClosedTrades` above — see its doc. */
+  getAllClosedTrades(_asOf: Date, _arm: TradingArm): ClosedTrade[] {
+    return CLOSED_TRADES;
+  }
+
   /** Same "scoped to the named lots" contract as `SqliteQueryStore` — see there. */
   getFillsForTrades(idempotencyKeys: readonly string[], _asOf: Date): Fill[] {
     const keys = new Set(idempotencyKeys);

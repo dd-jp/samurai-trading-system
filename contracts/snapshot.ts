@@ -320,6 +320,83 @@ export interface OutsideBenchmarkRow {
 }
 
 /**
+ * Where `PnlHeadlineWire.rate_usd_per_gbp` came from (#1595). A plain union
+ * with one member today rather than a bare `string` — the headline is
+ * required to name its source, and a future second source (a live FX feed,
+ * say) widens this type instead of silently making the existing literal
+ * ambiguous.
+ *
+ * `'static_sizing_rate'` is the SAME conversion `ArmComparisonRow.basis`
+ * already uses (`SIZING_USD_PER_GBP`, #1180) — not a second, independently
+ * chosen rate that could disagree with it.
+ */
+export type PnlRateSource = 'static_sizing_rate';
+
+/**
+ * All-time P&L for one arm (#1595): every closed trade ever recorded for it,
+ * plus the mark-to-market value of what it holds right now.
+ *
+ * **`max_drawdown_pct` is REQUIRED, for `ArmPerformanceWire`'s reason above.**
+ * It is realized-only — computed from the closed-trade series alone
+ * (`cumulativePnl`, control-arm/arm-comparison.ts) — while `net_gbp` is wider
+ * and includes today's open unrealized PnL. The two are not the same
+ * denominator: a headline with a positive `net_gbp` and a nonzero
+ * `max_drawdown_pct` is not a contradiction, it is the ordinary case of an arm
+ * that fell before recovering.
+ */
+export interface PnlOverallWire {
+  /** Cumulative realized `realized_pnl_net` plus current open unrealized, in GBP. Signed. */
+  net_gbp: number;
+  /** `net_gbp` as a signed fraction of the £1,000 declared book (`LIVE_BOOK_GBP`) — 0.05 is 5%. */
+  net_pct_of_book: number;
+  /** Peak-to-trough fall of the REALIZED series only, as a positive fraction of the declared book. Zero when the series never fell below a prior peak. */
+  max_drawdown_pct: number;
+  /** Every closed trade this arm has ever recorded, not windowed to `closed_trades` above. */
+  trade_count: number;
+}
+
+/**
+ * One arm's P&L over the Europe/London calendar day (#1595) — BST-aware, so a
+ * close just after midnight UTC during British Summer Time still counts on
+ * the London day it happened on, not the UTC day.
+ *
+ * No `max_drawdown_pct`: a single day's realized-plus-unrealized figure is a
+ * snapshot, not a series with a peak to fall from — the drawdown concept
+ * belongs to `PnlOverallWire`'s all-time series, not to this window.
+ */
+export interface PnlTodayWire {
+  /** `realized_gbp + unrealized_gbp`, signed. */
+  net_gbp: number;
+  /** `net_gbp` as a signed fraction of the £1,000 declared book. */
+  net_pct_of_book: number;
+  /** Sum of `realized_pnl_net` for trades closed today, in GBP. Signed. */
+  realized_gbp: number;
+  /** Current open positions' mark-to-market PnL, in GBP. Signed — this arm's `net_gbp` above already includes it. */
+  unrealized_gbp: number;
+  /** Sum of `fees_total` for trades closed today, in GBP. Always non-negative. */
+  costs_gbp: number;
+  /** Trades closed today, this arm. */
+  trade_count: number;
+}
+
+/**
+ * The dashboard's server-computed P&L headline for one arm (#1595) — all-time
+ * with drawdown, and today over the Europe/London calendar day, both in GBP.
+ *
+ * The conversion rate travels WITH the figures rather than being assumed by
+ * the renderer, the same reason `ArmComparisonRow.basis` is carried rather
+ * than recomputed client-side: a renderer that hard-coded the rate would keep
+ * showing the old one the moment this changes.
+ */
+export interface PnlHeadlineWire {
+  overall: PnlOverallWire;
+  today: PnlTodayWire;
+  /** USD per GBP — `SIZING_USD_PER_GBP` (`paper-profile.ts`), the same static rate `ArmComparisonRow.basis` is converted at. */
+  rate_usd_per_gbp: number;
+  rate_source: PnlRateSource;
+}
+
+/**
  * Why a lot closed. Structurally identical to the server-side
  * `ExitReason | 'stop' | 'target' | 'exit'` union
  * (`server/shared/types/records.ts`, `ClosedTrade.close_reason`) — duplicated
@@ -727,6 +804,13 @@ export interface DashboardSnapshot {
    */
   outside_benchmarks: OutsideBenchmarkRow[];
   /**
+   * The server-computed P&L headline for `arm` above (#1595) — all-time with
+   * drawdown, and today over the Europe/London calendar day, both converted to
+   * GBP. See `PnlHeadlineWire`'s doc for why the rate travels with the figures
+   * and why only the all-time half carries a drawdown.
+   */
+  pnl: PnlHeadlineWire;
+  /**
    * Count of alert sends TO THE ESCALATION CHAT that exhausted retry and
    * were durably recorded in `alert_delivery_failures` in the TRAILING 24
    * HOURS (#1108, windowed by #1131) — the answer to "is the alert channel
@@ -881,6 +965,7 @@ export const DASHBOARD_SNAPSHOT_FIELD_NAMES = [
   'metrics',
   'arm_comparison',
   'outside_benchmarks',
+  'pnl',
   'alert_delivery_failures_24h',
   'providers',
   'llm_spend',
@@ -923,7 +1008,7 @@ const _assertDashboardSnapshotFieldNamesCoverAllKeys: {
  * cryptographic and does not need to be: the only property this mechanism
  * needs is "the field list changing changes the output", which a 32-bit
  * non-cryptographic hash already gives with a collision risk irrelevant at
- * this input size (20 short field names).
+ * this input size (21 short field names).
  */
 function fnv1aHex(input: string): string {
   let hash = 0x811c9dc5;
