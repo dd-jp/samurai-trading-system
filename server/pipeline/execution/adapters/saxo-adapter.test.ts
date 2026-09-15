@@ -1075,6 +1075,47 @@ describe('SaxoBrokerAdapter.getOrder', () => {
     expect(client.cancelOrder).not.toHaveBeenCalled();
   });
 
+  it("falls back to the leg's resting Amount when the only fill-evidencing row carries no FillAmount — a summed 0 is 'no better evidence', not a genuine zero-fill (#1574)", async () => {
+    const client = makeClient({
+      listOpenOrders: vi
+        .fn()
+        .mockResolvedValue([dormantLeg({ Status: 'Working' }), targetLeg({ Status: 'Working' })]),
+      listOrderActivities: vi.fn().mockResolvedValue([activity({ Status: 'FinalFill' })]),
+    });
+    const { adapter } = makeAdapter(client);
+
+    const order = await adapter.getOrder('key-3usl-0930', '3USL');
+
+    expect(order).toMatchObject({ order_state: 'filled', filled_qty: 3 });
+    expect(client.cancelOrder).not.toHaveBeenCalled();
+  });
+
+  it('clamps the summed filled_qty at the order Amount — duplicate fill rows under one wire reference must not report a fill larger than the order itself (#1574)', async () => {
+    const client = makeClient({
+      listOpenOrders: vi
+        .fn()
+        .mockResolvedValue([dormantLeg({ Status: 'Working' }), targetLeg({ Status: 'Working' })]),
+      listOrderActivities: vi.fn().mockResolvedValue([
+        activity({ Status: 'FinalFill', FillAmount: 3, AveragePrice: 10 }),
+        activity({
+          LogId: 'log-2',
+          Status: 'FinalFill',
+          FillAmount: 1,
+          AveragePrice: 10,
+          ActivityTime: '2026-09-05T08:31:00.000000Z',
+        }),
+      ]),
+    });
+    const { adapter } = makeAdapter(client);
+
+    const order = await adapter.getOrder('key-3usl-0930', '3USL');
+
+    // Summed FillAmount is 4 against a leg Amount of 3 — clamped, not
+    // reported raw (#1574).
+    expect(order).toMatchObject({ order_state: 'filled', filled_qty: 3 });
+    expect(client.cancelOrder).not.toHaveBeenCalled();
+  });
+
   it('cancels every leg row on an activated-legs expiry, not just one per role — a duplicate row under the same leg reference must not be left resting (#1215 round 3)', async () => {
     const client = makeClient({
       listOpenOrders: vi

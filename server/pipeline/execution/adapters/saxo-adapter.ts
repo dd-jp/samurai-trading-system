@@ -1353,10 +1353,25 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
         this.clearDormantDefer(externalReference);
         // The audit trail's own fill amount replaces the leg's resting
         // `Amount` when corroboration found one — `Amount` is the order
-        // size, not necessarily what actually filled (#1563).
-        return verdict.filledQty === undefined
+        // size, not necessarily what actually filled (#1563). A summed `0`
+        // (a filled-classified row with no `FillAmount`, e.g. a bare
+        // `FinalFill`) is no better than what `open` already carries, not a
+        // genuine zero-fill, so it falls through to `open`'s own
+        // `first.Amount` reading instead of overriding it (#1574). The
+        // override is also clamped at the order's own `Amount`: summed
+        // `FillAmount` has no cross-row idempotency behind it (this adapter's
+        // ~15s retry window, doc 43), so duplicate fill rows under one wire
+        // reference must not be allowed to report a fill larger than the
+        // order itself (#1574).
+        return verdict.filledQty === undefined || verdict.filledQty <= 0
           ? open
-          : { ...open, normalized: { ...open.normalized, filled_qty: verdict.filledQty } };
+          : {
+              ...open,
+              normalized: {
+                ...open.normalized,
+                filled_qty: Math.min(verdict.filledQty, open.amount),
+              },
+            };
       }
       this.clearDormantDefer(externalReference);
       return open;
@@ -1475,6 +1490,13 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
    * no row at all inside the lookback leaves today's `filled` reading — the
    * VERIFIED (doc 43 round 2) genuine-fill path — unchanged, with no new
    * defer/escalate/page exposure added to it.
+   *
+   * `filledQty`, when present, is the sum of every fill-evidencing row's own
+   * `FillAmount`. It can legitimately come back `0` — a filled-classified row
+   * (e.g. a bare `FinalFill`) with no `FillAmount` of its own — which is not
+   * a genuine zero-fill, just an absence of better evidence; `lookup`, the
+   * only caller, treats that case as "no override" rather than replacing its
+   * own resting-`Amount` reading with a false zero (#1574).
    */
   private async corroborateActivatedLegs(
     externalReference: string,
