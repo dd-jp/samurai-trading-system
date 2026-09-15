@@ -73,12 +73,14 @@ export const IN_FLIGHT_ORDER_STATES: readonly OrderState[] = ['pending', 'submit
  * (execution/), and the shape `portfolio-view.ts` reserves against the entry
  * caps until one of that sweep or a real fill resolves it (#1568).
  *
- * Lives here for the same reason `IN_FLIGHT_ORDER_STATES` does — two modules
- * read the same shape and neither owns it. `portfolio-view.ts`'s reservation
- * is only safe because it shares a release path with the sweep; that argument
- * holds only while both read the SAME check, so a second, independently
- * written copy is exactly the silent-disagreement failure mode this file's
- * own doc names (#1586).
+ * Lives here for the same reason `IN_FLIGHT_ORDER_STATES` does — no single
+ * module owns this shape. `wedged-zero-fill-sweep.ts` and `portfolio-view.ts`
+ * both now read this export (#1586); `ingest-fills.ts`'s `FILLED_WITH_ZERO_SIZE`
+ * warning gate (#1087) still carries its own independent copy, unconverted.
+ * `portfolio-view.ts`'s reservation is only safe because it shares a release
+ * path with the sweep; that argument holds only while both read the SAME
+ * check, so a second, independently written copy is exactly the
+ * silent-disagreement failure mode this file's own doc names (#1586).
  */
 export function isWedgedZeroFillLot(
   position: Pick<OpenPosition, 'order_state' | 'filled_size'>,
