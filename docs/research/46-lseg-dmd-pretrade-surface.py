@@ -353,9 +353,10 @@ def load_observations():
                     # there, `tik` is itself chosen by `bid > 1000`, the same
                     # predicate this check re-tests, so on a fallback row the check
                     # is tautological again and cannot fire. Currently inert — 0
-                    # rows take the fallback branch on this pool (see the
-                    # `unclassified_fallback` figure in `analyze`'s output) — but
-                    # would silently stop being independent the moment one did.
+                    # rows take the fallback branch on this pool (see the "0 rows
+                    # fell back to the price-scale heuristic" line `analyze` prints
+                    # from `unclassified_fallback`) — but would silently stop being
+                    # independent the moment one did.
                     if bid > 0 and off > 0:
                         expect_gbx = SHARED_ISIN_TIK_CURRENCY[tik] == "GBX"
                         if expect_gbx != (bid > 1000):

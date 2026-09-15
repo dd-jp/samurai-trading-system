@@ -378,7 +378,8 @@ NVD3 (15.3 bps), LQQ3 (7.8 bps), 3LUS (5.9 bps), 3USL (5.8 bps)** — reproduced
 
 - **This doc now supplies `59-universe-tradeability-screen.md` §3.2's criterion (b)** ("Max quoted round-trip
   spread" — previously "**No.** ... **Not evaluable per line**") for 30 of 31 pool rows — see doc 59's own
-  updated pointer at that criterion and its §7 "Waiting on a vendor" list. Criteria (a) (tick/price floor) and
+  updated pointer at that criterion and its §7 "Decidable now" list, which criterion (b) moved into once this
+  doc's spread landed. Criteria (a) (tick/price floor) and
   (c) (print-frequency refresh for 19 unprobed rows) remain open, gated on #1032 and #1035/#895 respectively —
   this doc does not measure print frequency and makes no claim about criterion (c).
 - **MST3's absence is not closed**, only narrowed to "absent from every sample pulled here." A
