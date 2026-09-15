@@ -2263,29 +2263,32 @@ export function buildStartingProfileConfigs(
      * comment on #895 itself and #1019 (next paragraph) for what else arms at
      * the same time.
      *
-     * **Same-tick concurrency also opens a portfolio-cap race, filed as #1019
-     * rather than fixed here (#1013 fix-up H3).** `computePortfolioView`
-     * values a position at `filled_size * mark`, never `requested_size`
-     * (`portfolio-view.ts`), so a just-submitted order reads as ZERO exposure
-     * to every sibling instrument's Risk evaluation in the same tick until a
-     * fill poll (`DEFAULT_FILL_POLL_INTERVAL_MS = 15_000`) catches up — at
-     * width 6, unlike the old serial walk, no poll typically intervenes
-     * between sibling submissions. This makes `perSubclassDeploymentCap`'s
-     * cross-instrument netting (`risk-manager/index.ts`) structurally unable
-     * to net same-tick concurrent exposure. **Bounded today**: `DEFAULT_UNIVERSE`
-     * has no `subclass_of` entries, so `perSubclassDeploymentCap` is inert and
-     * the per-name gates (`perTradeSizeCap`, `perAssetExposureCap`) still bind
-     * independently. The 3 -> 20 widening keeps that bound deliberately: every
-     * new row is an UNCLASSIFIED US cash equity or index ETF with no
-     * `subclass`, so the widening does not arm the race. Do not classify
-     * these rows until #1019 is closed. **It disappears the moment a
-     * D5-classified subclass with
-     * a numeric fraction arms** (`isD5ArmedWithNumericFraction`,
-     * `risk-manager/index.ts`) — expected once #895's pool file lands — which
-     * nulls out both per-name gates and leaves only the gate that cannot net
-     * same-tick submissions. See #1019 for the full mechanism and the two
-     * related gaps (no submit-time cash reservation; a breaker-state
-     * audit-fidelity note) it also covers.
+     * **Same-tick concurrency used to open a portfolio-cap race — CLOSED by
+     * #1019 (PR #1565).** `computePortfolioView` values a position at
+     * `filled_size * mark`, never `requested_size` (`portfolio-view.ts`), so a
+     * just-submitted order reads as ZERO exposure to every sibling
+     * instrument's Risk evaluation in the same tick until a fill poll
+     * (`DEFAULT_FILL_POLL_INTERVAL_MS = 15_000`) catches up — at width 6,
+     * unlike the old serial walk, no poll typically intervenes between
+     * sibling submissions. `PortfolioView.reserved_exposure_by_instrument` /
+     * `_by_class` / `reserved_gross_exposure` now carry that unfilled
+     * remainder onto the deployed side of every `fraction × equity - deployed`
+     * gate via `committedExposureFor`/`committedExposureForClass`
+     * (`risk-manager/index.ts`), so `perSubclassDeploymentCap`'s
+     * cross-instrument netting — and every other entry cap — nets same-tick
+     * concurrent exposure correctly whether or not `perSubclassDeploymentCap`
+     * itself is armed. The 3 -> 20 widening's old "unclassified, so the race
+     * can't arm" reasoning is therefore moot rather than load-bearing.
+     *
+     * Of the two gaps #1019's PR body flagged as folded rather than fixed:
+     * the breaker-state audit-fidelity one (`next_breaker_state` read after
+     * an `await`) was fixed in the same PR, and the cash/buying-power one was
+     * decided, not built — [#1572](https://github.com/dd-jp/samurai-trading-system/issues/1572)
+     * found that no gate in `ENTRY_CAP_GATES` ever reads `portfolio.cash`:
+     * the field doesn't exist on `PortfolioView` at all (only the derived
+     * `equity` does — `equity = cash + gross_exposure`, computed once in
+     * `computePortfolioView` and never passed through), so there was no gate
+     * for a same-tick cash race to fool.
      *
      * **`backtest` is not this value.** This `6` is what `mode` resolves to
      * for `paper` and `live`; the return statement below overrides
