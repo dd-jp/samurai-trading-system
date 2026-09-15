@@ -54,6 +54,7 @@ import { LIVE_BOOK_SIZING_USD } from '../apps/orchestrator/paper-profile.js';
 import {
   type ArmComparison,
   buildArmComparison,
+  EXIT_CLASSES,
   SqliteArmComparisonSource,
 } from '../pipeline/control-arm/index.js';
 import { openSharedStore, resolveStoreMode, sharedStorePath } from '../shared/store/index.js';
@@ -152,6 +153,8 @@ export function formatArmComparison(comparison: ArmComparison): string {
     );
   }
 
+  lines.push(...costBasisDropLines(comparison));
+
   // #1121 review, finding 5: the automated reader (`evaluateArmDivergence`)
   // floors both arms at `min_trades_per_arm`, so a gutted arm reads as NO
   // VERDICT there. This report has no floor — it prints the count straight to
@@ -180,13 +183,76 @@ export function formatArmComparison(comparison: ArmComparison): string {
       '  a row closed since then stamps 0 whenever a covered leg is missing its',
       '  submit-time cost snapshot (that capture is best-effort). So a window over',
       '  pre-#1121 history is EXPECTED to read 0 here — but so can a window of purely',
-      '  recent closes. Either way `closed_trades` still holds the live rows:',
+      '  recent closes. The COST-BASIS EXCLUSION table above answers which it was for',
+      '  this window — a live `dropped` count larger than zero IS the exclusion. Either',
+      '  way `closed_trades` still holds the live rows:',
       "    SELECT modelled_cost_charged, COUNT(*) FROM closed_trades WHERE arm = 'live'",
       '     AND closed_at > ? AND closed_at <= ? GROUP BY 1;',
     );
   }
 
   return lines.join('\n');
+}
+
+/**
+ * #1546: the cost-basis exclusion's composition, printed UNCONDITIONALLY.
+ *
+ * Not gated on a non-zero drop count, unlike the refusal note above. An
+ * all-zero table is the reading #1412 most needs and cannot otherwise get — "the
+ * filter removed nothing from this window, so the trade counts are the whole
+ * population" is a positive fact, and a section that vanished when it held would
+ * make its absence mean either that or "this report predates the measurement".
+ *
+ * Per class, never a per-arm total: the whole point is that the two classes are
+ * not excluded at the same rate, and a merged figure is exactly the number that
+ * hides it.
+ */
+function costBasisDropLines(comparison: ArmComparison): string[] {
+  const lines = [
+    '',
+    '  COST-BASIS EXCLUSION by exit class (#1546) — closed trades this comparison',
+    '  KEPT and DROPPED, before the counts above were taken.',
+    '',
+    '  arm       exit class     kept   dropped   drop rate',
+  ];
+
+  for (const arm of [comparison.live, comparison.control]) {
+    for (const exitClass of EXIT_CLASSES) {
+      const { kept, dropped } = arm.cost_basis_drops[exitClass];
+      const seen = kept + dropped;
+      lines.push(
+        `  ${arm.arm.padEnd(10)}${exitClass.padEnd(11)}${String(kept).padStart(7)}` +
+          `${String(dropped).padStart(10)}` +
+          `${(seen === 0 ? 'n/a' : pct(dropped / seen)).padStart(12)}`,
+      );
+    }
+  }
+
+  lines.push(
+    '',
+    '  Why the split exists. A live lot that exits on its stop or target is priced',
+    "  by the ENTRY submission's single best-effort cost capture — the same one its",
+    '  entry legs already need — while a lot that exits on a flatten needs that',
+    "  capture AND the flatten submission's own. So a flatten close needs TWO",
+    '  successful captures to be counted here and a protective close needs ONE, and',
+    '  the flatten row above is expected to carry the higher drop rate. The',
+    '  surviving live population is enriched in protective exits by exactly that',
+    '  much (#1121 review round 2, #1301 round 2, #1546).',
+    '',
+    "  How to use it. Read the live arm's two drop rates against each other, not",
+    "  against the control's (a control row can only ever be kept — the Simulated",
+    '  adapter prices its own fills). The gap between them bounds how far this',
+    "  window's live population is selected on exit type; equal rates mean the",
+    '  selection term is zero for this window.',
+    '',
+    '  What a dropped row is NOT. It is not necessarily a failed capture: every',
+    '  live row closed before #1121 shipped was backfilled to dropped, and a lot',
+    '  opened before migration 0061 drops on a protective exit because its',
+    '  protective leg genuinely carried no modelled estimate. This table does not',
+    '  separate those from a capture that failed today.',
+  );
+
+  return lines;
 }
 
 /** Parses `--days N`; anything else is rejected rather than silently defaulted. */
@@ -222,10 +288,15 @@ if (isMain) {
   const from = new Date(to.getTime() - days * 24 * 60 * 60 * 1000);
   const source = new SqliteArmComparisonSource(db);
 
+  // #1546: trades and exclusion counts in one read, so the composition printed
+  // below is the composition of the population printed above it.
+  const window = source.getClosedTradeWindowBetween(from, to);
+
   console.log(
     formatArmComparison(
       buildArmComparison({
-        trades: source.getClosedTradesBetween(from, to),
+        trades: window.trades,
+        cost_basis_drops: window.cost_basis_drops,
         // #1099: the same window, from the same reader, in the same expression
         // — a refusal count taken over a different window would be a second
         // window to get wrong, which is what `SqliteArmComparisonSource`'s

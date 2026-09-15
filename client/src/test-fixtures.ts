@@ -256,6 +256,13 @@ export function makeArmComparison(overrides: Partial<ArmComparisonRow> = {}): Ar
       return_pct: 0.0184,
       max_drawdown_pct: 0.021,
       refused_pass_count: 0,
+      // #1546. Asymmetric on purpose: the live arm drops flattens at a higher
+      // rate than protective exits by construction, so a symmetric default
+      // would let a renderer that showed one class twice still pass.
+      cost_basis_drops: {
+        protective: { kept: 16, dropped: 2 },
+        flatten: { kept: 8, dropped: 6 },
+      },
     },
     control: {
       arm: 'control',
@@ -264,6 +271,10 @@ export function makeArmComparison(overrides: Partial<ArmComparisonRow> = {}): Ar
       return_pct: 0.0062,
       max_drawdown_pct: 0.028,
       refused_pass_count: 0,
+      cost_basis_drops: {
+        protective: { kept: 12, dropped: 0 },
+        flatten: { kept: 7, dropped: 0 },
+      },
     },
     diverged: false,
     divergence_reason: null,

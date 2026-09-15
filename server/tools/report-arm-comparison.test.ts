@@ -8,7 +8,7 @@
  * is worded about what the report can produce, not about what the builder
  * returns. These tests read the rendered text.
  */
-import { buildArmComparison } from '../pipeline/control-arm/index.js';
+import { buildArmComparison, noCostBasisDrops } from '../pipeline/control-arm/index.js';
 import type { ClosedTrade, TradingArm } from '../shared/index.js';
 import {
   DEFAULT_WINDOW_DAYS,
@@ -44,6 +44,7 @@ function report(): string {
     buildArmComparison({
       basis: 1_000,
       refused_passes: { live: 0, control: 0 },
+      cost_basis_drops: { live: noCostBasisDrops(), control: noCostBasisDrops() },
       from: FROM,
       to: TO,
       trades: [
@@ -106,6 +107,7 @@ describe('formatArmComparison (#753 AC4/AC5)', () => {
       buildArmComparison({
         basis: 1_000,
         refused_passes: { live: 0, control: 0 },
+        cost_basis_drops: { live: noCostBasisDrops(), control: noCostBasisDrops() },
         from: FROM,
         to: TO,
         trades: [trade('live', 40, '2026-09-02T00:00:00.000Z')],
@@ -136,6 +138,7 @@ describe('formatArmComparison (#753 AC4/AC5)', () => {
       buildArmComparison({
         basis: 1_000,
         refused_passes: { live: 0, control: 0 },
+        cost_basis_drops: { live: noCostBasisDrops(), control: noCostBasisDrops() },
         from: FROM,
         to: TO,
         trades: [trade('control', 40, '2026-09-02T00:00:00.000Z')],
@@ -176,6 +179,7 @@ describe('formatArmComparison (#753 AC4/AC5)', () => {
       buildArmComparison({
         basis: 1_000,
         refused_passes: { live: 0, control: 6 },
+        cost_basis_drops: { live: noCostBasisDrops(), control: noCostBasisDrops() },
         from: FROM,
         to: TO,
         trades: [trade('live', 40, '2026-09-02T00:00:00.000Z')],
@@ -199,6 +203,7 @@ describe('formatArmComparison (#753 AC4/AC5)', () => {
       buildArmComparison({
         basis: 1_000,
         refused_passes: { live: 2, control: 5 },
+        cost_basis_drops: { live: noCostBasisDrops(), control: noCostBasisDrops() },
         from: FROM,
         to: TO,
         trades: [trade('live', 40, '2026-09-02T00:00:00.000Z')],
@@ -216,6 +221,7 @@ describe('formatArmComparison (#753 AC4/AC5)', () => {
       buildArmComparison({
         basis: 1_000,
         refused_passes: { live: 0, control: 4 },
+        cost_basis_drops: { live: noCostBasisDrops(), control: noCostBasisDrops() },
         from: FROM,
         to: TO,
         trades: [trade('live', 40, '2026-09-02T00:00:00.000Z')],
@@ -231,6 +237,96 @@ describe('formatArmComparison (#753 AC4/AC5)', () => {
 
     expect(text).not.toContain('REFUSED rather than declined');
     expect(text).toMatch(/live\s+2\s+30\.00\s+3\.00%\s+1\.00%\s+0/);
+  });
+});
+
+/**
+ * #1546 AC1's second branch: the per-class drop rate is only "surfaced to the
+ * arm comparison" if it reaches the page an operator reads. These assert the
+ * rendered text, for the reason the file header gives about AC5 — a builder
+ * field a renderer never selects surfaces nothing.
+ */
+describe('formatArmComparison — the cost-basis exclusion by exit class (#1546)', () => {
+  function reportWith(
+    live: Parameters<typeof buildArmComparison>[0]['cost_basis_drops']['live'],
+    control: Parameters<typeof buildArmComparison>[0]['cost_basis_drops']['control'],
+  ): string {
+    return formatArmComparison(
+      buildArmComparison({
+        basis: 1_000,
+        refused_passes: { live: 0, control: 0 },
+        cost_basis_drops: { live, control },
+        from: FROM,
+        to: TO,
+        trades: [trade('live', 40, '2026-09-02T00:00:00.000Z')],
+      }),
+    );
+  }
+
+  it('prints each arm each class with its own kept, dropped and drop rate', () => {
+    const text = reportWith(
+      { protective: { kept: 15, dropped: 5 }, flatten: { kept: 6, dropped: 4 } },
+      { protective: { kept: 8, dropped: 0 }, flatten: { kept: 2, dropped: 0 } },
+    );
+
+    expect(text).toMatch(/live\s+protective\s+15\s+5\s+25\.00%/);
+    expect(text).toMatch(/live\s+flatten\s+6\s+4\s+40\.00%/);
+    expect(text).toMatch(/control\s+protective\s+8\s+0\s+0\.00%/);
+    expect(text).toMatch(/control\s+flatten\s+2\s+0\s+0\.00%/);
+  });
+
+  /**
+   * The merged per-arm figure here would be 9/30 = 30.00% for the live arm,
+   * which is the number that hides the very asymmetry the table exists to
+   * show. It must appear nowhere on the page.
+   */
+  it('never collapses the two classes into one per-arm rate', () => {
+    const text = reportWith(
+      { protective: { kept: 15, dropped: 5 }, flatten: { kept: 6, dropped: 4 } },
+      noCostBasisDrops(),
+    );
+
+    expect(text).not.toContain('30.00%');
+  });
+
+  /** A class nothing closed has no rate, and 0.00% would assert one. */
+  it('prints n/a, not a zero rate, for a class with nothing closed in the window', () => {
+    const text = reportWith(
+      { protective: { kept: 4, dropped: 1 }, flatten: { kept: 0, dropped: 0 } },
+      noCostBasisDrops(),
+    );
+
+    expect(text).toMatch(/live\s+flatten\s+0\s+0\s+n\/a/);
+  });
+
+  /**
+   * Unconditional, unlike the refusal note: "nothing was excluded" is the
+   * reading #1412 needs most, and a section that disappeared when it held would
+   * make its absence mean either that or "this report predates the measurement".
+   */
+  it('prints the table even when every count is zero', () => {
+    const text = reportWith(noCostBasisDrops(), noCostBasisDrops());
+
+    expect(text).toContain('COST-BASIS EXCLUSION by exit class');
+    expect(text).toMatch(/live\s+protective\s+0\s+0\s+n\/a/);
+    expect(text).toMatch(/control\s+flatten\s+0\s+0\s+n\/a/);
+  });
+
+  /**
+   * The asymmetry is stated in the direction the tree actually has it (#1546
+   * premise correction): protective needs ONE capture, flatten needs TWO. The
+   * ticket's own title asserted the reverse.
+   */
+  it('names the capture asymmetry in the direction the code has it', () => {
+    const flattened = reportWith(noCostBasisDrops(), noCostBasisDrops())
+      .split('\n')
+      .map((line) => line.trim())
+      .join(' ');
+
+    expect(flattened).toContain(
+      'a flatten close needs TWO successful captures to be counted here and a ' +
+        'protective close needs ONE',
+    );
   });
 });
 

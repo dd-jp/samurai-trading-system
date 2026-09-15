@@ -1475,11 +1475,22 @@ async function cumulativeTopUp(
  * still weakly higher, and the surviving live population is still enriched in
  * bracket exits. That survives BY CONSTRUCTION of the option David chose on
  * 2026-09-14 (price the protective legs at submit, one derivation) over giving
- * the control arm a bracket-exit path. #1546 owns that surviving selection
- * term; #1301 owned only the under-charge, which is closed. See
- * `modelledCostCharged`'s doc and
- * `sqlite-arm-comparison-source.ts`'s `modelledCostCharged` filter, which
- * carry the same limit from their own side.
+ * the control arm a bracket-exit path.
+ *
+ * #1546 RESOLVED IT AS A MEASUREMENT, not as a change to this function.
+ * `countCostBasisDrops` (sqlite-arm-comparison-source.ts) counts kept and
+ * dropped rows per arm and per exit class off the same read the comparison is
+ * built from, and `ArmPerformance.cost_basis_drops` carries both classes' drop
+ * rates to `yarn report:arms`, the FL sample (migration 0065) and the
+ * divergence alert — so #1412 can weight or bound the selection term instead of
+ * assuming it away. Nothing about the charge taken here changed: this fallback
+ * still fires only for a leg whose own submission captured, and a flatten whose
+ * capture failed is still charged the venue's fee alone. Charging it off the
+ * ENTRY's protective estimate instead would equalize the capture COUNT at the
+ * price of a second money-path use of one submission's `MarketState` — Option
+ * 1's own ruling and #1121 AC6, neither of which #1546 was asked to reopen.
+ * See `modelledCostCharged`'s doc and the filter of the same name in
+ * `sqlite-arm-comparison-source.ts`, which carry this from their own side.
  */
 /**
  * Raises `FEE_CURRENCY_NOT_BOOK_CURRENCY` for a fill whose venue-reported fee

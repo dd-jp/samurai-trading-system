@@ -8,6 +8,7 @@ import type {
   OutsideBenchmarkRow,
   OutsideBenchmarkWire,
 } from '@contracts';
+import { EXIT_CLASSES_WIRE } from '@contracts';
 import type { WireSnapshot } from '../../hooks/useSnapshot.ts';
 import { debateDegradedGloss } from '../../lib/debate-termination.ts';
 import {
@@ -237,6 +238,50 @@ function RefusedPassNotTracked({ row }: { row: ArmComparisonRow }) {
   return <p className="muted small">refusals not tracked for this cycle</p>;
 }
 
+/**
+ * `dropped/seen (rate)` per exit class for one arm — `null` when this row
+ * predates migration 0065, which `CostBasisDrops` below states once for the
+ * whole row rather than twice under two arms.
+ */
+function dropSummary(arm: ArmPerformanceWire): string | null {
+  const drops = arm.cost_basis_drops;
+  if (drops === null) {
+    return null;
+  }
+  const classes = EXIT_CLASSES_WIRE.map((exitClass) => {
+    const { kept, dropped } = drops[exitClass];
+    const seen = kept + dropped;
+    // No rate for a class nothing closed — `0.0%` would assert one.
+    const rate = seen === 0 ? 'n/a' : formatPercent(dropped / seen, 1);
+    return `${exitClass} ${formatCount(dropped)}/${formatCount(seen)} (${rate})`;
+  });
+  return `${ARM_LABEL[arm.arm]} ${classes.join(', ')}`;
+}
+
+/**
+ * #1546: how the trade counts above were SELECTED. Rendered even when every
+ * count is zero, unlike `RefusedPassCount` — "the exclusion removed nothing
+ * from this window, so these counts are the whole population" is a positive
+ * fact #1412 needs, and a block that vanished when it held would make its
+ * absence mean either that or "this row predates the measurement". A row that
+ * genuinely predates it says so instead.
+ */
+function CostBasisDrops({ row }: { row: ArmComparisonRow }) {
+  const live = dropSummary(row.live);
+  const control = dropSummary(row.control);
+  if (live === null || control === null) {
+    return <p className="muted small">cost-basis exclusion not counted for this cycle</p>;
+  }
+  return (
+    <p className="muted small" data-cost-basis-drops="true">
+      Dropped before these counts — {live} · {control}. A flatten close needs TWO successful
+      submit-time cost captures to be counted, a protective close ONE, so the flatten rate is
+      expected to be the higher of the two; the gap between an arm's own two rates is how far its
+      population is selected on exit type.
+    </p>
+  );
+}
+
 function ArmLine({ arm }: { arm: ArmPerformanceWire }) {
   return (
     <li className="arm-row" data-arm={arm.arm}>
@@ -273,6 +318,7 @@ function ArmCard({ comparisons }: { comparisons: readonly ArmComparisonRow[] }) 
             <ArmLine arm={latest.control} />
           </ul>
           <RefusedPassNotTracked row={latest} />
+          <CostBasisDrops row={latest} />
           <p className="muted small">
             {formatDateUtc(latest.window_from)} to {formatDateUtc(latest.window_to)} · one window,
             both arms · basis {formatUsd(latest.basis)}

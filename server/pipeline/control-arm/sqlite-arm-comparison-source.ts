@@ -23,10 +23,30 @@ import {
   type StoreHandle,
   toStoredTimestamp,
 } from '../../shared/store/index.js';
-import type { ArmRefusedPassCounts } from './arm-comparison.js';
+import type {
+  ArmCostBasisDrops,
+  ArmRefusedPassCounts,
+  CostBasisDropCount,
+  ExitClass,
+} from './arm-comparison.js';
+import { exitClassOf, noCostBasisDrops } from './arm-comparison.js';
 
 /** A closed trade plus the arm that produced it (migration 0033). */
 export type ArmedClosedTrade = ClosedTrade & { arm: TradingArm };
+
+/**
+ * One window's read, whole: the rows that survived the filters below AND what
+ * the cost-basis filter removed on the way (#1546).
+ *
+ * Returned together, from ONE query, for the module header's reason. A second
+ * method taking its own `from`/`to` would be a second window to get wrong —
+ * `getRefusedPassCountsBetween` is separate only because it reads a different
+ * table, which is not an excuse available here.
+ */
+export interface ClosedTradeWindow {
+  trades: ArmedClosedTrade[];
+  cost_basis_drops: ArmCostBasisDrops;
+}
 
 /**
  * The `trader_log.skip_reason` values that mean "this arm could not even
@@ -62,9 +82,16 @@ export class SqliteArmComparisonSource {
   /**
    * Every closed trade in the window, both arms, half-open at the start so
    * consecutive windows partition the timeline exactly as the Feedback Loop's
-   * daily cycle does.
+   * daily cycle does — plus, from the same rows, what the cost-basis filter
+   * dropped per arm and exit class (#1546).
+   *
+   * The counts are taken AFTER `oneSizingRegime` and BEFORE
+   * `modelledCostCharged`, which is the only position that answers the question
+   * asked: rows from an incomparable sizing regime are not part of this
+   * window's population at all, so counting them as "dropped by the cost-basis
+   * filter" would attribute one filter's removals to another.
    */
-  getClosedTradesBetween(from: Date, to: Date): ArmedClosedTrade[] {
+  getClosedTradeWindowBetween(from: Date, to: Date): ClosedTradeWindow {
     const rows = this.db
       .prepare(
         `SELECT idempotency_key, debate_id, instrument, asset_class, side,
@@ -81,10 +108,14 @@ export class SqliteArmComparisonSource {
       modelled_cost_charged: 0 | 1;
     })[];
 
-    return modelledCostCharged(oneSizingRegime(rows, from, to)).map((row) => ({
-      ...fromClosedTradeRow(row),
-      arm: row.arm,
-    }));
+    const sized = oneSizingRegime(rows, from, to);
+    return {
+      trades: modelledCostCharged(sized).map((row) => ({
+        ...fromClosedTradeRow(row),
+        arm: row.arm,
+      })),
+      cost_basis_drops: countCostBasisDrops(sized),
+    };
   }
 
   /**
@@ -97,7 +128,7 @@ export class SqliteArmComparisonSource {
    * contributes six — which is the granularity #1089's six dead passes were
    * counted at.
    *
-   * The same half-open window as `getClosedTradesBetween`, over a column
+   * The same half-open window as `getClosedTradeWindowBetween`, over a column
    * written through the same `toStoredTimestamp`, so consecutive windows
    * partition refusals exactly as they partition trades.
    *
@@ -199,11 +230,27 @@ export class SqliteArmComparisonSource {
  * veto `closedTrade()` refuses is genuinely refused; the selection arrives
  * anyway, by the back door.
  *
- * No failure RATE is claimed here, only the shape. The round-2 soak read
- * (live rows, `fills.cost_breakdown_json IS NOT NULL`) found both flatten-exit
- * lots stamping 0 and the single `stop` lot stamping 1, but could not separate
- * pre-migration-0037 lots from failed captures, so it measures the asymmetry's
- * existence and not its size.
+ * IT IS NOW MEASURED PER WINDOW, which is #1546's answer to it.
+ * `countCostBasisDrops` below counts kept and dropped rows per arm and per exit
+ * class off the SAME rows this filter runs on, and
+ * `ArmPerformance.cost_basis_drops` carries them to every reader
+ * (`formatArmComparison`, the FL sample, the divergence alert). A reader can
+ * therefore take the per-class drop RATE this comment could previously only
+ * name in the abstract, and #1412 can weight or bound the selection term
+ * against it instead of assuming it away. What is NOT done is equalizing the
+ * requirement: charging a flatten leg off the entry's protective estimate when
+ * the flatten's own capture failed would change `realized_pnl_net` on the live
+ * arm and add a second money-path use of one submission's `MarketState`, which
+ * is David's 2026-09-14 Option 1 ruling (and #1121 AC6) to reopen, not this
+ * reader's.
+ *
+ * The counts are NOT the rate on their own. `dropped / (kept + dropped)` per
+ * class is a per-window sample and can be 0/0; and a dropped row's cause is
+ * still not separable here between a failed capture and a pre-migration-0037
+ * lot that never had a snapshot to fail. The round-2 soak read (live rows,
+ * `fills.cost_breakdown_json IS NOT NULL`) found both flatten-exit lots
+ * stamping 0 and the single `stop` lot stamping 1 — the asymmetry's existence,
+ * not its size. What the column adds is the denominator that read lacked.
  *
  * DIRECTION IS NOT ESTABLISHED. Two terms act on the surviving live rows, and
  * neither their net sign nor their ordering by size follows from anything
@@ -265,7 +312,8 @@ export class SqliteArmComparisonSource {
  * a charge priced off the ENTRY snapshot needs no capture of its own, so
  * protective exits still need the entry captures alone and flattens still need
  * one more. The differential is a deliberate residual of the chosen option,
- * not an open question — and it is #1546's to answer, not #1301's.
+ * and #1546 answered it by MEASURING it rather than removing it — see "IT IS
+ * NOW MEASURED PER WINDOW" above.
  *
  * The floor covers the AUTOMATED reader only. `tools/report-arm-comparison.ts`
  * has no floor — it prints `trade_count` per arm to an operator, who would
@@ -277,6 +325,43 @@ function modelledCostCharged<Row extends { modelled_cost_charged: 0 | 1 }>(
   rows: readonly Row[],
 ): readonly Row[] {
   return rows.filter((row) => row.modelled_cost_charged === 1);
+}
+
+/**
+ * #1546: what `modelledCostCharged` above kept and removed, per arm and per
+ * exit class, over the rows it is about to run on.
+ *
+ * Counted from the SAME array rather than from a second `GROUP BY` query, so
+ * the counts and the trades cannot describe different windows — the property
+ * this module's header calls a correctness condition. It also means the counts
+ * see exactly what the filter sees, including the `oneSizingRegime` removals
+ * that happened first.
+ *
+ * A NULL `arm` counts as `'live'`, matching `buildArmComparison`'s own reading
+ * of the column: every row written before falsifier arm 2 existed was the live
+ * arm's (migration 0033's default). A control row can only ever land in
+ * `kept` — `SimulatedBrokerAdapter` prices its own fills — and the zero in
+ * `control.*.dropped` is the true count, not a placeholder.
+ */
+function countCostBasisDrops(
+  rows: readonly {
+    arm: TradingArm | null;
+    close_reason: ClosedTrade['close_reason'];
+    modelled_cost_charged: 0 | 1;
+  }[],
+): ArmCostBasisDrops {
+  const counts: Record<TradingArm, Record<ExitClass, CostBasisDropCount>> = {
+    live: noCostBasisDrops(),
+    control: noCostBasisDrops(),
+  };
+
+  for (const row of rows) {
+    const bucket = counts[row.arm ?? 'live'][exitClassOf(row.close_reason)];
+    if (row.modelled_cost_charged === 1) bucket.kept += 1;
+    else bucket.dropped += 1;
+  }
+
+  return counts;
 }
 
 /**
@@ -341,7 +426,7 @@ function oneSizingRegime<Row extends { sizing_capital_ceiling: number | null }>(
 
   if (declared.size > 1) {
     throw new Error(
-      `SqliteArmComparisonSource.getClosedTradesBetween: window ${from.toISOString()}..` +
+      `SqliteArmComparisonSource.getClosedTradeWindowBetween: window ${from.toISOString()}..` +
         `${to.toISOString()} mixes closed_trades sized under different declared ceilings ` +
         `(${[...declared].sort((a, b) => a - b).join(', ')}) — #1112 migration 0045. ` +
         'Averaging them into one return_pct would compare incomparable notional scales; ' +

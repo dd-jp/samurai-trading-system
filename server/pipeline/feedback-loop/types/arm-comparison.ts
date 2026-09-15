@@ -19,9 +19,10 @@
 import type { Clock } from '../../../shared/index.js';
 import type {
   ArmComparison,
-  ArmedClosedTrade,
   ArmPerformance,
   ArmRefusedPassCounts,
+  ClosedTradeWindow,
+  ExitClassDropCounts,
 } from '../../control-arm/index.js';
 
 /**
@@ -38,7 +39,13 @@ import type {
  * different question with a different answer.
  */
 export interface ArmComparisonSource {
-  getClosedTradesBetween(from: Date, to: Date): ArmedClosedTrade[];
+  /**
+   * The window's trades AND what the shared-cost-basis exclusion removed from
+   * it (#1546), together — one read, because they are two readings of the same
+   * rows and a source that could answer them separately could answer them over
+   * different windows.
+   */
+  getClosedTradeWindowBetween(from: Date, to: Date): ClosedTradeWindow;
   /**
    * Passes each arm refused over the SAME window (#1099) — a second read
    * against `trader_log`, because a refusal writes no `closed_trades` row and
@@ -98,7 +105,7 @@ export interface ArmComparisonSample {
 
 /**
  * What `arm_comparison_samples` can actually give back — every column migration
- * 0034/0035/0057 defines, and nothing else.
+ * 0034/0035/0057/0065 defines, and nothing else.
  *
  * `refused_pass_count` (#1099) has a column since migration 0057 (#1483), but
  * a NULLABLE one: every row written before that migration was computed before
@@ -116,9 +123,22 @@ export interface ArmComparisonSample {
  * Feedback Loop passes in is a required `number` on `ArmPerformance` itself,
  * so a write can never itself be the source of a NULL. Only pre-0057 rows read
  * back NULL.
+ *
+ * `cost_basis_drops` (#1546) has a column since migration 0065 and reads back
+ * the same way, for the same reason: a row computed before it was written by a
+ * cycle that never counted the per-class exclusion, and there is no after-the-
+ * fact recovery — the `closed_trades` rows a historical window covered are
+ * still there, but re-counting them today would answer a different question
+ * (today's filter over yesterday's window) and present it as what FL saw.
+ * `null` means "computed before this column existed"; all-zero counts mean "FL
+ * counted, and nothing was excluded".
  */
-export type PersistedArmPerformance = Omit<ArmPerformance, 'refused_pass_count'> & {
+export type PersistedArmPerformance = Omit<
+  ArmPerformance,
+  'refused_pass_count' | 'cost_basis_drops'
+> & {
   refused_pass_count: number | null;
+  cost_basis_drops: ExitClassDropCounts | null;
 };
 
 export interface PersistedArmComparison extends Omit<ArmComparison, 'live' | 'control'> {

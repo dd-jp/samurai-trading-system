@@ -7,7 +7,10 @@
  * no setters, and the snapshot function calls only get-* methods.
  */
 
-import { CONTRACT_VERSION } from '../../../contracts/index.js';
+import type { ExitClassWire } from '../../../contracts/index.js';
+import { CONTRACT_VERSION, EXIT_CLASSES_WIRE } from '../../../contracts/index.js';
+import type { ExitClass } from '../../pipeline/control-arm/index.js';
+import { EXIT_CLASSES } from '../../pipeline/control-arm/index.js';
 import type { AnalystContribution } from '../../pipeline/debate-engine/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
 import type { ClosedTrade, DebateLog, Fill, OpenPosition } from '../../shared/index.js';
@@ -22,6 +25,18 @@ import type {
   TickStatus,
   VerdictAuditEntry,
 } from './types.js';
+
+/**
+ * #1546: `contracts/` may import from neither runtime (CLAUDE.md), so
+ * `ExitClassWire` duplicates the server's `ExitClass` the way `TradingArmWire`
+ * duplicates `TradingArm`. These two assignments make the duplication a
+ * COMPILE error to break rather than a comment to remember — one direction
+ * each, so adding a class on either side alone fails here, and `buildSnapshot`
+ * carries whole `ArmPerformance` values across on a spread that would
+ * otherwise let a server-only class through untyped.
+ */
+const _serverExitClassesReachTheWire: readonly ExitClassWire[] = EXIT_CLASSES;
+const _wireExitClassesExistOnTheServer: readonly ExitClass[] = EXIT_CLASSES_WIRE;
 
 const AS_OF = new Date('2026-07-19T12:00:00Z');
 
@@ -720,6 +735,7 @@ describe('buildSnapshot', () => {
           return_pct: 0.0184,
           max_drawdown_pct: 0.021,
           refused_pass_count: 0,
+          cost_basis_drops: null,
         },
         control: {
           arm: 'control' as const,
@@ -728,6 +744,7 @@ describe('buildSnapshot', () => {
           return_pct: 0.0062,
           max_drawdown_pct: 0.028,
           refused_pass_count: 4,
+          cost_basis_drops: null,
         },
       },
       // A non-default floor (7, not `MIN_TRADES_PER_ARM_FOR_DIVERGENCE`'s 5)

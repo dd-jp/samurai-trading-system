@@ -741,6 +741,22 @@ migration `0045`'s `sizing_capital_ceiling` gives its own pre-cutover NULLs. Eve
 NULL only ever describes a row computed before this migration, and ages out of the dashboard's
 `getRecent` window exactly as those rows do.
 
+**`live_cost_basis_drops_json`/`control_cost_basis_drops_json` (migration `0065`,
+[#1546](https://github.com/dd-jp/samurai-trading-system/issues/1546)) hold that arm's
+`ExitClassDropCounts` as JSON — per exit class, how many closed trades this comparison KEPT and how
+many `modelled_cost_charged = 0` dropped before the counts above were taken.** The filter
+([#1121](https://github.com/dd-jp/samurai-trading-system/issues/1121)) drops the two classes at
+different rates by construction: a protective (`stop`/`target`) close is priced by the entry
+submission's single best-effort cost capture, while a flatten close needs that capture AND the
+flatten submission's own, so flattens are excluded more often and the surviving live population is
+enriched in bracket exits. #1546 measures that selection term rather than removing it. **One TEXT
+column per arm rather than eight INTEGERs**, because the class set is open — `exitClassOf` is a
+`switch` with a `never` arm precisely so a fourth `ExitReason` is a compile error, and eight columns
+would make that widening a migration. Nothing queries inside the JSON; the report and the dashboard
+read it whole. **Nullable with no `DEFAULT`, for migration 0057's reason above**: an all-zero
+default would assert "FL counted and nothing was excluded" for a window where FL never counted, and
+re-deriving it today would apply today's filter to yesterday's window.
+
 ```sql
 CREATE TABLE arm_comparison_samples (
   computed_at             TEXT PRIMARY KEY,
@@ -763,6 +779,8 @@ CREATE TABLE arm_comparison_samples (
   min_trades_per_arm       INTEGER NOT NULL DEFAULT 5,
   live_refused_pass_count    INTEGER,
   control_refused_pass_count INTEGER,
+  live_cost_basis_drops_json    TEXT,
+  control_cost_basis_drops_json TEXT,
 
   -- `divergence_reason` is non-NULL if and only if `diverged = 1` -- the same
   -- invariant `ArmDivergenceVerdict` documents and `evaluateArmDivergence`
