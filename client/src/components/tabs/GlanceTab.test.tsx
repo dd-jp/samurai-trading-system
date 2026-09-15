@@ -53,6 +53,16 @@ describe('P&L', () => {
     expect(within(card).getByText('at $1.27/£, static sizing rate')).toBeTruthy();
   });
 
+  it('captions Overall, not Today, with the Review arm-comparison divergence caveat (#1623)', () => {
+    renderGlance(makeSnapshot());
+    const card = screen.getByRole('region', { name: 'P&L' });
+    const caveat = within(card).getByText(
+      'All-time: net adds open unrealized to every closed trade; drawdown and trade count are closed trades only. The Review arm-comparison panel reports realized only, over a filtered window sampled on its own cadence, and can report a different figure for the same arm.',
+    );
+    const overallBlock = within(card).getByText('Overall').closest('.pnl-block');
+    expect(overallBlock?.contains(caveat)).toBe(true);
+  });
+
   it('states the declared book from the wire, not a client literal (#1620)', () => {
     renderGlance(
       makeSnapshot({
