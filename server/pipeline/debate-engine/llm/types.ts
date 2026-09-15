@@ -78,6 +78,19 @@ export interface LlmAttribution {
    * `model` the same way a model swap already is.
    */
   prompt_template_hash?: string | undefined;
+  /**
+   * Overrides the in-flight gate's `llmStage` (#1533) — its own naming for
+   * `llm_gate_wait`/`llm_gate_refused` log lines, independent of `stage`
+   * above. Falls back to `stage` when absent (`anthropic-client.ts`), which
+   * is why most call sites (personas, disagreement-detector, critic) need no
+   * change: their `stage` already names the gate correctly. `item-scorer.ts`
+   * is the one caller that needs the two to diverge — its `stage` stays
+   * `'market_intelligence'` for the load-bearing ADR-0008 spend-cap grouping
+   * while `gate_stage` names the finer `'market_intelligence_scoring'` the
+   * gate log wants. NEVER reaches `llm_spend` or the model prompt — same
+   * exclusion as every other field in this envelope.
+   */
+  gate_stage?: string | undefined;
 }
 
 /**

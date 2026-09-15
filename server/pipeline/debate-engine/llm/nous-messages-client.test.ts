@@ -7,6 +7,7 @@
  * truncated completion is NOT retried by the layer above.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { LogEntry } from '../../../shared/index.js';
 import {
   LlmInFlightRefusedError,
   NousAccountInFlightGate,
@@ -387,6 +388,53 @@ describe('NousMessagesClient behind the account in-flight gate (#1080)', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  /**
+   * AC3 (#1533): before this fix, `NousMessagesClient` hardcoded
+   * `llmStage: 'debate'` on every call, so a risk-critic call refused by the
+   * gate logged `llm_gate_refused` with `llm_stage: 'debate'` — indistinguishable
+   * from an actual debate call in the gate's own log lines.
+   */
+  it("carries the request's true stage on the gate's llm_gate_refused log line, not the debate default", async () => {
+    const entries: LogEntry[] = [];
+    const gate = new NousAccountInFlightGate({
+      maxInFlight: 1,
+      expectedCallMs: 5_800,
+      logger: { log: (entry) => entries.push(entry) },
+    });
+    const { fetchMock, releases } = gatedFetch();
+    const llm = gatedClient(gate, 28_000);
+
+    function criticRequest(): LlmRequest<{ stance: string }> {
+      return {
+        ...request(),
+        context: {
+          analyst_views: [],
+          attribution: { trace_id: 'trace-1', debate_id: 'debate-1', stage: 'risk_critic' },
+        },
+      };
+    }
+
+    const admitted = [
+      llm.complete(criticRequest()),
+      llm.complete(criticRequest()),
+      llm.complete(criticRequest()),
+      llm.complete(criticRequest()),
+    ];
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    const refused = await llm.complete(criticRequest()).catch((error: unknown) => error);
+    expect(refused).toBeInstanceOf(LlmAdmissionRefusedError);
+
+    const refusalLog = entries.find((entry) => entry.event === 'llm_gate_refused');
+    expect(refusalLog?.payload).toMatchObject({ llm_stage: 'risk_critic' });
+
+    for (let drained = 0; drained < admitted.length; drained += 1) {
+      await vi.waitFor(() => expect(releases.length).toBeGreaterThan(drained));
+      releases[drained]?.();
+    }
+    await Promise.all(admitted);
   });
 
   it('releases the slot when the caller aborts a call in flight', async () => {

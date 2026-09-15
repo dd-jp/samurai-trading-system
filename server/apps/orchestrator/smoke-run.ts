@@ -3809,6 +3809,9 @@ function makeExitProbeInput(overrides: Partial<OrderIntent> = {}) {
       exposure_by_instrument: {},
       exposure_by_class: { crypto: 0, stocks: 0 },
       gross_exposure: 0,
+      reserved_exposure_by_instrument: {},
+      reserved_exposure_by_class: { crypto: 0, stocks: 0 },
+      reserved_gross_exposure: 0,
       daily_pnl: {
         crypto: { known: true as const, pct: 0 },
         stocks: { known: true as const, pct: 0 },
@@ -6876,6 +6879,9 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // a real rate — log-only is enough, same posture as the other channels
       // above that this run never exercises.
       llmFailureRateAlerts: loggingAlertChannel('llmFailureRateAlerts', logger),
+      // #1533. Same posture, same reason: the smoke fixture's gate refuses
+      // nothing, so no window here can reach `GATE_REFUSAL_RATE_THRESHOLD`.
+      gateRefusalRateAlerts: loggingAlertChannel('gateRefusalRateAlerts', logger),
       // #1400 — the Saxo adapter's three, plus #1524's two. This run is
       // Alpaca/simulated-broker only (`SAMURAI_BROKER` is never read here,
       // the same posture as `SAMURAI_MODE`), so no Saxo adapter or reminder

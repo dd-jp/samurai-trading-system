@@ -105,7 +105,16 @@ export const STAGE_OWNED_TABLES: Record<StoreOwnerStage, readonly string[]> = {
   // Reader only: the control arm's comparison source reads both arms' rows and
   // writes none — the samples it feeds are written by the Feedback Loop.
   'control-arm': [],
-  'debate-engine': ['debate_log', 'debate_round_log', 'llm_call_log', 'llm_spend'],
+  // `llm_gate_refusals` (#1533) is the Debate Engine's the same way
+  // `debate_log` is: `SqliteDebateLogStore.recordGateRefusal` is its only
+  // writer, on the debate step's own refusal path.
+  'debate-engine': [
+    'debate_log',
+    'debate_round_log',
+    'llm_call_log',
+    'llm_gate_refusals',
+    'llm_spend',
+  ],
   // Cross-spec §4's three, plus the flatten write-ahead and the broker
   // reconciliation tables the same stage owns.
   execution: [

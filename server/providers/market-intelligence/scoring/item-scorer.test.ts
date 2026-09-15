@@ -50,6 +50,24 @@ describe('scoreItems', () => {
     ]);
   });
 
+  /**
+   * AC3 (#1533): the gate's own log lines want the finer
+   * `market_intelligence_scoring` name, but `llm_spend`'s ADR-0008 cap
+   * grouping (module doc comment) must keep reading `stage:
+   * 'market_intelligence'` unchanged — the two names diverge on purpose.
+   */
+  it('sets gate_stage to market_intelligence_scoring without changing the metered stage', async () => {
+    const client = new MockLlmClient();
+    client.enqueueText(JSON.stringify({ scores: [{ index: 0, sentiment: 1, confidence: 0.8 }] }));
+
+    await scoreItems([ITEMS[0] as ScorableItem], { llmClient: client, logger: NOOP_LOGGER });
+
+    expect(client.requests[0]?.context.attribution).toMatchObject({
+      stage: 'market_intelligence',
+      gate_stage: 'market_intelligence_scoring',
+    });
+  });
+
   it('tolerates a markdown-fenced response the way the rest of the debate stack does', async () => {
     const client = new MockLlmClient();
     client.enqueueText(

@@ -253,6 +253,57 @@ export class SqliteDebateLogStore implements DebateLogStore {
   }
 
   /**
+   * Records one gate-refused debate (#1533) so `GateRefusalRateMonitor`
+   * (orchestrator `production/gate-refusal-rate-guard.ts`) has something to
+   * count — see migration 0065's header for why this is a standalone
+   * append-only table rather than a `debate_log` column.
+   *
+   * Never throws on a malformed input: `occurred_at` is always a fresh
+   * `clock.now()` from the call site (`debate-adapter.ts`), so there is
+   * nothing here to validate. A `better-sqlite3` failure (SQLITE_BUSY, a
+   * closed handle) DOES propagate — the call site wraps this call in its own
+   * try/catch, so one bad write logs a warning rather than crashing a tick
+   * that has already degraded to `gateRefusedDebateResult`.
+   */
+  recordGateRefusal(occurred_at: Date): void {
+    this.db
+      .prepare('INSERT INTO llm_gate_refusals (occurred_at) VALUES (?)')
+      .run(toStoredTimestamp(occurred_at));
+  }
+
+  /**
+   * The gate-refusal-rate window read over `(from, to]` (#1533, review round 1
+   * F1) — a SEPARATE aggregate from `getTerminationCauseWindowCounts` above,
+   * feeding a separate signal with its own threshold, and deliberately not a
+   * widening of it: that method's `total` is truncations only, chosen so a
+   * healthy mostly-converged stream can never cross
+   * `LLM_FAILURE_RATE_THRESHOLD`, and folding a per-pass-constant refusal
+   * count into it would make that rate ~1.0 on every healthy window.
+   *
+   * `debates_logged` is EVERY `debate_log` row in the window, not the truncated
+   * subset — a gate refusal displaces a whole debate, so the population it is
+   * measured against is debates that ran, whatever they terminated as. A
+   * spend-cap (`debate_refused_spend_cap`) or rate-limiter
+   * (`debate_refused_rate_limit`) refusal writes neither a `debate_log` row nor
+   * an `llm_gate_refusals` row, so it is absent from both counts; the ratio is
+   * therefore "of the debates the gate decided", not "of every pass attempt".
+   */
+  getGateRefusalWindowCounts(
+    from: Date,
+    to: Date,
+  ): { gate_refused: number; debates_logged: number } {
+    const refused = this.db
+      .prepare(
+        'SELECT COUNT(*) AS count FROM llm_gate_refusals WHERE occurred_at > ? AND occurred_at <= ?',
+      )
+      .get(toStoredTimestamp(from), toStoredTimestamp(to)) as { count: number };
+    const logged = this.db
+      .prepare('SELECT COUNT(*) AS count FROM debate_log WHERE created_at > ? AND created_at <= ?')
+      .get(toStoredTimestamp(from), toStoredTimestamp(to)) as { count: number };
+    return { gate_refused: refused.count, debates_logged: logged.count };
+  }
+
+  /**
    * Every round-verdict row over `(from, to]`, in `debate_id`/`round` order —
    * the raw feed `server/tools/report-debate-round-flip-rate.ts` groups by
    * `debate_id` (#1517). Not part of the `DebateLogStore` port, same #785

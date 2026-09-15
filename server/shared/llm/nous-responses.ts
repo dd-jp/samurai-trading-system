@@ -48,6 +48,7 @@ import { fetchWithTimeout } from '../http/fetch-with-timeout.js';
 import type { LlmInFlightGate } from './in-flight-gate.js';
 import {
   buildApiError,
+  clampTimeoutToBudget,
   DEFAULT_NOUS_TIMEOUT_MS,
   NousApiError,
   NousTruncatedError,
@@ -181,6 +182,12 @@ export interface NousResponsesOptions {
    * with no result cap.
    */
   maxServerToolCalls?: number | undefined;
+  /**
+   * Shrinks the network timeout by however long the gate wait already took,
+   * so `gateBudgetMs` bounds wait + call rather than just the wait (#1533).
+   * See `clampTimeoutToBudget`'s doc for why this is opt-in.
+   */
+  clampCallToBudget?: boolean | undefined;
 }
 
 /** The subset of the Responses body this reads. Everything is `unknown` — wire data, coerced not trusted. */
@@ -336,6 +343,7 @@ export async function nousResponses(
   options: NousResponsesOptions,
   request: NousResponsesRequest,
 ): Promise<NousResponsesResult> {
+  const enteredAt = Date.now();
   const slot = await options.gate.acquire({
     budgetMs: options.gateBudgetMs,
     expectedCallMs: options.expectedCallMs,
@@ -343,7 +351,12 @@ export async function nousResponses(
     llmStage: options.llmStage,
   });
   try {
-    return await dispatchResponses(options, request);
+    const configuredTimeoutMs = options.timeoutMs ?? DEFAULT_NOUS_TIMEOUT_MS;
+    const timeoutMs =
+      options.clampCallToBudget === true
+        ? clampTimeoutToBudget(configuredTimeoutMs, options.gateBudgetMs, Date.now() - enteredAt)
+        : configuredTimeoutMs;
+    return await dispatchResponses(options, request, timeoutMs);
   } finally {
     slot.release();
   }
@@ -352,6 +365,7 @@ export async function nousResponses(
 async function dispatchResponses(
   options: NousResponsesOptions,
   request: NousResponsesRequest,
+  timeoutMs: number,
 ): Promise<NousResponsesResult> {
   const dispatchedAt = Date.now();
   const response = await fetchWithTimeout(
@@ -371,7 +385,7 @@ async function dispatchResponses(
       }),
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     },
-    options.timeoutMs ?? DEFAULT_NOUS_TIMEOUT_MS,
+    timeoutMs,
   );
   // Measured before the body read, matching `nousChat` — see `ttfb_ms`.
   const ttfb_ms = Date.now() - dispatchedAt;

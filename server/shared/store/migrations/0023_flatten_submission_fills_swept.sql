@@ -1,6 +1,6 @@
 -- Bounds `reconcile()`'s flatten-journal sweep (#519, #526) to genuinely
 -- in-flight rows, the same way `open_positions.order_state` bounds the
--- bracket sweep to `pending`/`submitted` lots (reconcile.ts's `IN_FLIGHT`).
+-- bracket sweep to `pending`/`submitted` lots (`IN_FLIGHT_ORDER_STATES`).
 --
 -- THE PROBLEM THIS CLOSES. `flatten_submissions.order_state` is written once,
 -- at ack time (`resolveFlattenSubmitted`), and nothing on the happy path ever

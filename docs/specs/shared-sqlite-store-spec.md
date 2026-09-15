@@ -1062,6 +1062,21 @@ CREATE INDEX idx_debate_round_log_debate_id ON debate_round_log(debate_id);
 
 **Not part of the twenty-two/twenty-three-table non-collision pass; checked here.** `debate_id`/`direction`/`created_at` match `debate_log`'s own columns of the same name (same CHECK on `direction`, same ISO-8601 UTC convention on `created_at`) by design — this table is that row's per-round breakdown. **`confidence` does NOT match `debate_log.confidence` for the final round whenever `applyAnalystWeights` rescales** (`weighted-conviction.ts`): it is called AFTER `runDebate` returns, on the already-resolved `DebateResult`, and rewrites only `result.confidence` — `result.round_verdicts` (built inside `runDebate`'s loop, one `assessment.synthesis.confidence` per round) is spread through untouched. So `debate_log.confidence` is post-weight while every `debate_round_log.confidence`, including the final round's, is pre-weight; they agree only when the weighting factor is exactly 1 (no analyst-agreement adjustment). Reading the two together for the same debate can show a "mismatch" that is not a divergence bug — it is `debate_round_log` recording what the mediator actually said each round, deliberately upstream of the Trader-facing rescale.
 
+#### `llm_gate_refusals` (migration `0065`, [#1533](https://github.com/dd-jp/samurai-trading-system/issues/1533))
+
+Owned by the Debate Engine (`SqliteDebateLogStore.recordGateRefusal`). A gate-refused debate — the in-flight LLM cap's `admission`/`queue_deadline` refusal (#1080) — writes NO `debate_log` row at all: `debate_id` is a content hash of (instrument, bar, views) and the PK, so a refusal occupying that key would permanently block the real retry's row. That correctly-absent row leaves a refusal invisible to every `debate_log` aggregate, so a soak where every debate was refused read as an empty, healthy window instead of the outage it was. This table is where refusals are counted instead, read by `getGateRefusalWindowCounts` for the gate-refusal-rate signal (`production/gate-refusal-rate-guard.ts`) — a signal of its own, **not** a term folded into `LlmFailureRateGuard`'s truncation rate, whose denominator is deliberately narrow (see that guard and `getTerminationCauseWindowCounts`). An append-only counter, no FK to `debate_log` (there usually isn't a row to reference) and no instrument/reason/trace_id, mirroring `llm_call_log`'s no-FK posture (migration 0039) rather than `debate_round_log`'s FK'd one: richer detail already lives on the `debate_refused_gate` log line the call site writes immediately before this insert. **No retention job.** `llm_call_log` has `prune-llm-call-log.ts`; this table has nothing equivalent, so it grows unboundedly at roughly 384 rows/day at the shipped cadence — one row is two small columns, so the size is not urgent, and a pruner is a tracked follow-up rather than part of #1533.
+
+```sql
+CREATE TABLE llm_gate_refusals (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  occurred_at TEXT    NOT NULL
+);
+
+CREATE INDEX idx_llm_gate_refusals_occurred_at ON llm_gate_refusals(occurred_at);
+```
+
+**Not part of the twenty-two/twenty-three-table non-collision pass; checked here.** `occurred_at` is a new name found nowhere else, but the same ISO-8601 UTC convention every other `_at`/`created_at` column in this schema already follows. The one access pattern is a `COUNT` over a trailing `(from, to]` window — the same shape `debate_log`'s own `created_at` index serves its sibling query with — so the index is on `occurred_at` alone, with no other column. No divergence found.
+
 #### `llm_spend_cap` (migration `0047`, [#1140](https://github.com/dd-jp/samurai-trading-system/issues/1140)) — DDL added by [#1174](https://github.com/dd-jp/samurai-trading-system/issues/1174)
 
 Owned by the Orchestrator — the composition root arms it at boot with the LLM spend ceiling actually enforced, and the dashboard reads this row so its meter measures against that cap rather than a copy of the number. One row, rewritten at every boot; `budget_usd` NULL records an uncapped run. No later migration touches this table.
@@ -1147,7 +1162,8 @@ Feedback Loop       → analyst_weights, strategy_params, risk_thresholds, dial_
                       cosine_setups (labels only; Trader writes)
 Trader              → cosine_setups (writes; FL labels), trader_log
 Risk                → breaker_state, risk_log, risk_critic_log
-Debate Engine       → debate_log, llm_spend, llm_call_log
+Debate Engine       → debate_log, debate_round_log, llm_spend, llm_call_log,
+                      llm_gate_refusals
 Verdict             → verdict_log
 Orchestrator        → audit_log, current_tick, daily_equity, llm_spend_cap, alert_delivery_failures
 Transport Layer     → account_state (AccountStateProvider, peak_equity)

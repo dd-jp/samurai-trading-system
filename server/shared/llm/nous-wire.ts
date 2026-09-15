@@ -193,6 +193,34 @@ export function toTokenCount(value: unknown): number {
 }
 
 /**
+ * Shrinks a network timeout so gate wait + call never exceeds `gateBudgetMs`
+ * (#1533, `#1080` review round 1 finding 6: `gateBudgetMs` bounds the WAIT,
+ * `configuredTimeoutMs` bounds the CALL, and nothing reconciled the two, so
+ * worst-case wall clock was their sum rather than the declared budget).
+ *
+ * `elapsedMs` is the caller's own measurement of time already spent — the
+ * gate wait, since this runs right after the slot is granted — because this
+ * module has no clock of its own to start one.
+ *
+ * Callers opt in (`nous-chat.ts`/`nous-responses.ts`'s `clampCallToBudget`)
+ * rather than this firing whenever `gateBudgetMs` is set: `NousMessagesClient`
+ * (the debate path) sets `gateBudgetMs` too, but deliberately keeps a WIDER
+ * network timeout than its own outer race (`AnthropicLlmClient.callWithTimeout`,
+ * whose timer starts before the gate is even entered) — clamping there would
+ * let this timer win instead, surfacing as an unclassified `fetchWithTimeout`
+ * abort rather than the typed `LlmTimeoutError` the retry/classification logic
+ * expects.
+ */
+export function clampTimeoutToBudget(
+  configuredTimeoutMs: number,
+  gateBudgetMs: number | undefined,
+  elapsedMs: number,
+): number {
+  if (gateBudgetMs === undefined) return configuredTimeoutMs;
+  return Math.max(0, Math.min(configuredTimeoutMs, gateBudgetMs - elapsedMs));
+}
+
+/**
  * Which model id the spend meter should price against.
  *
  * The meter prefers the model the provider says actually ran over the one that

@@ -94,7 +94,12 @@ const NO_PERSISTED_BREAKERS: PersistedBreakerState[] = [
 
 const NO_CORRELATION: CorrelationEstimate = { correlations: {}, insufficient_history: [] };
 
-const portfolioWith = (equity: number, exposure: Record<string, number>): PortfolioView => ({
+const portfolioWith = (
+  equity: number,
+  exposure: Record<string, number>,
+  /** Submitted-but-unfilled notional (#1019) — see `per-subclass-deployment-cap.test.ts`. */
+  reserved: Record<string, number> = {},
+): PortfolioView => ({
   equity,
   peak_equity: equity,
   drawdown_pct: 0,
@@ -104,6 +109,12 @@ const portfolioWith = (equity: number, exposure: Record<string, number>): Portfo
     stocks: Object.values(exposure).reduce((sum, e) => sum + e, 0),
   },
   gross_exposure: Object.values(exposure).reduce((sum, e) => sum + e, 0),
+  reserved_exposure_by_instrument: reserved,
+  reserved_exposure_by_class: {
+    crypto: 0,
+    stocks: Object.values(reserved).reduce((sum, e) => sum + e, 0),
+  },
+  reserved_gross_exposure: Object.values(reserved).reduce((sum, e) => sum + e, 0),
   daily_pnl: {
     crypto: { known: true, pct: 0 },
     stocks: { known: true, pct: 0 },

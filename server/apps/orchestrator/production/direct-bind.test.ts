@@ -5,6 +5,7 @@ import {
   SqliteExecutionStore,
 } from '../../../pipeline/execution/index.js';
 import type {
+  PersistedBreakerState,
   RiskConfig,
   RiskCriticProducer,
   RiskCriticVerdict,
@@ -1778,6 +1779,132 @@ describe('buildRiskStep', () => {
     expect(decision.next_breaker_state).toHaveLength(2);
   });
 
+  it('#1019: a sibling write-ahead order with no fill yet still consumes the gross cap, end to end from getOpenPositions', async () => {
+    // The whole chain the ticket is about, through the real composition rather
+    // than a hand-built `PortfolioView`: `execute.ts` writes this row with
+    // `filled_size: 0` BEFORE calling the broker, `ingestFills()` advances it
+    // on a 15s poll, and until it does the row values at zero. At #1013's
+    // width 6 that is where every sibling in a tick lands, so before this fix
+    // the second instrument's entry cleared the gross cap against an empty
+    // book.
+    const writeAhead: OpenPosition = {
+      idempotency_key: 'MSFT-write-ahead',
+      debate_id: 'debate-sibling',
+      instrument: 'MSFT',
+      asset_class: 'stocks',
+      side: 'buy',
+      intent_type: 'entry',
+      requested_size: 65,
+      filled_size: 0,
+      avg_entry_price: 0,
+      stop: 95,
+      target: 110,
+      order_state: 'pending',
+      broker_order_ids: [],
+      opened_at: NOW,
+      decision_timestamp: NOW,
+      conviction: 0.8,
+      converged: true,
+    };
+
+    const step = buildRiskStep({
+      // Cap = 0.7 x $10,000 equity = $7,000. The sibling reserves 65 x 100 =
+      // $6,500, leaving $500 of the $1,000 this intent asks for.
+      config: { ...RISK_CONFIG, portfolio_gross_cap_fraction_of_equity: 0.7 },
+      correlationConfig: { window: { timeframe: '1d', lookback: 30 }, min_bars: 5 },
+      ciiConsumer: { getScores: vi.fn(() => ({})) },
+      marketData: FAKE_MARKET_DATA,
+      circuitBreakers: new CircuitBreakers({
+        daily_loss_pct: 0.05,
+        daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
+        max_drawdown_pct: 0.2,
+        max_consecutive_losses: 5,
+        volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
+        auto_rearm: { recovery_drawdown_pct: 0.05, max_days_tripped: 5 },
+      }),
+      accountState: FAKE_ACCOUNT_STATE,
+      volatility: FAKE_VOLATILITY,
+      getOpenPositions: async () => [writeAhead],
+      maxMarkAge: TEST_MAX_MARK_AGE,
+      mode: 'paper',
+      breakerState: NOOP_BREAKER_STATE,
+      portfolioSnapshots: new Map(),
+      critic: undefined,
+    });
+
+    const decision = await step({ trace_id: TRACE_ID, intent: makeIntent(), clock: CLOCK });
+
+    expect(decision.status).toBe('approved');
+    expect(decision.order_intent?.size).toBe(5);
+    expect(decision.binding_constraint).toBe('portfolio_gross_exposure_cap');
+    // The unfilled lot must not have inflated equity: `cash` is not debited at
+    // submit time either, so counting it on both sides would move a sticky
+    // drawdown breaker off a position that does not exist yet.
+    expect(decision.risk_snapshot.exposure.portfolio).toBe(0);
+  });
+
+  it("#1019: next_breaker_state is the state of THIS pass's own observation, not whatever the shared instance holds after the await", async () => {
+    // `circuitBreakers` is ONE instance across every instrument's bind and
+    // since #1013 siblings run concurrently, so a read taken after the
+    // portfolio `await` can pick up a state a sibling's `evaluate()` advanced
+    // in between and file it under THIS instrument's `risk_log` row. The
+    // second return value below stands in for that sibling: the decision must
+    // carry the first, and so must the state persisted beside it.
+    const circuitBreakers = new CircuitBreakers({
+      daily_loss_pct: 0.05,
+      daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
+      max_drawdown_pct: 0.2,
+      max_consecutive_losses: 5,
+      volatility: { baseline: { crypto: 0.05, stocks: 0.02 }, multiplier: 3 },
+      auto_rearm: { recovery_drawdown_pct: 0.05, max_days_tripped: 5 },
+    });
+    const mine: PersistedBreakerState[] = [
+      {
+        tier: 'portfolio_drawdown',
+        tripped: false,
+        tripped_at: null,
+        reset_at: null,
+        reason: null,
+      },
+    ];
+    const siblings: PersistedBreakerState[] = [
+      {
+        tier: 'portfolio_drawdown',
+        tripped: true,
+        tripped_at: CLOCK.now(),
+        reset_at: null,
+        reason: 'a sibling instrument tripped it between the await and the read',
+      },
+    ];
+    let reads = 0;
+    vi.spyOn(circuitBreakers, 'getPersistedState').mockImplementation(() => {
+      reads += 1;
+      return reads === 1 ? mine : siblings;
+    });
+    const saved: PersistedBreakerState[][] = [];
+
+    const step = buildRiskStep({
+      config: RISK_CONFIG,
+      correlationConfig: { window: { timeframe: '1d', lookback: 30 }, min_bars: 5 },
+      ciiConsumer: { getScores: vi.fn(() => ({})) },
+      marketData: FAKE_MARKET_DATA,
+      circuitBreakers,
+      accountState: FAKE_ACCOUNT_STATE,
+      volatility: FAKE_VOLATILITY,
+      getOpenPositions: async () => NO_POSITIONS,
+      maxMarkAge: TEST_MAX_MARK_AGE,
+      mode: 'paper',
+      breakerState: { save: (state: PersistedBreakerState[]) => saved.push(state) },
+      portfolioSnapshots: new Map(),
+      critic: undefined,
+    });
+
+    const decision = await step({ trace_id: TRACE_ID, intent: makeIntent(), clock: CLOCK });
+
+    expect(decision.next_breaker_state).toStrictEqual(mine);
+    expect(saved).toStrictEqual([mine]);
+  });
+
   it('rejects when the portfolio circuit breaker is already tripped (sticky state honored)', async () => {
     const circuitBreakers = new CircuitBreakers({
       daily_loss_pct: 0.05,
@@ -2452,6 +2579,9 @@ describe('buildRiskStep', () => {
           exposure_by_instrument: {},
           exposure_by_class: { crypto: 0, stocks: 0 },
           gross_exposure: 0,
+          reserved_exposure_by_instrument: {},
+          reserved_exposure_by_class: { crypto: 0, stocks: 0 },
+          reserved_gross_exposure: 0,
           daily_pnl: { crypto: known, stocks: known, portfolio: known },
           consecutive_losses: 0,
           unvalued_instruments: ['DARK'],
@@ -2461,6 +2591,7 @@ describe('buildRiskStep', () => {
           asset_class_tripped: { crypto: false, stocks: false },
           armed_breakers: [],
         },
+        next_breaker_state: [],
       };
     }
 

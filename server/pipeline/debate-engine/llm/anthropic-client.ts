@@ -144,6 +144,14 @@ export interface AnthropicMessageResponse {
 export interface AnthropicMessageOptions {
   /** Aborts the underlying request. Wire clients that can honour it should. */
   signal?: AbortSignal | undefined;
+  /**
+   * Names this call on the in-flight gate's own log lines (#1533) — see
+   * `LlmAttribution.gate_stage`'s doc for the fallback (`gate_stage ?? stage`)
+   * that fills this in. Wire clients that honour it (`NousMessagesClient`)
+   * forward it as `llmStage`; a client that ignores it just keeps naming
+   * every call `'debate'`, which is the pre-#1533 behaviour.
+   */
+  stage?: string | undefined;
 }
 
 export interface AnthropicMessagesClient {
@@ -499,7 +507,9 @@ export class AnthropicLlmClient implements LlmClient {
     // this call actually asked", and the second question is the one an
     // operator has on day six of a soak.
     const content = renderMessageContent(request);
-    const response = await this.callWithTimeout(content, request.signal);
+    const attribution = request.context.attribution;
+    const gateStage = attribution?.gate_stage ?? attribution?.stage;
+    const response = await this.callWithTimeout(content, request.signal, gateStage);
     const latency_ms = Date.now() - start;
 
     // `finally`, not a plain sequence: `extractText` reads `response.content`,
@@ -652,6 +662,7 @@ export class AnthropicLlmClient implements LlmClient {
   private async callWithTimeout(
     content: string,
     callerSignal?: AbortSignal,
+    llmStage?: string,
   ): Promise<AnthropicMessageResponse> {
     const timeoutController = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -680,7 +691,7 @@ export class AnthropicLlmClient implements LlmClient {
           max_tokens: this.config.max_tokens,
           messages: [{ role: 'user', content }],
         },
-        { signal },
+        { signal, stage: llmStage },
       )
       .catch((error) => {
         throw classifyProviderError(error);

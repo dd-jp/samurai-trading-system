@@ -88,6 +88,68 @@ export interface PortfolioView {
   exposure_by_class: { crypto: number; stocks: number };
   gross_exposure: number;
   /**
+   * Notional of orders SUBMITTED but not yet filled, at mark, per instrument
+   * (#1019). Disjoint from `exposure_by_instrument` — that one values what is
+   * held (`filled_size`), this one values what has been committed to the
+   * venue and has not come back yet (`requested_size - filled_size` on a
+   * `pending`/`submitted` lot).
+   *
+   * **This is the submit-time reservation, and the write-ahead row IS the
+   * ledger.** `execute.ts` writes an `OpenPosition` with `filled_size: 0`
+   * BEFORE it calls the broker, and `ingestFills()` advances it on its own
+   * 15s poll. Between those two instants the lot valued at `filled_size`
+   * alone is worth ZERO to every exposure cap, so a second instrument
+   * evaluated in that window nets against nothing and reaches the same
+   * subclass/class/gross envelope independently. #1040's tail turnstile
+   * orders those evaluations but does not make the first one's exposure
+   * VISIBLE to the second, and nothing orders passes across overlapping
+   * ticks at all. Valuing the unfilled remainder here is what closes it:
+   * `getOpenPositions()` is durable, arm-scoped and already excludes every
+   * terminal state, so the reservation survives a restart and is released by
+   * the fill or the terminalization rather than by a separate release path.
+   *
+   * **Scoped to `pending`/`submitted`, never `partially_filled` — the test is
+   * a RELEASE PATH, not a time bound.** A partially-filled lot whose
+   * venue-side remainder is dead has no mechanism that ever advances it:
+   * `ingestFills` recomputes only from a NEW fill, `sweepTerminalPositions`
+   * deletes only already-terminal rows, and `wedged-zero-fill-sweep.ts`
+   * covers the zero-fill case alone. Counting its remainder would strand a
+   * reservation that blocks the subclass forever. `pending`/`submitted` are
+   * exactly the states `reconcile()`'s bracket pass revisits
+   * (`IN_FLIGHT_ORDER_STATES`, which `portfolio-view.ts` derives this scope
+   * from), and adopting broker truth there is what releases the reservation —
+   * on a fill, on a `rejected` for an order the venue never received, on any
+   * terminalization.
+   *
+   * That release is not on a clock. `reconcileLot` has no age-out: its
+   * `undetermined` branch (the adapter threw, which is evidence of nothing)
+   * deliberately writes nothing, and an order the venue genuinely reports as
+   * still working stays `submitted` for as long as it rests. Both hold the
+   * reservation open, and both are the SAFE direction — a resting order is
+   * committed notional, and over-reserving on an adapter outage withholds
+   * headroom rather than inventing it, the same asymmetry `reservedNotional`'s
+   * `Math.max(…, 0)` is written for. The forced age-outs that do exist
+   * elsewhere are each there because the aged row BLOCKS something — an
+   * unresolved flatten-journal row blocks the mandatory flat-by-close
+   * (`UNRESOLVABLE_FLATTEN_MAX_AGE_MS`), and a wedged zero-fill lot never
+   * terminalizes at all (`WEDGED_ZERO_FILL_ABANDON_AFTER_MS`). A held
+   * reservation blocks nothing comparable: it withholds headroom from the
+   * subclass the resting order is already committed to.
+   *
+   * **Never folded into `gross_exposure`, `equity` or `drawdown_pct`, and
+   * never into `BreakerEvalInput`.** `equity = cash + gross_exposure`, and
+   * `cash` is the broker's own figure, which is not debited at submit time
+   * either — adding the reservation to `gross_exposure` would inflate equity
+   * by the reserved notional, double-counting the same order on both sides of
+   * the balance and moving a STICKY drawdown breaker off a position that does
+   * not exist yet. The reservation belongs strictly on the DEPLOYED side of
+   * every `fraction × equity - deployed` cap in `index.ts`, which is where
+   * `committedExposureFor` reads it.
+   */
+  reserved_exposure_by_instrument: Record<string, number>;
+  reserved_exposure_by_class: { crypto: number; stocks: number };
+  reserved_gross_exposure: number;
+  /**
    * Replaces the former single `daily_pnl_pct: number`, which was Alpaca's
    * blended `last_equity` figure on an unverified boundary (GAP-8, #332).
    */

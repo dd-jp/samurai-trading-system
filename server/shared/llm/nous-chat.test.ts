@@ -7,6 +7,7 @@
  * unpriced (and an unpriced row does not count against the spend cap).
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { LlmInFlightGate } from './in-flight-gate.js';
 import { UNGATED_LLM_IN_FLIGHT } from './in-flight-gate.js';
 import { NousApiError, NousRefusalError, NousTruncatedError, nousChat } from './nous-chat.js';
 
@@ -473,6 +474,121 @@ describe('nousChat', () => {
 
       const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
       expect(init.body as string).not.toContain('cache_control');
+    });
+  });
+
+  describe('gate-budget clamp (#1533)', () => {
+    /** A gate whose `acquire` takes `waitMs` of (fake-timer) wall clock before granting the slot. */
+    function delayingGate(waitMs: number): LlmInFlightGate {
+      return {
+        acquire: async () => {
+          vi.advanceTimersByTime(waitMs);
+          return { release: () => undefined };
+        },
+      };
+    }
+
+    /** A `fetch` stub that never settles on its own — only when its signal aborts, mirroring real `fetch` cancellation. */
+    function stubHangingFetch(): { signal: () => AbortSignal | undefined } {
+      let capturedSignal: AbortSignal | undefined;
+      const fetchMock = vi.fn((_url: string, init: RequestInit) => {
+        capturedSignal = init.signal as AbortSignal;
+        return new Promise<Response>((_resolve, reject) => {
+          capturedSignal?.addEventListener('abort', () => reject(capturedSignal?.reason));
+        });
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      return { signal: () => capturedSignal };
+    }
+
+    it(
+      'shrinks the network timeout by the gate wait already spent, so a held permit cannot ' +
+        'push wall clock past gateBudgetMs (AC2 — held-permit test)',
+      async () => {
+        vi.useFakeTimers();
+        try {
+          const hanging = stubHangingFetch();
+
+          const resultPromise = nousChat(
+            {
+              ...OPTIONS,
+              gate: delayingGate(800),
+              gateBudgetMs: 1_000,
+              timeoutMs: 5_000,
+              clampCallToBudget: true,
+            },
+            REQUEST,
+          );
+          const rejection = expect(resultPromise).rejects.toMatchObject({ name: 'TimeoutError' });
+
+          // Remaining budget is 1000 - 800 = 200ms, not the full 5000ms
+          // configured network timeout. Just under that must not yet abort.
+          await vi.advanceTimersByTimeAsync(199);
+          expect(hanging.signal()?.aborted).toBe(false);
+
+          await vi.advanceTimersByTimeAsync(1);
+          expect(hanging.signal()?.aborted).toBe(true);
+
+          await rejection;
+        } finally {
+          vi.useRealTimers();
+        }
+      },
+    );
+
+    it("does not clamp when clampCallToBudget is left unset (the debate client's deliberate posture)", async () => {
+      // False-positive guard: `NousMessagesClient` sets `gateBudgetMs` too, but
+      // never opts into the clamp, because its OUTER race
+      // (`AnthropicLlmClient.callWithTimeout`) is meant to decide a slow
+      // call's timeout, not this network backstop. A held permit must not
+      // shrink the network timeout here.
+      vi.useFakeTimers();
+      try {
+        const hanging = stubHangingFetch();
+
+        const resultPromise = nousChat(
+          { ...OPTIONS, gate: delayingGate(800), gateBudgetMs: 1_000, timeoutMs: 5_000 },
+          REQUEST,
+        );
+        const rejection = expect(resultPromise).rejects.toMatchObject({ name: 'TimeoutError' });
+
+        // Without the clamp the full configured 5000ms network timeout
+        // applies, unaffected by the 800ms already spent waiting.
+        await vi.advanceTimersByTimeAsync(4_999);
+        expect(hanging.signal()?.aborted).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(1);
+        expect(hanging.signal()?.aborted).toBe(true);
+
+        await rejection;
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('never clamps below zero when the wait already exceeded the budget', async () => {
+      vi.useFakeTimers();
+      try {
+        stubHangingFetch();
+
+        const resultPromise = nousChat(
+          {
+            ...OPTIONS,
+            gate: delayingGate(1_500),
+            gateBudgetMs: 1_000,
+            timeoutMs: 5_000,
+            clampCallToBudget: true,
+          },
+          REQUEST,
+        );
+        const rejection = expect(resultPromise).rejects.toMatchObject({ name: 'TimeoutError' });
+
+        // A negative remaining budget clamps to 0, aborting on the very next tick.
+        await vi.advanceTimersByTimeAsync(0);
+        await rejection;
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

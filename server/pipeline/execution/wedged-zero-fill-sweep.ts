@@ -9,7 +9,7 @@
  * to a live state and no sweep that already covers it:
  *
  * - `reconcile()`'s own bracket pass only revisits `pending`/`submitted`
- *   (`IN_FLIGHT`, reconcile.ts) — this lot is neither.
+ *   (`IN_FLIGHT_ORDER_STATES`, reconcile.ts) — this lot is neither.
  * - `sweepResidualProtection` (#549) keys on `residual_unprotected_since`,
  *   which this lot never sets — nothing was ever flattened.
  * - `sweepTerminalPositions` (#1088) only deletes ALREADY-terminal rows; this

@@ -124,6 +124,163 @@ describe('computePortfolioView — exposure from filled_size', () => {
   });
 });
 
+/**
+ * #1019 — the submit-time reservation. `execute.ts` writes the lot with
+ * `filled_size: 0` BEFORE it calls the broker and `ingestFills()` advances it
+ * on a 15s poll, so between those two instants the caps in `index.ts` saw an
+ * empty book. These pin that the unfilled remainder is reported, that it is
+ * reported SEPARATELY from the valuation, and which order states may carry
+ * one.
+ */
+describe('computePortfolioView — in-flight reservation (#1019)', () => {
+  it('reserves the full requested notional of a write-ahead pending lot', async () => {
+    const marketData = makeMarketData({ AAPL: 100 });
+    const input = makeInput({
+      positions: [
+        makePosition({
+          order_state: 'pending',
+          requested_size: 100,
+          filled_size: 0,
+          conviction: 0.7,
+        }),
+      ],
+      marketData,
+    });
+
+    const view = await computePortfolioView(input);
+
+    expect(view.reserved_exposure_by_instrument.AAPL).toBe(10_000);
+    expect(view.reserved_exposure_by_class.stocks).toBe(10_000);
+    expect(view.reserved_gross_exposure).toBe(10_000);
+  });
+
+  it('reserves only the UNFILLED remainder of a submitted lot', async () => {
+    const marketData = makeMarketData({ AAPL: 100 });
+    const input = makeInput({
+      positions: [makePosition({ order_state: 'submitted', requested_size: 100, filled_size: 40 })],
+      marketData,
+    });
+
+    const view = await computePortfolioView(input);
+
+    expect(view.exposure_by_instrument.AAPL).toBe(4_000);
+    expect(view.reserved_exposure_by_instrument.AAPL).toBe(6_000);
+  });
+
+  it('reserves nothing against a partially_filled lot, whose remainder has no release path', async () => {
+    const marketData = makeMarketData({ AAPL: 100 });
+    const input = makeInput({
+      positions: [
+        makePosition({ order_state: 'partially_filled', requested_size: 100, filled_size: 40 }),
+      ],
+      marketData,
+    });
+
+    const view = await computePortfolioView(input);
+
+    // `reconcile()`'s bracket pass revisits `pending`/`submitted` only, so a
+    // remainder reserved here would never be released — see
+    // `RESERVABLE_ORDER_STATES`.
+    expect(view.reserved_exposure_by_instrument.AAPL).toBeUndefined();
+    expect(view.reserved_gross_exposure).toBe(0);
+  });
+
+  it('reserves nothing against a filled lot', async () => {
+    const marketData = makeMarketData({ AAPL: 100 });
+    const input = makeInput({
+      positions: [makePosition({ order_state: 'filled', requested_size: 100, filled_size: 100 })],
+      marketData,
+    });
+
+    const view = await computePortfolioView(input);
+
+    expect(view.exposure_by_instrument.AAPL).toBe(10_000);
+    expect(view.reserved_gross_exposure).toBe(0);
+  });
+
+  it('never returns a negative reservation when the venue overfilled', async () => {
+    const marketData = makeMarketData({ AAPL: 100 });
+    const input = makeInput({
+      positions: [
+        makePosition({ order_state: 'submitted', requested_size: 100, filled_size: 120 }),
+      ],
+      marketData,
+    });
+
+    const view = await computePortfolioView(input);
+
+    expect(view.reserved_gross_exposure).toBe(0);
+  });
+
+  it('sums reservations per instrument and per class across lots', async () => {
+    const marketData = makeMarketData({ AAPL: 100, 'BTC-USD': 50 });
+    const input = makeInput({
+      positions: [
+        makePosition({
+          idempotency_key: 'lot-1',
+          order_state: 'pending',
+          requested_size: 10,
+          filled_size: 0,
+        }),
+        makePosition({
+          idempotency_key: 'lot-2',
+          order_state: 'submitted',
+          requested_size: 5,
+          filled_size: 0,
+        }),
+        makePosition({
+          idempotency_key: 'lot-3',
+          instrument: 'BTC-USD',
+          asset_class: 'crypto',
+          order_state: 'pending',
+          requested_size: 4,
+          filled_size: 0,
+        }),
+      ],
+      marketData,
+    });
+
+    const view = await computePortfolioView(input);
+
+    expect(view.reserved_exposure_by_instrument.AAPL).toBe(1_500);
+    expect(view.reserved_exposure_by_class.stocks).toBe(1_500);
+    expect(view.reserved_exposure_by_class.crypto).toBe(200);
+    expect(view.reserved_gross_exposure).toBe(1_700);
+  });
+
+  /**
+   * The load-bearing separation. `equity = cash + gross_exposure`, and `cash`
+   * is the broker's figure, which is NOT debited at submit time either —
+   * folding a reservation into `gross_exposure` would count the same order on
+   * both sides of the balance and move a STICKY drawdown breaker off a
+   * position that does not exist yet.
+   */
+  it('leaves equity, gross_exposure, drawdown and daily PnL byte-identical to a book with no in-flight lot', async () => {
+    const marketData = makeMarketData({ AAPL: 100 });
+    const held = makePosition({ order_state: 'filled', requested_size: 10, filled_size: 10 });
+    const inFlight = makePosition({
+      idempotency_key: 'lot-2',
+      order_state: 'pending',
+      requested_size: 500,
+      filled_size: 0,
+      avg_entry_price: 0,
+    });
+
+    const without = await computePortfolioView(
+      makeInput({ positions: [held], marketData, peak_equity: 200_000 }),
+    );
+    const with_ = await computePortfolioView(
+      makeInput({ positions: [held, inFlight], marketData, peak_equity: 200_000 }),
+    );
+
+    expect(with_.gross_exposure).toBe(without.gross_exposure);
+    expect(with_.equity).toBe(without.equity);
+    expect(with_.drawdown_pct).toBe(without.drawdown_pct);
+    expect(with_.daily_pnl).toStrictEqual(without.daily_pnl);
+    expect(with_.reserved_gross_exposure).toBe(50_000);
+  });
+});
+
 describe('computePortfolioView — mark sourcing', () => {
   it('sources the mark from MDS getMark at the given asOf', async () => {
     const marketData = makeMarketData({ AAPL: 150 });

@@ -61,6 +61,7 @@ export const ALERT_IDS = [
   'promptTierAlerts',
   'lseCalendarCoverageAlerts',
   'llmFailureRateAlerts',
+  'gateRefusalRateAlerts',
   'nonSterlingFeeAlerts',
   'unattributedFlattenFillAlerts',
   'saxoSessionLostAlerts',
@@ -1076,6 +1077,47 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
         `failure, as of ${alert.reported_at.toISOString()}.\n` +
         'Check the LLM provider status and the rate-limited client for sustained 429s/5xxs — a ' +
         'debate log row alone cannot tell live provider trouble from a spend-cap refusal.'
+      );
+    },
+  },
+
+  // #1533. A SEPARATE entry from `llmFailureRateAlerts` above, not extra words
+  // in its text: refusals are a designed steady state (four of every six
+  // concurrent debates at the shipped gate settings, `production/defaults.ts`)
+  // and only their RATIO climbing toward 1 is a fault, so the two conditions
+  // need different thresholds and different remedies. Blending them into one
+  // alert is review round 1's F1 (`gate-refusal-rate-guard.ts`).
+  gateRefusalRateAlerts: {
+    method: 'postGateRefusalRateAlert',
+    delivery: 'awaited',
+    log: (alert) => ({
+      trace_id: 'gate-refusal-rate',
+      stage: 'debate',
+      event: 'gate_refusal_rate_elevated',
+      level: 'warn',
+      message:
+        `in-flight gate refused ${(alert.rate * 100).toFixed(1)}% of debates over the last ${Math.round(alert.window_ms / 3_600_000)}h ` +
+        `(${alert.gate_refused_count}/${alert.decision_count} refused or run) — ` +
+        LOG_ONLY_CANNOT_PAGE,
+      payload: {
+        rate: alert.rate,
+        gate_refused_count: alert.gate_refused_count,
+        decision_count: alert.decision_count,
+        window_ms: alert.window_ms,
+        reported_at: alert.reported_at.toISOString(),
+      },
+    }),
+    text: (alert) => {
+      const hours = Math.round(alert.window_ms / 3_600_000);
+      const rate = (alert.rate * 100).toFixed(1);
+      return (
+        `Samurai GATE REFUSAL RATE ELEVATED: the in-flight LLM gate refused ${rate}% of debates ` +
+        `over the last ${hours}h (${alert.gate_refused_count} refused of ` +
+        `${alert.decision_count} refused-or-run), as of ${alert.reported_at.toISOString()}.\n` +
+        'Refusing most of a pass is DESIGNED (maxInFlightLlmCalls admits two of six concurrent ' +
+        'instruments); refusing nearly all of one is not — check whether a permit is stuck, ' +
+        'whether per-call latency has risen past expectedLlmCallMs, and how few debates reached ' +
+        'debate_log at all. This threshold is provisional and unmeasured (#1427).'
       );
     },
   },

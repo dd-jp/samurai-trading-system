@@ -26,6 +26,7 @@ import { fetchWithTimeout } from '../http/fetch-with-timeout.js';
 import type { LlmInFlightGate } from './in-flight-gate.js';
 import {
   buildApiError,
+  clampTimeoutToBudget,
   DEFAULT_NOUS_TIMEOUT_MS,
   NousApiError,
   NousRefusalError,
@@ -121,6 +122,13 @@ export interface NousChatOptions {
   expectedCallMs?: number | undefined;
   /** Names this call's stage on the gate's own log lines. */
   llmStage?: string | undefined;
+  /**
+   * Shrinks the network timeout by however long the gate wait already took,
+   * so `gateBudgetMs` bounds wait + call rather than just the wait (#1533).
+   * See `clampTimeoutToBudget`'s doc for why this is opt-in rather than
+   * automatic whenever `gateBudgetMs` is set.
+   */
+  clampCallToBudget?: boolean | undefined;
 }
 
 interface NousChoice {
@@ -150,6 +158,7 @@ export async function nousChat(
   options: NousChatOptions,
   request: NousChatRequest,
 ): Promise<NousChatResult> {
+  const enteredAt = Date.now();
   const slot = await options.gate.acquire({
     budgetMs: options.gateBudgetMs,
     expectedCallMs: options.expectedCallMs,
@@ -157,7 +166,12 @@ export async function nousChat(
     llmStage: options.llmStage,
   });
   try {
-    return await dispatch(options, request);
+    const configuredTimeoutMs = options.timeoutMs ?? DEFAULT_NOUS_TIMEOUT_MS;
+    const timeoutMs =
+      options.clampCallToBudget === true
+        ? clampTimeoutToBudget(configuredTimeoutMs, options.gateBudgetMs, Date.now() - enteredAt)
+        : configuredTimeoutMs;
+    return await dispatch(options, request, timeoutMs);
   } finally {
     slot.release();
   }
@@ -166,6 +180,7 @@ export async function nousChat(
 async function dispatch(
   options: NousChatOptions,
   request: NousChatRequest,
+  timeoutMs: number,
 ): Promise<NousChatResult> {
   const dispatchedAt = Date.now();
   const response = await fetchWithTimeout(
@@ -183,7 +198,7 @@ async function dispatch(
       }),
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     },
-    options.timeoutMs ?? DEFAULT_NOUS_TIMEOUT_MS,
+    timeoutMs,
   );
   // Measured here, before `response.json()` below reads the body — see the
   // `ttfb_ms` doc comment on `NousChatResult`. Captured for every response

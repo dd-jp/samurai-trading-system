@@ -868,6 +868,70 @@ describe('AnthropicLlmClient spend metering', () => {
       expect(options.signal.aborted).toBe(true);
     });
 
+    it('forwards attribution.gate_stage as the wire options stage, when set (#1533)', async () => {
+      const wire: AnthropicMessagesClient = {
+        createMessage: vi.fn().mockResolvedValue(textResponse('good')),
+      };
+      const client = new AnthropicLlmClient(wire, {
+        model: 'anthropic/claude-sonnet-5',
+        max_tokens: 1024,
+        timeoutMs: 1_000,
+        retry: NO_RETRY,
+      });
+
+      await client.complete({
+        ...request(),
+        context: {
+          analyst_views: [],
+          attribution: { stage: 'market_intelligence', gate_stage: 'market_intelligence_scoring' },
+        },
+      });
+
+      const options = (wire.createMessage as ReturnType<typeof vi.fn>).mock.calls[0][1];
+      expect(options.stage).toBe('market_intelligence_scoring');
+    });
+
+    it('falls back to attribution.stage as the wire options stage when gate_stage is absent (#1533)', async () => {
+      const wire: AnthropicMessagesClient = {
+        createMessage: vi.fn().mockResolvedValue(textResponse('good')),
+      };
+      const client = new AnthropicLlmClient(wire, {
+        model: 'anthropic/claude-sonnet-5',
+        max_tokens: 1024,
+        timeoutMs: 1_000,
+        retry: NO_RETRY,
+      });
+
+      await client.complete({
+        ...request(),
+        context: { analyst_views: [], attribution: { stage: 'risk_critic' } },
+      });
+
+      const options = (wire.createMessage as ReturnType<typeof vi.fn>).mock.calls[0][1];
+      expect(options.stage).toBe('risk_critic');
+    });
+
+    it('forwards undefined stage when the request carries no attribution at all', async () => {
+      // False-positive guard: a bare request (no `attribution`, the common
+      // shape in this suite's own test doubles) must not surface some
+      // invented default here — `NousMessagesClient` is where the 'debate'
+      // default actually lives (#1533).
+      const wire: AnthropicMessagesClient = {
+        createMessage: vi.fn().mockResolvedValue(textResponse('good')),
+      };
+      const client = new AnthropicLlmClient(wire, {
+        model: 'anthropic/claude-sonnet-5',
+        max_tokens: 1024,
+        timeoutMs: 1_000,
+        retry: NO_RETRY,
+      });
+
+      await client.complete(request());
+
+      const options = (wire.createMessage as ReturnType<typeof vi.fn>).mock.calls[0][1];
+      expect(options.stage).toBeUndefined();
+    });
+
     it('reports a mid-flight cancellation as LlmCancelledError, not a provider fault, and does not retry', async () => {
       const wire: AnthropicMessagesClient = {
         createMessage: vi.fn(

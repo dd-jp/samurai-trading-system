@@ -108,7 +108,7 @@ describe('sweepWedgedZeroFillLots (#1186)', () => {
     expect((await store.getPosition(KEY))?.order_state).toBe('filled');
   });
 
-  it("leaves a pending/submitted lot untouched — that is reconcileLot's IN_FLIGHT scope, not this sweep's", async () => {
+  it("leaves a pending/submitted lot untouched — that is reconcileLot's IN_FLIGHT_ORDER_STATES scope, not this sweep's", async () => {
     const { store } = openTestExecutionStore();
     await seedWedgedPosition(store, { order_state: 'submitted' });
 

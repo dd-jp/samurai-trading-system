@@ -186,7 +186,14 @@ export async function scoreItems(
       analyst_views: [],
       attribution: {
         ...(deps.trace_id === undefined ? {} : { trace_id: deps.trace_id }),
+        // Metered as `stage: 'market_intelligence'` against the ADR-0008 cap
+        // (module doc above) — unchanged. `gate_stage` (#1533) is separate:
+        // it names this call on the in-flight gate's own log lines only,
+        // matching the sibling convention `market_intelligence_sentiment` /
+        // `market_intelligence_retrieval` already use, and never reaches
+        // `llm_spend`.
         stage: 'market_intelligence',
+        gate_stage: 'market_intelligence_scoring',
       },
     },
     parseResponse: (rawText: string) => {

@@ -176,11 +176,12 @@ export class NousSentimentClient implements GrokSentimentClient {
           baseUrl: this.#baseUrl,
           timeoutMs: this.#timeoutMs,
           gate: this.#gate,
-          // The gate budget bounds the WAIT; `timeoutMs` bounds the call. There
-          // is no outer race above a sentiment refresh to reconcile them, so
-          // worst case is their sum — see the same note in `x-search-client.ts`
-          // (#1080 review round 1, finding 6).
+          // The gate budget bounds wait + call: `clampCallToBudget` shrinks the
+          // network timeout by however long the wait already took (#1533),
+          // closing the gap #1080 review round 1 finding 6 left open (worst
+          // case used to be wait + full `timeoutMs`, their sum).
           gateBudgetMs: this.#timeoutMs,
+          clampCallToBudget: true,
           // No `expectedCallMs`, deliberately, unlike `x-search-client.ts`: a
           // sentiment refresh is one chat completion of the same shape and
           // output size as a debate call, so the gate's debate-calibrated
