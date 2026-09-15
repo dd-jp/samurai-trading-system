@@ -869,8 +869,10 @@ export class InMemoryQueryStore implements DashboardQueryStore {
    * mislabelled `arm: 'control'`. Arm-scoping IS proven at the HTTP layer —
    * `server.test.ts`'s `TwoArmQueryStore` covers it against the real server —
    * but any Playwright/e2e test built against this fixture store (#1595)
-   * cannot use position/closed-trade content to tell the arms apart; it would
-   * pass vacuously against a regression that broke real cross-arm scoping.
+   * cannot use position/closed-trade content — including derived figures like
+   * `pnl_headline`, which is computed entirely from these two reads — to tell
+   * the arms apart; it would pass vacuously against a regression that broke
+   * real cross-arm scoping.
    */
   getOpenPositions(_asOf: Date, _arm: TradingArm): OpenPosition[] {
     return OPEN_POSITIONS;
@@ -880,7 +882,7 @@ export class InMemoryQueryStore implements DashboardQueryStore {
     return CLOSED_TRADES.slice(0, limit);
   }
 
-  /** Same arm-agnostic fixture, same caveat, as `getRecentClosedTrades` above — see there. */
+  /** Same arm-agnostic fixture, same caveat (including `pnl_headline`), as `getRecentClosedTrades` above — see there. */
   getAllClosedTrades(_asOf: Date, _arm: TradingArm): ClosedTrade[] {
     return CLOSED_TRADES;
   }
