@@ -355,9 +355,13 @@ export type PnlRateSource = 'static_sizing_rate';
  *
  * - `modelledCostCharged` drops rows only on the live arm — a control fill is
  *   always priced by `SimulatedBrokerAdapter`, so `control` never loses a row
- *   to it (`countCostBasisDrops`'s doc). Every row this drops from the live
- *   arm was missing a cost the matched control paid, so this headline is
- *   COST-OPTIMISTIC relative to the panel on the live arm only.
+ *   to it (`countCostBasisDrops`'s doc). This asymmetry is one-directional —
+ *   it only ever affects the live arm, never the control arm — but the SIGN
+ *   of the resulting `net_gbp`/`max_drawdown_pct` difference is NOT
+ *   established: a dropped row can itself be a loss, which would make this
+ *   headline read WORSE than the panel, not better. `modelledCostCharged`
+ *   carries its own "DIRECTION IS NOT ESTABLISHED" note for the same reason
+ *   — do not restate this as "cost-optimistic" without redoing that math.
  * - `oneSizingRegime` can drop rows from BOTH arms (a pre-#1112-cutover
  *   `sizing_capital_ceiling = NULL` row), or make the panel throw outright on
  *   a window straddling two declared ceilings — an all-time population is, if
@@ -365,12 +369,15 @@ export type PnlRateSource = 'static_sizing_rate';
  *   because it never calls `oneSizingRegime` at all, not because its
  *   population is somehow safer.
  *
- * Full parity would need this reader to run `oneSizingRegime` too, which
- * needs `sizing_capital_ceiling` — a field `ClosedTrade`/`ClosedTradeRow` do
- * not carry. Filtering on `modelled_cost_charged` alone, without it, would
- * drop real trades from `trade_count` without reproducing the panel's
- * number, so this type is deliberately left reading the wider, unfiltered
- * population rather than a partial, still-wrong one.
+ * Full parity would need this reader to also run `oneSizingRegime`, which
+ * needs `sizing_capital_ceiling` on the row: present in the `closed_trades`
+ * table (migration 0045) and so on what `getAllClosedTrades`'s `SELECT *`
+ * already returns, but not on the `ClosedTrade`/`ClosedTradeRow` TYPE this
+ * reader is typed against — a mapper/type addition, not a schema one.
+ * Filtering on `modelled_cost_charged` alone, without it, would drop real
+ * trades from `trade_count` without reproducing the panel's number, so this
+ * type is deliberately left reading the wider, unfiltered population rather
+ * than a partial, still-wrong one.
  */
 export interface PnlOverallWire {
   /** Cumulative realized `realized_pnl_net` plus current open unrealized, in GBP. Signed. */
