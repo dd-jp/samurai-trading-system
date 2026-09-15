@@ -277,7 +277,13 @@ const RESERVABLE_ORDER_STATES: ReadonlySet<OpenPosition['order_state']> = new Se
  * `WEDGED_ZERO_FILL_ABANDON_AFTER_MS` if no fill ever lands (also stops
  * matching). Bounded at 24h in the pathological case — the same safe-direction
  * over-reservation `PortfolioView.reserved_exposure_by_instrument` already
- * accepts for a resting `submitted` order.
+ * accepts for a resting `submitted` order — PROVIDED the abandon actually
+ * retires the row. `sqlite-shared-store.ts`'s abandon UPDATE restates this
+ * predicate's shape in raw SQL rather than sharing it (a WHERE clause cannot
+ * import a TS function), so a predicate widened here without a matching SQL
+ * change leaves the row unretired and this reservation stranded past 24h
+ * (#1601, which makes that divergence a loud `warn` instead of a silent
+ * no-op — loud is not the same as bounded).
  */
 function reservedNotional(position: OpenPosition, mark: number): number {
   if (!RESERVABLE_ORDER_STATES.has(position.order_state) && !isWedgedZeroFillLot(position)) {
