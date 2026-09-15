@@ -2461,6 +2461,82 @@ describe('llm-failure-rate guard is wired by the composition root (#1396)', () =
     expect(alertsPosted[0]).toMatchObject({ llm_failure_count: 2, total_count: 7 });
     expect((alertsPosted[0] as { rate: number }).rate).toBeCloseTo(2 / 7);
   });
+
+  /**
+   * #1533's own wiring, asserted the same narrow way and in the same suite
+   * because it shares the hoisted `debateLogStore`: that `production.ts`
+   * threads `config.gateRefusalRateAlerts` and that store into
+   * `buildDebateStep` as a SEPARATE bundle, and that the debate step's success
+   * path invokes the refusal check at all. Refusals are pre-seeded through the
+   * same store rather than forced through a real `LlmAdmissionRefusedError`,
+   * which would need a client that refuses only the debate's calls and not the
+   * analysts' — the refusal PATH itself is `debate-adapter.test.ts`'s job.
+   */
+  it('posts the gate-refusal-rate alert to its own injected channel, off the same store', async () => {
+    const clock = new SimulatedClock(START);
+    const bars = [
+      ...fixtureBars('BTC-USD', '5m', 30, 5 * 60_000),
+      ...fixtureBars('BTC-USD', '1h', 30, 60 * 60_000),
+    ];
+    const refusalAlerts: unknown[] = [];
+    const truncationAlerts: unknown[] = [];
+    const config = stubConfig(db, {
+      ...REAL_CONFIGS,
+      clock,
+      logger: recordingLogger(),
+      dataSource: new FixtureDataSource(
+        bars,
+        { price: 160, observed_at: START, source: 'fixture' },
+        'crypto',
+      ),
+      llmClient: llmForOneDebate(),
+      llmFailureRateAlerts: {
+        postLlmFailureRateAlert: (alert) => {
+          truncationAlerts.push(alert);
+        },
+      },
+      gateRefusalRateAlerts: {
+        postGateRefusalRateAlert: (alert) => {
+          refusalAlerts.push(alert);
+        },
+      },
+    });
+
+    const components = buildProductionComponents(config);
+
+    // 400 refusals against the single converged debate the tick below writes:
+    // 400/401 ~= 0.9975, over GATE_REFUSAL_RATE_THRESHOLD and well clear of
+    // MIN_DECISIONS_FOR_GATE_REFUSAL_RATE.
+    for (let i = 0; i < 400; i += 1) {
+      components.debateLog.recordGateRefusal(new Date(START.getTime() - (i + 1) * 60_000));
+    }
+
+    const views = await components.steps.analysts({
+      trace_id: 'trace-1533-root',
+      signal: { asset: 'BTC-USD', asset_class: 'crypto' },
+      clock,
+      bar: START,
+    });
+    expect(views.length).toBeGreaterThan(0);
+
+    await components.steps.debate({
+      trace_id: 'trace-1533-root',
+      instrument: 'BTC-USD',
+      asset_class: 'crypto',
+      views,
+      clock,
+      bar: START,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(refusalAlerts).toHaveLength(1);
+    expect(refusalAlerts[0]).toMatchObject({ gate_refused_count: 400, decision_count: 401 });
+
+    // The other half of review round 1's F1, at the composition root: 400
+    // refusals must leave the truncation-rate guard silent. Its window holds
+    // one converged debate and zero truncations.
+    expect(truncationAlerts).toEqual([]);
+  });
 });
 
 /**

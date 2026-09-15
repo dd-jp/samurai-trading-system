@@ -1501,6 +1501,42 @@
       "sendFailedInTrace": null
     }
   ],
+  "gateRefusalRateAlerts": [
+    {
+      "log": {
+        "trace_id": "gate-refusal-rate",
+        "stage": "debate",
+        "event": "gate_refusal_rate_elevated",
+        "level": "warn",
+        "message": "in-flight gate refused 97.2% of debates over the last 24h (350/360 refused or run) — SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.",
+        "payload": {
+          "rate": 0.9722,
+          "gate_refused_count": 350,
+          "decision_count": 360,
+          "window_ms": 86400000,
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "logInTrace": {
+        "trace_id": "gate-refusal-rate",
+        "stage": "debate",
+        "event": "gate_refusal_rate_elevated",
+        "level": "warn",
+        "message": "in-flight gate refused 97.2% of debates over the last 24h (350/360 refused or run) — SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.",
+        "payload": {
+          "rate": 0.9722,
+          "gate_refused_count": 350,
+          "decision_count": 360,
+          "window_ms": 86400000,
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "text": "Samurai GATE REFUSAL RATE ELEVATED: the in-flight LLM gate refused 97.2% of debates over the last 24h (350 refused of 360 refused-or-run), as of 2026-09-10T08:15:00.000Z.\nRefusing most of a pass is DESIGNED (maxInFlightLlmCalls admits two of six concurrent instruments); refusing nearly all of one is not — check whether a permit is stuck, whether per-call latency has risen past expectedLlmCallMs, and how few debates reached debate_log at all. This threshold is provisional and unmeasured (#1427).",
+      "rejected": "telegram 502",
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    }
+  ],
   "nonSterlingFeeAlerts": [
     {
       "log": null,

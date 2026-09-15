@@ -119,6 +119,13 @@ export interface AnalystWeightSource {
 }
 
 import {
+  checkGateRefusalRate,
+  type GateRefusalRateAlertChannel,
+  type GateRefusalRateMonitor,
+  type GateRefusalWindowSource,
+  type LlmGateRefusalSink,
+} from './gate-refusal-rate-guard.js';
+import {
   checkLlmFailureRate,
   type LlmFailureRateAlertChannel,
   type LlmFailureRateMonitor,
@@ -138,6 +145,46 @@ export interface LlmFailureRateGuardDeps {
   windowSource: LlmFailureRateWindowSource;
   monitor: LlmFailureRateMonitor;
   alertChannel: LlmFailureRateAlertChannel | undefined;
+}
+
+/**
+ * `buildDebateStep`'s #1533 dependency bundle, the sibling of
+ * `LlmFailureRateGuardDeps` above and deliberately NOT merged into it: the two
+ * signals share a store and a call site but nothing else — different window
+ * read, different denominator, different threshold, different latch, different
+ * alert (see `gate-refusal-rate-guard.ts`'s "Why separate"). Optional as a
+ * whole for the same reason its sibling is.
+ */
+export interface GateRefusalRateGuardDeps {
+  windowSource: GateRefusalWindowSource;
+  monitor: GateRefusalRateMonitor;
+  alertChannel: GateRefusalRateAlertChannel | undefined;
+  /**
+   * Where a gate-refused debate is recorded, the only place it is written.
+   * Required (not optional like the rest of this bundle): a caller supplying
+   * this bundle at all wants refusals counted, and `SqliteDebateLogStore` —
+   * the same concrete store already passed as `windowSource` — implements it
+   * directly.
+   */
+  gateRefusalSink: LlmGateRefusalSink;
+}
+
+/** Fire-and-forget window check, invoked on both the completed-debate and the gate-refused path (#1533). */
+function checkGateRefusalRateIfConfigured(
+  guard: GateRefusalRateGuardDeps | undefined,
+  logger: Logger | undefined,
+  now: Date,
+): void {
+  if (guard === undefined) return;
+  void checkGateRefusalRate(
+    {
+      windowSource: guard.windowSource,
+      monitor: guard.monitor,
+      alertChannel: guard.alertChannel,
+      logger,
+    },
+    now,
+  );
 }
 
 /**
@@ -792,6 +839,13 @@ export function buildDebateStep(
    * keep compiling unchanged.
    */
   llmFailureRateGuard?: LlmFailureRateGuardDeps,
+  /**
+   * #1533: the gate-refusal-rate window read + monitor + alert channel, plus
+   * the sink the refusal path writes to. A SEPARATE parameter from
+   * `llmFailureRateGuard` because it is a separate signal — see
+   * `GateRefusalRateGuardDeps`. Optional for the same reason.
+   */
+  gateRefusalRateGuard?: GateRefusalRateGuardDeps,
 ): TickSteps['debate'] {
   /**
    * The debate each bar RESOLVED to, per instrument (#743, closing #781's
@@ -1146,6 +1200,30 @@ export function buildDebateStep(
             waited_ms: cause.waited_ms,
           },
         });
+        // #1533: no `debate_log` row is written for this debate (see the
+        // comment above), so `llm_gate_refusals` is the only place a refusal
+        // is counted. Recorded in its own try/catch — a bad write here must
+        // not turn a degrade-not-fault gate refusal into an unhandled tick
+        // failure. `checkLlmFailureRate` is deliberately NOT called here: that
+        // guard's rate is over truncated `debate_log` rows and a refusal wrote
+        // none, so a refusal moves neither its numerator nor its denominator.
+        if (gateRefusalRateGuard !== undefined) {
+          try {
+            gateRefusalRateGuard.gateRefusalSink.recordGateRefusal(clock.now());
+          } catch (recordError) {
+            logger?.log({
+              trace_id,
+              stage: 'debate',
+              event: 'llm_gate_refusal_record_failed',
+              level: 'error',
+              message:
+                'Failed to record a gate refusal for the gate-refusal-rate guard — this refusal ' +
+                'is undercounted in its window',
+              payload: { instrument, debate_id, error: describeThrownSafely(recordError) },
+            });
+          }
+          checkGateRefusalRateIfConfigured(gateRefusalRateGuard, logger, clock.now());
+        }
         return gateRefusedDebateResult(debate_id, bar, cause.message);
       }
       logDebateFailure({ logger, trace_id, instrument, bar, views, cause });
@@ -1202,6 +1280,12 @@ export function buildDebateStep(
         clock.now(),
       );
     }
+
+    // #1533. Same fire-and-forget posture, on the success path too so the
+    // ratio can FALL — a window read only when a refusal happens can never
+    // observe the refusals ageing out, and the monitor's latch would never
+    // re-arm.
+    checkGateRefusalRateIfConfigured(gateRefusalRateGuard, logger, clock.now());
 
     // Lost the write race: another writer already owns this `debate_id`'s row.
     // Return THEIR row, so the Trader sizes on the same bytes the Feedback Loop

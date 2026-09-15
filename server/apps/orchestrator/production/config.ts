@@ -75,6 +75,7 @@ import { DEFAULT_STAGE2_MAX_AGE_DAYS } from './daily-equity-metrics-source.js';
 import type { DataFailoverAlertChannel } from './data-failover.js';
 import type { AccountStateProvider, VolatilityReadingProvider } from './direct-bind.js';
 import type { ExitValuationDegradedAlertChannel } from './exit-valuation-alert.js';
+import type { GateRefusalRateAlertChannel } from './gate-refusal-rate-guard.js';
 import type { LlmFailureRateAlertChannel } from './llm-failure-rate-guard.js';
 import type { LseCalendarCoverageAlertChannel } from './lse-calendar-coverage-alert.js';
 import type { MiCoverageAlertChannel } from './mi-coverage.js';
@@ -477,6 +478,20 @@ export interface AlertChannelSlots {
    * (#322) supplies.
    */
   llmFailureRateAlerts?: LlmFailureRateAlertChannel;
+  /**
+   * Where a near-total in-flight-gate refusal ratio is escalated (#1533) —
+   * `checkGateRefusalRate`'s edge-triggered alert
+   * (`gate-refusal-rate-guard.ts`) posts here once the 24h ratio of refused
+   * debates to refused-or-run debates crosses `GATE_REFUSAL_RATE_THRESHOLD`.
+   * A SEPARATE slot from `llmFailureRateAlerts` above because it is a separate
+   * condition with a separate remedy: routine refusals are the gate working
+   * (`production/defaults.ts`), and folding them into the truncation rate
+   * pins that rate at ~1.0 on every healthy window. Defaults to
+   * `loggingAlertChannel('gateRefusalRateAlerts', …)`, with the same
+   * log-only-cannot-page caveat; `tradeChannelAlert('gateRefusalRateAlerts', …)`
+   * is what `SAMURAI_ALERTS=telegram` (#322) supplies.
+   */
+  gateRefusalRateAlerts?: GateRefusalRateAlertChannel;
   /**
    * Where a fill fee reported outside book currency is escalated (#1465) —
    * the other half of #1220, which raised `FEE_CURRENCY_NOT_BOOK_CURRENCY` at

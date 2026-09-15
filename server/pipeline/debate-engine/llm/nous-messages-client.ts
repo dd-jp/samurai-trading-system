@@ -105,7 +105,12 @@ export class NousMessagesClient implements AnthropicMessagesClient {
           signal: options.signal,
           gate: this.#gate,
           gateBudgetMs: this.#gateBudgetMs,
-          llmStage: 'debate',
+          // Per-call (#1533): the caller's `options.stage` names risk-critic
+          // and MI-scoring calls correctly on the gate's log lines instead of
+          // every call reading `'debate'`. `'debate'` remains the default for
+          // callers that pass no options at all (test doubles, programmatic
+          // callers), matching this client's pre-#1533 behaviour.
+          llmStage: options.stage ?? 'debate',
         },
         {
           model: request.model,
