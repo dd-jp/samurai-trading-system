@@ -12,14 +12,30 @@
  *
  * #1080 measured 41 of 44 live debates timing out in one 2026-09-04
  * session — BEFORE #1380 split the cause, so that 93% figure is
- * truncation overall, not `llm_failure` specifically. Nothing has yet
- * measured an `llm_failure` rate on its own: `LLM_FAILURE_RATE_THRESHOLD`
- * below is therefore PROVISIONAL, picked so the alert fires once outright
- * failures stop being a minority of an already truncation-heavy stream
- * rather than at a level backed by a soak measurement. It is due for
- * recalibration from the first soak that writes this column — not attempted
- * here, since there is no `llm_failure` measurement yet to recalibrate
- * against.
+ * truncation overall, not `llm_failure` specifically.
+ *
+ * ## First real measurement (#1427) — still PROVISIONAL
+ *
+ * `debate_log.termination_cause` has now recorded two real episodes
+ * (`data/samurai-paper.sqlite`, queried 2026-09-15): a genuine provider
+ * outage, 2026-09-14T13:32Z-14:06Z, 32/32 = 1.0 (35 of the window's 36
+ * `llm_call_failed` events carried `failure_cause: "timeout"`, "LLM call
+ * exceeded 28000ms" — the 36th was `cancelled` on a `non_converged` debate,
+ * outside the truncation set this guard counts, so it moves no rate);
+ * and an orchestrator-restart transient, 2026-09-10T20:00Z-
+ * 20:03Z, 2/19 = 0.105 (17 of those 19 truncations were in-flight calls
+ * `cancelled` by the restart, not ordinary budget expiry). `0.25` clears
+ * the first by 0.75 and sits 0.145 above the second, so neither
+ * contradicts it — but every cause-tagged truncation observed so far comes
+ * from one of these two pathological events. No window of ordinary
+ * operation (budget-pressure truncations with no outage or restart
+ * underneath) has been measured, so the threshold's SENSITIVITY side —
+ * whether 0.25 is low enough to page on routine noise — remains untested;
+ * `LLM_FAILURE_RATE_THRESHOLD` stays PROVISIONAL rather than backed by a
+ * measurement that could have falsified it. Closing this needs a
+ * continuous soak spanning multiple full 24h windows whose truncations
+ * come from budget pressure rather than shutdown or outage, to establish
+ * a baseline non-failure truncation rate to calibrate against.
  *
  * ## The window source lives beside the writer
  *
@@ -72,13 +88,24 @@
 import { describeThrownSafely } from '../../../shared/index.js';
 import type { Logger } from '../types.js';
 
-/** Same 24h cadence `COVERAGE_WINDOW_MS` (production/mi-coverage.ts) and `getDailyMetrics` already use for a "how is today going" read. */
+/**
+ * Same 24h cadence `COVERAGE_WINDOW_MS` (production/mi-coverage.ts) and
+ * `getDailyMetrics` already use for a "how is today going" read — still
+ * convention-based, not measurement-based. #1427's real episodes (this
+ * file's doc comment) were 3-34 minutes long, too short to say whether a
+ * shorter window would separate outage from blip any better; unchanged.
+ */
 export const LLM_FAILURE_RATE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /**
  * PROVISIONAL — see this file's doc comment. One in four truncations
  * outright LLM failures, rather than budget expiry, is the bar chosen to
- * flag a stream where failures are no longer the minority cause.
+ * flag a stream where failures are no longer the minority cause. #1427's
+ * first two real episodes (2026-09-15 measurement, this file's doc
+ * comment) sit well clear of 0.25 on both sides (1.0 and 0.105) without
+ * testing where the true cutover lies, so this is not yet a value a
+ * measurement has pinned down — only one a measurement has failed to
+ * contradict.
  */
 export const LLM_FAILURE_RATE_THRESHOLD = 0.25;
 
