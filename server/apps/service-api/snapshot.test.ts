@@ -7,15 +7,16 @@
  * no setters, and the snapshot function calls only get-* methods.
  */
 
-import type { ExitClassWire } from '../../../contracts/index.js';
+import type { ExitClassWire, PnlOverallWire } from '../../../contracts/index.js';
 import { CONTRACT_VERSION, EXIT_CLASSES_WIRE } from '../../../contracts/index.js';
 import type { ExitClass } from '../../pipeline/control-arm/index.js';
-import { EXIT_CLASSES } from '../../pipeline/control-arm/index.js';
+import { cumulativePnl, EXIT_CLASSES } from '../../pipeline/control-arm/index.js';
 import type { AnalystContribution } from '../../pipeline/debate-engine/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
 import type { ClosedTrade, DebateLog, Fill, OpenPosition } from '../../shared/index.js';
 import { toBrokerFillId } from '../../shared/index.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
+import { LIVE_BOOK_GBP, LIVE_BOOK_SIZING_USD, SIZING_USD_PER_GBP } from '../orchestrator/index.js';
 import { PIPELINE_LOOKBACK_MS, PIPELINE_MAX_LANES } from './pipeline-query.js';
 import { buildSnapshot } from './snapshot.js';
 import type {
@@ -166,6 +167,7 @@ function fakeStore(overrides: Partial<DashboardQueryStore> = {}): DashboardQuery
     getTickStatus: () => null,
     getOpenPositions: () => [],
     getRecentClosedTrades: () => [],
+    getAllClosedTrades: () => [],
     getFillsForTrades: () => [],
     getVerdictHistory: () => [],
     getRiskCritics: () => [],
@@ -900,6 +902,144 @@ describe('buildSnapshot', () => {
 
       expect(snap.arm_comparison[0]?.live.refused_pass_count).toBeNull();
       expect(snap.arm_comparison[0]?.control.refused_pass_count).toBeNull();
+    });
+  });
+
+  describe('P&L headline (#1595)', () => {
+    /** A required literal `pnl.overall` cannot be constructed without a drawdown. */
+    it('cannot construct a PnlOverallWire missing max_drawdown_pct — the compile-time half of "never return-only"', () => {
+      // @ts-expect-error — max_drawdown_pct is required, not optional.
+      const returnOnly: PnlOverallWire = {
+        net_gbp: 10,
+        net_pct_of_book: 0.01,
+        trade_count: 1,
+      };
+      expect(returnOnly).toBeDefined();
+    });
+
+    it('emits a present (zero, not absent) drawdown alongside a zero P&L when nothing has traded', () => {
+      const snap = buildSnapshot(fakeStore(), AS_OF, 'paper', 'live');
+
+      expect(snap.pnl.overall).toEqual({
+        net_gbp: 0,
+        net_pct_of_book: 0,
+        max_drawdown_pct: 0,
+        trade_count: 0,
+      });
+      expect(snap.pnl.today).toEqual({
+        net_gbp: 0,
+        net_pct_of_book: 0,
+        realized_gbp: 0,
+        unrealized_gbp: 0,
+        costs_gbp: 0,
+        trade_count: 0,
+      });
+    });
+
+    it('computes all-time net (realized + open unrealized), % of book, drawdown and trade count in GBP at the static rate', () => {
+      const trades = [
+        makeClosedTrade({
+          idempotency_key: 't1',
+          closed_at: new Date('2026-06-01T10:00:00Z'),
+          realized_pnl_net: 40,
+        }),
+        makeClosedTrade({
+          idempotency_key: 't2',
+          closed_at: new Date('2026-06-02T10:00:00Z'),
+          realized_pnl_net: -10,
+        }),
+      ];
+      const store = fakeStore({
+        getAllClosedTrades: () => trades,
+        getOpenPositions: () => [makePosition({ idempotency_key: 'open-1' })],
+        getMark: () => makeMark(105), // (105 - 100) * 100 filled_size = +500 unrealized
+      });
+
+      const snap = buildSnapshot(store, AS_OF, 'paper', 'live');
+
+      const unrealizedUsd = 500;
+      const expectedNetUsd = 40 - 10 + unrealizedUsd;
+      const expectedCumulative = cumulativePnl(trades, LIVE_BOOK_SIZING_USD);
+
+      expect(snap.pnl.overall.net_gbp).toBeCloseTo(expectedNetUsd / SIZING_USD_PER_GBP);
+      expect(snap.pnl.overall.net_pct_of_book).toBeCloseTo(
+        expectedNetUsd / SIZING_USD_PER_GBP / LIVE_BOOK_GBP,
+      );
+      expect(snap.pnl.overall.max_drawdown_pct).toBeCloseTo(expectedCumulative.max_drawdown_pct);
+      expect(snap.pnl.overall.trade_count).toBe(2);
+      expect(snap.pnl.rate_usd_per_gbp).toBe(SIZING_USD_PER_GBP);
+      expect(snap.pnl.rate_source).toBe('static_sizing_rate');
+    });
+
+    /**
+     * The BST-boundary discriminator: 2026-07-16T00:30 local London time (BST,
+     * UTC+1) is 2026-07-15T23:30Z — the PREVIOUS UTC calendar day. A plain
+     * `toISOString().slice(0, 10)` day boundary would file this trade under
+     * "2026-07-15" and drop it out of `asOf`'s ("2026-07-16") today window.
+     */
+    it('counts a 00:30 BST close on the London day it happened on, not the UTC day', () => {
+      const asOf = new Date('2026-07-16T10:00:00Z'); // London: 11:00 BST, day 2026-07-16
+      const trades = [
+        makeClosedTrade({
+          idempotency_key: 'bst-boundary',
+          closed_at: new Date('2026-07-15T23:30:00Z'), // London: 2026-07-16T00:30 BST
+          realized_pnl_net: 25,
+          fees_total: 1,
+        }),
+      ];
+      const store = fakeStore({ getAllClosedTrades: () => trades });
+
+      const snap = buildSnapshot(store, asOf, 'paper', 'live');
+
+      expect(snap.pnl.today.trade_count).toBe(1);
+      expect(snap.pnl.today.realized_gbp).toBeCloseTo(25 / SIZING_USD_PER_GBP);
+      expect(snap.pnl.today.costs_gbp).toBeCloseTo(1 / SIZING_USD_PER_GBP);
+    });
+
+    /**
+     * The GMT control case: outside BST, London and UTC agree, so a close on
+     * `asOf`'s own UTC calendar day counts as today with no shift needed — and
+     * a close on the PREVIOUS UTC day is correctly excluded, proving the
+     * mechanism doesn't over-shift when there is no offset to apply.
+     */
+    it('counts a winter close on its UTC-equal London day, and excludes the prior day', () => {
+      const asOf = new Date('2026-01-16T18:00:00Z'); // GMT, no offset from UTC
+      const trades = [
+        makeClosedTrade({
+          idempotency_key: 'today-gmt',
+          closed_at: new Date('2026-01-16T08:00:00Z'),
+          realized_pnl_net: 12,
+        }),
+        makeClosedTrade({
+          idempotency_key: 'yesterday-gmt',
+          closed_at: new Date('2026-01-15T23:00:00Z'),
+          realized_pnl_net: 99,
+        }),
+      ];
+      const store = fakeStore({ getAllClosedTrades: () => trades });
+
+      const snap = buildSnapshot(store, asOf, 'paper', 'live');
+
+      expect(snap.pnl.today.trade_count).toBe(1);
+      expect(snap.pnl.today.realized_gbp).toBeCloseTo(12 / SIZING_USD_PER_GBP);
+      // Both trades still count toward all-time.
+      expect(snap.pnl.overall.trade_count).toBe(2);
+    });
+
+    it('scopes to the requested arm — control rows never reach the live headline and vice versa', () => {
+      const liveTrade = makeClosedTrade({ idempotency_key: 'live-t', realized_pnl_net: 40 });
+      const controlTrade = makeClosedTrade({ idempotency_key: 'control-t', realized_pnl_net: 999 });
+      const store = fakeStore({
+        getAllClosedTrades: (_asOf, arm) => (arm === 'live' ? [liveTrade] : [controlTrade]),
+      });
+
+      const liveSnap = buildSnapshot(store, AS_OF, 'paper', 'live');
+      expect(liveSnap.pnl.overall.trade_count).toBe(1);
+      expect(liveSnap.pnl.overall.net_gbp).toBeCloseTo(40 / SIZING_USD_PER_GBP);
+
+      const controlSnap = buildSnapshot(store, AS_OF, 'paper', 'control');
+      expect(controlSnap.pnl.overall.trade_count).toBe(1);
+      expect(controlSnap.pnl.overall.net_gbp).toBeCloseTo(999 / SIZING_USD_PER_GBP);
     });
   });
 

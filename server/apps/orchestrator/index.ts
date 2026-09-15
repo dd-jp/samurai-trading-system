@@ -170,7 +170,13 @@ export {
   type OrphanGoVerdict,
   OrphanVerdictScanner,
 } from './orphan-verdict-scan.js';
-export { paperStartingProfile, RISK_CAP_EQUITY_FRACTIONS } from './paper-profile.js';
+export {
+  LIVE_BOOK_GBP,
+  LIVE_BOOK_SIZING_USD,
+  paperStartingProfile,
+  RISK_CAP_EQUITY_FRACTIONS,
+  SIZING_USD_PER_GBP,
+} from './paper-profile.js';
 export {
   ALERT_AFTER_CONSECUTIVE_SKIPS,
   ALERT_REPEAT_EVERY_SKIPS,

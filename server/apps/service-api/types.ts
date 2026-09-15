@@ -222,6 +222,16 @@ export interface DashboardQueryStore {
    */
   getRecentClosedTrades(limit: number, asOf: Date, arm: TradingArm): ClosedTrade[];
   /**
+   * EVERY closed trade for one arm, unbounded — the P&L headline's source
+   * (#1595): `cumulativePnl` (control-arm/arm-comparison.ts) needs the whole
+   * realized series to find the all-time peak and trough, and a `LIMIT`
+   * window sized for a recent-history list (`getRecentClosedTrades` above)
+   * would silently truncate the drawdown to whatever fits in it. `arm`
+   * required for the same reason as `getOpenPositions`/`getRecentClosedTrades`
+   * (#1592) — the headline must never blend the two arms' realized series.
+   */
+  getAllClosedTrades(asOf: Date, arm: TradingArm): ClosedTrade[];
+  /**
    * Every fill belonging to the named lots, in no particular cross-lot order.
    * Scoped to `idempotencyKeys` rather than a bounded "recent fills" window
    * (contrast `getMarks`' instrument-list shape) — `buildSnapshot` always

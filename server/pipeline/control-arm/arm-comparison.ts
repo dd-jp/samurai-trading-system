@@ -295,34 +295,42 @@ export function buildArmComparison(input: {
   };
 }
 
+export interface CumulativePnl {
+  /** Cumulative `realized_pnl_net`, net of fees, in account currency. Signed. */
+  net: number;
+  /** `net` as a signed fraction of `basis`. */
+  return_pct: number;
+  /** Peak-to-trough fall of the cumulative series, as a positive fraction of `basis`. Zero when the series never fell below a prior peak. */
+  max_drawdown_pct: number;
+}
+
 /**
- * One arm's slice of the shared derivation — return AND drawdown from the same
- * cumulative series, in one pass.
+ * The cumulative realized-PnL series for a set of closed trades, and its
+ * peak-to-trough drawdown — the one derivation both `performanceFor` below
+ * and the dashboard's all-time P&L headline (#1595) build on, so the two
+ * never compute return or drawdown by separate arithmetic that could drift
+ * apart.
+ *
+ * Takes no `arm`: the caller has already filtered to one arm (or, for the
+ * headline, already read one arm's rows from the store) — this function only
+ * ever sees the population it should sum, not the whole table.
  *
  * Sorted by close time and then by key: `closed_at` is stored at second
  * resolution in some paths, so two lots closing in the same second would
  * otherwise order non-deterministically and move the drawdown between runs. The
  * tiebreak makes the series reproducible, which a measurement has to be.
  */
-function performanceFor(
-  arm: TradingArm,
-  trades: readonly (ClosedTrade & { arm?: TradingArm })[],
-  basis: number,
-  refusedPassCount: number,
-  costBasisDrops: ExitClassDropCounts,
-): ArmPerformance {
-  const mine = trades
-    .filter((trade) => (trade.arm ?? 'live') === arm)
-    .sort(
-      (a, b) =>
-        a.closed_at.getTime() - b.closed_at.getTime() ||
-        a.idempotency_key.localeCompare(b.idempotency_key),
-    );
+export function cumulativePnl(trades: readonly ClosedTrade[], basis: number): CumulativePnl {
+  const sorted = [...trades].sort(
+    (a, b) =>
+      a.closed_at.getTime() - b.closed_at.getTime() ||
+      a.idempotency_key.localeCompare(b.idempotency_key),
+  );
 
   let cumulative = 0;
   let peak = 0;
   let maxDrawdown = 0;
-  for (const trade of mine) {
+  for (const trade of sorted) {
     cumulative += trade.realized_pnl_net;
     // The peak starts at 0, so an arm that is down from its first trade has a
     // real drawdown rather than a zero one — the series' high-water mark is the
@@ -332,12 +340,26 @@ function performanceFor(
     if (drawdown > maxDrawdown) maxDrawdown = drawdown;
   }
 
+  return { net: cumulative, return_pct: cumulative / basis, max_drawdown_pct: maxDrawdown / basis };
+}
+
+/** One arm's slice of `trades` — filters to `arm`, then delegates to `cumulativePnl`. */
+function performanceFor(
+  arm: TradingArm,
+  trades: readonly (ClosedTrade & { arm?: TradingArm })[],
+  basis: number,
+  refusedPassCount: number,
+  costBasisDrops: ExitClassDropCounts,
+): ArmPerformance {
+  const mine = trades.filter((trade) => (trade.arm ?? 'live') === arm);
+  const { net, return_pct, max_drawdown_pct } = cumulativePnl(mine, basis);
+
   return {
     arm,
     trade_count: mine.length,
-    realized_pnl_net: cumulative,
-    return_pct: cumulative / basis,
-    max_drawdown_pct: maxDrawdown / basis,
+    realized_pnl_net: net,
+    return_pct,
+    max_drawdown_pct,
     refused_pass_count: refusedPassCount,
     cost_basis_drops: costBasisDrops,
   };

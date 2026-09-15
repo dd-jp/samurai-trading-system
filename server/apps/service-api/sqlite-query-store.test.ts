@@ -604,6 +604,66 @@ describe('SqliteQueryStore', () => {
       expect(store.getFillsForTrades([], NOW)).toEqual([]);
     });
   });
+
+  // #1595: the P&L headline's source — unbounded, unlike getRecentClosedTrades.
+  describe('getAllClosedTrades', () => {
+    it('reads every closed trade for the named arm, with no LIMIT truncation', async () => {
+      const db = makeDb();
+      const execStore = new SqliteExecutionStore(db);
+      // One more row than any dashboard list's fixed window (10), which would
+      // silently truncate the all-time drawdown if this read used a LIMIT the
+      // way getRecentClosedTrades does.
+      for (let i = 0; i < 11; i++) {
+        await seedClosedTrade(
+          execStore,
+          makeClosedTrade({
+            idempotency_key: `key-closed-${i}`,
+            closed_at: new Date(NOW.getTime() - i * 60_000),
+          }),
+        );
+      }
+
+      const store = new SqliteQueryStore(db);
+      expect(store.getAllClosedTrades(NOW, 'live')).toHaveLength(11);
+    });
+
+    // The discriminating test the fixture-store's #1595 comment calls out: this
+    // is proven at the SQL layer, not just at the call-site-threads-arm layer —
+    // a `getAllClosedTrades` that forgot `WHERE arm = ?` would still pass a test
+    // that only checks the parameter is threaded through.
+    it('scopes to the named arm, excluding the other arm entirely', async () => {
+      const db = makeDb();
+      const liveStore = new SqliteExecutionStore(db, 'live');
+      const controlStore = new SqliteExecutionStore(db, 'control');
+      await seedClosedTrade(liveStore, makeClosedTrade({ idempotency_key: 'key-closed-live' }));
+      await seedClosedTrade(
+        controlStore,
+        makeClosedTrade({ idempotency_key: 'key-closed-control' }),
+      );
+
+      const store = new SqliteQueryStore(db);
+
+      const live = store.getAllClosedTrades(NOW, 'live');
+      expect(live).toHaveLength(1);
+      expect(live[0]?.idempotency_key).toBe('key-closed-live');
+
+      const control = store.getAllClosedTrades(NOW, 'control');
+      expect(control).toHaveLength(1);
+      expect(control[0]?.idempotency_key).toBe('key-closed-control');
+    });
+
+    it('excludes a closed trade that closed after asOf', async () => {
+      const db = makeDb();
+      const execStore = new SqliteExecutionStore(db);
+      await seedClosedTrade(
+        execStore,
+        makeClosedTrade({ closed_at: new Date('2026-07-28T00:00:00Z') }), // after NOW
+      );
+
+      const store = new SqliteQueryStore(db);
+      expect(store.getAllClosedTrades(NOW, 'live')).toEqual([]);
+    });
+  });
 });
 
 describe('SqliteQueryStore.getLlmSpend', () => {

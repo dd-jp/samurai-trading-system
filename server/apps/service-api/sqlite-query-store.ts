@@ -284,6 +284,19 @@ export class SqliteQueryStore implements DashboardQueryStore {
   }
 
   /**
+   * #1595: every closed trade for one arm, unbounded — no `LIMIT`, unlike
+   * `getRecentClosedTrades` above. The P&L headline's all-time drawdown needs
+   * the whole realized series; truncating it to a recent-history window would
+   * silently understate (or entirely miss) the true peak-to-trough fall.
+   */
+  getAllClosedTrades(asOf: Date, arm: TradingArm): ClosedTrade[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM closed_trades WHERE arm = ? AND closed_at <= ? ORDER BY closed_at`)
+      .all(arm, toStoredTimestamp(asOf)) as ClosedTradeRow[];
+    return rows.map(fromClosedTradeRow);
+  }
+
+  /**
    * #940: every fill for the named lots. Scoped by `idempotency_key IN (...)`
    * rather than a bounded time window — `buildSnapshot` always calls this with
    * the closed trades it just read, so the placeholder list (built from

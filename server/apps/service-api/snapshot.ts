@@ -11,7 +11,9 @@
  * what actually filled. Recent-history window is fixed
  * (`RECENT_DEBATES_LIMIT` / `RECENT_VERDICTS_LIMIT`), no config surface yet.
  */
+import type { PnlHeadlineWire, PnlRateSource } from '../../../contracts/index.js';
 import { CONTRACT_VERSION, toProfitFactorWire } from '../../../contracts/index.js';
+import { cumulativePnl } from '../../pipeline/control-arm/index.js';
 import type { AnalystContribution, Direction } from '../../pipeline/debate-engine/index.js';
 import { OUTSIDE_BENCHMARKS } from '../../pipeline/outside-benchmark/index.js';
 import {
@@ -23,6 +25,7 @@ import type { Mark } from '../../providers/market-data-service/index.js';
 import type { ClosedTrade, Fill, TradingArm } from '../../shared/index.js';
 import { isExitFill, totalQty, weightedAvgPrice } from '../../shared/index.js';
 import type { StoreMode } from '../../shared/store/index.js';
+import { LIVE_BOOK_GBP, LIVE_BOOK_SIZING_USD, SIZING_USD_PER_GBP } from '../orchestrator/index.js';
 import { buildPipelineView, PIPELINE_LOOKBACK_MS, PIPELINE_MAX_LANES } from './pipeline-query.js';
 import { NULL_PROVIDER_STATUS, type ProviderStatusReader } from './provider-status.js';
 import type {
@@ -212,6 +215,79 @@ function derivedExitPrice(trade: ClosedTrade): number {
 function exitPriceFor(trade: ClosedTrade, fillsByTrade: ReadonlyMap<string, Fill[]>): number {
   const fills = fillsByTrade.get(trade.idempotency_key) ?? [];
   return weightedExitFillPrice(fills) ?? derivedExitPrice(trade);
+}
+
+/**
+ * The calendar day `instant` falls on in Europe/London, as `YYYY-MM-DD` —
+ * BST-aware without a timezone-database dependency (#1595). `Intl` carries
+ * the IANA tz database in the Node runtime already, so a plain UTC day
+ * boundary (`instant.toISOString().slice(0, 10)`) is the one thing this must
+ * NOT do: during BST (UTC+1) a close at 00:30 London time is 23:30 UTC the
+ * PREVIOUS day, and today's P&L would silently drop it onto yesterday.
+ *
+ * `en-CA` is not a locale choice about Canada — it is the one built-in
+ * locale whose default date format is already `YYYY-MM-DD`, so no
+ * `formatToParts` reassembly is needed.
+ */
+const LONDON_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London' });
+
+function londonCalendarDay(instant: Date): string {
+  return LONDON_DAY.format(instant);
+}
+
+const PNL_RATE_SOURCE: PnlRateSource = 'static_sizing_rate';
+
+/**
+ * The P&L headline for one arm (#1595): all-time (every closed trade this arm
+ * has ever recorded, plus current open unrealized) with its realized
+ * drawdown, and today over the Europe/London calendar day.
+ *
+ * `allClosedTrades` and `unrealizedUsd` are both already scoped to `arm` and
+ * to `asOf` by the caller — this function does no filtering of its own beyond
+ * splitting `allClosedTrades` into today's slice.
+ *
+ * Every money figure here is computed in USD (the currency `realized_pnl_net`
+ * and `unrealized_pnl` are recorded in today — `ArmComparisonRow.basis`'s doc
+ * has the same fact) and converted to GBP at `SIZING_USD_PER_GBP` exactly
+ * once, at the end — never per-trade, so rounding cannot accumulate
+ * differently between the two arms' headlines.
+ */
+function buildPnlHeadline(
+  allClosedTrades: readonly ClosedTrade[],
+  unrealizedUsd: number,
+  asOf: Date,
+): PnlHeadlineWire {
+  const overall = cumulativePnl(allClosedTrades, LIVE_BOOK_SIZING_USD);
+  const overallNetUsd = overall.net + unrealizedUsd;
+
+  const today = londonCalendarDay(asOf);
+  const closedToday = allClosedTrades.filter(
+    (trade) => londonCalendarDay(trade.closed_at) === today,
+  );
+  const realizedTodayUsd = closedToday.reduce((sum, trade) => sum + trade.realized_pnl_net, 0);
+  const costsTodayUsd = closedToday.reduce((sum, trade) => sum + trade.fees_total, 0);
+  const netTodayUsd = realizedTodayUsd + unrealizedUsd;
+
+  const toGbp = (usd: number) => usd / SIZING_USD_PER_GBP;
+
+  return {
+    overall: {
+      net_gbp: toGbp(overallNetUsd),
+      net_pct_of_book: toGbp(overallNetUsd) / LIVE_BOOK_GBP,
+      max_drawdown_pct: overall.max_drawdown_pct,
+      trade_count: allClosedTrades.length,
+    },
+    today: {
+      net_gbp: toGbp(netTodayUsd),
+      net_pct_of_book: toGbp(netTodayUsd) / LIVE_BOOK_GBP,
+      realized_gbp: toGbp(realizedTodayUsd),
+      unrealized_gbp: toGbp(unrealizedUsd),
+      costs_gbp: toGbp(costsTodayUsd),
+      trade_count: closedToday.length,
+    },
+    rate_usd_per_gbp: SIZING_USD_PER_GBP,
+    rate_source: PNL_RATE_SOURCE,
+  };
 }
 
 /**
@@ -408,6 +484,12 @@ export function buildSnapshot(
     timestamp: fill.timestamp.toISOString(),
   }));
 
+  // #1595: the P&L headline, over EVERY closed trade this arm has ever
+  // recorded (not `closedTradesDomain` above, which is windowed for the
+  // recent-history table) plus this arm's current open unrealized PnL.
+  const unrealizedUsd = positions.reduce((sum, position) => sum + position.unrealized_pnl, 0);
+  const pnl = buildPnlHeadline(store.getAllClosedTrades(asOf, arm), unrealizedUsd, asOf);
+
   return {
     generated_at: new Date().toISOString(),
     as_of: asOf.toISOString(),
@@ -424,6 +506,7 @@ export function buildSnapshot(
     metrics,
     arm_comparison,
     outside_benchmarks,
+    pnl,
     alert_delivery_failures_24h: store.getAlertDeliveryFailureCount(asOf),
     providers: providers.readProviderStatus(),
     llm_spend: store.getLlmSpend(asOf),
