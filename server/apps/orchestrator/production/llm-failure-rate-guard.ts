@@ -18,9 +18,11 @@
  *
  * `debate_log.termination_cause` has now recorded two real episodes
  * (`data/samurai-paper.sqlite`, queried 2026-09-15): a genuine provider
- * outage, 2026-09-14T13:31Z-14:07Z, 32/32 = 1.0 (every `llm_call_failed`
- * in the window carried `failure_cause: "timeout"`, "LLM call exceeded
- * 28000ms"); and an orchestrator-restart transient, 2026-09-10T20:00Z-
+ * outage, 2026-09-14T13:32Z-14:06Z, 32/32 = 1.0 (35 of the window's 36
+ * `llm_call_failed` events carried `failure_cause: "timeout"`, "LLM call
+ * exceeded 28000ms" — the 36th was `cancelled` on a `non_converged` debate,
+ * outside the truncation set this guard counts, so it moves no rate);
+ * and an orchestrator-restart transient, 2026-09-10T20:00Z-
  * 20:03Z, 2/19 = 0.105 (17 of those 19 truncations were in-flight calls
  * `cancelled` by the restart, not ordinary budget expiry). `0.25` clears
  * the first by 0.75 and sits 0.145 above the second, so neither
@@ -90,7 +92,7 @@ import type { Logger } from '../types.js';
  * Same 24h cadence `COVERAGE_WINDOW_MS` (production/mi-coverage.ts) and
  * `getDailyMetrics` already use for a "how is today going" read — still
  * convention-based, not measurement-based. #1427's real episodes (this
- * file's doc comment) were 3-36 minutes long, too short to say whether a
+ * file's doc comment) were 3-34 minutes long, too short to say whether a
  * shorter window would separate outage from blip any better; unchanged.
  */
 export const LLM_FAILURE_RATE_WINDOW_MS = 24 * 60 * 60 * 1000;
