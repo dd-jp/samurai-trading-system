@@ -29,9 +29,12 @@
  *   fill (`Working` on the book, indistinguishable from a real fill by
  *   `Status` alone), `lookup` corroborates that read too
  *   (`corroborateActivatedLegs`) — but asymmetrically: only a settled,
- *   terminal non-`Filled`, zero-`FillAmount` master row downgrades it, since
- *   deferring on inconclusive evidence here would delay recognizing a
- *   position that may be genuinely live, which is worse than the
+ *   terminal, non-`Filled` master row downgrades it, and only once no row
+ *   for this reference in the lookback carries any evidence of a fill
+ *   (every row is scanned, not just the latest, so an earlier fill followed
+ *   by a later terminal residual-cancellation row still counts — #1215
+ *   round 3), since deferring on inconclusive evidence here would delay
+ *   recognizing a position that may be genuinely live, which is worse than the
  *   phantom-fill risk being guarded against. That defense is itself
  *   conditional on Saxo emitting such a row for this master at all — whether
  *   it does is exactly what #1426 has yet to observe. If Saxo instead emits
@@ -1088,6 +1091,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
       }
       const filled = master.FilledAmount ?? 0;
       return {
+        kind: 'master',
         ids,
         side: master.BuySell === 'Buy' ? 'buy' : 'sell',
         amount: master.Amount,
@@ -1122,6 +1126,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
       else ids.target = leg.OrderId;
     }
     return {
+      kind: 'legs',
       ids,
       legs,
       side: first.BuySell === 'Buy' ? 'sell' : 'buy',
@@ -1331,21 +1336,42 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
   ): Promise<LookedUpOrder | null> {
     const open = await this.findOpen(externalReference);
     if (open !== null && !isDormantLegs(open)) {
-      // `ids.entry` is absent only on `findOpen`'s activated-legs-no-master
-      // branch (the master-present branch always sets it) — the read
-      // `corroborateActivatedLegs` exists to check (#1215, #1426). That same
-      // branch is the only one that populates `open.legs`, so cancelling off
-      // it here — rather than the role-deduped `orderIdList(open.ids)` —
-      // matches `clearLegs`' own behavior on the mirror branch and does not
-      // silently drop a duplicate row under one leg's reference (#1215
-      // round 3).
-      if (open.ids.entry === undefined) {
+      // `kind: 'legs'` is `findOpen`'s activated-legs-no-master branch (the
+      // master-present branch is always `kind: 'master'`) — the read
+      // `corroborateActivatedLegs` exists to check (#1215, #1426). Cancelling
+      // off `open.legs` here — rather than the role-deduped
+      // `orderIdList(open.ids)` — matches `clearLegs`' own behavior on the
+      // mirror branch and does not silently drop a duplicate row under one
+      // leg's reference (#1215 round 3).
+      if (open.kind === 'legs') {
         const verdict = await this.corroborateActivatedLegs(externalReference, lookbackMs);
         if (verdict.kind === 'expired') {
-          await this.cancelOrderIds((open.legs ?? []).map((leg) => leg.OrderId));
+          await this.cancelOrderIds(open.legs.map((leg) => leg.OrderId));
           this.clearDormantDefer(externalReference);
           return fromActivity(verdict.latest, externalReference);
         }
+        this.clearDormantDefer(externalReference);
+        // The audit trail's own fill amount replaces the leg's resting
+        // `Amount` when corroboration found one — `Amount` is the order
+        // size, not necessarily what actually filled (#1563). A summed `0`
+        // (a filled-classified row with no `FillAmount`, e.g. a bare
+        // `FinalFill`) is no better than what `open` already carries, not a
+        // genuine zero-fill, so it falls through to `open`'s own
+        // `first.Amount` reading instead of overriding it (#1574). The
+        // override is also clamped at the order's own `Amount`: summed
+        // `FillAmount` has no cross-row idempotency behind it (this adapter's
+        // ~15s retry window, doc 43), so duplicate fill rows under one wire
+        // reference must not be allowed to report a fill larger than the
+        // order itself (#1574).
+        return verdict.filledQty === undefined || verdict.filledQty <= 0
+          ? open
+          : {
+              ...open,
+              normalized: {
+                ...open.normalized,
+                filled_qty: Math.min(verdict.filledQty, open.amount),
+              },
+            };
       }
       this.clearDormantDefer(externalReference);
       return open;
@@ -1464,16 +1490,33 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
    * no row at all inside the lookback leaves today's `filled` reading — the
    * VERIFIED (doc 43 round 2) genuine-fill path — unchanged, with no new
    * defer/escalate/page exposure added to it.
+   *
+   * `filledQty`, when present, is the sum of every fill-evidencing row's own
+   * `FillAmount`. It can legitimately come back `0` — a filled-classified row
+   * (e.g. a bare `FinalFill`) with no `FillAmount` of its own — which is not
+   * a genuine zero-fill, just an absence of better evidence; `lookup`, the
+   * only caller, treats that case as "no override" rather than replacing its
+   * own resting-`Amount` reading with a false zero (#1574).
    */
   private async corroborateActivatedLegs(
     externalReference: string,
     lookbackMs: number,
-  ): Promise<{ kind: 'confirmed' } | { kind: 'expired'; latest: SaxoOrderActivity }> {
+  ): Promise<
+    { kind: 'confirmed'; filledQty?: number } | { kind: 'expired'; latest: SaxoOrderActivity }
+  > {
     const rows = await this.activitiesFor(externalReference, lookbackMs);
-    const everFilled = rows.some(
+    const fillRows = rows.filter(
       (row) => activityState(row) === 'filled' || (row.FillAmount ?? 0) > 0,
     );
-    if (everFilled) return { kind: 'confirmed' };
+    if (fillRows.length > 0) {
+      // Summed, not read off one row: `FillAmount` is per-event (see this
+      // function's own doc), so a partial fill split across several activity
+      // rows would under-report at any single row's amount (#1563).
+      return {
+        kind: 'confirmed',
+        filledQty: fillRows.reduce((sum, row) => sum + (row.FillAmount ?? 0), 0),
+      };
+    }
     let latest: SaxoOrderActivity | undefined;
     for (const row of rows) {
       if (latest === undefined || row.ActivityTime >= latest.ActivityTime) latest = row;
@@ -1527,22 +1570,38 @@ interface OrderIds {
   target?: string;
 }
 
-interface LookedUpOrder {
+interface LookedUpMasterOrder {
+  readonly kind: 'master';
   ids: OrderIds;
-  /**
-   * The raw `listOpenOrders` rows behind `ids`, set only on `findOpen`'s
-   * activated-legs-no-master branch. `ids.stop`/`ids.target` collapse by
-   * role, so a duplicate row under the same leg reference (the adapter has
-   * no durable idempotency inside its ~15s retry window, doc 43) would be
-   * silently dropped from `ids` — `lookup` cancels off this list instead,
-   * matching `clearLegs`' `legs.map(leg => leg.OrderId)` on the same branch
-   * (#1215 round 3).
-   */
-  legs?: readonly SaxoOpenOrder[];
   side: 'buy' | 'sell';
   amount: number;
   normalized: NormalizedOrder;
 }
+
+/**
+ * `findOpen`'s activated-legs-no-master branch, and `legsFilled`'s
+ * audit-confirmed dormant-legs fill: only the protective legs are open, the
+ * master itself is gone. `legs` carries the raw `listOpenOrders` rows behind
+ * `ids` — `ids.stop`/`ids.target` collapse by role, so a duplicate row under
+ * the same leg reference (the adapter has no durable idempotency inside its
+ * ~15s retry window, doc 43) would be silently dropped from `ids` — `lookup`
+ * cancels off `legs` instead, matching `clearLegs`' `legs.map(leg =>
+ * leg.OrderId)` on the same branch (#1215 round 3). Split out as its own
+ * `kind` (#1563) rather than an optional field on one shared interface: a
+ * caller that needs the legs could no longer forget to check for them —
+ * the invariant used to be documented only in this comment, unchecked by the
+ * compiler.
+ */
+interface LookedUpActivatedLegsOrder {
+  readonly kind: 'legs';
+  ids: OrderIds;
+  legs: readonly SaxoOpenOrder[];
+  side: 'buy' | 'sell';
+  amount: number;
+  normalized: NormalizedOrder;
+}
+
+type LookedUpOrder = LookedUpMasterOrder | LookedUpActivatedLegsOrder;
 
 /** `findOpen`'s signal for a related-order pair found `NotWorking` with no master — see `lookup`. */
 interface DormantLegs {
@@ -1648,6 +1707,7 @@ function adopt(existing: LookedUpOrder, externalReference: string): Placed {
 /** Builds a `LookedUpOrder` from the master's own audit-trail row (`lookup`'s no-open-order fallback). */
 function fromActivity(activity: SaxoOrderActivity, externalReference: string): LookedUpOrder {
   return {
+    kind: 'master',
     ids: { entry: activity.OrderId },
     side: activity.BuySell === 'Buy' ? 'buy' : 'sell',
     amount: activity.Amount,
@@ -1678,7 +1738,9 @@ function legsFilled(
     else ids.target = leg.OrderId;
   }
   return {
+    kind: 'legs',
     ids,
+    legs,
     side: first.BuySell === 'Buy' ? 'sell' : 'buy',
     amount: first.Amount,
     normalized: {
