@@ -244,7 +244,13 @@ const PNL_RATE_SOURCE: PnlRateSource = 'static_sizing_rate';
  *
  * `allClosedTrades` and `unrealizedUsd` are both already scoped to `arm` and
  * to `asOf` by the caller — this function does no filtering of its own beyond
- * splitting `allClosedTrades` into today's slice.
+ * splitting `allClosedTrades` into today's slice. It runs `cumulativePnl`
+ * over that unfiltered population, unlike the arm-comparison panel's
+ * `performanceFor`, which runs the same function over rows `oneSizingRegime`
+ * and `modelledCostCharged` have already dropped from
+ * (`sqlite-arm-comparison-source.ts`) — see `PnlOverallWire`'s header
+ * (contracts/snapshot.ts) for why that is deliberate, not an oversight, and
+ * what it does to `net_gbp`/`max_drawdown_pct`/`trade_count` (#1616).
  *
  * Every money figure here is computed in USD (the currency `realized_pnl_net`
  * and `unrealized_pnl` are recorded in today — `ArmComparisonRow.basis`'s doc

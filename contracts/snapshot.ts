@@ -343,6 +343,34 @@ export type PnlRateSource = 'static_sizing_rate';
  * denominator: a headline with a positive `net_gbp` and a nonzero
  * `max_drawdown_pct` is not a contradiction, it is the ordinary case of an arm
  * that fell before recovering.
+ *
+ * **This reuses `cumulativePnl` but NOT its usual population (#1616).** The
+ * Feedback Loop's arm-comparison panel (`ArmPerformanceWire` above) feeds
+ * that same function rows that already passed `oneSizingRegime` and
+ * `modelledCostCharged` (`sqlite-arm-comparison-source.ts`); this headline
+ * feeds it every `closed_trades` row for the arm, unfiltered
+ * (`getAllClosedTrades`, sqlite-query-store.ts). The two can therefore report
+ * different `net_gbp`/`max_drawdown_pct` for the same arm and the same
+ * window, and the divergence is not symmetric:
+ *
+ * - `modelledCostCharged` drops rows only on the live arm — a control fill is
+ *   always priced by `SimulatedBrokerAdapter`, so `control` never loses a row
+ *   to it (`countCostBasisDrops`'s doc). Every row this drops from the live
+ *   arm was missing a cost the matched control paid, so this headline is
+ *   COST-OPTIMISTIC relative to the panel on the live arm only.
+ * - `oneSizingRegime` can drop rows from BOTH arms (a pre-#1112-cutover
+ *   `sizing_capital_ceiling = NULL` row), or make the panel throw outright on
+ *   a window straddling two declared ceilings — an all-time population is, if
+ *   anything, MORE likely to span two. This headline never throws only
+ *   because it never calls `oneSizingRegime` at all, not because its
+ *   population is somehow safer.
+ *
+ * Full parity would need this reader to run `oneSizingRegime` too, which
+ * needs `sizing_capital_ceiling` — a field `ClosedTrade`/`ClosedTradeRow` do
+ * not carry. Filtering on `modelled_cost_charged` alone, without it, would
+ * drop real trades from `trade_count` without reproducing the panel's
+ * number, so this type is deliberately left reading the wider, unfiltered
+ * population rather than a partial, still-wrong one.
  */
 export interface PnlOverallWire {
   /** Cumulative realized `realized_pnl_net` plus current open unrealized, in GBP. Signed. */
@@ -351,7 +379,13 @@ export interface PnlOverallWire {
   net_pct_of_book: number;
   /** Peak-to-trough fall of the REALIZED series only, as a positive fraction of the declared book. Zero when the series never fell below a prior peak. */
   max_drawdown_pct: number;
-  /** Every closed trade this arm has ever recorded, not windowed to `closed_trades` above. */
+  /**
+   * Every closed trade this arm has ever recorded, not windowed to
+   * `closed_trades` above — AND, on the live arm, not filtered the way the
+   * arm-comparison panel's `trade_count` is (#1616, see this interface's
+   * header). This figure can exceed the panel's live `trade_count` for the
+   * same window; that is not a bug to reconcile silently.
+   */
   trade_count: number;
 }
 
@@ -363,6 +397,11 @@ export interface PnlOverallWire {
  * No `max_drawdown_pct`: a single day's realized-plus-unrealized figure is a
  * snapshot, not a series with a peak to fall from — the drawdown concept
  * belongs to `PnlOverallWire`'s all-time series, not to this window.
+ *
+ * `realized_gbp`/`costs_gbp`/`trade_count` are a same-day filter over the
+ * SAME unfiltered `getAllClosedTrades` population as `PnlOverallWire`, not
+ * the arm-comparison panel's — see that interface's header (#1616) for what
+ * that means on the live arm.
  */
 export interface PnlTodayWire {
   /** `realized_gbp + unrealized_gbp`, signed. */

@@ -1014,6 +1014,42 @@ describe('buildSnapshot', () => {
     });
 
     /**
+     * If this starts failing because `buildPnlHeadline` gained
+     * `modelledCostCharged`/`oneSizingRegime` filtering, that is a deliberate
+     * reversal of #1616's resolution (`PnlOverallWire`'s header,
+     * contracts/snapshot.ts) — update the docs alongside the test.
+     */
+    it('counts a row the arm-comparison panel would drop for modelled_cost_charged: false', () => {
+      const trades = [
+        makeClosedTrade({ idempotency_key: 'charged', realized_pnl_net: 40 }),
+        makeClosedTrade({
+          idempotency_key: 'uncharged',
+          realized_pnl_net: 10,
+          modelled_cost_charged: false,
+        }),
+      ];
+      const store = fakeStore({ getAllClosedTrades: () => trades });
+
+      const snap = buildSnapshot(store, AS_OF, 'paper', 'live');
+
+      expect(snap.pnl.overall.trade_count).toBe(2);
+      expect(snap.pnl.overall.net_gbp).toBeCloseTo(50 / SIZING_USD_PER_GBP);
+    });
+
+    /**
+     * The other #1616 axis, `oneSizingRegime`, can't be pinned by a runtime
+     * assertion the way the cost axis above is: `ClosedTrade` carries no
+     * `sizing_capital_ceiling` field at all, which is exactly why full parity
+     * isn't implemented. That absence is the load-bearing fact, so pin it at
+     * compile time — if a future change adds the field, this starts failing
+     * ("unused @ts-expect-error"), which is the signal to revisit #1616.
+     */
+    it('has no sizing_capital_ceiling field on ClosedTrade for oneSizingRegime to filter on', () => {
+      // @ts-expect-error ClosedTrade carries no sizing_capital_ceiling — see PnlOverallWire's header (#1616)
+      makeClosedTrade({ sizing_capital_ceiling: 100 });
+    });
+
+    /**
      * The BST-boundary discriminator: 2026-07-16T00:30 local London time (BST,
      * UTC+1) is 2026-07-15T23:30Z — the PREVIOUS UTC calendar day. A plain
      * `toISOString().slice(0, 10)` day boundary would file this trade under
