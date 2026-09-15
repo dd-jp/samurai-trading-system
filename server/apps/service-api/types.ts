@@ -206,7 +206,19 @@ export interface DashboardSnapshotBuilder {
  * owned elsewhere (execution, debate engine, feedback loop, etc.).
  */
 export interface DashboardQueryStore {
+  /**
+   * Arm-less by scope (#1594): `debate_log` is written only by the live
+   * debate path (`debate-adapter.ts`) — the control arm's `DebateResult` is
+   * synthesized in memory and never written there — so this table cannot
+   * hold a control row for an `arm` parameter to filter.
+   */
   getRecentDebates(limit: number, asOf: Date): DebateLog[];
+  /**
+   * Arm-less by scope (#1594): reflects `current_tick`, persisted only by
+   * the live arm's `SequentialTickRunner`. The control arm's ticks live in
+   * its own in-memory, never-persisted store (`control-arm-wiring.ts`), so
+   * there is no control row this could ever surface.
+   */
   getTickStatus(asOf: Date): TickStatus | null;
   /**
    * #1592: `arm` is required, not optional — the #753/#1318 "no read returns
@@ -228,6 +240,11 @@ export interface DashboardQueryStore {
    * calls this with the SAME closed trades it is about to render, so the
    * fills returned are guaranteed complete for those trades rather than
    * coincidentally so.
+   *
+   * Arm-less by scope (#1594): scoped by `idempotencyKeys`, not by an arm
+   * predicate — the caller (`buildSnapshot`) passes only the keys of an
+   * already arm-scoped `getRecentClosedTrades` read, so the arm boundary is
+   * enforced by the caller, not by a column here.
    */
   getFillsForTrades(idempotencyKeys: readonly string[], asOf: Date): Fill[];
   /**
@@ -298,6 +315,9 @@ export interface DashboardQueryStore {
    * live-money operator surface. Throws for the first such instrument in
    * `instruments` order, so the failure is identical to what the per-position
    * loop produced.
+   *
+   * Arm-less by scope (#1594): market data (`latest_mark`) has no arm
+   * dimension — both arms price against the same observed market.
    */
   getMarks(instruments: readonly string[], asOf: Date): Map<string, Mark>;
   /**
@@ -305,6 +325,9 @@ export interface DashboardQueryStore {
    * Alpaca/Polygon tiles, because `llm_spend` genuinely IS a shared-store
    * table written by another component (the debate engine's LLM client) — the
    * same relationship this store has to `open_positions` or `verdict_log`.
+   *
+   * Arm-less by scope (#1594): the control arm calls no model, so it never
+   * writes a row here — this table cannot hold control-arm spend.
    */
   getLlmSpend(asOf: Date): LlmSpendSummary;
   /**

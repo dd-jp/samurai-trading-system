@@ -422,6 +422,48 @@ describe('buildSnapshot', () => {
     });
   });
 
+  // #1594: the remaining reads' own arm scoping. Mirrors the #1592 block
+  // above — a store that records which arm each method was called with,
+  // proving `buildSnapshot` forwards its own `arm` parameter rather than
+  // hardcoding 'live' at any of these five call sites.
+  describe('arm scoping for the remaining reads (#1594)', () => {
+    it('passes the requested arm to getVerdictHistory, getRiskCritics, getAttribution, getDailyMetrics and getPipelineActivity', () => {
+      const seenArms: Record<string, string> = {};
+      const store = fakeStore({
+        getVerdictHistory: (_limit, _asOf, arm) => {
+          seenArms.verdictHistory = arm;
+          return [];
+        },
+        getRiskCritics: (_limit, _asOf, arm) => {
+          seenArms.riskCritics = arm;
+          return [];
+        },
+        getAttribution: (_asOf, arm) => {
+          seenArms.attribution = arm;
+          return {};
+        },
+        getDailyMetrics: (_asOf, arm) => {
+          seenArms.dailyMetrics = arm;
+          return { ...METRICS };
+        },
+        getPipelineActivity: (_maxLanes, _lookbackMs, _asOf, arm) => {
+          seenArms.pipelineActivity = arm;
+          return { universe: [], events: [], live: [] };
+        },
+      });
+
+      buildSnapshot(store, AS_OF, 'paper', 'control');
+
+      expect(seenArms).toEqual({
+        verdictHistory: 'control',
+        riskCritics: 'control',
+        attribution: 'control',
+        dailyMetrics: 'control',
+        pipelineActivity: 'control',
+      });
+    });
+  });
+
   it('renders an empty state (zero rows, not a throw) when the store has no data', () => {
     const snap = buildSnapshot(fakeStore(), AS_OF, 'paper', 'live');
 
