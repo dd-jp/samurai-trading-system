@@ -1170,6 +1170,8 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     const RESTING_STATUSES = ['new', 'accepted', 'pending_new', 'accepted_for_bidding'];
     let live: AlpacaOrder | null = null;
     let settled: AlpacaOrder | null = null;
+    let settledAttempt = -1;
+    let lastAllocated = -1;
     let freeAttempt: number | null = null;
 
     for (let attempt = 0; attempt < MAX_REARM_ATTEMPTS; attempt += 1) {
@@ -1180,10 +1182,12 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         freeAttempt = attempt;
         break;
       }
+      lastAllocated = attempt;
 
       const priorState = mapOrderState(prior.status);
       if (priorState === 'filled' || priorState === 'partially_filled') {
         settled = prior;
+        settledAttempt = attempt;
         continue;
       }
       if (RESTING_STATUSES.includes(prior.status) && rearmOrderMatches(prior, qty, stop, target)) {
@@ -1212,7 +1216,16 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
 
     // `live` over `settled`: see the two-slot note above. Only one of these is
     // ever protection that can still fire.
-    const adopted = live ?? settled;
+    //
+    // A `settled` prior counts ONLY when it is the NEWEST id the lot has
+    // allocated. Below the newest it proves nothing about what is protecting
+    // the lot NOW: the ids above it have since been walked, and any of them
+    // that was live-but-stale-sized was just CANCELLED above. Adopting it
+    // there would return success having retired the only live leg, and the
+    // caller clears the #549 marker on that return — a naked residual that
+    // nothing is watching. When the walk has cancelled its way past the
+    // newest id, the answer is to place, not to reach backwards.
+    const adopted = live ?? (settledAttempt === lastAllocated ? settled : null);
     if (adopted !== null) {
       this.rearmedLegs.set(clientOrderId, adopted.id);
       // Same column semantics as the fresh-place path below — the OCO's

@@ -3150,6 +3150,39 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       expect(venue.cancelOrder).toHaveBeenLastCalledWith('oco-2');
       expect(venue.resting()).toEqual([]);
     });
+
+    /**
+     * The other half of finding 2's fix, and the hole the first draft of it
+     * opened: a `settled` prior may only be adopted when it is the NEWEST id
+     * the lot has allocated.
+     *
+     * With attempt 0 `filled` and attempt 1 resting at a STALE size, the walk
+     * cancels attempt 1 (correctly — it is mis-sized) and then reaches the
+     * gap. Honouring attempt 0's filled row there would report protection
+     * confirmed while the lot has no live leg at all: `maybeRearmResidual`
+     * clears the #549 marker on that return, so the residual goes naked AND
+     * unwatched. Adopting a stale terminal row must never be the answer to
+     * having just cancelled the only live one — the walk places instead.
+     */
+    it('places a replacement rather than adopting a filled row below the newest id', async () => {
+      const venue = measuredAlpacaVenue();
+      const adapter = adapterWith(makeClient(venue));
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
+      venue.rows.set('key-1:rearm', {
+        ...venue.rows.get('key-1:rearm')!,
+        status: 'filled',
+        filled_qty: '6',
+      });
+
+      // The residual shrank again, so attempt 1 is now mis-sized too.
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 3, 95, 110);
+
+      expect(venue.rows.get('key-1:rearm-1')?.status).toBe('canceled');
+      expect(venue.resting().map((row) => row.client_order_id)).toEqual(['key-1:rearm-2']);
+      expect(venue.resting().map((row) => row.qty)).toEqual(['3']);
+    });
   });
 
   // #586: a crypto residual never reaches `submitOcoOrder` — the order class
