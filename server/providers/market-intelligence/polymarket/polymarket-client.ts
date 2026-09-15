@@ -74,13 +74,13 @@ const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
  */
 const DEFAULT_PACING = { capacity: 20, refillPerSecond: 5 } as const;
 
-/** One Polymarket binary market, decoded off the Gamma wire shape. */
+/** One Polymarket binary market, decoded off the Gamma wire shape */
 export interface PolymarketMarket {
   slug: string;
   question: string;
-  /** Outcome names, in token order — `['Yes', 'No']` for every market tracked. */
+  /** Outcome names, in token order — `['Yes', 'No']` for every market tracked */
   outcomes: string[];
-  /** Current implied probabilities, index-aligned with `outcomes`. */
+  /** Current implied probabilities, index-aligned with `outcomes` */
   outcomePrices: number[];
   /** CLOB token ids, index-aligned with `outcomes`. This is what `/prices-history` keys on. */
   tokenIds: string[];
@@ -91,14 +91,14 @@ export interface PolymarketMarket {
   /** 24h traded volume in USDC. `undefined` when the wire omits it — which it does on quiet markets. */
   volume24hr: number | undefined;
   liquidity: number | undefined;
-  /** The vendor's revision stamp — the agent's staleness guard reads this. */
+  /** The vendor's revision stamp — the agent's staleness guard reads this */
   updatedAt: Date | undefined;
   closed: boolean;
   /** The market object as fetched, for the archive. Not re-parsed anywhere. */
   payload: string;
 }
 
-/** One point of a market's probability history. */
+/** One point of a market's probability history */
 export interface PolymarketPricePoint {
   at: Date;
   probability: number;
@@ -124,7 +124,7 @@ function requestInit(): RequestInit {
   return { redirect: 'error', signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) };
 }
 
-/** Decodes one of Gamma's JSON-encoded-string array fields. */
+/** Decodes one of Gamma's JSON-encoded-string array fields */
 function decodeJsonArray(raw: unknown, field: string, slug: string): string[] {
   if (Array.isArray(raw)) return raw.map((entry) => String(entry));
   if (typeof raw !== 'string') {
@@ -197,7 +197,7 @@ export class PolymarketClient {
     const tokenIds = decodeJsonArray(raw.clobTokenIds, 'clobTokenIds', marketSlug);
     // Checked rather than trusted: an outcome/price/token misalignment would
     // silently take the delta of the WRONG side of the book, which reaches an
-    // analyst as a correctly-formed and exactly-inverted signal.
+    // analyst as a correctly-formed and exactly-inverted signal
     if (outcomes.length !== prices.length || outcomes.length !== tokenIds.length) {
       throw new Error(
         `polymarket: market '${marketSlug}' has ${outcomes.length} outcomes but ` +
@@ -257,10 +257,10 @@ export class PolymarketClient {
     if (!response.ok) {
       throw new Error(`polymarket: ${url} returned HTTP ${response.status}`);
     }
-    // Bounded before the body is parsed whenever the server declares a length.
+    // Bounded before the body is parsed whenever the server declares a length
     // The post-read check below is what catches a missing or understated
     // header — the same two-sided shape `GdeltGkgClient` uses, with the same
-    // admitted limit: an undeclared oversized body is still materialised once.
+    // admitted limit: an undeclared oversized body is still materialised once
     const declared = Number(response.headers.get('content-length') ?? '0');
     if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) {
       throw new Error(`polymarket: ${url} declared ${declared} bytes`);

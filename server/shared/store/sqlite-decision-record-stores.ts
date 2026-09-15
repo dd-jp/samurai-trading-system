@@ -55,7 +55,7 @@ export class SqliteTraderLogStore implements TraderLogStore {
         record.cosine_precedent?.weighted_mean_r ?? null,
         // `no_precedent` is a real tri-state here: 1, 0, or NULL for "the
         // retrieval never ran". Coercing the third to 0 would claim precedent
-        // was found and simply not recorded.
+        // was found and simply not recorded
         record.cosine_precedent === null ? null : record.cosine_precedent.no_precedent ? 1 : 0,
         record.atr,
         record.entry,

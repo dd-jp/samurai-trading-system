@@ -73,7 +73,7 @@ describe('AnthropicLlmClient prompt capture', () => {
     const wireContent = sent?.messages[0]?.content;
     expect(sink.records[0]?.prompt).toBe(wireContent);
     // …and that string is still what `renderMessageContent` produces, so the
-    // hoist did not quietly change what the provider is asked.
+    // hoist did not quietly change what the provider is asked
     expect(wireContent).toBe(renderMessageContent(request()));
   });
 
@@ -107,7 +107,7 @@ describe('AnthropicLlmClient prompt capture', () => {
     // metering used to run ABOVE that line. If the throw skipped the meter,
     // `llm_spend` would lose a billed call and `SqliteSpendCap` — which sums
     // that table — would silently understate the budget. The `finally` is what
-    // this pins; the call is still allowed to fail.
+    // this pins; the call is still allowed to fail
     const wire: AnthropicMessagesClient = {
       createMessage: vi.fn().mockResolvedValue({ usage: { input_tokens: 120, output_tokens: 30 } }),
     };
@@ -147,7 +147,7 @@ describe('AnthropicLlmClient prompt capture', () => {
   it('does not fail the call when the sink throws while capturing', async () => {
     // The boundary guarantee, unchanged by #1035: `LlmSpendSink` is a public
     // interface, so the "recording must never fail a call" rule is enforced
-    // here rather than trusted per-implementation.
+    // here rather than trusted per-implementation
     const wire: AnthropicMessagesClient = {
       createMessage: vi.fn().mockResolvedValue(usageResponse('good')),
     };

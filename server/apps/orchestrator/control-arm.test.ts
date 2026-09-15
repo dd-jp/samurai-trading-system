@@ -60,7 +60,7 @@ function tickContext(overrides: Partial<TickContext> = {}): TickContext {
     logger: recordingLogger(),
     // No cast: `AuditLog` declares `record()` and nothing else — `getByTraceId`
     // belongs to the concrete `SqliteAuditLog`, and stubbing it here was what
-    // made a cast look necessary.
+    // made a cast look necessary
     auditLog: { record: () => undefined },
     currentTickStore: new InMemoryCurrentTickStore(),
     ...overrides,
@@ -76,7 +76,7 @@ describe('AnalystViewRelay', () => {
     expect(relay.get('a:control')[0]?.confidence).toBe(0.1);
     expect(relay.get('b:control')[0]?.confidence).toBe(0.9);
     // Never undefined: an absent pass reads as a quorum skip, which is what a
-    // control pass with nothing to decide from should be.
+    // control pass with nothing to decide from should be
     expect(relay.get('c:control')).toEqual([]);
   });
 
@@ -132,7 +132,7 @@ describe('buildControlDebateStep', () => {
    * control arm's `analysts` step already returned the relayed set, so both
    * paths agree — but reading the relay is what guarantees the control decides
    * from the LIVE pass's views rather than from anything the runner might
-   * reconstruct.
+   * reconstruct
    */
   it('decides from the relay, not from whatever the runner passes as views', async () => {
     const relay = new AnalystViewRelay();
@@ -163,7 +163,7 @@ describe('buildControlDebateStep', () => {
     expect(result.direction).toBe('neutral');
     expect(result.confidence).toBe(0);
     // The Trader declines a neutral direction on its own existing branch — no
-    // second entry gate anywhere in the control's path.
+    // second entry gate anywhere in the control's path
   });
 });
 
@@ -217,10 +217,10 @@ describe('buildControlArmStep', () => {
 
     expect(seen[0]?.trace_id).toBe(`trace-live${CONTROL_TRACE_SUFFIX}`);
     // Its OWN progress store — a control pass writing the live `current_tick`
-    // row would clobber the live pass's progress for the same instrument.
+    // row would clobber the live pass's progress for the same instrument
     expect(seen[0]?.currentTickStore).toBe(currentTickStore);
     expect(seen[0]?.currentTickStore).not.toBe(ctx.currentTickStore);
-    // Same clock and same audit log: the two arms must be joinable.
+    // Same clock and same audit log: the two arms must be joinable
     expect(seen[0]?.clock).toBe(ctx.clock);
     expect(seen[0]?.auditLog).toBe(ctx.auditLog);
   });
@@ -239,7 +239,7 @@ describe('buildControlArmStep', () => {
       views: [view()],
     });
     // A tick pass: no `decision_bar`, so the control runs its own exit check —
-    // without which its lots would never reach ADR-0014's flat-by-close.
+    // without which its lots would never reach ADR-0014's flat-by-close
     await step({ signal: SIGNAL, ctx: tickContext() });
 
     expect(seen[0]?.decision_bar).toBe(decisionBar);
@@ -276,11 +276,11 @@ describe('buildControlArmStep', () => {
     const logged = logger.entries.filter((entry) => entry.stage === 'control_arm');
     expect(logged).toHaveLength(1);
     // #1089: 'error', not 'warn' — a contained crash from any cause must
-    // surface above the level an unattended soak's operator actually reads.
+    // surface above the level an unattended soak's operator actually reads
     expect(logged[0]?.level).toBe('error');
     expect(logged[0]?.trace_id).toBe(`trace-live${CONTROL_TRACE_SUFFIX}`);
     expect(logged[0]?.message).toContain('BTC-USD');
-    // A crashed pass must not leave views behind for a later one to decide from.
+    // A crashed pass must not leave views behind for a later one to decide from
     expect(relay.get(`trace-live${CONTROL_TRACE_SUFFIX}`)).toEqual([]);
   });
 

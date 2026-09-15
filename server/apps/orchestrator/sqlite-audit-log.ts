@@ -42,7 +42,7 @@ interface AuditLogRow {
   input_digest: string;
   output_digest: string;
   timestamp: string;
-  /** NULL for rows written before migration 0013, and for non-tick audit rows. */
+  /** NULL for rows written before migration 0013, and for non-tick audit rows */
   instrument: string | null;
   asset_class: AssetClass | null;
 }

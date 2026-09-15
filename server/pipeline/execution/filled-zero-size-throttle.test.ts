@@ -22,7 +22,7 @@ const at = (offsetMs: number): Date => new Date(T0.getTime() + offsetMs);
 describe('FilledZeroSizeThrottle', () => {
   it('stays quiet for the first two observations — not a warning-on-first design (#1087 review, pass 2)', () => {
     // Threshold 3, not 1: `ingest-fills.ts`'s own doc names "once or twice"
-    // of this as ordinary live-arm propagation lag, not a defect.
+    // of this as ordinary live-arm propagation lag, not a defect
     const throttle = new FilledZeroSizeThrottle();
     expect(throttle.observe('lot-1', at(0))).toEqual({ announce: null, consecutive: 1 });
     expect(throttle.observe('lot-1', at(1))).toEqual({ announce: null, consecutive: 2 });
@@ -30,7 +30,7 @@ describe('FilledZeroSizeThrottle', () => {
 
   it('the alert-after threshold is 3, covering the documented "once or twice" benign lag with a poll of margin', () => {
     // Pins the constant, not just the behavior: a reader changing this
-    // constant should see this test name it explicitly.
+    // constant should see this test name it explicitly
     expect(ALERT_AFTER_CONSECUTIVE_ZERO_SIZE).toBe(3);
   });
 
@@ -38,7 +38,7 @@ describe('FilledZeroSizeThrottle', () => {
     // The regression this test exists for: mutating the throttle (or its
     // caller) so the first crossing announces at 'info' instead of 'warn'
     // must fail here, or a bounded-repeat/severity regression is
-    // indistinguishable from #1087's original alert having been deleted.
+    // indistinguishable from #1087's original alert having been deleted
     const throttle = new FilledZeroSizeThrottle();
     throttle.observe('lot-1', at(0));
     throttle.observe('lot-1', at(1));
@@ -53,7 +53,7 @@ describe('FilledZeroSizeThrottle', () => {
 
     // 40 further polls, all well inside the reannounce window — old
     // bounded-repeat-at-warn cadence (every 8th) would have fired ~5 more
-    // warns in this span; the fix must stay silent throughout.
+    // warns in this span; the fix must stay silent throughout
     const announcements: (string | null)[] = [];
     for (let i = 1; i <= 40; i += 1) {
       announcements.push(throttle.observe('lot-1', at(2 + i * 1_000)).announce);
@@ -62,7 +62,7 @@ describe('FilledZeroSizeThrottle', () => {
 
     // Just past the reannounce interval: one info line, carrying the grown
     // consecutive count — the wedge is still visible, at a level that
-    // cannot flood `warn`.
+    // cannot flood `warn`
     const reannounced = throttle.observe('lot-1', at(2 + FILLED_ZERO_SIZE_REANNOUNCE_EVERY_MS + 1));
     expect(reannounced.announce).toBe('info');
     expect(reannounced.consecutive).toBeGreaterThan(3);
@@ -83,7 +83,7 @@ describe('FilledZeroSizeThrottle', () => {
     throttle.observe('lot-1', at(1));
     throttle.observe('lot-1', at(2)); // consecutive: 3, warns
     // lot-2's FIRST observation is still below threshold, unaffected by
-    // lot-1's count — no shared state between lots.
+    // lot-1's count — no shared state between lots
     expect(throttle.observe('lot-2', at(3))).toEqual({ announce: null, consecutive: 1 });
   });
 
@@ -95,7 +95,7 @@ describe('FilledZeroSizeThrottle', () => {
     throttle.observe('lot-2', at(3));
     throttle.observe('lot-2', at(4));
     // lot-2 reaching the same threshold warns too — the silence is per-lot,
-    // not a single global "one warning ever" latch.
+    // not a single global "one warning ever" latch
     expect(throttle.observe('lot-2', at(5))).toEqual({ announce: 'warn', consecutive: 3 });
   });
 
@@ -108,7 +108,7 @@ describe('FilledZeroSizeThrottle', () => {
     expect(throttle.observe('lot-1', at(3))).toEqual({ announce: null, consecutive: 1 });
     throttle.observe('lot-1', at(4));
     // A second episode for the same lot (cleared, then wedged again) warns
-    // again on its own 3rd — clearing genuinely ends the prior episode.
+    // again on its own 3rd — clearing genuinely ends the prior episode
     expect(throttle.observe('lot-1', at(5))).toEqual({ announce: 'warn', consecutive: 3 });
   });
 
@@ -140,7 +140,7 @@ describe('FilledZeroSizeThrottle', () => {
     // path that never calls clear() (an out-of-band store repair, e.g.
     // #1186 — see the class doc) leaves the episode exactly like this:
     // permanently `warned`, so every further crossing announces `info` at
-    // most, never `warn` again.
+    // most, never `warn` again
     let t = 2;
     const announcements: (string | null)[] = [];
     for (let i = 0; i < 10; i += 1) {

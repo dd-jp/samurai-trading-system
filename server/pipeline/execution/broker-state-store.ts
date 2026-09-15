@@ -76,7 +76,7 @@ export interface BrokerBracketRecord {
   /**
    * The originating `NativeBracketRequest`, or null on a row learned from the
    * venue rather than from a submit (Alpaca/Saxo `getOrder`), which knows the
-   * order ids and not the request that produced them.
+   * order ids and not the request that produced them
    */
   request: BrokerBracketRequestFields | null;
   armed_qty: number | null;
@@ -96,13 +96,13 @@ export interface BrokerBracketRecord {
  */
 export type BrokerBracketRequestFields = Omit<NativeBracketRequest, 'client_order_id'>;
 
-/** The journalled half of a bracket request — the one place it is spelled out. */
+/** The journalled half of a bracket request — the one place it is spelled out */
 export function toRequestFields(order: NativeBracketRequest): BrokerBracketRequestFields {
   const { client_order_id: _clientOrderId, ...fields } = order;
   return fields;
 }
 
-/** The venue order ids a rehydration path learns without the request. */
+/** The venue order ids a rehydration path learns without the request */
 export interface BrokerBracketOrderIds {
   entry_order_id: string | null;
   stop_order_id: string | null;
@@ -119,28 +119,28 @@ export interface BrokerBracketOrderIds {
  */
 export interface UnpricedFillObservation {
   client_order_id: string;
-  /** The venue order id the fill would have been booked under. */
+  /** The venue order id the fill would have been booked under */
   broker_fill_id: string;
   leg: NormalizedFill['leg'];
   instrument: string;
-  /** The quantity the venue claims filled — what makes this a contradiction. */
+  /** The quantity the venue claims filled — what makes this a contradiction */
   qty: number;
 }
 
-/** A persisted `UnpricedFillObservation` plus its age-out clock. */
+/** A persisted `UnpricedFillObservation` plus its age-out clock */
 export interface UnpricedFillRecord extends UnpricedFillObservation {
   /** Set once, on first observation. Never advanced — this IS the clock. */
   first_seen_at: Date;
-  /** Refreshed each sweep that still sees it unpriced; diagnostic only. */
+  /** Refreshed each sweep that still sees it unpriced; diagnostic only */
   last_seen_at: Date;
-  /** Null until an age-out alert has been delivered for this fill. */
+  /** Null until an age-out alert has been delivered for this fill */
   alerted_at: Date | null;
 }
 
 export interface BrokerStateStore {
-  /** Every bracket this venue has ever recorded, oldest first. */
+  /** Every bracket this venue has ever recorded, oldest first */
   loadBrackets(venue: BrokerVenue): BrokerBracketRecord[];
-  /** Full-row upsert — the submit path and every alpaca-crypto-emulation phase transition. */
+  /** Full-row upsert — the submit path and every alpaca-crypto-emulation phase transition */
   saveBracket(record: BrokerBracketRecord): void;
   /**
    * Partial upsert for the REHYDRATION paths: record the venue's order ids for
@@ -161,16 +161,16 @@ export interface BrokerStateStore {
    * across restarts, must accumulate age rather than resetting it.
    */
   recordUnpricedFill(venue: BrokerVenue, observation: UnpricedFillObservation, seenAt: Date): void;
-  /** Every still-unresolved unpriced fill for this venue, oldest first. */
+  /** Every still-unresolved unpriced fill for this venue, oldest first */
   loadUnpricedFills(venue: BrokerVenue): UnpricedFillRecord[];
-  /** Records that the age-out alert for this fill was actually delivered. */
+  /** Records that the age-out alert for this fill was actually delivered */
   markUnpricedFillAlerted(
     venue: BrokerVenue,
     clientOrderId: string,
     brokerFillId: string,
     alertedAt: Date,
   ): void;
-  /** Drops the row: the venue priced the fill and it has been ingested. */
+  /** Drops the row: the venue priced the fill and it has been ingested */
   clearUnpricedFill(venue: BrokerVenue, clientOrderId: string, brokerFillId: string): void;
 }
 
@@ -202,7 +202,7 @@ export class InMemoryBrokerStateStore implements BrokerStateStore {
       // Mirrors the SQL implementation's `COALESCE(excluded, existing)` on the
       // request columns: a save that carries no request must never blank one a
       // submit recorded. Kept in step deliberately — a test double that is
-      // merely *nearly* the real store is how a suite certifies a bug.
+      // merely *nearly* the real store is how a suite certifies a bug
       request: record.request ?? existing?.request ?? null,
     });
   }
@@ -225,7 +225,7 @@ export class InMemoryBrokerStateStore implements BrokerStateStore {
       // reports no child (because the venue has since cancelled it) must not
       // blank an id a submit recorded, or the adapter's own `legs`/order-id
       // index loses it on the next restart and its executions go unclaimed —
-      // #295, reinstated.
+      // #295, reinstated
       entry_order_id: ids.entry_order_id ?? existing?.entry_order_id ?? null,
       stop_order_id: ids.stop_order_id ?? existing?.stop_order_id ?? null,
       target_order_id: ids.target_order_id ?? existing?.target_order_id ?? null,
@@ -238,10 +238,10 @@ export class InMemoryBrokerStateStore implements BrokerStateStore {
     this.unpriced.set(rowKey, {
       ...observation,
       venue,
-      // Mirrors the SQL implementation's untouched `first_seen_at` on conflict.
+      // Mirrors the SQL implementation's untouched `first_seen_at` on conflict
       // Kept in step deliberately: a test double whose clock resets where the
       // real store's does not is how a suite certifies the bug it was written
-      // to catch.
+      // to catch
       first_seen_at: existing?.first_seen_at ?? seenAt,
       last_seen_at: seenAt,
       alerted_at: existing?.alerted_at ?? null,
@@ -252,7 +252,7 @@ export class InMemoryBrokerStateStore implements BrokerStateStore {
     // Mirrors the SQL `ORDER BY first_seen_at, rowid`: sort ascending on the
     // clock, and let Array.prototype.sort's guaranteed stability do the
     // tiebreak — the pre-sort order here is Map iteration order, i.e.
-    // insertion order, the double's analogue of rowid (#1340).
+    // insertion order, the double's analogue of rowid (#1340)
     return [...this.unpriced.values()]
       .filter((row) => row.venue === venue)
       .map(({ venue: _venue, ...row }) => row)

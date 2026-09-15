@@ -71,7 +71,7 @@ describe('computeConvictionScore', () => {
     // Directional consensus: mean(1, 0) = 0.5 on a [-1,1] axis. (The pre-#625
     // spread metric produced 0.5 here too, by coincidence rather than by
     // agreement — this comment described that formula until #676.)
-    // Evidence strength: avg key points 1.5/3 = 0.5, avg confidence 0.5 -> 0.5.
+    // Evidence strength: avg key points 1.5/3 = 0.5, avg confidence 0.5 -> 0.5
     // score = 0.6 * 0.5 + 0.4 * 0.5 = 0.5
     expect(computeConvictionScore(views, roundStances, undefined)).toBe(0.5);
   });
@@ -132,8 +132,8 @@ describe('computeConvictionScore', () => {
       { analyst_id: 'a3', round: 1, stance: 'neutral' },
     ];
 
-    // Directional consensus: mean(1, 1, 0) = 0.667 on a [-1,1] axis.
-    // Evidence strength: 1.0 (saturated key points, full confidence).
+    // Directional consensus: mean(1, 1, 0) = 0.667 on a [-1,1] axis
+    // Evidence strength: 1.0 (saturated key points, full confidence)
     // score = 0.6 * 0.667 + 0.4 * 1 = 0.8
     //
     // Was 0.7 before #625, under `1 - spread/2`. The difference IS the fix:
@@ -147,7 +147,7 @@ describe('computeConvictionScore', () => {
      * The production stock shape measured in #625: the technical analyst forms
      * a directional view, while sentiment and fundamental are pinned neutral at
      * confidence 0.05 by the #436 NO_DATA branch because the Market
-     * Intelligence store returns `[]` on every refresh (#552).
+     * Intelligence store returns `[]` on every refresh (#552)
      */
     function stockDesk(technicalDirection: 'bullish' | 'bearish' | 'neutral'): AnalystView[] {
       const absent = (id: string, type: string): AnalystView =>
@@ -176,7 +176,7 @@ describe('computeConvictionScore', () => {
     }
 
     // The real shipped floor, not a copy — a config change must break these
-    // gating tests rather than let them keep passing against a stale number.
+    // gating tests rather than let them keep passing against a stale number
     const CONVICTION_FLOOR = DEFAULT_TRADER_CONFIG.conviction_floor;
 
     it('defect 1 — a stock with a directional signal the mediator agrees with clears the floor', () => {
@@ -195,7 +195,7 @@ describe('computeConvictionScore', () => {
       const abstaining = computeConvictionScore(views, [], 'neutral');
 
       // Pre-#625 all three were identical: the adapter echoed analyst input
-      // directions back as round stances, so the debate contributed zero.
+      // directions back as round stances, so the debate contributed zero
       expect(agreeing).toBeGreaterThan(abstaining);
       expect(abstaining).toBeGreaterThan(dissenting);
     });
@@ -205,7 +205,7 @@ describe('computeConvictionScore', () => {
       const directional = computeConvictionScore(stockDesk('bullish'), [], 'bullish');
 
       // Pre-#625 this was inverted: all-neutral had zero spread and scored
-      // ~0.81-0.85, while a real directional opinion collapsed to ~0.53.
+      // ~0.81-0.85, while a real directional opinion collapsed to ~0.53
       expect(silent).toBeLessThan(directional);
       expect(silent).toBeLessThan(CONVICTION_FLOOR);
     });
@@ -213,7 +213,7 @@ describe('computeConvictionScore', () => {
     it('a mediator override with no analyst backing cannot authorise a trade', () => {
       // The only branch with headroom above the floor pre-#625, and the one
       // that produced both observed bearish debates — in each, the mediator
-      // emitted a direction no analyst agreed with.
+      // emitted a direction no analyst agreed with
       const score = computeConvictionScore(stockDesk('neutral'), [], 'bearish');
 
       expect(score).toBeLessThan(CONVICTION_FLOOR);
@@ -224,14 +224,14 @@ describe('computeConvictionScore', () => {
       // mediator vote used to supply a lean of 1/(n+1) out of nothing — 0.55
       // (exactly the floor) on a three-analyst desk, 0.60 (clearing outright)
       // on a two-analyst desk. `decide.ts` gates on `confidence <
-      // conviction_floor`, so the exact tie AUTHORISED the trade.
+      // conviction_floor`, so the exact tie AUTHORISED the trade
       //
       // #683 implements Option 1: the mediator amplifies an existing analyst
       // lean but cannot create one. With the analysts' own directional mean at
       // exactly 0, `computeDirectionalConsensus` now returns 0 regardless of
       // what the mediator says, so the whole score is capped at
       // `EVIDENCE_WEIGHT` (0.4) — well under the floor, and identically so at
-      // both desk sizes, closing the desk-size dependency along with the hole.
+      // both desk sizes, closing the desk-size dependency along with the hole
       const maxEvidence = (id: string): AnalystView =>
         makeView({
           analyst_id: id,
@@ -245,7 +245,7 @@ describe('computeConvictionScore', () => {
       const twoAnalystDesk = [maxEvidence('a1'), maxEvidence('a2')];
 
       // Evidence strength is saturated (3 key points, confidence 1) for both
-      // desks, so the ceiling is exactly EVIDENCE_WEIGHT (0.4) either way.
+      // desks, so the ceiling is exactly EVIDENCE_WEIGHT (0.4) either way
       expect(computeConvictionScore(threeAnalystDesk, [], 'bearish')).toBeCloseTo(0.4, 10);
       expect(computeConvictionScore(twoAnalystDesk, [], 'bearish')).toBeCloseTo(0.4, 10);
       expect(computeConvictionScore(threeAnalystDesk, [], 'bearish')).toBeLessThan(
@@ -254,7 +254,7 @@ describe('computeConvictionScore', () => {
       expect(computeConvictionScore(twoAnalystDesk, [], 'bearish')).toBeLessThan(CONVICTION_FLOOR);
 
       // Holds for every mediator stance, not just 'bearish' — a neutral desk
-      // cannot be walked over the floor by the mediator alone, at any size.
+      // cannot be walked over the floor by the mediator alone, at any size
       for (const mediator of ['bullish', 'neutral', 'bearish'] as const) {
         expect(computeConvictionScore(threeAnalystDesk, [], mediator)).toBeLessThan(
           CONVICTION_FLOOR,
@@ -266,7 +266,7 @@ describe('computeConvictionScore', () => {
     it('#683 — the mediator can still amplify a genuine (non-zero) analyst lean', () => {
       // The fix must not regress defect 2/#625: when the analysts DO have a
       // real (non-zero) mean lean, the mediator remains an equal participant
-      // that can move the score up or down, same as before #683.
+      // that can move the score up or down, same as before #683
       const desk = [
         makeView({ analyst_id: 'a1', direction: 'bullish', confidence: 1, key_points: [] }),
         makeView({ analyst_id: 'a2', direction: 'neutral', confidence: 1, key_points: [] }),
@@ -285,7 +285,7 @@ describe('computeConvictionScore', () => {
       // "Analysts' own mean is 0" is broader than "every analyst neutral": a
       // desk that cancels out exactly (one bullish, one bearish) has no net
       // lean either, and the mediator must not be able to manufacture one from
-      // that symmetric disagreement.
+      // that symmetric disagreement
       const cancelledDesk = [
         makeView({ analyst_id: 'a1', direction: 'bullish', confidence: 1, key_points: [] }),
         makeView({ analyst_id: 'a2', direction: 'bearish', confidence: 1, key_points: [] }),
@@ -293,14 +293,14 @@ describe('computeConvictionScore', () => {
 
       // 0.4 is `EVIDENCE_WEIGHT`, deliberately restated as a literal rather
       // than imported: this is the module's own INVARIANT, and importing the
-      // constant would make the assertion move with any retune of it.
+      // constant would make the assertion move with any retune of it
       expect(computeConvictionScore(cancelledDesk, [], 'bullish')).toBeLessThanOrEqual(0.4);
       expect(computeConvictionScore(cancelledDesk, [], 'bearish')).toBeLessThanOrEqual(0.4);
     });
 
     it('with no directional lean the score cannot reach any shipped floor', () => {
       // Structural, not a tuned threshold: the first term is 0 without a lean,
-      // so the score is capped at EVIDENCE_WEIGHT = 0.4.
+      // so the score is capped at EVIDENCE_WEIGHT = 0.4
       const perfectEvidenceNoDirection = [
         makeView({
           analyst_id: 'a1',
@@ -403,7 +403,7 @@ describe('computeConvictionScore', () => {
       // the two-live-one-mute score must equal the two-live-only score,
       // because the excluded analyst contributes nothing to
       // `computeEvidenceStrength` either way — only to the (honest) neutral
-      // vote in the consensus term.
+      // vote in the consensus term
       const twoLiveOnly = [
         makeView({ analyst_id: 'tech', direction: 'bullish', confidence: 0.9 }),
         makeView({ analyst_id: 'fund', direction: 'bullish', confidence: 0.9 }),
@@ -417,7 +417,7 @@ describe('computeConvictionScore', () => {
       // (and should not) undo — see computeDirectionalConsensus's doc
       // comment. The claim under test is narrower: adding the mute analyst
       // must not pull the score DOWN via the evidence term, which a
-      // regression to averaging it in would do.
+      // regression to averaging it in would do
       expect(withMute).toBeGreaterThan(withoutMute * 0.6);
       expect(withMute).toBeGreaterThan(CONVICTION_FLOOR);
     });

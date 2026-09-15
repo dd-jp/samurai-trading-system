@@ -144,7 +144,7 @@ export const DEFAULT_CRITIC_BUDGET_MS = 10_000;
  */
 const MAX_REASONING_CHARS = 400;
 
-/** One held position, as the critic sees it. */
+/** One held position, as the critic sees it */
 export interface CriticHeldPosition {
   instrument: string;
   notional: number;
@@ -154,7 +154,7 @@ export interface CriticHeldPosition {
 export interface RiskCriticRequest {
   trace_id: string;
   intent: OrderIntent;
-  /** Book context — the co-catalyst read ADR-0003 §1 names as the blind spot. */
+  /** Book context — the co-catalyst read ADR-0003 §1 names as the blind spot */
   portfolio: {
     equity: number;
     gross_exposure: number;
@@ -172,7 +172,7 @@ export interface RiskCriticProducer {
   produce(request: RiskCriticRequest): Promise<RiskCriticVerdict | undefined>;
 }
 
-/** `unavailable` is persisted for audit but never handed to `evaluate()` — see the module header. */
+/** `unavailable` is persisted for audit but never handed to `evaluate()` — see the module header */
 function toDecisionInput(verdict: RiskCriticVerdict): RiskCriticVerdict | undefined {
   return verdict.verdict === 'unavailable' ? undefined : verdict;
 }
@@ -235,14 +235,14 @@ const CRITIC_PROMPT_TEMPLATE = [
   BARE_JSON_INSTRUCTION,
 ].join('\n');
 
-/** sha256 of `CRITIC_PROMPT_TEMPLATE` (#1514), computed once at module load. */
+/** sha256 of `CRITIC_PROMPT_TEMPLATE` (#1514), computed once at module load */
 export const CRITIC_PROMPT_TEMPLATE_HASH = hashPromptTemplate(CRITIC_PROMPT_TEMPLATE);
 
 /**
  * The book context is wrapped by `wrapUntrusted` even though none of it is
  * ingested free text today: instrument ids come from a pool file, and the one
  * cheap guarantee worth keeping is that no data block can ever read as an
- * instruction (#208).
+ * instruction (#208)
  */
 export function renderCriticPrompt(request: RiskCriticRequest): string {
   const { intent, portfolio } = request;
@@ -338,9 +338,9 @@ export function parseCriticVerdict(
   }
   const reasoning = parsed.reasoning.trim().slice(0, MAX_REASONING_CHARS);
 
-  // The conditions half is carried out UNVALIDATED and cannot fail this parse.
+  // The conditions half is carried out UNVALIDATED and cannot fail this parse
   // #997 Q2a: discarding a valid `reject` because the advisory half was
-  // malformed would make the system strictly less safe than it is today.
+  // malformed would make the system strictly less safe than it is today
   const raw_conditions = parsed.conditions;
 
   if (verdict !== 'trim') {
@@ -393,7 +393,7 @@ export interface LlmRiskCriticProducerOptions {
  */
 type CriticUnavailableCause = FailureCause | 'spend_cap';
 
-/** The `live`/`paper` producer: one metered LLM pass per viable entry intent, persisted by `debate_id`. */
+/** The `live`/`paper` producer: one metered LLM pass per viable entry intent, persisted by `debate_id` */
 export class LlmRiskCriticProducer implements RiskCriticProducer {
   readonly #llm: LlmClient;
   readonly #store: RiskCriticStore;
@@ -414,10 +414,10 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
   async produce(request: RiskCriticRequest): Promise<RiskCriticVerdict | undefined> {
     const debate_id = request.intent.metadata.debate_id;
 
-    // A verdict already logged for this debate is REUSED rather than re-asked.
+    // A verdict already logged for this debate is REUSED rather than re-asked
     // The store's key is the debate, and a tick re-run after a crash must not
     // bill a second call — nor produce a second, possibly different, verdict
-    // for one decision, which is the thing replay-from-log exists to prevent.
+    // for one decision, which is the thing replay-from-log exists to prevent
     const logged = this.#store.getByDebateId(debate_id);
     if (logged !== undefined) return toDecisionInput(logged.verdict);
 
@@ -428,7 +428,7 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
       // one condition an operator can act on — the budget is spent, top it up
       // or widen the cap — was the only one invisible. Same event code as the
       // catch below, because both mean "no verdict"; `failure_cause` is what
-      // separates them.
+      // separates them
       this.#logUnavailable(request, 'spend_cap', reason);
       return this.#record(request, unavailable(reason));
     }
@@ -436,7 +436,7 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.#budgetMs);
     // The budget spans BOTH halves: the model call, and the market-data reads
-    // the conditions half runs in front of the same order.
+    // the conditions half runs in front of the same order
     try {
       return await this.#produceWithin(request, controller);
     } finally {
@@ -466,13 +466,13 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
           prompt: renderCriticPrompt(request),
           context: {
             analyst_views: [],
-            // Meter bookkeeping, never sent to the model (`LlmAttribution`).
+            // Meter bookkeeping, never sent to the model (`LlmAttribution`)
             // `stage: 'risk_critic'` keeps this call attributable in
             // `llm_spend` instead of landing inside the debate's cost; the
-            // `debate_id` still joins it to the decision it belongs to.
+            // `debate_id` still joins it to the decision it belongs to
             // `prompt_template_hash` (#1514) is `CRITIC_PROMPT_TEMPLATE_HASH`,
             // not a hash of the rendered prompt above — see that constant's
-            // doc comment.
+            // doc comment
             attribution: {
               trace_id: request.trace_id,
               stage: 'risk_critic',
@@ -488,13 +488,13 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
       parsed = response.data;
     } catch (error) {
       // EVERY failure lands here and fails open: provider error, cancellation
-      // on the budget above, or a response that could not be read.
+      // on the budget above, or a response that could not be read
       //
       // The budget's own arm (`#expiry`) rejects with a bare `Error` that no
       // classifier can read as a deadline, so the cause is decided from the
       // controller instead — this controller is the producer's own and ONLY
       // its timer aborts it, so `aborted` here means the budget fired,
-      // whichever arm of the race happened to reject first (#1394).
+      // whichever arm of the race happened to reject first (#1394)
       this.#logUnavailable(
         request,
         controller.signal.aborted ? 'timeout' : classifyFailureCause(error),
@@ -582,7 +582,7 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
     );
   }
 
-  /** Logging must never be the thing that voids a verdict — see `#produceWithin`. */
+  /** Logging must never be the thing that voids a verdict — see `#produceWithin` */
   #warn(
     request: RiskCriticRequest,
     event: LogEventCode,
@@ -599,7 +599,7 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
         payload,
       });
     } catch {
-      // A logger that throws is not a reason to lose a parsed verdict.
+      // A logger that throws is not a reason to lose a parsed verdict
     }
   }
 
@@ -650,7 +650,7 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
     });
   }
 
-  /** Persists the verdict (audit + replay) and returns what `evaluate()` should see. */
+  /** Persists the verdict (audit + replay) and returns what `evaluate()` should see */
   #record(request: RiskCriticRequest, verdict: RiskCriticVerdict): RiskCriticVerdict | undefined {
     try {
       this.#store.writeVerdict({
@@ -661,17 +661,17 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
     } catch (error) {
       // Never a throw — like `SqliteLlmSpendStore.record`, this is bookkeeping
       // attached to a decision the tick is waiting on, and a store failure
-      // must not take the risk stage down.
+      // must not take the risk stage down
       //
       // But it is not merely logged either: the verdict is DROPPED, and the
-      // decision proceeds on the mechanical steps with `risk_critic: skipped`.
+      // decision proceeds on the mechanical steps with `risk_critic: skipped`
       // A verdict with no row cannot be replayed — a backtest reading this
       // `debate_id` finds nothing and reaches its decision without it — so
       // acting on it live would put the live run on a code path replay can
       // never reproduce, which is exactly what ADR-0003 §2's
       // same-code-path-live-and-replay invariant forbids. Fail-open costs one
       // narrative check while the store is down; the alternative silently
-      // invalidates every trade taken in that window against its own backtest.
+      // invalidates every trade taken in that window against its own backtest
       this.#logger?.log({
         trace_id: request.trace_id,
         stage: 'risk',

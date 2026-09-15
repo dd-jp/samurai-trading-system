@@ -52,10 +52,10 @@ export type JoinProvenance =
   | { by: 'trace_id'; exact: true }
   | { by: 'instrument'; exact: false };
 
-/** A `DebateRow` carries no `trace_id`, so a live lane's debate can only be approximate. */
+/** A `DebateRow` carries no `trace_id`, so a live lane's debate can only be approximate */
 export type DebateJoin = Extract<JoinProvenance, { by: 'debate_id' | 'instrument' }>;
 
-/** Both routes to a Risk decision are exact key matches; neither falls back. */
+/** Both routes to a Risk decision are exact key matches; neither falls back */
 export type RiskCriticJoin = Extract<JoinProvenance, { by: 'debate_id' | 'trace_id' }>;
 
 const BY_DEBATE_ID: Extract<JoinProvenance, { by: 'debate_id' }> = { by: 'debate_id', exact: true };
@@ -67,7 +67,7 @@ const BY_INSTRUMENT: Extract<JoinProvenance, { by: 'instrument' }> = {
 
 export interface Selection {
   instrument: string;
-  /** `null` selects the instrument's current lane; a trace id pins one trace. */
+  /** `null` selects the instrument's current lane; a trace id pins one trace */
   traceId: string | null;
 }
 
@@ -75,7 +75,7 @@ export interface TraceDetail {
   instrument: string;
   traceId: string | null;
   lane: PipelineLane | undefined;
-  /** `null` when there is no trace to draw a timeline from — `absence.lane` says why. */
+  /** `null` when there is no trace to draw a timeline from — `absence.lane` says why */
   cells: readonly ResolvedCell[] | null;
   verdict: VerdictRow | undefined;
   riskCritic: RiskCriticRow | undefined;
@@ -145,14 +145,14 @@ export function laneDebate(
     : latestDebateFor(snapshot.debates, lane.instrument);
 }
 
-/** Every row the Live drawer shows for one selected lane or pinned trace. */
+/** Every row the Live drawer shows for one selected lane or pinned trace */
 export function resolveTrace(snapshot: WireSnapshot, selection: Selection): TraceDetail {
   const { instrument } = selection;
   const lane = laneFor(snapshot.pipeline, instrument, selection.traceId);
   // A trace_id that fails the instrument-conjoined join above but is
   // attested — on a lane, a verdict, a risk-critic row, or the in-flight
   // tick_status — under some other instrument is a mismatched Selection, not
-  // an aged-out trace (#1267): the id must not leak into TraceDetail either.
+  // an aged-out trace (#1267): the id must not leak into TraceDetail either
   const wrongInstrument =
     lane === undefined &&
     selection.traceId !== null &&
@@ -168,7 +168,7 @@ export function resolveTrace(snapshot: WireSnapshot, selection: Selection): Trac
   const position = openPositionFor(snapshot.positions, instrument);
   // One row for both the timeline's degraded `debate` cell and the debate
   // section beneath it — the drawer cannot state two causes for one debate
-  // if it only ever reads one row (#1428).
+  // if it only ever reads one row (#1428)
   //
   // `snapshot.debates` is NOT arm-scoped on the wire (#1594's doc comment,
   // `contracts/snapshot.ts`) — the control arm never writes `debate_log`, so
@@ -178,7 +178,7 @@ export function resolveTrace(snapshot: WireSnapshot, selection: Selection): Trac
   // same instrument, which is exactly the leak dashboard-spec.md's "no
   // component shows a figure from the other arm" forbids (#1597). The
   // control arm structurally has no debate at all, so the join is skipped
-  // outright rather than filtered.
+  // outright rather than filtered
   const debate =
     snapshot.arm === 'control' ? undefined : latestDebateFor(snapshot.debates, instrument);
   return {
@@ -212,7 +212,7 @@ export function resolveTrace(snapshot: WireSnapshot, selection: Selection): Trac
 
 /**
  * The one join a Review row needs, without the rest of `resolveTrade`'s
- * sequence: a table of N rows would otherwise re-run all of it per poll.
+ * sequence: a table of N rows would otherwise re-run all of it per poll
  */
 export function tradeDebate(
   debates: readonly DebateRow[],
@@ -221,7 +221,7 @@ export function tradeDebate(
   return debateById(debates, trade.debate_id);
 }
 
-/** Every row the Review drawer shows for one closed trade, or `null` if it has left the window. */
+/** Every row the Review drawer shows for one closed trade, or `null` if it has left the window */
 export function resolveTrade(snapshot: WireSnapshot, idempotencyKey: string): TradeDetail | null {
   const trade = closedTradeByKey(snapshot.closed_trades, idempotencyKey);
   if (trade === undefined) return null;
@@ -230,7 +230,7 @@ export function resolveTrade(snapshot: WireSnapshot, idempotencyKey: string): Tr
   const lane = traceId === null ? undefined : laneFor(snapshot.pipeline, trade.instrument, traceId);
   // The Review drawer reaches its debate exactly, by `debate_id`, so its
   // timeline is reconciled against that row rather than the instrument's
-  // latest — the same row `DebateSection` and `whyTaken` already render.
+  // latest — the same row `DebateSection` and `whyTaken` already render
   const debate = debateById(snapshot.debates, trade.debate_id);
   const cells = cellsOf(lane, debate);
   return {

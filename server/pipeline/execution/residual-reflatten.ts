@@ -81,13 +81,13 @@ import type { ResidualReflattenInput } from './types.js';
  */
 export const MAX_RESIDUAL_REFLATTEN_ATTEMPTS = 3;
 
-/** Why an attempt was not made — a bare code for the log payload and the sweep's divergence reason. */
+/** Why an attempt was not made — a bare code for the log payload and the sweep's divergence reason */
 export type ResidualReflattenSkipReason =
-  /** The venue is shut — a market order must not be fired into it. */
+  /** The venue is shut — a market order must not be fired into it */
   | 'venue_shut'
   /** The calendar could not answer, so "is the venue open" is unknown. Fail closed. */
   | 'session_unknown'
-  /** Someone ELSE's flatten on this instrument is still in flight — the daily cadence's. */
+  /** Someone ELSE's flatten on this instrument is still in flight — the daily cadence's */
   | 'flatten_in_flight'
   /**
    * THIS lot's own earlier re-flatten is still working at the venue. Distinct
@@ -95,9 +95,9 @@ export type ResidualReflattenSkipReason =
    * residual is being closed, by an order this path itself sent.
    */
   | 'own_reflatten_in_flight'
-  /** The journal could not be read, so neither of the two gates above could be evaluated. */
+  /** The journal could not be read, so neither of the two gates above could be evaluated */
   | 'journal_read_failed'
-  /** `MAX_RESIDUAL_REFLATTEN_ATTEMPTS` already spent on this lot. */
+  /** `MAX_RESIDUAL_REFLATTEN_ATTEMPTS` already spent on this lot */
   | 'attempts_exhausted';
 
 export type ResidualReflattenOutcome =
@@ -129,7 +129,7 @@ export async function reflattenResidual(
   // `undefined.isOpen`, and both implementations' `isOpen` can throw outright
   // when they cannot answer (trading-calendar.ts). Either way the answer to
   // "is the venue open" is unknown, and firing a market order on an unknown
-  // session is the one thing the decision's second constraint forbids.
+  // session is the one thing the decision's second constraint forbids
   let open: boolean;
   try {
     open = input.sessionCalendars[position.asset_class].isOpen(now);
@@ -174,12 +174,12 @@ export async function reflattenResidual(
   // lot's residual included. This same gate is also what keeps THIS path from
   // ever having two of its own attempts live at once, since its rows carry
   // the same instrument, which is why the key walk below can treat any
-  // existing candidate as settled.
+  // existing candidate as settled
   //
   // Advisory, not the guarantee — see the file doc's "One submitter at a
   // time". `writeAheadFlatten` re-checks this atomically; what this read buys
   // is a named skip and a log line rather than a caught refusal, and the walk
-  // invariant above.
+  // invariant above
   //
   // Which MATCHING row is handed on matters, because `standDown` splits its
   // paging decision on whether the blocker is this lot's own earlier
@@ -188,7 +188,7 @@ export async function reflattenResidual(
   // flight, or rows left by an older build — `find` would pick by table order,
   // which is arbitrary and could report someone else's flatten while this
   // lot's own order is the one working. Prefer this lot's own key, and only
-  // fall back to any other row on the instrument.
+  // fall back to any other row on the instrument
   const onInstrument = unresolved.filter((row) => row.instrument === position.instrument);
   const blocking =
     onInstrument.find((row) => isOwnReflattenKey(row.idempotency_key, lotKey)) ?? onInstrument[0];
@@ -223,7 +223,7 @@ export async function reflattenResidual(
 
   // The closing side, derived from the lot's own — the same inversion
   // `buildFlattenExit` (trader/decide.ts) applies, done here because this
-  // path has no `OrderIntent` to carry one.
+  // path has no `OrderIntent` to carry one
   const closingSide = position.side === 'buy' ? 'sell' : 'buy';
 
   // MANDATORY, and it must precede the submit: without this row the flatten's
@@ -232,7 +232,7 @@ export async function reflattenResidual(
   // returns null for it — the fill is never attributed to anything, and the
   // lot stays open in the store while flat at the venue. A journal write that
   // fails therefore ends the attempt HERE rather than being folded into one
-  // broad try around both calls.
+  // broad try around both calls
   try {
     await store.writeAheadFlatten({
       idempotency_key: candidate,
@@ -243,17 +243,17 @@ export async function reflattenResidual(
       submitted_at: now,
       // Exactly one lot, holding exactly the residual: this order closes one
       // lot's remainder, never an instrument's whole book (see the file doc's
-      // "Why not executeExit").
+      // "Why not executeExit")
       lot_held_quantities: [{ idempotency_key: lotKey, held: residual }],
       // Reusing 'flatten' rather than widening `ExitReason` (records.ts): this
       // IS the flat-by-close intent, finished late — and a fourth value would
       // reach `closed_trades.close_reason` and every consumer that switches on
-      // it for no gain in meaning.
+      // it for no gain in meaning
       exit_reason: 'flatten',
       // All null, legitimately: `captureSubmitSnapshot`'s budget belongs to
       // the decision path, and this order is not a decision — it is the
       // completion of one already taken. `FlattenSubmissionWriteAhead` types
-      // these as nullable for exactly the case where no snapshot was taken.
+      // these as nullable for exactly the case where no snapshot was taken
       decision_price: null,
       quote_bid: null,
       quote_ask: null,
@@ -266,7 +266,7 @@ export async function reflattenResidual(
     // it is the gate above, re-evaluated atomically and this time authoritative
     // (a flatten was journalled between that read and this write). Reported as
     // the same skip, so the outcome does not depend on which of the two reads
-    // saw it.
+    // saw it
     if (error instanceof UnresolvedFlattenForInstrumentError) {
       return standDown(input, position, residual, lotKey, error.blocking_key);
     }
@@ -285,7 +285,7 @@ export async function reflattenResidual(
     // Left at 'submitting', never resolved to 'error': `resolveFlattenError`
     // asserts the order PROVABLY never reached the broker, and a thrown
     // submit proves no such thing — `executeExit`'s own submit catch takes
-    // this identical posture, and `reconcile()` settles the row.
+    // this identical posture, and `reconcile()` settles the row
     return fail(
       input,
       position,
@@ -306,7 +306,7 @@ export async function reflattenResidual(
     // The order is LIVE — this is bookkeeping on a submission that already
     // happened, so it may not turn into a `failed` outcome. The row stays
     // 'submitting' and `reconcile()` resolves it against the venue, exactly
-    // as it does for a lost ack.
+    // as it does for a lost ack
     logCaughtFailure(
       input.logger,
       {
@@ -346,7 +346,7 @@ export async function reflattenResidual(
 /**
  * Whether `key` is one of `lotKey`'s own re-flatten attempts — the same key
  * shape `resolveReflattenKey` walks, asked as a predicate so the advisory read
- * and `standDown` cannot disagree about what "own" means.
+ * and `standDown` cannot disagree about what "own" means
  */
 function isOwnReflattenKey(key: string, lotKey: string): boolean {
   return key.startsWith(`${lotKey}:residual-reflatten-`);

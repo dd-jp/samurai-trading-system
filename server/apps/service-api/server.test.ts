@@ -32,7 +32,7 @@ import {
   resolveBundlePath,
 } from './server.js';
 
-/** Distinguishable bodies, so a wrong-file response is visible in the diff. */
+/** Distinguishable bodies, so a wrong-file response is visible in the diff */
 const INDEX_HTML =
   '<!doctype html><html><head><title>Samurai</title>' +
   '<script type="module" crossorigin src="./assets/index-abc123.js"></script>' +
@@ -44,7 +44,7 @@ const SIBLING_HTML = '<html>sibling directory that shares the root prefix</html>
 
 let server: DashboardServer;
 let base: string;
-/** The temp parent; `bundleRoot` and its evil sibling both live inside it. */
+/** The temp parent; `bundleRoot` and its evil sibling both live inside it */
 let parent: string;
 let bundleRoot: string;
 
@@ -58,15 +58,15 @@ beforeAll(async () => {
   await writeFile(join(bundleRoot, 'assets', 'index-abc123.js.map'), '{"version":3}');
   await writeFile(join(bundleRoot, 'assets', 'chakra-petch.woff2'), 'not-really-a-font');
   // `@fontsource` emits a `.woff` fallback beside every `.woff2`, and the
-  // built CSS references both — see BUNDLE_CONTENT_TYPES.
+  // built CSS references both — see BUNDLE_CONTENT_TYPES
   await writeFile(join(bundleRoot, 'assets', 'chakra-petch.woff'), 'not-really-a-font-either');
   await writeFile(join(bundleRoot, 'favicon.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>');
-  // Inside the bundle but not a servable type — the allow-list's negative case.
+  // Inside the bundle but not a servable type — the allow-list's negative case
   await writeFile(join(bundleRoot, 'notes.txt'), 'should never be served');
 
   // The two escape targets. Both have a servable extension and real content,
   // so a broken guard returns 200 with a body rather than a 404 that would
-  // pass for the right reason by accident.
+  // pass for the right reason by accident
   await writeFile(join(parent, 'outside.html'), OUTSIDE_HTML);
   await mkdir(join(parent, 'client-evil'), { recursive: true });
   await writeFile(join(parent, 'client-evil', 'secret.html'), SIBLING_HTML);
@@ -79,7 +79,7 @@ beforeAll(async () => {
     mode: 'paper',
   });
   await server.start();
-  // Node assigns the real port when listening on :0; pull it off the address.
+  // Node assigns the real port when listening on :0; pull it off the address
   base = server.url;
 });
 
@@ -95,7 +95,7 @@ describe('dashboard server — static bundle', () => {
     expect(r.headers.get('content-type')).toBe('text/html; charset=utf-8');
     const html = await r.text();
     expect(html).toBe(INDEX_HTML);
-    // The React entry point, not a hand-rolled template literal.
+    // The React entry point, not a hand-rolled template literal
     expect(html).toContain('<div id="root">');
   });
 
@@ -116,7 +116,7 @@ describe('dashboard server — static bundle', () => {
     ['/assets/index-abc123.css', 'text/css; charset=utf-8'],
     ['/assets/index-abc123.js.map', 'application/json; charset=utf-8'],
     ['/favicon.svg', 'image/svg+xml; charset=utf-8'],
-    // Binary: no charset parameter.
+    // Binary: no charset parameter
     ['/assets/chakra-petch.woff2', 'font/woff2'],
     ['/assets/chakra-petch.woff', 'font/woff'],
   ])('serves %s as %s', async (path, contentType) => {
@@ -137,7 +137,7 @@ describe('dashboard server — static bundle', () => {
 });
 
 describe('dashboard server — path traversal', () => {
-  // Percent-encoded `..` survives URL normalisation, so these reach the guard.
+  // Percent-encoded `..` survives URL normalisation, so these reach the guard
   it.each([
     ['%2e%2e%2foutside.html'],
     ['..%2foutside.html'],
@@ -147,7 +147,7 @@ describe('dashboard server — path traversal', () => {
     const r = await fetch(`${base}/${path}`);
     expect(r.status).toBe(404);
     // Not merely "not 200": the escape targets have real bodies, so assert
-    // neither one leaked.
+    // neither one leaked
     const body = await r.text();
     expect(body).not.toContain('outside the bundle');
     expect(body).not.toContain('sibling directory');
@@ -157,7 +157,7 @@ describe('dashboard server — path traversal', () => {
     // `%252e%252e%252f` decodes ONCE to the literal characters `%2e%2e%2f`,
     // which is a filename inside the bundle rather than a traversal. 404 is
     // the correct answer; a second decode here is how double-decoding bugs
-    // are born.
+    // are born
     const r = await fetch(`${base}/%252e%252e%252foutside.html`);
     expect(r.status).toBe(404);
     expect(await r.text()).not.toContain('outside the bundle');
@@ -191,7 +191,7 @@ describe('resolveBundlePath', () => {
 
   it('rejects a SIBLING directory that merely shares the root prefix', () => {
     // The case `resolved.startsWith(root)` passes and containment does not:
-    // no `..` remains after normalisation, and the string prefix matches.
+    // no `..` remains after normalisation, and the string prefix matches
     expect(resolveBundlePath(root, '/../client-evil/secret.html')).toBeNull();
     expect(resolveBundlePath('/srv/app/dist/client', '/../client.bak/x.js')).toBeNull();
   });
@@ -225,7 +225,7 @@ describe('bundleDiagnostic', () => {
     // The reviewer's scenario: `tsx server/apps/service-api/index.ts` resolves
     // `bundleRoot` to the repo's `client/`, which HAS an index.html — the dev
     // template, whose only script tag is `/src/main.tsx`. A "does the file
-    // exist" check is green here and the served page still loads nothing.
+    // exist" check is green here and the served page still loads nothing
     const sourceTree = join(parent, 'client-src');
     await mkdir(sourceTree, { recursive: true });
     await writeFile(
@@ -238,7 +238,7 @@ describe('bundleDiagnostic', () => {
     expect(message).toContain('Vite SOURCE template');
     expect(message).toContain('/src/main.tsx');
     expect(message).toContain('dist/client/');
-    // Distinguishable from case 1 — the two have different fixes.
+    // Distinguishable from case 1 — the two have different fixes
     expect(message).not.toContain('Dashboard bundle not found');
   });
 });
@@ -258,7 +258,7 @@ describe('bundleContentType', () => {
 /**
  * #1592: a store whose `getOpenPositions`/`getRecentClosedTrades` actually
  * differ by arm — `InMemoryQueryStore`'s fixture data does not vary by arm,
- * so it cannot prove the HTTP layer threads `?arm=` through to the store.
+ * so it cannot prove the HTTP layer threads `?arm=` through to the store
  */
 class TwoArmQueryStore extends InMemoryQueryStore {
   override getOpenPositions(asOf: Date, arm: 'live' | 'control') {
@@ -363,7 +363,7 @@ describe('dashboard server — api', () => {
     expect(snap.tick_status).not.toBeNull();
     expect(snap.metrics).toBeDefined();
     // #539: the run mode the entry point resolved, on the wire — the browser
-    // has no other honest source for it.
+    // has no other honest source for it
     expect(snap.mode).toBe('paper');
   });
 
@@ -440,7 +440,7 @@ describe('dashboard server — /api/snapshot error responder guard (#1355)', () 
     // reached), so the fetch itself must settle on its own bound and hand
     // control to a real assertion below — an unbounded fetch racing the
     // harness's own default timeout would fail as a bare "Test timed out"
-    // with no assertion diff.
+    // with no assertion diff
     const result = await fetch(`${hostileServer.url}/api/snapshot`, {
       cache: 'no-store',
       signal: AbortSignal.timeout(2_000),
@@ -457,7 +457,7 @@ describe('dashboard server — /api/snapshot error responder guard (#1355)', () 
       expect(result.status).toBe(500);
       // The literal fallback is dropped in favor of `describeThrownSafely`'s
       // placeholder for a value that could not be rendered at all — see
-      // `renderResponderError`'s doc comment in server.ts.
+      // `renderResponderError`'s doc comment in server.ts
       expect(result.body.error).toBe('[unrenderable error]');
     }
   }, 10_000);
@@ -487,7 +487,7 @@ describe('dashboard server — /api/snapshot headersSent guard (#1355 round 1)',
       // buildSnapshot — unlike `filled_size`, which `unrealizedPnl`
       // multiplies against a `number`: poisoning THAT throws inside
       // `buildSnapshot` itself, before `writeHead(200)` ever runs, and never
-      // reaches this bug at all.
+      // reaches this bug at all
       return [{ ...first, stop: 1n as unknown as number }, ...rest];
     }
   }
@@ -512,9 +512,9 @@ describe('dashboard server — /api/snapshot headersSent guard (#1355 round 1)',
   it('completes the response instead of throwing ERR_HTTP_HEADERS_SENT out of the catch', async () => {
     // Status/body are whatever the already-committed `writeHead(200, ...)`
     // left behind — the guard's job is only to stop the catch's own
-    // `writeHead(500)` from throwing, not to make the response say 500.
+    // `writeHead(500)` from throwing, not to make the response say 500
     // That is the same contract the sibling `serveStatic` guard already
-    // has (`server.ts`'s `if (res.headersSent) { res.end(); return; }`).
+    // has (`server.ts`'s `if (res.headersSent) { res.end(); return; }`)
     const result = await fetch(`${poisonedServer.url}/api/snapshot`, {
       cache: 'no-store',
       signal: AbortSignal.timeout(2_000),
@@ -633,7 +633,7 @@ describe('dashboard server — bind guard (#887, ADR-0019)', () => {
 describe('dashboard server — request-time token verification (#1038)', () => {
   const FIXTURE_TOKEN = 'fixture-dashboard-token';
 
-  /** Throws if ever called — proves an unauthorized request never reaches buildSnapshot. */
+  /** Throws if ever called — proves an unauthorized request never reaches buildSnapshot */
   class PoisonedStore extends InMemoryQueryStore {
     override getTickStatus(): never {
       throw new Error('PoisonedStore: buildSnapshot must not run for an unauthorized request');
@@ -642,7 +642,7 @@ describe('dashboard server — request-time token verification (#1038)', () => {
 
   let poisonedServer: DashboardServer;
   let poisonedBase: string;
-  /** A normal store, for the cases that must actually reach buildSnapshot. */
+  /** A normal store, for the cases that must actually reach buildSnapshot */
   let liveServer: DashboardServer;
   let liveBase: string;
 
@@ -677,8 +677,8 @@ describe('dashboard server — request-time token verification (#1038)', () => {
 
   it('REFUSES /api/snapshot with no Authorization header — the acceptance-critical case', async () => {
     // A test that only asserted the valid-token case would still pass
-    // against pre-#1038 behaviour, which never checks this header at all.
-    // Uses the poisoned store: the store must never be touched here.
+    // against pre-#1038 behaviour, which never checks this header at all
+    // Uses the poisoned store: the store must never be touched here
     const r = await fetch(`${poisonedBase}/api/snapshot`);
     expect(r.status).toBe(401);
     expect(r.headers.get('www-authenticate')).toBe('Bearer');
@@ -712,7 +712,7 @@ describe('dashboard server — request-time token verification (#1038)', () => {
     // assets carry no book data, and a browser's plain navigation/subresource
     // requests send no custom header, so gating them would break the client
     // outright. This proves the decision is actually wired, not just stated.
-    // Uses the poisoned store too: an ungated route must never reach it either.
+    // Uses the poisoned store too: an ungated route must never reach it either
     const r = await fetch(`${poisonedBase}/`);
     expect(r.status).toBe(200);
     expect(r.headers.get('www-authenticate')).toBeNull();

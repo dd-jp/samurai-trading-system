@@ -103,7 +103,7 @@ export const VENUE_DOCUMENTED_CEILING_PER_SECOND: Partial<Record<VenueKey, numbe
   // Saxo OpenAPI rate-limit reference (read 2026-09-05, #1032): 120 requests
   // per minute per service group is the tightest published per-app figure;
   // order placement is additionally throttled to one request per second per
-  // session, which is where DEFAULT_VENUE_PACING.saxo's refill sits.
+  // session, which is where DEFAULT_VENUE_PACING.saxo's refill sits
   saxo: 120 / 60,
   // ccxt: deliberately absent. See DEFAULT_VENUE_PACING.ccxt.
 };
@@ -320,7 +320,7 @@ export const DEFAULT_VENUE_PACING: VenuePacingConfig = {
   // VENUE_DOCUMENTED_CEILING_PER_SECOND.saxo itself, which is the 120/min
   // SERVICE-GROUP ceiling, 2 here — the 1/s session figure has no exported
   // symbol of its own). Raising capacity would burst past that documented
-  // per-session limit rather than an invented one.
+  // per-session limit rather than an invented one
   //
   // #1222 measured the real fan-outs this paces, as FLOORS, not exact
   // counts: `listOpenOrders`/`listOrderActivities`/`listNetPositions` each
@@ -333,7 +333,7 @@ export const DEFAULT_VENUE_PACING: VenuePacingConfig = {
   // placeOrder) — the POST parks ~1s behind the first two — and cancelling
   // a 3-leg bracket is AT LEAST 4 (listOpenOrders + one cancelOrder per
   // leg) — ~2s of the ~1s/leg refill after the burst. No hard deadline is
-  // known to bind on either path today.
+  // known to bind on either path today
   //
   // #1419 classifies every SaxoHttpBrokerClient call site into the two
   // lanes #391 built for exactly this: `placeOrder`/`cancelOrder` (and the
@@ -343,10 +343,10 @@ export const DEFAULT_VENUE_PACING: VenuePacingConfig = {
   // `listAll()` pagination spend `acquireBackground()`. A multi-page read
   // sweep can now drain only down to the reserve below, leaving a pending
   // placement/cancel a token to go through on rather than parking it behind
-  // the 1/s refill.
+  // the 1/s refill
   //
   // `reserveForPriority: 1` — UNVERIFIED, a deliberate conservative
-  // placeholder in the ccxt entry's style, not a Saxo-published figure.
+  // placeholder in the ccxt entry's style, not a Saxo-published figure
   // developer.saxo/openapi/learn/rate-limiting documents the ceilings this
   // file already cites (120/min service-group, the 1/s session throttle
   // capacity models) but says nothing about reserving part of that budget
@@ -366,7 +366,7 @@ export const DEFAULT_VENUE_PACING: VenuePacingConfig = {
   // cost exactly: `resolveIdentity()` is memoised, so once warm each spends
   // a single token. Revisit this the same way `alpaca.reserveForPriority`
   // was re-derived (#1080) once a real Saxo account/tier exists to measure
-  // fan-out and refill against.
+  // fan-out and refill against
   saxo: { capacity: 2, refillPerSecond: 1, reserveForPriority: 1 },
 };
 
@@ -538,7 +538,7 @@ function resolveBucketPacing(
   return {
     // A bucket whose capacity is under one token can never satisfy
     // `acquire()`'s `tokens >= 1` test, so every call parks forever. That is
-    // a stopped trading system, not a slow one — refused rather than paced.
+    // a stopped trading system, not a slow one — refused rather than paced
     capacity: readPositive(env, names.capacity, fallback.capacity, {
       min: 1,
       minLabel: 'at least 1 (a bucket under one token never releases a call)',

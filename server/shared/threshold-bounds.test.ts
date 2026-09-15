@@ -68,7 +68,7 @@ describe('assertThresholdWithinBounds', () => {
     expect(thrown).toBeInstanceOf(ThresholdBoundViolationError);
     const violation = thrown as ThresholdBoundViolationError;
     // The offending value survives into the message: an operator must be able
-    // to fix the config without attaching a debugger.
+    // to fix the config without attaching a debugger
     expect(violation.value).toBe(0.5);
     expect(violation.threshold).toBe('max_pbo');
     expect(violation.message).toContain('at most 0.05');
@@ -152,7 +152,7 @@ describe('isThresholdBoundViolation (#766)', () => {
     // misses: `assertThresholdsWithinBounds` throws a bare `Error` when two
     // or more rows cross at once, not the typed class. A detector that only
     // matched the typed class would silence the MORE alarming case (multiple
-    // crossings) while paging correctly on a single one.
+    // crossings) while paging correctly on a single one
     let thrown: unknown;
     try {
       assertThresholdsWithinBounds({ max_pbo: 0.5, min_oos_sharpe: 0.1 }, 'test');

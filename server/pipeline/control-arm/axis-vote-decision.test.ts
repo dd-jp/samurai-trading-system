@@ -55,7 +55,7 @@ describe('controlArmDecision (#753 — falsifier arm 2 entry)', () => {
     expect(decision?.direction).toBe(direction);
     expect(decision?.confidence).toBe(confidence);
     // Not rounded, not floored, not clamped: the Trader's conviction floor is
-    // the ONE threshold on this path, and it is the live arm's.
+    // the ONE threshold on this path, and it is the live arm's
     expect(decision?.bar_timestamp).toEqual(BAR);
   });
 
@@ -135,7 +135,7 @@ describe('controlArmDecision (#753 — falsifier arm 2 entry)', () => {
     const decision = controlArmDecision({ instrument: '3LUS', views: [view()], bar: BAR });
 
     expect(decision?.debate_id.startsWith(CONTROL_DEBATE_ID_PREFIX)).toBe(true);
-    // A real `computeDebateId` output is bare 64-hex; this is not.
+    // A real `computeDebateId` output is bare 64-hex; this is not
     expect(/^[0-9a-f]{64}$/.test(decision?.debate_id ?? '')).toBe(false);
   });
 
@@ -170,7 +170,7 @@ describe('controlArmDecision (#753 — falsifier arm 2 entry)', () => {
     const importLines = source
       .split('\n')
       .filter((line) => /^import\s/.test(line) || /^\s+from\s+'/.test(line));
-    // Exactly two: `node:crypto`, and a TYPE-ONLY import from debate-engine.
+    // Exactly two: `node:crypto`, and a TYPE-ONLY import from debate-engine
     expect(
       importLines.some((line) => line.includes("import { createHash } from 'node:crypto'")),
     ).toBe(true);
@@ -180,7 +180,7 @@ describe('controlArmDecision (#753 — falsifier arm 2 entry)', () => {
       ),
     ).toBe(true);
     expect(importLines).toHaveLength(2);
-    // And no value import of anything that could carry a model call.
+    // And no value import of anything that could carry a model call
     expect(/import\s+\{[^}]*\}\s+from\s+'.*llm/i.test(source)).toBe(false);
     expect(source).not.toMatch(/\bawait\b/);
   });

@@ -136,7 +136,7 @@ describe('SqliteCgtFillSource — resolves instrument/arm across closed AND open
     const { legs } = new SqliteCgtFillSource(db).getLiveEquityFillLegs();
 
     // Both PKs are single-column on idempotency_key, so the two LEFT JOINs
-    // cannot fan out — 2 legs, not 4 — and closed_trades wins the `??`.
+    // cannot fan out — 2 legs, not 4 — and closed_trades wins the `??`
     expect(legs).toHaveLength(2);
     expect(legs.every((l) => l.instrument === 'LSE:CLOSED')).toBe(true);
   });
@@ -244,7 +244,7 @@ describe('SqliteCgtFillSource — currency handling (#1518 review round 1, findi
     expect(unconverted.find((f) => f.kind === 'acquisition')?.grossAmount).toBe(1000);
     expect(unconverted.find((f) => f.kind === 'disposal')?.grossAmount).toBe(1200);
     // #1521 round 1 review: the report's UNCONVERTED section must be able to
-    // say WHY a fill has no rate, not just that it doesn't.
+    // say WHY a fill has no rate, not just that it doesn't
     expect(unconverted.every((f) => f.fxRateToGbpSource === 'not_reported_by_venue')).toBe(true);
   });
 
@@ -304,7 +304,7 @@ describe('SqliteCgtFillSource — currency handling (#1518 review round 1, findi
     expect(legs).toHaveLength(0);
     expect(unconverted).toHaveLength(2);
     // Ordered by idempotency_key ('usd-neg-1' sorts before 'usd-zero-1'), not
-    // insertion order — matches the query's own ORDER BY.
+    // insertion order — matches the query's own ORDER BY
     expect(unconverted.map((f) => f.fxRateToGbpSource)).toEqual([
       'invalid_stored_rate:-0.8',
       'invalid_stored_rate:0',
@@ -319,7 +319,7 @@ describe('SqliteCgtFillSource — currency handling (#1518 review round 1, findi
   // column for a real fill (see `docs/cgt-disposal-matching.md`'s
   // "#1521's field verification" section), so this test can only pin the
   // code's own self-consistent behaviour, not confirm it matches whatever
-  // field Saxo eventually reports the rate on.
+  // field Saxo eventually reports the rate on
   it('converts a USD fill on the stored venue rate instead of listing it unconverted (#1521)', () => {
     const db = openSharedStore(':memory:');
     seedClosedTrade(db, 'usd-rated-1', 'LSE:TEST', 'stocks', 'buy', 'live');
@@ -383,7 +383,7 @@ describe('SqliteCgtFillSource + matchDisposals — cross-check against closed_tr
 
     // qty*(exit-entry) - totalFees = 10*(120-100) - 3 = 197, the SAME formula
     // `closedTrade()` uses for `realized_pnl_net` — computed here from the raw
-    // fills, independently of the `closed_trades` row seeded above.
+    // fills, independently of the `closed_trades` row seeded above
     expect(totalGain).toBe(197);
   });
 });

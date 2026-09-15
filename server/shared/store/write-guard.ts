@@ -103,11 +103,11 @@ export type StoreOwnerStage = (typeof STORE_OWNER_STAGES)[number];
 export const STAGE_OWNED_TABLES: Record<StoreOwnerStage, readonly string[]> = {
   backtest: ['config_trials', 'stage2_selected_config'],
   // Reader only: the control arm's comparison source reads both arms' rows and
-  // writes none — the samples it feeds are written by the Feedback Loop.
+  // writes none — the samples it feeds are written by the Feedback Loop
   'control-arm': [],
   // `llm_gate_refusals` (#1533) is the Debate Engine's the same way
   // `debate_log` is: `SqliteDebateLogStore.recordGateRefusal` is its only
-  // writer, on the debate step's own refusal path.
+  // writer, on the debate step's own refusal path
   'debate-engine': [
     'debate_log',
     'debate_round_log',
@@ -116,7 +116,7 @@ export const STAGE_OWNED_TABLES: Record<StoreOwnerStage, readonly string[]> = {
     'llm_spend',
   ],
   // Cross-spec §4's three, plus the flatten write-ahead and the broker
-  // reconciliation tables the same stage owns.
+  // reconciliation tables the same stage owns
   execution: [
     'broker_brackets',
     'broker_unpriced_fills',
@@ -148,14 +148,14 @@ export const STAGE_OWNED_TABLES: Record<StoreOwnerStage, readonly string[]> = {
     // #1140: `SqliteLlmSpendCapStore` lives in `shared/store` because the
     // dashboard reads it, but the WRITE is a boot-time statement of the
     // config the composition root armed — the orchestrator's, by the same
-    // handle-identity rule `account_state` above follows.
+    // handle-identity rule `account_state` above follows
     'llm_spend_cap',
     'session_equity',
   ],
   risk: ['breaker_state', 'risk_critic_log', 'risk_log'],
   // Reader only — the dashboard's process must never write. Declaring it with
   // an empty set is the strongest statement available here, and doubles as
-  // the standing proof that reads are not blocked.
+  // the standing proof that reads are not blocked
   'service-api': [],
   trader: ['cosine_setups', 'trader_log'],
   verdict: ['verdict_log'],
@@ -202,20 +202,20 @@ export function isStoreWriteGuardEnabled(
   },
 ): boolean {
   if (environment.override === 'off') return false;
-  // Ordered ABOVE `on` on purpose — see the doc comment's asymmetry note.
+  // Ordered ABOVE `on` on purpose — see the doc comment's asymmetry note
   if (environment.samuraiMode === 'live') return false;
   if (environment.override === 'on') return true;
   if (environment.nodeEnv === 'production') return false;
   return true;
 }
 
-/** `'…'` string literals and both comment forms, blanked before the scan. */
+/** `'…'` string literals and both comment forms, blanked before the scan */
 const SQL_NOISE = /'(?:[^']|'')*'|--[^\n]*|\/\*[\s\S]*?\*\//g;
 
-/** One identifier: bare, `"quoted"`, `` `backticked` `` or `[bracketed]`. */
+/** One identifier: bare, `"quoted"`, `` `backticked` `` or `[bracketed]` */
 const IDENTIFIER_PART = String.raw`(?:"[^"]+"|\x60[^\x60]+\x60|\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_$]*)`;
 
-/** A table reference, optionally schema-qualified (`main.audit_log`, `temp.t`). */
+/** A table reference, optionally schema-qualified (`main.audit_log`, `temp.t`) */
 const IDENTIFIER = String.raw`(?:${IDENTIFIER_PART}\s*\.\s*)?${IDENTIFIER_PART}`;
 
 /**
@@ -240,7 +240,7 @@ const WRITE_TARGET = new RegExp(
 /**
  * Keywords that can only ever be a mis-read: if the "table name" is one of
  * these the statement was not understood, and an unparsed statement is allowed
- * (see this module's doc — the guard fails open).
+ * (see this module's doc — the guard fails open)
  */
 const NOT_A_TABLE = new Set(['set', 'from', 'where', 'values', 'select', 'into']);
 
@@ -325,7 +325,7 @@ export function guardedStore(
       // Everything else delegates to the real connection, bound to it:
       // better-sqlite3 is a native binding and its methods and getters
       // (`transaction`, `pragma`, `inTransaction`, `close`) must see the real
-      // object as `this`, not the proxy.
+      // object as `this`, not the proxy
       const value = Reflect.get(target, property) as unknown;
       return typeof value === 'function' ? value.bind(target) : value;
     },

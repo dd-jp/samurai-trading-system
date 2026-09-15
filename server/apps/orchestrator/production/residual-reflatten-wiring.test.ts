@@ -47,7 +47,7 @@ import {
 
 /** 2026-07-20 is a Monday. 02:00Z is 22:00 Sunday in New York — the US venue is shut. */
 const SHUT_INSTANT = new Date('2026-07-20T02:00:00Z');
-/** The same Monday at 11:00 New York — inside the regular session. */
+/** The same Monday at 11:00 New York — inside the regular session */
 const OPEN_INSTANT = new Date('2026-07-20T15:00:00Z');
 const OPENED_AT = new Date('2026-07-17T14:00:00Z');
 const LOT = 'key-1';
@@ -104,7 +104,7 @@ class SaxoShapedBroker implements BrokerAdapter {
   }
 }
 
-/** The durable state a partial flatten leaves behind: entry 10, exit 4, marked unprotected. */
+/** The durable state a partial flatten leaves behind: entry 10, exit 4, marked unprotected */
 async function seedMarkedResidual(store: ExecutionSharedStore): Promise<void> {
   const position: OpenPosition = {
     idempotency_key: LOT,
@@ -152,10 +152,10 @@ async function seedMarkedResidual(store: ExecutionSharedStore): Promise<void> {
   await store.markResidualUnprotected(LOT, OPENED_AT);
 }
 
-/** `filled-zero-size-wiring.test.ts`'s `StubConfig`, verbatim reasoning. */
+/** `filled-zero-size-wiring.test.ts`'s `StubConfig`, verbatim reasoning */
 type StubConfig = ProductionConfig & Required<Pick<ProductionConfig, 'alpacaBrokerClient'>>;
 
-/** `filled-zero-size-wiring.test.ts`'s stub config, plus an EXPLICIT equity calendar. */
+/** `filled-zero-size-wiring.test.ts`'s stub config, plus an EXPLICIT equity calendar */
 function stubConfig(db: StoreHandle, logger: Logger): StubConfig {
   return {
     db,
@@ -207,9 +207,9 @@ function stubConfig(db: StoreHandle, logger: Logger): StubConfig {
     verdictConfig: {
       automation_level: { crypto: 'auto', stocks: 'auto' },
       // Read by `assertFlattenGraceWithinMarkAge` at boot (#1389): the
-      // post-bell flatten grace must not outrun gate 2a's staleness ceiling.
+      // post-bell flatten grace must not outrun gate 2a's staleness ceiling
       // Nothing in this file turns on the value; it just has to clear
-      // `DEFAULT_TRADER_CONFIG.flatten_after_close_ms`.
+      // `DEFAULT_TRADER_CONFIG.flatten_after_close_ms`
       max_mark_age: { crypto: 2 * 60_000, stocks: 15 * 60_000 },
     } as ProductionConfig['verdictConfig'],
     executionConfig: makeWiringExecutionConfig(),
@@ -226,7 +226,7 @@ function stubConfig(db: StoreHandle, logger: Logger): StubConfig {
     ciiConsumerConfig: makeWiringCiiConsumerConfig(),
     // EXPLICIT, unlike the other wiring proofs' `AlwaysOpenCalendar`: this
     // file's whole subject is that the root's real session opinion reaches
-    // Execution, so the calendar under test must be one that actually closes.
+    // Execution, so the calendar under test must be one that actually closes
     tradingCalendar: new UsEquityRegularHoursCalendar(),
   } as StubConfig;
 }
@@ -264,7 +264,7 @@ describe("the residual re-flatten reads the root's own session calendar (#1214)"
 
     const surface = buildExecutionSurface(components.executionDeps, 'trace-1214-wiring');
 
-    // 22:00 the previous evening in New York: no market order may be sent.
+    // 22:00 the previous evening in New York: no market order may be sent
     await surface.sweepResidualProtection();
     expect(broker.flattenCalls).toEqual([]);
     expect(logger.entries).toContainEqual(
@@ -274,7 +274,7 @@ describe("the residual re-flatten reads the root's own session calendar (#1214)"
       }),
     );
 
-    // Same composition, same surface, same marked lot — only the clock moves.
+    // Same composition, same surface, same marked lot — only the clock moves
     clock.advanceTo(OPEN_INSTANT);
     await surface.sweepResidualProtection();
     expect(broker.flattenCalls).toEqual([

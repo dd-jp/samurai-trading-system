@@ -15,7 +15,7 @@
 
 export interface AlpacaOrderLeg {
   id: string;
-  /** 'limit' = the take-profit (target) leg; 'stop' = the stop-loss leg. */
+  /** 'limit' = the take-profit (target) leg; 'stop' = the stop-loss leg */
   type: 'limit' | 'stop';
   status: string;
   filled_qty: string;
@@ -28,11 +28,11 @@ export interface AlpacaOrderLeg {
    * (alpaca-adapter.ts) can verify a prior re-arm's levels without a cast.
    */
   stop_price?: string | null;
-  /** The leg's limit price, present on a `type: 'limit'` leg — same optionality reasoning as `stop_price`. */
+  /** The leg's limit price, present on a `type: 'limit'` leg — same optionality reasoning as `stop_price` */
   limit_price?: string | null;
 }
 
-/** Alpaca's order payload, as returned by both submit and get-order. */
+/** Alpaca's order payload, as returned by both submit and get-order */
 export interface AlpacaOrder {
   id: string;
   client_order_id: string;
@@ -44,7 +44,7 @@ export interface AlpacaOrder {
   filled_qty: string;
   filled_avg_price: string | null;
   filled_at: string | null;
-  /** Present on the bracket parent: [take_profit_leg, stop_loss_leg]. */
+  /** Present on the bracket parent: [take_profit_leg, stop_loss_leg] */
   legs?: AlpacaOrderLeg[];
   /**
    * The order's own limit price — for an OCO this IS the take-profit level
@@ -60,7 +60,7 @@ export interface AlpacaBracketOrderRequest {
   symbol: string;
   side: 'buy' | 'sell';
   qty: string;
-  /** Entry limit price. */
+  /** Entry limit price */
   limit_price: string;
   time_in_force: string;
   client_order_id: string;
@@ -97,7 +97,7 @@ export interface AlpacaBracketOrderRequest {
  */
 export interface AlpacaOcoOrderRequest {
   symbol: string;
-  /** The CLOSING side, same convention as the flatten. */
+  /** The CLOSING side, same convention as the flatten */
   side: 'buy' | 'sell';
   qty: string;
   time_in_force: string;
@@ -133,9 +133,9 @@ export interface AlpacaStopLimitOrderRequest {
   symbol: string;
   side: 'buy' | 'sell';
   qty: string;
-  /** The trigger. */
+  /** The trigger */
   stop_price: string;
-  /** The limit the order rests at once triggered. */
+  /** The limit the order rests at once triggered */
   limit_price: string;
   time_in_force: string;
   client_order_id: string;
@@ -162,7 +162,7 @@ export interface AlpacaMarketOrderRequest {
  */
 export interface AlpacaPosition {
   symbol: string;
-  /** Signed: negative for a short. */
+  /** Signed: negative for a short */
   qty: string;
   side: 'long' | 'short';
   avg_entry_price: string;
@@ -170,16 +170,16 @@ export interface AlpacaPosition {
 
 export interface AlpacaBrokerClient {
   submitOrder(request: AlpacaBracketOrderRequest): Promise<AlpacaOrder>;
-  /** The flatten (#429) — a plain market order, no bracket. */
+  /** The flatten (#429) — a plain market order, no bracket */
   submitMarketOrder(request: AlpacaMarketOrderRequest): Promise<AlpacaOrder>;
-  /** Re-arm on an EQUITY residual (#525) — protective legs only, no entry. */
+  /** Re-arm on an EQUITY residual (#525) — protective legs only, no entry */
   submitOcoOrder(request: AlpacaOcoOrderRequest): Promise<AlpacaOrder>;
   /**
    * A plain limit order (#586) — the crypto emulation's entry and its
    * emulated take-profit leg. No `order_class`, no legs.
    */
   submitLimitOrder(request: AlpacaLimitOrderRequest): Promise<AlpacaOrder>;
-  /** A plain stop-limit order (#586) — the crypto emulation's stop leg. */
+  /** A plain stop-limit order (#586) — the crypto emulation's stop leg */
   submitStopLimitOrder(request: AlpacaStopLimitOrderRequest): Promise<AlpacaOrder>;
   /**
    * `DELETE /v2/orders/{id}` (#429). Resolves rather than throwing when the
@@ -188,9 +188,9 @@ export interface AlpacaBrokerClient {
    * throws on "too late" is unusable exactly when it is needed.
    */
   cancelOrder(alpacaOrderId: string): Promise<void>;
-  /** `GET /v2/positions` (#429) — everything the venue believes it holds. */
+  /** `GET /v2/positions` (#429) — everything the venue believes it holds */
   getPositions(): Promise<AlpacaPosition[]>;
-  /** Reconciliation/poll lookup — current broker-side state of a prior order. */
+  /** Reconciliation/poll lookup — current broker-side state of a prior order */
   getOrder(alpacaOrderId: string): Promise<AlpacaOrder>;
   /**
    * Lookup by OUR id rather than Alpaca's (`GET /v2/orders:by_client_order_id`),
@@ -242,9 +242,9 @@ export interface AlpacaBrokerClient {
  * a `NaN` the wire shape claimed was a number.
  */
 export interface AlpacaAccount {
-  /** Settled cash. */
+  /** Settled cash */
   cash: string;
-  /** Total account value including open positions — the high-water mark's input. */
+  /** Total account value including open positions — the high-water mark's input */
   equity: string;
   /**
    * DISPLAY ONLY — the operator dashboard's balance tile, never a sizing input.

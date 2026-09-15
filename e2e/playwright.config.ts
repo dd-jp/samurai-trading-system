@@ -54,7 +54,7 @@ const BASE_URL = `http://${HOST}:${PORT}`;
 /**
  * Repo root, resolved from THIS FILE rather than from `process.cwd()`: the
  * server builds and serves out of the checkout the config lives in, whatever
- * directory `yarn e2e` was invoked from.
+ * directory `yarn e2e` was invoked from
  */
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 
@@ -62,10 +62,10 @@ export default defineConfig({
   testDir: fileURLToPath(new URL('.', import.meta.url)),
   outputDir: fileURLToPath(new URL('./test-results', import.meta.url)),
   // The walk and staleness scenarios assert on sampled motion over a fixed
-  // 3-second poll clock, so they are measurably sensitive to a loaded machine.
+  // 3-second poll clock, so they are measurably sensitive to a loaded machine
   // One worker costs about a minute and removes that variable; retries are off
   // for the same reason — a retried green here would hide exactly the class of
-  // defect the suite is for.
+  // defect the suite is for
   workers: 1,
   fullyParallel: false,
   retries: 0,
@@ -87,23 +87,23 @@ export default defineConfig({
     // Pinned rather than inherited: the walk scenarios assert that motion
     // HAPPENS, and a runner whose OS asks for reduced motion would turn every
     // walk into a snap and fail them for the wrong reason. The reduced-motion
-    // scenario overrides this per-file.
+    // scenario overrides this per-file
     contextOptions: { reducedMotion: 'no-preference' },
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: {
     // Builds what it serves: the point of this suite is the real bundle, and a
-    // stale `dist/` would test bytes nobody is shipping.
+    // stale `dist/` would test bytes nobody is shipping
     command: 'yarn build && node dist/server/apps/service-api/fixture-server.js',
     cwd: repoRoot,
     url: `${BASE_URL}/api/snapshot`,
-    // `tsc` + `vite build` from cold; the 60s default is not enough.
+    // `tsc` + `vite build` from cold; the 60s default is not enough
     timeout: 300_000,
-    // Never adopt a server this run did not build, in CI or locally.
+    // Never adopt a server this run did not build, in CI or locally
     reuseExistingServer: false,
     env: {
       // Mandatory by design — `resolveStoreMode()` throws without it, and a
-      // dashboard that guessed its mode is the one failure that matters.
+      // dashboard that guessed its mode is the one failure that matters
       SAMURAI_MODE: 'paper',
       PORT: String(PORT),
       HOST,
@@ -117,7 +117,7 @@ export default defineConfig({
       // every fixture-server request 401, since no spec sends an
       // Authorization header. A blank value reads as unset
       // (`isConfiguredCredential`), so this is a no-op today and a
-      // structural guarantee against tomorrow's ambient env.
+      // structural guarantee against tomorrow's ambient env
       [DASHBOARD_CREDENTIAL_ENV_VAR]: '',
     },
     stdout: 'pipe',

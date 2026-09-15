@@ -98,7 +98,7 @@ describe('hasCoverageFor — presence, never direction', () => {
    * #752 acceptance criterion: "a pool of uniformly bearish items does not
    * raise it." Every item below is bearish; coverage must still read true —
    * the signal asks whether evidence EXISTS, never whether it agrees with a
-   * direction (ADR-0016 D2 rules out catalyst-gating).
+   * direction (ADR-0016 D2 rules out catalyst-gating)
    */
   it('reads a uniformly bearish pool as covered, not as absent', () => {
     const context = emptyContext({
@@ -185,7 +185,7 @@ describe('MiCoverageMonitor', () => {
 
     // Alerts at consecutive=1, then again at consecutive=9 (1 + 8) — every
     // tick in between stays quiet, matching the analyst-skip/trader-diagnostic
-    // bounded-repeat convention this module reuses.
+    // bounded-repeat convention this module reuses
     expect(results.map((r) => r.alert)).toEqual([
       true,
       false,
@@ -254,7 +254,7 @@ function buildDeps(overrides: {
                   // lse-etp-pool.ts row), so the honest fixture for "the
                   // instrument used in these tests (3USL) is covered" is an
                   // item entitied 'SPY', not '3USL' — mirroring what
-                  // `checkMiCoverage` now actually resolves before comparing.
+                  // `checkMiCoverage` now actually resolves before comparing
                   entity: 'SPY',
                   headline: 'x',
                   sentiment: 1,
@@ -327,7 +327,7 @@ describe('checkMiCoverage', () => {
   // #1280: `MiCoverageAlert.trace_id` is threaded from `params.trace_id`, the
   // same value the adjacent `noDataObserved`/catch-line telemetry already
   // uses — not a hardcoded constant on the alert-channel side. Two different
-  // trace ids proves it is threaded rather than fixed.
+  // trace ids proves it is threaded rather than fixed
   it("threads the caller's trace_id onto the posted alert, not a fixed constant (#1280)", async () => {
     const { deps: deps1, alertsPosted: alertsPosted1 } = buildDeps({
       covered: false,
@@ -360,7 +360,7 @@ describe('checkMiCoverage', () => {
     // `ALERT_AFTER_CONSECUTIVE_NO_DATA = 1` that is an alert on tick 1 for a
     // name that does have news — the spurious fire AC5 rules out. The COUNTER
     // still fires: it is the measurement, and a rate whose denominator
-    // silently dropped these ticks would be the wrong number.
+    // silently dropped these ticks would be the wrong number
     const monitor = new MiCoverageMonitor();
     const { deps, noDataEvents, alertsPosted } = buildDeps({
       covered: false,
@@ -381,14 +381,14 @@ describe('checkMiCoverage', () => {
     // counter, `shouldAlertAt` would then skip the next 8 misses before
     // speaking, so a gate meant to hold one tick would silence the first real
     // one. "MI has not looked yet" is also not "this name has no coverage",
-    // which is what `degraded` reports.
+    // which is what `degraded` reports
     expect(monitor.degraded).toBe(false);
   });
 
   it('alerts on the first miss once MI has looked, even if that look failed (#1085)', async () => {
     // ATTEMPTED, not succeeded. A name whose refresh threw or was refused by
     // the spend cap has no data and is not going to get any, so the gate must
-    // not be able to silence coverage for a whole run.
+    // not be able to silence coverage for a whole run
     const { deps, alertsPosted } = buildDeps({
       covered: false,
       refreshAttempted: () => true,
@@ -409,13 +409,13 @@ describe('checkMiCoverage', () => {
     // while the gate is closed — the hydrated-archive case, where a name reads
     // covered before a single refresh has run. That skip is a no-op rather
     // than a lost reset: `observe(x, true)` only DELETES `x` from the
-    // consecutive and currently-missing maps, and `x` cannot be in either.
+    // consecutive and currently-missing maps, and `x` cannot be in either
     // Both are populated exclusively by `observe(x, false)`, which this same
     // gate blocks, and `MiRefreshQueue`'s `#attempted` set is add-only — one
     // `add` and no delete, not even in `stop()` — so `refreshAttempted` never
     // goes true then false again. The monitor is also constructed per process
     // (`production.ts`) and reads nothing back, so there is no earlier run's
-    // streak to strand.
+    // streak to strand
     const monitor = new MiCoverageMonitor();
     let attempted = false;
     const { deps, alertsPosted } = buildDeps({
@@ -436,7 +436,7 @@ describe('checkMiCoverage', () => {
     expect(monitor.everDegraded).toBe(false);
 
     // A gated MISS on the same name, still before the first sweep — the other
-    // half of what the gate suppresses.
+    // half of what the gate suppresses
     const gatedMiss = buildDeps({ covered: false, monitor, refreshAttempted: () => attempted });
 
     await checkMiCoverage(gatedMiss.deps, {
@@ -451,7 +451,7 @@ describe('checkMiCoverage', () => {
     // The discriminating assertion: once MI has looked, the next miss is the
     // FIRST one the monitor has seen and alerts immediately. Move `observe`
     // above the gate — so either gated pass advanced the counter — and this
-    // miss becomes the second, which `shouldAlertAt` skips, and this goes red.
+    // miss becomes the second, which `shouldAlertAt` skips, and this goes red
     attempted = true;
     const missing = buildDeps({ covered: false, monitor, refreshAttempted: () => true });
 
@@ -466,7 +466,7 @@ describe('checkMiCoverage', () => {
   });
 
   it('alerts on the first miss when no gate is supplied, because nothing will ever look', async () => {
-    // The honest default for a run with no MI writer wired at all.
+    // The honest default for a run with no MI writer wired at all
     const { deps, alertsPosted } = buildDeps({ covered: false });
 
     await checkMiCoverage(deps, {
@@ -512,7 +512,7 @@ describe('checkMiCoverage', () => {
     // its resolved 'SPY'. If checkMiCoverage were still comparing the raw
     // instrument, this would read as covered; since it now resolves '3USL'
     // to 'SPY' before comparing, an entity of '3USL' no longer matches
-    // anything and the instrument correctly reads as missing.
+    // anything and the instrument correctly reads as missing
     const contextSource: MiCoverageContextSource = {
       getContext: vi.fn(() =>
         emptyContext({
@@ -618,7 +618,7 @@ describe('checkMiCoverage', () => {
 
   it('never throws when no alert channel is configured at all', async () => {
     const { deps } = buildDeps({ covered: false });
-    // Simulate the "absent channel" composition-root state directly.
+    // Simulate the "absent channel" composition-root state directly
     (deps as { alertChannel: MiCoverageAlertChannel | undefined }).alertChannel = undefined;
 
     await expect(

@@ -53,7 +53,7 @@ describe('RateLimiter refuses a misconfigured budget at construction', () => {
   });
 
   it('refuses a clock that does not return a Date', () => {
-    // Would otherwise throw on `clock.now().getTime()` at the first debate.
+    // Would otherwise throw on `clock.now().getTime()` at the first debate
     expect(
       () => new RateLimiter({ now: () => undefined } as unknown as SimulatedClock, makeConfig()),
     ).toThrow(/must return a Date/);
@@ -72,7 +72,7 @@ describe('RateLimiter refuses a misconfigured budget at construction', () => {
   /**
    * `windowMs: 0` is the dangerous one: `currentWindow`'s
    * `now - windowStart < windowMs` is never true, so every call mints a fresh
-   * window and the limiter enforces NOTHING while reading as configured.
+   * window and the limiter enforces NOTHING while reading as configured
    */
   it('refuses windowMs: 0, which would silently disable enforcement', () => {
     expect(() => new RateLimiter(clock, makeConfig({ windowMs: 0 }))).toThrow(
@@ -117,7 +117,7 @@ describe('RateLimiter.reserve is total over AssetClass', () => {
     });
 
     // `stocks` has no entry. It must be governed by `default` (maxDebates 3),
-    // not error and not inherit crypto's 99.
+    // not error and not inherit crypto's 99
     expect(limiter.reserve('stocks', 4)).toEqual({ granted: true });
     limiter.reserve('stocks', 4);
     limiter.reserve('stocks', 4);
@@ -131,7 +131,7 @@ describe('RateLimiter.reserve is total over AssetClass', () => {
     });
 
     // Shares `currentWindow` with `reserve`, and runs INSIDE the debate via
-    // `RateLimitedLlmClient` — a throw here would fail the debate mid-flight.
+    // `RateLimitedLlmClient` — a throw here would fail the debate mid-flight
     expect(() => limiter.recordCall('stocks')).not.toThrow();
     expect(limiter.snapshot().stocks?.llmCallsUsed).toBe(1);
   });
@@ -153,7 +153,7 @@ describe('RateLimiter', () => {
     limiter.recordCall('crypto');
     limiter.recordCall('crypto');
 
-    // 2 calls used, 8 remain — a further worst-case-8 reservation should fit exactly.
+    // 2 calls used, 8 remain — a further worst-case-8 reservation should fit exactly
     const result = limiter.reserve('crypto', 8);
 
     expect(result).toEqual({ granted: true });
@@ -186,7 +186,7 @@ describe('RateLimiter', () => {
       reason: 'LLM call budget insufficient for crypto: 0/3 used, 4 needed for worst case',
     });
 
-    // Rejection must not consume any debate-count budget either.
+    // Rejection must not consume any debate-count budget either
     const followUp = limiter.reserve('crypto', 3);
     expect(followUp).toEqual({ granted: true });
   });

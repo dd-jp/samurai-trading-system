@@ -17,7 +17,7 @@
 import type { OpenPosition, OrderState } from '../types/records.js';
 import { fromStoredTimestamp } from './sqlite-utils.js';
 
-/** One `open_positions` row exactly as `better-sqlite3` returns it. */
+/** One `open_positions` row exactly as `better-sqlite3` returns it */
 export interface OpenPositionRow {
   idempotency_key: string;
   debate_id: string;
@@ -36,26 +36,26 @@ export interface OpenPositionRow {
   decision_timestamp: string;
   conviction: number;
   converged: 0 | 1;
-  /** NULL unless a #549 unprotected-residual episode is open — migration 0024. */
+  /** NULL unless a #549 unprotected-residual episode is open — migration 0024 */
   residual_unprotected_since: string | null;
-  /** NULL until that episode's operator alert was posted — migration 0024. */
+  /** NULL until that episode's operator alert was posted — migration 0024 */
   residual_rearm_alerted_at: string | null;
   /**
    * NULL until the TRUTHFUL permanent-gap page (a confirmed
    * `ProtectiveRearmUnsupportedError`) was posted for this episode — its own
-   * dedup, independent of `residual_rearm_alerted_at` (migration 0059, #1447).
+   * dedup, independent of `residual_rearm_alerted_at` (migration 0059, #1447)
    */
   residual_rearm_unsupported_alerted_at: string | null;
-  /** #1001, migration 0037 — see `OpenPosition.decision_price`. */
+  /** #1001, migration 0037 — see `OpenPosition.decision_price` */
   decision_price: number | null;
   quote_bid: number | null;
   quote_ask: number | null;
   quote_mid: number | null;
   quote_observed_at: string | null;
   modelled_cost_breakdown_json: string | null;
-  /** #1301, migration 0061 — see `OpenPosition.modelled_protective_exit_cost_breakdown`. */
+  /** #1301, migration 0061 — see `OpenPosition.modelled_protective_exit_cost_breakdown` */
   modelled_protective_exit_cost_breakdown_json: string | null;
-  /** #1186, migration 0056 — set only when `order_state = 'abandoned'`. */
+  /** #1186, migration 0056 — set only when `order_state = 'abandoned'` */
   abandon_reason: string | null;
 }
 
@@ -133,7 +133,7 @@ export function fromOpenPositionRow(row: OpenPositionRow): OpenPosition {
     conviction: row.conviction,
     converged: row.converged === 1,
     // Optional domain fields are OMITTED, not `null`, on a pre-migration row
-    // (`exactOptionalPropertyTypes`) — the same convention as `fromFillRow`.
+    // (`exactOptionalPropertyTypes`) — the same convention as `fromFillRow`
     ...(row.decision_price === null ? {} : { decision_price: row.decision_price }),
     ...(row.quote_bid === null ? {} : { quote_bid: row.quote_bid }),
     ...(row.quote_ask === null ? {} : { quote_ask: row.quote_ask }),

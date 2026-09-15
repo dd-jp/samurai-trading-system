@@ -20,82 +20,82 @@ const TABLES = [
   'debate_log',
   'breaker_state',
   'verdict_log',
-  // #328 — the Trader/Risk decision records, migration 0016.
+  // #328 — the Trader/Risk decision records, migration 0016
   'trader_log',
   'risk_log',
   'audit_log',
   'current_tick',
   'cii_snapshots',
   // `account_state` shipped in 0006 without being listed here — the assertion
-  // is only as good as the list, so it is added with `broker_brackets` (0007).
-  // 0007's other table, `broker_observed_fills`, was dropped by 0053 (#1059).
+  // is only as good as the list, so it is added with `broker_brackets` (0007)
+  // 0007's other table, `broker_observed_fills`, was dropped by 0053 (#1059)
   'account_state',
   'broker_brackets',
   'broker_unpriced_fills',
   // `session_equity` (0009) very nearly repeated `account_state`'s omission
   // above, which is why the assertion below is now an exact set rather than a
   // one-directional "every listed table exists": that form is blind to a table
-  // nobody listed, so it could never have caught either miss.
+  // nobody listed, so it could never have caught either miss
   'session_equity',
   // `llm_spend` (0010) — locally-metered Anthropic token spend, the stand-in
-  // for the credit-balance endpoint Anthropic does not publish.
+  // for the credit-balance endpoint Anthropic does not publish
   'llm_spend',
   // `daily_equity` (0011) — the append-only daily equity series `computeMetrics`
   // derives a live `ReturnSeries` from (#345). Samples the same boundary
-  // `session_equity` above does; unlike it, never overwrites a row.
+  // `session_equity` above does; unlike it, never overwrites a row
   'daily_equity',
   // `stage2_selected_config` (0014) — the frozen Stage 2 selection (#375,
   // #384). Where `DailyMetricsSample.revalidation` and the divergence baseline
-  // both come from, and the reason four kill-lines out of four could not fire.
+  // both come from, and the reason four kill-lines out of four could not fire
   'stage2_selected_config',
   // `flatten_submissions` (0019) — the durable journal for `execute()`'s
   // exit path (#508 review, PR #516): an exit writes no `open_positions`
   // row, so without this table a replayed flatten had nothing to dedupe
   // against and a lost `submitFlatten` response had no clientOrderId for
-  // reconcile to resolve.
+  // reconcile to resolve
   'flatten_submissions',
   // `risk_critic_log` (0032) — the risk critic's `debate_id`-keyed verdict
   // (#957). ADR-0003 §2's replay-from-log determinism lives in this table: a
   // `backtest` run reads what a `live`/`paper` run wrote instead of calling
-  // the model again.
+  // the model again
   'risk_critic_log',
   // `arm_comparison_samples` (0034) — the Feedback Loop's own record of every
   // matched-control comparison it computed and of the ones it escalated (#971,
   // under #636/#913). Persisted rather than recomputed because the dashboard
-  // reads it from a different process, and because a trend needs a series.
+  // reads it from a different process, and because a trend needs a series
   'arm_comparison_samples',
   // `outside_benchmark_samples` (0036) — the risk-adjusted OUTSIDE benchmarks,
   // SPY and 60/40, over the same window the arm comparison used (#981, under
   // #636). A separate table rather than columns on `arm_comparison_samples`: a
   // benchmark has no trade count, no realized PnL, no verdict and no arm tag,
   // so folding it in would mean four nullable columns and would make the
-  // secondary reading look like a third arm.
+  // secondary reading look like a third arm
   'outside_benchmark_samples',
   // `llm_call_log` (0039) — the prompt sent and the text that came back for
   // every metered LLM call (#1035). Separate from `llm_spend` because the
   // spend cap sums that table on the trading path and the dashboard
-  // range-scans it, and neither reads the text; see the migration's header.
+  // range-scans it, and neither reads the text; see the migration's header
   'llm_call_log',
   // `alert_delivery_failures` (0043) — a Telegram alert send that exhausted
   // retries (#1108). Durable so "how many escalations went undelivered" is
-  // answerable after the fact, not just visible in a log line.
+  // answerable after the fact, not just visible in a log line
   'alert_delivery_failures',
   // `feedback_cycle_schedule` (0044) — the daily feedback cycle's
   // restart-durable schedule (#1110); see production.ts's
-  // `scheduleFeedbackCycle` for why.
+  // `scheduleFeedbackCycle` for why
   'feedback_cycle_schedule',
   // `llm_spend_cap` (0047) — the LLM budget the orchestrator's composition
   // root armed its spend cap with (#1140), so the dashboard's meter measures
-  // against the cap being enforced rather than a copy of the number.
+  // against the cap being enforced rather than a copy of the number
   'llm_spend_cap',
   // `debate_round_log` (0064) — each round's mediator verdict (#1517), so
   // the flip-rate report can compare round 1's direction against the final
   // round's without `debate_log` (one row per debate, final state only)
-  // having to carry a transcript.
+  // having to carry a transcript
   'debate_round_log',
   // `llm_gate_refusals` (0065) — a gate-refused debate writes no `debate_log`
   // row (#1533), so `LlmFailureRateGuard`'s window read would otherwise never
-  // learn a refusal happened at all; see the migration's header.
+  // learn a refusal happened at all; see the migration's header
   'llm_gate_refusals',
 ];
 
@@ -118,7 +118,7 @@ const MIGRATIONS = listMigrations(MIGRATIONS_DIR);
 const MIGRATION_VERSIONS = MIGRATIONS.map((migration) => migration.version);
 const HIGHEST_KNOWN_MIGRATION_VERSION = 66;
 
-/** A temp copy of `MIGRATIONS_DIR` holding every migration through `throughVersion`, inclusive. */
+/** A temp copy of `MIGRATIONS_DIR` holding every migration through `throughVersion`, inclusive */
 function copyMigrationsUpTo(throughVersion: number): string {
   const dir = mkdtempSync(join(tmpdir(), `samurai-migrations-through-${throughVersion}-`));
   for (const migration of MIGRATIONS) {
@@ -162,9 +162,9 @@ describe('openSharedStore', () => {
 
     // Exact set, both directions. A migration that adds a table without adding
     // it here now FAILS rather than passing unnoticed — the gap that let
-    // `account_state` (0006) and `session_equity` (0009) both ship unlisted.
+    // `account_state` (0006) and `session_equity` (0009) both ship unlisted
     // `sqlite_sequence` is SQLite's own AUTOINCREMENT bookkeeping, created
-    // implicitly, so it is excluded rather than declared.
+    // implicitly, so it is excluded rather than declared
     const declared = new Set([...TABLES, 'schema_migrations']);
     const unexpected = [...names].filter(
       (name) => !declared.has(name) && name !== 'sqlite_sequence',
@@ -207,7 +207,7 @@ describe('openSharedStore', () => {
       // Nullable with no default: NULL is the historically-true "no declared
       // ceiling was in effect" for every pre-#1112 row, and
       // `oneSizingRegime` (sqlite-arm-comparison-source.ts) reads it as
-      // exactly that.
+      // exactly that
       expect(column?.notnull).toBe(0);
       expect(column?.dflt_value).toBeNull();
     }
@@ -215,7 +215,7 @@ describe('openSharedStore', () => {
 
   // #1186: unlike 0045, this column belongs on `open_positions` only — an
   // abandoned (wedged-zero-fill) lot never produces a `ClosedTrade` row, so
-  // `closed_trades` has no matching column to miss.
+  // `closed_trades` has no matching column to miss
   it('migration 0056 adds a nullable abandon_reason to open_positions only (#1186)', () => {
     const db = openSharedStore(':memory:');
 
@@ -257,7 +257,7 @@ describe('openSharedStore', () => {
     // explicitly (`SqliteExecutionStore.insertClosedTrade`), so the default
     // only ever fires for a row this migration itself backfills — and it is
     // right for the control arm (always correctly charged) and wrong for the
-    // live arm, which the migration's own UPDATE corrects to 0 below.
+    // live arm, which the migration's own UPDATE corrects to 0 below
     expect(column?.notnull).toBe(1);
     expect(column?.dflt_value).toBe('1');
   });
@@ -269,7 +269,7 @@ describe('openSharedStore', () => {
   // corrected. This test instead reproduces the real cutover: migrate to
   // 0048 (a checkout mid-#1121), write one row per arm the way they looked
   // before this ticket, THEN apply 0049 from the real migrations directory
-  // and check the UPDATE it runs.
+  // and check the UPDATE it runs
   it('migration 0049 backfills pre-existing live rows to 0 and control rows to 1 (#1121)', () => {
     const raw = new BetterSqlite3(':memory:');
     const preCutoverVersion = 48;
@@ -316,7 +316,7 @@ describe('openSharedStore', () => {
   // Same cutover shape as the 0049 test above, and for the same reason: 0052's
   // whole content is an UPDATE over rows that must already exist when it runs,
   // so a fresh `:memory:` DB — which applies 0052 before any row is written —
-  // proves nothing about it.
+  // proves nothing about it
   //
   // The pre-conversion value is the GBP book (1000) that `paperStartingProfile`
   // stamped through `sizing_capital_ceiling` before #1180 converted the sizing
@@ -325,7 +325,7 @@ describe('openSharedStore', () => {
   // `open_positions` mixed. The unrelated-ceiling row is what stops the UPDATE
   // being written as an unconditional rewrite of the column: a genuinely
   // different declared ceiling must survive untouched, or the backfill would
-  // erase the real mid-window book change `oneSizingRegime` exists to refuse.
+  // erase the real mid-window book change `oneSizingRegime` exists to refuse
   it('migration 0052 normalizes the pre-conversion ceiling stamp on both lot tables (#1180)', () => {
     const raw = new BetterSqlite3(':memory:');
     const preCutoverVersion = 51;
@@ -391,11 +391,11 @@ describe('openSharedStore', () => {
   // against an empty fresh `:memory:` DB (spec-schema-drift.test.ts) cannot
   // catch a transposition because no row ever moves through it. This seeds one
   // row per table before 0055 with a distinct, non-default value in every
-  // column so a shift shows up as a wrong value rather than a silent pass.
+  // column so a shift shows up as a wrong value rather than a silent pass
   // `broker_unpriced_fills` in particular has two adjacent TEXT NOT NULL
   // timestamp columns (`first_seen_at`/`last_seen_at`) a transposition made
   // consistently in both the migration and the spec fence would pass every
-  // other gate on — the row-level check here is what would actually catch it.
+  // other gate on — the row-level check here is what would actually catch it
   it('migration 0055 preserves pre-existing bracket and unpriced-fill rows across the CHECK rebuild (#1459)', () => {
     const raw = new BetterSqlite3(':memory:');
     const preCutoverVersion = 54;
@@ -489,7 +489,7 @@ describe('openSharedStore', () => {
   // hypothetical — the paper soak DB was at `schema_migrations` max 48 when
   // #1124 was fixed, holding 13 `flatten_submissions` rows of which 11 were
   // the control arm's; `DEFAULT 'live'` alone would have mislabelled all 11
-  // into the live arm's newly-filtered `getUnresolvedFlattens()` scan.
+  // into the live arm's newly-filtered `getUnresolvedFlattens()` scan
   //
   // The four seeded rows are the four answers the backfill can give: the
   // closed-trade arm, the open-position arm (the second COALESCE branch —
@@ -504,7 +504,7 @@ describe('openSharedStore', () => {
   // NULL row is excluded by that `WHERE` twice over (`IS NOT NULL`, and
   // `json_valid(NULL)` is itself NULL) and so never runs the UPDATE at all,
   // keeping the column's DEFAULT. `json_each(NULL)` does not raise — it
-  // yields zero rows; only a malformed value raises.
+  // yields zero rows; only a malformed value raises
   it('migration 0050 backfills each flatten row to its lots’ arm, falling back to live (#1124)', () => {
     const raw = new BetterSqlite3(':memory:');
     const preCutoverVersion = 49;
@@ -563,7 +563,7 @@ describe('openSharedStore', () => {
       // The index is what keeps the newly-filtered scan from degrading into a
       // full-table read as the journal grows, and nothing else in the suite
       // asserts it exists — the store test covers the COLUMN end to end, but a
-      // dropped `CREATE INDEX` line would stay green everywhere.
+      // dropped `CREATE INDEX` line would stay green everywhere
       expect(
         raw
           .prepare(
@@ -599,7 +599,7 @@ describe('openSharedStore', () => {
       expect(column?.type).toBe('REAL');
       // Nullable with no default: NULL is "this gate does not compare a number
       // to a bound", which is the truth for every pre-#1111 row and for every
-      // `go` and non-staleness refusal written since.
+      // `go` and non-staleness refusal written since
       expect(column?.notnull).toBe(0);
       expect(column?.dflt_value).toBeNull();
     }
@@ -609,7 +609,7 @@ describe('openSharedStore', () => {
   // through a column-name typo in the migration file — every marker query
   // would then fail only at runtime. Asserted against the SCHEMA the
   // migration actually produced, plus a write/read round-trip through the
-  // exact column names the store's SQL uses.
+  // exact column names the store's SQL uses
   it('migration 0024 adds the residual-protection marker columns as nullable TEXT (#549)', () => {
     const db = openSharedStore(':memory:');
 
@@ -627,12 +627,12 @@ describe('openSharedStore', () => {
       expect(column?.type).toBe('TEXT');
       // Nullable with no default: NULL IS the "no open episode" state
       // (migration 0024's own doc), for pre-migration rows and fresh ones
-      // alike.
+      // alike
       expect(column?.notnull).toBe(0);
       expect(column?.dflt_value).toBeNull();
     }
 
-    // Round-trip through the exact column names the store's marker SQL uses.
+    // Round-trip through the exact column names the store's marker SQL uses
     db.prepare(
       `INSERT INTO open_positions (
          idempotency_key, debate_id, instrument, asset_class, side, intent_type,
@@ -668,7 +668,7 @@ describe('openSharedStore', () => {
     });
   });
 
-  // Same reasoning as the 0024 assertion above.
+  // Same reasoning as the 0024 assertion above
   it('migration 0027 adds key_scheme defaulting to 2, with existing rows at 1 (#686)', () => {
     const db = openSharedStore(':memory:');
 
@@ -687,7 +687,7 @@ describe('openSharedStore', () => {
     // writes is post-#686 without any code naming the column, and the
     // migration's own UPDATE is what marks the pre-cutover rows as 1. A
     // nullable column, or a DEFAULT of 1, would make the guard fire on lots it
-    // should pass — or, worse, pass lots it should block.
+    // should pass — or, worse, pass lots it should block
     expect(column?.notnull).toBe(1);
     expect(column?.dflt_value).toBe('2');
   });
@@ -695,7 +695,7 @@ describe('openSharedStore', () => {
   // Same reasoning as the 0024 assertion above: a recorded version alone would
   // stay green through a typo'd index name or column. The dashboard's 3-second
   // poll range-scans `audit_log.timestamp` twice, and without this index that
-  // is two full table scans of a table that grows forever (#619).
+  // is two full table scans of a table that grows forever (#619)
   it('migration 0025 indexes audit_log by timestamp (#619)', () => {
     const db = openSharedStore(':memory:');
 
@@ -712,7 +712,7 @@ describe('openSharedStore', () => {
     const db = openSharedStore(tempDbPath());
 
     expect(db.pragma('journal_mode', { simple: true })).toBe('wal');
-    // synchronous=FULL is 2 in SQLite's pragma encoding.
+    // synchronous=FULL is 2 in SQLite's pragma encoding
     expect(db.pragma('synchronous', { simple: true })).toBe(2);
   });
 
@@ -721,7 +721,7 @@ describe('openSharedStore', () => {
     // is gitignored — so on any fresh clone it does not exist. Without this,
     // `yarn orchestrator` died at the store open with better-sqlite3's
     // "Cannot open database because the directory does not exist": no path, no
-    // stage, no hint that a `mkdir` is all it wanted.
+    // stage, no hint that a `mkdir` is all it wanted
     const root = mkdtempSync(join(tmpdir(), 'samurai-store-'));
     const path = join(root, 'data', 'nested', 'samurai-development.sqlite');
 
@@ -843,7 +843,7 @@ describe('openSharedStore', () => {
 // literal can, so `HIGHEST_KNOWN_MIGRATION_VERSION` is checked here against a
 // full 1..N contiguity assertion (not just the tail, so a deleted middle file
 // reds too) — and folded into an unrelated test, deleting or skipping that
-// test would have silently dropped this guarantee with the suite still green.
+// test would have silently dropped this guarantee with the suite still green
 describe('migrations directory (#1397)', () => {
   it('is a known, contiguous 1..N version list', () => {
     expect(MIGRATION_VERSIONS).toEqual(
@@ -877,7 +877,7 @@ describe('sharedStorePath', () => {
 
   it('gives paper and live distinct files — the mechanism, not a detail', () => {
     // Two paths never share state, so paper/live cross-contamination is
-    // physically impossible rather than merely discouraged.
+    // physically impossible rather than merely discouraged
     expect(new Set(STORE_MODES.map((mode) => sharedStorePath(mode))).size).toBe(STORE_MODES.length);
   });
 
@@ -902,7 +902,7 @@ describe('sharedStorePath', () => {
   it('refuses an unset or unrecognised mode rather than defaulting to paper', () => {
     // A default of `paper` would be the #330 hazard inverted: a live run whose
     // SAMURAI_MODE failed to export would open the paper database and trade
-    // real money against paper state.
+    // real money against paper state
     for (const raw of [undefined, '', 'Paper', 'PAPER', 'production', 'a/b', '../../etc/passwd']) {
       if (raw === undefined) delete process.env.SAMURAI_MODE;
       else process.env.SAMURAI_MODE = raw;
@@ -941,7 +941,7 @@ describe('sharedStorePath — the pre-#330 database (migration story)', () => {
   it('refuses to start against an empty store when a pre-#330 file is stranded', () => {
     // Without this, the run opens a fresh database and sees none of the
     // positions, fills or tuning history in the old one — while any real
-    // positions stay open at the broker.
+    // positions stay open at the broker
     writeFileSync(join(root, 'data', 'samurai-production.sqlite'), '');
 
     expect(() => sharedStorePath()).toThrow(/samurai-production\.sqlite/);
@@ -964,7 +964,7 @@ describe('sharedStorePath — the pre-#330 database (migration story)', () => {
 
     expect(() => sharedStorePath()).toThrow();
     // The old file is exactly where it was: only the operator knows whether it
-    // is paper history to carry forward or live state a paper run must not get.
+    // is paper history to carry forward or live state a paper run must not get
     expect(existsSync(join(root, 'data', 'samurai-production.sqlite'))).toBe(true);
     expect(existsSync(join(root, 'data', 'samurai-paper.sqlite'))).toBe(false);
   });

@@ -88,7 +88,7 @@ function makeInput(overrides: MetricsInputOverrides = {}): {
   // `{ ...base, ...overrides }` as a `MetricsInput` precisely because
   // `overrides` may carry `revalidation: undefined` — which is the whole point
   // of `MetricsInputOverrides` above. Everything before the spread is still
-  // type-checked against `MetricsInput`.
+  // type-checked against `MetricsInput`
   const input = {
     clock: makeClock(),
     daily: makeSuite(),
@@ -108,7 +108,7 @@ describe('computeMetrics', () => {
   it('refuses to score a cycle against a softened kill line (#638)', () => {
     // The boot check cannot cover this: `FeedbackConfig` is held for the life
     // of the process, so the per-cycle check is what stops a verdict being
-    // REPORTED against a line that is not the recorded one.
+    // REPORTED against a line that is not the recorded one
     const { input } = makeInput({
       config: makeConfig({
         kill_thresholds: {
@@ -247,7 +247,7 @@ describe('computeMetrics', () => {
 
     computeMetrics(input);
 
-    // Tightened by at most max_step, never crossing the floor.
+    // Tightened by at most max_step, never crossing the floor
     expect(tuning.getRiskThresholds().max_position_size).toBeCloseTo(0.1);
   });
 
@@ -285,7 +285,7 @@ describe('computeMetrics — un-evaluated kill-lines (#327)', () => {
 
     // The clean bill of health it would otherwise look like...
     expect(report.breaches).toEqual([]);
-    // ...is distinguishable only because of this.
+    // ...is distinguishable only because of this
     expect(report.not_evaluated).toEqual([
       'pbo_over_max',
       'oos_sharpe_under_min',
@@ -308,7 +308,7 @@ describe('computeMetrics — un-evaluated kill-lines (#327)', () => {
     });
     const report = computeMetrics(input);
 
-    // The `0` return is deliberate and unchanged — visibility is the fix.
+    // The `0` return is deliberate and unchanged — visibility is the fix
     expect(report.breaches).toEqual([]);
     expect(report.not_evaluated).toEqual(['live_backtest_divergence_over_max']);
     expect(alerts.getAlerts()).toEqual([]);

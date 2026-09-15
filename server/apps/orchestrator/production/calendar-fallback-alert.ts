@@ -33,14 +33,14 @@
  * is implemented.
  */
 
-/** One calendar-fetch fallback, at boot. */
+/** One calendar-fetch fallback, at boot */
 export interface CalendarFallbackAlert {
-  /** The fetch failure's own message — never a credential, per every other alert on this list. */
+  /** The fetch failure's own message — never a credential, per every other alert on this list */
   reason: string;
   /**
    * The hand table `US_TABLE_COVERAGE_END` (trading-calendar.ts) currently
    * reads, so the operator knows how far the fallback can be trusted before
-   * it itself starts throwing rather than guessing.
+   * it itself starts throwing rather than guessing
    */
   fallback_coverage_end: string;
   reported_at: Date;

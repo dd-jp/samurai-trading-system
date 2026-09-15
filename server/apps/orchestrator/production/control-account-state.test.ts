@@ -23,7 +23,7 @@ import {
   ControlArmAccountStateProvider,
 } from './control-account-state.js';
 
-/** Saturday noon UTC: the crypto session opened at 00:00 UTC the same morning. */
+/** Saturday noon UTC: the crypto session opened at 00:00 UTC the same morning */
 const AS_OF = new Date('2026-08-01T12:00:00Z');
 const BEFORE_THE_SESSION = new Date('2026-07-30T09:00:00.000Z');
 const IN_THE_SESSION = new Date('2026-08-01T06:00:00.000Z');
@@ -36,7 +36,7 @@ function openStore(): { db: StoreHandle; cleanup: () => void } {
   return { db, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-/** As `account-state.test.ts`'s helper: `closed_at` normalized through `toISOString()`. */
+/** As `account-state.test.ts`'s helper: `closed_at` normalized through `toISOString()` */
 function insertClosedTrade(
   db: StoreHandle,
   args: {
@@ -72,7 +72,7 @@ function insertClosedTrade(
   );
 }
 
-/** A filled long lot, written straight to the table so `filled_size` is non-zero. */
+/** A filled long lot, written straight to the table so `filled_size` is non-zero */
 function insertOpenLot(
   db: StoreHandle,
   args: { key: string; arm: TradingArm; price: number; size: number },
@@ -113,7 +113,7 @@ function makeProvider(
   return new ControlArmAccountStateProvider({
     resolveBook,
     // `arm: 'control'` — the whole point. The live arm's Feedback Loop takes
-    // the same class's default.
+    // the same class's default
     closedTrades: new SqliteClosedTradeStore(db, 'control'),
     getOpenPositions: () => new SqliteExecutionStore(db, 'control').getOpenPositions(),
     calendars: { crypto: new AlwaysOpenCalendar(), stocks: new UsEquityRegularHoursCalendar() },
@@ -138,7 +138,7 @@ describe('ControlArmAccountStateProvider (#753)', () => {
       expect(before.peak_equity).toBe(BOOK);
 
       // The live arm banks £400 and deploys £350 — a large cash movement on the
-      // real account, which is exactly what the shared provider used to report.
+      // real account, which is exactly what the shared provider used to report
       insertClosedTrade(db, {
         key: 'live-win',
         assetClass: 'crypto',
@@ -161,13 +161,13 @@ describe('ControlArmAccountStateProvider (#753)', () => {
 
   /**
    * The converse, in the same file on purpose: a filter that returned zero rows
-   * would pass the case above and this one is what catches it.
+   * would pass the case above and this one is what catches it
    */
   it("moves on the control arm's OWN closes and its own open lots", async () => {
     const { db, cleanup } = openStore();
     try {
       // Settled before the session opened: it moves the denominator, not the
-      // numerator.
+      // numerator
       insertClosedTrade(db, {
         key: 'control-old',
         assetClass: 'crypto',
@@ -175,7 +175,7 @@ describe('ControlArmAccountStateProvider (#753)', () => {
         closedAt: BEFORE_THE_SESSION,
         arm: 'control',
       });
-      // Inside the session: the daily numerator, and a loss, so the streak moves.
+      // Inside the session: the daily numerator, and a loss, so the streak moves
       insertClosedTrade(db, {
         key: 'control-today',
         assetClass: 'crypto',
@@ -191,7 +191,7 @@ describe('ControlArmAccountStateProvider (#753)', () => {
       expect(state.cash).toBeCloseTo(BOOK + 60 - 100, 9);
       // The realized high-water mark: book + 100 was reached before the loss,
       // and the loss gives cash back without giving the PEAK back to a level
-      // the net final balance alone would understate.
+      // the net final balance alone would understate
       expect(state.peak_equity).toBe(BOOK + 100);
       expect(state.consecutive_losses).toBe(1);
 
@@ -200,12 +200,12 @@ describe('ControlArmAccountStateProvider (#753)', () => {
       if (crypto.known) {
         // Everything realized BEFORE the boundary is the denominator…
         expect(crypto.open_equity).toBe(BOOK + 100);
-        // …and only what closed after it is the numerator.
+        // …and only what closed after it is the numerator
         expect(crypto.realized_pnl).toBe(-40);
       }
       // The class filter is on the numerator only, exactly as the live provider
       // does it: the stock session opened Friday 16:00 ET, before this crypto
-      // trade closed, but the trade is not a stock trade.
+      // trade closed, but the trade is not a stock trade
       const stocks = state.daily_basis.stocks;
       expect(stocks.known).toBe(true);
       if (stocks.known) expect(stocks.realized_pnl).toBe(0);
@@ -216,7 +216,7 @@ describe('ControlArmAccountStateProvider (#753)', () => {
 
   /**
    * `peak_equity` divides the drawdown breaker, so a peak that fell back with
-   * equity would make a drawdown unmeasurable — the breaker would never see one.
+   * equity would make a drawdown unmeasurable — the breaker would never see one
    */
   it('holds the realized high-water mark once the control arm gives it back', async () => {
     const { db, cleanup } = openStore();
@@ -250,7 +250,7 @@ describe('ControlArmAccountStateProvider (#753)', () => {
   /**
    * The live provider's non-positive-base guard, kept: a zero denominator makes
    * the daily fraction Infinity or NaN, and both compare false against the
-   * breaker's threshold — a wiped-out book would read as a flat day.
+   * breaker's threshold — a wiped-out book would read as a flat day
    */
   it('refuses a daily percentage against a wiped-out base', async () => {
     const { db, cleanup } = openStore();
@@ -346,7 +346,7 @@ describe('the control arm’s book anchor (#753)', () => {
 
       const first = await provider.getAccountState(AS_OF);
       // The live arm's account is wiped out between the two calls. The control
-      // arm's book must not notice: it is a matched control, not a mirror.
+      // arm's book must not notice: it is a matched control, not a mirror
       liveEquity = 20_000;
       const second = await provider.getAccountState(AS_OF);
 
@@ -396,7 +396,7 @@ describe('the control arm’s book anchor (#753)', () => {
   it('reconstructs the true high-water mark from the trade record after a restart', async () => {
     const { db, cleanup } = openStore();
     try {
-      // Control runs +250 then -300 (net -50) while some process is up.
+      // Control runs +250 then -300 (net -50) while some process is up
       insertClosedTrade(db, {
         key: 'control-up',
         assetClass: 'crypto',
@@ -413,13 +413,13 @@ describe('the control arm’s book anchor (#753)', () => {
       });
 
       // A restart: a FRESH provider instance, never having seen the +250 tick
-      // itself, reading the SAME store.
+      // itself, reading the SAME store
       const restarted = makeProvider(db, async () => BOOK);
       const state = await restarted.getAccountState(AS_OF);
 
       // The true peak was reached after the +250 close, before the -300 loss —
       // NOT the anchor (BOOK) and NOT the net (BOOK - 50), either of which a
-      // running-sum-reset-to-the-anchor implementation would report instead.
+      // running-sum-reset-to-the-anchor implementation would report instead
       expect(state.peak_equity).toBe(BOOK + 250);
       expect(state.cash).toBe(BOOK - 50);
     } finally {
@@ -463,7 +463,7 @@ describe('buildControlBookAnchorResolver (#753)', () => {
       });
       expect(await firstBoot(AS_OF)).toBe(100_000);
 
-      // A second process, started after the live arm has run its book up.
+      // A second process, started after the live arm has run its book up
       const readsLive: number[] = [];
       const secondBoot = buildControlBookAnchorResolver({
         liveAccountState: {
@@ -477,9 +477,9 @@ describe('buildControlBookAnchorResolver (#753)', () => {
       });
 
       expect(await secondBoot(AS_OF)).toBe(100_000);
-      // Not merely the right number: the live account is not consulted at all.
+      // Not merely the right number: the live account is not consulted at all
       expect(readsLive).toEqual([]);
-      // And the live arm's own row is untouched — different key, same table.
+      // And the live arm's own row is untouched — different key, same table
       expect(new SqliteAccountStateStore(db).peakEquity()).toBeNull();
     } finally {
       cleanup();
@@ -491,7 +491,7 @@ describe('buildControlBookAnchorResolver (#753)', () => {
     try {
       // A restart taken while the live arm holds lots: `cash` is the residual,
       // `peak_equity` is the account. Anchoring on `cash` alone would start the
-      // control at a fraction of the live arm's size for no stated reason.
+      // control at a fraction of the live arm's size for no stated reason
       const resolve = buildControlBookAnchorResolver({
         liveAccountState: accountReturning(10_000, 100_000),
         store: new SqliteAccountStateStore(db, CONTROL_BOOK_ANCHOR_KEY),
@@ -518,7 +518,7 @@ describe('buildControlBookAnchorResolver (#753)', () => {
       });
 
       // Not a throw: this resolves on the first decision tick, and an account
-      // read that fails must not take the live arm's tick down with it.
+      // read that fails must not take the live arm's tick down with it
       expect(await resolve(AS_OF)).toBe(BOOK);
     } finally {
       cleanup();
@@ -558,13 +558,13 @@ describe('buildControlBookAnchorResolver (#753)', () => {
       expect(anchorRow.peakEquity()).toBeNull();
 
       // Tick 2: the live read succeeds. The anchor is persisted at the real
-      // live value — first-write-wins now has something real to win with.
+      // live value — first-write-wins now has something real to win with
       shouldFail = false;
       expect(await resolve(AS_OF)).toBe(250_000);
       expect(anchorRow.peakEquity()).toBe(250_000);
 
       // Tick 3: reads the persisted real anchor, not the fallback — even
-      // though the live account happens to be unreadable again.
+      // though the live account happens to be unreadable again
       shouldFail = true;
       expect(await resolve(AS_OF)).toBe(250_000);
     } finally {

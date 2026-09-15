@@ -46,7 +46,7 @@ import {
 // Reached directly rather than through the barrel: these are the internal
 // Eastern-civil-date helpers `trading-calendar.ts` exports for exactly this
 // caller (see `ET_ZONE`'s own doc comment) — not part of the package's public
-// surface, so they stay off `providers/market-data-service/index.ts`.
+// surface, so they stay off `providers/market-data-service/index.ts`
 import {
   civilDateKey,
   ET_ZONE,
@@ -57,7 +57,7 @@ import { loggingAlertChannel } from '../alert-catalogue.js';
 import type { Logger } from '../types.js';
 import type { CalendarFallbackAlertChannel } from './calendar-fallback-alert.js';
 
-/** How far back/forward the fetched table reaches, in civil days from `now`. */
+/** How far back/forward the fetched table reaches, in civil days from `now` */
 export const CALENDAR_FETCH_LOOKBACK_DAYS = 30;
 /**
  * ~13 months forward. Generous on purpose: `sessionEnd`/`sessionStart` walk
@@ -82,7 +82,7 @@ export interface ResolveUsEquitySessionCalendarOptions {
   now: () => Date;
   /** Injected in tests — no real network call otherwise. Defaults to `AlpacaHttpCalendarClient`. */
   client?: AlpacaCalendarClient;
-  /** Defaults to `loggingAlertChannel('calendarFallbackAlerts', logger)`, same posture as `dataFailoverAlerts`. */
+  /** Defaults to `loggingAlertChannel('calendarFallbackAlerts', logger)`, same posture as `dataFailoverAlerts` */
   alertChannel?: CalendarFallbackAlertChannel;
 }
 
@@ -134,7 +134,7 @@ export async function resolveUsEquitySessionCalendar(
     // absent (`assertCredentialsPresent`, index.ts), so reaching this catch
     // means the pair passed that gate but this client's own construction
     // still failed (e.g. a caller-injected empty override) — treat it exactly
-    // like a fetch failure rather than letting it escape uncaught.
+    // like a fetch failure rather than letting it escape uncaught
     return fallback(error instanceof Error ? error.message : String(error));
   }
 

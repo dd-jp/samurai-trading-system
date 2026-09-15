@@ -14,9 +14,9 @@ import { fetchSnapshot, serveSequence, serveThenFail } from './support/poll.ts';
 import { laneOf, settleAtExecution, withVerdict } from './support/snapshot.ts';
 import { expect, test } from './support/test.ts';
 
-/** Two poll intervals plus the tick that evaluates the watchdog. */
+/** Two poll intervals plus the tick that evaluates the watchdog */
 const STALE_TIMEOUT_MS = 20_000;
-/** Long enough for two further polls of the unchanged payload. */
+/** Long enough for two further polls of the unchanged payload */
 const REPOLL_MS = 7_000;
 
 test('verdicts: a settle between polls appends one row, deduped, and opens its own trace', async ({
@@ -41,20 +41,20 @@ test('verdicts: a settle between polls appends one row, deduped, and opens its o
 
   const verdicts = page.getByRole('region', { name: 'Verdicts this session' });
   const rows = verdicts.getByRole('button');
-  // Seeded from the first paint: the four lanes that were already settled.
+  // Seeded from the first paint: the four lanes that were already settled
   await expect(rows).toHaveCount(4);
 
-  // The settle is OBSERVED, so it earns a stamped row of its own.
+  // The settle is OBSERVED, so it earns a stamped row of its own
   await expect(rows).toHaveCount(5, { timeout: 15_000 });
   const spyRow = verdicts.getByRole('button', { name: /^SPY, go, human override, / });
   await expect(spyRow).toBeVisible();
   await expect(spyRow, 'the HITL badge travels with the verdict row').toContainText('HITL');
 
-  // Re-polling the same payload must not stamp it again.
+  // Re-polling the same payload must not stamp it again
   await page.waitForTimeout(REPOLL_MS);
   await expect(rows).toHaveCount(5);
 
-  // A row opens Live on the trace stamped on it.
+  // A row opens Live on the trace stamped on it
   await spyRow.click();
   await expect(page).toHaveURL(/#live$/);
   const drawer = page.getByRole('complementary', { name: 'Trace detail' });
@@ -75,12 +75,12 @@ test('staleness: two missed polls mark the page stale and keep its last numbers'
   await expect(rail).toHaveAttribute('data-stale', 'false');
 
   await expect(rail).toHaveAttribute('data-stale', 'true', { timeout: STALE_TIMEOUT_MS });
-  // The state is announced, not merely coloured.
+  // The state is announced, not merely coloured
   await expect(page.getByRole('status')).toContainText('stale — last update');
   await expect(rail).toContainText('STALE');
 
   // A stale page keeps the numbers it last had; blanking them would read as
-  // zero on a live-money surface.
+  // zero on a live-money surface
   await expect(page.getByRole('region', { name: 'Open risk' })).toContainText('BTC-USD');
   await page.getByRole('tab', { name: 'Live' }).click();
   await expect(

@@ -54,7 +54,7 @@ describe('SqliteBreakerStateStore', () => {
     store.save(trippedState());
 
     // "Restart": a fresh store over the same file, a fresh CircuitBreakers
-    // from what it loads — the exact boot path buildProductionComponents takes.
+    // from what it loads — the exact boot path buildProductionComponents takes
     const config: BreakerConfig = {
       daily_loss_pct: 0.05,
       daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },

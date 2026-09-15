@@ -153,19 +153,19 @@ export class SequentialTickRunner implements TickRunner {
     // stepped manually by the backtest harness and does not advance on its
     // own during real async work (LLM calls, I/O), so it would report
     // near-zero durations there. Same reasoning as the debate engine's
-    // `enforceLatencyBudget`, which uses `Date.now()` for the same reason.
+    // `enforceLatencyBudget`, which uses `Date.now()` for the same reason
     //
     // Elapsed time is measured off `perfMs` (`performance.now()`), not
     // `wallMs`: `Date.now()` can step backward on an NTP correction
     // mid-stage, which would report a negative duration. `performance.now()`
     // is monotonic. `wallMs` is still needed alongside it, since `started_at`
-    // must be a real wall-clock instant, not an elapsed measurement.
+    // must be a real wall-clock instant, not an elapsed measurement
     //
     // Named fields rather than two positional numbers at each call site —
     // `wallMs`/`perfMs` are trivially transposable as bare `number` params
     // (swapping compiles clean and silently yields a 1970 `started_at` /
     // negative `duration_ms`), so this closure is the one place either value
-    // is read.
+    // is read
     const startStageTimer = () => ({ wallMs: Date.now(), perfMs: performance.now() });
 
     /**
@@ -192,7 +192,7 @@ export class SequentialTickRunner implements TickRunner {
       // site passing `'execution'` is the Risk -> Verdict -> Execution tail
       // below, reached by both entries and exits), so an execution failure —
       // including the exact failure mode #921's resilience gaps are about —
-      // used to log at `'info'` like a normal status update.
+      // used to log at `'info'` like a normal status update
       if (stage === 'execution' && decision === 'error') {
         return 'error';
       }
@@ -210,7 +210,7 @@ export class SequentialTickRunner implements TickRunner {
       // selected transport; the once-an-hour `analysts`/`debate` lines every
       // instrument still emits at `info` on its decision cadence
       // (`DEBATE_BAR_TIMEFRAME_MS`) regardless of position state; and
-      // `SAMURAI_LOG_LEVEL=debug` for this line itself.
+      // `SAMURAI_LOG_LEVEL=debug` for this line itself
       if (stage === 'position_check' && decision === 'no_exit_due') {
         return 'debug';
       }
@@ -246,7 +246,7 @@ export class SequentialTickRunner implements TickRunner {
         // persisted, which left every short-circuited tick unattributable to
         // an instrument — `current_tick` covers only the in-flight tick and
         // `verdict_log` only the ticks that reached Verdict, so a tick that
-        // stopped at Analysts or Risk belonged to nothing readable.
+        // stopped at Analysts or Risk belonged to nothing readable
         instrument,
         asset_class: signal.asset_class,
       });
@@ -325,7 +325,7 @@ export class SequentialTickRunner implements TickRunner {
       // #748: the tick path can now fire TWO kinds of exit, so the audit row
       // names which — `flatten` and `signal_decay` are different events with
       // different causes, and one shared `'flatten'` string would make an
-      // early release read as a session ending four hours early.
+      // early release read as a session ending four hours early
       record(
         'position_check',
         exitIntent === null ? 'no_exit_due' : (exitIntent.metadata.exit_reason ?? 'exit'),
@@ -340,7 +340,7 @@ export class SequentialTickRunner implements TickRunner {
       // Separate flags rather than one `exit_fired`, for the reason
       // `flatten_fired` exists at all: a rejected flatten and a rejected early
       // release are both invisible without a flag, and folding them together
-      // would lose exactly the distinction the flag was added to preserve.
+      // would lose exactly the distinction the flag was added to preserve
       // PHASE SPLIT (#1040): the turn is taken HERE and not at the top of the
       // exit check, because the exit check itself reads NO portfolio state —
       // `direct-bind.ts`'s `exitCheck` skips `snapshotForTick` deliberately,
@@ -358,7 +358,7 @@ export class SequentialTickRunner implements TickRunner {
       //     flatten still queues, but only after its check has run, so the
       //     wait is shorter by the exit check and no more. The ADR-0014
       //     flatten window is five minutes wide, which is why even that
-      //     matters.
+      //     matters
       //   - `buildGuardedRunner` releases the #669 claim when `runInstrument`
       //     RETURNS, so a null-intent pass's release no longer depends on a
       //     slow instrument ahead of it — the starvation #669 exists to
@@ -367,11 +367,11 @@ export class SequentialTickRunner implements TickRunner {
       // Nothing above this line is book state: `traderLog.write` and
       // `escalateTraderDiagnostics` inside the exit check are a record and an
       // alert, not a position. Risk re-reads its portfolio snapshot INSIDE the
-      // turn, so cap enforcement is unaffected by where the wait is taken.
+      // turn, so cap enforcement is unaffected by where the wait is taken
       //
       // `markStage('position_check')` above runs BEFORE the wait on purpose: a
       // pass parked on the turnstile must be visible in `current_tick` rather
-      // than looking like a pass that never started.
+      // than looking like a pass that never started
       await ctx.beginPortfolioTail?.();
       return runIntentTail(
         exitIntent,
@@ -388,18 +388,18 @@ export class SequentialTickRunner implements TickRunner {
       // because the control arm holds its own lots and they are subject to the
       // same ADR-0014 flat-by-close the live arm's are. A control that only ran
       // on decision bars would carry positions overnight, which is not the live
-      // arm minus one stage — it is a different strategy.
+      // arm minus one stage — it is a different strategy
       //
       // Awaited rather than fired off so a pass cannot outlive the tick that
       // started it and decide against the next bar's tape. It never rejects
       // (see `TickSteps.controlArm`), so there is nothing here to catch: the
       // containment is inside the step, where it does not disturb this method's
-      // deliberate absence of a try/catch.
+      // deliberate absence of a try/catch
       await this.steps.controlArm?.({ signal, ctx });
       // ── TICK PASS (#743): the cheap, position-facing path. ────────────────
       // The bar is floored HERE, once, onto the same grid the decision gate
       // uses; the exit intent's idempotency key dedupes on it, so every
-      // tick-pass flatten inside one bar re-keys to the same order.
+      // tick-pass flatten inside one bar re-keys to the same order
       return runExitCheckPass(floorToBar(clock.now(), DEBATE_BAR_TIMEFRAME_MS));
     }
 
@@ -408,13 +408,13 @@ export class SequentialTickRunner implements TickRunner {
     // `bar` is the gate's — the single derivation for this pass (#687/#743),
     // threaded to the analysts (and, through them, to
     // `MarketIntelligenceStore.getContext`) unchanged (#811) rather than
-    // re-derived from `clock.now()` a second time.
+    // re-derived from `clock.now()` a second time
     const analystsInput = { trace_id, signal, clock, bar: decisionBar.open_time };
     const analystsTimer = startStageTimer();
     const views = await this.steps.analysts(analystsInput);
     // Read only on the empty branch, and destructively (#1080): a kind belongs
     // to one pass, and the relay is a side channel for the fact the step's
-    // return type cannot carry, not a store to be queried later.
+    // return type cannot carry, not a store to be queried later
     const analystsDecision =
       views.length === 0
         ? analystsSkipDecisionWord(this.steps.analystSkipKind?.(trace_id))
@@ -430,12 +430,12 @@ export class SequentialTickRunner implements TickRunner {
     // the shared tape: `buildAnalystsStep` reaches
     // `MarketIntelligenceStore.getContext`, which can call the Nous/Grok ingest
     // agent, so a control arm that re-ran its analysts would make a model call
-    // in production while every stubbed-step unit test stayed green.
+    // in production while every stubbed-step unit test stayed green
     //
     // Passed even when `views` is empty: the control arm reads an empty set the
     // same way this runner does — a quorum skip that falls through to its own
     // exit check — so a quorum-skipped bar still evaluates the control's
-    // flat-by-close instead of silently skipping it.
+    // flat-by-close instead of silently skipping it
     await this.steps.controlArm?.({ signal, ctx, views });
 
     if (views.length === 0) {
@@ -445,15 +445,15 @@ export class SequentialTickRunner implements TickRunner {
       // gate's OWN bar (the single derivation for a decision pass, #687/#743)
       // rather than a fresh `floorToBar(clock.now(), ...)` — the gate has
       // already done this derivation for this pass, and a second one could
-      // only disagree with it, never improve on it.
+      // only disagree with it, never improve on it
       return runExitCheckPass(decisionBar.open_time);
     }
 
     markStage('debate');
     // `asset_class` comes straight off the `Signal` the scheduler produced
     // (#388): the Debate Engine's rate-limit budget and latency budget are
-    // both keyed on it, and this is the only layer that holds it as fact.
-    // `bar` is the gate's — the single derivation for this pass (#687/#743).
+    // both keyed on it, and this is the only layer that holds it as fact
+    // `bar` is the gate's — the single derivation for this pass (#687/#743)
     const debateInput = {
       trace_id,
       instrument,
@@ -475,7 +475,7 @@ export class SequentialTickRunner implements TickRunner {
     // coordinate another intent may already hold and is suppressed downstream
     // as a duplicate — which, without this line, reads exactly like a healthy
     // no-trade tick. The pass still proceeds: Verdict's staleness gate is the
-    // fail-safe refusal, this is the audible record that it happened.
+    // fail-safe refusal, this is the audible record that it happened
     if (debate.bar_timestamp.getTime() !== decisionBar.open_time.getTime()) {
       logger.log({
         trace_id,
@@ -557,13 +557,13 @@ export class SequentialTickRunner implements TickRunner {
    * reasoning does not reach such a pipeline.
    */
   private reportAdvisoryWarnings(instrument: string, warnings: string[], ctx: TickContext): void {
-    // Sorted copy: the signature compares SETS, not sequences.
+    // Sorted copy: the signature compares SETS, not sequences
     // `insufficient_history` follows `Object.keys(exposure_by_instrument)`,
     // whose insertion order follows `getOpenPositions()`'s `ORDER BY
     // opened_at` — no tiebreak, and the order shifts whenever a position
     // closes and reopens. Comparing raw order would read a reordering as a
-    // change and re-fire, defeating the suppression this method exists for.
-    // The payload keeps the original order; only the comparison is sorted.
+    // change and re-fire, defeating the suppression this method exists for
+    // The payload keeps the original order; only the comparison is sorted
     const signature = [...warnings].sort().join('|');
     if (this.#lastAdvisory.get(instrument) === signature) return;
 
@@ -573,11 +573,11 @@ export class SequentialTickRunner implements TickRunner {
 
     // Clearing is good news and must never page — `info`, not `warn`. It is
     // emitted at all so that coverage completing is a positive statement in
-    // the log, not an absence indistinguishable from this reader breaking.
+    // the log, not an absence indistinguishable from this reader breaking
     //
     // `instrument` is carried explicitly because a `correlation_warmup:MSFT`
     // tag names one side of a PAIR, and the unmeasurable side may be this
-    // tick's own instrument (see `CorrelationEstimate.insufficient_history`).
+    // tick's own instrument (see `CorrelationEstimate.insufficient_history`)
     ctx.logger.log({
       trace_id: ctx.trace_id,
       stage: 'risk',

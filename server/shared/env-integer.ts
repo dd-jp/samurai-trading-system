@@ -25,7 +25,7 @@ export function nonEmpty(raw: string | undefined): string | undefined {
   return trimmed !== undefined && trimmed.length > 0 ? trimmed : undefined;
 }
 
-/** The one bound definition both entry points below hold a value to. */
+/** The one bound definition both entry points below hold a value to */
 function isIntegerAtLeast(value: number, min: number): boolean {
   return Number.isSafeInteger(value) && value >= min;
 }

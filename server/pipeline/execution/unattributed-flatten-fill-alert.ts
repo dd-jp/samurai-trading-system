@@ -46,17 +46,17 @@
  * row, no broker response body reaches an implementation of this port.
  */
 
-/** One flatten split fill booked against a lot that is no longer open. */
+/** One flatten split fill booked against a lot that is no longer open */
 export interface UnattributedFlattenFillAlert {
   /**
    * The `ExecutionInput.trace_id` of the Execution SURFACE this alert was
    * raised on — the control-arm-distinguishing role
-   * `ResidualExposureAlert.trace_id` documents (#1348).
+   * `ResidualExposureAlert.trace_id` documents (#1348)
    */
   trace_id: string;
-  /** The flatten's own `client_order_id`, which is its `flatten_submissions` key. */
+  /** The flatten's own `client_order_id`, which is its `flatten_submissions` key */
   flatten_idempotency_key: string;
-  /** The named lot the split was booked against, already terminal in the store. */
+  /** The named lot the split was booked against, already terminal in the store */
   lot_idempotency_key: string;
   /**
    * #1550: the instrument the exposure is IN, read off the flatten's
@@ -77,9 +77,9 @@ export interface UnattributedFlattenFillAlert {
    * buy that over-runs a closed short leaves the account LONG, not short.
    */
   side: 'buy' | 'sell';
-  /** The venue's own fill identifier for the split — greppable against the booked `fills` row. */
+  /** The venue's own fill identifier for the split — greppable against the booked `fills` row */
   broker_fill_id: string;
-  /** The split's share, in instrument units: the quantity the venue sold with no live lot behind it. */
+  /** The split's share, in instrument units: the quantity the venue sold with no live lot behind it */
   qty: number;
   observed_at: Date;
 }

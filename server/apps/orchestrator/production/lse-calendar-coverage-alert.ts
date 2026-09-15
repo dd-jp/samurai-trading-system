@@ -44,7 +44,7 @@
  * disagreed with the raw coverage-end date it computes from.
  */
 export interface LseCalendarCoverageAlert {
-  /** `LSE_TABLE_COVERAGE_END` at the time this alert was raised. */
+  /** `LSE_TABLE_COVERAGE_END` at the time this alert was raised */
   coverage_end: string;
   /** Civil days from `reported_at` to `coverage_end`. Always >= 0 — enforced by the guard, see above. */
   days_remaining: number;

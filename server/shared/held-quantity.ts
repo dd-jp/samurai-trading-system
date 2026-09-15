@@ -26,7 +26,7 @@
  */
 import type { Fill, OpenPosition } from './types.js';
 
-/** A fill on a closing leg — everything that is not the entry. */
+/** A fill on a closing leg — everything that is not the entry */
 export type ExitFill = Fill & { leg: 'stop' | 'target' | 'exit' };
 
 export function isExitFill(fill: Fill): fill is ExitFill {
@@ -37,14 +37,14 @@ export function totalQty(fills: readonly Fill[]): number {
   return fills.reduce((sum, fill) => sum + fill.qty, 0);
 }
 
-/** Size-weighted average price of `fills`; 0 when they carry no quantity. */
+/** Size-weighted average price of `fills`; 0 when they carry no quantity */
 export function weightedAvgPrice(fills: readonly Fill[]): number {
   const qty = totalQty(fills);
   if (qty === 0) return 0;
   return fills.reduce((sum, fill) => sum + fill.price * fill.qty, 0) / qty;
 }
 
-/** One lot's held quantity — see `heldQuantities`. */
+/** One lot's held quantity — see `heldQuantities` */
 export interface LotHeldQuantity {
   idempotency_key: string;
   /**
@@ -138,9 +138,9 @@ export function coversQty(actual: number, target: number): boolean {
  * exactly what `ingestFills()` writes into it.
  */
 export interface RecordedHeldQuantity {
-  /** Σ entry-leg fill quantity. */
+  /** Σ entry-leg fill quantity */
   filledSize: number;
-  /** Σ closing-leg fill quantity. */
+  /** Σ closing-leg fill quantity */
   exitQty: number;
   held: number;
 }
@@ -151,7 +151,7 @@ export function heldQuantityFromFills(fills: readonly Fill[]): RecordedHeldQuant
   return { filledSize, exitQty, held: filledSize - exitQty };
 }
 
-/** Round-tripped to flat under the one tolerance — nothing left at the venue. */
+/** Round-tripped to flat under the one tolerance — nothing left at the venue */
 export function isFlat(recorded: Pick<RecordedHeldQuantity, 'filledSize' | 'exitQty'>): boolean {
   return coversQty(recorded.exitQty, recorded.filledSize);
 }

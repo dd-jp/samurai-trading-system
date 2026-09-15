@@ -341,7 +341,7 @@ describe('tokenFilePath', () => {
     // The gitignore pattern `data/saxo-tokens/` is root-anchored (no leading
     // `**/`), so a cwd-relative path only matches it when run from the repo
     // root. Pinning cwd-independence here is what actually protects the
-    // ignore match — this is the property the mismatch broke.
+    // ignore match — this is the property the mismatch broke
     const fromRepoRoot = tokenFilePath('sim');
     const originalCwd = process.cwd();
     const elsewhere = mkdtempSync(join(tmpdir(), 'saxo-login-cwd-'));
@@ -406,7 +406,7 @@ describe('runLogin — never prints a token or secret (#1522 AC4)', () => {
     dir = mkdtempSync(join(tmpdir(), 'saxo-login-run-'));
     // `tokenPath` sandboxes the write under `dir` (finding 1's repo-root
     // anchoring means `tokenFilePath` itself is no longer cwd-sensitive, so
-    // this test no longer needs — and no longer uses — `process.chdir`).
+    // this test no longer needs — and no longer uses — `process.chdir`)
     tokenPath = join(dir, 'sim.json');
   });
 

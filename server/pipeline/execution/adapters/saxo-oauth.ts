@@ -37,7 +37,7 @@ export class SaxoOAuthError extends Error {
   }
 }
 
-/** Both Saxo apps register the same localhost redirect (#1522); the environment picks the host. */
+/** Both Saxo apps register the same localhost redirect (#1522); the environment picks the host */
 const DEFAULT_AUTH_URLS: Readonly<Record<SaxoTradingEnvironment, string>> = {
   sim: 'https://sim.logonvalidation.net/authorize',
   live: 'https://live.logonvalidation.net/authorize',
@@ -99,9 +99,9 @@ export function resolveSaxoOAuthConfig(
 export interface SaxoTokenResponse {
   accessToken: string;
   refreshToken: string;
-  /** ISO instant, derived from the response's `expires_in` (measured 1200 s live, 2026-09-14 — never hardcoded). */
+  /** ISO instant, derived from the response's `expires_in` (measured 1200 s live, 2026-09-14 — never hardcoded) */
   accessTokenExpiresAt: string;
-  /** ISO instant, derived from the response's `refresh_token_expires_in` (measured 3600 s live, 2026-09-14 — never hardcoded). */
+  /** ISO instant, derived from the response's `refresh_token_expires_in` (measured 3600 s live, 2026-09-14 — never hardcoded) */
   refreshTokenExpiresAt: string;
 }
 
@@ -155,7 +155,7 @@ export async function requestSaxoToken(
   }
   // Masked even though a token-endpoint error body is not expected to echo
   // the app secret back — defense in depth, matching saxo-http-client.ts's
-  // own error-body posture.
+  // own error-body posture
   if (response.status !== 200 && response.status !== 201) {
     throw new SaxoOAuthError(
       `Saxo token exchange failed: HTTP ${response.status} — ${maskCredentials(text).slice(0, 500)}`,

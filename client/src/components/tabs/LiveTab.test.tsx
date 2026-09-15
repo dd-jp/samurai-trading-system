@@ -24,7 +24,7 @@ describe('LiveTab — control arm', () => {
         arm: 'control',
         pipeline: makeView([doneThrough('SPY', 'trace-spy', 'risk', { outcome: 'stopped' })]),
         // Same instrument as the lane — proves the join is skipped by arm,
-        // not merely absent from this fixture.
+        // not merely absent from this fixture
         debates: [makeDebate({ debate_id: 'd1', instrument: 'SPY', direction: 'bullish' })],
         risk_critics: [
           makeRiskCritic({
@@ -90,7 +90,7 @@ describe('LiveTab — control arm', () => {
         ]),
         // Same instrument as the lane, with a recorded termination cause —
         // proves the matrix reads no cause from the live arm's row, not
-        // merely that this fixture has none to read.
+        // merely that this fixture has none to read
         debates: [
           makeDebate({
             debate_id: 'd1',

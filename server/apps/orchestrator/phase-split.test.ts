@@ -55,9 +55,9 @@ const NOW = new Date('2026-07-15T14:00:00Z');
 const CLOCK: Clock = { now: () => NOW };
 const LOGGER: Logger = { log: vi.fn() };
 
-/** One share at 100, so a notional is trivially countable in the assertions. */
+/** One share at 100, so a notional is trivially countable in the assertions */
 const NOTIONAL = 100;
-/** Room for one entry, not two — the point of the exposure test. */
+/** Room for one entry, not two — the point of the exposure test */
 const GROSS_CAP = 150;
 
 function makePlan(...assets: string[]): TickPlan {
@@ -191,7 +191,7 @@ function submitted(intent: OrderIntent): ExecutionResult {
   };
 }
 
-/** Head completion under the test's control, so phase-1 order can be permuted. */
+/** Head completion under the test's control, so phase-1 order can be permuted */
 function deferredHeads(assets: readonly string[]): {
   wait: (asset: string) => Promise<void>;
   release: (asset: string) => void;
@@ -238,7 +238,7 @@ function bookSteps(heads: ReturnType<typeof deferredHeads>): {
     },
     risk: async ({ intent }) => {
       // The pre-trade read. Yields first, so a concurrent sibling has every
-      // chance to interleave here — the failure this test must be able to see.
+      // chance to interleave here — the failure this test must be able to see
       await Promise.resolve();
       const notional = intent.size * intent.entry;
       return book.gross + notional > GROSS_CAP ? rejectedRisk() : approvedRisk(intent);
@@ -267,7 +267,7 @@ function decisionCtx(signal: Signal, overrides: Partial<TickContext> = {}): Tick
   };
 }
 
-/** Yields long enough for every pending microtask to settle. */
+/** Yields long enough for every pending microtask to settle */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe('phase split — the exposure race within one pass (#1040)', () => {
@@ -278,15 +278,15 @@ describe('phase split — the exposure race within one pass (#1040)', () => {
     const pending = runTickPlan(makePlan('SPY', 'QQQ'), new SequentialTickRunner(steps), CLOCK, {
       ...loopConfig(),
       // Width 2: both heads genuinely overlap, so the serialisation under test
-      // is the turnstile's, not the pool's.
+      // is the turnstile's, not the pool's
       max_concurrent_instruments: 2,
     });
 
     await settle();
-    // Neither tail has started: both passes are parked in their heads.
+    // Neither tail has started: both passes are parked in their heads
     expect(tailOrder).toEqual([]);
 
-    // Phase 1 finishes in REVERSE plan order — the case that must not matter.
+    // Phase 1 finishes in REVERSE plan order — the case that must not matter
     heads.release('QQQ');
     heads.release('SPY');
 
@@ -303,7 +303,7 @@ describe('phase split — the exposure race within one pass (#1040)', () => {
     // The contrast case, so the assertion above cannot pass vacuously. This is
     // the pre-#1040 shape AND today's paper/live behaviour: #1013 set
     // `maxConcurrentInstruments: 6`, so sibling instruments already reach Risk
-    // against the same pre-trade snapshot (#1019).
+    // against the same pre-trade snapshot (#1019)
     const heads = deferredHeads(['SPY', 'QQQ']);
     const { steps, book } = bookSteps(heads);
     const runner = new SequentialTickRunner(steps);
@@ -353,7 +353,7 @@ describe('phase split — tail order is plan order, not completion order (#1040)
       heads.release(asset);
       // Released one at a time with a real yield between, so the completion
       // order is genuinely observed by the loop rather than collapsed into one
-      // microtask drain.
+      // microtask drain
       await settle();
     }
 
@@ -361,7 +361,7 @@ describe('phase split — tail order is plan order, not completion order (#1040)
 
     expect(tailOrder).toEqual(['SPY', 'QQQ', 'AAPL', 'TSLA']);
     // And the OUTCOMES are the same too, not just the sequence: with a cap
-    // that fits one entry, the same instrument wins every time.
+    // that fits one entry, the same instrument wins every time
     expect(outcomes.map((o) => o.final_stage)).toEqual(['execution', 'risk', 'risk', 'risk']);
   });
 
@@ -383,7 +383,7 @@ describe('phase split — tail order is plan order, not completion order (#1040)
   it('does not strand the queue when a head throws', async () => {
     // A head that throws never asks for a turn. If settlement were reported
     // only from the success path, every later instrument in the plan would
-    // wait out the tick and the plan would never settle.
+    // wait out the tick and the plan would never settle
     const heads = deferredHeads([]); // every head resolves immediately
     const { steps, tailOrder } = bookSteps(heads);
     const failing: TickSteps = {
@@ -405,7 +405,7 @@ describe('phase split — tail order is plan order, not completion order (#1040)
     );
 
     expect(outcomes[0]?.error).toContain('analysts exploded');
-    // QQQ still ran its whole tail, and against an untouched book.
+    // QQQ still ran its whole tail, and against an untouched book
     expect(tailOrder).toEqual(['QQQ']);
     expect(outcomes[1]).toMatchObject({ final_stage: 'execution' });
   });
@@ -427,7 +427,7 @@ describe('phase split — the turnstile is idempotent before the grant (#1040)',
     const runner: TickRunner = {
       async runInstrument(_signal, ctx): Promise<TickOutcome> {
         if (ctx.trace_id.endsWith('-0')) {
-          // Index 0 holds the turn, so index 1's requests must both queue.
+          // Index 0 holds the turn, so index 1's requests must both queue
           await headParked;
           return { trace_id: ctx.trace_id, final_stage: 'execution' };
         }
@@ -459,14 +459,14 @@ describe('phase split — the turnstile is idempotent before the grant (#1040)',
     // The other branch of the same claim: once granted, a second `begin` must
     // return immediately rather than queue behind a `finish` that will never
     // come for an index already running. Untested, this is a self-deadlock
-    // waiting for the second portfolio read someone adds later.
+    // waiting for the second portfolio read someone adds later
     //
     // Honest limit: this asserts the OUTCOME (no self-deadlock), not the
     // `#granted` branch specifically. While a pass holds the turn its index
     // still equals `#turn`, so `#granted` and the turn check agree and either
     // alone would resolve this. `#granted` is what keeps them agreeing after
     // `finish` advances the cursor past the index — a state no pass can reach
-    // for itself, since `finish` runs only once `runInstrument` has returned.
+    // for itself, since `finish` runs only once `runInstrument` has returned
     let calls = 0;
 
     const runner: TickRunner = {
@@ -474,7 +474,7 @@ describe('phase split — the turnstile is idempotent before the grant (#1040)',
         await ctx.beginPortfolioTail?.();
         calls++;
         // No `finish` can have run for this index — the pass is still inside
-        // its own tail — so this resolves only via the granted-set shortcut.
+        // its own tail — so this resolves only via the granted-set shortcut
         await ctx.beginPortfolioTail?.();
         calls++;
         return { trace_id: ctx.trace_id, final_stage: 'execution' };
@@ -504,7 +504,7 @@ describe('phase split — the #669 claim is held through the tail (#1040)', () =
     // the WHOLE `runInstrument` call — head and tail. This asserts the timing
     // the phase split must not have loosened: a pass parked in its tail is
     // still "running", so the next tick skips it rather than starting a second
-    // concurrent pass on the same instrument.
+    // concurrent pass on the same instrument
     let releaseTail!: () => void;
     const tailParked = new Promise<void>((resolve) => {
       releaseTail = resolve;
@@ -540,7 +540,7 @@ describe('phase split — the #669 claim is held through the tail (#1040)', () =
     await vi.advanceTimersByTimeAsync(1_000);
     expect(headsDone).toBe(1);
 
-    // Second tick, while the first pass sits in its tail: skipped as busy.
+    // Second tick, while the first pass sits in its tail: skipped as busy
     await vi.advanceTimersByTimeAsync(1_000);
     expect(headsDone).toBe(1);
     expect(

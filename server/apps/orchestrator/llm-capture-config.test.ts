@@ -19,7 +19,7 @@ describe('captureLlmTextFromEnvironment', () => {
   it('is ON when the variable is unset', () => {
     // The load-bearing case. Default-off would mean the 14-day soak this
     // capture exists to make diagnosable runs without it, and the absence is
-    // only discovered when someone needs the data months later.
+    // only discovered when someone needs the data months later
     expect(captureLlmTextFromEnvironment(undefined)).toBe(true);
   });
 
@@ -31,7 +31,7 @@ describe('captureLlmTextFromEnvironment', () => {
 
   it('stays ON for any other value, including an empty string', () => {
     // A typo must not silently disable an observability feature: the only
-    // value that turns capture off is the one that says so.
+    // value that turns capture off is the one that says so
     expect(captureLlmTextFromEnvironment('')).toBe(true);
     expect(captureLlmTextFromEnvironment('on')).toBe(true);
     expect(captureLlmTextFromEnvironment('true')).toBe(true);

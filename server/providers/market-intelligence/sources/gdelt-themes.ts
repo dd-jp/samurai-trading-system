@@ -59,7 +59,7 @@ const MACRO_THEMES = [
   'WB_471_ECONOMIC_GROWTH',
 ] as const;
 
-/** Equity-specific: the market itself, and the corporate-credit tail. */
+/** Equity-specific: the market itself, and the corporate-credit tail */
 const STOCK_THEMES = [
   'ECON_STOCKMARKET',
   'ECON_BANKRUPTCY',
@@ -87,7 +87,7 @@ const WATCHLIST: Record<AssetClass, readonly string[]> = {
   crypto: [...MACRO_THEMES, ...CRYPTO_THEMES],
 };
 
-/** The themes worth archiving for one asset class. */
+/** The themes worth archiving for one asset class */
 export function themesFor(asset_class: AssetClass): readonly string[] {
   return WATCHLIST[asset_class];
 }

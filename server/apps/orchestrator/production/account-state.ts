@@ -57,7 +57,7 @@ import type { SessionEquityKey, SqliteSessionEquityStore } from '../sqlite-sessi
 import type { Logger } from '../types.js';
 import type { AccountStateProvider } from './direct-bind.js';
 
-/** The `ClosedTrade` read this provider needs — a subset of `SharedStore`. */
+/** The `ClosedTrade` read this provider needs — a subset of `SharedStore` */
 export interface ClosedTradeReader {
   getClosedTradesBetween(from: Date, to: Date): ClosedTrade[];
 }
@@ -191,7 +191,7 @@ export class BrokerAccountStateProvider implements AccountStateProvider {
     const { cash, equity } = await this.input.funding.readFunding();
 
     // Raise the high-water mark before reading it, so a new all-time high is
-    // reflected in the very tick that set it rather than one tick later.
+    // reflected in the very tick that set it rather than one tick later
     const peakEquity = this.input.store.recordEquity(equity, asOf);
 
     return {
@@ -250,11 +250,11 @@ export class BrokerAccountStateProvider implements AccountStateProvider {
 
     // The process can only have seen the open if it was already up at it. A
     // fresh DB is never an observation either: nothing sampled equity then, so
-    // the row is being invented now regardless of how long this process has run.
+    // the row is being invented now regardless of how long this process has run
     const observedAtBoundary =
       stored !== null && this.input.startedAt.getTime() <= sessionStart.getTime();
 
-    // #345 — the same boundary, sampled into a series instead of over itself.
+    // #345 — the same boundary, sampled into a series instead of over itself
     //
     // `portfolio` only. The three keys share this method but not this concern:
     // `stocks` rides the 16:00 ET close, which skips weekends and holidays, so
@@ -262,7 +262,7 @@ export class BrokerAccountStateProvider implements AccountStateProvider {
     // over them is wrong by construction. `crypto` is the same UTC midnight as
     // `portfolio` and would duplicate every row (the two keys always carry
     // identical `open_equity`/`open_at` — see `calendarFor`). So the series is
-    // anchored to the portfolio-level UTC day, exactly 86,400,000 ms per step.
+    // anchored to the portfolio-level UTC day, exactly 86,400,000 ms per step
     //
     // Attempted on EVERY tick rather than only inside the advance branch below,
     // and idempotent because `append` is `DO NOTHING` on conflict. Tying it to
@@ -270,7 +270,7 @@ export class BrokerAccountStateProvider implements AccountStateProvider {
     // that comes up mid-session finds `session_equity` already current for this
     // session, takes no advance, and would leave a hole in the series that can
     // never be filled. A late sample flagged `observed_at_boundary = 0` is worth
-    // more than a gap — the gap breaks the spacing of everything after it.
+    // more than a gap — the gap breaks the spacing of everything after it
     if (key === 'portfolio') {
       this.input.dailyEquity.append(sessionStart, equity, asOf, observedAtBoundary);
     }
@@ -295,7 +295,7 @@ export class BrokerAccountStateProvider implements AccountStateProvider {
     // A non-positive denominator would make the fraction Infinity or NaN, and
     // both compare false against the breaker's threshold — the figure would
     // read as "no loss" through an account that has none of itself left. There
-    // is no honest percentage against a zero base, so say so.
+    // is no honest percentage against a zero base, so say so
     if (!(openEquity > 0)) {
       return this.nonPositiveBase(key, openEquity);
     }
@@ -351,7 +351,7 @@ export class BrokerAccountStateProvider implements AccountStateProvider {
           // through `ControlAccountStateProvider` (control-account-state.ts),
           // alike. So this joins that tick (#1280); none of them runs at boot,
           // which is why the constant is a fallback rather than a case
-          // anything reaches.
+          // anything reaches
           trace_id: currentTraceId() ?? 'account-state',
           stage: 'orchestrator',
           event: 'daily_pnl_unknown',
@@ -373,7 +373,7 @@ export class BrokerAccountStateProvider implements AccountStateProvider {
 
     if (firstTime) {
       this.input.logger.log({
-        // Same reasoning as the `live`-mode branch above.
+        // Same reasoning as the `live`-mode branch above
         trace_id: currentTraceId() ?? 'account-state',
         stage: 'orchestrator',
         event: 'session_open_equity_midsession',
@@ -386,7 +386,7 @@ export class BrokerAccountStateProvider implements AccountStateProvider {
     }
 
     // Same non-positive guard as the trusted path: a zero base is Infinity or
-    // NaN, which compares false in the breaker and reads as no loss at all.
+    // NaN, which compares false in the breaker and reads as no loss at all
     if (!(openEquity > 0)) {
       return this.nonPositiveBase(key, openEquity);
     }

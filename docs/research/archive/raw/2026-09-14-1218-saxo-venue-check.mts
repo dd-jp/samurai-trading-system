@@ -29,7 +29,7 @@
  */
 // Resolved from this file's own location (docs/research/archive/raw/) rather
 // than from cwd, so the archived copy runs unchanged from anywhere in any
-// checkout: `npx tsx docs/research/archive/raw/2026-09-14-1218-saxo-venue-check.mts`.
+// checkout: `npx tsx docs/research/archive/raw/2026-09-14-1218-saxo-venue-check.mts`
 const ROOT = new URL('../../../../', import.meta.url).href;
 
 const { CostModelImpl } = await import(`${ROOT}server/tools/backtest/cost-model.ts`);
@@ -39,7 +39,7 @@ const { CALIBRATED_INTRADAY_COST_CONFIG, CALIBRATED_COST_CONFIG, DEFAULT_CAPITAL
 const INTRADAY_SLIPPAGE_COEFF = CALIBRATED_INTRADAY_COST_CONFIG.stocks.slippageCoefficient;
 const INTRADAY_IMPACT_K = CALIBRATED_INTRADAY_COST_CONFIG.stocks.impactK;
 
-/** Doc 53's published 1m/intraday-config component row, in bps, per symbol. */
+/** Doc 53's published 1m/intraday-config component row, in bps, per symbol */
 interface Published {
   symbol: string;
   mid: number;
@@ -54,7 +54,7 @@ interface Published {
 // (2017-03-15, 1m bars under CALIBRATED_INTRADAY_COST_CONFIG) and its charged
 // cost column. `mid` is the only input NOT published there; it cancels out of
 // every bps figure except through the size/adv ratio, which `adv` then absorbs,
-// so any positive mid reconstructs the same table.
+// so any positive mid reconstructs the same table
 const PUBLISHED: Published[] = [
   {
     symbol: 'SPY',
@@ -94,11 +94,11 @@ const PUBLISHED: Published[] = [
   },
 ];
 
-/** volatility such that the model's slippage equals the published slippage. */
+/** volatility such that the model's slippage equals the published slippage */
 const volatilityFor = (p: Published): number =>
   ((p.slippage / 10_000) * p.mid) / INTRADAY_SLIPPAGE_COEFF;
 
-/** adv such that the model's market impact equals the published impact. */
+/** adv such that the model's market impact equals the published impact */
 const advFor = (p: Published, volatility: number, size: number): number => {
   const root = ((p.impact / 10_000) * p.mid) / (INTRADAY_IMPACT_K * volatility);
   return size / (root * root);

@@ -102,7 +102,7 @@ const NOW = new Date('2026-07-20T16:00:00Z');
 // Strictly before every scripted fill's timestamp (15:00/15:30) below —
 // `ingestFills()` fetches fills since the lot's own `opened_at`
 // (`ingest-fills.test.ts`'s identical split, `OPENED_AT` vs `NOW`), so a
-// position opened AT `NOW` would filter every fill in this file out.
+// position opened AT `NOW` would filter every fill in this file out
 const OPENED_AT = new Date('2026-07-20T14:00:00Z');
 
 /**
@@ -142,7 +142,7 @@ class AmnesiacFlattenBroker implements BrokerAdapter {
   }
 }
 
-/** `flatten-reconcile-arm-wiring.test.ts`'s seeding helper, verbatim. */
+/** `flatten-reconcile-arm-wiring.test.ts`'s seeding helper, verbatim */
 async function seedAckedThenDeniedFlatten(store: ExecutionSharedStore, key: string): Promise<void> {
   await store.writeAheadFlatten({
     idempotency_key: key,
@@ -241,7 +241,7 @@ async function seedPosition(
     // `IN_FLIGHT_ORDER_STATES`, so the startup reconcile's OWN positions loop would
     // ask the (unrelated) broker double `getOrder(residual-live)`, get
     // `null` back, and reject the lot before `ingestFills()` below ever
-    // runs — a real partial-flatten residual is well past that state.
+    // runs — a real partial-flatten residual is well past that state
     order_state: 'partially_filled',
     broker_order_ids: ['residual-live:entry', 'residual-live:stop', 'residual-live:target'],
     opened_at: OPENED_AT,
@@ -252,7 +252,7 @@ async function seedPosition(
   });
 }
 
-/** `filled-zero-size-wiring.test.ts`'s `StubConfig`, verbatim reasoning. */
+/** `filled-zero-size-wiring.test.ts`'s `StubConfig`, verbatim reasoning */
 type StubConfig = ProductionConfig & Required<Pick<ProductionConfig, 'alpacaBrokerClient'>>;
 
 function stubConfig(db: StoreHandle, logger: Logger, broker: BrokerAdapter): StubConfig {
@@ -377,7 +377,7 @@ describe('residual-exposure and flatten-overfill alerts name the arm that raised
     // for these same two rows — cleared here so only the two calls below,
     // driven directly on the captured FILL-SYNC surfaces, are what this
     // assertion reads. See the file doc for why calling their methods
-    // directly is still the root.
+    // directly is still the root
     logger.entries.length = 0;
     await controlExecution.reconcile();
     await liveExecution.reconcile();
@@ -402,7 +402,7 @@ describe('residual-exposure and flatten-overfill alerts name the arm that raised
    * wiring's fill-sync surface (captured, not built here) rather than a
    * surface `ingest-fills.test.ts` constructs by hand — closing the loop the
    * test above cannot for the alert TYPE, on the arm whose broker
-   * `ProductionConfig.broker` can script.
+   * `ProductionConfig.broker` can script
    */
   it("posts the live arm's own re-arm failure under the fill-sync trace id", async () => {
     const logger = recordingLogger();
@@ -442,7 +442,7 @@ describe('residual-exposure and flatten-overfill alerts name the arm that raised
    * The live arm's real over-filled flatten, same reasoning as the test
    * above — `redistributeOneFlatten` runs only inside `ingestFills()`, so
    * this is the only alert of the two `FlattenOverfillWarning.trace_id`
-   * doc claims for it.
+   * doc claims for it
    */
   it("posts the live arm's own over-filled flatten under the fill-sync trace id", async () => {
     const logger = recordingLogger();

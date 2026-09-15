@@ -6,7 +6,7 @@ import { SimulatedBrokerAdapter } from './simulated-adapter.js';
 import type { NativeBracketRequest, SimulatedAdapterConfig } from './types.js';
 
 const NOW = new Date('2026-07-15T14:00:00Z');
-/** Earlier than NOW: a mark is dated when OBSERVED, not when requested. */
+/** Earlier than NOW: a mark is dated when OBSERVED, not when requested */
 const OBSERVED_AT = new Date('2026-07-15T13:59:00Z');
 const fixedClock: Clock = { now: () => NOW };
 
@@ -115,7 +115,7 @@ describe('SimulatedBrokerAdapter.submitBracket', () => {
 
   // #1032 item 2: `MarketState.venue` was declared by #1000 and set by no
   // caller, so `CostConfig.venues.saxo` never reached `CostModelImpl`. The
-  // adapter's config is where the venue identity enters the real path.
+  // adapter's config is where the venue identity enters the real path
   it('stamps MarketState.venue from config so a venue-keyed cost override binds', async () => {
     const costModel: CostModel = {
       fill: vi.fn().mockReturnValue({
@@ -157,7 +157,7 @@ describe('SimulatedBrokerAdapter.submitBracket', () => {
     const [plainFill] = await plain.fetchNewFills(NOW);
     const [saxoFill] = await saxo.fetchNewFills(NOW);
 
-    // 100 shares at mid 100: 5bps -> 5, 8bps -> 8.
+    // 100 shares at mid 100: 5bps -> 5, 8bps -> 8
     expect(plainFill?.cost_breakdown?.commission).toBeCloseTo(5, 10);
     expect(saxoFill?.cost_breakdown?.commission).toBeCloseTo(8, 10);
   });
@@ -185,7 +185,7 @@ describe('SimulatedBrokerAdapter.submitBracket', () => {
 
   // MDS returns null where no bid/ask exists (historical stock bars); the
   // cost model owns the volatility fallback, so null must reach it intact
-  // rather than being fabricated into a number by the adapter.
+  // rather than being fabricated into a number by the adapter
   it('passes a null spread estimate through to the cost model', async () => {
     const marketData = makeMarketData({ getSpreadEstimate: vi.fn().mockResolvedValue(null) });
     const costModel: CostModel = {
@@ -214,17 +214,17 @@ describe('SimulatedBrokerAdapter.submitBracket', () => {
       qty: 100,
       // #1087: the fill's own timestamp — submit time (NOW), not the
       // priced mark's own (earlier) observation time. See "never stamps a
-      // fill earlier than the order's own submit time" below for why.
+      // fill earlier than the order's own submit time" below for why
       timestamp: NOW,
     });
-    // Buy fills adversely above mid; commission is the cash fee.
+    // Buy fills adversely above mid; commission is the cash fee
     expect(fills[0]?.price).toBeGreaterThan(100);
     expect(fills[0]?.fee).toBeCloseTo(5, 10);
     expect(fills[0]?.cost_breakdown).toBeDefined();
   });
 
   // AC: "submit-N-times yields exactly one fill" — the venue-side half of the
-  // dedup, proven independently of execute()'s store check.
+  // dedup, proven independently of execute()'s store check
   it('yields exactly one fill when the same client order id is submitted N times', async () => {
     const adapter = makeAdapter();
 
@@ -264,7 +264,7 @@ describe('SimulatedBrokerAdapter.submitBracket', () => {
 
   // No lookahead: the fill is stamped at the order's own submit-time clock
   // read (the same `now` used to build MarketState) — never ahead of
-  // simulated T, because it IS simulated T.
+  // simulated T, because it IS simulated T
   it('stamps the fill at or before simulated T', async () => {
     const adapter = makeAdapter();
     await adapter.submitBracket(makeBracket());
@@ -283,7 +283,7 @@ describe('SimulatedBrokerAdapter.submitBracket', () => {
   // poll forever — this is the mechanism observed in the 2026-09-03 paper
   // soak (a META control-arm lot: `order_state: 'filled'`, `filled_size: 0`,
   // permanently). A fill must never be dated earlier than the moment the
-  // order was actually submitted, no matter how stale the priced mark is.
+  // order was actually submitted, no matter how stale the priced mark is
   it("never stamps a fill earlier than the order's own submit time, even when the priced mark lags", async () => {
     const laggyObservedAt = new Date(NOW.getTime() - 5 * 60_000);
     const marketData = makeMarketData({
@@ -302,7 +302,7 @@ describe('SimulatedBrokerAdapter.submitBracket', () => {
     expect(fills[0]?.timestamp.getTime()).toBeGreaterThanOrEqual(NOW.getTime());
     // The self-referential trap this fixes: a poll floored on this lot's own
     // `opened_at` (NOW, its only reasonable value for a lone open position)
-    // must still see its own fill.
+    // must still see its own fill
     expect(await adapter.fetchNewFills(NOW)).toHaveLength(1);
   });
 
@@ -311,7 +311,7 @@ describe('SimulatedBrokerAdapter.submitBracket', () => {
     await adapter.submitBracket(makeBracket());
 
     expect(await adapter.fetchNewFills(NOW)).toHaveLength(1);
-    // Already drained as of a later cursor.
+    // Already drained as of a later cursor
     expect(await adapter.fetchNewFills(new Date(NOW.getTime() + 1))).toHaveLength(0);
   });
 });
@@ -320,7 +320,7 @@ describe('SimulatedBrokerAdapter.getOrder', () => {
   // The instrument is declared but unused here. The assertion that matters is
   // structural: this adapter must accept the same arguments `reconcile()`
   // passes every other adapter, which is only compiler-enforced while the
-  // parameter is declared.
+  // parameter is declared
   it('answers the BrokerAdapter lookup by client order id, ignoring the instrument', async () => {
     const adapter = makeAdapter();
     const bracket = makeBracket();
@@ -330,12 +330,12 @@ describe('SimulatedBrokerAdapter.getOrder', () => {
 
     expect(order?.client_order_id).toBe(bracket.client_order_id);
     // A simulated venue is authoritative in both directions: absent means
-    // never submitted, not "we cannot tell".
+    // never submitted, not "we cannot tell"
     expect(await adapter.getOrder('never-submitted', bracket.instrument)).toBeNull();
   });
 });
 
-/** #429 — the intervention path, modelled the same way an entry is. */
+/** #429 — the intervention path, modelled the same way an entry is */
 describe('SimulatedBrokerAdapter — intervention path (#429)', () => {
   it('models a flatten fill and publishes it to the fill feed', async () => {
     const adapter = makeAdapter();
@@ -357,7 +357,7 @@ describe('SimulatedBrokerAdapter — intervention path (#429)', () => {
   });
 
   it('nets positions per instrument rather than reporting one row per lot', async () => {
-    // A venue reports a position, not the lots that built it.
+    // A venue reports a position, not the lots that built it
     const adapter = makeAdapter();
     await adapter.submitBracket(makeBracket({ client_order_id: 'a', size: 100 }));
     await adapter.submitBracket(makeBracket({ client_order_id: 'b', size: 50 }));
@@ -369,7 +369,7 @@ describe('SimulatedBrokerAdapter — intervention path (#429)', () => {
 
   it('reports nothing for an instrument that has netted flat', async () => {
     // Reporting qty 0 would make reconciliation see a holding the venue does
-    // not have — which is exactly the divergence it is looking for.
+    // not have — which is exactly the divergence it is looking for
     const adapter = makeAdapter();
     await adapter.submitBracket(makeBracket({ client_order_id: 'a', size: 100 }));
     await adapter.submitFlatten('AAPL', 'sell', 100, 'flatten-1');

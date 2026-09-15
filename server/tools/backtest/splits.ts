@@ -26,7 +26,7 @@ import type { Split } from './validation-types.js';
 const CPCV_GROUPS = 6;
 const CPCV_TEST_GROUPS = 2;
 
-/** Walk-forward folds: each fold tests the next slice and trains on all prior ones. */
+/** Walk-forward folds: each fold tests the next slice and trains on all prior ones */
 const WALK_FORWARD_FOLDS = 5;
 
 /**
@@ -49,9 +49,9 @@ const CSCV_FOLDS = 6;
  * Defaulting it would silently pick a cadence and mis-size every purge.
  */
 export interface SplitOptions {
-  /** Bars purged/embargoed around each test fold. */
+  /** Bars purged/embargoed around each test fold */
   embargo: number;
-  /** Duration of one bar, in milliseconds — how `embargo` becomes a span. */
+  /** Duration of one bar, in milliseconds — how `embargo` becomes a span */
   barMs: number;
 }
 
@@ -67,7 +67,7 @@ export function generateSplits(
 
   // Exhaustive switch rather than a ternary: a ternary silently routes every
   // scheme it does not name to the else branch, so widening the union would
-  // have quietly scored `cscv` as CPCV.
+  // have quietly scored `cscv` as CPCV
   switch (scheme) {
     case 'walk_forward':
       return walkForwardSplits(window, options);
@@ -95,7 +95,7 @@ function walkForwardSplits(window: DateRange, options: SplitOptions): Split[] {
   for (let fold = 1; fold <= WALK_FORWARD_FOLDS; fold++) {
     const test = at(groups, fold);
     // Purge the run-up to the test slice: the bars immediately before it
-    // overlap the test labels, so training on them leaks forward.
+    // overlap the test labels, so training on them leaks forward
     const trainEnd = new Date(test.start.getTime() - embargoMs);
 
     if (trainEnd.getTime() <= window.start.getTime()) {
@@ -113,7 +113,7 @@ function walkForwardSplits(window: DateRange, options: SplitOptions): Split[] {
 
 /**
  * Combinatorial Purged CV: every C(6,2) = 15 choice of test groups, with the
- * remaining groups as train, purged and embargoed around each test group.
+ * remaining groups as train, purged and embargoed around each test group
  */
 function cpcvSplits(window: DateRange, options: SplitOptions): Split[] {
   const groups = partition(window, CPCV_GROUPS);
@@ -215,7 +215,7 @@ function purge(group: DateRange, test: DateRange[], embargoMs: number): DateRang
   return remaining;
 }
 
-/** Split the window into `count` contiguous, equal-duration groups. */
+/** Split the window into `count` contiguous, equal-duration groups */
 function partition(window: DateRange, count: number): DateRange[] {
   const startMs = window.start.getTime();
   const groupMs = (window.end.getTime() - startMs) / count;
@@ -243,7 +243,7 @@ function at(groups: readonly DateRange[], index: number): DateRange {
   return group;
 }
 
-/** All ascending index combinations of `choose` out of `n`. */
+/** All ascending index combinations of `choose` out of `n` */
 function combinations(n: number, choose: number): number[][] {
   const result: number[][] = [];
 

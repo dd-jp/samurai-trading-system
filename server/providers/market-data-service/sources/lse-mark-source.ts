@@ -85,7 +85,7 @@ import { type LiveObservation, NormalizingDataSource } from './normalizing-data-
 // own existing consumers (its test, the `market-data-service` barrel) — the
 // definitions themselves moved to `shared/book-currency.ts` under #1465,
 // which also repoints `lse-etp-pool.ts`'s `isSterlingQuoted` at the same
-// predicate instead of a hand-duplicated code list.
+// predicate instead of a hand-duplicated code list
 export { BOOK_CURRENCY, isBookCurrency };
 
 /**
@@ -147,9 +147,9 @@ export class NonTradeableInstrumentError extends Error {
   }
 }
 
-/** One vendor candle, in the vendor's own quoted currency. */
+/** One vendor candle, in the vendor's own quoted currency */
 export interface LseVendorCandle {
-  /** Source-native candle timestamp (period start). */
+  /** Source-native candle timestamp (period start) */
   open_time: Date;
   open: number;
   high: number;
@@ -158,7 +158,7 @@ export interface LseVendorCandle {
   volume: number;
 }
 
-/** A vendor bar payload plus the currency every price in it is quoted in. */
+/** A vendor bar payload plus the currency every price in it is quoted in */
 export interface LseVendorBars {
   /** e.g. 'GBX' | 'GBp' | 'GBP' | 'USD' — normalised or refused, never assumed. */
   currency: string;
@@ -202,7 +202,7 @@ export interface LseVendorQuote {
  * lets that decision land as a config change rather than a rewrite.
  */
 export interface LseMarkClient {
-  /** Vendor name, recorded on every `Bar.source` / `Mark.source` for audit. */
+  /** Vendor name, recorded on every `Bar.source` / `Mark.source` for audit */
   readonly vendor: string;
   getBars(
     symbol: string,
@@ -252,7 +252,7 @@ export interface LseMarkSourceOptions {
    * root — keeps the per-read check alone.
    */
   declaredCurrencies?: ReadonlyMap<string, string> | undefined;
-  /** Bar granularity a backtest mark is derived from. */
+  /** Bar granularity a backtest mark is derived from */
   markTimeframe?: string | undefined;
 }
 
@@ -271,7 +271,7 @@ export function toBookCurrency(
 ): number {
   const code = currency.trim();
   // Pence FIRST: 'GBp' upper-cases to 'GBP', so a case-insensitive pound test
-  // run first would swallow it and 100x the price.
+  // run first would swallow it and 100x the price
   if (isPenceCurrency(code)) {
     return price / 100;
   }
@@ -385,7 +385,7 @@ export class LseMarkDataSource extends NormalizingDataSource {
       high: toBook(candle.high),
       low: toBook(candle.low),
       close: toBook(candle.close),
-      // Volume is a SHARE count, not a price — converting it would be wrong.
+      // Volume is a SHARE count, not a price — converting it would be wrong
       volume: candle.volume,
     }));
   }
@@ -431,7 +431,7 @@ export class LseMarkDataSource extends NormalizingDataSource {
   }
 }
 
-/** The midpoint of a two-sided quote, or `null` when the vendor gave only one side. */
+/** The midpoint of a two-sided quote, or `null` when the vendor gave only one side */
 function midpointOf(quote: LseVendorQuote): number | null {
   if (quote.bid === undefined || quote.ask === undefined) return null;
   return (quote.bid + quote.ask) / 2;

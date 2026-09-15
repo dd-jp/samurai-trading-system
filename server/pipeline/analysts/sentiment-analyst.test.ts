@@ -82,10 +82,10 @@ function buildInput(
     bar: ASOF,
     market_intelligence: marketIntelligence,
     market_data: marketData,
-    // #746: sentiment never reads it, but AnalystInput.calendar is required.
+    // #746: sentiment never reads it, but AnalystInput.calendar is required
     calendar: new AlwaysOpenCalendar(),
     // #790: AnalystInput.telemetry is required too; the no-op default is
-    // correct here since this analyst never reports through it.
+    // correct here since this analyst never reports through it
     telemetry: NOOP_ANALYST_TELEMETRY,
   };
 }
@@ -143,7 +143,7 @@ describe('sentimentAnalyst', () => {
     // every real tick looks like today. The old text ("0 social items in
     // window, net sentiment driving neutral") is indistinguishable in a debate
     // transcript from "the analyst looked and saw nothing bullish" — and a
-    // 14-day soak's own output would read that way for two weeks.
+    // 14-day soak's own output would read that way for two weeks
     const clock = new ManualClock(ASOF);
     const empty = new MarketIntelligenceStore(clock);
     const input = { ...buildInput(signal, 'trace-empty'), market_intelligence: empty };
@@ -154,7 +154,7 @@ describe('sentimentAnalyst', () => {
     expect(view.key_points[0]).toContain('ABSENCE OF INPUT');
     // Still neutral and still low-confidence — the marker changes what the
     // debate is TOLD, not the arithmetic. Pinned so a later change to one is
-    // not mistaken for a change to the other.
+    // not mistaken for a change to the other
     expect(view.direction).toBe('neutral');
     expect(view.confidence).toBe(0.05);
   });

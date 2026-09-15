@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
 import { makeMetrics, makeSnapshot } from '../test-fixtures.ts';
 import { RECOGNISED_MODES, snapshotUrl, toWireSnapshot } from './useSnapshot.ts';
 
-/** A payload as it comes off `response.json()`: untyped, possibly wrong. */
+/** A payload as it comes off `response.json()`: untyped, possibly wrong */
 function raw(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return { ...(makeSnapshot() as unknown as Record<string, unknown>), ...overrides };
 }
@@ -26,7 +26,7 @@ describe('toWireSnapshot', () => {
     const snapshot = toWireSnapshot(body);
 
     // Not `undefined`: the type says `ServerMode | null`, and a consumer that
-    // reads this field must find the value the type promises.
+    // reads this field must find the value the type promises
     expect(snapshot?.mode).toBeNull();
   });
 
@@ -44,7 +44,7 @@ describe('toWireSnapshot', () => {
 
   it('never coerces an unknown mode toward "paper"', () => {
     // The asymmetric failure this whole field exists to prevent: a page that
-    // says "paper" while real money is at risk.
+    // says "paper" while real money is at risk
     for (const mode of [undefined, 'staging', 'live-ish', 0]) {
       expect(toWireSnapshot(raw({ mode }))?.mode).not.toBe('paper');
     }
@@ -53,7 +53,7 @@ describe('toWireSnapshot', () => {
   it('keeps the rest of the payload when mode is unusable', () => {
     // A bad `mode` must not throw away positions, verdicts and the pipeline —
     // the rail has an honest rendering for an unknown mode, and blanking a
-    // live-money screen over one field would be the worse failure.
+    // live-money screen over one field would be the worse failure
     const body = raw({ mode: 'staging' });
     const snapshot = toWireSnapshot(body);
 
@@ -67,7 +67,7 @@ describe('toWireSnapshot', () => {
     // #606 item 2: the rail's LLM cap block renders a named empty state for exactly this
     // value and the burn meter renders "meter not drawable", so rejecting the
     // body froze every OTHER panel — positions, verdicts, the whole pipeline —
-    // to spare the one panel built to degrade.
+    // to spare the one panel built to degrade
     const snapshot = toWireSnapshot(raw({ llm_spend: null }));
 
     expect(snapshot).not.toBeNull();
@@ -81,7 +81,7 @@ describe('toWireSnapshot', () => {
     delete absent.llm_spend;
     expect(toWireSnapshot(absent)?.llm_spend).toBeNull();
     // A scalar where an object belongs is the proxy/older-server case, and it
-    // must not reach the LLM cap block as something it will dereference.
+    // must not reach the LLM cap block as something it will dereference
     expect(toWireSnapshot(raw({ llm_spend: 'unavailable' }))?.llm_spend).toBeNull();
     expect(toWireSnapshot(raw({ llm_spend: 0 }))?.llm_spend).toBeNull();
   });
@@ -92,7 +92,7 @@ describe('toWireSnapshot', () => {
     // on `spend.all_time.per_debate` — a white screen, since `main.tsx` mounts
     // `<App/>` with no error boundary. Admitting a wrong shape is worse than
     // rejecting a null: the panel exists to say "the read failed", and it can
-    // only say it if the boundary hands it `null`.
+    // only say it if the boundary hands it `null`
     const summary = makeSnapshot().llm_spend as unknown as Record<string, unknown>;
     const withoutAllTime = { ...summary };
     delete withoutAllTime.all_time;
@@ -117,13 +117,13 @@ describe('toWireSnapshot', () => {
   // spend windows (the 24h/7d/all-time footnote) over a fault in an unrelated
   // field — the exact `mode` mistake `toWireSnapshot`'s doc comment says this
   // file exists to avoid, one level deeper. Each malformed cap field
-  // degrades to `null`/`undefined` on its own; the windows always survive.
+  // degrades to `null`/`undefined` on its own; the windows always survive
   //
   // A malformed `cap_usd` degrades to `undefined`, NOT `null` (review round
   // 3's MAJOR): `null` is reserved for the wire EXPLICITLY saying so, and
   // collapsing a malformed value into it let an intact `cap_armed_at` on the
   // same payload render "deliberately uncapped" — an affirmative claim
-  // manufactured from noise.
+  // manufactured from noise
   it('normalizes a malformed cap_usd or cap_armed_at instead of rejecting the whole summary', () => {
     const summary = makeSnapshot().llm_spend as unknown as Record<string, unknown>;
 
@@ -166,7 +166,7 @@ describe('toWireSnapshot', () => {
   // older server that predates #1196 — not a malformed one, and at THIS
   // boundary must not be rejected: the rest of the summary is still real and
   // rendered, unlike a structurally bad window (`per_debate` missing etc.),
-  // which voids the whole summary.
+  // which voids the whole summary
   //
   // That does not mean an absent field renders any differently from a
   // malformed one, though: `normalizeCapUsd(undefined)` and
@@ -176,7 +176,7 @@ describe('toWireSnapshot', () => {
   // client cannot read a field, but the same fact about whether it can be
   // trusted, so `Rail.tsx` renders both the same way per field (`'unreadable'`
   // for `cap_usd`, folded into `'ambiguous'` for `cap_armed_at` — review
-  // round 3's MAJOR).
+  // round 3's MAJOR)
   it('admits a spend summary missing cap_usd or cap_armed_at entirely', () => {
     const summary = makeSnapshot().llm_spend as unknown as Record<string, unknown>;
     const withoutCapArmedAt = { ...summary };
@@ -215,7 +215,7 @@ describe('toWireSnapshot', () => {
     // `PnlHeadlineWire.overall`/`.today` moves nothing there and lands here
     // structurally "known good" but missing the field `PnlCard` dereferences
     // straight into with no error boundary — the same shape `llm_spend`'s
-    // `all_time`/`per_debate` check above guards.
+    // `all_time`/`per_debate` check above guards
     const headline = makeSnapshot().pnl as unknown as Record<string, unknown>;
     const withoutOverall = { ...headline };
     delete withoutOverall.overall;
@@ -232,7 +232,7 @@ describe('toWireSnapshot', () => {
     expect(toWireSnapshot('<html>captive portal</html>')).toBeNull();
     expect(toWireSnapshot({})).toBeNull();
     // Parses, has a mode, but carries no pipeline lanes — an empty lane matrix
-    // would read as "the system went quiet".
+    // would read as "the system went quiet"
     const body = raw();
     delete body.pipeline;
     expect(toWireSnapshot(body)).toBeNull();
@@ -244,7 +244,7 @@ describe('toWireSnapshot', () => {
     // payload reaches this boundary structurally valid. Without
     // normalization, ReviewTab's `switch (pf.kind)` throws on these, and
     // `main.tsx` mounts with no error boundary: a white screen, not a
-    // degraded tile.
+    // degraded tile
 
     it('degrades a pre-#1270 null (the value JSON.stringify collapsed Infinity/NaN/-Infinity into) to unreadable, never guessing no_losses', () => {
       const body = raw({ metrics: { ...makeMetrics(), profit_factor: null } });
@@ -276,7 +276,7 @@ describe('toWireSnapshot', () => {
     // zero-argument invocation (silently duplicating the `undefined` case
     // instead of ever exercising an array input) — caught by re-running this
     // block with `--reporter=verbose` and finding two identically-named
-    // "undefined" cases instead of one "[]" and one "undefined".
+    // "undefined" cases instead of one "[]" and one "undefined"
     it.each([
       [{ kind: 'ratio', value: Number.NaN }],
       [{ kind: 'ratio', value: 'not a number' }],

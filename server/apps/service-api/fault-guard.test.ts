@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { installDashboardContinueOnFault, watchDashboardStdout } from './fault-guard.js';
 
-/** Async-`'error'`-only stand-in for `process.stdout` — see stdout-fault-guard.test.ts. */
+/** Async-`'error'`-only stand-in for `process.stdout` — see stdout-fault-guard.test.ts */
 class FakeStdout {
   private listener?: (error: Error) => void;
   on(_event: 'error', listener: (error: Error) => void): this {
@@ -23,7 +23,7 @@ class FakeStdout {
  * Same shape as `FakeStdout`, plus `write` — stands in for `process.stderr`,
  * which is both the reporting channel and (per the module doc's "Both
  * streams, not just stdout") a stream that must itself have an `'error'`
- * listener so a dead stderr degrades instead of reaching `uncaughtException`.
+ * listener so a dead stderr degrades instead of reaching `uncaughtException`
  */
 class FakeStderr {
   private listener?: (error: Error) => void;
@@ -55,7 +55,7 @@ describe('watchDashboardStdout', () => {
 
     expect(() => stdout.emitError(new Error('EPIPE'))).not.toThrow();
     // A dead pipe fires 'error' again on every subsequent write attempt
-    // (measured: 36 of 40 in the module doc) — the report must not repeat.
+    // (measured: 36 of 40 in the module doc) — the report must not repeat
     stdout.emitError(new Error('EPIPE'));
     stdout.emitError(new Error('EPIPE'));
 

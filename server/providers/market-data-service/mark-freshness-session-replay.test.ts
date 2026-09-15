@@ -29,7 +29,7 @@ import {
 } from './mark-freshness.js';
 import type { Mark } from './types.js';
 
-/** `max_mark_age.stocks` (paper-profile.ts) — the bound these marks were judged against. */
+/** `max_mark_age.stocks` (paper-profile.ts) — the bound these marks were judged against */
 const STOCKS_BOUND_MS = 15 * 60_000;
 
 /**
@@ -117,7 +117,7 @@ function markObservedAt(iso: string): Mark {
   return { price: 100, observed_at: new Date(iso), source: 'alpaca', asset_class: 'stocks' };
 }
 
-/** The tick's frozen `asOf`, reconstructed from the logged `(observed_at, forwardOffsetMs)` pair. */
+/** The tick's frozen `asOf`, reconstructed from the logged `(observed_at, forwardOffsetMs)` pair */
 function asOfFor(observedAt: string, forwardOffsetMs: number): Date {
   return new Date(new Date(observedAt).getTime() - forwardOffsetMs);
 }
@@ -126,7 +126,7 @@ describe('the 2026-09-04 session’s valuation refusals, replayed (#1111)', () =
   it('every one of them was a forward offset past the old tolerance, not an aged mark', () => {
     // Non-vacuity for the case below: each row really did refuse under the
     // pre-#1111 coordinate, and refused for being AHEAD rather than for being
-    // old.
+    // old
     for (const [, observedAt, forwardOffsetMs] of SESSION_REFUSALS) {
       const asOf = asOfFor(observedAt, forwardOffsetMs);
       expect(markAgeMs(markObservedAt(observedAt), asOf)).toBe(-forwardOffsetMs);

@@ -97,7 +97,7 @@ export const CONTROL_DEBATE_ID_PREFIX = 'control:';
  */
 export const CONTROL_TRACE_SUFFIX = ':control';
 
-/** Free-text `DebateResult` fields, hoisted so the record says the same thing everywhere. */
+/** Free-text `DebateResult` fields, hoisted so the record says the same thing everywhere */
 const NO_DEBATE_HAPPENED =
   'Falsifier arm 2 (#753): no debate was held. The direction and confidence below are the ' +
   "technical analyst's deterministic axis vote (assessAxes), thresholded by the Trader's own " +
@@ -117,9 +117,9 @@ const NO_DEBATE_HAPPENED =
  */
 export function controlArmDecision(input: {
   instrument: string;
-  /** The SAME views the live arm's debate is about to run on — not a re-run. */
+  /** The SAME views the live arm's debate is about to run on — not a re-run */
   views: readonly AnalystView[];
-  /** The decision bar the gate opened for this pass. */
+  /** The decision bar the gate opened for this pass */
   bar: Date;
 }): DebateResult | null {
   const axisVote = input.views.find((view) => view.analyst_type === AXIS_VOTE_ANALYST_TYPE);
@@ -130,7 +130,7 @@ export function controlArmDecision(input: {
     // vote, unmodified: `direction` picks the side, `confidence` is what the
     // Trader's `conviction_floor` thresholds and what its conviction multiplier
     // scales size by — the SAME floor and the SAME multiplier the live arm's
-    // debate confidence goes through.
+    // debate confidence goes through
     direction: axisVote.direction,
     confidence: axisVote.confidence,
 
@@ -138,13 +138,13 @@ export function controlArmDecision(input: {
     // arm's debate carries it (#687/#743). The Trader inherits its
     // `decision_timestamp` and its idempotency key's bar from here, so a control
     // intent keys to the same bar the live one does — which is precisely why the
-    // key also has to carry the arm.
+    // key also has to carry the arm
     bar_timestamp: input.bar,
     debate_id: controlDebateId(input.instrument, input.bar, axisVote),
 
     // ── The fields that describe a debate that did not happen. ──────────────
     // Each is given the value that SAYS SO, rather than the value that would
-    // make the control look most like the live arm.
+    // make the control look most like the live arm
     //
     // `converged: true` is the one that needs defending, because `false` is the
     // superficially humbler choice and would be wrong twice over. The Trader
@@ -158,7 +158,7 @@ export function controlArmDecision(input: {
     // agreement before the round cap", and a single deterministic vote has no
     // disagreement left to resolve. It is unanimous by construction. The control
     // arm has no rounds, so "converged" is not a variable for it — it is
-    // ALWAYS-DECIDED, and a constant is the honest encoding of that.
+    // ALWAYS-DECIDED, and a constant is the honest encoding of that
     //
     // The consequence, named rather than left to be discovered: on a bar where
     // the LIVE debate fails to converge, the live arm takes the
@@ -169,21 +169,21 @@ export function controlArmDecision(input: {
     // flag would make the control's size a function of the live model layer,
     // which is the one input a matched control may not take. It is a known
     // asymmetry of the measurement, and `formatArmComparison` says so in the
-    // report rather than leaving the reader to infer it from equal trade counts.
+    // report rather than leaving the reader to infer it from equal trade counts
     converged: true,
     // Zero, not one. No round was run, and a `1` here would put a fabricated
-    // round into any per-round accounting of what the control cost.
+    // round into any per-round accounting of what the control cost
     rounds_completed: 0,
     // Likewise zero: no wall-clock was spent debating. The axis vote's own cost
     // was already paid by the analyst layer, and it is paid ONCE — the control
-    // arm reuses the live arm's views rather than re-running them.
+    // arm reuses the live arm's views rather than re-running them
     latency_ms: 0,
     // No analyst was argued with, so no analyst influenced an outcome. An empty
     // set rather than a synthesized contribution for the technical analyst:
     // `AnalystContribution.influence_score` measures how much a view MOVED a
     // debate, and there was no debate to move. The Feedback Loop's attribution
     // join reads `debate_log`, which the control arm never writes, so nothing
-    // downstream is looking for a contribution here.
+    // downstream is looking for a contribution here
     contributions: [],
     open_items: [],
     synthesis: NO_DEBATE_HAPPENED,
@@ -191,7 +191,7 @@ export function controlArmDecision(input: {
     disagreement_summary: NO_DEBATE_HAPPENED,
     // The axis vote WAS read — deterministically, off `axisVote` above, not
     // via an LLM debate. `read` distinguishes "nothing to read" (#1393) from
-    // "read something other than a debate", and this is the latter.
+    // "read something other than a debate", and this is the latter
     read: true,
   };
 }

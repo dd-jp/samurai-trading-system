@@ -69,7 +69,7 @@ export function weightedConvictionFactor(
 
   // Nobody agrees with the mediator — which happens, since `direction` is the
   // mediator's synthesis rather than a vote. There is no agreement to weight,
-  // so weights carry no information here and conviction is left alone.
+  // so weights carry no information here and conviction is left alone
   if (agreeing.length === 0) return 1;
 
   const totalWeight = contributions.reduce((sum, c) => sum + weightOf(c), 0);

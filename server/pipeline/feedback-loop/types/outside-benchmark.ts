@@ -53,7 +53,7 @@ import type {
  * the Feedback Loop, which is the one thing #636 decided.
  */
 export interface OutsideBenchmarkSampleStore {
-  /** One row per (cycle instant, benchmark). */
+  /** One row per (cycle instant, benchmark) */
   append(sample: OutsideBenchmarkSample): void;
   /** Most-recently-computed first. Empty means no cycle has measured one yet. */
   getRecent(limit: number, asOf: Date): OutsideBenchmarkSample[];
@@ -73,15 +73,15 @@ export interface UnmeasuredOutsideBenchmark {
   reason: string;
 }
 
-/** What one benchmark cycle produced: what it measured, and what it could not. */
+/** What one benchmark cycle produced: what it measured, and what it could not */
 export interface OutsideBenchmarkCycleResult {
   measured: OutsideBenchmarkSample[];
   unmeasured: UnmeasuredOutsideBenchmark[];
 }
 
-/** Everything `runOutsideBenchmarkCycle` consumes. */
+/** Everything `runOutsideBenchmarkCycle` consumes */
 export interface OutsideBenchmarkCycleInput {
-  /** Wall-clock live, simulated T in replay — read only through this. */
+  /** Wall-clock live, simulated T in replay — read only through this */
   clock: Clock;
   /**
    * The matched control's comparison, ALREADY computed this cycle. The window

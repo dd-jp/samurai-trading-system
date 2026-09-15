@@ -54,7 +54,7 @@
  */
 const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['127.0.0.1', '::1']);
 
-/** True iff `host` is one of the two literal loopback addresses above. */
+/** True iff `host` is one of the two literal loopback addresses above */
 export function isLoopbackHost(host: string): boolean {
   return LOOPBACK_HOSTS.has(host);
 }

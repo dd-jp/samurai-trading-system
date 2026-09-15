@@ -19,7 +19,7 @@ import type { StoreHandle } from '../../shared/store/index.js';
 import { fromStoredTimestampOrNull, toStoredTimestampOrNull } from '../../shared/store/index.js';
 import type { PersistedBreakerState } from './types.js';
 
-/** The narrow write seam the tick path needs — see `computeCurrentPortfolioAndBreakers`. */
+/** The narrow write seam the tick path needs — see `computeCurrentPortfolioAndBreakers` */
 export interface BreakerStatePersistence {
   save(states: readonly PersistedBreakerState[]): void;
 }

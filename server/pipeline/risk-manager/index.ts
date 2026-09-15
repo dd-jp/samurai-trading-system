@@ -216,7 +216,7 @@ function committedExposureFor(portfolio: PortfolioView, instrument: string): num
   );
 }
 
-/** See `committedExposureFor` — the same sum over one asset class. */
+/** See `committedExposureFor` — the same sum over one asset class */
 function committedExposureForClass(
   portfolio: PortfolioView,
   assetClass: RiskInput['intent']['asset_class'],
@@ -265,7 +265,7 @@ export class RiskManagerImpl implements RiskManager {
 
     // Resolved per call, not per construction. That is the entire point of the
     // ticket: a threshold the Feedback Loop tightened between two ticks has to
-    // bind on the second one, and a config frozen in the constructor cannot.
+    // bind on the second one, and a config frozen in the constructor cannot
     //
     // SKIPPED for an exit intent (#766). `resolveRiskConfig` re-checks the
     // WHOLE `risk_thresholds` row set against the in-code clamp
@@ -280,10 +280,10 @@ export class RiskManagerImpl implements RiskManager {
     // `resolveRiskConfig` never changes it — `config.cii_threshold` is
     // byte-identical whether or not the live table is consulted. Skipping the
     // resolve therefore changes NOTHING about what an exit decides; it only
-    // removes exits' exposure to a corrupt threshold row they never needed.
+    // removes exits' exposure to a corrupt threshold row they never needed
     // ADR-0014's flat-by-close flatten rides the exit path, and a bad
     // threshold row stranding open positions through the close would be a
-    // materially worse defect than the audibility gap #766 was filed for.
+    // materially worse defect than the audibility gap #766 was filed for
     const { config } =
       intent.intent_type === 'exit' || !this.thresholds
         ? { config: this.config }
@@ -331,7 +331,7 @@ export class RiskManagerImpl implements RiskManager {
     // the leveraged-ETP universe long-only), so this refuses unconditionally
     // rather than sizing one. A "down" thesis belongs on the paired inverse
     // line if the universe carries it — that routing is a Trader concern, not
-    // this gate's.
+    // this gate's
     //
     // Scoped to `config.long_only_instruments` — the ACTUAL Saxo-venue set
     // the run is configured to trade (`saxoTradeableUniverse()`,
@@ -341,7 +341,7 @@ export class RiskManagerImpl implements RiskManager {
     // paper universe (`DEFAULT_UNIVERSE`, also `asset_class: 'stocks'`),
     // which trades no venue this decision named. See `RiskConfig`'s own doc
     // comment for why `per_subclass_deployment_cap.subclass_of` is not the
-    // discriminator either (it under-refuses unmeasured Saxo rows).
+    // discriminator either (it under-refuses unmeasured Saxo rows)
     //
     // Placed here rather than in `ENTRY_CAP_GATES`: this is a structural
     // refusal, not a sizing cap, so it should not pay for a portfolio/breaker
@@ -349,7 +349,7 @@ export class RiskManagerImpl implements RiskManager {
     // trim-only contract, this one REJECTS outright, which the gates array
     // does not otherwise do (the two `PerSubclassCapUnresolvableError` gates
     // throw instead of returning a decision — this is a genuine `rejected()`
-    // both ends can act on).
+    // both ends can act on)
     if (intent.side === 'sell' && config.long_only_instruments?.has(intent.instrument)) {
       const binding = 'long_only_book';
       const positionClaim = intent.intent_type === 'entry' ? 'with no held lot' : 'on a scale_in';
@@ -370,10 +370,10 @@ export class RiskManagerImpl implements RiskManager {
     // became a property of one call site in the composition root. This is the
     // guard that puts it back in the gate: every cap below reads an absent
     // instrument as ZERO exposure, so a book missing a position is a book
-    // whose per-asset, per-subclass and gross caps are all too wide.
+    // whose per-asset, per-subclass and gross caps are all too wide
     //
     // Placed BELOW the exit branch on purpose — an exit is what the degraded
-    // view exists to let through, and it consults none of these caps.
+    // view exists to let through, and it consults none of these caps
     if (portfolio.unvalued_instruments.length > 0) {
       const binding = 'unvalued_book';
       return rejected(binding, [
@@ -401,7 +401,7 @@ export class RiskManagerImpl implements RiskManager {
     // reservation would otherwise show a cap binding against exposure the
     // audit row says is zero — an unreproducible decision. One line naming
     // the reserved instruments makes the subtraction the gates performed
-    // re-derivable from the `risk_log` row alone.
+    // re-derivable from the `risk_log` row alone
     const reservedInstruments = Object.entries(portfolio.reserved_exposure_by_instrument);
     if (reservedInstruments.length > 0) {
       reasons.push(
@@ -462,7 +462,7 @@ export class RiskManagerImpl implements RiskManager {
       return rejected('min_viable_size', reasons);
     }
 
-    // Risk-critic review (#204; producer built by #957 in `critic.ts`).
+    // Risk-critic review (#204; producer built by #957 in `critic.ts`)
     if (critic === undefined) {
       // Fails open BY RECORD, not silently (review 2026-08-06 B3): a decision
       // the critic never saw must stay distinguishable from one it actually
@@ -477,25 +477,25 @@ export class RiskManagerImpl implements RiskManager {
       // that the condition states and every validator drop reason land on
       // `reasons` on every path — a clean pass, a trim, a prose reject and a
       // breach reject alike. Ordering then decides only which
-      // `binding_constraint` wins, never what is audited.
+      // `binding_constraint` wins, never what is audited
       reasons.push(...invalidationReasons(critic));
 
       const criticTrim = applyCritic(critic, notional, reasons);
       if (criticTrim.rejected) {
         return rejected('risk_critic:reject', reasons);
       }
-      // #997 Q2b: a MEASURED breach rejects even when the prose said `pass`.
+      // #997 Q2b: a MEASURED breach rejects even when the prose said `pass`
       // The producer never pre-computes this — it reports `verdict: 'pass'`
       // beside a `breached` condition and `evaluate()` holds the authority,
       // which is ADR-0003's seam exactly and keeps the persisted row honest
       // about what the model actually said. The constraint is its own, so
       // "how often do prose and predicates disagree?" stays answerable: this
-      // line is reached only when the prose verdict did NOT itself reject.
+      // line is reached only when the prose verdict did NOT itself reject
       //
       // `unevaluable` is deliberately absent from this test. A data gap must
       // never block a trade (`devils-advocate-spec.md`:94), and an absent or
       // empty `conditions` list — a pre-fold row, or a malformed conditions
-      // half — yields no breaches and therefore no effect at all.
+      // half — yields no breaches and therefore no effect at all
       const breached = breachedConditions(critic);
       if (breached.length > 0) {
         return rejected(INVALIDATED_BINDING_CONSTRAINT, reasons);
@@ -508,19 +508,19 @@ export class RiskManagerImpl implements RiskManager {
 
     const approvedSize = submittableSize(notional);
 
-    // The dust floor has to be re-tested on what will ACTUALLY be submitted.
+    // The dust floor has to be re-tested on what will ACTUALLY be submitted
     // The `min_viable_size` check above ran on the pre-floor notional, and
     // flooring only ever reduces it: £110 of trimmed notional at an entry of
     // £60 is 1.83 shares, floors to 1, and submits £60 against a config that
     // just declared anything under £100 to be dust. A quantity grid can turn
     // a viable order into a sub-viable one, so the floor is checked on both
-    // sides of it.
+    // sides of it
     //
     // Two reasons, not one, and for the same reason `decide.ts` keeps
     // `rounds_to_zero_shares` distinct from `below_min_notional`: a soak log
     // must distinguish "the venue's grid ate the whole position" from "what
     // survived the caps was dust". The zero case is the strictly worse one —
-    // there is no order left at all.
+    // there is no order left at all
     const approvedNotional = approvedSize * intent.entry;
     if (approvedSize <= 0) {
       reasons.push(
@@ -538,7 +538,7 @@ export class RiskManagerImpl implements RiskManager {
     // `modifications` carries only sizes, so a reader cannot tell a cap trim
     // from a grid floor by comparing them — and `binding_constraint` names
     // the cap. Recorded in `reasons` instead, which is the audit channel, so
-    // an under-deployed entry is attributable without re-deriving the grid.
+    // an under-deployed entry is attributable without re-deriving the grid
     if (config.whole_share_sizing && approvedSize !== finalSize) {
       reasons.push(
         `whole_share_sizing: floored size from ${finalSize} to ${approvedSize} (whole shares)`,
@@ -580,7 +580,7 @@ export class PerSubclassCapUnresolvableError extends Error {
   }
 }
 
-/** The circuit-breaker gate — halts new entries + scale-ins, fail fast. */
+/** The circuit-breaker gate — halts new entries + scale-ins, fail fast */
 function trippedBreakerTier(
   breakers: BreakerState,
   assetClass: RiskInput['intent']['asset_class'],
@@ -839,8 +839,8 @@ const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
   // through. `undefined - deployedToSubclass` is `NaN`, `trimToAllowed` does
   // `Math.max(NaN, 0) === NaN`, `notional <= NaN` is false so it "trims" to
   // `NaN`, and `NaN < config.min_viable_size` is false too — so the intent
-  // clears both this gate and the min-viable floor with no envelope at all.
-  // That is the exact failure D5 exists to prevent, arriving silently.
+  // clears both this gate and the min-viable floor with no envelope at all
+  // That is the exact failure D5 exists to prevent, arriving silently
   const capFraction: number | null | undefined = declared.cap_fraction_of_equity[subclass];
   if (capFraction === undefined) {
     throw new PerSubclassCapUnresolvableError(
@@ -860,7 +860,7 @@ const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
   // diverge. `portfolio.equity` is one blended broker figure with no
   // per-leg accounting, so it equals the book only by coincidence of how the
   // account happens to be funded at this instant; funding it past the book
-  // must not silently widen every position the same fractions size.
+  // must not silently widen every position the same fractions size
   const ceiling = declared.equity_ceiling;
   if (ceiling !== undefined) {
     // #949, re-affirmed by #1180 — `book` is GBP, `portfolio.equity` is read
@@ -869,16 +869,16 @@ const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
     // funding in EITHER direction until it is known to compare like-for-like
     // — not just above `refuseAbove`, where the previous behaviour merely
     // gave the wrong REASON, but also below it, where a stale FX rate could
-    // have let a genuinely wrong funding level clamp and pass silently.
+    // have let a genuinely wrong funding level clamp and pass silently
     // Refuse outright, before the numeric comparison, rather than let either
-    // failure mode reach it.
+    // failure mode reach it
     //
     // **A configured rate now exists (`SIZING_USD_PER_GBP`) and this gate
     // still refuses — by design, not by staleness.** See
     // `same_currency_verified`'s doc comment (types.ts) for the arithmetic:
     // the rate's own drift is larger than `refuse_above_tolerance`, so arming
     // this with it would make FX movement indistinguishable from the
-    // overfunding the refusal exists to catch.
+    // overfunding the refusal exists to catch
     if (!ceiling.same_currency_verified) {
       throw new PerSubclassCapUnresolvableError(
         'per_subclass_deployment_cap: currency mismatch, cannot verify funding — ' +
@@ -903,7 +903,7 @@ const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
       // (the breaker baselines, the drawdown envelope D5's fractions were
       // measured to hold). Refusing the entry outright, rather than quietly
       // capping and moving on, is what turns that into something the
-      // operator has to notice and correct, per #888's chosen resolution.
+      // operator has to notice and correct, per #888's chosen resolution
       throw new PerSubclassCapUnresolvableError(
         `per_subclass_deployment_cap's declared book is ${ceiling.book} but portfolio.equity is ` +
           `${portfolio.equity}, more than ${(ceiling.refuse_above_tolerance * 100).toFixed(0)}% ` +
@@ -922,7 +922,7 @@ const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
   // of a falling book, so it stops bounding drawdown at the first loss. Below
   // the declared book (or when no book is declared at all) that equity read
   // is `portfolio.equity` unclamped; at or above the book (within tolerance)
-  // it is clamped to the book, per #888 — the whole point of `equity_ceiling`.
+  // it is clamped to the book, per #888 — the whole point of `equity_ceiling`
   const cappedEquity =
     ceiling === undefined ? portfolio.equity : Math.min(portfolio.equity, ceiling.book);
   const cap = capFraction * cappedEquity;
@@ -933,7 +933,7 @@ const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
   // iterating the held record alone would skip exactly the sibling this
   // netting exists to count — which is what made the invariant this gate's
   // docstring claims ("N concurrently-armed names share ONE combined cap")
-  // false for anything submitted before the next fill poll.
+  // false for anything submitted before the next fill poll
   const deployedToSubclass = [
     ...new Set([
       ...Object.keys(portfolio.exposure_by_instrument),
@@ -1055,7 +1055,7 @@ function applyCritic(
     // Nothing to apply. `notional` goes back untouched — before #957 this
     // branch echoed the SHARE COUNT back in a field named `notional`, inert
     // only because the caller ignores the value when `changed` is false. That
-    // path is reachable for the first time now, so it returns the real thing.
+    // path is reachable for the first time now, so it returns the real thing
     return { changed: false, notional, rejected: false };
   }
 

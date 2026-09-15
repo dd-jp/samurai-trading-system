@@ -26,12 +26,12 @@ describe('snapToTick', () => {
     //   1.13 / 0.01 = 112.99999999999999  -> a bare floor drops it to 1.12
     // A price the venue would have accepted verbatim must come back unchanged
     // in BOTH directions. These sit in the penny range ADR-0016's LSE ETP
-    // universe trades in, so this is the live case, not a contrived one.
+    // universe trades in, so this is the live case, not a contrived one
     expect(snapToTick(1.11, 'up')).toBe(1.11);
     expect(snapToTick(1.13, 'down')).toBe(1.13);
     expect(snapToTick(2.22, 'up')).toBe(2.22);
     expect(snapToTick(1.18, 'down')).toBe(1.18);
-    // Sub-dollar grid: 0.0003 / 0.0001 = 2.9999999999999996.
+    // Sub-dollar grid: 0.0003 / 0.0001 = 2.9999999999999996
     expect(snapToTick(0.0003, 'down')).toBe(0.0003);
     expect(snapToTick(766.41, 'up')).toBe(766.41);
     expect(snapToTick(762.34, 'up')).toBe(762.34);
@@ -41,15 +41,15 @@ describe('snapToTick', () => {
     expect(snapToTick(766.40805334, 'down')).toBe(766.4);
     expect(snapToTick(766.40805334, 'up')).toBe(766.41);
     // 762.335 is the decimal midpoint of the two ticks, and its double lands
-    // just ABOVE it (762.33500000000003638), so the nearer tick is 762.34.
-    // 'down' must still go down.
+    // just ABOVE it (762.33500000000003638), so the nearer tick is 762.34
+    // 'down' must still go down
     expect(snapToTick(762.335, 'down')).toBe(762.33);
   });
 
   it('leaves a high-priced on-tick value alone, where a flat 1e-9 bound would not', () => {
     // Measured: 111848.18 / 0.01 carries 1.86e-9 of dust, the first penny price
     // above $200k-down to exceed a flat 1e-9. A relative tolerance still sees it
-    // as on-tick; an absolute one would ceil it to 111848.19.
+    // as on-tick; an absolute one would ceil it to 111848.19
     expect(snapToTick(111848.18, 'up')).toBe(111848.18);
     expect(snapToTick(111848.18, 'down')).toBe(111848.18);
   });
@@ -60,7 +60,7 @@ describe('snapToTick', () => {
 
   it('returns a value that survives its own string form', () => {
     // The whole point: `76641 * 0.01` is not 766.41, and String()-ing that
-    // onto the wire is refused for the same reason as the unrounded price.
+    // onto the wire is refused for the same reason as the unrounded price
     expect(String(snapToTick(766.40805334, 'up'))).toBe('766.41');
   });
 
@@ -90,11 +90,11 @@ describe('roundBracketToTick', () => {
   it('rounds the SPY short that the venue actually refused', () => {
     const rounded = roundBracketToTick('sell', 762.335, 766.40805334, 754.18889332);
 
-    // Entry UP: a short's limit is the least it will accept.
+    // Entry UP: a short's limit is the least it will accept
     expect(rounded.entry).toBe(762.34);
-    // Stop DOWN: a short's stop sits above the entry, so down is a smaller loss.
+    // Stop DOWN: a short's stop sits above the entry, so down is a smaller loss
     expect(rounded.stop).toBe(766.4);
-    // Target UP: below the entry, so up is the earlier, easier fill.
+    // Target UP: below the entry, so up is the earlier, easier fill
     expect(rounded.target).toBe(754.19);
   });
 
@@ -124,19 +124,19 @@ describe('roundBracketToTick', () => {
   it('resolves the tick per LEG, so a bracket straddling a dollar uses both grids', () => {
     // The reason `tickFor` is called per price rather than once per order: a
     // long entered just above a dollar has its stop on the finer grid and its
-    // target on the coarser one, in the SAME bracket.
+    // target on the coarser one, in the SAME bracket
     expect(roundBracketToTick('buy', 1.004567, 0.98765432, 1.114567)).toEqual({
-      // >= $1: penny grid, rounded down for a long entry.
+      // >= $1: penny grid, rounded down for a long entry
       entry: 1,
-      // < $1: hundredth-of-a-penny grid, rounded up (toward the entry).
+      // < $1: hundredth-of-a-penny grid, rounded up (toward the entry)
       stop: 0.9877,
-      // >= $1 again: penny grid, rounded down.
+      // >= $1 again: penny grid, rounded down
       target: 1.11,
     });
   });
 
   it('refuses a bracket that rounding collapses rather than submitting it inverted', () => {
-    // Sub-tick wide: every leg lands on 100.00.
+    // Sub-tick wide: every leg lands on 100.00
     expect(() => roundBracketToTick('buy', 100.001, 99.9995, 100.002)).toThrow(
       /collapsed the bracket/,
     );

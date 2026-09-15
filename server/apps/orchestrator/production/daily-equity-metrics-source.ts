@@ -39,7 +39,7 @@ import type {
 } from '../sqlite-daily-equity-store.js';
 import type { Logger } from '../types.js';
 
-/** Consecutive portfolio sessions are UTC midnights — exactly this far apart. */
+/** Consecutive portfolio sessions are UTC midnights — exactly this far apart */
 const MS_PER_DAY = 24 * 60 * 60 * 1_000;
 
 /**
@@ -113,7 +113,7 @@ export const MIN_RETURN_OBSERVATIONS = 60;
 
 export interface DailyEquityMetricsSourceInput {
   equity: SqliteDailyEquityStore;
-  /** The closed trades behind the suite's trade-derived fields. */
+  /** The closed trades behind the suite's trade-derived fields */
   trades: { getClosedTradesBetween(from: Date, to: Date): ClosedTrade[] };
   logger: Logger;
   /**
@@ -129,7 +129,7 @@ export interface DailyEquityMetricsSourceInput {
    * Stage 2.
    */
   stage2Selections?: { getLatestPerAssetClass(): Stage2Selection[] };
-  /** Needed to age a selection out; defaults to the system clock. */
+  /** Needed to age a selection out; defaults to the system clock */
   clock?: Clock;
 }
 
@@ -222,7 +222,7 @@ export class SqliteDailyEquityMetricsSource implements DailyMetricsSource {
     const window = {
       // The first observation is consumed as the base of the first return, so
       // the returns cover `(run[0], run[last]]` — a half-open window matching
-      // `ClosedTradeStore.getClosedTradesBetween`'s own convention exactly.
+      // `ClosedTradeStore.getClosedTradesBetween`'s own convention exactly
       start: run[0]?.session_start as Date,
       end: run[run.length - 1]?.session_start as Date,
     };
@@ -240,7 +240,7 @@ export class SqliteDailyEquityMetricsSource implements DailyMetricsSource {
         instrument: trade.instrument,
         pnl: trade.realized_pnl_net,
         // Entry + exit legs, matching `toTradeSeries` (trade-derivation.ts) so
-        // the live turnover figure and the backtest one mean the same thing.
+        // the live turnover figure and the backtest one mean the same thing
         notional: trade.entry * trade.filled_size * 2,
         opened_at: trade.opened_at,
         closed_at: trade.closed_at,
@@ -259,7 +259,7 @@ export class SqliteDailyEquityMetricsSource implements DailyMetricsSource {
       // that. Caught here rather than allowed to propagate because the port's
       // contract is `undefined` for "no suite this cycle", and an exception
       // escaping into the daily timer would be logged as a failed feedback
-      // cycle when nothing failed.
+      // cycle when nothing failed
       this.skip(
         'the daily equity series could not be reduced to a metrics suite: ' +
           `${error instanceof Error ? error.message : String(error)}`,
@@ -299,7 +299,7 @@ export class SqliteDailyEquityMetricsSource implements DailyMetricsSource {
 
     const now = (this.input.clock ?? new SystemClock()).now();
     // The DECISION is the shared predicate (also behind the startup line in
-    // production.ts); the staged checks below only pick the inert message.
+    // production.ts); the staged checks below only pick the inert message
     const usable = usableRevalidationSelections(selections, now);
     if (usable.length === 0) {
       const anyFresh = selections.some(
@@ -308,7 +308,7 @@ export class SqliteDailyEquityMetricsSource implements DailyMetricsSource {
       this.noteInert(
         anyFresh
           ? // Both statistics are required: the snapshot's shape has no room for
-            // "PBO was refused", and a zero would read as a perfect result.
+            // "PBO was refused", and a zero would read as a perfect result
             'the persisted Stage 2 selection refused to compute PBO or DSR, so no honest ' +
               'revalidation snapshot exists'
           : `every persisted Stage 2 selection is older than ${
@@ -399,7 +399,7 @@ function usableRun(observations: readonly DailyEquityObservation[]): DailyEquity
 
   // A single trailing observation whose own equity is unusable yields no
   // returns anyway, but a non-positive newest row would otherwise sit at the
-  // end of an otherwise fine run and produce one NaN return.
+  // end of an otherwise fine run and produce one NaN return
   const run = observations.slice(start);
   return run.every((o) => o.equity > 0) ? run : [];
 }

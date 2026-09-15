@@ -20,7 +20,7 @@ describe('isLoopbackHost', () => {
 
   it('rejects `localhost` — a hostname to resolve, not a literal loopback address', () => {
     // Deliberate, not an oversight: see bind-guard.ts's LOOPBACK_HOSTS comment
-    // for why the allowlist is addresses only.
+    // for why the allowlist is addresses only
     expect(isLoopbackHost('localhost')).toBe(false);
   });
 
@@ -74,7 +74,7 @@ describe('assertBindAllowed — the throwing half wired into createDashboardServ
     // The refusal message must be operator-legible (what's wrong, how to fix
     // it) without ever interpolating a credential value — there is no code
     // path where it could, since the message text below is fixed and never
-    // reads `credential`.
+    // reads `credential`
     expect(() => assertBindAllowed('0.0.0.0', undefined)).toThrow(/0\.0\.0\.0/);
     expect(() => assertBindAllowed('0.0.0.0', undefined)).toThrow(
       new RegExp(DASHBOARD_CREDENTIAL_ENV_VAR),

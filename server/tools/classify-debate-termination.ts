@@ -83,18 +83,18 @@ import { assertStorePathMatchesMode } from '../apps/orchestrator/index.js';
 import type { DebateTermination } from '../shared/index.js';
 import { openSharedStore, resolveStoreMode, sharedStorePath } from '../shared/store/index.js';
 
-/** One `debate_log` row, the columns classification needs. */
+/** One `debate_log` row, the columns classification needs */
 export interface DebateLogTerminationRow {
   debate_id: string;
-  /** SQLite 1/0/NULL, matching the raw column — not yet converted to boolean. */
+  /** SQLite 1/0/NULL, matching the raw column — not yet converted to boolean */
   converged: number | null;
-  /** NULL for a pre-0041 row; a row already classified is never reclassified. */
+  /** NULL for a pre-0041 row; a row already classified is never reclassified */
   termination: string | null;
-  /** ISO timestamp — the coordinate `isCovered` checks against a log's spans. */
+  /** ISO timestamp — the coordinate `isCovered` checks against a log's spans */
   created_at: string;
 }
 
-/** A contiguous span of ISO timestamps a log positively covers — see `parseLogCoverage`. */
+/** A contiguous span of ISO timestamps a log positively covers — see `parseLogCoverage` */
 export interface CoverageInterval {
   start: string;
   end: string;
@@ -103,7 +103,7 @@ export interface CoverageInterval {
 /**
  * What a run log positively establishes: every `debate_id` a `debate.timeout`
  * line named (direct evidence of `'latency_truncated'`), and the timestamp
- * spans the log actually saw (coverage evidence for everything else).
+ * spans the log actually saw (coverage evidence for everything else)
  */
 export interface LogCoverage {
   timeoutIds: Set<string>;
@@ -217,7 +217,7 @@ export function parseLogCoverage(lines: Iterable<string>): LogCoverage {
     // timestamp of its own to open the next span from. Checked before the
     // timestamp gate below, deliberately: a boot line that failed to log a
     // parseable timestamp is still a boot line, and must not be silently
-    // treated as ordinary untimestamped chatter that leaves the span open.
+    // treated as ordinary untimestamped chatter that leaves the span open
     if (record.trace_id === 'startup') {
       closeSpan();
     }
@@ -226,7 +226,7 @@ export function parseLogCoverage(lines: Iterable<string>): LogCoverage {
     if (typeof rawTimestamp !== 'string') {
       // A well-formed, non-boot line with no timestamp at all neither
       // extends nor closes the current span — it is not evidence of a gap,
-      // just a line this function cannot place in time.
+      // just a line this function cannot place in time
       continue;
     }
     const parsedMs = Date.parse(rawTimestamp);
@@ -236,7 +236,7 @@ export function parseLogCoverage(lines: Iterable<string>): LogCoverage {
     // Canonicalise before storing — `isCovered` compares this against
     // `debate_log.created_at`, which is always written via `.toISOString()`;
     // a parseable-but-non-canonical timestamp string must not sort wrong
-    // against it.
+    // against it
     const timestamp = new Date(parsedMs).toISOString();
 
     const gapTooLarge = spanEndMs !== undefined && parsedMs - spanEndMs > MAX_INTER_LINE_GAP_MS;
@@ -256,27 +256,27 @@ export function parseLogCoverage(lines: Iterable<string>): LogCoverage {
 /**
  * The `debate_id`s a run log's `debate.timeout` lines name — a thin view over
  * `parseLogCoverage`, kept as its own export because direct timeout matching
- * is useful (and testable) independent of coverage-span reasoning.
+ * is useful (and testable) independent of coverage-span reasoning
  */
 export function parseLatencyTruncatedDebateIds(lines: Iterable<string>): Set<string> {
   return parseLogCoverage(lines).timeoutIds;
 }
 
-/** Whether `createdAt` falls inside any of the given coverage spans (inclusive). */
+/** Whether `createdAt` falls inside any of the given coverage spans (inclusive) */
 export function isCovered(createdAt: string, intervals: readonly CoverageInterval[]): boolean {
   return intervals.some((interval) => interval.start <= createdAt && createdAt <= interval.end);
 }
 
-/** One row's proposed classification — `classifyRows` never emits one for a row already classified. */
+/** One row's proposed classification — `classifyRows` never emits one for a row already classified */
 export interface ClassifiedRow {
   debate_id: string;
   termination: DebateTermination;
 }
 
-/** `classifyRows`' full output: what it proposes to write, and what it could not. */
+/** `classifyRows`' full output: what it proposes to write, and what it could not */
 export interface ClassificationResult {
   classified: ClassifiedRow[];
-  /** `debate_id`s left NULL — no `debate.timeout` match AND no log span covers the row's `created_at`. */
+  /** `debate_id`s left NULL — no `debate.timeout` match AND no log span covers the row's `created_at` */
   uncovered: string[];
   /**
    * `debate_id`s left NULL for a different reason than `uncovered`: the log
@@ -354,7 +354,7 @@ export function classifyRows(
   return { classified, uncovered, indeterminate };
 }
 
-/** Per-`termination` counts, for the operator-facing report. */
+/** Per-`termination` counts, for the operator-facing report */
 export function summarizeClassification(
   classified: readonly ClassifiedRow[],
 ): Record<DebateTermination, number> {
@@ -369,7 +369,7 @@ export function summarizeClassification(
   return summary;
 }
 
-/** Renders the classification as a human-readable report. */
+/** Renders the classification as a human-readable report */
 export function formatClassificationReport(result: ClassificationResult, applied: boolean): string {
   const summary = summarizeClassification(result.classified);
   const totalRead =
@@ -400,7 +400,7 @@ export function formatClassificationReport(result: ClassificationResult, applied
   return lines.join('\n');
 }
 
-/** Parses `--log a,b --log c` (comma-separated and/or repeated) into a flat, deduped list. */
+/** Parses `--log a,b --log c` (comma-separated and/or repeated) into a flat, deduped list */
 export function parseLogPaths(argv: readonly string[]): string[] {
   const paths: string[] = [];
   for (let i = 0; i < argv.length; i += 1) {
@@ -468,7 +468,7 @@ if (isMain) {
   let dbPath: string;
   if (explicitDbPath !== undefined) {
     // An explicit path names its own file — the paper/live filename guard
-    // below exists to protect the environment-resolved default, not this.
+    // below exists to protect the environment-resolved default, not this
     assertDbPathExists(explicitDbPath);
     dbPath = explicitDbPath;
   } else {
@@ -476,7 +476,7 @@ if (isMain) {
     dbPath = sharedStorePath(mode);
     // Same guard `report-arm-comparison.ts` and `place-soak-position.ts` apply:
     // a classification run against the wrong database would silently report
-    // numbers that describe no real session.
+    // numbers that describe no real session
     assertStorePathMatchesMode({ dbPath, mode });
   }
   const db = openSharedStore(dbPath);

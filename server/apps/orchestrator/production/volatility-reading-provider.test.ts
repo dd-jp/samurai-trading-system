@@ -17,9 +17,9 @@ import { openSharedStore } from '../../../shared/store/index.js';
 import type { AssetClass, Logger, UniverseInstrument } from '../types.js';
 import { MarketDataVolatilityReadingProvider } from './volatility-reading-provider.js';
 
-/** Tuesday 10:00 ET — the US equity session is open, so the gate admits both classes. */
+/** Tuesday 10:00 ET — the US equity session is open, so the gate admits both classes */
 const NOW = new Date('2026-07-28T14:00:00Z');
-/** Sunday night — the US equity session is shut, crypto is not. */
+/** Sunday night — the US equity session is shut, crypto is not */
 const SESSION_SHUT = new Date('2026-07-19T23:00:00Z');
 /**
  * Tuesday 03:00 ET — a TRADING DAY, but hours before the open. Most of the
@@ -39,7 +39,7 @@ const VOLATILITY_INDICATOR: IndicatorSpec = {
   lookback: 20,
 };
 
-/** Fixture universe deliberately shaped so max, average, and first value all disagree per class. */
+/** Fixture universe deliberately shaped so max, average, and first value all disagree per class */
 const UNIVERSE: readonly UniverseInstrument[] = [
   { asset: 'BTC-USD', asset_class: 'crypto' },
   { asset: 'ETH-USD', asset_class: 'crypto' },
@@ -48,7 +48,7 @@ const UNIVERSE: readonly UniverseInstrument[] = [
   { asset: 'TSLA', asset_class: 'stocks' },
 ];
 
-/** instrument -> indicator value, so the fixture reads like a small table. */
+/** instrument -> indicator value, so the fixture reads like a small table */
 const READING_BY_INSTRUMENT: Record<string, number> = {
   'BTC-USD': 10,
   'ETH-USD': 40, // crypto max; not first (BTC-USD) nor average (~23.33)
@@ -73,7 +73,7 @@ function fakeLogger(): { logger: Logger; log: ReturnType<typeof vi.fn> } {
 /**
  * `behaviorByInstrument` lets a test make specific instruments reject or
  * resolve with a non-finite value, to exercise the fail-closed boundary
- * handling without touching the happy-path fixture table above.
+ * handling without touching the happy-path fixture table above
  */
 function buildProvider(
   universe: readonly UniverseInstrument[] = UNIVERSE,
@@ -87,7 +87,7 @@ function buildProvider(
     if (behavior === 'hostile') {
       // Circular (defeats `JSON.stringify`) with a throwing `Symbol.toPrimitive`
       // (defeats the `String()` fallback too) — same shape as the #1262
-      // tick-loop hostile value.
+      // tick-loop hostile value
       const hostile: Record<string, unknown> = {
         [Symbol.toPrimitive]: () => {
           throw new Error('render boom');
@@ -161,7 +161,7 @@ describe('MarketDataVolatilityReadingProvider', () => {
     const reading = await provider.getVolatilityReading(NOW);
 
     // ETH-USD was crypto's max (40) in the happy path; a rejection must still trip the
-    // class to the fail-closed sentinel, not silently fall back to the next-highest value.
+    // class to the fail-closed sentinel, not silently fall back to the next-highest value
     expect(reading.crypto).toBe(Number.POSITIVE_INFINITY);
     expect(reading.stocks).toBe(15);
     expect(log).toHaveBeenCalledWith(
@@ -175,7 +175,7 @@ describe('MarketDataVolatilityReadingProvider', () => {
   // #1351: `result.reason` is rendered inside a synchronous `open.map(...)`
   // callback — an unguarded throw there aborts the WHOLE map, so
   // `getVolatilityReading` rejects and EVERY instrument's reading is lost,
-  // not just the one that failed.
+  // not just the one that failed
   it('an unrenderable rejection reason still fails closed for its own instrument and leaves every other reading intact', async () => {
     const { provider, log } = buildProvider(UNIVERSE, { 'ETH-USD': 'hostile' });
 
@@ -183,7 +183,7 @@ describe('MarketDataVolatilityReadingProvider', () => {
 
     // The durable artifact: a full reading for BOTH classes, not a rejected
     // promise. `stocks` in particular has nothing to do with the hostile
-    // instrument and must be unaffected by it.
+    // instrument and must be unaffected by it
     expect(reading.crypto).toBe(Number.POSITIVE_INFINITY);
     expect(reading.stocks).toBe(15);
     expect(log).toHaveBeenCalledWith(
@@ -204,7 +204,7 @@ describe('MarketDataVolatilityReadingProvider', () => {
     const reading = await provider.getVolatilityReading(NOW);
 
     // TSLA was stocks' max (15) in the happy path; a NaN reading must still trip the
-    // class to the fail-closed sentinel rather than making every `>` comparison false.
+    // class to the fail-closed sentinel rather than making every `>` comparison false
     expect(reading.stocks).toBe(Number.POSITIVE_INFINITY);
     expect(reading.crypto).toBe(40);
     expect(log).toHaveBeenCalledWith(
@@ -255,14 +255,14 @@ describe('MarketDataVolatilityReadingProvider', () => {
     // Why `warnIfClassEmpty` keeps its constant, pinned as the mechanism that
     // earns it: the warn is emitted by the CONSTRUCTOR, once, and a tick never
     // emits another. Construction is boot-time (`production.ts` builds this
-    // provider in `buildProductionComponents`), so there is no tick to join.
+    // provider in `buildProductionComponents`), so there is no tick to join
     //
     // What this deliberately does NOT assert is that an ambient read would be
     // wrong here — at construction there is no enclosing tick, so
     // `currentTraceId() ?? 'volatility-reading-provider'` would log the same
     // string and no assertion at this seam can tell the two apart. The call
     // site is what rules the ambient form out. Wrapping construction in
-    // `runWithTraceId` would pin a state that never occurs, so it is not done.
+    // `runWithTraceId` would pin a state that never occurs, so it is not done
     it('warns about an empty asset class once, at construction, and never again per tick', async () => {
       const cryptoOnly: readonly UniverseInstrument[] = [
         { asset: 'BTC-USD', asset_class: 'crypto' },
@@ -292,7 +292,7 @@ describe('MarketDataVolatilityReadingProvider', () => {
     // branch and aggregates as `FAILURE_READING`, so the volatility breaker
     // trips conservatively instead of comparing against a fabricated number
     // — which is why throwing is consistent with this module's posture
-    // rather than a new failure mode it has to learn about.
+    // rather than a new failure mode it has to learn about
     const asOf = new Date('2026-07-28T14:00:00Z');
     const warmInstrument = 'BTC-USD';
     const coldInstrument = 'ETH-USD';
@@ -319,9 +319,9 @@ describe('MarketDataVolatilityReadingProvider', () => {
     };
 
     const bars: Bar[] = [
-      // Warm: 20 bars, comfortably past the ATR(14) width.
+      // Warm: 20 bars, comfortably past the ATR(14) width
       ...Array.from({ length: 20 }, (_, i) => bar(warmInstrument, i, 20)),
-      // Cold: 6 bars — enough that no source call was short, not enough for ATR(14).
+      // Cold: 6 bars — enough that no source call was short, not enough for ATR(14)
       ...Array.from({ length: 6 }, (_, i) => bar(coldInstrument, i, 6)),
     ];
 
@@ -427,7 +427,7 @@ describe('MarketDataVolatilityReadingProvider', () => {
     it('reads the shut class as 0 (inert), not as the fail-closed Infinity sentinel', async () => {
       // Pre-fix every equity threw `atr(14) needs 15 bars but received 12` and
       // folded in as `FAILURE_READING`, arming `volatility_halt:stocks` for ~16
-      // hours a weekday and all weekend on a bar-count artifact.
+      // hours a weekday and all weekend on a bar-count artifact
       const { provider } = buildProvider();
 
       const reading = await provider.getVolatilityReading(SESSION_SHUT);
@@ -437,7 +437,7 @@ describe('MarketDataVolatilityReadingProvider', () => {
 
     it('logs no per-instrument error line while the venue is shut', async () => {
       // ~5,700 `error` lines a day on a 14-day soak, all of them expected —
-      // the alert-fatigue failure mode #383 and #362 fixed elsewhere.
+      // the alert-fatigue failure mode #383 and #362 fixed elsewhere
       const { provider, log } = buildProvider(UNIVERSE, { AAPL: 'reject', TSLA: 'reject' });
 
       await provider.getVolatilityReading(SESSION_SHUT);
@@ -448,7 +448,7 @@ describe('MarketDataVolatilityReadingProvider', () => {
     it('gates on the SESSION, not the trading day — a weekday night is shut too', async () => {
       // `isTradingDay` is true all Tuesday, including 03:00 ET. Gating on it
       // would leave the weekday-overnight hours reading equities, which is
-      // where most of #386's ~5,700 error lines a day actually came from.
+      // where most of #386's ~5,700 error lines a day actually came from
       const { provider, getIndicator } = buildProvider();
 
       const reading = await provider.getVolatilityReading(WEEKDAY_OVERNIGHT);
@@ -468,7 +468,7 @@ describe('MarketDataVolatilityReadingProvider', () => {
     });
 
     it('still fails closed for an in-session instrument that cannot be read', async () => {
-      // The gate must not become a way for a genuine equity failure to go quiet.
+      // The gate must not become a way for a genuine equity failure to go quiet
       const { provider, log } = buildProvider(UNIVERSE, { TSLA: 'reject' });
 
       const reading = await provider.getVolatilityReading(NOW);

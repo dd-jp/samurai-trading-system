@@ -8,7 +8,7 @@ import type { ExitReason, Fill } from '../types/records.js';
 import { toBrokerFillId } from '../types/records.js';
 import { fromStoredTimestamp } from './sqlite-utils.js';
 
-/** One `fills` row exactly as `better-sqlite3` returns it. */
+/** One `fills` row exactly as `better-sqlite3` returns it */
 export interface FillRow {
   idempotency_key: string;
   broker_fill_id: string;
@@ -18,15 +18,15 @@ export interface FillRow {
   fee: number;
   timestamp: string;
   cost_breakdown_json: string | null;
-  /** #793, migration 0031 — see `Fill.exit_reason`. */
+  /** #793, migration 0031 — see `Fill.exit_reason` */
   exit_reason: ExitReason | null;
-  /** #1001, migration 0037 — see `Fill.flatten_idempotency_key`. */
+  /** #1001, migration 0037 — see `Fill.flatten_idempotency_key` */
   flatten_idempotency_key: string | null;
-  /** #1220, migration 0054 — see `Fill.fee_currency`. */
+  /** #1220, migration 0054 — see `Fill.fee_currency` */
   fee_currency: string | null;
-  /** #1521, migration 0060 — see `Fill.fx_rate_to_gbp`. */
+  /** #1521, migration 0060 — see `Fill.fx_rate_to_gbp` */
   fx_rate_to_gbp: number | null;
-  /** #1521, migration 0060 — see `Fill.fx_rate_to_gbp_source`. */
+  /** #1521, migration 0060 — see `Fill.fx_rate_to_gbp_source` */
   fx_rate_to_gbp_source: string | null;
 }
 

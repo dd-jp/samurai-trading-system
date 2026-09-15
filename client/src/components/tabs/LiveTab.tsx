@@ -35,7 +35,7 @@ export interface LiveTabProps {
 /**
  * The button's own accessible name, since `aria-label` here overrides the
  * inner text for assistive tech — a degraded cell has to be named here or it
- * is not reachable by anything but sighted, mouse-driven inspection.
+ * is not reachable by anything but sighted, mouse-driven inspection
  */
 function laneName(lane: PipelineLane, cells: readonly ResolvedCell[]): string {
   const where =
@@ -51,7 +51,7 @@ function laneName(lane: PipelineLane, cells: readonly ResolvedCell[]): string {
 
 function LaneRow(props: {
   lane: PipelineLane;
-  /** The lane's debate row, for the degraded `debate` cell's cause (#1428). */
+  /** The lane's debate row, for the degraded `debate` cell's cause (#1428) */
   debate: DebateRow | undefined;
   selected: boolean;
   onSelect: () => void;
@@ -81,7 +81,7 @@ function LaneRow(props: {
             data-stage={cell.stage}
             // Same hook the drawer timeline sets (#1080, #1142) — a degraded
             // decision must read differently on the surface an operator
-            // scans first, not only once they open the trace.
+            // scans first, not only once they open the trace
             data-degraded={cell.degraded ? 'true' : undefined}
           >
             <StateWord state={cell.state} />
@@ -91,7 +91,7 @@ function LaneRow(props: {
               // (`.lane-decision`'s ellipsis truncation clipped it, review
               // fix-round-1 F1). The gloss is one hover away via `title`; the
               // glyph is the non-colour carrier the dashboard's accessibility
-              // floor requires alongside the amber tint.
+              // floor requires alongside the amber tint
               <span className="lane-decision" title={cell.decisionText}>
                 {cell.degraded && (
                   <span className="lane-degraded-mark" role="img" aria-label="degraded">

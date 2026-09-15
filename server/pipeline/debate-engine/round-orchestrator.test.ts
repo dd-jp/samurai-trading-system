@@ -35,7 +35,7 @@ function makeSynthesis(overrides: Partial<MediatorSynthesis> = {}): MediatorSynt
   };
 }
 
-/** A bull/bear stub that records the order it was called in and echoes a fixed argument. */
+/** A bull/bear stub that records the order it was called in and echoes a fixed argument */
 function stubDebater(persona: 'bull' | 'bear', calls: string[]): DebaterPersona {
   return {
     argue: vi.fn(async (context: RoundContext) => {
@@ -104,7 +104,7 @@ describe('runDebate', () => {
     expect(result.converged).toBe(true);
     expect(result.rounds_completed).toBe(1);
     expect(result.open_items).toEqual([]);
-    // Exactly one round's worth of persona calls.
+    // Exactly one round's worth of persona calls
     expect(calls).toEqual(['bull:1', 'bear:1', 'mediator:1']);
   });
 
@@ -242,7 +242,7 @@ describe('runDebate', () => {
     const result = await runDebate(makeInput(), {
       bull: stubDebater('bull', calls),
       bear: stubDebater('bear', calls),
-      // Never converges but returns empty open_items — orchestrator must backfill.
+      // Never converges but returns empty open_items — orchestrator must backfill
       mediator: stubMediator([], calls, { open_items: [] }),
       clock: new SimulatedClock(new Date('2026-07-14T09:00:00Z')),
     });
@@ -280,14 +280,14 @@ describe('runDebate', () => {
     });
 
     expect(result.contributions).toHaveLength(2);
-    // Each analyst recorded a stance in all 3 rounds.
+    // Each analyst recorded a stance in all 3 rounds
     expect(result.contributions[0].stance_during_debate).toHaveLength(MAX_ROUNDS);
     expect(result.contributions[1].stance_during_debate).toHaveLength(MAX_ROUNDS);
   });
 
   it('measures latency_ms from the injected clock', async () => {
     const clock = new SimulatedClock(new Date('2026-07-14T09:00:00.000Z'));
-    // Advance the clock as the mediator "works".
+    // Advance the clock as the mediator "works"
     const mediator: MediatorPersona = {
       assess: vi.fn(async (context: RoundContext) => {
         clock.advanceTo(new Date('2026-07-14T09:00:00.500Z'));
@@ -366,7 +366,7 @@ describe('runDebate', () => {
       const calls: string[] = [];
       const personas = {
         // Bear aborts the debate the moment it is asked — standing in for the
-        // latency budget firing while bear's LLM call is in flight.
+        // latency budget firing while bear's LLM call is in flight
         bull: stubDebater('bull', calls),
         bear: {
           argue: vi.fn(async (context: RoundContext) => {
@@ -384,7 +384,7 @@ describe('runDebate', () => {
       ).rejects.toMatchObject({ name: 'AbortError' });
 
       // Two calls, not the nine an uncancelled 3-round debate would make: the
-      // mediator is never asked, and neither are rounds 2 and 3.
+      // mediator is never asked, and neither are rounds 2 and 3
       expect(calls).toEqual(['bull:1', 'bear:1']);
       expect(personas.mediator.assess).not.toHaveBeenCalled();
     });

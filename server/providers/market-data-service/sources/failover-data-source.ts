@@ -133,7 +133,7 @@
 import type { BarWindow, DataSource, Mark, Quote } from '../types.js';
 import { type BarFetcher, type FailoverAlerter, withOhlcvFailover } from './ohlcv-failover.js';
 
-/** One instrument's fallback: which leg it belongs to, what serves it, and what that vendor is called. */
+/** One instrument's fallback: which leg it belongs to, what serves it, and what that vendor is called */
 export interface DataSourceFallbackLeg {
   leg: 'equities' | 'crypto';
   /** Vendor name, as it appears in the alert and in `bars.source` (e.g. `'polygon'`). */
@@ -225,7 +225,7 @@ export class PrimaryCircuitOpenError extends Error {
   }
 }
 
-/** What the breaker says about the NEXT primary call. */
+/** What the breaker says about the NEXT primary call */
 type CircuitAdmission = 'closed' | 'probe' | 'open';
 
 /**
@@ -256,7 +256,7 @@ class PrimaryCircuitBreaker {
 
     // `hasElapsed` treats a NEGATIVE elapsed as expired: a clock that steps
     // backwards (an NTP correction, a simulated clock rewound between runs)
-    // must not pin the circuit open for however long the step was.
+    // must not pin the circuit open for however long the step was
     if (!hasElapsed(at, openedAt, FAILOVER_CIRCUIT_COOLDOWN_MS)) return 'open';
 
     const probeStartedAt = this.#probeStartedAt;
@@ -264,19 +264,19 @@ class PrimaryCircuitBreaker {
       probeStartedAt !== undefined &&
       !hasElapsed(at, probeStartedAt, FAILOVER_CIRCUIT_COOLDOWN_MS)
     ) {
-      // A probe is genuinely in flight — everyone else keeps skipping.
+      // A probe is genuinely in flight — everyone else keeps skipping
       return 'open';
     }
 
     // Either no probe outstanding, or the outstanding one has been pending
     // for a whole further cooldown and is presumed hung. A promise that never
     // settles must not be able to hold the circuit open for the rest of a
-    // fourteen-day soak.
+    // fourteen-day soak
     this.#probeStartedAt = at;
     return 'probe';
   }
 
-  /** A primary read answered: the circuit closes and the count resets. */
+  /** A primary read answered: the circuit closes and the count resets */
   recordSuccess(): void {
     this.#consecutiveFailures = 0;
     this.#openedAt = undefined;
@@ -300,7 +300,7 @@ function hasElapsed(at: number, since: number, duration: number): boolean {
 
 export class FailoverDataSource implements DataSource {
   readonly #config: FailoverDataSourceConfig;
-  /** One breaker per leg — see the module doc for why the key is the leg and not the instrument. */
+  /** One breaker per leg — see the module doc for why the key is the leg and not the instrument */
   readonly #breakers = new Map<string, PrimaryCircuitBreaker>();
 
   constructor(config: FailoverDataSourceConfig) {
@@ -326,14 +326,14 @@ export class FailoverDataSource implements DataSource {
       // No fallback to route to, so there is nothing to break the circuit
       // TOWARDS: skipping the primary here would turn a slow read into a
       // guaranteed failure. The instrument keeps its pre-#562 behaviour
-      // exactly.
+      // exactly
       return this.#config.primary.fetchBars(instrument, window, asOf);
     }
 
     const breaker = this.#breakerFor(fallback.leg);
     // Decided ONCE, before the fetch: `withOhlcvFailover` calls `primary`
     // exactly once, and reserving the probe at decision time is what stops a
-    // tick's concurrent reads from probing in parallel.
+    // tick's concurrent reads from probing in parallel
     const admission = breaker.admit(this.#now());
 
     const fetch = withOhlcvFailover({
@@ -360,7 +360,7 @@ export class FailoverDataSource implements DataSource {
     return fetch(instrument, window, asOf);
   }
 
-  /** Primary only — see the module doc: a mark must not come from a delayed fallback feed. */
+  /** Primary only — see the module doc: a mark must not come from a delayed fallback feed */
   async fetchMark(instrument: string, asOf: Date, mode: 'live' | 'backtest'): Promise<Mark> {
     return this.#config.primary.fetchMark(instrument, asOf, mode);
   }

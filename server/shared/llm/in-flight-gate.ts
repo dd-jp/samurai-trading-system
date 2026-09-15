@@ -190,7 +190,7 @@ export class NousAccountInFlightGate implements LlmInFlightGate {
     }
     // Zero or negative would make every estimate 0 and silently disable
     // admission control, leaving only the `queue_deadline` backstop — the
-    // mechanism-that-does-nothing shape this file exists to avoid.
+    // mechanism-that-does-nothing shape this file exists to avoid
     if (!Number.isFinite(options.expectedCallMs) || options.expectedCallMs <= 0) {
       throw new Error(
         `NousAccountInFlightGate: expectedCallMs must be a positive number of milliseconds, got ${options.expectedCallMs}`,
@@ -206,7 +206,7 @@ export class NousAccountInFlightGate implements LlmInFlightGate {
     if (signal?.aborted === true) {
       // Rejected with the caller's own reason, not a gate error: this call was
       // cancelled, and relabelling it `gate_refused` would put a deliberate
-      // teardown in the bucket #1080 measures contention with.
+      // teardown in the bucket #1080 measures contention with
       return Promise.reject(signal.reason);
     }
 
@@ -276,7 +276,7 @@ export class NousAccountInFlightGate implements LlmInFlightGate {
           const waitMs = Date.now() - enqueuedAt;
           // Resolved BEFORE the log line: the slot is already counted in
           // flight, so a logger that throws between the two would leave the
-          // permit held by nobody and this promise never settled.
+          // permit held by nobody and this promise never settled
           resolve(this.#take(callMs));
           this.#logger?.log({
             trace_id: 'llm',
@@ -290,7 +290,7 @@ export class NousAccountInFlightGate implements LlmInFlightGate {
               'but NOT in `ttfb_ms` — the difference between those two is this number',
             payload: {
               wait_ms: waitMs,
-              /** What was ALREADY queued when this call arrived — 0 for the first waiter. */
+              /** What was ALREADY queued when this call arrived — 0 for the first waiter */
               queue_depth: queueDepth,
               in_flight: this.#inFlightCallMs.length,
               max_in_flight: this.#maxInFlight,
@@ -329,7 +329,7 @@ export class NousAccountInFlightGate implements LlmInFlightGate {
       if (budgetMs !== undefined) {
         // The last moment a grant would still be useful, NOT the budget itself:
         // a waiter granted with less than its own call left would dispatch a
-        // call that is already over deadline.
+        // call that is already over deadline
         timer = setTimeout(() => waiter.drop(), Math.max(0, budgetMs - callMs));
       }
     });

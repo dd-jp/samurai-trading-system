@@ -25,7 +25,7 @@ export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
  * construction sites, the `fetchWithTimeout` deadline abort and a 408/504
  * response — so the venue's retry predicate can gate on it instead of
  * retrying every timeout unconditionally, which is what once let a timed-out
- * placement POST retry (#1273, #1275).
+ * placement POST retry (#1273, #1275)
  */
 export class VenueTimeoutError extends Error {
   readonly method: HttpMethod;
@@ -37,9 +37,9 @@ export class VenueTimeoutError extends Error {
   }
 }
 
-/** `method`: see `VenueTimeoutError` — same reason, same gate. */
+/** `method`: see `VenueTimeoutError` — same reason, same gate */
 export class VenueRateLimitError extends Error {
-  /** Provider-supplied hint (from a `Retry-After` header), if one was given. */
+  /** Provider-supplied hint (from a `Retry-After` header), if one was given */
   readonly retryAfterMs: number | undefined;
   readonly method: HttpMethod;
 

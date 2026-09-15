@@ -41,7 +41,7 @@ import { promisify } from 'node:util';
 
 // Imported from the module rather than the orchestrator barrel: this is a CLI, and
 // pulling `apps/orchestrator/index.js` would drag the whole runtime in to read two
-// constants.
+// constants
 import {
   LIVE_MONEY_GATES,
   LIVE_MONEY_GATES_VERIFIED_ON,
@@ -49,7 +49,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 
-/** The states GitHub reports, plus the case where the lookup itself failed. */
+/** The states GitHub reports, plus the case where the lookup itself failed */
 export type GateState = 'OPEN' | 'CLOSED' | 'UNKNOWN';
 
 /** Looks up one issue's state. Injected so tests never reach the network. */
@@ -64,9 +64,9 @@ export interface GateVerdict {
 export interface GateReport {
   readonly verifiedOn: string;
   readonly verdicts: readonly GateVerdict[];
-  /** Cited issues that have closed — the list is stale by exactly these. */
+  /** Cited issues that have closed — the list is stale by exactly these */
   readonly stale: readonly GateVerdict[];
-  /** Cited issues whose state could not be determined; not a staleness claim. */
+  /** Cited issues whose state could not be determined; not a staleness claim */
   readonly unknown: readonly GateVerdict[];
 }
 

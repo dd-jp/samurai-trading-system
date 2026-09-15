@@ -63,7 +63,7 @@ async function seedPosition(
     stop: 95,
     target: 110,
     // NOT in reconcile's IN_FLIGHT_ORDER_STATES set, so `reconcile()`'s bracket pass
-    // leaves it alone and only the #549 sweep acts on it.
+    // leaves it alone and only the #549 sweep acts on it
     order_state: 'partially_filled',
     broker_order_ids: [`${LOT}:entry`],
     opened_at: OPENED_AT,
@@ -76,7 +76,7 @@ async function seedPosition(
   return position;
 }
 
-/** Persists the durable state a partial flatten leaves: entry 10, exit 4, lot not flat. */
+/** Persists the durable state a partial flatten leaves: entry 10, exit 4, lot not flat */
 async function seedPartiallyFlattenedFills(store: TestExecutionStore): Promise<void> {
   const entry: Fill = {
     idempotency_key: LOT,
@@ -106,7 +106,7 @@ async function seedPartiallyFlattenedFills(store: TestExecutionStore): Promise<v
 /**
  * #867's shape: the lot's legs were cancelled and the flatten was then
  * refused, so the entry fill is on record and NO exit fill is — the residual
- * is the whole held quantity.
+ * is the whole held quantity
  */
 async function seedEntryOnlyFills(store: TestExecutionStore): Promise<void> {
   const entry: Fill = {
@@ -125,7 +125,7 @@ async function seedEntryOnlyFills(store: TestExecutionStore): Promise<void> {
   });
 }
 
-/** A flatten journal row on this lot's instrument, for the #1214 gates that read the journal. */
+/** A flatten journal row on this lot's instrument, for the #1214 gates that read the journal */
 function flattenWriteAhead(key: string): FlattenSubmissionWriteAhead {
   return {
     idempotency_key: key,
@@ -145,19 +145,19 @@ function flattenWriteAhead(key: string): FlattenSubmissionWriteAhead {
   };
 }
 
-/** A broker for the sweep: only `rearmProtectiveLegs` (scriptable) and reconcile's reads matter. */
+/** A broker for the sweep: only `rearmProtectiveLegs` (scriptable) and reconcile's reads matter */
 class SweepBroker implements BrokerAdapter {
   readonly rearmCalls: Array<{ clientOrderId: string; qty: number }> = [];
-  /** #1214: every residual re-flatten this sweep submitted, in call order. */
+  /** #1214: every residual re-flatten this sweep submitted, in call order */
   readonly flattenCalls: Array<{
     clientOrderId: string;
     instrument: string;
     side: 'buy' | 'sell';
     size: number;
   }> = [];
-  /** When set, `rearmProtectiveLegs` rejects with this. */
+  /** When set, `rearmProtectiveLegs` rejects with this */
   rearmFailure: Error | undefined;
-  /** When set, `submitFlatten` rejects with this. */
+  /** When set, `submitFlatten` rejects with this */
   flattenFailure: Error | undefined;
 
   async submitBracket(order: NativeBracketRequest): Promise<BrokerAck> {
@@ -213,7 +213,7 @@ class SweepBroker implements BrokerAdapter {
     };
   }
   async cancel(): Promise<void> {}
-  /** Empty so `reconcile()`'s unrecorded-position pass reports nothing. */
+  /** Empty so `reconcile()`'s unrecorded-position pass reports nothing */
   async getOpenPositions(): ReturnType<BrokerAdapter['getOpenPositions']> {
     return [];
   }
@@ -237,7 +237,7 @@ function makeInput(
   residualExposureAlerts: ResidualExposureAlertChannel = makeResidualExposureAlerts(),
   logger: Logger = recordingLogger(),
   // #1214: overridable so a test can shut the venue and prove the residual
-  // re-flatten stands down rather than firing a market order into it.
+  // re-flatten stands down rather than firing a market order into it
   sessionCalendars: Record<AssetClass, TradingCalendar> = openSessionCalendars(),
 ): ExecutionInput {
   const config: ExecutionConfig = {
@@ -279,23 +279,23 @@ describe('residual-protection sweep (#549)', () => {
     // The durable trace the crashed poll left: `redistributeOneFlatten`
     // marks a named lot's unclosed share BEFORE any advance persists, so
     // this exact state — exit fill durable, marker durable, no re-arm ever
-    // attempted, nothing left in the fill feed — is what a restart finds.
+    // attempted, nothing left in the fill feed — is what a restart finds
     await store.markResidualUnprotected(LOT, NOW);
 
-    // Restart: fresh store instance + fresh broker over the same database.
+    // Restart: fresh store instance + fresh broker over the same database
     const restartedStore = new TestExecutionStore(db);
     const broker = new SweepBroker();
     const alerts = makeResidualExposureAlerts();
     const report = await new ExecutionImpl(makeInput(broker, restartedStore, alerts)).reconcile();
 
-    // The sweep, not the fill path, re-armed the residual (10 − 4 = 6).
+    // The sweep, not the fill path, re-armed the residual (10 − 4 = 6)
     expect(broker.rearmCalls).toEqual([{ clientOrderId: LOT, qty: 6 }]);
-    // Marker cleared only because protection was CONFIRMED.
+    // Marker cleared only because protection was CONFIRMED
     expect(await restartedStore.getResidualProtectionMarker(LOT)).toEqual({
       unprotected_since: null,
       alerted_at: null,
     });
-    // Reported through reconcile's own divergence surface, and counted.
+    // Reported through reconcile's own divergence surface, and counted
     const divergence = report.divergences.find((entry) => entry.idempotency_key === LOT);
     expect(divergence?.action).toBe('adopted');
     // Distinct from `reconcileLot`'s bracket rows: this row DOES flow
@@ -303,11 +303,11 @@ describe('residual-protection sweep (#549)', () => {
     // right above, same array that loop consumes) but never demotes, since
     // the demotion predicate requires `kind === 'bracket'` (#1122 review
     // round 3 — round 1's comment here claimed "never routed", which this
-    // very assertion's lookup path contradicts).
+    // very assertion's lookup path contradicts)
     expect(divergence?.kind).toBe('sweep');
     expect(report.checked).toBeGreaterThanOrEqual(1);
     expect(report.corrected).toBeGreaterThanOrEqual(1);
-    // A successful retry pages nobody.
+    // A successful retry pages nobody
     expect(alerts.alerts).toEqual([]);
   });
 
@@ -317,14 +317,14 @@ describe('residual-protection sweep (#549)', () => {
     // the live prior order under the deterministic wire id (asserted against
     // the real AlpacaBrokerAdapter in alpaca-adapter.test.ts, "re-arm
     // adopt-or-place (#549)"). Here: the retry resolving must clear the
-    // marker exactly as a fresh place does, and must call the seam ONCE.
+    // marker exactly as a fresh place does, and must call the seam ONCE
     const { db, store } = openTestExecutionStore();
     await seedPosition(store);
     await seedPartiallyFlattenedFills(store);
     await store.markResidualUnprotected(LOT, NOW);
 
     const restartedStore = new TestExecutionStore(db);
-    const broker = new SweepBroker(); // resolves = adopted-or-placed, either way confirmed.
+    const broker = new SweepBroker(); // resolves = adopted-or-placed, either way confirmed
     const execution = new ExecutionImpl(makeInput(broker, restartedStore));
     const result = await execution.sweepResidualProtection();
 
@@ -337,7 +337,7 @@ describe('residual-protection sweep (#549)', () => {
       alerted_at: null,
     });
 
-    // And the pass after that is a no-op: nothing marked, no broker call.
+    // And the pass after that is a no-op: nothing marked, no broker call
     const second = await execution.sweepResidualProtection();
     expect(second).toEqual({ checked: 0, divergences: [] });
     expect(broker.rearmCalls).toHaveLength(1);
@@ -348,7 +348,7 @@ describe('residual-protection sweep (#549)', () => {
     await seedPosition(store, { order_state: 'filled', filled_size: 10, avg_entry_price: 100 });
     // Entry already on record from an earlier poll; THIS poll offers the
     // partial exit fill, whose re-arm fails — the real ingest path writes
-    // the marker and the alert dedup.
+    // the marker and the alert dedup
     await store.applyLotAdvance({
       idempotency_key: LOT,
       fills: [
@@ -387,14 +387,14 @@ describe('residual-protection sweep (#549)', () => {
     await execution.ingestFills();
 
     // The observing poll alerted once (the pre-#549 behaviour) AND left the
-    // durable episode: marked unprotected, marked alerted.
+    // durable episode: marked unprotected, marked alerted
     expect(alerts.alerts).toHaveLength(1);
     const marker = await store.getResidualProtectionMarker(LOT);
     expect(marker?.unprotected_since).not.toBeNull();
     expect(marker?.alerted_at).not.toBeNull();
 
     // The venue heals; the fill-sync-cadence sweep (same live Execution, no
-    // restart) retries, confirms, clears — and does NOT page again.
+    // restart) retries, confirms, clears — and does NOT page again
     failingBroker.rearmFailure = undefined;
     const result = await execution.sweepResidualProtection();
 
@@ -436,14 +436,14 @@ describe('residual-protection sweep (#549)', () => {
     const alerts = makeResidualExposureAlerts();
     await new ExecutionImpl(makeInput(broker, store, alerts)).ingestFills();
 
-    // The observing poll re-armed successfully → marker cleared same poll.
+    // The observing poll re-armed successfully → marker cleared same poll
     expect(broker.rearmCalls).toEqual([{ clientOrderId: LOT, qty: 6 }]);
     expect(await store.getResidualProtectionMarker(LOT)).toEqual({
       unprotected_since: null,
       alerted_at: null,
     });
 
-    // Restart: the sweep finds nothing — no retry, no alert, no divergence.
+    // Restart: the sweep finds nothing — no retry, no alert, no divergence
     const restartedStore = new TestExecutionStore(db);
     const restartedBroker = new SweepBroker();
     const result = await new ExecutionImpl(
@@ -456,7 +456,7 @@ describe('residual-protection sweep (#549)', () => {
 
   it('escalates from the SWEEP when the retry fails — once per episode, not once per pass (#342)', async () => {
     // Window (a) shape — the crash meant NO inline alert ever fired — so the
-    // sweep is the only surface left that can page.
+    // sweep is the only surface left that can page
     const { db, store } = openTestExecutionStore();
     await seedPosition(store);
     await seedPartiallyFlattenedFills(store);
@@ -477,7 +477,7 @@ describe('residual-protection sweep (#549)', () => {
       residual_qty_is_upper_bound: false,
     });
 
-    // Pass 2 and 3: retried (every attempt), NOT re-paged (once per episode).
+    // Pass 2 and 3: retried (every attempt), NOT re-paged (once per episode)
     const second = await execution.sweepResidualProtection();
     const third = await execution.sweepResidualProtection();
     expect(second.divergences.map((entry) => entry.action)).toEqual(['undetermined']);
@@ -486,7 +486,7 @@ describe('residual-protection sweep (#549)', () => {
     expect(alerts.alerts).toHaveLength(1);
 
     // The episode ends when a retry finally confirms — and a FUTURE episode
-    // may page afresh, because the dedup clears with the marker.
+    // may page afresh, because the dedup clears with the marker
     broker.rearmFailure = undefined;
     await execution.sweepResidualProtection();
     expect(await restartedStore.getResidualProtectionMarker(LOT)).toEqual({
@@ -500,7 +500,7 @@ describe('residual-protection sweep (#549)', () => {
     // `rearmProtectiveLegs` refuses before it ever reaches the venue. David's
     // 2026-09-08 decision (option 2) makes that refusal trigger a re-flatten
     // rather than another page: this lot was already being closed, and
-    // finishing the job is the action that matches the intent.
+    // finishing the job is the action that matches the intent
     const { db, store } = openTestExecutionStore();
     await seedPosition(store);
     await seedPartiallyFlattenedFills(store);
@@ -519,12 +519,12 @@ describe('residual-protection sweep (#549)', () => {
     const result = await execution.sweepResidualProtection();
 
     // A market order for exactly the residual, on the CLOSING side, under a
-    // key derived from the lot's own.
+    // key derived from the lot's own
     expect(broker.flattenCalls).toEqual([
       { clientOrderId: `${LOT}:residual-reflatten-1`, instrument: 'AAPL', side: 'sell', size: 6 },
     ]);
     // Journalled BEFORE the submit — without that row `getFlattenAttribution`
-    // cannot route the fill back to this lot when it lands.
+    // cannot route the fill back to this lot when it lands
     expect(await restartedStore.getFlattenAttribution(`${LOT}:residual-reflatten-1`)).toMatchObject(
       { lot_idempotency_keys: [LOT], exit_reason: 'flatten' },
     );
@@ -534,7 +534,7 @@ describe('residual-protection sweep (#549)', () => {
         status: 'submitted',
       }),
     ]);
-    // NOT paged: the residual is being closed, not abandoned.
+    // NOT paged: the residual is being closed, not abandoned
     expect(alerts.alerts).toEqual([]);
     expect(logger.entries).toContainEqual(
       expect.objectContaining({
@@ -546,10 +546,10 @@ describe('residual-protection sweep (#549)', () => {
     expect(result.divergences[0]?.action).toBe('undetermined');
     expect(result.divergences[0]?.reason).toMatch(/was CLOSED instead/);
     // #1615: distinct from the reflatten-in-flight/rearm-unsupported rows,
-    // which share `action`/`kind` with this one.
+    // which share `action`/`kind` with this one
     expect(result.divergences[0]?.escalation).toBe('residual_sweep_reflatten_submitted');
     // Still marked: the order is live, not filled. The marker clears when the
-    // fill lands and the lot reads flat.
+    // fill lands and the lot reads flat
     expect(
       (await restartedStore.getResidualProtectionMarker(LOT))?.unprotected_since,
     ).not.toBeNull();
@@ -569,7 +569,7 @@ describe('residual-protection sweep (#549)', () => {
     // NOW is 16:00Z = 12:00 New York on a Friday, which IS inside the US
     // session — so the shut venue has to come from the instrument's own
     // calendar disagreeing, not from the clock. `AlwaysOpenCalendar` is what
-    // every other test here uses; this one asks a calendar that says no.
+    // every other test here uses; this one asks a calendar that says no
     const shutCalendar: TradingCalendar = {
       isOpen: () => false,
       isTradingDay: () => true,
@@ -595,7 +595,7 @@ describe('residual-protection sweep (#549)', () => {
     );
     expect(result.divergences[0]?.reason).toMatch(/could not be closed either/);
     // #1615: distinct from the ordinary-retry-failure escalation, which
-    // shares `action`/`kind` with this row but is retryable, not permanent.
+    // shares `action`/`kind` with this row but is retryable, not permanent
     expect(result.divergences[0]?.escalation).toBe('residual_sweep_rearm_unsupported');
   });
 
@@ -628,12 +628,12 @@ describe('residual-protection sweep (#549)', () => {
   });
 
   it('does NOT page while this lot’s own re-flatten is still working (#1214 review, finding 4)', async () => {
-    // The pass right after a successful submit sees the very order it sent.
+    // The pass right after a successful submit sees the very order it sent
     // Paging here would tell the operator the residual "could not be closed"
     // of a lot with a live closing order, and the page's remedy — act at the
     // venue by hand — would be a THIRD submitter. Contrast the test above: a
     // flatten belonging to someone else still pages, because that one leaves
-    // this lot's residual genuinely unattended.
+    // this lot's residual genuinely unattended
     const { db, store } = openTestExecutionStore();
     await seedPosition(store);
     await seedPartiallyFlattenedFills(store);
@@ -658,7 +658,7 @@ describe('residual-protection sweep (#549)', () => {
     expect(broker.flattenCalls).toEqual([]);
     expect(alerts.alerts).toEqual([]);
     // The marker stays: protection is still NOT confirmed, and it is the
-    // re-flatten's fill that clears it.
+    // re-flatten's fill that clears it
     expect(
       (await restartedStore.getResidualProtectionMarker(LOT))?.unprotected_since,
     ).not.toBeNull();
@@ -669,7 +669,7 @@ describe('residual-protection sweep (#549)', () => {
       }),
     );
     // #1615: distinct from the shut-venue/other-flatten-in-flight page below,
-    // which shares `action: 'undetermined'`/`kind: 'sweep'` with this row.
+    // which shares `action: 'undetermined'`/`kind: 'sweep'` with this row
     expect(result.divergences[0]?.escalation).toBe('residual_sweep_reflatten_in_flight');
   });
 
@@ -682,7 +682,7 @@ describe('residual-protection sweep (#549)', () => {
     // someone-else's row sorts first, so a plain `find` reports
     // `flatten_in_flight` and pages about a lot whose own closing order is
     // working. THE MUTATION THIS KILLS: drop the own-key preference in
-    // `reflattenResidual` and take `onInstrument[0]`.
+    // `reflattenResidual` and take `onInstrument[0]`
     const { db, store } = openTestExecutionStore();
     await seedPosition(store);
     await seedPartiallyFlattenedFills(store);
@@ -694,7 +694,7 @@ describe('residual-protection sweep (#549)', () => {
          order_state, broker_order_ids, submitted_at, resolved_at, arm
        ) VALUES (?, 'AAPL', 'stocks', 'sell', 6, 'submitted', 'submitted', ?, ?, ?, 'live')`,
     );
-    // Inserted first, so `find` over the scan would return this one.
+    // Inserted first, so `find` over the scan would return this one
     insert.run(
       'daily-flatten-1',
       JSON.stringify(['daily-flatten-1']),
@@ -724,7 +724,7 @@ describe('residual-protection sweep (#549)', () => {
 
   it('stops after MAX_RESIDUAL_REFLATTEN_ATTEMPTS and falls back to the page (#1214)', async () => {
     // The bound is DURABLE, not an in-memory counter: three spent keys in the
-    // journal are what stop the fourth attempt, so a restart cannot reset it.
+    // journal are what stop the fourth attempt, so a restart cannot reset it
     const { db, store } = openTestExecutionStore();
     await seedPosition(store);
     await seedPartiallyFlattenedFills(store);
@@ -733,7 +733,7 @@ describe('residual-protection sweep (#549)', () => {
       const key = `${LOT}:residual-reflatten-${attempt}`;
       await store.writeAheadFlatten(flattenWriteAhead(key));
       // Resolved, so the instrument has no unresolved flatten and the walk
-      // reaches the bound rather than standing down on the gate before it.
+      // reaches the bound rather than standing down on the gate before it
       await store.resolveFlattenError(key, 'the venue rejected the residual', NOW);
     }
 
@@ -763,7 +763,7 @@ describe('residual-protection sweep (#549)', () => {
     // therefore had nothing that could resolve it — `getUnresolvedFlattens()`
     // named its instrument forever, across restarts, so every later attempt
     // stood down on 'flatten_in_flight' and 'attempts_exhausted' was never
-    // reached.
+    // reached
     const { db, store } = openTestExecutionStore();
     await seedPosition(store);
     await seedPartiallyFlattenedFills(store);
@@ -778,7 +778,7 @@ describe('residual-protection sweep (#549)', () => {
     ).sweepResidualProtection();
     expect(broker.flattenCalls.map((call) => call.clientOrderId)).toEqual([firstKey]);
 
-    // The venue's verdict on it: terminal, and it closed nothing.
+    // The venue's verdict on it: terminal, and it closed nothing
     broker.resumeFlattenAnswers.set(firstKey, {
       client_order_id: firstKey,
       broker_order_ids: [firstKey],
@@ -788,7 +788,7 @@ describe('residual-protection sweep (#549)', () => {
 
     // A restart, then one reconcile pass: its flatten loop settles the dead
     // row, and the #549 sweep that runs later in the SAME pass then finds the
-    // instrument clear and walks on to the next key.
+    // instrument clear and walks on to the next key
     const restartedStore = new TestExecutionStore(db);
     await new ExecutionImpl(makeInput(broker, restartedStore)).reconcile();
 
@@ -808,7 +808,7 @@ describe('residual-protection sweep (#549)', () => {
     // an exit-fill count, and the lot is naked by exactly the definition #1214
     // says to close. What actually prevents two submitters is
     // `writeAheadFlatten`'s atomic per-instrument refusal (see the
-    // 'flatten_in_flight' cases above), which holds in both orderings.
+    // 'flatten_in_flight' cases above), which holds in both orderings
     const { db, store } = openTestExecutionStore();
     await seedPosition(store);
     await seedEntryOnlyFills(store);
@@ -823,7 +823,7 @@ describe('residual-protection sweep (#549)', () => {
 
     await execution.sweepResidualProtection();
 
-    // The WHOLE held quantity, not a remainder — nothing was ever sold.
+    // The WHOLE held quantity, not a remainder — nothing was ever sold
     expect(broker.flattenCalls).toEqual([
       {
         clientOrderId: `${LOT}:residual-reflatten-1`,
@@ -851,7 +851,7 @@ describe('residual-protection sweep (#549)', () => {
 
     await execution.sweepResidualProtection();
 
-    // Ambiguous, so never resolved to 'error': the venue may have seen it.
+    // Ambiguous, so never resolved to 'error': the venue may have seen it
     expect(await restartedStore.getUnresolvedFlattens()).toEqual([
       expect.objectContaining({
         idempotency_key: `${LOT}:residual-reflatten-1`,
@@ -884,7 +884,7 @@ describe('residual-protection sweep (#549)', () => {
 
     // A market order with no attribution row is the worst state this design
     // can reach: nothing routes its fill, so the lot stays open in the store
-    // while flat at the venue.
+    // while flat at the venue
     expect(broker.flattenCalls).toEqual([]);
     expect(alerts.alerts).toHaveLength(1);
     expect(logger.entries).toContainEqual(
@@ -947,11 +947,11 @@ describe('residual-protection sweep (#549)', () => {
     expect(result.divergences[0]?.reason).toMatch(/re-arm retry failed/);
     // #1615: distinct from the permanently-unsupported branch below this
     // one shares `action`/`kind` with — an ordinary retryable failure must
-    // not dedup away a later pass's permanent-gap escalation on the same lot.
+    // not dedup away a later pass's permanent-gap escalation on the same lot
     expect(result.divergences[0]?.escalation).toBe('residual_sweep_rearm_retry_failed');
     expect(alerts.alerts[0]).toMatchObject({ rearm_unsupported: false });
     // #1214 is scoped to a PERMANENT gap. An ordinary failure is still a
-    // retry, and a market order must not be spent on one.
+    // retry, and a market order must not be spent on one
     expect(broker.flattenCalls).toEqual([]);
   });
 
@@ -965,7 +965,7 @@ describe('residual-protection sweep (#549)', () => {
     const broker = new SweepBroker();
     broker.rearmFailure = new Error('venue still down');
     // A transport that is DOWN for the first delivery and healthy after —
-    // the transient outage that must not permanently silence the page.
+    // the transient outage that must not permanently silence the page
     const delivered: ResidualExposureAlert[] = [];
     let failDeliveriesRemaining = 1;
     const flakyChannel: ResidualExposureAlertChannel = {
@@ -980,17 +980,17 @@ describe('residual-protection sweep (#549)', () => {
     const execution = new ExecutionImpl(makeInput(broker, restartedStore, flakyChannel));
 
     await execution.sweepResidualProtection();
-    // The delivery was swallowed, so the episode must NOT read as alerted.
+    // The delivery was swallowed, so the episode must NOT read as alerted
     expect(delivered).toHaveLength(0);
     expect((await restartedStore.getResidualProtectionMarker(LOT))?.alerted_at).toBeNull();
 
     // Next pass: still failing, transport healthy — the page goes out now,
-    // and only now is the dedup recorded.
+    // and only now is the dedup recorded
     await execution.sweepResidualProtection();
     expect(delivered).toHaveLength(1);
     expect((await restartedStore.getResidualProtectionMarker(LOT))?.alerted_at).not.toBeNull();
 
-    // And a third pass stays deduped.
+    // And a third pass stays deduped
     await execution.sweepResidualProtection();
     expect(delivered).toHaveLength(1);
   });
@@ -1046,14 +1046,14 @@ describe('residual-protection sweep (#549)', () => {
 
   // #549 review (cycle 2): every containment branch of `sweepOne`, pinned
   // directly — not through the smoke run's happy path and not through
-  // fill-sync's mocked surface.
+  // fill-sync's mocked surface
   describe('sweep containment branches', () => {
     it('a hostile thrown value on one lot does not abort the pass — the remaining marked lots are still swept (#1262)', async () => {
       const FIRST = 'key-hostile';
       const SECOND = 'key-second';
       const { db, store } = openTestExecutionStore();
       // `getUnprotectedResidualLots()` orders by `opened_at`, so the hostile
-      // lot is swept FIRST and everything after it is what a throw would cost.
+      // lot is swept FIRST and everything after it is what a throw would cost
       await seedPosition(store, {
         idempotency_key: FIRST,
         opened_at: new Date('2026-08-07T13:00:00Z'),
@@ -1101,7 +1101,7 @@ describe('residual-protection sweep (#549)', () => {
       // (defeats the `String()` fallback too) — the same construction
       // orchestrator.test.ts uses to defeat `describeThrown` itself. Thrown
       // from `confirmResidualProtected`, which `sweepOne` calls OUTSIDE its own
-      // try blocks, so it lands in the per-lot catch inside the `for` loop.
+      // try blocks, so it lands in the per-lot catch inside the `for` loop
       const hostile: Record<string, unknown> = {
         [Symbol.toPrimitive]: () => {
           throw new Error('render boom');
@@ -1123,7 +1123,7 @@ describe('residual-protection sweep (#549)', () => {
       // THE DAMAGE THIS PINS: the loop reached the second lot at all. Before
       // the guard, rendering the hostile value threw out of the per-lot catch
       // and out of `sweepResidualProtection` itself, so the second lot was
-      // never re-armed and its residual stayed naked until some later pass.
+      // never re-armed and its residual stayed naked until some later pass
       expect(broker.rearmCalls).toEqual([
         { clientOrderId: FIRST, qty: 6 },
         { clientOrderId: SECOND, qty: 6 },
@@ -1136,7 +1136,7 @@ describe('residual-protection sweep (#549)', () => {
 
       // And the first lot's failure is RECORDED, not swallowed: its marker
       // survives for the next pass and the divergence names the render
-      // failure with the shared placeholder.
+      // failure with the shared placeholder
       expect(
         (await hostileStore.getResidualProtectionMarker(FIRST))?.unprotected_since,
       ).not.toBeNull();
@@ -1145,7 +1145,7 @@ describe('residual-protection sweep (#549)', () => {
       expect(failed?.reason).toContain('[unrenderable error]');
       // #1615: this outer-catch row must carry its own escalation, distinct
       // from every other `action: 'undetermined'`/`kind: 'sweep'` row this
-      // file can push.
+      // file can push
       expect(failed?.escalation).toBe('residual_sweep_lot_unsettled');
     });
 
@@ -1167,7 +1167,7 @@ describe('residual-protection sweep (#549)', () => {
       ).sweepResidualProtection();
 
       // The exact residual is unknowable — the page carries the lot's whole
-      // requested size, flagged as an upper bound (#569's semantics).
+      // requested size, flagged as an upper bound (#569's semantics)
       expect(alerts.alerts).toEqual([
         expect.objectContaining({
           idempotency_key: LOT,
@@ -1175,13 +1175,13 @@ describe('residual-protection sweep (#549)', () => {
           residual_qty_is_upper_bound: true,
         }),
       ]);
-      // No re-arm was attempted off a figure that could not be computed.
+      // No re-arm was attempted off a figure that could not be computed
       expect(broker.rearmCalls).toEqual([]);
       expect(result.divergences.map((entry) => entry.action)).toEqual(['undetermined']);
       // #1615: distinct from every other `action: 'undetermined'`/
-      // `kind: 'sweep'` row this file can push.
+      // `kind: 'sweep'` row this file can push
       expect(result.divergences[0]?.escalation).toBe('residual_sweep_size_read_failed');
-      // The marker stays for the next pass's fresh read.
+      // The marker stays for the next pass's fresh read
       expect(
         (await failingStore.getResidualProtectionMarker(LOT))?.unprotected_since,
       ).not.toBeNull();
@@ -1195,7 +1195,7 @@ describe('residual-protection sweep (#549)', () => {
       // Entry and exit both sum to Infinity: `coversQty(Inf, Inf)` is false
       // (Inf − Inf·ε is NaN, and Inf >= NaN is false) so the lot reads
       // not-flat, while the residual recomputes to NaN — the exact
-      // store-numbers-disagree shape the guard refuses to hand the broker.
+      // store-numbers-disagree shape the guard refuses to hand the broker
       const garbageStore = new (class extends TestExecutionStore {
         override async getFills(): Promise<Fill[]> {
           const base = {
@@ -1232,14 +1232,14 @@ describe('residual-protection sweep (#549)', () => {
       // NaN serializes to null and a negative reads as nonsense. It carries
       // the upper-bound requested_size with the upper-bound flag, mirroring
       // the fill-read-failure path; the divergence reason keeps the real
-      // recomputed value for diagnosis.
+      // recomputed value for diagnosis
       expect(alerts.alerts[0]?.residual_qty).toBe(10);
       expect(alerts.alerts[0]?.residual_qty_is_upper_bound).toBe(true);
       expect(result.divergences.map((entry) => entry.action)).toEqual(['undetermined']);
       expect(result.divergences.map((entry) => entry.kind)).toEqual(['sweep']);
       expect(result.divergences[0]?.reason).toContain('NaN');
       // #1615: distinct from every other `action: 'undetermined'`/
-      // `kind: 'sweep'` row this file can push.
+      // `kind: 'sweep'` row this file can push
       expect(result.divergences[0]?.escalation).toBe('residual_sweep_garbage_residual');
       expect(
         (await garbageStore.getResidualProtectionMarker(LOT))?.unprotected_since,
@@ -1267,7 +1267,7 @@ describe('residual-protection sweep (#549)', () => {
 
       // The re-arm itself succeeded — a bookkeeping failure is NOT a naked
       // residual, so nobody is paged; the outer containment reports it and
-      // the marker survives for the next pass's idempotent re-verify.
+      // the marker survives for the next pass's idempotent re-verify
       expect(broker.rearmCalls).toHaveLength(1);
       expect(alerts.alerts).toEqual([]);
       expect(first.divergences.map((entry) => entry.action)).toEqual(['undetermined']);
@@ -1276,7 +1276,7 @@ describe('residual-protection sweep (#549)', () => {
       ).not.toBeNull();
 
       // The store heals: the next pass re-verifies (idempotent re-arm) and
-      // finally clears the marker.
+      // finally clears the marker
       confirmFailingStore.failConfirm = false;
       const second = await execution.sweepResidualProtection();
       expect(second.divergences.map((entry) => entry.action)).toEqual(['adopted']);
@@ -1306,7 +1306,7 @@ describe('residual-protection sweep (#549)', () => {
       expect(alerts.alerts).toHaveLength(1);
       expect(first.divergences.map((entry) => entry.action)).toEqual(['undetermined']);
       // The dedup never persisted, so the next pass re-pages — noisy, not
-      // unsafe, exactly the trade the catch documents.
+      // unsafe, exactly the trade the catch documents
       await execution.sweepResidualProtection();
       expect(alerts.alerts).toHaveLength(2);
     });
@@ -1346,15 +1346,15 @@ describe('residual-protection sweep (#549)', () => {
       const later = new Date('2026-08-07T17:00:00Z');
       await expect(store.markResidualAlerted(LOT, NOW)).resolves.toBe(true);
       // A second surface arriving later does NOT overwrite the record — the
-      // dedup holds regardless of caller ordering.
+      // dedup holds regardless of caller ordering
       await expect(store.markResidualAlerted(LOT, later)).resolves.toBe(false);
       expect((await store.getResidualProtectionMarker(LOT))?.alerted_at).toBe(NOW.toISOString());
       // An unknown key is `false`, never a throw — the write is a claim, not
-      // an assertion the lot exists.
+      // an assertion the lot exists
       await expect(store.markResidualAlerted('no-such-lot', NOW)).resolves.toBe(false);
 
       // The claim re-opens with the episode: confirm clears both columns,
-      // and a NEW episode's first writer wins again.
+      // and a NEW episode's first writer wins again
       await store.confirmResidualProtected(LOT);
       await store.markResidualUnprotected(LOT, later);
       await expect(store.markResidualAlerted(LOT, later)).resolves.toBe(true);
@@ -1371,7 +1371,7 @@ describe('residual-protection sweep (#549)', () => {
         alerted_at: null,
       });
       // No throw on the already-clear (or unknown) key — the sweep and the
-      // observing poll may race to clear.
+      // observing poll may race to clear
       await expect(store.confirmResidualProtected(LOT)).resolves.toBeUndefined();
       await expect(store.confirmResidualProtected('no-such-lot')).resolves.toBeUndefined();
     });
@@ -1386,7 +1386,7 @@ describe('residual-protection sweep (#549)', () => {
       // Simulates a store-read-failure/non-finite-residual page that already
       // fired for this episode BEFORE any re-arm was even attempted — the
       // general dedup is spent, exactly the pre-condition #1447 was filed
-      // against.
+      // against
       await store.markResidualAlerted(LOT, new Date('2026-08-07T15:00:00Z'));
 
       const restartedStore = new TestExecutionStore(db);
@@ -1397,7 +1397,7 @@ describe('residual-protection sweep (#549)', () => {
       );
       // Force the #1214 re-flatten remedy to fail too, so this pass falls
       // through to the page — same technique as "never submits unjournalled"
-      // above.
+      // above
       restartedStore.writeAheadFlatten = async () => {
         throw new Error('disk full');
       };
@@ -1406,7 +1406,7 @@ describe('residual-protection sweep (#549)', () => {
 
       await execution.sweepResidualProtection();
 
-      // The general dedup being already-set must not have blocked this.
+      // The general dedup being already-set must not have blocked this
       expect(alerts.alerts).toEqual([
         expect.objectContaining({ idempotency_key: LOT, rearm_unsupported: true }),
       ]);
@@ -1458,10 +1458,10 @@ describe('residual-protection sweep (#549)', () => {
       await seedPosition(store);
       await store.markResidualUnprotected(LOT, NOW);
 
-      // The general dedup is exercised first — it must not gate this one.
+      // The general dedup is exercised first — it must not gate this one
       await expect(store.markResidualAlerted(LOT, NOW)).resolves.toBe(true);
       await expect(store.markResidualRearmUnsupportedAlerted(LOT, NOW)).resolves.toBe(true);
-      // Second writer for the SAME dedup loses; the general dedup is untouched.
+      // Second writer for the SAME dedup loses; the general dedup is untouched
       const later = new Date('2026-08-07T17:00:00Z');
       await expect(store.markResidualRearmUnsupportedAlerted(LOT, later)).resolves.toBe(false);
       expect(await store.getResidualRearmUnsupportedAlertedAtRaw(LOT)).toBe(NOW.toISOString());

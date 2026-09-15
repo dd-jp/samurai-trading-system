@@ -49,15 +49,15 @@ export type PipelineStage = (typeof PIPELINE_STAGES)[number];
  * mechanical over any stage-index gap, not tied to any one stage.
  */
 export type PipelineCellState =
-  /** Reached, completed, tick continued past it. */
+  /** Reached, completed, tick continued past it */
   | 'done'
-  /** Where the in-flight tick is right now, per `current_tick`. */
+  /** Where the in-flight tick is right now, per `current_tick` */
   | 'live'
-  /** Reached, and the tick ended here. */
+  /** Reached, and the tick ended here */
   | 'stopped'
-  /** Deliberately not run for this tick, though the tick continued. */
+  /** Deliberately not run for this tick, though the tick continued */
   | 'skipped'
-  /** The tick never got this far (it ended earlier), or the stage does not exist yet. */
+  /** The tick never got this far (it ended earlier), or the stage does not exist yet */
   | 'not_reached';
 
 export interface PipelineCell {
@@ -70,7 +70,7 @@ export interface PipelineCell {
    * duration is still running and is computed client-side from `entered_at`).
    */
   duration_ms: number | null;
-  /** The `audit_log` decision word (`quorum_met`, `quorum_skip`, …), when one was recorded. */
+  /** The `audit_log` decision word (`quorum_met`, `quorum_skip`, …), when one was recorded */
   decision: string | null;
   /**
    * ISO timestamp of the stage's last `audit_log` row; `null` for
@@ -128,7 +128,7 @@ export const DEGRADED_DECISIONS = {
   // the two actually happened is `debate_log.termination_cause`
   // ('budget' | 'llm_failure'), not this string — read that column to tell
   // "the budget is too tight" and "the LLM provider is unreliable" apart
-  // before acting on either.
+  // before acting on either
   budget_exhausted:
     'the debate hit its latency budget, or an LLM call it depended on failed outright, before ' +
     'any round completed — no synthesis exists, so the neutral direction and zero confidence ' +
@@ -145,7 +145,7 @@ export const DEGRADED_DECISIONS = {
   // #1393: no producer writes this yet. It exists so that a future fallback
   // producing a neutral `DebateResult` for a reason neither `timed_out` nor
   // `rate_limited` names still glosses as degraded rather than as a genuine
-  // `neutral` wash — see `DebateResult.read` (debate-engine/types.ts).
+  // `neutral` wash — see `DebateResult.read` (debate-engine/types.ts)
   unread:
     'the result was not read from a debate at all — neither the latency budget nor the rate ' +
     'limiter accounts for it, so whatever produced it read nothing',
@@ -157,7 +157,7 @@ export const DEGRADED_DECISIONS = {
     'fault) — the tick was stopped before any view existed, not decided',
 } as const satisfies Record<string, string>;
 
-/** One of `DEGRADED_DECISIONS`'s keys. */
+/** One of `DEGRADED_DECISIONS`'s keys */
 export type DegradedDecision = keyof typeof DEGRADED_DECISIONS;
 
 /**
@@ -175,36 +175,36 @@ export const QUORUM_SKIP_DECISIONS = [
   'quorum_skip_fault',
 ] as const;
 
-/** Whether an `audit_log` decision word names a stage that produced no analyst views. */
+/** Whether an `audit_log` decision word names a stage that produced no analyst views */
 export function isQuorumSkipDecision(decision: string | null): boolean {
   return decision !== null && (QUORUM_SKIP_DECISIONS as readonly string[]).includes(decision);
 }
 
-/** Whether an `audit_log` decision word names a degraded stage rather than a market outcome. */
+/** Whether an `audit_log` decision word names a degraded stage rather than a market outcome */
 export function isDegradedDecision(decision: string | null): decision is DegradedDecision {
   return decision !== null && Object.hasOwn(DEGRADED_DECISIONS, decision);
 }
 
-/** How a trace ended, or that it hasn't. */
+/** How a trace ended, or that it hasn't */
 export type PipelineOutcome =
   | 'go'
   | 'no_go'
-  /** Ended before Verdict — the last cell carries which stage and why. */
+  /** Ended before Verdict — the last cell carries which stage and why */
   | 'stopped'
-  /** Ended at Analysts without quorum. */
+  /** Ended at Analysts without quorum */
   | 'quorum_skip'
-  /** Still running (this lane holds `current_tick`). */
+  /** Still running (this lane holds `current_tick`) */
   | 'in_flight'
-  /** No trace at all in the window — a closed market, or an instrument not yet ticked. */
+  /** No trace at all in the window — a closed market, or an instrument not yet ticked */
   | 'idle';
 
-/** One instrument's row: its most recent trace across all six stages. */
+/** One instrument's row: its most recent trace across all six stages */
 export interface PipelineLane {
   instrument: string;
   asset_class: AssetClass;
-  /** `null` only for an `idle` lane. */
+  /** `null` only for an `idle` lane */
   trace_id: string | null;
-  /** Exactly `PIPELINE_STAGES.length` cells, in `PIPELINE_STAGES` order. */
+  /** Exactly `PIPELINE_STAGES.length` cells, in `PIPELINE_STAGES` order */
   cells: PipelineCell[];
   outcome: PipelineOutcome;
   /** The stage the trace ended at, or is currently in. `null` when idle. */
@@ -215,10 +215,10 @@ export interface PipelineLane {
   total_ms: number | null;
 }
 
-/** The `pipeline` field on the snapshot — what the Pipeline view renders from. */
+/** The `pipeline` field on the snapshot — what the Pipeline view renders from */
 export interface PipelineView {
   lanes: PipelineLane[];
-  /** `current_tick`'s trace, or `null` when nothing is in flight. */
+  /** `current_tick`'s trace, or `null` when nothing is in flight */
   live_trace_id: string | null;
   /** When the live tick entered its current stage, ISO. `null` when nothing is in flight. */
   live_entered_at: string | null;

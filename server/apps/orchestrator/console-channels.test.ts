@@ -49,7 +49,7 @@ describe('LoggingFlattenOverfillAlertChannel (#527, #1348)', () => {
 
     // `warn`, not `error`: the split still completed and the poll still
     // succeeded — this is a diagnostic trail for an invariant violation
-    // elsewhere, not itself a failure of `ingestFills()`.
+    // elsewhere, not itself a failure of `ingestFills()`
     expect(logger.entries[0]?.level).toBe('warn');
     expect(logger.entries[0]?.trace_id).toBe('fill-sync');
     expect(logger.entries[0]?.payload).toMatchObject({
@@ -64,7 +64,7 @@ describe('LoggingFlattenOverfillAlertChannel (#527, #1348)', () => {
   // builds, so a constant here labels a control-arm drop exactly like a live
   // one. The fill-sync surface's own id is the discriminant, threaded on the
   // warning — the same explicit form #1331 established for the catalogue's
-  // `flattenReconcileAlerts` entry.
+  // `flattenReconcileAlerts` entry
   it("carries the fill-sync pass's trace_id verbatim, and changes when the pass does", async () => {
     const logger = makeLogger();
     const channel = new LoggingFlattenOverfillAlertChannel(logger);
@@ -101,7 +101,7 @@ describe('UnwiredApprovalChannel', () => {
   it('throws rather than fabricating consent when the HITL gate (6) is reached', async () => {
     // Under ADR-0007's `auto` dial this is unreachable; reaching it means the
     // dial was changed without wiring a transport, and auto-approving there
-    // would read as an enforced gate while enforcing nothing.
+    // would read as an enforced gate while enforcing nothing
     await expect(new UnwiredApprovalChannel().requestApproval(request)).rejects.toThrow(
       'no ApprovalChannel is wired',
     );
@@ -117,7 +117,7 @@ describe('UnwiredApprovalChannel', () => {
     // Deliberate: this channel takes no mode and refuses nothing at
     // construction, because refusing in `live` would block a live start over
     // a gate that `auto` never reaches. The safety lives in `requestApproval`
-    // throwing, which is mode-independent.
+    // throwing, which is mode-independent
     expect(() => new UnwiredApprovalChannel()).not.toThrow();
   });
 });

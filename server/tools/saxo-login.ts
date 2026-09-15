@@ -75,7 +75,7 @@ export interface CallbackResult {
   code: string;
 }
 
-/** Loopback only (review round 1, finding 7) — a redirect URI host of `0.0.0.0` (or any other) would bind the code-receiving listener on every interface. */
+/** Loopback only (review round 1, finding 7) — a redirect URI host of `0.0.0.0` (or any other) would bind the code-receiving listener on every interface */
 const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
 
 /**
@@ -139,7 +139,7 @@ export function waitForCallback(
   // `listen` failures (EADDRINUSE, EACCES, ...) are emitted asynchronously
   // on the server, not thrown from `listen()` itself — without this handler
   // one is an uncaught exception that `runLogin`'s try/catch never sees
-  // (review round 1, finding 3).
+  // (review round 1, finding 3)
   server.on('error', (cause) => {
     fail(
       new SaxoLoginError(
@@ -192,7 +192,7 @@ export type SaxoVerification =
   | { ok: true; identity: SaxoIdentitySummary }
   | { ok: false; status?: number };
 
-/** Read-only proof call (#1522 AC3) — reports only success/failure and non-secret identity fields, never the token. */
+/** Read-only proof call (#1522 AC3) — reports only success/failure and non-secret identity fields, never the token */
 export async function verifyToken(
   gatewayBaseUrl: string,
   accessToken: string,
@@ -217,7 +217,7 @@ export async function verifyToken(
   return { ok: true, identity: isRecord(body) ? pickIdentityFields(body) : {} };
 }
 
-/** Routes every printed line through `maskCredentials` — see the module doc comment. */
+/** Routes every printed line through `maskCredentials` — see the module doc comment */
 export function printSafely(line: string): void {
   console.log(maskCredentials(line));
 }
@@ -236,7 +236,7 @@ async function openInBrowser(url: string): Promise<void> {
     });
   } catch {
     // Best-effort only. The URL is always printed above, so a headless host
-    // (no `open`/`xdg-open`) still lets the operator complete the login.
+    // (no `open`/`xdg-open`) still lets the operator complete the login
   }
 }
 
@@ -248,7 +248,7 @@ export interface RunLoginDeps {
   waitForCallbackImpl?: typeof waitForCallback;
   openBrowser?: (url: string) => Promise<void>;
   state?: () => string;
-  /** Overrides `tokenFilePath(environment)` — tests use this to sandbox the write under a temp directory instead of the real repo-root-anchored path. */
+  /** Overrides `tokenFilePath(environment)` — tests use this to sandbox the write under a temp directory instead of the real repo-root-anchored path */
   tokenPath?: string;
 }
 
@@ -275,7 +275,7 @@ export async function runLogin(
   } finally {
     // `closeAllConnections` drops any socket still open (an abandoned
     // browser tab) so `close()` doesn't wait on it — see the PR body's
-    // recorded finding 5 for the still-open gap (no listener timeout).
+    // recorded finding 5 for the still-open gap (no listener timeout)
     server.closeAllConnections();
     server.close();
   }
@@ -284,7 +284,7 @@ export async function runLogin(
   const token = await exchangeAuthorizationCode(config, callback.code, now, fetchImpl);
   const path = deps.tokenPath ?? tokenFilePath(environment);
   // `loggedInAt` is this run's own timestamp, never carried over from a prior
-  // file (#1524) — a manual login is exactly the event it records.
+  // file (#1524) — a manual login is exactly the event it records
   writeTokenFile(path, {
     ...token,
     environment,

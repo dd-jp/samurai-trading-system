@@ -156,7 +156,7 @@ function stubConfig(db: StoreHandle, logger: Logger): StubConfig {
     logger,
     // This wiring proof never debates — a stub that throws if ever called
     // would silently pass on a `.complete` never invoked, same as leaving it
-    // out; this documents the "never reached" contract instead of hoping it.
+    // out; this documents the "never reached" contract instead of hoping it
     llmClient: {
       complete: async () => {
         throw new Error('unreachable: this wiring test never runs a debate');
@@ -268,7 +268,7 @@ describe('the FILLED_WITH_ZERO_SIZE throttle is wired through the real compositi
     // `fetchNewFills` excludes this fill on every single poll, forever
     // (`WedgingBroker.fetchNewFills` filters by `since` exactly like every
     // real adapter — the invariant violation is entirely in the fixture,
-    // never in the filtering).
+    // never in the filtering)
     const broker = new WedgingBroker(order, [
       {
         client_order_id: 'key-1',
@@ -285,17 +285,17 @@ describe('the FILLED_WITH_ZERO_SIZE throttle is wired through the real compositi
     // copies it) so this test can advance wall-clock time across surfaces —
     // the property that distinguishes a shared throttle from a fresh one
     // now that the throttle's re-announcement is time-based, not
-    // poll-count-based (#1383).
+    // poll-count-based (#1383)
     const clock = config.clock as SimulatedClock;
     const components = buildProductionComponents({ ...config, broker });
     await seedWedgedPosition(components.executionStore);
 
     // Surface #1: what `fillSyncExecution` actually is in production —
-    // `buildExecutionSurface(components.executionDeps, ...)`, built once.
+    // `buildExecutionSurface(components.executionDeps, ...)`, built once
     const surfaceA = buildExecutionSurface(components.executionDeps, 'trace-wiring-a');
     await surfaceA.reconcile();
     // Three polls: `ALERT_AFTER_CONSECUTIVE_ZERO_SIZE=3` stays quiet for the
-    // first two (consecutive 1, 2), warns once on the 3rd.
+    // first two (consecutive 1, 2), warns once on the 3rd
     for (let poll = 0; poll < 3; poll += 1) {
       await surfaceA.ingestFills();
     }
@@ -306,12 +306,12 @@ describe('the FILLED_WITH_ZERO_SIZE throttle is wired through the real compositi
     // episode (quiet at consecutive 1, 2, `warn` on ITS OWN consecutive 3);
     // sharing correctly, its first poll lands inside `surfaceA`'s
     // already-warned episode, past due for the low-cadence `info`
-    // reannounce, and its next two polls are too soon to reannounce again.
+    // reannounce, and its next two polls are too soon to reannounce again
     clock.advanceTo(new Date(NOW.getTime() + FILLED_ZERO_SIZE_REANNOUNCE_EVERY_MS + 1));
 
     // Surface #2: a SEPARATE `buildExecutionSurface` call against the SAME
     // `components.executionDeps` — the shape a second consumer of the same
-    // root's deps takes.
+    // root's deps takes
     const surfaceB = buildExecutionSurface(components.executionDeps, 'trace-wiring-b');
     for (let poll = 0; poll < 3; poll += 1) {
       await surfaceB.ingestFills();
@@ -319,7 +319,7 @@ describe('the FILLED_WITH_ZERO_SIZE throttle is wired through the real compositi
 
     // No `getPosition` on the `StoreHandle` port itself (only the test
     // harness's `TestExecutionStore` adds that convenience) — `getOpenPositions`
-    // is the real port surface, same as `ingestFills()` itself reads.
+    // is the real port surface, same as `ingestFills()` itself reads
     const [position] = await components.executionStore.getOpenPositions();
     expect(position?.idempotency_key).toBe('key-1');
     expect(position?.order_state).toBe('filled');
@@ -330,7 +330,7 @@ describe('the FILLED_WITH_ZERO_SIZE throttle is wired through the real compositi
     // Exactly one `warn` and one `info`: the throttle counted all six polls
     // as ONE continuous episode across two independently-built surfaces —
     // an unshared surface #2 would instead have produced a SECOND `warn`
-    // (its own consecutive 3) and no `info` at all (see the note above).
+    // (its own consecutive 3) and no `info` at all (see the note above)
     expect(announcements.map((entry) => entry.level)).toEqual(['warn', 'info']);
     expect(announcements[0]?.payload).toMatchObject({
       idempotency_key: 'key-1',
@@ -346,7 +346,7 @@ describe('the FILLED_WITH_ZERO_SIZE throttle is wired through the real compositi
     });
     // Both carry how long the lot has been stuck, and it grows across them
     // — the property #1128's `ExitSkipWriteThrottle` docblock relies on
-    // this channel to provide.
+    // this channel to provide
     const stuckMsValues = announcements.map(
       (entry) => (entry.payload as { stuck_ms?: unknown })?.stuck_ms,
     );
@@ -357,7 +357,7 @@ describe('the FILLED_WITH_ZERO_SIZE throttle is wired through the real compositi
 
     // And this IS the root's own logger — `config.logger`, the same seam
     // `startFromEnvironment` resolves from `SAMURAI_ALERTS` in a real boot —
-    // not a channel `ingestFills()` was handed directly by the test.
+    // not a channel `ingestFills()` was handed directly by the test
     expect(logger).toBe(config.logger);
   });
 });

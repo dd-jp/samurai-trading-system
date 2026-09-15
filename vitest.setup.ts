@@ -65,10 +65,10 @@ import { afterAll } from 'vitest';
  * a transport that does not go through it.
  */
 
-/** Hosts a test may talk to: this machine, and nothing else. */
+/** Hosts a test may talk to: this machine, and nothing else */
 const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]', '::1', '0.0.0.0']);
 
-/** Hosts this file was refused, accumulated for the `afterAll` below. */
+/** Hosts this file was refused, accumulated for the `afterAll` below */
 const escapedToNetwork = new Set<string>();
 
 const realFetch = globalThis.fetch;
@@ -90,7 +90,7 @@ globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestIni
   // Each argument shape read explicitly. `String(new Request(url))` is the
   // useless '[object Request]', which carries no host and would walk straight
   // past a fence that only stringified — a backstop a caller can route around
-  // by passing a different-but-equivalent argument type is not a backstop.
+  // by passing a different-but-equivalent argument type is not a backstop
   const url =
     typeof input === 'string'
       ? input

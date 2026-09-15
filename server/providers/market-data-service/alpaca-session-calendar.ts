@@ -57,17 +57,17 @@ import {
  * modelled.
  */
 export interface AlpacaCalendarDay {
-  /** `YYYY-MM-DD`, the trading date — the same key `civilDateKey` produces. */
+  /** `YYYY-MM-DD`, the trading date — the same key `civilDateKey` produces */
   date: string;
-  /** `HH:MM`, ET wall clock — 09:30 on every ordinary day. */
+  /** `HH:MM`, ET wall clock — 09:30 on every ordinary day */
   open: string;
-  /** `HH:MM`, ET wall clock — 16:00 normally, 13:00 on a known early close. */
+  /** `HH:MM`, ET wall clock — 16:00 normally, 13:00 on a known early close */
   close: string;
 }
 
-/** The seam the fallback wiring stubs in tests — no real network call there. */
+/** The seam the fallback wiring stubs in tests — no real network call there */
 export interface AlpacaCalendarClient {
-  /** `start`/`end` are `YYYY-MM-DD`, inclusive, in Alpaca's own date format. */
+  /** `start`/`end` are `YYYY-MM-DD`, inclusive, in Alpaca's own date format */
   fetchCalendar(range: { start: string; end: string }): Promise<AlpacaCalendarDay[]>;
 }
 
@@ -83,15 +83,15 @@ export class AlpacaCalendarFetchError extends Error {
 }
 
 const DEFAULT_TIMEOUT_MS = 10_000;
-/** Same shape as the broker/data clients' retry budgets (transport-layer-spec.md). */
+/** Same shape as the broker/data clients' retry budgets (transport-layer-spec.md) */
 const DEFAULT_RETRY_CONFIG: RetryConfig = { maxAttempts: 3, baseDelayMs: 250, maxDelayMs: 4_000 };
-/** Alpaca's paper trading host — `/v2/calendar` is a Trading API endpoint, not Data API. */
+/** Alpaca's paper trading host — `/v2/calendar` is a Trading API endpoint, not Data API */
 const DEFAULT_BASE_URL = 'https://paper-api.alpaca.markets';
 
 export interface AlpacaCalendarClientOptions {
-  /** Defaults to `ALPACA_API_KEY` — the paper account's pair (#684 is scoped to the paper leg). */
+  /** Defaults to `ALPACA_API_KEY` — the paper account's pair (#684 is scoped to the paper leg) */
   apiKey?: string;
-  /** Defaults to `ALPACA_API_SECRET`. */
+  /** Defaults to `ALPACA_API_SECRET` */
   apiSecret?: string;
   /** Defaults to Alpaca's paper trading host. Override only for a mock/staging host in tests. */
   baseUrl?: string;
@@ -197,12 +197,12 @@ export class AlpacaHttpCalendarClient implements AlpacaCalendarClient {
             this.#timeoutMs,
           );
         } catch (cause) {
-          // Network failure, DNS, timeout — always retryable within budget.
+          // Network failure, DNS, timeout — always retryable within budget
           // Guarded render: a throw from it escapes before the retryable
           // AlpacaCalendarFetchError is constructed, so the predicate below
           // sees a plain Error and refuses it. withRetry still runs this
           // first of 3 budgeted attempts, then rethrows immediately instead
-          // of spending the other 2 — a transient blip becomes terminal.
+          // of spending the other 2 — a transient blip becomes terminal
           throw new AlpacaCalendarFetchError(
             `network error fetching Alpaca calendar (${context}): ` +
               `${describeThrownSafely(cause)}`,
@@ -215,12 +215,12 @@ export class AlpacaHttpCalendarClient implements AlpacaCalendarClient {
           try {
             bodyText = truncateForError(await response.text());
           } catch {
-            // Best-effort context only; the status is the load-bearing fact.
+            // Best-effort context only; the status is the load-bearing fact
           }
           throw new AlpacaCalendarFetchError(
             `Alpaca calendar request failed (${context}): ${response.status} ` +
               `${response.statusText} ${bodyText}`,
-            // 429/5xx are transient; a 4xx (bad key, bad params) will not fix itself on retry.
+            // 429/5xx are transient; a 4xx (bad key, bad params) will not fix itself on retry
             response.status === 429 || isServerErrorStatus(response.status),
           );
         }
@@ -244,7 +244,7 @@ export class AlpacaHttpCalendarClient implements AlpacaCalendarClient {
   }
 }
 
-/** One trading day's regular session, in minutes since ET midnight. */
+/** One trading day's regular session, in minutes since ET midnight */
 export interface AlpacaSessionRow {
   openMinutes: number;
   closeMinutes: number;

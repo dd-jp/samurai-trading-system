@@ -39,7 +39,7 @@ describe('SqliteOutsideBenchmarkSampleStore (#981)', () => {
     const [read] = store.getRecent(10, COMPUTED_AT);
 
     // Each of these would survive a column that is never threaded only if the
-    // default happened to equal it — and none of them is a plausible default.
+    // default happened to equal it — and none of them is a plausible default
     expect(read.computed_at).toEqual(COMPUTED_AT);
     expect(read.from).toEqual(WINDOW_FROM);
     expect(read.to).toEqual(WINDOW_TO);
@@ -53,7 +53,7 @@ describe('SqliteOutsideBenchmarkSampleStore (#981)', () => {
     // `window_to` is the arm comparison's `to`, which is not the same instant as
     // `computed_at` — a store that wrote `computed_at` into all three timestamp
     // columns would pass a laxer test and silently claim the benchmark covered
-    // a window it did not.
+    // a window it did not
     const db = openSharedStore(':memory:');
     const store = new SqliteOutsideBenchmarkSampleStore(db);
 
@@ -90,7 +90,7 @@ describe('SqliteOutsideBenchmarkSampleStore (#981)', () => {
     // equality on the wire value (`row.computed_at === latest.computed_at`), so
     // a round trip that lost, gained or reformatted a millisecond on one row
     // would make the panel render one benchmark and report the other as "not
-    // measured this cycle" — a data-outage claim invented by a serializer.
+    // measured this cycle" — a data-outage claim invented by a serializer
     const stamps = rows.map((r) => r.computed_at.toISOString());
     expect(new Set(stamps).size).toBe(1);
     expect(
@@ -119,7 +119,7 @@ describe('SqliteOutsideBenchmarkSampleStore (#981)', () => {
     );
 
     const rows = store.getRecent(10, COMPUTED_AT);
-    // A restart re-measuring the same window is not a second point in the trend.
+    // A restart re-measuring the same window is not a second point in the trend
     expect(rows).toHaveLength(1);
     expect(rows[0].performance.buy_and_hold_return_pct).toBe(0.0412);
   });
@@ -159,7 +159,7 @@ describe('SqliteOutsideBenchmarkSampleStore (#981)', () => {
             // #981's non-goals rule out reopening it. The type rejects this at
             // compile time and the table's CHECK rejects it at runtime — the
             // second is what stops a hand-written INSERT or a repair script
-            // creating a silent third series in the panel's trend.
+            // creating a silent third series in the panel's trend
             benchmark: 'nasdaq',
             buy_and_hold_return_pct: 0.01,
             max_drawdown_pct: 0.01,

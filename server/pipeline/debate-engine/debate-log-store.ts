@@ -34,12 +34,12 @@ export function buildDebateLog(
     rounds: result.rounds_completed,
     created_at,
     // #426. Omitted rather than `undefined` so the row shape matches the
-    // optional field exactly; a caller with no trace writes NULL.
+    // optional field exactly; a caller with no trace writes NULL
     ...(trace_id === undefined ? {} : { trace_id }),
     // #617. What the Trader actually reads, so a later same-bar tick can
     // replay this row instead of re-running an identical debate. `confidence`
     // is the load-bearing one — it is what position sizing is a function of,
-    // and until migration 0026 the table had no column for it.
+    // and until migration 0026 the table had no column for it
     confidence: result.confidence,
     synthesis: result.synthesis,
     position: result.position,
@@ -50,7 +50,7 @@ export function buildDebateLog(
     // `DebateLog` has no `read` column to project it into (#1418). Harmless
     // while every producer sets `read: true`, but a future `read: false`
     // producer would need this row to carry it before `replayedDebateResult`
-    // could read anything but `true` back off a replay.
+    // could read anything but `true` back off a replay
     // #1081. Derived from the SAME `result` the row's other fields come off,
     // so a truncated debate cannot be mis-tagged converged by a caller that
     // forgot to pass a separate flag: `timed_out` is set by exactly one
@@ -58,7 +58,7 @@ export function buildDebateLog(
     // the debate before a result was produced. Every other producer of a
     // `DebateResult` — a completed round, the round-cap hybrid termination —
     // leaves it unset, so `converged` alone decides between the other two
-    // states.
+    // states
     termination:
       result.timed_out !== undefined
         ? 'latency_truncated'
@@ -70,7 +70,7 @@ export function buildDebateLog(
     // carry a cause without also carrying the termination it explains. Absent
     // rather than null on the domain object, matching every other optional
     // field here: a pre-migration `timed_out` (a test fixture, a replay of an
-    // old row) genuinely has no cause to report.
+    // old row) genuinely has no cause to report
     ...(result.timed_out?.cause === undefined ? {} : { termination_cause: result.timed_out.cause }),
   };
 }
@@ -221,7 +221,7 @@ export class InMemoryDebateLogStore implements DebateLogStore {
   // is off the `DebateLogStore` port (#1558 review round 2) — so `rounds`
   // is discarded here rather than routed through a same-named method this
   // class has no use for. A `Map.set` cannot partially fail, so there is no
-  // atomicity gap for this in-memory implementation to close either.
+  // atomicity gap for this in-memory implementation to close either
   writeLogWithRounds(entry: DebateLog, _rounds: DebateRoundLogEntry[]): void {
     this.writeLog(entry);
   }

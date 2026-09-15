@@ -40,7 +40,7 @@ const DEFAULT_BASE_URL = 'https://api.polygon.io';
 const MAX_PAGES = 25;
 const PAGE_LIMIT = 50_000;
 
-/** Polygon's raw per-bar shape — a superset of `PolygonAggregate` (also carries `vw`, `n`). */
+/** Polygon's raw per-bar shape — a superset of `PolygonAggregate` (also carries `vw`, `n`) */
 interface RawPolygonAggregate {
   t: number;
   o: number;
@@ -55,7 +55,7 @@ interface PolygonAggregatesResponse {
   next_url?: string;
 }
 
-/** `typeof x === 'number'` narrowed further to exclude `NaN`/`Infinity` — a vendor can send either on the wire. */
+/** `typeof x === 'number'` narrowed further to exclude `NaN`/`Infinity` — a vendor can send either on the wire */
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
@@ -89,12 +89,12 @@ function validateRawPolygonAggregate(raw: unknown, symbol: string): RawPolygonAg
   );
 }
 
-/** Maps this repo's universe symbols to Polygon ticker strings — crypto gets the `X:` prefix. */
+/** Maps this repo's universe symbols to Polygon ticker strings — crypto gets the `X:` prefix */
 export function toPolygonTicker(symbol: string): string {
   return symbol.endsWith('-USD') ? `X:${symbol.slice(0, -'-USD'.length)}USD` : symbol;
 }
 
-/** `YYYY-MM-DD`, per Polygon's `from`/`to` path-param format. */
+/** `YYYY-MM-DD`, per Polygon's `from`/`to` path-param format */
 function toPolygonDate(date: Date): string {
   return date.toISOString().split('T')[0] as string;
 }
@@ -104,7 +104,7 @@ export interface HttpPolygonClientOptions {
   apiKey?: string;
   /** Defaults to `https://api.polygon.io`. See module doc on the Massive.com rebrand. */
   baseUrl?: string;
-  /** Injectable for tests — defaults to the global `fetch`. */
+  /** Injectable for tests — defaults to the global `fetch` */
   fetchImpl?: typeof fetch;
   /**
    * Proactive outbound pacing against the free tier's 5 calls/min (ticket
@@ -152,7 +152,7 @@ export interface HttpPolygonClientOptions {
   rateLimiter?: TokenBucket;
 }
 
-/** Real HTTP `PolygonClient` against Polygon/Massive's aggregates endpoint. */
+/** Real HTTP `PolygonClient` against Polygon/Massive's aggregates endpoint */
 export class HttpPolygonClient implements PolygonClient {
   private readonly apiKey: string;
   private readonly baseUrl: string;
@@ -224,7 +224,7 @@ export class HttpPolygonClient implements PolygonClient {
       // rejects it. A 429 that does slip through (e.g. another process
       // sharing this key) still surfaces below via the generic `!response.ok`
       // throw — this bucket is a floor, not a replacement for reacting to
-      // whatever the venue actually says.
+      // whatever the venue actually says
       await this.rateLimiter.acquire();
       const response = await this.fetchImpl(url, {
         headers: { Authorization: `Bearer ${this.apiKey}` },
@@ -258,7 +258,7 @@ export class HttpPolygonClient implements PolygonClient {
       // throwing — Stage 2 is offline tooling with no retry/underfetch
       // machinery of its own, so an early stop here just returns a shorter
       // series than the venue actually holds, which is visible in the row
-      // count rather than silent.
+      // count rather than silent
       if (typeof body.next_url !== 'string') break;
       url = body.next_url;
     }

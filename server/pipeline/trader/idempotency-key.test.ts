@@ -15,7 +15,7 @@ import {
 } from './idempotency-key.js';
 
 const BAR = new Date('2026-08-14T19:00:00.000Z');
-/** The US close on the same day — deliberately ON the 1h bar grid (#1389). */
+/** The US close on the same day — deliberately ON the 1h bar grid (#1389) */
 const SESSION_CLOSE = new Date('2026-08-14T20:00:00.000Z');
 
 describe('intentSideFor', () => {
@@ -30,7 +30,7 @@ describe('computeIdempotencyKey', () => {
   it('separates an opening intent from a closing one in the same bar', () => {
     // The #686 collision, at the unit level: same instrument, same bar, and
     // before the discriminator these were one key — so the mandatory
-    // flat-by-close exit was suppressed as a duplicate of the entry.
+    // flat-by-close exit was suppressed as a duplicate of the entry
     expect(computeIdempotencyKey('3USL', BAR, 'open')).not.toBe(
       computeIdempotencyKey('3USL', BAR, 'close'),
     );
@@ -38,13 +38,13 @@ describe('computeIdempotencyKey', () => {
 
   it('keeps entry and scale_in on ONE key within a bar', () => {
     // The property #616 and #617 were protecting, and the reason the
-    // discriminator is open/close rather than the full `intent_type`.
+    // discriminator is open/close rather than the full `intent_type`
     //
     // Within a bar the first tick can produce an `entry` and a later tick a
     // `scale_in`, because by then the position exists. Under a three-way key
     // those are two keys, so a crash-replay of that bar places BOTH orders
     // instead of deduping to one — doubling exposure in exactly the scenario
-    // the key exists for.
+    // the key exists for
     expect(computeIdempotencyKey('3USL', BAR, intentSideFor('entry'))).toBe(
       computeIdempotencyKey('3USL', BAR, intentSideFor('scale_in')),
     );
@@ -83,7 +83,7 @@ describe('computeIdempotencyKey', () => {
 describe('computeFlattenIdempotencyKey (#1389)', () => {
   it('is one key per instrument per SESSION CLOSE', () => {
     // The obligation is a close, not a bar — so every tick that enforces the
-    // same close, on either side of the bell, produces one key.
+    // same close, on either side of the bell, produces one key
     expect(computeFlattenIdempotencyKey('3USL', SESSION_CLOSE)).toBe(
       computeFlattenIdempotencyKey('3USL', new Date(SESSION_CLOSE)),
     );
@@ -95,7 +95,7 @@ describe('computeFlattenIdempotencyKey (#1389)', () => {
     expect(computeFlattenIdempotencyKey('3LDE', SESSION_CLOSE)).not.toBe(base);
     expect(computeFlattenIdempotencyKey('3USL', SESSION_CLOSE, 'control')).not.toBe(base);
     // The NEXT session's close: a lot carried past the grace must be targetable
-    // again tomorrow rather than deduped against today's refusal.
+    // again tomorrow rather than deduped against today's refusal
     expect(computeFlattenIdempotencyKey('3USL', new Date('2026-08-15T20:00:00.000Z'))).not.toBe(
       base,
     );
@@ -106,7 +106,7 @@ describe('computeFlattenIdempotencyKey (#1389)', () => {
     // payload that named the field `bar` would collide with a genuine
     // 20:00 bar's own `'close'`-side key — the direction-flip exit's, which
     // still uses the bar coordinate. The field name is what keeps the two key
-    // spaces apart.
+    // spaces apart
     expect(computeFlattenIdempotencyKey('3USL', SESSION_CLOSE)).not.toBe(
       computeIdempotencyKey('3USL', SESSION_CLOSE, 'close'),
     );
@@ -121,7 +121,7 @@ describe('computeFlattenIdempotencyKey (#1389)', () => {
     );
   });
 
-  /** Same contract as the pin above: the payload is a §7 shape, not a detail. */
+  /** Same contract as the pin above: the payload is a §7 shape, not a detail */
   it('pins the hash so the payload cannot change silently', () => {
     // sha256 of
     // {"instrument":"3USL","session_close":"2026-08-14T20:00:00.000Z","side":"close"}

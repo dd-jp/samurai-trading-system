@@ -120,7 +120,7 @@ export const DEFAULT_VOLATILITY_INDICATOR: IndicatorSpec = {
   indicator: 'atr',
   params: { period: 14 },
   // 1h, matching every other indicator in the live path. Explicit since #315:
-  // `getIndicator` used to hardcode this and now reads it from the spec.
+  // `getIndicator` used to hardcode this and now reads it from the spec
   timeframe: '1h',
   lookback: recommendedWarmupFor({
     indicator: 'atr',
@@ -216,7 +216,7 @@ const DEFAULT_LLM_TIMEOUT_MS =
  * from the environment (#274 AC), since a stale/rotated model id is the one
  * failure mode ops needs to fix without a redeploy.
  */
-/** Exported for `production.test.ts` — asserts the actual retry/timeout budget wired into the live default, not just the model threaded through the startup warn log (PR #284 review). */
+/** Exported for `production.test.ts` — asserts the actual retry/timeout budget wired into the live default, not just the model threaded through the startup warn log (PR #284 review) */
 export const DEFAULT_LLM_CLIENT_CONFIG: Omit<AnthropicLlmClientConfig, 'model'> = {
   max_tokens: 1024,
   timeoutMs: DEFAULT_LLM_TIMEOUT_MS,
@@ -244,7 +244,7 @@ export const DEFAULT_LLM_CLIENT_CONFIG: Omit<AnthropicLlmClientConfig, 'model'> 
  * observable benefit; the inner timeout stays a wider, independent backstop
  * so an in-flight request is not left dangling after the outer race settles.
  */
-/** Exported for `production.test.ts` — lets the test assert the constructed client's actual shape (instance type, model, retry/timeout config) rather than only the startup warn log's side effect (PR #284 review). */
+/** Exported for `production.test.ts` — lets the test assert the constructed client's actual shape (instance type, model, retry/timeout config) rather than only the startup warn log's side effect (PR #284 review) */
 export function buildDefaultLlmClient(
   logger: Logger,
   gate: LlmInFlightGate,
@@ -255,7 +255,7 @@ export function buildDefaultLlmClient(
   // billed API call per debate round rather than a required seam
   // (kimi-3-review on #284) — this is the one signal that the live default
   // was built instead of a test/mock override. The model is in the payload
-  // because it is the field that decides both the bill and the behaviour.
+  // because it is the field that decides both the bill and the behaviour
   logger.log({
     trace_id: 'startup',
     stage: 'orchestrator',
@@ -271,14 +271,14 @@ export function buildDefaultLlmClient(
     // `RetryAttemptReport` (shared/http/retry.ts) for why the loop was
     // otherwise silent. `warn`, not `info`: a retried attempt is the system
     // paying twice and halving the budget it had left, which an operator
-    // reading a soak log should see without filtering for it.
+    // reading a soak log should see without filtering for it
     // `logCaughtFailure`, not a bare `logger.log`: this runs inside the retry
     // loop's own observer guard, and a throw from here — a hostile
     // `toString` on the provider's rejection value, or an injected logger
     // whose sink is gone — would be swallowed there, losing the line this
     // whole mechanism exists to emit. The shared helper renders and
     // sanitizes the thrown value behind its own try/catch, so the failure
-    // degrades to `[unrenderable error]` in the payload instead.
+    // degrades to `[unrenderable error]` in the payload instead
     onRetryAttempt: (report) => {
       logCaughtFailure(
         logger,
@@ -307,7 +307,7 @@ export function buildDefaultLlmClient(
           // #1394. `RetryAttemptReport.error` is `unknown`, so this line named
           // the attempt and its cost but never what it was retrying — a
           // rate limit and a malformed draw produced identical lines, and only
-          // the first is worth waiting out.
+          // the first is worth waiting out
           failure_cause: classifyFailureCause(report.error),
         },
       );
@@ -317,7 +317,7 @@ export function buildDefaultLlmClient(
     // every caller downstream of this client either fails open (the risk
     // critic, the disagreement detector, MI scoring) or re-renders the failure
     // in its own words, so without this the only session-wide count of LLM
-    // failures by cause was unrecoverable from the log.
+    // failures by cause was unrecoverable from the log
     onCallFailed: (report) => {
       logCaughtFailure(
         logger,
@@ -345,21 +345,21 @@ export function buildDefaultLlmClient(
   // `gateBudgetMs` is `config.timeoutMs`, NOT `NousMessagesClient`'s own (wider)
   // network backstop: the gate wait happens inside the outer race in
   // `callWithTimeout`, whose timer starts before `createMessage` is called, so
-  // that is the clock a queue wait actually eats into (#1080).
+  // that is the clock a queue wait actually eats into (#1080)
   //
   // Equal to it, with no safety margin subtracted, because the gate's queue
   // timer fires at `budgetMs - expectedCallMs` — a full expected call before
   // the budget, and therefore unconditionally before the outer race — so
-  // `queue_deadline` is reachable by construction rather than by a constant.
+  // `queue_deadline` is reachable by construction rather than by a constant
   // An earlier revision subtracted a 1,000 ms `LLM_GATE_BUDGET_MARGIN_MS` to
-  // buy that reachability; the timer change made it dead weight.
+  // buy that reachability; the timer change made it dead weight
   const client = new NousMessagesClient({ apiKey, baseUrl, gate, gateBudgetMs: config.timeoutMs });
   // `spendSink` is only ever supplied on this default path, and deliberately
   // so: a `ProductionConfig.llmClient` override is a test double or another
   // provider, and metering one against the Nous price table would produce a
   // confidently wrong dollar figure. An overridden client
   // meters nothing, and the dashboard's spend tile reads $0 — visibly empty
-  // rather than quietly fictional.
+  // rather than quietly fictional
   return new AnthropicLlmClient(client, config, spendSink);
 }
 
@@ -541,7 +541,7 @@ export function buildDefaultAlpacaBrokerClient(
   // reason: the operator's belief about which account they are trading and the
   // account the orders land in must not be allowed to differ, and a live run
   // silently filling into a paper account is a fortnight of fake fills that
-  // look real.
+  // look real
   if (overrideHost === 'paper' && mode === 'live') {
     throw new Error(
       `ALPACA_BASE_URL points at Alpaca's PAPER trading host ('${override}') but SAMURAI_MODE ` +
@@ -554,7 +554,7 @@ export function buildDefaultAlpacaBrokerClient(
   // Constructed before the log line, not after: the client re-checks the
   // environment/host agreement and can still throw, and a startup log naming a
   // host the process never reached is worse than no log at all. `environment`
-  // is also what selects the credential pair (#511) — see the doc comment.
+  // is also what selects the credential pair (#511) — see the doc comment
   const client = new AlpacaHttpBrokerClient(
     override === undefined ? { environment } : { environment, baseUrl: override },
   );
@@ -744,7 +744,7 @@ export function buildAlpacaDataSource(
   config: Pick<ProductionConfig, 'alpacaDataClient' | 'dataSourceAssetClass' | 'lseMarkClient'>,
   universe: readonly UniverseInstrument[],
   tradingCalendar: TradingCalendar,
-  /** The account's shared outbound bucket (#391) — see `buildDefaultAlpacaDataClient`. */
+  /** The account's shared outbound bucket (#391) — see `buildDefaultAlpacaDataClient` */
   rateLimiter?: TokenBucket,
 ): DataSource {
   // #734, and it runs FIRST because it is a venue question, not an asset-class
@@ -753,14 +753,14 @@ export function buildAlpacaDataSource(
   // not list it. Re-probed with this project's own keys on 2026-08-18:
   // `/v2/stocks/bars?symbols=3USL` answers `{"message":"invalid symbol: 3USL"}`
   // and Polygon's exchange list contains no `XLON`. See
-  // `docs/research/34-lse-mark-source-options.md`.
+  // `docs/research/34-lse-mark-source-options.md`
   const lseSource = buildLseMarkSourceIfNeeded(config, universe);
   if (lseSource !== undefined) return lseSource;
 
   const present = universeAssetClasses(universe);
   // An empty universe has no class to derive — `'crypto'` remains the
   // historical default there rather than throwing on a degenerate-but-harmless
-  // config.
+  // config
   const classes: AssetClass[] =
     present.length > 0 ? present : [config.dataSourceAssetClass ?? 'crypto'];
 
@@ -771,7 +771,7 @@ export function buildAlpacaDataSource(
       asset_class: assetClass,
       // Authoritative for equities only: `AlpacaDataSource` substitutes
       // `AlwaysOpenCalendar` for a crypto source regardless of what is passed
-      // (alpaca-source.ts), because a 24/7 venue has no session to gate on.
+      // (alpaca-source.ts), because a 24/7 venue has no session to gate on
       calendar: tradingCalendar,
     });
 
@@ -784,7 +784,7 @@ export function buildAlpacaDataSource(
     // request to `/v1beta3/crypto/us/...` and 404s silently (#358) — and this
     // function's whole premise is that the market-data wiring cannot disagree
     // with the tick plan. The override stays useful for the case it was added
-    // for: an EMPTY universe, which asserts nothing to contradict.
+    // for: an EMPTY universe, which asserts nothing to contradict
     if (override !== undefined && present.length > 0 && override !== single) {
       throw new Error(
         `Orchestrator cannot start: ProductionConfig.dataSourceAssetClass is '${override}', but ` +
@@ -893,7 +893,7 @@ class LazyDataSource implements DataSource {
  * whole port via `ProductionConfig.benchmarkSeriesSource`.
  */
 export function buildBenchmarkDataSource(options: {
-  /** The account's shared outbound bucket (#391) — see `buildDefaultAlpacaDataClient`. */
+  /** The account's shared outbound bucket (#391) — see `buildDefaultAlpacaDataClient` */
   rateLimiter?: TokenBucket;
   /**
    * A STOCKS-rooted wire client. Omitted in production, where the default
@@ -911,7 +911,7 @@ export function buildBenchmarkDataSource(options: {
       // trade in. The live path's calendar is `equityCalendarFor(config)`,
       // which returns `LseRegularHoursCalendar` in live mode, so accepting
       // one would re-couple this builder to the live configuration through
-      // the back door — the independence would hold for the signature only.
+      // the back door — the independence would hold for the signature only
       // `NormalizingDataSource` resolves session boundaries and holidays
       // against whatever calendar it is handed, and `LSE_HOLIDAYS` is not the
       // US table, so US bars normalized on a London session is simply the
@@ -924,7 +924,7 @@ export function buildBenchmarkDataSource(options: {
       // `isTradingDay` would keep under one calendar and drop under the
       // other. The signature simply has no `calendar` parameter
       // to pass, so this coupling cannot recur no matter which calendar the
-      // live path is on — closed structurally, not by empirical agreement.
+      // live path is on — closed structurally, not by empirical agreement
       asset_class: 'stocks',
     }),
   );

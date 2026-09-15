@@ -119,7 +119,7 @@ export const LIVE_MONEY_GATES: readonly { readonly issue: number; readonly gap: 
   {
     issue: 895,
     // Verified OPEN 2026-08-19: `gh issue view 895`. See the comment left on
-    // #895 recording the citation.
+    // #895 recording the citation
     //
     // This entry was #665 until 2026-08-19, and #665 was the WRONG citation
     // rather than a stale one: its title is "T212 setup: pass the
@@ -130,17 +130,17 @@ export const LIVE_MONEY_GATES: readonly { readonly issue: number; readonly gap: 
     // `check:live-gates` staying green because it only asks whether the cited
     // issue is open. #895 is the mark-vendor gap itself, with that gap as its
     // closure condition, which is what this module's rule requires: the cited
-    // issue must SAY what the line claims.
+    // issue must SAY what the line claims
     //
     // The T212 terms question — whether that venue may be driven by an
     // algorithm at all — is #896, a venue question rather than a mark one, so
-    // it is not folded into this entry's claim.
+    // it is not folded into this entry's claim
     gap: 'the live equity leg still has no chosen mark vendor — the LseMarkDataSource seam exists but the composition root has no client to hand it, so a live LSE boot refuses by design; no source this repo integrates lists an LSE ticker (Alpaca and Polygon both VERIFIED absent), and doc 34 recommends IBKR LSE UK L1 as the only retail-priced real-time LSE Level 1 feed with bid/ask found',
   },
   {
     issue: 900,
     // Verified OPEN 2026-08-19: filed on that date and cited here in the same
-    // change; see the comment left on #900 recording the citation.
+    // change; see the comment left on #900 recording the citation
     //
     // This entry is the survivor of #894's, which was itself the survivor of
     // #826's. Each step closed one half of the same operator-facing gap and
@@ -148,12 +148,12 @@ export const LIVE_MONEY_GATES: readonly { readonly issue: number; readonly gap: 
     // #826 made the mandatory flat-by-close flatten degrade to an unpriced
     // exit instead of throwing, and #894 stopped Verdict's staleness gate
     // refusing that degraded flatten one stage later — so the book now HAS one
-    // exit path that completes during an outage, which the old wording denied.
+    // exit path that completes during an outage, which the old wording denied
     // What #894 did not touch, and never claimed to: quotes are not failed
     // over at all, and every entry plus both discretionary exits still stop
     // the tick at the mark read. A closed issue is deleted, not struck
     // through, so the citation moves to the open issue that carries what is
-    // left.
+    // left
     gap: 'a data-source outage leaves the book able to take exactly ONE action — quotes are not failed over at all, and every entry plus both discretionary exits (signal_decay, direction_flip) still stop the tick at the mark read, so the clock-driven flat-by-close flatten is the only decision that completes while a vendor is down',
   },
 ];
@@ -168,7 +168,7 @@ export const LIVE_MONEY_GATES: readonly { readonly issue: number; readonly gap: 
 export const LIVE_MONEY_GATES_VERIFIED_ON = '2026-08-31';
 // (re-verified same day: #895/#900 confirmed still OPEN, #925 and #932 entries removed above)
 
-/** The command that re-verifies the list, named in the operator-facing summary. */
+/** The command that re-verifies the list, named in the operator-facing summary */
 export const LIVE_MONEY_GATES_RECHECK_COMMAND = 'yarn check:live-gates';
 
 /**

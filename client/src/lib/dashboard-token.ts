@@ -22,13 +22,13 @@
  * browser profile is shared across tabs or persists across restarts.
  */
 
-/** Query param an operator's link carries the token in. */
+/** Query param an operator's link carries the token in */
 export const DASHBOARD_TOKEN_QUERY_PARAM = 'token';
 
-/** `sessionStorage` key the token is persisted under after capture. */
+/** `sessionStorage` key the token is persisted under after capture */
 export const DASHBOARD_TOKEN_STORAGE_KEY = 'samurai-dashboard-token';
 
-/** The `sessionStorage` surface this module needs — narrowed for testability without a DOM. */
+/** The `sessionStorage` surface this module needs — narrowed for testability without a DOM */
 export type TokenStorage = Pick<Storage, 'getItem' | 'setItem'>;
 
 /**

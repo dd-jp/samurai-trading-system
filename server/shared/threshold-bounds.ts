@@ -66,7 +66,7 @@ export interface ThresholdBound {
   readonly min?: number;
   /** Highest permitted value, inclusive. Absent means unbounded above. */
   readonly max?: number;
-  /** Where the line comes from, quoted or cited. */
+  /** Where the line comes from, quoted or cited */
   readonly source: string;
 }
 
@@ -174,7 +174,7 @@ export const GUARDED_THRESHOLD_BOUNDS = {
   },
   /**
    * Kill lines in the other direction: LOWERING either one softens the kill,
-   * so both are floors.
+   * so both are floors
    */
   min_oos_sharpe: {
     min: 0.5,
@@ -189,7 +189,7 @@ export const GUARDED_THRESHOLD_BOUNDS = {
 
 export type GuardedThresholdName = keyof typeof GUARDED_THRESHOLD_BOUNDS;
 
-/** Every guarded name, for callers that must prove they covered all of them. */
+/** Every guarded name, for callers that must prove they covered all of them */
 export const GUARDED_THRESHOLD_NAMES = Object.keys(
   GUARDED_THRESHOLD_BOUNDS,
 ) as readonly GuardedThresholdName[];

@@ -32,7 +32,7 @@
  * absent here, and why `pricing.test.ts` asserts every key prices non-null.
  */
 
-/** Dollars per million tokens, as published on the Nous portal. */
+/** Dollars per million tokens, as published on the Nous portal */
 export interface ModelRate {
   input: number;
   output: number;
@@ -102,13 +102,13 @@ const GROK_LARGE_PROMPT_TIER = {
  * ends this table is what has to change.
  */
 export const MODEL_RATES: Readonly<Record<string, ModelRate>> = Object.freeze({
-  // Anthropic, via Nous.
+  // Anthropic, via Nous
   'anthropic/claude-fable-5': { input: 8, output: 40 },
   'anthropic/claude-opus-5': { input: 4, output: 20 },
   'anthropic/claude-opus-4.8': { input: 4, output: 20 },
   'anthropic/claude-sonnet-5': { input: 1.6, output: 8 },
   'anthropic/claude-haiku-4.5': { input: 0.8, output: 4 },
-  // OpenAI, via Nous.
+  // OpenAI, via Nous
   'openai/gpt-5.6-sol': { input: 4, output: 24 },
   'openai/gpt-5.6-sol-pro': { input: 4, output: 24 },
   'openai/gpt-5.6-terra': { input: 1, output: 6 },
@@ -118,12 +118,12 @@ export const MODEL_RATES: Readonly<Record<string, ModelRate>> = Object.freeze({
   'openai/gpt-5.5': { input: 4, output: 24 },
   'openai/gpt-5.5-pro': { input: 24, output: 144 },
   'openai/gpt-5.4-mini': { input: 0.6, output: 3.6 },
-  // Google, via Nous.
+  // Google, via Nous
   'google/gemini-3.1-pro-preview': { input: 1.6, output: 9.6 },
   'google/gemini-3.6-flash': { input: 1.2, output: 6 },
   // xAI, via Nous — the sentiment role's model. Grok is the defensible pick
   // for X/Twitter sentiment because it is the model trained on that discourse,
-  // even though nothing here retrieves from X live (see ADR-0009).
+  // even though nothing here retrieves from X live (see ADR-0009)
   'x-ai/grok-4.5': { input: 1.6, output: 4.8, cache_read: 0.4, ...GROK_LARGE_PROMPT_TIER },
   /**
    * A FLOATING ALIAS, and the only one in this table. The leading `~` is the
@@ -149,11 +149,11 @@ export const MODEL_RATES: Readonly<Record<string, ModelRate>> = Object.freeze({
    * retrieval ever makes corpus recency pay again.
    */
   '~x-ai/grok-latest': { input: 1.6, output: 4.8, cache_read: 0.4, ...GROK_LARGE_PROMPT_TIER },
-  // DeepSeek, via Nous.
+  // DeepSeek, via Nous
   'deepseek/deepseek-v4-pro': { input: 0.35, output: 0.7 },
   'deepseek/deepseek-v4-flash': { input: 0.07, output: 0.14 },
   'deepseek/deepseek-v4-flash-0731': { input: 0.01, output: 0.02 },
-  // Everyone else, via Nous.
+  // Everyone else, via Nous
   'qwen/qwen3.8-max': { input: 1.6, output: 4.8 },
   'moonshotai/kimi-k3': { input: 2.4, output: 12 },
   'minimax/minimax-m3': { input: 0.24, output: 0.96 },
@@ -166,7 +166,7 @@ export const MODEL_RATES: Readonly<Record<string, ModelRate>> = Object.freeze({
   'sakana/fugu-ultra': { input: 4, output: 24 },
   // Free tiers. A real zero, not an unknown — these must be present rather
   // than absent, because absent means unpriced means uncapped (see the module
-  // doc comment), and "this call was free" is a fact the meter can state.
+  // doc comment), and "this call was free" is a fact the meter can state
   'tencent/hy3:free': { input: 0, output: 0 },
   'stepfun/step-3.7-flash:free': { input: 0, output: 0 },
   'poolside/laguna-s-2.1:free': { input: 0, output: 0 },
@@ -281,7 +281,7 @@ const TOKENS_PER_MILLION = 1_000_000;
 export interface AnthropicUsage {
   input_tokens: number;
   output_tokens: number;
-  /** Absent when nothing was cached — absent means zero here, a real zero rather than an unknown. */
+  /** Absent when nothing was cached — absent means zero here, a real zero rather than an unknown */
   cache_creation_input_tokens?: number;
   cache_read_input_tokens?: number;
 }
@@ -323,7 +323,7 @@ export function priceUsage(model: string, usage: AnthropicUsage): number | null 
   // occupied the context window whatever they were charged at, which is what
   // the vendor's threshold counts. `promptTokensOf` is the one definition of
   // that sum, shared with `crossesPromptTier` so a caller's warning and this
-  // arithmetic can never disagree.
+  // arithmetic can never disagree
   const tier =
     rate.tier !== undefined && promptTokensOf(usage) > rate.tier.above_prompt_tokens
       ? rate.tier
@@ -334,7 +334,7 @@ export function priceUsage(model: string, usage: AnthropicUsage): number | null 
   // A published per-million cache-read rate wins over the multiplier. Note it
   // scales off the row's BASE input rate, not the tier's: no vendor publishes
   // a tiered cache-read multiple, so inventing one would be a guess in the
-  // under-counting direction for rows using the fallback.
+  // under-counting direction for rows using the fallback
   const cacheReadRate = rate.cache_read ?? rate.input * CACHE_READ_MULTIPLIER;
 
   const inputCost =

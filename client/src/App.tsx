@@ -49,7 +49,7 @@ function isTab(value: string): value is Tab {
 /**
  * `ARMS` is `Rail.tsx`'s own list — imported rather than re-listed here, so
  * this and the rail's selector read the same two arms (`contracts/snapshot.ts:78`
- * warns "widen both sides together" about exactly this class of duplication).
+ * warns "widen both sides together" about exactly this class of duplication)
  */
 function isArm(value: string | undefined): value is TradingArmWire {
   return value !== undefined && ARMS.some((entry) => entry.id === value);
@@ -68,7 +68,7 @@ function hashSegments(): [tab: string, arm: string | undefined] {
   return [tab, arm];
 }
 
-/** The tab named by `location.hash`, so a tab survives a reload and can be linked. */
+/** The tab named by `location.hash`, so a tab survives a reload and can be linked */
 function tabFromHash(): Tab {
   const [tab] = hashSegments();
   return isTab(tab) ? tab : 'glance';
@@ -86,7 +86,7 @@ function armFromHash(): TradingArmWire {
   return isArm(arm) ? arm : 'live';
 }
 
-/** The hash a given tab/arm pair writes — the inverse of the two readers above. */
+/** The hash a given tab/arm pair writes — the inverse of the two readers above */
 function hashFor(tab: Tab, arm: TradingArmWire): string {
   return arm === 'control' ? `#${tab}/control` : `#${tab}`;
 }
@@ -124,7 +124,7 @@ function safeSessionStorage(): TokenStorage {
         // Swallowed: `resolveDashboardToken` still returns the just-read URL
         // token to the caller even when persisting it fails (round 2 finding
         // B) — an unreachable store must cost the NEXT reload its token, not
-        // this one's first poll.
+        // this one's first poll
       }
     },
   };
@@ -247,11 +247,11 @@ function ArmView(props: ArmViewProps) {
   const { arm, onArm, authToken, snapshotOptions, ...rest } = props;
   // `arm` after the spread: the rail's selected arm must win over a
   // caller-supplied `snapshotOptions.arm`, not the other way round — no
-  // caller does this today, but `arm` is a public `UseSnapshotOptions` field.
+  // caller does this today, but `arm` is a public `UseSnapshotOptions` field
   const feed = useSnapshot({ authToken, ...snapshotOptions, arm });
 
   // The one place the client asks whether a snapshot exists (#1520), now
-  // scoped to the currently-selected arm's own feed.
+  // scoped to the currently-selected arm's own feed
   const view = feedView(feed);
   if (view.kind === 'cold') return <ColdStart feed={view.feed} />;
 
@@ -271,7 +271,7 @@ export function App({ snapshotOptions }: AppProps = {}) {
   // this initializer, but that is idempotent (same value, same URL) and not
   // a reason to move it back into an effect. `safeSessionStorage()` guards
   // every storage access this can reach, so nothing here throws out of
-  // render (finding B).
+  // render (finding B)
   const [authToken] = useState<string | null>(() =>
     resolveDashboardToken(window.location.search, safeSessionStorage()),
   );
@@ -284,7 +284,7 @@ export function App({ snapshotOptions }: AppProps = {}) {
     // (dashboard-token.ts's header). Preserves `pathname`/`hash` —
     // `tabFromHash` above reads the hash directly off `location`, and
     // rewriting it away here would silently reset whichever tab a shared
-    // link pointed at.
+    // link pointed at
     const nextSearch = stripTokenParam(window.location.search);
     if (nextSearch !== window.location.search) {
       window.history.replaceState(

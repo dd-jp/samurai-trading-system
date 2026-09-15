@@ -76,13 +76,13 @@ export interface NousResponsesRequest {
   model: string;
   /** The prompt. A plain string is the Responses API's own shorthand for a single user turn. */
   input: string;
-  /** Prepended as the model's instructions — the Responses API's system-turn equivalent. */
+  /** Prepended as the model's instructions — the Responses API's system-turn equivalent */
   instructions?: string;
   tools?: readonly NousServerTool[];
   max_output_tokens: number;
 }
 
-/** One citation the provider attached to its answer. */
+/** One citation the provider attached to its answer */
 export interface NousCitation {
   url: string;
   title?: string | undefined;
@@ -91,9 +91,9 @@ export interface NousCitation {
 export interface NousResponsesResult {
   /** The assistant's text, concatenated across output items. Never `undefined`. */
   text: string;
-  /** Normalised the same way `nousChat` does — cache-exclusive `input_tokens`. */
+  /** Normalised the same way `nousChat` does — cache-exclusive `input_tokens` */
   usage: AnthropicUsage;
-  /** The model id to METER against — see `resolveMeteredModel`. */
+  /** The model id to METER against — see `resolveMeteredModel` */
   model: string;
   /**
    * Every citation the response carried, deduplicated by URL, from BOTH the
@@ -134,7 +134,7 @@ export interface NousResponsesResult {
    * back explicitly rather than get a silent local-clock substitute.
    */
   created_at_ms: number | null;
-  /** Time-to-first-byte, measured before the body is read — same convention as `NousChatResult`. */
+  /** Time-to-first-byte, measured before the body is read — same convention as `NousChatResult` */
   ttfb_ms: number;
 }
 
@@ -151,7 +151,7 @@ export interface NousResponsesOptions {
    * measuring the wrong population.
    */
   gate: LlmInFlightGate;
-  /** The caller's remaining deadline for the whole call, gate wait included. */
+  /** The caller's remaining deadline for the whole call, gate wait included */
   gateBudgetMs?: number | undefined;
   /**
    * What this caller's own call is expected to take, for the gate's estimate —
@@ -159,7 +159,7 @@ export interface NousResponsesOptions {
    * call", which is wrong for anything materially slower.
    */
   expectedCallMs?: number | undefined;
-  /** Names this call's stage on the gate's own log lines. */
+  /** Names this call's stage on the gate's own log lines */
   llmStage?: string | undefined;
   /**
    * Ceiling on the CITATION-DERIVED ESTIMATE of `server_tool_calls` — not a
@@ -233,7 +233,7 @@ function extractText(body: ResponsesBody): string {
     if (!Array.isArray(item?.content)) continue;
     for (const content of item.content as OutputContent[]) {
       // `output_text` is the content-part type name; a `refusal` part is not
-      // answer text and must not be parsed as though it were.
+      // answer text and must not be parsed as though it were
       if (content?.type !== undefined && content.type !== 'output_text') continue;
       if (typeof content?.text === 'string') parts.push(content.text);
     }
@@ -241,7 +241,7 @@ function extractText(body: ResponsesBody): string {
   return parts.join('');
 }
 
-/** Reads one annotation into a citation, tolerating both the nested and flattened shapes. */
+/** Reads one annotation into a citation, tolerating both the nested and flattened shapes */
 function toCitation(annotation: unknown): NousCitation | null {
   if (typeof annotation !== 'object' || annotation === null) return null;
   const record = annotation as { url?: unknown; title?: unknown; url_citation?: unknown };
@@ -309,7 +309,7 @@ function extractCitations(body: ResponsesBody): NousCitation[] {
     }
   }
 
-  // Top-level `citations` is a bare string array on the observed responses.
+  // Top-level `citations` is a bare string array on the observed responses
   if (Array.isArray(body.citations)) {
     for (const entry of body.citations) {
       push(typeof entry === 'string' ? { url: entry } : toCitation(entry));
@@ -337,7 +337,7 @@ function truncationReason(body: ResponsesBody): string | null {
 /**
  * POSTs one non-streaming Responses call to Nous and normalises the reply,
  * behind the account-wide in-flight gate (#1080) — same slot discipline as
- * `nousChat`, and the same account queue.
+ * `nousChat`, and the same account queue
  */
 export async function nousResponses(
   options: NousResponsesOptions,
@@ -387,7 +387,7 @@ async function dispatchResponses(
     },
     timeoutMs,
   );
-  // Measured before the body read, matching `nousChat` — see `ttfb_ms`.
+  // Measured before the body read, matching `nousChat` — see `ttfb_ms`
   const ttfb_ms = Date.now() - dispatchedAt;
 
   if (!response.ok) {
@@ -426,7 +426,7 @@ async function dispatchResponses(
   // answer, it is an unreadable one — the `choices`-missing case from
   // `nousChat`, in this endpoint's vocabulary. Distinguished from a genuinely
   // empty answer (present-but-empty `output`) so a shape change surfaces as an
-  // error rather than as silent NO_DATA for the rest of the soak.
+  // error rather than as silent NO_DATA for the rest of the soak
   if (parsed.output === undefined && parsed.output_text === undefined) {
     throw new NousApiError(
       response.status,
@@ -447,7 +447,7 @@ async function dispatchResponses(
 
   // Nous's `usage` block carries TOKENS ONLY — no search count — so part of
   // this is an estimate, and the direction it errs in is the whole point: a
-  // spend cap fed an under-count is not a cap.
+  // spend cap fed an under-count is not a cap
   //
   // Two sources, and they are NOT the same kind of thing (review round 2,
   // #1055 — the earlier code blurred them and its clamp contradicted its own
@@ -461,10 +461,10 @@ async function dispatchResponses(
   //   that matters most, a search that RAN and returned nothing. This one IS
   //   clamped by `maxServerToolCalls`, which is what that option was always
   //   for: one call returns up to `max_search_results` citations, so an
-  //   unclamped citation count reads N results as N calls.
+  //   unclamped citation count reads N results as N calls
   //
   // Taking the max keeps the deliberate over-charge when many citations come
-  // back from one call, and keeps the floor when few or none do.
+  // back from one call, and keeps the floor when few or none do
   const toolCalls = countServerToolCalls(parsed);
   const ceiling = options.maxServerToolCalls;
   const estimatedFromCitations =
@@ -483,7 +483,7 @@ async function dispatchResponses(
         ? // The Responses API reports SECONDS since epoch; every other clock in
           // this repo is milliseconds. Converting at the boundary keeps the
           // 1000x mistake from reaching the recency comparison, where it would
-          // read as a 1970 timestamp and silently fail every post.
+          // read as a 1970 timestamp and silently fail every post
           parsed.created_at * 1000
         : null,
     ttfb_ms,

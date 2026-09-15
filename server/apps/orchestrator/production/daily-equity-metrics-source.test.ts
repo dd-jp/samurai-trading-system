@@ -75,7 +75,7 @@ describe('SqliteDailyEquityMetricsSource', () => {
   it('produces a real MetricsSuite once the series is long enough', () => {
     const { store, cleanup } = openStore();
     try {
-      // One more observation than returns required — n observations give n−1.
+      // One more observation than returns required — n observations give n−1
       seed(store, MIN_RETURN_OBSERVATIONS + 1);
       const sample = makeSource(store, makeLogger()).getDailyMetrics();
 
@@ -83,7 +83,7 @@ describe('SqliteDailyEquityMetricsSource', () => {
       expect(Number.isFinite(sample?.daily.sharpe)).toBe(true);
       expect(Number.isFinite(sample?.daily.max_drawdown)).toBe(true);
       // Daily, never a revalidation snapshot: walk-forward/DSR/PBO are computed
-      // offline on their own cadence, not derived from an equity series.
+      // offline on their own cadence, not derived from an equity series
       expect(sample?.revalidation).toBeUndefined();
     } finally {
       cleanup();
@@ -109,7 +109,7 @@ describe('SqliteDailyEquityMetricsSource', () => {
       // - `periodsPerYear` is 365, the UTC-day cadence the portfolio boundary
       //   actually advances at. 252 (the trading-day count) would silently
       //   over-annualize every ratio in the suite by ~1.2x, and nothing else in
-      //   the system would notice.
+      //   the system would notice
       const expectedReturns: number[] = [];
       for (let i = 1; i < equities.length; i += 1) {
         expectedReturns.push(
@@ -138,7 +138,7 @@ describe('SqliteDailyEquityMetricsSource', () => {
   it('refuses a series one observation short of the gate', () => {
     const { store, cleanup } = openStore();
     try {
-      // MIN observations => MIN−1 returns => exactly one short.
+      // MIN observations => MIN−1 returns => exactly one short
       seed(store, MIN_RETURN_OBSERVATIONS);
       const logger = makeLogger();
 
@@ -156,7 +156,7 @@ describe('SqliteDailyEquityMetricsSource', () => {
   it('a ~10-observation soak yields nothing to evaluate', () => {
     const { store, cleanup } = openStore();
     try {
-      // What a 14-day paper soak (#238) actually produces.
+      // What a 14-day paper soak (#238) actually produces
       seed(store, 10);
       expect(makeSource(store, makeLogger()).getDailyMetrics()).toBeUndefined();
     } finally {
@@ -173,7 +173,7 @@ describe('SqliteDailyEquityMetricsSource', () => {
 
       // `getDailyMetrics` is called once per feedback cycle, so one line per
       // call is one line per day. An unattended soak must not receive the same
-      // sentence 20,000 times (the failure #342 fixed for the heartbeat).
+      // sentence 20,000 times (the failure #342 fixed for the heartbeat)
       source.getDailyMetrics();
       expect(logger.entries).toHaveLength(1);
       source.getDailyMetrics();
@@ -188,12 +188,12 @@ describe('SqliteDailyEquityMetricsSource', () => {
     try {
       // A long-enough series with a missing midnight near the end: the process
       // was down across one boundary. Everything before the hole is unusable as
-      // a contiguous trailing run, so the remainder is too short to evaluate.
+      // a contiguous trailing run, so the remainder is too short to evaluate
       seed(store, MIN_RETURN_OBSERVATIONS + 1, { skipDay: MIN_RETURN_OBSERVATIONS - 4 });
       const logger = makeLogger();
 
       expect(makeSource(store, logger).getDailyMetrics()).toBeUndefined();
-      // Only the post-gap tail counted, not the full row count.
+      // Only the post-gap tail counted, not the full row count
       expect(logger.entries[0]?.payload).toMatchObject({ usable_returns: 4 });
     } finally {
       cleanup();
@@ -203,7 +203,7 @@ describe('SqliteDailyEquityMetricsSource', () => {
   it('uses only the contiguous trailing run when a gap sits before enough fresh data', () => {
     const { store, cleanup } = openStore();
     try {
-      // Ancient stretch, hole, then a full usable run.
+      // Ancient stretch, hole, then a full usable run
       seed(store, 5);
       const store2Start = SERIES_START + 40 * MS_PER_DAY;
       for (let i = 0; i <= MIN_RETURN_OBSERVATIONS; i += 1) {
@@ -224,7 +224,7 @@ describe('SqliteDailyEquityMetricsSource', () => {
         const at = new Date(SERIES_START + i * MS_PER_DAY);
         // A wiped-out account. Dividing by 0 gives Infinity/NaN, and NaN
         // compares false against every kill threshold — the lines would stop
-        // firing silently instead of failing.
+        // firing silently instead of failing
         store.append(at, i === MIN_RETURN_OBSERVATIONS - 3 ? 0 : 100_000 + i * 40, at, true);
       }
 
@@ -238,7 +238,7 @@ describe('SqliteDailyEquityMetricsSource', () => {
     const { store, cleanup } = openStore();
     try {
       // Day 0 is a zero — an account that was empty before it was funded, which
-      // is the ordinary case for a new deployment, not a disaster.
+      // is the ordinary case for a new deployment, not a disaster
       store.append(new Date(SERIES_START), 0, new Date(SERIES_START), true);
       for (let i = 1; i <= MIN_RETURN_OBSERVATIONS + 1; i += 1) {
         const at = new Date(SERIES_START + i * MS_PER_DAY);
@@ -248,7 +248,7 @@ describe('SqliteDailyEquityMetricsSource', () => {
       // The backward walk must STOP at the zero and keep the tail. Rejecting the
       // whole series instead would mean one bad historical row disables the
       // kill-lines permanently — the series only ever grows, so that row never
-      // ages out.
+      // ages out
       expect(makeSource(store, makeLogger()).getDailyMetrics()).toBeDefined();
     } finally {
       cleanup();
@@ -266,7 +266,7 @@ describe('SqliteDailyEquityMetricsSource', () => {
 
       // Zero variance: `computeMetrics` throws by design. The port's contract is
       // `undefined` for "no suite this cycle", and an exception escaping into
-      // the daily timer would be logged as a failed feedback cycle.
+      // the daily timer would be logged as a failed feedback cycle
       expect(makeSource(store, logger).getDailyMetrics()).toBeUndefined();
       expect(logger.entries[0]?.message).toMatch(/zero variance/);
     } finally {
@@ -281,7 +281,7 @@ describe('SqliteDailyEquityMetricsSource', () => {
         makeSource(store, makeLogger(), [], MIN_RETURN_OBSERVATIONS + 100),
       ).not.toThrow();
       // The floor is a safety property of a path that writes risk thresholds,
-      // not a preference a config may switch off.
+      // not a preference a config may switch off
       expect(() => makeSource(store, makeLogger(), [], 2)).toThrow(/must be at least/);
     } finally {
       cleanup();
@@ -292,7 +292,7 @@ describe('SqliteDailyEquityMetricsSource', () => {
 /**
  * The gate's reason for existing, tested end-to-end rather than by inspection:
  * a breach does not merely report, it WRITES every risk threshold toward its
- * extreme and appends to the `AdjustmentLog`.
+ * extreme and appends to the `AdjustmentLog`
  */
 describe('the gate protects autoTighten from a short series', () => {
   function makeTuning(): TuningStore & { thresholds: Record<string, number> } {
@@ -303,10 +303,10 @@ describe('the gate protects autoTighten from a short series', () => {
       setAnalystWeight: () => {},
       // Added by #371 (first-write-wins seeding). This double never grew it;
       // `false` is the honest answer for a store that holds no weights — "this
-      // call was not the one that wrote it".
+      // call was not the one that wrote it"
       seedAnalystWeight: () => false,
       // Same shape for #433's threshold seeding: this double is handed its
-      // thresholds at construction, so no call here is ever the one that wrote.
+      // thresholds at construction, so no call here is ever the one that wrote
       seedRiskThreshold: () => false,
       getStrategyParams: () => ({}),
       setStrategyParam: () => {},
@@ -336,7 +336,7 @@ describe('the gate protects autoTighten from a short series', () => {
     attribution_window_ms: MS_PER_DAY,
     weights: { floor: 0, ceiling: 1, max_step: 0.1, tighten_is: 'decrease' },
     // them and never picked them up; the gate it exercises is unaffected by
-    // their values.
+    // their values
     strategy_params: {},
     risk_thresholds: {
       max_position_pct: { floor: 0.01, ceiling: 1, max_step: 0.1, tighten_is: 'decrease' },
@@ -345,8 +345,8 @@ describe('the gate protects autoTighten from a short series', () => {
       max_pbo: 0.05,
       min_oos_sharpe: 0.5,
       min_deflated_sharpe: 0.95,
-      // Deliberately hair-trigger: ANY shortfall against the reference breaches.
-      // If a short series ever reached `computeMetrics`, this would fire.
+      // Deliberately hair-trigger: ANY shortfall against the reference breaches
+      // If a short series ever reached `computeMetrics`, this would fire
       max_live_backtest_divergence: 0,
     },
   };
@@ -393,7 +393,7 @@ describe('the gate protects autoTighten from a short series', () => {
 
       // The gate removed — exactly what a regression that drops the minimum
       // would produce. This asserts the danger is real, so the test above is
-      // proving something rather than restating a tautology.
+      // proving something rather than restating a tautology
       const ungated = makeSource(store, makeLogger());
       // biome-ignore lint/complexity/useLiteralKeys: reaching past the gate on purpose.
       (ungated as unknown as Record<string, number>)['minReturnObservations'] = 2;
@@ -411,7 +411,7 @@ describe('the gate protects autoTighten from a short series', () => {
         alerts: { postBreachAlert: () => {} },
       });
 
-      // A 9-return sample stepped a real risk threshold toward its floor.
+      // A 9-return sample stepped a real risk threshold toward its floor
       expect(tuning.thresholds.max_position_pct).toBeLessThan(0.5);
       expect(appended).not.toEqual([]);
     } finally {
@@ -483,7 +483,7 @@ describe('SqliteDailyEquityMetricsSource — revalidation from the Stage 2 selec
 
   it('reports the WORSE asset class when both have one', () => {
     // A portfolio holding crypto and stocks is only as validated as its weaker
-    // half; averaging would hide a failed verdict behind a passing one.
+    // half; averaging would hide a failed verdict behind a passing one
     const { store, cleanup } = openStore();
     try {
       seed(store, MIN_RETURN_OBSERVATIONS + 1);
@@ -517,7 +517,7 @@ describe('SqliteDailyEquityMetricsSource — revalidation from the Stage 2 selec
 
   it('refuses a selection older than the freshness bound', () => {
     // A verdict about an old sample says nothing about today's regime, and this
-    // snapshot drives autoTighten, which WRITES real risk configuration.
+    // snapshot drives autoTighten, which WRITES real risk configuration
     const { store, cleanup } = openStore();
     try {
       seed(store, MIN_RETURN_OBSERVATIONS + 1);
@@ -549,7 +549,7 @@ describe('SqliteDailyEquityMetricsSource — revalidation from the Stage 2 selec
   it('reports a FAILED Stage 2 verdict rather than suppressing it', () => {
     // The point of the ticket: a strategy that failed Stage 2 has kill-lines
     // that SHOULD fire. Hiding the row would restore the exact silence #384 is
-    // about.
+    // about
     const { store, cleanup } = openStore();
     try {
       seed(store, MIN_RETURN_OBSERVATIONS + 1);

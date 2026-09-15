@@ -24,25 +24,25 @@ import type { NormalizedFill } from './types.js';
  */
 const TOP_UP_ID_SEPARATOR = '#';
 
-/** A persisted (or this-poll) row of the same lot — the fields the difference is taken against. */
+/** A persisted (or this-poll) row of the same lot — the fields the difference is taken against */
 export type BookedRow = Pick<Fill, 'broker_fill_id' | 'qty' | 'price' | 'fee'>;
 
-/** One observation of a cumulative feed: `qty`, `price` and `fee` are all running totals. */
+/** One observation of a cumulative feed: `qty`, `price` and `fee` are all running totals */
 export type CumulativeObservation = Pick<
   NormalizedFill,
   'broker_fill_id' | 'qty' | 'price' | 'fee'
 >;
 
 export interface CumulativeIncrement {
-  /** `<base>#<cumulative qty>` — deterministic, so a re-poll at the same cumulative finds it booked and yields `null`. */
+  /** `<base>#<cumulative qty>` — deterministic, so a re-poll at the same cumulative finds it booked and yields `null` */
   broker_fill_id: BrokerFillId;
   qty: number;
-  /** The increment's own price when derivable, else the venue's cumulative average (see `priceDegraded`). */
+  /** The increment's own price when derivable, else the venue's cumulative average (see `priceDegraded`) */
   price: number;
-  /** Clamped at 0: a shrinking venue fee total must not credit the lot income. */
+  /** Clamped at 0: a shrinking venue fee total must not credit the lot income */
   fee: number;
   bookedQty: number;
-  /** Raw, possibly non-finite or non-positive — reported for the operator when `priceDegraded`. */
+  /** Raw, possibly non-finite or non-positive — reported for the operator when `priceDegraded` */
   derivedPrice: number;
   /**
    * The derived increment price was unusable and `price` fell back to the
@@ -79,14 +79,14 @@ export function cumulativeIncrement(
   );
   // With no prior row there is nothing to take a difference against, and
   // inventing the whole cumulative quantity as this lot's would double-book
-  // whichever lot actually holds it.
+  // whichever lot actually holds it
   if (priors.length === 0) return null;
 
   const bookedQty = priors.reduce((sum, row) => sum + row.qty, 0);
   const delta = observation.qty - bookedQty;
   // The same relative tolerance `coversQty` judges flatness by (ADR-0005) —
   // a second tolerance for the same float64 noise is how two surfaces come to
-  // disagree about the same lot.
+  // disagree about the same lot
   //
   // `delta < 0` — the venue reporting LESS than we have booked — falls out
   // here too, silently. It is venue/store divergence rather than a lost
@@ -100,7 +100,7 @@ export function cumulativeIncrement(
   // increment's own price is what makes the average true — and a
   // `weightedAvgPrice` over base + top-up then reproduces the venue's
   // reported average to within ADR-0005's summation bound, rather than
-  // drifting toward whichever tranche was larger.
+  // drifting toward whichever tranche was larger
   const bookedNotional = priors.reduce((sum, row) => sum + row.price * row.qty, 0);
   const derivedPrice = (observation.price * observation.qty - bookedNotional) / delta;
   const priceIsUsable = Number.isFinite(derivedPrice) && derivedPrice > 0;
@@ -117,9 +117,9 @@ export function cumulativeIncrement(
     // the venue's running total, and subtracting less than it would charge
     // the same venue money twice across increments. Worked through: priors
     // charged 0.5 against a venue cumulative of 0.8 leaves a 0.3 increment,
-    // topped up to the modelled 0.5 — 1.0 in total for that example, not 1.3.
+    // topped up to the modelled 0.5 — 1.0 in total for that example, not 1.3
     // Where the venue out-charges the model the same subtraction returns its
-    // real delta untouched.
+    // real delta untouched
     //
     // "One modelled commission in total" is a property of THAT example, not
     // of the mechanism (#1121): `max` runs per increment, so a venue whose
@@ -127,7 +127,7 @@ export function cumulativeIncrement(
     // model once — 0.7 then 0.3 against a modelled 1.0 split 0.5/0.5 charges
     // 1.2. `chargeTopUpTo`'s doc carries the per-lot bound. Unreachable on
     // this path today: cumulative feeds are Alpaca-only and Alpaca reports
-    // `fee: 0`.
+    // `fee: 0`
     fee: Math.max(0, observation.fee - priors.reduce((sum, row) => sum + row.fee, 0)),
     bookedQty,
     derivedPrice,

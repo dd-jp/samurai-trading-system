@@ -47,17 +47,17 @@ export interface ConfigTrialLog {
    */
   recordTrial(config_hash: string, result: BacktestReport): void;
 
-  /** N — the distinct-config count DSR and MinBTL deflate by. */
+  /** N — the distinct-config count DSR and MinBTL deflate by */
   distinctTrialCount(): number;
 
-  /** The most recent report logged for a hash, if any. */
+  /** The most recent report logged for a hash, if any */
   getTrial(config_hash: string): BacktestReport | undefined;
 }
 
 /**
  * In-memory `ConfigTrialLog` — a concrete implementation of the port, not a
  * test-only mock, mirroring server/pipeline/trader/fixture-setup-store.ts and
- * server/providers/market-data-service/fixture-data-source.ts.
+ * server/providers/market-data-service/fixture-data-source.ts
  */
 export class InMemoryConfigTrialLog implements ConfigTrialLog {
   private readonly trials = new Map<string, BacktestReport>();
@@ -77,7 +77,7 @@ export class InMemoryConfigTrialLog implements ConfigTrialLog {
     // Overwrites rather than appends: the latest report for a hash is what a
     // reader wants, and the count is over distinct hashes either way. `set`
     // on an existing key leaves `this.trials.size` — N — untouched, which is
-    // exactly the re-run-does-not-inflate-N rule.
+    // exactly the re-run-does-not-inflate-N rule
     this.trials.set(config_hash, result);
   }
 

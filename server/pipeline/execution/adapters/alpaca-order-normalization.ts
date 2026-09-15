@@ -89,7 +89,7 @@ export function collectFill(
     return;
   }
 
-  // #842: `filled_at` NO LONGER GATES THE FILL — only dates it.
+  // #842: `filled_at` NO LONGER GATES THE FILL — only dates it
   //
   // Alpaca's own documentation does not settle whether `filled_at` is
   // populated on the FIRST partial fill or stays null until an order is
@@ -102,16 +102,16 @@ export function collectFill(
   // way for us: the trade_updates stream distinguishes `fill` ("completely
   // filled") from `partial_fill`, which hints "filled" means COMPLETELY in
   // Alpaca's vocabulary — i.e. that a partially-filled order may well report
-  // a positive `filled_qty` with a null `filled_at`.
+  // a positive `filled_qty` with a null `filled_at`
   //
   // Under the old guard that combination was dropped SILENTLY, every poll,
   // forever. That is the same money-losing ending as the `hasFill` dedup this
   // ticket also fixes: shares that filled are never booked, so they are
   // unprotected (no stop/target covers them), invisible to the exposure caps,
-  // and not exited by flat-by-close (ADR-0014), which sizes off `filled_size`.
+  // and not exited by flat-by-close (ADR-0014), which sizes off `filled_size`
   // With the docs unable to rule the combination out, the guard is fixed
   // defensively: a venue that says it filled quantity is believed about the
-  // quantity, and only the DATE falls back.
+  // quantity, and only the DATE falls back
   //
   // Falling back to `observedAt` (this sweep's clock reading) puts the fill
   // inside the `since` window rather than letting it be silently aged out of
@@ -122,12 +122,12 @@ export function collectFill(
   // tolerates). `ingestFills` therefore reads its `now` AFTER `fetchNewFills`
   // returns, which makes it the later of the two by construction. Change
   // either side and the undated fill silently disappears again; the
-  // advancing-clock test in `ingest-fills.test.ts` (#842) is what catches it.
+  // advancing-clock test in `ingest-fills.test.ts` (#842) is what catches it
   //
   // A non-string is treated as absent for the same reason: `new Date(undefined)`
   // is an Invalid Date, whose `getTime()` is NaN, and `NaN < since` is FALSE —
   // so an undeclared/missing `filled_at` would otherwise sail past the window
-  // check and be booked with an unsorted, unserializable timestamp.
+  // check and be booked with an unsorted, unserializable timestamp
   const filledAt = resolveFilledAt(order, observedAt);
   if (filledAt.getTime() < since.getTime()) {
     return;
@@ -137,14 +137,14 @@ export function collectFill(
   // itself, and there is no safe way to record it: a zero price is not a
   // conservative guess but a fabricated one, and it flows straight into
   // realized PnL, the R-multiple and the feedback loop's weighting — a lot
-  // booked at 0 reads as a total loss or an infinite gain depending on side.
+  // booked at 0 reads as a total loss or an infinite gain depending on side
   // Same posture the ccxt adapter takes in `toFill`: refuse rather than
-  // silently degrade, and let the poll retry once the venue is coherent.
+  // silently degrade, and let the poll retry once the venue is coherent
   //
   // "Let the poll retry" is only half an answer, though, and the other half is
-  // #298: if the venue NEVER prices this fill, retrying forever is silence.
+  // #298: if the venue NEVER prices this fill, retrying forever is silence
   // The typed error carries what the caller needs to start an age-out clock on
-  // it — refusing to book the fill and refusing to notice are different things.
+  // it — refusing to book the fill and refusing to notice are different things
   if (order.filled_avg_price === null) {
     throw new UnpricedFillError(
       `Alpaca order ${order.id} (${leg} leg of '${clientOrderId}') reports filled_qty ` +
@@ -166,14 +166,14 @@ export function collectFill(
     price: Number.parseFloat(order.filled_avg_price),
     qty: filledQty,
     // Alpaca is commission-free on US equities; crypto fee attribution is
-    // deferred (out of scope for this ticket's entry/stop-out equities path).
+    // deferred (out of scope for this ticket's entry/stop-out equities path)
     fee: 0,
     timestamp: filledAt,
     // #842: Alpaca reports a RUNNING total per order, not one event per
     // partial fill, and `broker_fill_id` above is the ORDER id — so a second
     // observation at a larger `filled_qty` re-uses this exact id. The flag is
     // what lets `ingestFills()` book the increment instead of discarding the
-    // re-offer as a duplicate; see `NormalizedFill.qty_is_cumulative`.
+    // re-offer as a duplicate; see `NormalizedFill.qty_is_cumulative`
     qty_is_cumulative: true,
   });
 }
@@ -262,7 +262,7 @@ export function mapOrderState(status: string): OrderState {
       return 'expired';
     // 'new' | 'accepted' | 'pending_new' | 'accepted_for_bidding' and any
     // other acknowledgement status: the bracket has landed at the venue but
-    // nothing has filled yet, which is 'submitted' in our state machine.
+    // nothing has filled yet, which is 'submitted' in our state machine
     default:
       return 'submitted';
   }

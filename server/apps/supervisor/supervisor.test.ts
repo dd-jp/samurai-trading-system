@@ -5,7 +5,7 @@ import { type SpawnFn, startSupervisor } from './supervisor.js';
 
 /**
  * Stands in for a spawned process: records the signals sent to it, and lets a
- * test decide exactly when — and how — it dies.
+ * test decide exactly when — and how — it dies
  */
 class FakeChild extends EventEmitter {
   readonly signals: (NodeJS.Signals | undefined)[] = [];
@@ -15,7 +15,7 @@ class FakeChild extends EventEmitter {
     return true;
   }
 
-  /** Simulates the OS reaping the process. */
+  /** Simulates the OS reaping the process */
   die(code: number | null, signal: NodeJS.Signals | null = null): void {
     this.emit('exit', code, signal);
   }
@@ -39,14 +39,14 @@ function fakeSpawn(): {
   return { spawn, calls, children };
 }
 
-/** Both children, in spawn order: orchestrator first, then dashboard. */
+/** Both children, in spawn order: orchestrator first, then dashboard */
 function start(log: (message: string) => void = () => {}) {
   const { spawn, calls, children } = fakeSpawn();
   const supervisor = startSupervisor({
     spawn,
     execPath: '/usr/bin/node',
     log,
-    // The real one opens SQLite; the ordering it guarantees is tested below.
+    // The real one opens SQLite; the ordering it guarantees is tested below
     prepare: () => {},
   });
   const [orchestrator, dashboard] = children;
@@ -93,7 +93,7 @@ describe('startSupervisor', () => {
     await Promise.resolve();
 
     // The orchestrator is still draining its in-flight tick. Exiting now would
-    // orphan it mid-pass — the whole reason the supervisor waits.
+    // orphan it mid-pass — the whole reason the supervisor waits
     expect(resolved).toBe(false);
 
     orchestrator.die(0);
@@ -136,9 +136,9 @@ describe('startSupervisor', () => {
     const messages: string[] = [];
     const { supervisor, orchestrator, dashboard } = start((m) => messages.push(m));
 
-    // `kill -TERM` aimed at the orchestrator alone: it drains and returns 0.
+    // `kill -TERM` aimed at the orchestrator alone: it drains and returns 0
     // Nobody asked `serve` to stop, so this is still a failure — logging
-    // "stopping the other" and then exiting 0 would contradict itself.
+    // "stopping the other" and then exiting 0 would contradict itself
     orchestrator.die(0);
 
     expect(dashboard.signals).toEqual(['SIGTERM']);
@@ -175,7 +175,7 @@ describe('startSupervisor', () => {
     const { supervisor, orchestrator, dashboard } = start();
 
     supervisor.shutdown('SIGTERM');
-    // buildShutdownHandler exits 1 when the drain itself rejects.
+    // buildShutdownHandler exits 1 when the drain itself rejects
     orchestrator.die(1);
     dashboard.die(0);
 
@@ -196,7 +196,7 @@ describe('startSupervisor', () => {
       });
 
       // The point of the ordering: both children open an already-migrated
-      // database, so neither races the other through `CREATE TABLE`.
+      // database, so neither races the other through `CREATE TABLE`
       expect(order).toEqual(['prepare', 'spawn', 'spawn']);
       expect(children).toHaveLength(2);
     });
@@ -231,7 +231,7 @@ describe('startSupervisor', () => {
       ).toThrow('EINVAL');
 
       // The orchestrator was live when the dashboard failed to launch; the
-      // caller gets the error, but not a process nobody is supervising.
+      // caller gets the error, but not a process nobody is supervising
       const [orchestrator] = children;
       expect(orchestrator?.signals).toEqual(['SIGTERM']);
     });
@@ -252,7 +252,7 @@ describe('startSupervisor', () => {
 
     it('settles even when no exit ever follows it', async () => {
       // Node does not promise an 'exit' after an 'error'. If this promise
-      // stayed pending, `yarn serve` would hang with the other half live.
+      // stayed pending, `yarn serve` would hang with the other half live
       const { supervisor, orchestrator, dashboard } = start();
 
       orchestrator.emit('error', new Error('spawn EACCES'));

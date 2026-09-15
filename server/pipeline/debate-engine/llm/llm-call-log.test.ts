@@ -48,7 +48,7 @@ describe('llm_call_log capture', () => {
   it('does not capture unless the seam is switched on', () => {
     // The constructor default. Every test double and backtest construction of
     // this class gets this, so turning capture on is a deployment decision
-    // taken once at the composition root and nowhere else.
+    // taken once at the composition root and nowhere else
     const db = openSharedStore(':memory:');
     new SqliteLlmSpendStore(db).record(ENTRY);
 
@@ -68,7 +68,7 @@ describe('llm_call_log capture', () => {
     expect(row?.debate_id).toBe('debate-1');
     expect(row?.model).toBe('anthropic/claude-haiku-4.5');
 
-    // The join that makes the text and the numbers one record.
+    // The join that makes the text and the numbers one record
     const spendId = (db.prepare('SELECT id FROM llm_spend').get() as { id: number }).id;
     expect(row?.spend_id).toBe(spendId);
   });
@@ -92,13 +92,13 @@ describe('llm_call_log capture', () => {
 
     const [row] = callRows(db);
     expect(row?.prompt).toContain('(truncated, 20000 chars total)');
-    // A truncated capture must never read as a short prompt.
+    // A truncated capture must never read as a short prompt
     expect(row?.prompt?.length).toBeLessThan(huge.length);
   });
 
   it('writes no row when the record carries no text at all', () => {
     // A caller that meters but has nothing to capture (a client that does not
-    // supply the strings) leaves no empty rows behind.
+    // supply the strings) leaves no empty rows behind
     const db = openSharedStore(':memory:');
     const { prompt: _p, response: _r, ...noText } = ENTRY;
     new SqliteLlmSpendStore(db, undefined, true).record(noText);
@@ -115,7 +115,7 @@ describe('llm_call_log capture', () => {
     expect(line?.stage).toBe('debate');
     expect(line?.trace_id).toBe('trace-1');
     // Timing comes from the call's own measurement, not a second clock read
-    // here, so the line cannot disagree with the row beside it.
+    // here, so the line cannot disagree with the row beside it
     expect(line?.started_at).toBe(NOW.toISOString());
     expect(line?.duration_ms).toBe(3_200);
 
@@ -140,7 +140,7 @@ describe('llm_call_log capture', () => {
     // from the dashboard spend total — false, and it sends them to look at the
     // meter instead of at the table that actually failed. So this asserts the
     // capture message is present AND the spend message is absent; asserting
-    // only "some warn was logged" passes under the bug too.
+    // only "some warn was logged" passes under the bug too
     const db = openSharedStore(':memory:');
     db.prepare('DROP TABLE llm_call_log').run();
     const lines: LogEntry[] = [];

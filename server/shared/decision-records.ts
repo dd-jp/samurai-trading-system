@@ -74,7 +74,7 @@ export interface TraderDecisionRecord {
     non_converged_haircut: number;
     cosine_multiplier: number;
   } | null;
-  /** What the cosine retrieval returned — the input that moved `cosine_multiplier`. */
+  /** What the cosine retrieval returned — the input that moved `cosine_multiplier` */
   cosine_precedent: {
     neighbor_count: number;
     weighted_mean_r: number | null;
@@ -104,7 +104,7 @@ export interface RiskDecisionRecord {
   original_size: number | null;
   final_size: number | null;
   stop_tightened: boolean;
-  /** Breaker state as EVALUATED, not as it stands now. */
+  /** Breaker state as EVALUATED, not as it stands now */
   breakers: {
     portfolio_tripped: boolean;
     crypto_tripped: boolean;
@@ -138,11 +138,11 @@ export interface RiskDecisionRecord {
 }
 
 export interface TraderLogStore {
-  /** Append-only, first-write-wins on `(trace_id, instrument)`. */
+  /** Append-only, first-write-wins on `(trace_id, instrument)` */
   write(record: TraderDecisionRecord): void;
 }
 
 export interface RiskLogStore {
-  /** Append-only, first-write-wins on `(trace_id, instrument)`. */
+  /** Append-only, first-write-wins on `(trace_id, instrument)` */
   write(record: RiskDecisionRecord): void;
 }

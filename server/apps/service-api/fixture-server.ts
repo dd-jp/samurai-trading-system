@@ -103,7 +103,7 @@ const E2E_VERDICTS: VerdictAuditEntry[] = [
     status: 'no_go',
     reason: 'risk_correlation',
     hitl_override: true,
-    // The ETH lane's Verdict row, to the second.
+    // The ETH lane's Verdict row, to the second
     timestamp: fixtureVerdictTime(112),
   },
   {
@@ -112,12 +112,12 @@ const E2E_VERDICTS: VerdictAuditEntry[] = [
     status: 'go',
     reason: 'approved',
     hitl_override: false,
-    // The BTC lane's Execution row is 170s old; its verdict is the row before it.
+    // The BTC lane's Execution row is 170s old; its verdict is the row before it
     timestamp: fixtureVerdictTime(172),
   },
 ];
 
-/** The fixture store, with its verdict history joined to the pipeline fixtures. */
+/** The fixture store, with its verdict history joined to the pipeline fixtures */
 class E2eFixtureStore extends InMemoryQueryStore {
   override getVerdictHistory(limit: number, _asOf: Date, _arm: TradingArm): VerdictAuditEntry[] {
     return E2E_VERDICTS.slice(0, limit);
@@ -175,14 +175,14 @@ const server = createDashboardServer({
   // structurally (`bind-guard.ts`), so this harness inherits the identical
   // fail-closed behaviour for free rather than needing its own copy — there
   // is no reason a Playwright run should be able to publish a fake book to
-  // the LAN unauthenticated when the real dashboard cannot.
+  // the LAN unauthenticated when the real dashboard cannot
   host: process.env.HOST ?? '127.0.0.1',
   store: new E2eFixtureStore(),
   // Same module-relative resolution as `index.ts`: this file is
   // `dist/server/apps/service-api/fixture-server.js` in the only form
   // Playwright runs it, so three levels up is `dist/` and the built bundle is
   // `dist/client/`. Must stay in step with `index.ts` — they resolve the same
-  // directory from the same depth, and only the e2e run exercises this one.
+  // directory from the same depth, and only the e2e run exercises this one
   bundleRoot: fileURLToPath(new URL('../../../client/', import.meta.url)),
   mode,
   providers,

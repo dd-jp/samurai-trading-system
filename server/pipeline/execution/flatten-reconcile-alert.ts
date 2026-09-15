@@ -45,7 +45,7 @@
  * it stays within the same "sanitized, never raw" guarantee.
  */
 
-/** One `flatten_submissions` row `reconcile()` could not settle this pass. */
+/** One `flatten_submissions` row `reconcile()` could not settle this pass */
 export interface FlattenReconcileAlert {
   /**
    * The `ExecutionInput.trace_id` of the Execution SURFACE this pass ran on,
@@ -97,10 +97,10 @@ export interface FlattenReconcileAlert {
    * live one at a real venue.
    */
   trace_id: string;
-  /** The flatten's own `flatten_submissions.idempotency_key` (its `client_order_id`). */
+  /** The flatten's own `flatten_submissions.idempotency_key` (its `client_order_id`) */
   idempotency_key: string;
   instrument: string;
-  /** Why it could not be settled — the adapter's own (sanitized) error, or the venue's contradiction. */
+  /** Why it could not be settled — the adapter's own (sanitized) error, or the venue's contradiction */
   reason: string;
   observed_at: Date;
 }

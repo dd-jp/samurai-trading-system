@@ -26,7 +26,7 @@
  * text or response body reaches it.
  */
 export interface DormantLegsUnresolvedAlert {
-  /** The bracket's own `client_order_id`. */
+  /** The bracket's own `client_order_id` */
   client_order_id: string;
   instrument: string;
   /**
@@ -36,7 +36,7 @@ export interface DormantLegsUnresolvedAlert {
    * consecutive-poll count (`DORMANT_DEFER_ALERT_AFTER`), and the repeat
    * that follows is a separate wall-clock interval
    * (`DORMANT_DEFER_ALERT_REPEAT_EVERY_MS`) measured from the previous
-   * alert, not from `firstObservedAt`; see `escalateIfStale`.
+   * alert, not from `firstObservedAt`; see `escalateIfStale`
    */
   stuck_ms: number;
   observed_at: Date;

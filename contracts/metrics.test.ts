@@ -18,7 +18,7 @@ describe('toProfitFactorWire', () => {
   it('is a finite ratio of 0 for a window with no closed trades at all (wins === 0 && losses === 0)', () => {
     // `profitFactor()` (sqlite-query-store.ts) returns 0 for this case, not
     // `NaN` — it must keep reading as a real, finite 0, not collapse into
-    // `no_losses` or `unreadable`.
+    // `no_losses` or `unreadable`
     expect(toProfitFactorWire(0)).toEqual({ kind: 'ratio', value: 0 });
   });
 
@@ -34,7 +34,7 @@ describe('toProfitFactorWire', () => {
   it('survives JSON.stringify -> JSON.parse for every case, unlike the bare number it replaces', () => {
     // The bug this ticket fixes: `JSON.stringify(Number.POSITIVE_INFINITY)`
     // is the string `'null'`. Prove the wrapped form does not take that
-    // route for any of the three states.
+    // route for any of the three states
     for (const input of [2.5, 0, Number.POSITIVE_INFINITY, Number.NaN, Number.NEGATIVE_INFINITY]) {
       const wire = toProfitFactorWire(input);
       const roundTripped: unknown = JSON.parse(JSON.stringify(wire));

@@ -46,7 +46,7 @@ describe('dashboard server — serveStatic rejection handler guard (#1355)', () 
     // `respondNotFound`, whose `bundleDiagnostic` call is where the mocked
     // `join` throws — before `respondNotFound`'s own `writeHead` runs, so
     // `res.headersSent` is still false when the throw reaches the outer
-    // `.catch()` and the vulnerable render is what actually executes.
+    // `.catch()` and the vulnerable render is what actually executes
     parent = await mkdtemp(join(tmpdir(), 'samurai-dashboard-hostile-static-'));
     const bundleRoot = join(parent, 'client');
     server = createDashboardServer({
@@ -75,7 +75,7 @@ describe('dashboard server — serveStatic rejection handler guard (#1355)', () 
       // evaluating `.end`'s argument that throws, so `.end()` is never
       // reached and nothing flushes to the socket. The request hangs the
       // same way `:303` does, and the primary assertion below must still run
-      // instead of the whole test failing on the fetch alone.
+      // instead of the whole test failing on the fetch alone
       const result = await fetch(`${server.url}/`, {
         cache: 'no-store',
         signal: AbortSignal.timeout(2_000),
@@ -99,19 +99,19 @@ describe('dashboard server — serveStatic rejection handler guard (#1355)', () 
       // own 2s abort). By the time `result` exists, the rejection (if any)
       // has already fired. This flushes exactly one deferred macrotask —
       // not a magnitude-tuned duration — so any check still queued behind
-      // it runs before the assertion.
+      // it runs before the assertion
       await new Promise((resolve) => setImmediate(resolve));
 
       // Asserted first, and unconditionally: this is the property #1355
       // is actually about. A red run without the guard fails right here
       // with the captured hostile error, before either assertion below
-      // ever runs.
+      // ever runs
       expect(unhandled).toEqual([]);
       // Asserted second, and NOT hidden behind `if (result.completed)`:
       // green must prove the guarded render actually fired and answered
       // the request, not merely that nothing threw. If the mock ever stops
       // matching `bundleDiagnostic`'s call (e.g. that call stops using
-      // `join`), this line — not a silently-skipped block — is what fails.
+      // `join`), this line — not a silently-skipped block — is what fails
       expect(result.completed).toBe(true);
       if (result.completed) {
         expect(result.status).toBe(500);

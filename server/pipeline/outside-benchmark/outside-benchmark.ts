@@ -98,7 +98,7 @@ export const BENCHMARK_COMPOSITION: Record<OutsideBenchmarkId, readonly Benchmar
   ],
 };
 
-/** One daily observation of a benchmark leg — the close and when it closed. */
+/** One daily observation of a benchmark leg — the close and when it closed */
 export interface BenchmarkObservation {
   close_time: Date;
   close: number;
@@ -141,9 +141,9 @@ export interface OutsideBenchmarkPerformance {
   observation_count: number;
 }
 
-/** One benchmark, measured over the matched control's own window. */
+/** One benchmark, measured over the matched control's own window */
 export interface OutsideBenchmarkSample {
-  /** The FL cycle instant, read through the injected `Clock`. */
+  /** The FL cycle instant, read through the injected `Clock` */
   computed_at: Date;
   /**
    * The window, copied from the `ArmComparison` this benchmark accompanies —
@@ -217,7 +217,7 @@ export function buildOutsideBenchmark(input: {
   }
 
   // Per leg: the anchor close (last at or before `from`) and the in-window
-  // closes, keyed by close time so the legs can be intersected below.
+  // closes, keyed by close time so the legs can be intersected below
   const perLeg = input.legs.map(({ leg, observations }) => {
     const sorted = [...observations].sort(
       (a, b) => a.close_time.getTime() - b.close_time.getTime(),
@@ -258,7 +258,7 @@ export function buildOutsideBenchmark(input: {
   // The legs are intersected on close time before blending. SPY and AGG share
   // the US equity calendar so this is normally a no-op — but a vendor gap in ONE
   // leg must not silently become a day on which the blend was 60% invested. A
-  // day either has every leg's close or it is not a day of this benchmark.
+  // day either has every leg's close or it is not a day of this benchmark
   const perLegTimes = perLeg.map(
     (entry) => new Set(entry.inWindow.map((o) => o.close_time.getTime())),
   );
@@ -275,7 +275,7 @@ export function buildOutsideBenchmark(input: {
   // The blended index, seeded at 1 on the anchor. Each step is the
   // weighted sum of the legs' SIMPLE daily returns — which is what
   // "daily-rebalanced fixed weight" means: the weights are restored to
-  // BENCHMARK_COMPOSITION every day rather than drifting with performance.
+  // BENCHMARK_COMPOSITION every day rather than drifting with performance
   let index = 1;
   let peak = 1;
   let maxDrawdown = 0;
@@ -289,7 +289,7 @@ export function buildOutsideBenchmark(input: {
       // close times, so each leg has this observation by construction. Kept as
       // a `continue` rather than a throw: the narrowing is what `find`'s type
       // requires, and skipping a leg cannot produce a wrong number here since
-      // the branch is unreachable.
+      // the branch is unreachable
       if (observation === undefined) continue;
       const previous = previousClose.get(entry.leg.instrument) ?? observation.close;
       blendedReturn += entry.leg.weight * (observation.close / previous - 1);
@@ -299,7 +299,7 @@ export function buildOutsideBenchmark(input: {
     index *= 1 + blendedReturn;
     if (index > peak) peak = index;
     // Drawdown is RELATIVE to the running peak, not to the seed: a benchmark
-    // that doubled and then halved fell 50%, not 0%.
+    // that doubled and then halved fell 50%, not 0%
     const drawdown = (peak - index) / peak;
     if (drawdown > maxDrawdown) maxDrawdown = drawdown;
   }

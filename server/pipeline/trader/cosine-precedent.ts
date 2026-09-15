@@ -8,23 +8,23 @@
  */
 import type { SetupNeighbor, SetupStore, SetupVector } from '../../shared/index.js';
 
-/** Nearest neighbors considered, after the similarity threshold filter. */
+/** Nearest neighbors considered, after the similarity threshold filter */
 export const K_NEIGHBORS = 5;
 
-/** Minimum cosine similarity for a past setup to count as a precedent. */
+/** Minimum cosine similarity for a past setup to count as a precedent */
 export const MIN_SIMILARITY_THRESHOLD = 0.75;
 
-/** Fewer qualifying neighbors than this triggers the no-precedent default. */
+/** Fewer qualifying neighbors than this triggers the no-precedent default */
 export const MIN_NEIGHBOR_COUNT = 1;
 
-/** 0.75x default when there is no close neighbor (trader-spec story 15). */
+/** 0.75x default when there is no close neighbor (trader-spec story 15) */
 export const NO_PRECEDENT_MULTIPLIER = 0.75;
 
-/** Bounded multiplier range (trader-spec story 14). */
+/** Bounded multiplier range (trader-spec story 14) */
 export const MIN_MULTIPLIER = 0.5;
 export const MAX_MULTIPLIER = 1.5;
 
-/** Weighted-mean-R magnitude at which the multiplier saturates to the bound. */
+/** Weighted-mean-R magnitude at which the multiplier saturates to the bound */
 export const R_SATURATION = 2;
 
 export interface CosinePrecedentResult {
@@ -34,7 +34,7 @@ export interface CosinePrecedentResult {
   no_precedent: boolean;
 }
 
-/** Cosine similarity of two equal-length vectors; 0 if either is a zero vector. */
+/** Cosine similarity of two equal-length vectors; 0 if either is a zero vector */
 export function cosineSimilarity(a: number[], b: number[]): number {
   if (a.length !== b.length) {
     throw new Error('cosineSimilarity: vector length mismatch');
@@ -66,7 +66,7 @@ function toFlatVector(vector: SetupVector): number[] {
  * Maps the similarity-weighted mean R of the retrieved neighbors to a
  * bounded multiplier: 0 -> 1.0x, saturating to MIN/MAX_MULTIPLIER at
  * +-R_SATURATION (trader-spec: "positive -> up, negative -> down, near-zero
- * -> 1.0x").
+ * -> 1.0x")
  */
 function rToMultiplier(weightedMeanR: number): number {
   const midpoint = (MIN_MULTIPLIER + MAX_MULTIPLIER) / 2;

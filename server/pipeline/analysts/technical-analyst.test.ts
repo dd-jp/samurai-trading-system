@@ -65,10 +65,10 @@ const CONTEXT_INTERVAL_MS = 60 * 60 * 1000;
  * fixture running thin, not a collapse defect. 70 leaves margin.
  */
 const BAR_COUNT = 70;
-/** Matches the analyst's own `CONTEXT_CANDLE_LOOKBACK` (20); any count > 0 exercises the real path. */
+/** Matches the analyst's own `CONTEXT_CANDLE_LOOKBACK` (20); any count > 0 exercises the real path */
 const CONTEXT_BAR_COUNT = 20;
 
-/** A steady uptrend so SMA/RSI produce a non-neutral, deterministic reading. */
+/** A steady uptrend so SMA/RSI produce a non-neutral, deterministic reading */
 function buildBars(): Bar[] {
   const bars: Bar[] = [];
   const start = new Date('2026-07-14T00:00:00Z').getTime();
@@ -91,7 +91,7 @@ function buildBars(): Bar[] {
   return bars;
 }
 
-/** 1h context bars — populated by default so the ordinary test path exercises the real (non-degraded) context read. */
+/** 1h context bars — populated by default so the ordinary test path exercises the real (non-degraded) context read */
 function buildContextBars(): Bar[] {
   const bars: Bar[] = [];
   const start = new Date('2026-07-10T00:00:00Z').getTime();
@@ -128,7 +128,7 @@ function buildInput(
   // is incidental, and asOf must sit at/after the LATEST bar of whichever
   // series the caller cares about driving to completion. The 5m series is
   // always the later-dated one in this file's fixtures, so this also covers
-  // (>=) any 1h bars present.
+  // (>=) any 1h bars present
   const fiveMinuteBars = bars.filter((bar) => bar.timeframe === TIMEFRAME);
   const asOf = (fiveMinuteBars.at(-1) ?? bars.at(-1))?.close_time as Date;
   const clock = new ManualClock(asOf);
@@ -212,7 +212,7 @@ describe('technicalAnalyst', () => {
 
     // Exact match, not `.startsWith` — a fabricated midnight-UTC-anchored
     // number dressed as a reading would still start with "Session VWAP (5m):"
-    // and only an exact-string check catches it appending anything numeric.
+    // and only an exact-string check catches it appending anything numeric
     expect(view.key_points).toContain('Session VWAP (5m): no session to anchor to');
     expect(view.key_points.filter((line) => line.startsWith('Session VWAP (5m):'))).toHaveLength(1);
   });
@@ -233,7 +233,7 @@ describe('technicalAnalyst', () => {
   it('reports real avg volume for the 1h context read by default (#742)', async () => {
     // BARS includes both the '5m' technical series and a populated '1h'
     // context series (buildContextBars) — this is the ordinary production
-    // shape, not the degraded no-context path below.
+    // shape, not the degraded no-context path below
     const view = await technicalAnalyst.run(buildInput(signal, 'trace-1'));
 
     const contextLine = view.key_points.find((line) => line.startsWith('Context (1h):'));
@@ -247,7 +247,7 @@ describe('technicalAnalyst', () => {
     // reported a fabricated 'avg volume 0' — a false claim about the tape,
     // the same fabrication class #319 made `computeIndicator` throw on
     // instead of silently answering. It must degrade the prose only, never
-    // invent a number.
+    // invent a number
     const fiveMinuteOnly = buildBars();
     const view = await technicalAnalyst.run(buildInput(signal, 'trace-1', fiveMinuteOnly));
 
@@ -312,14 +312,14 @@ describe('technicalAnalyst', () => {
     // asserting the floor's value after the live spec moved to 57). Only
     // `params.period` reaches the arithmetic, so passing all 20 fixture bars
     // with a 57-bar spec computes exactly what the analyst computed from the
-    // 20 the fixture source could serve.
+    // 20 the fixture source could serve
     const honest = computeIndicator(ZIGZAG, RSI_SPEC);
     // The nearest computable stand-in for what it used to report. The exact
     // old value — 13 changes divided by 14 — is no longer expressible: the
     // guard is what stops `computeIndicator` producing it. An honest RSI(13)
     // over the same 14-bar window is the same WIDTH of history, and it
     // differs, which is what makes the assertion above evidence rather than a
-    // coincidence: the analyst could not have printed `honest` off 14 bars.
+    // coincidence: the analyst could not have printed `honest` off 14 bars
     const narrower = computeIndicator(ZIGZAG.slice(-14), {
       indicator: 'rsi',
       params: { period: 13 },
@@ -329,8 +329,8 @@ describe('technicalAnalyst', () => {
 
     expect(honest).not.toBeCloseTo(narrower, 6);
     // #745 renders the RSI inside the MOMENTUM axis line, already interpreted
-    // (the band is computed here, never explained to the model in the prompt).
-    // The number itself is what this test is about and it is unchanged.
+    // (the band is computed here, never explained to the model in the prompt)
+    // The number itself is what this test is about and it is unchanged
     const momentum = view.key_points.find((line) => line.startsWith('Momentum (5m):'));
     expect(momentum).toContain(`RSI(14) ${honest}`);
   });
@@ -338,7 +338,7 @@ describe('technicalAnalyst', () => {
   it('rejects rather than reporting an RSI(14) it has only 14 bars for (#319)', async () => {
     // The fail-loud posture at the analyst boundary. A cold instrument gets
     // no view at all rather than a plausible-looking number that a debate
-    // would then weigh as if it meant something.
+    // would then weigh as if it meant something
     await expect(
       technicalAnalyst.run(buildInput(signal, 'trace-1', ZIGZAG.slice(0, 14))),
     ).rejects.toThrow(InsufficientBarsError);
@@ -384,7 +384,7 @@ describe('technicalAnalyst', () => {
     // RSI at the midline, no participating volume, Donchian mid-range), so
     // `|net| / availableAxes` is 0 — and the volatility gate caps on top,
     // because a flat tape has ADX 0. The analyst stays present in the debate
-    // (technical is `mandatory`) and argues at zero strength.
+    // (technical is `mandatory`) and argues at zero strength
     expect(view.confidence).toBe(0);
     expect(view.direction).toBe('neutral');
     expect(view.key_points.some((line) => line.includes('confidence capped at 0.4'))).toBe(true);
@@ -477,7 +477,7 @@ describe('technicalAnalyst — bounded 5m bar fetches per instrument per tick (#
   function buildLiveInput(signal: Signal): { input: AnalystInput; counting: CountingDataSource } {
     // See the comment on the same pattern in `buildInput` above: LIVE_BARS
     // interleaves the '5m' and '1h' series, so asOf must be derived from the
-    // '5m' series specifically, not the array's incidental last element.
+    // '5m' series specifically, not the array's incidental last element
     const asOf = LIVE_BARS.filter((bar) => bar.timeframe === TIMEFRAME).at(-1)?.close_time as Date;
     const clock = new ManualClock(asOf);
     const counting = new CountingDataSource(
@@ -545,7 +545,7 @@ describe('technicalAnalyst — bounded 5m bar fetches per instrument per tick (#
     // guard would miss, and the collapse above would silently degrade to six
     // fetches rather than fail loud — this pins the invariant that prevents
     // that. Every #745 spec is listed, not just the widest, so adding a spec
-    // without adding it here is the only way to slip past.
+    // without adding it here is the only way to slip past
     for (const spec of [
       SMA_SPEC,
       RSI_SPEC,

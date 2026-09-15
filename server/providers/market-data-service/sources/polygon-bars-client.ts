@@ -82,15 +82,15 @@ const DEFAULT_TIMEOUT_MS = 10_000;
  * watchlist ships and replaces it.
  */
 const DEFAULT_RETRY_CONFIG: RetryConfig = { maxAttempts: 2, baseDelayMs: 500, maxDelayMs: 2_000 };
-/** Comfortably above anything this client's small `limit`s (20/30) could return in one page. */
+/** Comfortably above anything this client's small `limit`s (20/30) could return in one page */
 const PAGE_LIMIT = 50_000;
-/** Headroom over the requested `limit` — a short read is returned as-is, not retried. */
+/** Headroom over the requested `limit` — a short read is returned as-is, not retried */
 const REQUEST_BUFFER_MULTIPLIER = 2;
 /**
  * Small-`limit` DAILY requests still need a few calendar days of headroom to
  * cross a weekend; gated to `isDailyTimeframe` — same split
  * `AlpacaHttpDataClient.getBars` uses for its own `minBufferMs` — so an
- * intraday (`1h`) request isn't forced to search 4 days it does not need.
+ * intraday (`1h`) request isn't forced to search 4 days it does not need
  */
 const MIN_DAILY_BUFFER_MS = 4 * 86_400_000;
 
@@ -107,12 +107,12 @@ interface PolygonAggregatesResponse {
   results?: unknown;
 }
 
-/** `typeof x === 'number'` narrowed further to exclude `NaN`/`Infinity` — a vendor can send either on the wire. */
+/** `typeof x === 'number'` narrowed further to exclude `NaN`/`Infinity` — a vendor can send either on the wire */
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
-/** Same shape guard as `HttpPolygonClient`'s `validateRawPolygonAggregate` (issue #509 precedent) — no unvalidated field rides into a `Bar`. */
+/** Same shape guard as `HttpPolygonClient`'s `validateRawPolygonAggregate` (issue #509 precedent) — no unvalidated field rides into a `Bar` */
 function validateRawPolygonAggregate(raw: unknown, symbol: string): RawPolygonAggregate {
   if (typeof raw === 'object' && raw !== null) {
     const { t, o, h, l, c, v } = raw as Record<string, unknown>;
@@ -132,7 +132,7 @@ function validateRawPolygonAggregate(raw: unknown, symbol: string): RawPolygonAg
   );
 }
 
-/** `'1h'` -> `{multiplier: 1, timespan: 'hour'}`, `'1d'` -> `{multiplier: 1, timespan: 'day'}` — Polygon's `/range/{multiplier}/{timespan}/...` vocabulary. */
+/** `'1h'` -> `{multiplier: 1, timespan: 'hour'}`, `'1d'` -> `{multiplier: 1, timespan: 'day'}` — Polygon's `/range/{multiplier}/{timespan}/...` vocabulary */
 export function toPolygonRange(timeframe: string): { multiplier: number; timespan: string } {
   const match = /^(\d+)([mhd])$/.exec(timeframe);
   if (!match) {
@@ -144,7 +144,7 @@ export function toPolygonRange(timeframe: string): { multiplier: number; timespa
   return { multiplier: Number(countText!), timespan };
 }
 
-/** `YYYY-MM-DD`, per Polygon's `from`/`to` path-param format (matches `HttpPolygonClient`'s `toPolygonDate`). */
+/** `YYYY-MM-DD`, per Polygon's `from`/`to` path-param format (matches `HttpPolygonClient`'s `toPolygonDate`) */
 function toPolygonDate(date: Date): string {
   return date.toISOString().split('T')[0] as string;
 }
@@ -152,12 +152,12 @@ function toPolygonDate(date: Date): string {
 export interface PolygonBarsClientOptions {
   /** Defaults to `process.env.POLYGON_API_KEY`. Never logged or thrown into an error message. */
   apiKey?: string;
-  /** Defaults to `https://api.polygon.io`. */
+  /** Defaults to `https://api.polygon.io` */
   baseUrl?: string;
   timeoutMs?: number;
-  /** Paced via `resolvePolygonPacing()` at the call site — never a bespoke sleep, same as `HttpPolygonClient`. */
+  /** Paced via `resolvePolygonPacing()` at the call site — never a bespoke sleep, same as `HttpPolygonClient` */
   rateLimiter?: TokenBucket | undefined;
-  /** Defaults to `DEFAULT_RETRY_CONFIG` — see its doc comment for why this client retries less than the other transport clients. */
+  /** Defaults to `DEFAULT_RETRY_CONFIG` — see its doc comment for why this client retries less than the other transport clients */
   retry?: RetryConfig;
 }
 
@@ -214,7 +214,7 @@ export class PolygonBarsClient {
     // before it (#391 precedent, `AlpacaHttpDataClient.requestJson`): a
     // retried attempt is a second request against the same account-wide
     // budget, and pacing only the first attempt would let a retry burst
-    // through the bucket.
+    // through the bucket
     const response = await withRetry(
       async () => {
         await this.rateLimiter?.acquireBackground();

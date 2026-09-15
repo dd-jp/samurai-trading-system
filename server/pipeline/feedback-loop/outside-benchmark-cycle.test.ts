@@ -20,7 +20,7 @@ import type { OutsideBenchmarkCycleInput } from './types/outside-benchmark.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const NOW = new Date('2026-09-01T12:00:00.000Z');
-/** Deliberately NOT `NOW - 30d`: the cycle must copy this, not recompute it. */
+/** Deliberately NOT `NOW - 30d`: the cycle must copy this, not recompute it */
 const WINDOW_FROM = new Date('2026-08-05T09:15:00.000Z');
 const WINDOW_TO = new Date('2026-08-31T20:00:00.000Z');
 
@@ -50,7 +50,7 @@ const COMPARISON: ArmComparison = {
 
 const clock = { now: () => NOW };
 
-/** Records the windows it was asked for, so the test can assert on them. */
+/** Records the windows it was asked for, so the test can assert on them */
 class RecordingSeriesSource implements BenchmarkSeriesSource {
   readonly calls: { instrument: string; from: Date; to: Date }[] = [];
 
@@ -104,7 +104,7 @@ describe('runOutsideBenchmarkCycle — the window is the matched control’s', (
     for (const sample of result.measured) {
       expect(sample.from).toEqual(WINDOW_FROM);
       expect(sample.to).toEqual(WINDOW_TO);
-      // The cycle instant is the clock's, and is distinct from the window end.
+      // The cycle instant is the clock's, and is distinct from the window end
       expect(sample.computed_at).toEqual(NOW);
       expect(sample.to.getTime()).not.toBe(sample.computed_at.getTime());
     }
@@ -113,7 +113,7 @@ describe('runOutsideBenchmarkCycle — the window is the matched control’s', (
   it('has no window parameter of its own to get wrong', () => {
     // A structural claim, checked as one: `OutsideBenchmarkCycleInput` carries
     // no `window_ms`. If one is ever added, a benchmark can be measured over a
-    // period the arms were not, which is the exact defect #636 rules out.
+    // period the arms were not, which is the exact defect #636 rules out
     const input: OutsideBenchmarkCycleInput = {
       clock,
       comparison: COMPARISON,
@@ -122,7 +122,7 @@ describe('runOutsideBenchmarkCycle — the window is the matched control’s', (
       // @ts-expect-error there is no `window_ms` on this input, by design. The
       // window comes from `comparison`, so a benchmark cannot be measured over
       // a period the arms were not — #636's exact-window condition, made
-      // unrepresentable rather than merely documented.
+      // unrepresentable rather than merely documented
       window_ms: 30 * DAY,
     };
     expect(input).toBeTruthy();
@@ -145,7 +145,7 @@ describe('runOutsideBenchmarkCycle — measures and persists both benchmarks', (
     const persisted = samples.getRecent(10, NOW);
     expect(persisted).toHaveLength(2);
     for (const sample of persisted) {
-      // Both columns present on every persisted benchmark — D4.
+      // Both columns present on every persisted benchmark — D4
       expect(typeof sample.performance.buy_and_hold_return_pct).toBe('number');
       expect(typeof sample.performance.max_drawdown_pct).toBe('number');
       expect(sample.performance.observation_count).toBe(2);
@@ -153,7 +153,7 @@ describe('runOutsideBenchmarkCycle — measures and persists both benchmarks', (
 
     // SPY fell 10% from its peak; the 60/40 blend, being 40% in a flat bond
     // leg, fell less. The benchmark that is measured is the blend, not SPY
-    // scaled — so these must differ.
+    // scaled — so these must differ
     const spy = persisted.find((s) => s.performance.benchmark === 'spy');
     const blend = persisted.find((s) => s.performance.benchmark === 'sixty_forty');
     expect(spy?.performance.max_drawdown_pct ?? 0).toBeGreaterThan(
@@ -172,7 +172,7 @@ describe('runOutsideBenchmarkCycle — measures and persists both benchmarks', (
     // Even a benchmark that massively out-performs both arms produces no
     // verdict and wakes nobody: there is no threshold, no `diverged` field and
     // no alert channel on this cycle at all. An outside benchmark is context,
-    // never a falsifying result (CLAUDE.md; ADR-0014 amendment 2; ADR-0017).
+    // never a falsifying result (CLAUDE.md; ADR-0014 amendment 2; ADR-0017)
     for (const sample of result.measured) {
       expect('diverged' in sample).toBe(false);
       expect('divergence' in sample).toBe(false);
@@ -194,12 +194,12 @@ describe('runOutsideBenchmarkCycle — unmeasurable is absent, never fabricated'
 
     // Both benchmarks depend on SPY, so both are unmeasured — and NEITHER is
     // written as a zero-return row. An absent row means "not measured"; a
-    // zero row would be a fabricated benchmark on the operator's panel.
+    // zero row would be a fabricated benchmark on the operator's panel
     expect(samples.getRecent(10, NOW)).toEqual([]);
     expect(result.measured).toEqual([]);
     expect(result.unmeasured.map((u) => u.benchmark)).toEqual(['spy', 'sixty_forty']);
     // The reason travels back for the caller to log: absence from persistence,
-    // presence in the log, so "the vendor 429'd" and "FL never ran" differ.
+    // presence in the log, so "the vendor 429'd" and "FL never ran" differ
     for (const unmeasured of result.unmeasured) {
       expect(unmeasured.reason).toMatch(/vendor 429/);
     }
@@ -211,7 +211,7 @@ describe('runOutsideBenchmarkCycle — unmeasurable is absent, never fabricated'
       clock,
       comparison: COMPARISON,
       // AGG is missing, so 60/40 cannot be built — but SPY is intact and its
-      // reading is still owed to the operator.
+      // reading is still owed to the operator
       series: new RecordingSeriesSource({
         SPY: series([100, 105]),
         AGG: new Error('no bars for AGG'),

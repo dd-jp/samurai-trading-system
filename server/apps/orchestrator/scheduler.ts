@@ -113,7 +113,7 @@ export const DEFAULT_UNIVERSE: readonly UniverseInstrument[] = [
 
 export interface SchedulerConfig {
   universe: readonly UniverseInstrument[];
-  /** Gates every instrument in `universe`, regardless of `asset_class`. */
+  /** Gates every instrument in `universe`, regardless of `asset_class` */
   calendar: TradingCalendar;
   /**
    * An OPTIONAL narrowing of when equities are TICKED, on top of — never
@@ -179,16 +179,16 @@ export class UniverseScheduler implements Scheduler {
     const tickTime = clock.now();
     // Read once per tick, not per instrument: every stock in the plan must be
     // gated on the same instant, or a session boundary crossed mid-iteration
-    // would produce a plan that was never true at any single point in time.
+    // would produce a plan that was never true at any single point in time
     //
     // The window is read once for the same reason, and evaluated only when the
-    // calendar already says open — it narrows a session, it cannot open one.
+    // calendar already says open — it narrows a session, it cannot open one
     const marketOpen =
       this.config.calendar.isOpen(tickTime) &&
       (this.config.stocksTradingWindow?.(tickTime) ?? true);
     // #1389: OR'd, and read on the same `tickTime` for the same reason. The
     // grace runs when the venue is already shut, so it cannot be expressed as a
-    // narrowing of an open session.
+    // narrowing of an open session
     //
     // A tick admitted here can only CLOSE — the entry path consults
     // `withinFlattenWindow` too and returns `skip('session_closing')`. `grace_only`
@@ -198,25 +198,25 @@ export class UniverseScheduler implements Scheduler {
     // same as any other tick-path pass. Before #1499 the claim was unconditional,
     // and the US close at 20:00Z sits exactly on the 1h debate-bar grid, so the
     // first grace tick after it claimed a fresh bar and paid the full pass before
-    // the Trader skipped: ~1 extra decision bar/day, ≈+15% on the US paper leg.
+    // the Trader skipped: ~1 extra decision bar/day, ≈+15% on the US paper leg
     // The LSE leg was never exposed — its 15:30Z close floors into the 15:00 bar,
-    // so no LSE grace tick ever claimed a new one.
+    // so no LSE grace tick ever claimed a new one
     const inFlattenGrace = this.config.postCloseFlattenWindow?.(tickTime) ?? false;
 
     return {
       // No always-open exception for any asset_class (#738) — every
       // instrument in the universe is gated on the same calendar/window
-      // instant, or it does not appear in the plan.
+      // instant, or it does not appear in the plan
       instruments: marketOpen || inFlattenGrace ? [...this.config.universe] : [],
       tick_time: tickTime,
       // Absent, not `false` (`exactOptionalPropertyTypes`), whenever
       // `marketOpen` is true OR neither predicate admits — `marketOpen` alone
       // decides this, because a window tick takes precedence over the grace
       // when both would technically admit (they never do in practice:
-      // `postCloseFlattenTail` answers false while the venue is still open).
+      // `postCloseFlattenTail` answers false while the venue is still open)
       // Keyed on admission, not on `instruments.length`: a grace-admitted
       // tick over an EMPTY configured universe still carries `grace_only:
-      // true` alongside `instruments: []`.
+      // true` alongside `instruments: []`
       ...(marketOpen ? {} : inFlattenGrace ? { grace_only: true } : {}),
     };
   }

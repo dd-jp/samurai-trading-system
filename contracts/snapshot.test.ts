@@ -50,11 +50,11 @@ describe('contractVersionOf', () => {
     // non-deterministic (e.g. object key iteration order of a `Record`
     // rather than a fixed array) — every real client build and every real
     // server process must derive the exact same value from the exact same
-    // source for the comparison in `useSnapshot.ts` to mean anything.
+    // source for the comparison in `useSnapshot.ts` to mean anything
     // Re-derives CONTRACT_VERSION independently from the same field list
     // rather than comparing the constant to itself (a tautology that can
     // never fail) — this actually exercises `contractVersionOf` a second
-    // time against the real field list, not a hand-picked one.
+    // time against the real field list, not a hand-picked one
     expect(contractVersionOf(DASHBOARD_SNAPSHOT_FIELD_NAMES)).toBe(CONTRACT_VERSION);
     expect(typeof CONTRACT_VERSION).toBe('string');
     expect(CONTRACT_VERSION.length).toBeGreaterThan(0);

@@ -47,14 +47,14 @@ describe('llmCallLogMaxRowsFromEnvironment', () => {
     // `Number(' ')` is `0`. Without the trim-to-undefined rule a stray space
     // in a compose file would parse as a real, in-range ceiling of zero — the
     // near-miss documented on the file sink's identical setting (#349), which
-    // is why both now share one validator.
+    // is why both now share one validator
     expect(llmCallLogMaxRowsFromEnvironment('   ')).toBe(DEFAULT_MAX_LLM_CALL_ROWS);
     expect(llmCallLogMaxRowsFromEnvironment('')).toBe(DEFAULT_MAX_LLM_CALL_ROWS);
   });
 
   it('refuses a malformed value instead of defaulting', () => {
     // Fail-fast, deliberately: silently falling back would leave an operator
-    // believing they had set a retention policy they had not.
+    // believing they had set a retention policy they had not
     expect(() => llmCallLogMaxRowsFromEnvironment('lots')).toThrow(
       /SAMURAI_LLM_CALL_LOG_MAX_ROWS must be an integer/,
     );
@@ -66,14 +66,14 @@ describe('llmCallLogMaxRowsFromEnvironment', () => {
     // The one deliberate divergence from `SAMURAI_LOG_MAX_FILES`, where `0`
     // legally means "keep nothing". Here that intention is already spelled
     // `SAMURAI_LLM_CAPTURE=off`, and a zero ceiling would mean writing every
-    // prompt to disk purely to delete it on the next sweep.
+    // prompt to disk purely to delete it on the next sweep
     expect(() => llmCallLogMaxRowsFromEnvironment('0')).toThrow(/must be an integer >= 1/);
   });
 
   it('names the variable an operator has to fix', () => {
     expect(ENV_LLM_CALL_LOG_MAX_ROWS).toBe('SAMURAI_LLM_CALL_LOG_MAX_ROWS');
     // And the message points at THIS policy, not the log sink's — the reason
-    // the shared validator takes the purpose clause as an argument.
+    // the shared validator takes the purpose clause as an argument
     expect(() => llmCallLogMaxRowsFromEnvironment('nope')).toThrow(/row ceiling \(#1045\)/);
   });
 });
@@ -83,7 +83,7 @@ describe('the llm_call_log prune is spelled at the composition root, in full', (
 
   // Matched by regex, not exact string: the formatter is free to wrap a call
   // across lines, and a retention guard that fails on reformatting would be
-  // deleted by the first person it inconvenienced.
+  // deleted by the first person it inconvenienced
   //
   // The FULL known argument list is required, in order, rather than a lazy
   // `[\s\S]*?` scan from the function name to the trigger literal. A lazy
@@ -95,7 +95,7 @@ describe('the llm_call_log prune is spelled at the composition root, in full', (
   // this test stay green. Requiring the full parameter sequence, anchored on
   // `config.db` as the first argument, bounds the match to one statement and
   // nothing an unrelated later line can satisfy. Mirrors
-  // `mi-archive-retention.test.ts` (#1060).
+  // `mi-archive-retention.test.ts` (#1060)
   const callSite = (trigger: string): RegExp =>
     new RegExp(
       `pruneLlmCallLogWithLog\\(\\s*config\\.db,\\s*llmCallLogMaxRows,\\s*logger,\\s*'${trigger}',?\\s*\\)`,
@@ -105,7 +105,7 @@ describe('the llm_call_log prune is spelled at the composition root, in full', (
     // Startup alone fires once when the table is smallest and never again
     // during the unattended run the ceiling exists to bound; the daily sweep
     // alone leaves a restart-heavy loop pruning nothing. Both call sites are
-    // load-bearing, so both are asserted.
+    // load-bearing, so both are asserted
     expect(source).toMatch(callSite('startup'));
     expect(source).toMatch(callSite('daily'));
   });
@@ -115,15 +115,15 @@ describe('the llm_call_log prune is spelled at the composition root, in full', (
     // the prune bypass the sole-writer check silently and every other test here
     // would still pass — the exact shape this file exists to catch, one level
     // down. `llm_call_log` is the debate engine's table; the orchestrator runs
-    // the sweep but does not own the rows.
+    // the sweep but does not own the rows
     expect(source).toMatch(/pruneLlmCallLog\(\s*guardedStore\(db, 'debate-engine'\)/);
   });
 
   it('spells the daily prune ABOVE the feedback cycle try block', () => {
     // Inside it, a persistently throwing `runDailyCycle` would silently
     // disable retention as well: the catch would fire every day while the
-    // table grew forever and the log showed only a feedback failure.
-    // Housekeeping must not depend on unrelated work succeeding.
+    // table grew forever and the log showed only a feedback failure
+    // Housekeeping must not depend on unrelated work succeeding
     const cycleStart = source.indexOf('const runFeedbackCycle =');
     expect(cycleStart).toBeGreaterThan(-1);
 

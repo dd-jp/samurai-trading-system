@@ -50,7 +50,7 @@ import type { StoreHandle } from '../../shared/store/index.js';
 import { fromStoredTimestamp } from '../../shared/store/index.js';
 import type { Logger } from './types.js';
 
-/** One `verdict_log` `go` row with no corresponding `execution`-stage `audit_log` row. */
+/** One `verdict_log` `go` row with no corresponding `execution`-stage `audit_log` row */
 export interface OrphanGoVerdict {
   trace_id: string;
   idempotency_key: string;
@@ -58,9 +58,11 @@ export interface OrphanGoVerdict {
   verdict_timestamp: Date;
 }
 
-/** The notification surface this scan needs — a fire-and-forget alert, not an
+/**
+ * The notification surface this scan needs — a fire-and-forget alert, not an
  * approval round-trip (see `ApprovalChannel` in verdict/types.ts for that shape,
- * which does not fit here: there is nothing to approve or reject). */
+ * which does not fit here: there is nothing to approve or reject)
+ */
 export interface OrphanAlertChannel {
   postOrphanAlert(orphan: OrphanGoVerdict): Promise<void>;
 }

@@ -14,7 +14,7 @@ import type { AnalystView } from './types.js';
  * Fields excluded from the hash because they vary across an otherwise
  * identical re-run: `trace_id` is a correlation id tied to the invocation,
  * not business data, and `timestamp` is the wall-clock moment the view was
- * produced, not the view's content.
+ * produced, not the view's content
  */
 function normalizeView(view: AnalystView) {
   return {

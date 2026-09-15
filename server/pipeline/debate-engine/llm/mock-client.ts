@@ -15,10 +15,10 @@ type QueuedResult = { kind: 'text'; rawText: string } | { kind: 'error'; error: 
 export class MockLlmClient implements LlmClient {
   private readonly queue: QueuedResult[] = [];
 
-  /** Every request `complete` has received so far, in call order — for assertions on what was asked. */
+  /** Every request `complete` has received so far, in call order — for assertions on what was asked */
   readonly requests: Array<LlmRequest<unknown>> = [];
 
-  /** Queues a successful raw-text response for the next `complete` call. */
+  /** Queues a successful raw-text response for the next `complete` call */
   enqueueText(rawText: string): void {
     this.queue.push({ kind: 'text', rawText });
   }

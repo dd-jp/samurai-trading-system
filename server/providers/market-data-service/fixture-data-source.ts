@@ -6,7 +6,7 @@
  */
 import type { Bar, BarWindow, DataSource, Mark, Quote } from './types.js';
 
-/** The live latest-mark seed this fixture serves in 'live' mode. */
+/** The live latest-mark seed this fixture serves in 'live' mode */
 export interface FixtureLiveMark {
   price: number;
   observed_at: Date;

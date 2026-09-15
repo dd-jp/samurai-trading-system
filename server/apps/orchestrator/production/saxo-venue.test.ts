@@ -31,7 +31,7 @@ import {
 
 const silentLogger: Logger = { log: () => undefined };
 
-/** Every checked-in sterling line quotes in pence with a 0.01 factor (doc 44 §2.1). */
+/** Every checked-in sterling line quotes in pence with a 0.01 factor (doc 44 §2.1) */
 function penceDetails(uic: number, assetType: SaxoAssetType): SaxoInstrumentDetails {
   return {
     Uic: uic,
@@ -100,7 +100,7 @@ describe('saxoTradeableUniverse', () => {
     for (const instrument of universe) {
       expect(instrument.asset_class).toBe('stocks');
     }
-    // Never a US screening proxy: those are what the analysts read, never what is routed.
+    // Never a US screening proxy: those are what the analysts read, never what is routed
     expect(universe.map((instrument) => instrument.asset)).not.toContain('QQQ');
   });
 
@@ -311,7 +311,7 @@ describe('buildSaxoTokenSource', () => {
 
     // The refresher's own `saxo_session_lost` line, emitted at BOOT because
     // `start()` primed it — before that call it appeared only once something
-    // asked for a bearer.
+    // asked for a bearer
     const lost = logger.entries.find((entry) => entry.event === 'saxo_session_lost');
     expect(lost?.message).toMatch(/yarn saxo:login --env sim/);
   });
@@ -320,7 +320,7 @@ describe('buildSaxoTokenSource', () => {
    * A live session on a SIM boot must not be spent: the refresh would rotate
    * (and so invalidate) the live refresh token against the SIM gateway, which
    * cannot honour it — the operator would lose the live session to a run that
-   * was never entitled to it.
+   * was never entitled to it
    */
   it('refuses a saved session written for the OTHER gateway', async () => {
     writeFileSync(

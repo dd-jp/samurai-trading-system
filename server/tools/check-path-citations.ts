@@ -138,12 +138,12 @@ export const IMMUTABLE_RECORD_DIRS = [
  */
 const SKIPPED_DIRS = new Set([
   // Agent skills and yarn's vendored releases: tracked, but not this repo's prose or
-  // source, and neither is ever the subject of a citation.
+  // source, and neither is ever the subject of a citation
   '.claude',
   '.yarn',
   // Fixture markdown deliberately contains citations that do NOT resolve — that is what
   // it is for. Scanning it would make the checker flag its own test data on every run.
-  // Do not remove this entry without moving the fixtures somewhere else first.
+  // Do not remove this entry without moving the fixtures somewhere else first
   '__fixtures__',
 ]);
 
@@ -159,17 +159,17 @@ export interface Exemption {
 }
 
 export interface Citation {
-  /** Repo-relative path of the markdown file the citation was written in. */
+  /** Repo-relative path of the markdown file the citation was written in */
   readonly file: string;
-  /** 1-based line within that markdown file. */
+  /** 1-based line within that markdown file */
   readonly line: number;
-  /** The citation exactly as it appears between the backticks. */
+  /** The citation exactly as it appears between the backticks */
   readonly raw: string;
-  /** The path part, with any trailing `:line` and trailing slash removed. */
+  /** The path part, with any trailing `:line` and trailing slash removed */
   readonly path: string;
-  /** The cited line number, when the citation carried one. */
+  /** The cited line number, when the citation carried one */
   readonly lineNumber?: number;
-  /** Set when an in-document marker exempts this citation. */
+  /** Set when an in-document marker exempts this citation */
   readonly exemption?: Exemption;
 }
 
@@ -257,11 +257,11 @@ export function createIndexResolver(root: string, indexedPaths: readonly string[
         // with the deletion unstaged. Existence and content now come from different
         // places, so this case exists where it could not before. Report a length no
         // citation can exceed: the checker errs toward the false negative, and crashing
-        // the whole run over one locally-deleted file is the worst available outcome.
+        // the whole run over one locally-deleted file is the worst available outcome
         return Number.MAX_SAFE_INTEGER;
       }
       // A trailing newline terminates the last line rather than starting an empty one,
-      // so `a\nb\n` is 2 lines, not 3 — cite `b` as `:2` and it must pass.
+      // so `a\nb\n` is 2 lines, not 3 — cite `b` as `:2` and it must pass
       if (text === '') return 0;
       return text.replace(/\n$/, '').split('\n').length;
     },
@@ -302,7 +302,7 @@ function markerOn(line: string): { reason: string; note: string } | null {
   return { reason: match[1] ?? '', note: (match[2] ?? '').trim() };
 }
 
-/** Blanks out fenced code blocks so inline-looking backticks inside them are not scanned. */
+/** Blanks out fenced code blocks so inline-looking backticks inside them are not scanned */
 function stripFencedBlocks(lines: readonly string[]): string[] {
   const out: string[] = [];
   let fence: string | null = null;
@@ -480,7 +480,7 @@ export interface ExtractOptions {
  * blocks blanked, for markdown; non-comment code blanked, for `.ts`/`.tsx`), while
  * `rawLines` — always the real source — is what a `cite-exempt` marker is read from, so
  * a marker written outside a fence or a comment still attaches to the citation on its
- * line.
+ * line
  */
 function citationsFromLines(
   rawLines: readonly string[],
@@ -517,7 +517,7 @@ export function extractCitations(markdown: string, options: ExtractOptions): Cit
   return citationsFromLines(rawLines, stripFencedBlocks(rawLines), options);
 }
 
-/** Same rules as {@link extractCitations}, scoped to line- and block-comment text only. */
+/** Same rules as {@link extractCitations}, scoped to line- and block-comment text only */
 export function extractCodeCitations(source: string, options: ExtractOptions): Citation[] {
   const rawLines = source.split('\n');
   return citationsFromLines(rawLines, stripToComments(rawLines), options);
@@ -603,14 +603,14 @@ export function markdownFilesIn(indexedPaths: readonly string[]): string[] {
 /**
  * `.ts`/`.tsx` only — `.mts`/`.cts` are unused in this tree and are out of scope until one
  * is added; `runCitationCheck`'s dispatch uses this same pattern so a file neither `.md`
- * nor matching it is skipped explicitly, not swept in by an else branch.
+ * nor matching it is skipped explicitly, not swept in by an else branch
  */
 const CODE_EXTENSION_RE = /\.tsx?$/;
 
 /**
  * The `.ts`/`.tsx` source to scan for comment citations, tracked minus a skipped
  * directory — same rule `markdownFilesIn` applies, so `__fixtures__` (this file's own
- * `known-good.ts`/`known-bad.ts` included) is never scanned by the repo-wide run.
+ * `known-good.ts`/`known-bad.ts` included) is never scanned by the repo-wide run
  */
 export function codeFilesIn(indexedPaths: readonly string[]): string[] {
   return indexedPaths
@@ -633,7 +633,7 @@ export interface CheckOptions {
 export function runCitationCheck(options: CheckOptions): Report {
   const root = resolve(options.root);
   // Lazy: a caller that supplies the tree, the roots and the file list is running against
-  // fixtures and must not be made to shell out to git for a listing it never reads.
+  // fixtures and must not be made to shell out to git for a listing it never reads
   let listing: readonly string[] | undefined = options.indexedPaths;
   const indexed = (): readonly string[] => (listing ??= listIndexedPaths(root));
 
@@ -668,7 +668,7 @@ export function runCitationCheck(options: CheckOptions): Report {
       // is the false negative this file is allowed to err toward; crashing the whole run
       // over one locally-deleted file is not. Not counted as scanned either — an ENOENT
       // never contributed a citation and `filesScanned` should stay a fact about files
-      // actually read, not files attempted.
+      // actually read, not files attempted
       continue;
     }
     const extract = file.endsWith('.md')
@@ -678,7 +678,7 @@ export function runCitationCheck(options: CheckOptions): Report {
         : null;
     // Reachable only via the `files` option (the default file set is always `.md` or
     // `CODE_EXTENSION_RE`): a file matching neither is skipped, not counted scanned —
-    // `filesScanned` stays a fact about files this run actually extracted citations from.
+    // `filesScanned` stays a fact about files this run actually extracted citations from
     if (!extract) continue;
     filesScanned++;
     const citations = extract(text, { file, knownRoots });

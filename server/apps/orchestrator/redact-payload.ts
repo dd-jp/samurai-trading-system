@@ -129,7 +129,7 @@ const CREDENTIAL_KEYS: ReadonlySet<string> = new Set([
   'webhooksecret',
 ]);
 
-/** The placeholder, identical to the one `sanitize-log-text.ts` writes. */
+/** The placeholder, identical to the one `sanitize-log-text.ts` writes */
 const REDACTED = '[REDACTED]';
 
 /**
@@ -164,7 +164,7 @@ function isCredentialKey(key: string): boolean {
 export function redactPayload(payload: unknown): unknown {
   // One counter for the whole walk, not per level: the bound that matters is
   // total work done inside a logging call, and a wide-but-shallow payload
-  // costs exactly as much as a narrow-but-deep one.
+  // costs exactly as much as a narrow-but-deep one
   let visited = 0;
 
   const walk = (value: unknown, depth: number): unknown => {
@@ -174,7 +174,7 @@ export function redactPayload(payload: unknown): unknown {
     if (typeof value === 'string') return maskCredentials(value);
 
     // Primitives carry no key context and no free text, so there is nothing to
-    // mask; returned as-is to keep the payload's types intact for a reader.
+    // mask; returned as-is to keep the payload's types intact for a reader
     if (value === null || typeof value !== 'object') return value;
 
     if (depth >= MAX_DEPTH) return '[REDACTION_DEPTH_LIMIT]';
@@ -185,7 +185,7 @@ export function redactPayload(payload: unknown): unknown {
     // array still cost 100k iterations and still produced a 100k-element line,
     // so neither the work nor the line length was actually bounded. The
     // truncation marker is appended once, so a reader can still tell "there
-    // was more here" from "there was nothing here".
+    // was more here" from "there was nothing here"
     if (Array.isArray(value)) {
       const items: unknown[] = [];
       for (const item of value) {
@@ -202,13 +202,13 @@ export function redactPayload(payload: unknown): unknown {
     // in a recognisable shape, so each is rendered the way `JSON.stringify`
     // renders it and then masked as text. Errors are the case that actually
     // occurs here, and their `message` is exactly the free text
-    // `maskCredentials` exists for.
+    // `maskCredentials` exists for
     //
     // Other exotic prototypes are NOT special-cased: a Map or a Set has no own
     // enumerable properties, so it falls through to the loop below and comes
     // out as `{}` — the same thing `JSON.stringify` would have produced for it
     // unredacted, and lossy either way. Nothing in this system logs one; if
-    // something starts to, it needs a branch here rather than silence.
+    // something starts to, it needs a branch here rather than silence
     if (value instanceof Error) return maskCredentials(`${value.name}: ${value.message}`);
     if (value instanceof Date) return value.toISOString();
 
@@ -220,7 +220,7 @@ export function redactPayload(payload: unknown): unknown {
       }
       // Rule 1 before the walk: a credential key's value is replaced whatever
       // it is, so a secret nested inside an object under `auth` cannot escape
-      // by being structured rather than a string.
+      // by being structured rather than a string
       out[key] = isCredentialKey(key) ? REDACTED : walk(item, depth + 1);
     }
     return out;

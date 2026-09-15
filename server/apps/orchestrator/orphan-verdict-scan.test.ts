@@ -39,8 +39,10 @@ function insertAudit(db: StoreHandle, trace_id: string, stage: string, timestamp
   ).run(trace_id, stage, timestamp);
 }
 
-/** Seeds a trace that crashed after Verdict logged `go` but before Execution ran:
- * audit_log has rows up to 'verdict', deliberately no 'execution' row. */
+/**
+ * Seeds a trace that crashed after Verdict logged `go` but before Execution ran:
+ * audit_log has rows up to 'verdict', deliberately no 'execution' row
+ */
 function seedOrphan(
   db: StoreHandle,
   trace_id: string,
@@ -54,7 +56,7 @@ function seedOrphan(
   insertVerdict(db, { trace_id, idempotency_key, instrument, timestamp });
 }
 
-/** Seeds a healthy trace that reached Execution — must never be reported as an orphan. */
+/** Seeds a healthy trace that reached Execution — must never be reported as an orphan */
 function seedHealthy(
   db: StoreHandle,
   trace_id: string,
@@ -76,7 +78,7 @@ describe('OrphanVerdictScanner', () => {
   it('a crash-restart between the go-verdict write and Execution surfaces an alert on a fresh handle over the same file (AC3)', async () => {
     // Real file path (not :memory:) so "restart" (opening a NEW handle) is
     // meaningfully different from re-reading the same in-process db —
-    // mirrors sqlite-shared-store.test.ts's "a crash before ack..." test.
+    // mirrors sqlite-shared-store.test.ts's "a crash before ack..." test
     const fs = await import('node:fs');
     const os = await import('node:os');
     const path = await import('node:path');
@@ -93,13 +95,13 @@ describe('OrphanVerdictScanner', () => {
 
     try {
       // Process A: Verdict logs 'go', tick reaches 'verdict' in the audit
-      // trail, then the process dies before Execution's audit_log row lands.
+      // trail, then the process dies before Execution's audit_log row lands
       const db1 = openSharedStore(tmpDb);
       seedOrphan(db1, 'trace-crash-1', 'AAPL', 'idem-crash-1');
       db1.close();
 
       // Process B: the restart. A brand-new handle over the same file finds
-      // the row process A left behind and must alert on it.
+      // the row process A left behind and must alert on it
       const db2 = openSharedStore(tmpDb);
       const channel = makeChannel();
       const scanner = new OrphanVerdictScanner();
@@ -157,7 +159,7 @@ describe('OrphanVerdictScanner', () => {
   it('does not flag a go-verdict whose no_go sibling trace lacks execution (status filter)', async () => {
     const db = openSharedStore(':memory:');
     // A no_go verdict with no execution audit row must never be reported —
-    // Execution is never invoked for a no_go, so that absence is expected, not orphaned.
+    // Execution is never invoked for a no_go, so that absence is expected, not orphaned
     insertAudit(db, 'trace-no-go', 'verdict', '2026-07-27T10:00:00.000Z');
     db.prepare(
       `INSERT INTO verdict_log (trace_id, idempotency_key, instrument, status, no_go_reason, hitl_override, timestamp)

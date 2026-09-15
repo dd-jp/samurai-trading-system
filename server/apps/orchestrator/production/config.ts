@@ -577,13 +577,13 @@ export interface AlertChannelSlots {
  * constructed.
  */
 export interface ProductionConfig extends AlertChannelSlots {
-  /** The shared SQLite handle (`openSharedStore(...)`) every store here is built over. */
+  /** The shared SQLite handle (`openSharedStore(...)`) every store here is built over */
   db: StoreHandle;
   clock: Clock;
-  /** `paper` for the first run; `live` only after graduation (CLAUDE.md). */
+  /** `paper` for the first run; `live` only after graduation (CLAUDE.md) */
   mode: 'live' | 'paper' | 'backtest';
 
-  // --- Transports with no in-repo implementation (see file doc comment) ---
+  // Transports with no in-repo implementation (see file doc comment)
   /**
    * Alpaca trading REST surface, for order submission. Optional since #273/
    * #286 landed `AlpacaHttpBrokerClient`: when omitted this module builds it
@@ -623,7 +623,7 @@ export interface ProductionConfig extends AlertChannelSlots {
    * the check runs on the fill poll.
    */
   unpricedFillAgeOutMs?: number;
-  /** WorldMonitor CII reads (ADR-0002; live wiring parked during paper trading). */
+  /** WorldMonitor CII reads (ADR-0002; live wiring parked during paper trading) */
   ciiScoreProvider?: CiiScoreProvider;
   /**
    * Account accounting scalars. Optional since #276: when omitted this module
@@ -653,10 +653,10 @@ export interface ProductionConfig extends AlertChannelSlots {
    * provider, this one only its funding source.
    */
   accountFunding?: AccountFundingSource;
-  /** Realized-vol reading for the volatility breaker tier — no in-repo indicator (#234). */
+  /** Realized-vol reading for the volatility breaker tier — no in-repo indicator (#234) */
   volatility?: VolatilityReadingProvider;
 
-  // --- Stage configuration (shapes, not values — tuned in paper trading) ---
+  // Stage configuration (shapes, not values — tuned in paper trading)
   traderConfig: TraderConfig;
   riskConfig: RiskConfig;
   verdictConfig: VerdictConfig;
@@ -666,7 +666,7 @@ export interface ProductionConfig extends AlertChannelSlots {
   costConfig: CostConfig;
   ciiConsumerConfig: CiiConsumerConfig;
 
-  // --- Optional composition knobs ---
+  // Optional composition knobs
   /**
    * Defaults to `SMOKE_TEST_UNIVERSE` — a default that is now only right for
    * a programmatic caller. The shipped paper entrypoint supplies
@@ -718,7 +718,7 @@ export interface ProductionConfig extends AlertChannelSlots {
   broker?: BrokerAdapter;
   /**
    * Overrides the `AlpacaDataSource` this module would otherwise build —
-   * same rationale as `broker`, for `FixtureDataSource`/ccxt/IBKR.
+   * same rationale as `broker`, for `FixtureDataSource`/ccxt/IBKR
    */
   dataSource?: DataSource;
   /**
@@ -825,7 +825,7 @@ export interface ProductionConfig extends AlertChannelSlots {
    * default.
    */
   stocksTradingWindow?: (instant: Date) => boolean;
-  /** Sticky breaker rows recovered from a prior process, if any. */
+  /** Sticky breaker rows recovered from a prior process, if any */
   initialBreakerState?: readonly PersistedBreakerState[];
   /** Wall-clock gap between tick starts. Default 60s. */
   tickIntervalMs?: number;
@@ -1113,7 +1113,7 @@ export interface FeedbackCycleConfig {
    * cycle: analyst weights are attributed from closed trades, not proposed.
    */
   proposals?: TuningProposal[];
-  /** Default 24h. */
+  /** Default 24h */
   intervalMs?: number;
   /**
    * What makes `computeMetrics` — and with it the four kill-lines — actually
@@ -1170,7 +1170,7 @@ export interface DailyMetricsSourceDeps {
    * sampler.
    */
   db: StoreHandle;
-  /** The root's own instance — the same reader `runDailyCycle` attributes over. */
+  /** The root's own instance — the same reader `runDailyCycle` attributes over */
   trades: ClosedTradeStore;
   logger: Logger;
   /**
@@ -1181,11 +1181,11 @@ export interface DailyMetricsSourceDeps {
    * same row.
    */
   stage2Selections: SqliteStage2SelectionStore;
-  /** Ages a selection out; the root's clock, so a replay ages deterministically. */
+  /** Ages a selection out; the root's clock, so a replay ages deterministically */
   clock: Clock;
 }
 
-/** Deferred construction of a `DailyMetricsSource` — see `DailyMetricsSourceDeps`. */
+/** Deferred construction of a `DailyMetricsSource` — see `DailyMetricsSourceDeps` */
 export type DailyMetricsSourceFactory = (deps: DailyMetricsSourceDeps) => DailyMetricsSource;
 
 export interface DailyMetricsConfig {

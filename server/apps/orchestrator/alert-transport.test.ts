@@ -19,7 +19,7 @@ import type { Logger } from './types.js';
 /**
  * Saved and restored around EVERY test in the file, for the reason
  * `startup.test.ts` spells out: vitest reuses a worker across files, so a
- * credential left behind here is inherited by whatever runs next.
+ * credential left behind here is inherited by whatever runs next
  */
 const MUTATED_ENV_VARS = ['SAMURAI_ALERTS', ...TELEGRAM_ALERT_ENV_VARS] as const;
 const savedEnv = new Map<string, string | undefined>();
@@ -48,9 +48,9 @@ function recordingLogger(): Logger & { entries: Parameters<Logger['log']>[0][] }
   return { entries, log: (entry) => entries.push(entry) };
 }
 
-/** The chat the operator must keep reading — every escalation lands here. */
+/** The chat the operator must keep reading — every escalation lands here */
 const ESCALATION_CHAT_ID = '-1001234567890';
-/** The chat the operator is free to mute (#342) — heartbeats only. */
+/** The chat the operator is free to mute (#342) — heartbeats only */
 const HEARTBEAT_CHAT_ID = '-1009876543210';
 
 function configureTelegramEnv(): void {
@@ -59,7 +59,7 @@ function configureTelegramEnv(): void {
   process.env.TELEGRAM_HEARTBEAT_CHAT_ID = HEARTBEAT_CHAT_ID;
 }
 
-/** Every `sendMessage` body the stubbed transport saw, in call order. */
+/** Every `sendMessage` body the stubbed transport saw, in call order */
 function sentMessages(
   stub: ReturnType<typeof stubTelegramFetch>,
 ): { chat_id: string; text: string }[] {
@@ -95,7 +95,7 @@ function stubTelegramFetch(failFor: (chatId: string) => boolean = () => false) {
   return stub;
 }
 
-/** One of each escalation, so a test can drive all three onto the wire. */
+/** One of each escalation, so a test can drive all three onto the wire */
 const ORPHAN = {
   trace_id: 'trace-1',
   idempotency_key: 'ioc-1',
@@ -132,7 +132,7 @@ const RESIDUAL_EXPOSURE = {
 
 describe('resolveAlertsMode', () => {
   it('refuses to start when SAMURAI_ALERTS is unset, naming the variable and both values', () => {
-    // The bug #322 exists to fix: absence used to mean "log-only", silently.
+    // The bug #322 exists to fix: absence used to mean "log-only", silently
     expect(() => resolveAlertsMode({})).toThrow(/SAMURAI_ALERTS/);
     const error = (() => {
       try {
@@ -166,7 +166,7 @@ describe('resolveAlertsMode', () => {
     // mode the operator typed. Refusing it produced "must be one of
     // telegram|log-only" for a value that reads as `telegram` on screen —
     // a fail-loud, but one nobody could act on. Both post-trim outcomes are
-    // still values the operator wrote, so trimming invents nothing.
+    // still values the operator wrote, so trimming invents nothing
     process.env.SAMURAI_ALERTS = ' telegram\n';
     expect(resolveAlertsMode({})).toBe('telegram');
 
@@ -175,7 +175,7 @@ describe('resolveAlertsMode', () => {
   });
 
   it('still rejects a whitespace-only value rather than defaulting', () => {
-    // Trimming must not open a path from "nothing meaningful set" to a mode.
+    // Trimming must not open a path from "nothing meaningful set" to a mode
     process.env.SAMURAI_ALERTS = '   ';
 
     expect(() => resolveAlertsMode({})).toThrow(/SAMURAI_ALERTS/);
@@ -184,7 +184,7 @@ describe('resolveAlertsMode', () => {
   it('needs no mode at all when the caller injected every alert channel itself', () => {
     // Same posture as `missingCredentialEnvVars`' `satisfiedByInjection`: a
     // caller that supplied all three transports has already made this decision
-    // explicitly, and must not be asked for an env var it will never consult.
+    // explicitly, and must not be asked for an env var it will never consult
     const injected = Object.fromEntries(
       ALERT_CHANNEL_FIELDS.map((field) => [field, {}]),
     ) as Partial<ProductionConfig>;
@@ -195,7 +195,7 @@ describe('resolveAlertsMode', () => {
   it('still demands a mode when only SOME channels are injected', () => {
     // The hole this closes: injecting one channel must not exempt the other
     // two from the decision, or a partially-wired caller inherits log-only for
-    // the rest by omission.
+    // the rest by omission
     for (const field of ALERT_CHANNEL_FIELDS) {
       expect(() => resolveAlertsMode({ [field]: {} } as Partial<ProductionConfig>)).toThrow(
         /SAMURAI_ALERTS/,
@@ -210,7 +210,7 @@ describe('TELEGRAM_ALERT_ENV_VARS', () => {
     // escalation chat is the alert-fatigue failure, and there is no chat id
     // this process could invent as a default. The outbound escalations on
     // this list (orphaned go verdicts, stuck fills, kill breaches, heartbeat)
-    // accept nothing FROM Telegram, so no allowlist belongs here.
+    // accept nothing FROM Telegram, so no allowlist belongs here
     expect([...TELEGRAM_ALERT_ENV_VARS]).toEqual([
       'TELEGRAM_BOT_TOKEN',
       'TELEGRAM_CHAT_ID',
@@ -224,7 +224,7 @@ describe('buildAlertChannels — log-only', () => {
   it('supplies nothing, leaving the composition root its own log-only defaults', () => {
     // Deliberate: `loggingAlertChannel(id, logger)` is already the documented
     // default in production.ts. Constructing a second set here would be two places to
-    // keep in sync for no behavioural difference.
+    // keep in sync for no behavioural difference
     const logger = recordingLogger();
 
     expect(
@@ -264,7 +264,7 @@ describe('buildAlertChannels — telegram', () => {
 
     // Every catalogue entry, under the port method its stage calls — the
     // #562 criterion (a live OHLCV failover reaches the phone, not the script
-    // output #560 settled for) generalised to the whole table.
+    // output #560 settled for) generalised to the whole table
     for (const id of ALERT_IDS) {
       expect(Object.keys(channels[id] ?? {}), id).toEqual([ALERT_CATALOGUE[id].method]);
     }
@@ -331,7 +331,7 @@ describe('buildAlertChannels — telegram', () => {
   it('never writes the bot token to the startup log', async () => {
     // SECURITY. The token is a bearer credential for the whole bot; it lives in
     // every request path, so the one place it could leak is a log line or an
-    // error message written around construction.
+    // error message written around construction
     configureTelegramEnv();
     const logger = recordingLogger();
 
@@ -343,7 +343,7 @@ describe('buildAlertChannels — telegram', () => {
     });
 
     expect(JSON.stringify(logger.entries)).not.toContain(SENTINEL_TOKEN);
-    // And it did log something — otherwise this assertion is vacuous.
+    // And it did log something — otherwise this assertion is vacuous
     expect(logger.entries.some((e) => e.message.includes('telegram'))).toBe(true);
   });
 });
@@ -378,7 +378,7 @@ describe('buildAlertChannels — heartbeat destination is separate from escalati
     await channels.residualExposureAlerts?.postResidualExposureAlert(RESIDUAL_EXPOSURE);
     channels.breachAlerts?.postBreachAlert(BREACH);
     // `postBreachAlert` is fire-and-forget (void, by design) — let its
-    // `Promise.allSettled` settle before reading the wire.
+    // `Promise.allSettled` settle before reading the wire
     await new Promise((resolve) => setImmediate(resolve));
 
     const byChat = sentMessages(fetchStub).map((m) => m.chat_id);
@@ -390,7 +390,7 @@ describe('buildAlertChannels — heartbeat destination is separate from escalati
       ESCALATION_CHAT_ID,
     ]);
     // Nothing but the heartbeat is addressed to the mutable chat — that is
-    // what makes muting it safe.
+    // what makes muting it safe
     expect(sentMessages(fetchStub).filter((m) => m.chat_id === HEARTBEAT_CHAT_ID)).toHaveLength(1);
   });
 
@@ -398,7 +398,7 @@ describe('buildAlertChannels — heartbeat destination is separate from escalati
     // The "muted" half that IS observable: a heartbeat chat the bot has been
     // kicked from. All four channels share one `TelegramBotApiClient`, so this
     // is the test that would catch a shared retry budget, circuit breaker or
-    // queue letting a dead heartbeat chat take the escalations down with it.
+    // queue letting a dead heartbeat chat take the escalations down with it
     configureTelegramEnv();
     const fetchStub = stubTelegramFetch((chatId) => chatId === HEARTBEAT_CHAT_ID);
     const channels = telegramChannels();
@@ -419,7 +419,7 @@ describe('buildAlertChannels — heartbeat destination is separate from escalati
 
     const delivered = sentMessages(fetchStub).filter((m) => m.chat_id === ESCALATION_CHAT_ID);
     expect(delivered).toHaveLength(2);
-    // And the heartbeat failures were not silent either.
+    // And the heartbeat failures were not silent either
     expect(logger.entries.filter((e) => e.message === 'heartbeat post failed')).toHaveLength(5);
   });
 
@@ -427,7 +427,7 @@ describe('buildAlertChannels — heartbeat destination is separate from escalati
     // Configuring both to one chat re-creates #342 exactly: ~20k heartbeats
     // over the soak in the chat the escalations need. Named and refused, not
     // warned about — the operator would have to read the warning in the chat
-    // they are about to mute.
+    // they are about to mute
     configureTelegramEnv();
     process.env.TELEGRAM_HEARTBEAT_CHAT_ID = ESCALATION_CHAT_ID;
 
@@ -467,7 +467,7 @@ describe('buildAlertChannels — heartbeat destination is separate from escalati
     // rotating-file-sink.ts already applies to `SAMURAI_LOG_MAX_FILES`: a
     // value that is nothing but whitespace is "not configured", never a
     // destination. `chat_id: "  "` is a Bot API 400 discovered on the first
-    // beat, days into an unattended soak.
+    // beat, days into an unattended soak
     configureTelegramEnv();
     process.env.TELEGRAM_HEARTBEAT_CHAT_ID = ' \n\t ';
 
@@ -480,11 +480,11 @@ describe('buildAlertChannels — heartbeat destination is separate from escalati
   it('refuses a heartbeat chat that equals the escalation chat but for whitespace', () => {
     // The hole kimi-3-review found in #353: raw `===` meant one trailing
     // newline out of an env file — `TELEGRAM_HEARTBEAT_CHAT_ID=-100…\n` —
-    // slipped past the refusal while still addressing the escalation chat.
+    // slipped past the refusal while still addressing the escalation chat
     // The guard would report safe and the property it exists to protect
     // (muting the beat cannot mute an escalation) would be gone. Direct
     // precedent: #293/#320, where a whitespace-sensitive `startsWith` let
-    // ' https://api.alpaca.markets' walk past a live-host guard.
+    // ' https://api.alpaca.markets' walk past a live-host guard
     for (const padded of [
       `${ESCALATION_CHAT_ID}\n`,
       ` ${ESCALATION_CHAT_ID}`,
@@ -499,7 +499,7 @@ describe('buildAlertChannels — heartbeat destination is separate from escalati
 
   it('refuses an escalation chat that equals the heartbeat chat but for whitespace', () => {
     // The mirror image: the padding can sit on either variable, and only
-    // normalizing one of them leaves the other half of the hole open.
+    // normalizing one of them leaves the other half of the hole open
     configureTelegramEnv();
     process.env.TELEGRAM_CHAT_ID = ` ${HEARTBEAT_CHAT_ID} `;
 
@@ -511,7 +511,7 @@ describe('buildAlertChannels — heartbeat destination is separate from escalati
     // newline inside a `chat_id` is a Bot API 400, so a padded id that IS
     // distinct from the escalation chat would pass the refusal and then fail
     // every single send. Normalize once, at the read, and both the comparison
-    // and the wire see the same value.
+    // and the wire see the same value
     configureTelegramEnv();
     process.env.TELEGRAM_CHAT_ID = ` ${ESCALATION_CHAT_ID}\n`;
     process.env.TELEGRAM_HEARTBEAT_CHAT_ID = `\t${HEARTBEAT_CHAT_ID} `;
@@ -530,7 +530,7 @@ describe('buildAlertChannels — heartbeat destination is separate from escalati
   it('asks for no heartbeat chat at all when the caller injected the heartbeat channel', () => {
     // Nothing this module builds would post to it, so demanding it — or
     // refusing a value that happens to equal the escalation chat — would be a
-    // check on a decision the caller already made for itself.
+    // check on a decision the caller already made for itself
     configureTelegramEnv();
     delete process.env.TELEGRAM_HEARTBEAT_CHAT_ID;
 
@@ -547,10 +547,10 @@ describe('buildAlertChannels — heartbeat destination is separate from escalati
 
   it('does not claim the heartbeat chat when the caller supplied its own channel', () => {
     // The startup line is what an operator checks their alerting against
-    // before a 14-day soak, so it must not name a destination no beat reaches.
+    // before a 14-day soak, so it must not name a destination no beat reaches
     // On this path TELEGRAM_HEARTBEAT_CHAT_ID is never read and no heartbeat
     // adapter is built — the injected channel decides where the beat goes,
-    // and this module cannot know where that is.
+    // and this module cannot know where that is
     configureTelegramEnv();
     delete process.env.TELEGRAM_HEARTBEAT_CHAT_ID;
     const logger = recordingLogger();
@@ -565,16 +565,16 @@ describe('buildAlertChannels — heartbeat destination is separate from escalati
     const entry = logger.entries.find((e) => e.message.includes(`${'SAMURAI_ALERTS'}=telegram`));
     expect(entry?.payload).toMatchObject({ heartbeat: 'caller-supplied' });
     // The variable may be MENTIONED (saying it is not read is useful); what it
-    // must not do is assert the beat is going there.
+    // must not do is assert the beat is going there
     expect(entry?.message).not.toMatch(/heartbeat goes to TELEGRAM_HEARTBEAT_CHAT_ID/);
     expect(entry?.message).toContain('ProductionConfig.heartbeatChannel');
-    // The escalation half of the line is unchanged and still true.
+    // The escalation half of the line is unchanged and still true
     expect(entry?.message).toContain('TELEGRAM_CHAT_ID');
   });
 
   it('claims the heartbeat chat only when it is the one actually wired', () => {
     // The other side of the branch above: when this module built the channel,
-    // the line names the destination it gave it.
+    // the line names the destination it gave it
     configureTelegramEnv();
     const logger = recordingLogger();
 
@@ -622,7 +622,7 @@ describe('buildAlertChannels — durable delivery-failure recording (#1108)', ()
   it('records a permanently-undeliverable escalation in the real alert_delivery_failures table', async () => {
     configureTelegramEnv();
     // 403 is `isRetryableTelegramError`'s terminal case — one attempt, no
-    // retry sleep, so the failure resolves immediately.
+    // retry sleep, so the failure resolves immediately
     stubTelegramFetch((chatId) => chatId === ESCALATION_CHAT_ID);
     const db = openSharedStore(':memory:');
 

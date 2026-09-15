@@ -85,7 +85,7 @@ describe('buildAnalystsStep', () => {
     it('hands the runner the cause of the skip it just returned', async () => {
       // The narrowing to `views` is what threw the reasons away; this carries
       // back the one bit the audit row needs, keyed on the pass that produced
-      // it so concurrent instruments cannot read each other's.
+      // it so concurrent instruments cannot read each other's
       const skipKinds = new AnalystSkipKindRelay();
       await run(buildAnalystsStep(skippingOrchestrator('timeout'), undefined, { skipKinds }));
 
@@ -120,7 +120,7 @@ describe('buildAnalystsStep', () => {
       // The alert fires on the second consecutive skip and is deliberately
       // allowed to fail without taking the tick down. The audit row's reason
       // must not be collateral damage from that: the runner reads the relay
-      // immediately after this step returns.
+      // immediately after this step returns
       const skipKinds = new AnalystSkipKindRelay();
       const step = buildAnalystsStep(skippingOrchestrator('timeout'), undefined, {
         skipKinds,
@@ -198,7 +198,7 @@ describe('buildAnalystsStep', () => {
       expect(entry.level).toBe('error');
       expect(entry.stage).toBe('analysts');
       expect(entry.trace_id).toBe('trace-9');
-      // The operator has to be able to read the cause out of the line itself.
+      // The operator has to be able to read the cause out of the line itself
       expect(entry.message).toContain('BTC-USD');
       expect(entry.message).toContain('technical');
       expect(entry.message).toContain('http 404');
@@ -296,7 +296,7 @@ describe('buildAnalystsStep', () => {
         const serialized = JSON.stringify(entries);
         expect(serialized).not.toContain(FAKE_BOT_TOKEN);
         expect(serialized).toContain('[REDACTED]');
-        // Still says which analyst died and that it was a network error.
+        // Still says which analyst died and that it was a network error
         expect(serialized).toContain('technical');
         expect(serialized).toContain('network error');
       });
@@ -469,7 +469,7 @@ describe('buildAnalystsStep', () => {
         const orchestrator = { runAnalysts: skipping() } as unknown as AnalystOrchestrator;
         const step = buildAnalystsStep(orchestrator, undefined, { skipAlerts: channel });
 
-        // 2 fires, then every ALERT_REPEAT_EVERY_SKIPS after: 2 and 10.
+        // 2 fires, then every ALERT_REPEAT_EVERY_SKIPS after: 2 and 10
         for (let i = 0; i < 10; i++) await tick(step);
 
         expect(posted.map((alert) => alert.consecutive_skips)).toEqual([2, 10]);
@@ -479,7 +479,7 @@ describe('buildAnalystsStep', () => {
         const { posted, channel } = recordingChannel();
         // ONE step, whose orchestrator's answer changes between calls — the
         // counter lives in the step's closure, so a second `buildAnalystsStep`
-        // would start from zero and prove nothing about the reset.
+        // would start from zero and prove nothing about the reset
         let skips = true;
         const runAnalysts = vi.fn(async () =>
           skips
@@ -501,7 +501,7 @@ describe('buildAnalystsStep', () => {
           },
         );
 
-        // skip, recover, skip, recover, skip — never two in a row, never an alert.
+        // skip, recover, skip, recover, skip — never two in a row, never an alert
         for (const skipping of [true, false, true, false, true]) {
           skips = skipping;
           await tick(step);
@@ -510,7 +510,7 @@ describe('buildAnalystsStep', () => {
         expect(posted).toEqual([]);
 
         // And the counter really is back at zero: two in a row now alerts at 2,
-        // not at some accumulated total.
+        // not at some accumulated total
         skips = true;
         await tick(step);
         expect(posted.map((alert) => alert.consecutive_skips)).toEqual([2]);
@@ -521,7 +521,7 @@ describe('buildAnalystsStep', () => {
         const orchestrator = { runAnalysts: skipping() } as unknown as AnalystOrchestrator;
         const step = buildAnalystsStep(orchestrator, undefined, { skipAlerts: channel });
 
-        // One skip each: a fleet-wide blip is not two skips on one instrument.
+        // One skip each: a fleet-wide blip is not two skips on one instrument
         await tick(step, 'BTC-USD');
         await tick(step, 'ETH-USD');
 
@@ -581,7 +581,7 @@ describe('buildAnalystsStep', () => {
       // degraded` line rather than a literal, so the assertion is that the two
       // join, which is the property the field is read for. Any constant in the
       // field breaks the equality on the first tick; a wrong-tick id breaks it
-      // on the second, whose trace differs.
+      // on the second, whose trace differs
       it('logs an undelivered alert under the tick that raised it, not a category label', async () => {
         const failing = {
           postAnalystSkipAlert: async () => {
@@ -761,7 +761,7 @@ describe('composeMarketIntelligence (#969)', () => {
     // The defect this exists to prevent: the composition root used to bind
     // ONE agent, so with the news path available the sentiment agent — the
     // only `social` writer — was never called at all. A retrieving client
-    // nothing calls is this repo's characteristic bug, not a new one.
+    // nothing calls is this repo's characteristic bug, not a new one
     const calls: string[] = [];
 
     const composed = composeMarketIntelligence([
@@ -775,7 +775,7 @@ describe('composeMarketIntelligence (#969)', () => {
 
   it('keeps going when one agent fails', async () => {
     // One provider's outage must not empty the other's bucket, and must not
-    // fail a tick that would otherwise have traded.
+    // fail a tick that would otherwise have traded
     const calls: string[] = [];
 
     const composed = composeMarketIntelligence([
@@ -789,7 +789,7 @@ describe('composeMarketIntelligence (#969)', () => {
 
   it('returns undefined when there is nothing to run', () => {
     // `undefined` is the honest "no writer" state the analysts step already
-    // handles — not a no-op refresher that would look like a working one.
+    // handles — not a no-op refresher that would look like a working one
     expect(composeMarketIntelligence([undefined, undefined])).toBeUndefined();
   });
 

@@ -101,26 +101,26 @@ function makeClient(overrides: Partial<AlpacaBrokerClient> = {}): AlpacaBrokerCl
     // rejects rather than resolving null: the port documents null as
     // "Alpaca AUTHORITATIVELY knows no such order", which reconcile acts on by
     // marking a lot `rejected`. A default that answered null would let a test
-    // that reaches this path silently assert the position was never placed.
+    // that reaches this path silently assert the position was never placed
     getOrderByClientOrderId: vi
       .fn()
       .mockRejectedValue(new Error('makeClient: override getOrderByClientOrderId to use it')),
     getAccount: vi.fn().mockRejectedValue(new Error('makeClient: override getAccount to use it')),
     // #429's three. Rejecting by default for `getOrderByClientOrderId`'s
     // reason: a flatten or a cancel that quietly resolved would let a test
-    // assert an intervention happened when nothing was asked of the venue.
+    // assert an intervention happened when nothing was asked of the venue
     submitMarketOrder: vi
       .fn()
       .mockRejectedValue(new Error('makeClient: override submitMarketOrder to use it')),
     // #525's re-arm path — same "reject unless overridden" posture as the
     // other intervention-path methods above: a test that reaches this
     // without overriding it is asserting a re-arm happened when nothing was
-    // asked of the venue.
+    // asked of the venue
     submitOcoOrder: vi
       .fn()
       .mockRejectedValue(new Error('makeClient: override submitOcoOrder to use it')),
     // #586's two plain crypto order types — same posture again: the emulated
-    // path submitting an order no test asked for must fail that test.
+    // path submitting an order no test asked for must fail that test
     submitLimitOrder: vi
       .fn()
       .mockRejectedValue(new Error('makeClient: override submitLimitOrder to use it')),
@@ -130,7 +130,7 @@ function makeClient(overrides: Partial<AlpacaBrokerClient> = {}): AlpacaBrokerCl
     cancelOrder: vi.fn().mockRejectedValue(new Error('makeClient: override cancelOrder to use it')),
     // #1500's `cancel()` fallback. Rejecting by default keeps the direct
     // lookup the primary: a test whose `getOrderByClientOrderId` answers must
-    // never reach this, and one that does reach it has to say so.
+    // never reach this, and one that does reach it has to say so
     listOpenOrders: vi
       .fn()
       .mockRejectedValue(new Error('makeClient: override listOpenOrders to use it')),
@@ -158,7 +158,7 @@ function recordingAlerts(): UnpricedFillAlertChannel & { readonly posted: Unpric
 
 /**
  * #586's required seam, same reasoning as `recordingAlerts` above: a
- * construction that forgets the double-fill escalation cannot exist.
+ * construction that forgets the double-fill escalation cannot exist
  */
 function recordingDoubleFillAlerts(): OcoDoubleFillAlertChannel & {
   readonly posted: OcoDoubleFillAlert[];
@@ -172,7 +172,7 @@ function recordingDoubleFillAlerts(): OcoDoubleFillAlertChannel & {
   };
 }
 
-/** Ages a fill without sleeping — the age-out is minutes long by design. */
+/** Ages a fill without sleeping — the age-out is minutes long by design */
 class FixedClock implements Clock {
   #now: Date;
 
@@ -189,7 +189,7 @@ class FixedClock implements Clock {
   }
 }
 
-/** An order the venue reports filled and will not price — #298's whole subject. */
+/** An order the venue reports filled and will not price — #298's whole subject */
 function unpricedOrder(overrides: Partial<AlpacaOrder> = {}): AlpacaOrder {
   return acceptedOrder({
     status: 'filled',
@@ -217,7 +217,7 @@ describe('AlpacaBrokerAdapter.submitBracket', () => {
       symbol: 'AAPL',
       side: 'buy',
       qty: '100',
-      // #983: emitted at the venue's tick precision, not `String(number)`.
+      // #983: emitted at the venue's tick precision, not `String(number)`
       limit_price: '100.00',
       time_in_force: 'day',
       client_order_id: 'key-aapl-1355',
@@ -257,12 +257,12 @@ describe('AlpacaBrokerAdapter.submitBracket', () => {
 
     expect(client.submitOrder).toHaveBeenCalledWith(
       expect.objectContaining({
-        // Entry UP: a short's limit is the least it will accept.
+        // Entry UP: a short's limit is the least it will accept
         limit_price: '762.34',
         // Stop DOWN: above the entry on a short, so down is a SMALLER loss —
-        // rounding must never hand back exposure the Risk Manager removed.
+        // rounding must never hand back exposure the Risk Manager removed
         stop_loss: { stop_price: '766.40' },
-        // Target UP: below the entry, so up is the earlier fill.
+        // Target UP: below the entry, so up is the earlier fill
         take_profit: { limit_price: '754.19' },
       }),
     );
@@ -303,7 +303,7 @@ describe('AlpacaBrokerAdapter.submitBracket', () => {
   // class for crypto (422 code 42210000, verified #550). The emulated path
   // sends a PLAIN limit entry instead, in slash form (#585) and with no
   // order class at all; the protective prices go to the journal, not the
-  // wire, until the entry fills.
+  // wire, until the entry fills
   it('submits a crypto bracket as a PLAIN limit entry, never order_class bracket', async () => {
     const submitLimitOrder = vi.fn().mockResolvedValue(acceptedOrder({ id: 'entry-1', legs: [] }));
     const client = makeClient({ submitLimitOrder });
@@ -329,7 +329,7 @@ describe('AlpacaBrokerAdapter.submitBracket', () => {
     );
 
     // The exact wire body, pinned: no `order_class`, no `take_profit`, no
-    // `stop_loss` — any of those is the guaranteed 422.
+    // `stop_loss` — any of those is the guaranteed 422
     expect(submitLimitOrder).toHaveBeenCalledWith({
       symbol: 'BTC/USD',
       side: 'buy',
@@ -340,7 +340,7 @@ describe('AlpacaBrokerAdapter.submitBracket', () => {
     });
     expect(client.submitOrder).not.toHaveBeenCalled();
     // Only the entry exists at ack time — the leg ids appear when the sweep
-    // arms them; inventing two the venue never heard of would be a lie.
+    // arms them; inventing two the venue never heard of would be a lie
     expect(ack).toEqual({
       client_order_id: 'key-btc-1',
       broker_order_ids: ['entry-1'],
@@ -353,7 +353,7 @@ describe('AlpacaBrokerAdapter.submitBracket', () => {
   // this repo submits an already-slash-form instrument today (the universe
   // only ever produces dash form), but the conversion function is a plain
   // string transform with no memory of what called it, so this pins that it
-  // stays a no-op on input it has no work to do on.
+  // stays a no-op on input it has no work to do on
   it('does not double-convert a symbol already in Alpaca slash form', async () => {
     const submitLimitOrder = vi.fn().mockResolvedValue(acceptedOrder({ id: 'entry-1', legs: [] }));
     const client = makeClient({ submitLimitOrder });
@@ -420,7 +420,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills', () => {
   // The sweep awaits `getOrder` per bracket, so a `submitBracket` landing
   // mid-pass would otherwise be picked up by that same pass — whose `since`
   // window predates it, dropping its fills (PR #290 review, deepseek; the
-  // same fix #297 applied to ccxt's `syncBrackets`).
+  // same fix #297 applied to ccxt's `syncBrackets`)
   it('does not poll a bracket submitted while the pass is already in flight', async () => {
     const client = makeClient();
     const adapter = new AlpacaBrokerAdapter({
@@ -433,14 +433,14 @@ describe('AlpacaBrokerAdapter.fetchNewFills', () => {
     await adapter.submitBracket(makeBracket());
 
     (client.getOrder as ReturnType<typeof vi.fn>).mockImplementation(async () => {
-      // A concurrent submission mutates the bracket map mid-iteration.
+      // A concurrent submission mutates the bracket map mid-iteration
       await adapter.submitBracket(makeBracket({ client_order_id: 'key-tsla-1400' }));
       return acceptedOrder();
     });
 
     await adapter.fetchNewFills(new Date(0));
 
-    // One getOrder: the pass's worklist was fixed at entry, not re-read.
+    // One getOrder: the pass's worklist was fixed at entry, not re-read
     expect(client.getOrder).toHaveBeenCalledTimes(1);
   });
 
@@ -477,7 +477,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills', () => {
         fee: 0,
         timestamp: new Date(filledAt),
         // #842: Alpaca reports a running per-order total, flagged for
-        // `ingestFills()` so a later, larger observation books the increment.
+        // `ingestFills()` so a later, larger observation books the increment
         qty_is_cumulative: true,
       },
     ]);
@@ -532,7 +532,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills', () => {
         qty: 50,
         fee: 0,
         // Never EARLIER than the real fill, so `advanceLot`'s no-lookahead
-        // filter cannot be tricked into seeing a fill ahead of simulated T.
+        // filter cannot be tricked into seeing a fill ahead of simulated T
         timestamp: now,
         qty_is_cumulative: true,
       },
@@ -552,7 +552,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills', () => {
       )
       // The venue's SECOND word on the SAME order — a running total, not a
       // second fill event, and under the same order id. Nothing about the
-      // wire shape distinguishes it from a duplicate; only the flag does.
+      // wire shape distinguishes it from a duplicate; only the flag does
       .mockResolvedValueOnce(
         acceptedOrder({
           status: 'canceled',
@@ -576,7 +576,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills', () => {
     expect(first).toEqual([expect.objectContaining({ broker_fill_id: 'alpaca-entry-1', qty: 50 })]);
     // The bracket is NOT pruned on a terminal status the way `flattens` is,
     // so the terminating observation is still swept — which is what gives
-    // `ingestFills()` the chance to book that last 30.
+    // `ingestFills()` the chance to book that last 30
     expect(second).toEqual([
       expect.objectContaining({ broker_fill_id: 'alpaca-entry-1', qty: 80 }),
     ]);
@@ -692,7 +692,7 @@ describe('AlpacaBrokerAdapter integration: entry fill then stop-out', () => {
   // adapter only needs to normalize what `getOrder` reports, not emulate
   // the cancellation. Full ClosedTrade emission is #83's `ingestFills()`
   // (not yet built); this test proves the adapter-level fill normalization
-  // that #83 will consume, across the round trip from submit to stop-out.
+  // that #83 will consume, across the round trip from submit to stop-out
   it('normalizes the entry fill, then the stop fill, as the position round-trips to flat', async () => {
     const entryFilledAt = '2026-07-15T14:05:00Z';
     const stopFilledAt = '2026-07-15T16:30:00Z';
@@ -744,13 +744,13 @@ describe('AlpacaBrokerAdapter integration: entry fill then stop-out', () => {
         fee: 0,
         timestamp: new Date(entryFilledAt),
         // #842: Alpaca reports a running per-order total, flagged for
-        // `ingestFills()` so a later, larger observation books the increment.
+        // `ingestFills()` so a later, larger observation books the increment
         qty_is_cumulative: true,
       },
     ]);
 
     // The stop leg fills; Alpaca's native OCO has already cancelled the
-    // sibling target leg venue-side by the time this poll observes it.
+    // sibling target leg venue-side by the time this poll observes it
     vi.mocked(client.getOrder).mockResolvedValueOnce(
       acceptedOrder({
         status: 'filled',
@@ -788,7 +788,7 @@ describe('AlpacaBrokerAdapter integration: entry fill then stop-out', () => {
         fee: 0,
         timestamp: new Date(stopFilledAt),
         // #842: Alpaca reports a running per-order total, flagged for
-        // `ingestFills()` so a later, larger observation books the increment.
+        // `ingestFills()` so a later, larger observation books the increment
         qty_is_cumulative: true,
       },
     ]);
@@ -801,7 +801,7 @@ describe('AlpacaBrokerAdapter outbound call discipline', () => {
     const rateLimiter = permissiveLimiter();
     const acquire = vi.spyOn(rateLimiter, 'acquire');
     // The one construction in this file that had forgotten `unpricedFillAlerts`
-    // — the very thing the port comment above says "cannot exist".
+    // — the very thing the port comment above says "cannot exist"
     const adapter = new AlpacaBrokerAdapter({
       client,
       rateLimiter,
@@ -814,13 +814,13 @@ describe('AlpacaBrokerAdapter outbound call discipline', () => {
     await adapter.fetchNewFills(new Date(0));
 
     // submitOrder + the per-bracket getOrder poll — an unpaced call would show
-    // up here as a client call the limiter never saw.
+    // up here as a client call the limiter never saw
     expect(acquire).toHaveBeenCalledTimes(2);
   });
 
   it('never lets a venue error carry its HTTP context out of the adapter', async () => {
     // Alpaca's REST errors quote the failed request, API-key header included,
-    // and execute() copies a thrown message into a logged ExecutionResult.reason.
+    // and execute() copies a thrown message into a logged ExecutionResult.reason
     const secret = 'PKTEST_APIKEY_9f2c';
     const client = makeClient({
       submitOrder: vi.fn().mockRejectedValue(
@@ -889,7 +889,7 @@ describe('AlpacaBrokerAdapter outbound call discipline', () => {
       // NOT the client's raw `.message`, which is exactly what this test used
       // to assert stayed OUT of `BrokerError`. That credential-safety
       // boundary is unchanged; what changed is that Alpaca's parsed `message`
-      // field is now curated in, the same way `code` already was.
+      // field is now curated in, the same way `code` already was
       expect((error as BrokerError).venueMessage).toBe(
         'fractional orders must be simple orders that are DAY orders',
       );
@@ -919,7 +919,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills on inconsistent venue data', () => {
   // drops every OTHER bracket's and flatten's fills too when one happens to
   // land unpriced in the same poll (see `alpaca-adapter.test.ts`'s
   // `still collects a healthy bracket fill in the same poll as an unpriced
-  // flatten` for that case).
+  // flatten` for that case)
   it('does not fail the sweep for a filled quantity Alpaca reports no average price for', async () => {
     const client = makeClient({
       getOrder: vi.fn().mockResolvedValue(
@@ -942,14 +942,14 @@ describe('AlpacaBrokerAdapter.fetchNewFills on inconsistent venue data', () => {
 
     // Not booked (an empty array, same as "nothing new"), and not thrown —
     // retried next poll, exactly like an order the venue has not reported
-    // on at all yet.
+    // on at all yet
     await expect(adapter.fetchNewFills(new Date(0))).resolves.toEqual([]);
   });
 
   it('refuses an unparseable filled_qty rather than booking NaN', async () => {
     // `NaN <= 0` is false, so without an explicit finite check this sails past
     // the "nothing filled" guard and is recorded as `qty: NaN`, which poisons
-    // weighted-average pricing and realized PnL without ever failing loudly.
+    // weighted-average pricing and realized PnL without ever failing loudly
     const client = makeClient({
       getOrder: vi.fn().mockResolvedValue(
         acceptedOrder({
@@ -981,12 +981,12 @@ describe('AlpacaBrokerAdapter.fetchNewFills on inconsistent venue data', () => {
     // The regression this guards: `ingestFills()` awaits fetchNewFills ONCE
     // before advancing any lot, and `brackets` iterates in insertion order, so
     // an unhandled throw on the FIRST bracket would abort ingestion for the
-    // whole account — stop-outs on every later bracket included.
+    // whole account — stop-outs on every later bracket included
     const filledAt = '2026-07-15T15:00:00Z';
     const client = makeClient({
       getOrder: vi
         .fn()
-        // Submitted first, so it is swept first — the starvation position.
+        // Submitted first, so it is swept first — the starvation position
         .mockResolvedValueOnce(
           acceptedOrder({
             id: 'alpaca-poisoned',
@@ -1019,7 +1019,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills on inconsistent venue data', () => {
     const fills = await adapter.fetchNewFills(new Date(0));
 
     // The healthy lot still ingests; the poisoned one contributes nothing and
-    // is retried next sweep (dedup on broker_fill_id makes that free).
+    // is retried next sweep (dedup on broker_fill_id makes that free)
     expect(fills).toHaveLength(1);
     expect(fills[0]).toMatchObject({ client_order_id: 'healthy-lot', qty: 50, price: 100.02 });
   });
@@ -1038,7 +1038,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills failure logging (#609)', () => {
     const client = makeClient({
       getOrder: vi
         .fn()
-        // Swept first (insertion order): a genuine fill.
+        // Swept first (insertion order): a genuine fill
         .mockResolvedValueOnce(
           acceptedOrder({
             id: 'alpaca-healthy',
@@ -1051,7 +1051,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills failure logging (#609)', () => {
         // Swept second: an unparseable filled_qty is a genuine failure (a
         // plain Error, not the modelled/expected UnpricedFillError), so it
         // lands in `failures` — this is the exact "source A fills, source B
-        // fails in the SAME sweep" shape #609 was filed against.
+        // fails in the SAME sweep" shape #609 was filed against
         .mockResolvedValueOnce(
           acceptedOrder({
             id: 'alpaca-broken',
@@ -1065,7 +1065,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills failure logging (#609)', () => {
     const logger = recordingLogger();
     // #1123: a clock reading before either fill's `filled_at`, so the new
     // since-floor invariant audit stays quiet here — this test is about #609's
-    // per-source failure logging, not #1123's separate check.
+    // per-source failure logging, not #1123's separate check
     const clock = new FixedClock(new Date('2026-07-15T14:00:00Z'));
     const adapter = new AlpacaBrokerAdapter({
       client,
@@ -1082,7 +1082,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills failure logging (#609)', () => {
 
     // The healthy lot's fill is still returned — this ticket does not change
     // that — but before #609 the broken lot's failure was silently dropped
-    // right here, precisely because a fill was also read this sweep.
+    // right here, precisely because a fill was also read this sweep
     expect(fills).toHaveLength(1);
     expect(logger.entries).toHaveLength(1);
     expect(logger.entries[0]).toMatchObject({
@@ -1092,7 +1092,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills failure logging (#609)', () => {
         error: expect.stringMatching(/unparseable filled_qty 'N\/A'/),
         // fills_read > 0 is the #609 shape itself: a source failed in the
         // SAME sweep that also read a fill, the exact case the throw gate
-        // (`fills.length === 0 && failures.length > 0`) never sees.
+        // (`fills.length === 0 && failures.length > 0`) never sees
         fills_read: 1,
         bracket_failures: 1,
       },
@@ -1111,7 +1111,7 @@ describe('AlpacaBrokerAdapter.fetchNewFills failure logging (#609)', () => {
         }),
       ),
     });
-    // #1123: a clock reading before `filled_at`, same reason as the test above.
+    // #1123: a clock reading before `filled_at`, same reason as the test above
     const clock = new FixedClock(new Date('2026-07-15T14:00:00Z'));
     const adapter = new AlpacaBrokerAdapter({
       client,
@@ -1135,12 +1135,12 @@ describe('AlpacaBrokerAdapter.fetchNewFills failure logging (#609)', () => {
   // is the quiet path that actually matters in production (far more common
   // than a spotless sweep): if this ever starts logging, #524's "an unpriced
   // fill is not a failure" decision has been silently reversed at the log
-  // layer this ticket adds.
+  // layer this ticket adds
   it('logs nothing for an unpriced fill with a working journal (#524, not a #609 failure)', async () => {
     const logger = recordingLogger();
     const client = makeClient({ getOrder: vi.fn().mockResolvedValue(unpricedOrder()) });
     // #1123: a clock reading before `unpricedOrder`'s `filled_at`, same reason
-    // as the two tests above.
+    // as the two tests above
     const clock = new FixedClock(new Date('2026-07-15T14:00:00Z'));
     const adapter = new AlpacaBrokerAdapter({
       client,
@@ -1185,7 +1185,7 @@ describe('AlpacaBrokerAdapter since-floor invariant audit (#1123)', () => {
           status: 'filled',
           filled_qty: '100',
           filled_avg_price: '100.02',
-          // Earlier than T0, the clock read at submission time below.
+          // Earlier than T0, the clock read at submission time below
           filled_at: '2026-07-20T15:59:00Z',
         }),
       ),
@@ -1202,7 +1202,7 @@ describe('AlpacaBrokerAdapter since-floor invariant audit (#1123)', () => {
 
     const fills = await adapter.fetchNewFills(new Date(0));
 
-    // Flagged, not clamped: the fill is still booked at its reported date.
+    // Flagged, not clamped: the fill is still booked at its reported date
     expect(fills).toHaveLength(1);
     expect(logger.entries).toEqual([
       expect.objectContaining({
@@ -1221,7 +1221,7 @@ describe('AlpacaBrokerAdapter since-floor invariant audit (#1123)', () => {
   it('warns only on first sighting of a genuine violation, not every sweep', async () => {
     // `brackets` is never pruned, so a genuinely violating bracket is
     // re-polled forever — without a throttle this would warn on every one
-    // of these sweeps, not just the first.
+    // of these sweeps, not just the first
     const clock = new FixedClock(T0);
     const logger = recordingLogger();
     const client = makeClient({
@@ -1256,15 +1256,15 @@ describe('AlpacaBrokerAdapter since-floor invariant audit (#1123)', () => {
   // uses — so the original bracket's submission-time bound applies here too,
   // with no new map. The flatten sweep needed its own bound instead
   // (`flattens` is keyed by the EXIT's own idempotency_key, a different
-  // value) — covered separately by #1415, below.
+  // value) — covered separately by #1415, below
   //
   // #1123 round-2 review (F1): this test ALSO makes the ORIGINAL bracket
   // entry a violation, not just the re-armed leg — the exact scenario the
   // reviewer proved broken with a lot-only throttle key: the entry leg is
   // polled first and warns, and a lot-only `warnedSinceFloorViolations` key
-  // then silently swallowed the re-armed target's OWN, different violation.
+  // then silently swallowed the re-armed target's OWN, different violation
   // Both must warn — this is the regression test for the `clientOrderId:leg`
-  // composite key.
+  // composite key
   it('warns on BOTH the entry leg and a re-armed leg of the same lot, each once, when both violate', async () => {
     const clock = new FixedClock(T0);
     const logger = recordingLogger();
@@ -1278,12 +1278,12 @@ describe('AlpacaBrokerAdapter since-floor invariant audit (#1123)', () => {
       filled_avg_price: '100.02',
       // Earlier than T0, the clock read at the ORIGINAL bracket's
       // submission — the re-arm itself has no submission-time proxy of its
-      // own, and shares the lot's original bound instead.
+      // own, and shares the lot's original bound instead
       filled_at: '2026-07-20T15:59:00Z',
       legs: [],
     };
     // id-aware: BOTH the original bracket entry ('alpaca-entry-1') and the
-    // re-armed OCO ('rearm-venue-id') violate here.
+    // re-armed OCO ('rearm-venue-id') violate here
     const getOrder = vi.fn(async (id: string) => {
       if (id === 'rearm-venue-id') {
         return acceptedOrder({ id: 'rearm-venue-id', ...violatingFill });
@@ -1300,7 +1300,7 @@ describe('AlpacaBrokerAdapter since-floor invariant audit (#1123)', () => {
     });
     await adapter.submitBracket(makeBracket());
     // `side` is the lot's HELD side (matches `makeBracket`'s 'buy'), so stop
-    // below / target above, same ordering as the bracket itself.
+    // below / target above, same ordering as the bracket itself
     await adapter.rearmProtectiveLegs('key-aapl-1355', 'AAPL', 'buy', 100, 90, 115);
 
     const fills = await adapter.fetchNewFills(new Date(0));
@@ -1362,7 +1362,7 @@ describe('AlpacaBrokerAdapter since-floor invariant audit (#1123)', () => {
   // (see its own doc comment), so a long-closed bracket is re-polled every
   // sweep and would trip the OLD, global `since` floor constantly once
   // `since` has moved on to newer lots — that is noise, not a genuine
-  // per-lot violation, and must not warn.
+  // per-lot violation, and must not warn
   it('stays quiet for a re-polled, already-closed bracket even once the global since floor has moved past its fill', async () => {
     const clock = new FixedClock(T0);
     const logger = recordingLogger();
@@ -1388,7 +1388,7 @@ describe('AlpacaBrokerAdapter since-floor invariant audit (#1123)', () => {
     await adapter.fetchNewFills(new Date(0));
 
     // A later sweep, `since` now well past this bracket's own fill —
-    // `brackets` is never pruned, so it is polled again regardless.
+    // `brackets` is never pruned, so it is polled again regardless
     const laterSince = new Date('2026-07-20T18:00:00Z');
     await adapter.fetchNewFills(laterSince);
 
@@ -1411,7 +1411,7 @@ describe('AlpacaBrokerAdapter since-floor invariant audit (#1123)', () => {
 
     // Simulate a restart: a fresh adapter over the same durable state has no
     // in-memory `bracketSubmittedAt` entry for this bracket, only `brackets`
-    // (restored from `state.loadBrackets`).
+    // (restored from `state.loadBrackets`)
     const logger = recordingLogger();
     const client = makeClient({
       getOrder: vi.fn().mockResolvedValue(
@@ -1419,7 +1419,7 @@ describe('AlpacaBrokerAdapter since-floor invariant audit (#1123)', () => {
           status: 'filled',
           filled_qty: '100',
           filled_avg_price: '100.02',
-          // Earlier than T0 — would warn if this bracket had a local proxy.
+          // Earlier than T0 — would warn if this bracket had a local proxy
           filled_at: '2026-07-20T15:00:00Z',
         }),
       ),
@@ -1462,7 +1462,7 @@ describe('AlpacaBrokerAdapter flatten sweep since-floor invariant audit (#1415)'
           status: 'filled',
           filled_qty: '12',
           filled_avg_price: '99.50',
-          // Earlier than T0, the clock read at submission time below.
+          // Earlier than T0, the clock read at submission time below
           filled_at: '2026-07-20T15:59:00Z',
           legs: [],
         }),
@@ -1480,7 +1480,7 @@ describe('AlpacaBrokerAdapter flatten sweep since-floor invariant audit (#1415)'
 
     const fills = await adapter.fetchNewFills(new Date(0));
 
-    // Flagged, not clamped: the fill is still booked at its reported date.
+    // Flagged, not clamped: the fill is still booked at its reported date
     expect(fills).toHaveLength(1);
     expect(logger.entries).toEqual([
       expect.objectContaining({
@@ -1563,7 +1563,7 @@ describe('AlpacaBrokerAdapter flatten sweep since-floor invariant audit (#1415)'
   // #1415: `resumeFlatten` has no same-process clock read to offer — same
   // reason `getOrder`'s bracket-restore path leaves `bracketSubmittedAt`
   // empty for a restored bracket (#1123). A flatten resumed after a restart
-  // therefore stays unaudited rather than clamped or estimated.
+  // therefore stays unaudited rather than clamped or estimated
   it('does not audit a flatten resumed after a restart, which has no local submission-time proxy', async () => {
     const clock = new FixedClock(T0);
     const violatingOrder = acceptedOrder({
@@ -1571,7 +1571,7 @@ describe('AlpacaBrokerAdapter flatten sweep since-floor invariant audit (#1415)'
       status: 'filled',
       filled_qty: '12',
       filled_avg_price: '99.50',
-      // Earlier than T0 — would warn if this flatten had a local proxy.
+      // Earlier than T0 — would warn if this flatten had a local proxy
       filled_at: '2026-07-20T15:00:00Z',
       legs: [],
     });
@@ -1655,7 +1655,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
       client: makeClient({ getOrder: vi.fn().mockResolvedValue(unpricedOrder()) }),
     });
 
-    // First sighting starts the clock; nothing is due yet.
+    // First sighting starts the clock; nothing is due yet
     await adapter.fetchNewFills(new Date(0)).catch(() => undefined);
     expect(alerts.posted).toEqual([]);
 
@@ -1667,7 +1667,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
         venue: 'alpaca',
         client_order_id: 'key-aapl-1355',
         // The venue order id, the symbol and the quantity are what makes this
-        // actionable: an operator has to find this order on Alpaca's dashboard.
+        // actionable: an operator has to find this order on Alpaca's dashboard
         broker_fill_id: 'alpaca-entry-1',
         leg: 'entry',
         instrument: 'AAPL',
@@ -1679,7 +1679,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
     ]);
 
     // A permanent venue anomaly must not page every 15 seconds for the rest of
-    // the soak — which is what "do not silently retry forever" cuts both ways on.
+    // the soak — which is what "do not silently retry forever" cuts both ways on
     clock.advance(DEFAULT_UNPRICED_FILL_AGE_OUT_MS * 4);
     await adapter.fetchNewFills(new Date(0)).catch(() => undefined);
     expect(alerts.posted).toHaveLength(1);
@@ -1687,7 +1687,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
 
   it('names the bracket parent symbol for an unpriced protective leg', async () => {
     // `AlpacaOrderLeg` carries no `symbol` of its own, so an alert built from
-    // the leg alone could not say what instrument is stuck.
+    // the leg alone could not say what instrument is stuck
     const clock = new FixedClock(T0);
     const alerts = recordingAlerts();
     const adapter = await submitAndSweep({
@@ -1732,7 +1732,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
   // (a `NormalizedFill` carries no `instrument` field at all) — so this is
   // where the read-back conversion is pinned: the operator-facing alert must
   // read 'BTC-USD', never Alpaca's wire 'BTC/USD', matching what the rest of
-  // the system (and the operator) calls this instrument everywhere else.
+  // the system (and the operator) calls this instrument everywhere else
   it('converts a crypto bracket symbol back to dash form for an unpriced-fill alert', async () => {
     const clock = new FixedClock(T0);
     const alerts = recordingAlerts();
@@ -1753,7 +1753,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
 
   // #585: same read-back conversion, through the FLATTEN sweep rather than
   // the bracket one — a separate code path in `fetchNewFills` with its own
-  // `symbolOf` call.
+  // `symbolOf` call
   it('converts a crypto flatten symbol back to dash form for an unpriced-fill alert', async () => {
     const clock = new FixedClock(T0);
     const alerts = recordingAlerts();
@@ -1782,7 +1782,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
 
   // #586: the EMULATED crypto sweep's unpriced-fill posture — a stop leg the
   // venue reports filled but will not price is recorded and escalated under
-  // the lot's own dash-form instrument, exactly as the native sweeps do.
+  // the lot's own dash-form instrument, exactly as the native sweeps do
   // (Crypto no longer reaches the equity re-arm sweep this test used to
   // exercise; the emulation names the instrument from its own journalled
   // request, so no read-back conversion is even needed.)
@@ -1833,9 +1833,9 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
       }),
     );
 
-    // Sweep 1: the entry fill is observed and the two plain legs are armed.
+    // Sweep 1: the entry fill is observed and the two plain legs are armed
     await adapter.fetchNewFills(new Date(0));
-    // Sweep 2: the stop leg reports filled-but-unpriced — recorded, not booked.
+    // Sweep 2: the stop leg reports filled-but-unpriced — recorded, not booked
     await adapter.fetchNewFills(new Date(0)).catch(() => undefined);
     clock.advance(DEFAULT_UNPRICED_FILL_AGE_OUT_MS);
     await adapter.fetchNewFills(new Date(0)).catch(() => undefined);
@@ -1846,7 +1846,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
   it('escalates even on a sweep that other brackets are filling normally', async () => {
     // The path that would otherwise hide it: with any healthy fill in the sweep
     // the aggregate throw is skipped and the failure list is discarded, so the
-    // escalation cannot be hung off the failure path.
+    // escalation cannot be hung off the failure path
     const clock = new FixedClock(T0);
     const alerts = recordingAlerts();
     const client = makeClient({
@@ -1902,7 +1902,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
 
     await adapter.fetchNewFills(new Date(0)).catch(() => undefined);
 
-    // The venue catches up one poll later — the transient case.
+    // The venue catches up one poll later — the transient case
     (client.getOrder as ReturnType<typeof vi.fn>).mockResolvedValue(
       acceptedOrder({
         status: 'filled',
@@ -1916,7 +1916,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
     expect(fills).toHaveLength(1);
 
     // Long past the threshold measured from the FIRST sighting: a resolved
-    // anomaly must not keep ticking towards an alert nobody needs.
+    // anomaly must not keep ticking towards an alert nobody needs
     clock.advance(DEFAULT_UNPRICED_FILL_AGE_OUT_MS * 2);
     await adapter.fetchNewFills(new Date(0));
 
@@ -1925,13 +1925,13 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
 
   it('retries delivery instead of recording an alert nobody received', async () => {
     // "Do not silently give up": a channel outage at the moment the age-out
-    // fires must not consume the one alert this fill ever gets.
+    // fires must not consume the one alert this fill ever gets
     const clock = new FixedClock(T0);
     const state = new InMemoryBrokerStateStore();
     const failing: UnpricedFillAlertChannel = {
       postUnpricedFillAlert: async () => {
         // Realistically shaped: a transport error quotes the request it failed
-        // on, which is why the adapter must not re-throw or attach it.
+        // on, which is why the adapter must not re-throw or attach it
         throw new Error('POST https://api.telegram.org/bot<token>/sendMessage failed: 503');
       },
     };
@@ -1949,7 +1949,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
     expect(state.loadUnpricedFills('alpaca')[0]?.alerted_at).toBeNull();
 
     // A second adapter over the SAME state — the channel is fixed, the row is
-    // still owed an alert, and the clock still reads from the first sighting.
+    // still owed an alert, and the clock still reads from the first sighting
     const alerts = recordingAlerts();
     const recovered = new AlpacaBrokerAdapter({
       client: makeClient({ getOrder: vi.fn().mockResolvedValue(unpricedOrder()) }),
@@ -2010,7 +2010,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
 
   it('does not leak the alert channel error text into the sweep failure', async () => {
     // A Telegram transport error quotes the URL it failed on, and that URL
-    // carries the bot token — `BrokerError`'s posture applies here too.
+    // carries the bot token — `BrokerError`'s posture applies here too
     const clock = new FixedClock(T0);
     const secret = 'bot123456:SUPER-SECRET-TOKEN';
     const adapter = await submitAndSweep({
@@ -2037,7 +2037,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
   // #524 review (deepseek): before this fix, an UnpricedFillError counted as
   // a sweep failure in BOTH the bracket loop and the flatten loop (#517
   // faithfully mirrored the bracket loop's own pre-existing behaviour) —
-  // contradicting the bracket catch's own "skipped, not swallowed" comment.
+  // contradicting the bracket catch's own "skipped, not swallowed" comment
   // On a poll where an unpriced fill was the ONLY new activity, that made
   // the whole `fetchNewFills` call throw, which `ingestFills()` never
   // catches per-order — nothing from ANY bracket or flatten got persisted
@@ -2045,7 +2045,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
   // flatten sweep specifically (the bracket-only version of this failure
   // mode already existed before #517; the tests above tolerate it via
   // `.catch(() => undefined)` because their own assertions are about the
-  // age-out mechanism, not the throw).
+  // age-out mechanism, not the throw)
   it('does not fail the sweep when the only new activity is an unpriced flatten fill', async () => {
     const submitMarketOrder = vi.fn().mockResolvedValue({ ...acceptedOrder(), id: 'flatten-1' });
     const client = makeClient({
@@ -2094,7 +2094,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
     const fills = await adapter.fetchNewFills(new Date(0));
 
     // The bracket's entry fill made it through untouched — the unpriced
-    // flatten cost the sweep nothing beyond its own contribution.
+    // flatten cost the sweep nothing beyond its own contribution
     expect(fills).toEqual([
       {
         client_order_id: 'key-aapl-1355',
@@ -2105,7 +2105,7 @@ describe('AlpacaBrokerAdapter unpriced-fill age-out', () => {
         fee: 0,
         timestamp: new Date(filledAt),
         // #842: Alpaca reports a running per-order total, flagged for
-        // `ingestFills()` so a later, larger observation books the increment.
+        // `ingestFills()` so a later, larger observation books the increment
         qty_is_cumulative: true,
       },
     ]);
@@ -2142,7 +2142,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       side: 'sell',
       qty: '12',
       // The one TIF Alpaca accepts for a market order on BOTH venues, and the
-      // right semantics for an emergency exit: fill now, leave nothing resting.
+      // right semantics for an emergency exit: fill now, leave nothing resting
       time_in_force: 'ioc',
       client_order_id: 'flatten-key',
     });
@@ -2157,7 +2157,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
   // scheduler.ts, orchestrator/production.ts) spell every crypto instrument
   // as '<BASE>-USD' and every equity as a bare ticker with no separator at
   // all, so a '-USD' suffix unambiguously means crypto for every instrument
-  // this adapter is configured to ever see.
+  // this adapter is configured to ever see
   it('converts a dash-form crypto instrument to Alpaca slash form when flattening', async () => {
     const submitMarketOrder = vi.fn().mockResolvedValue({ ...acceptedOrder(), id: 'flatten-1' });
     const adapter = adapterWith(makeClient({ submitMarketOrder }));
@@ -2173,7 +2173,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
   // matter what `ingestFills()` did with it. This is that gap's own test,
   // independent of `ingestFills()`'s attribution (covered in
   // `execute.test.ts` against the Simulated adapter): does the SWEEP even
-  // see the order.
+  // see the order
   it('sweeps a submitted flatten and reports its fill tagged as an exit, not an entry', async () => {
     const submitMarketOrder = vi.fn().mockResolvedValue({ ...acceptedOrder(), id: 'flatten-1' });
     const filledAt = '2026-07-15T15:10:00Z';
@@ -2184,7 +2184,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         filled_qty: '12',
         filled_avg_price: '99.50',
         filled_at: filledAt,
-        legs: [], // a flatten is a plain market order — no attached legs.
+        legs: [], // a flatten is a plain market order — no attached legs
       }),
     );
     const adapter = adapterWith(makeClient({ submitMarketOrder, getOrder }));
@@ -2202,7 +2202,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         fee: 0,
         timestamp: new Date(filledAt),
         // #842: Alpaca reports a running per-order total, flagged for
-        // `ingestFills()` so a later, larger observation books the increment.
+        // `ingestFills()` so a later, larger observation books the increment
         qty_is_cumulative: true,
       },
     ]);
@@ -2220,7 +2220,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     await adapter.fetchNewFills(new Date(0));
 
     // One tracked flatten, so one `getOrder` call — the second `submitFlatten`
-    // overwrote the same map entry rather than adding a second one.
+    // overwrote the same map entry rather than adding a second one
     expect(getOrder).toHaveBeenCalledTimes(1);
   });
 
@@ -2237,7 +2237,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
 
     // Resolved through the VENUE, not the local bracket map: that map is
     // populated only by submitBracket in this process, so after a restart it
-    // is empty and answering from it would cancel nothing.
+    // is empty and answering from it would cancel nothing
     expect(cancelOrder).toHaveBeenCalledWith('venue-77');
   });
 
@@ -2326,7 +2326,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     it('keeps the id the direct lookup DID answer with when only the :rearm lookup breaks', async () => {
       // The `:rearm` lookup alone failing says nothing about the original's
       // id, and that id is already in hand — only the unanswered one is
-      // re-derived from the list.
+      // re-derived from the list
       const getOrderByClientOrderId = vi.fn(async (clientOrderId: string) => {
         if (clientOrderId === 'key-1') return { ...acceptedOrder(), id: 'bracket-venue-id' };
         throw new Error('order-details 503 on the :rearm key');
@@ -2353,7 +2353,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       // The re-armed id was placed by this process, so the venue's outage
       // cannot cost it. Re-deriving it from the list could only lose it —
       // one page, and a leg past it reads as `null` — and cancelling the
-      // parent while a protective leg is live is the #516 hazard itself.
+      // parent while a protective leg is live is the #516 hazard itself
       let directFails = false;
       const getOrderByClientOrderId = vi.fn(async (clientOrderId: string) => {
         if (directFails) throw new Error('order-details 503');
@@ -2396,7 +2396,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         'rearm-venue-id',
         'bracket-venue-id',
       ]);
-      // The list is asked for the PARENT only — the re-arm never needed it.
+      // The list is asked for the PARENT only — the re-arm never needed it
       expect(listOpenOrders).toHaveBeenCalledTimes(1);
     });
 
@@ -2415,12 +2415,12 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       );
 
       // #867 unchanged: a lookup outage leaves the lot's protection fully
-      // intact, and the caller's fail-closed refusal is still the safe answer.
+      // intact, and the caller's fail-closed refusal is still the safe answer
       //
       // Which failure it names is the assertion: the DIRECT lookup's, not the
       // fallback's. `sanitizeBrokerError` strips the original message by
       // design (broker-error.ts's credential boundary), so the status it
-      // carried is what survives to say which cause this is.
+      // carried is what survives to say which cause this is
       await expect(adapter.cancel('key-1', 'AAPL')).rejects.toMatchObject({ statusCode: 503 });
       expect(cancelOrder).not.toHaveBeenCalled();
     });
@@ -2458,14 +2458,14 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     // Answers for the ONE id the prior was placed under, and `null` for the
     // rest of this lot's wire-id space — the shape #1346 measured. A fake
     // answering the same order for EVERY id would read as a lot that had
-    // already spent all four.
+    // already spent all four
     const prior: AlpacaOrder = {
       ...acceptedOrder(),
       id: 'rearm-venue-id',
       client_order_id: 'key-1:rearm',
       order_class: 'oco',
       qty: '6',
-      // What the venue holds: rounded, because that is what was sent.
+      // What the venue holds: rounded, because that is what was sent
       limit_price: '754.19',
       legs: [
         {
@@ -2490,7 +2490,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     );
 
     // The caller passes the UNROUNDED levels, exactly as the lot's own
-    // bracket multiples produced them.
+    // bracket multiples produced them
     await adapter.rearmProtectiveLegs('key-1', 'SPY', 'sell', 6, 766.40805334, 754.18889332);
 
     expect(cancelOrder).not.toHaveBeenCalled();
@@ -2521,9 +2521,9 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
   // it carries `${clientOrderId}:rearm`, a DIFFERENT id from the lot's own,
   // so the lookup above alone can never find it. Left uncancelled, it stays
   // live at the venue and can fire into the flatten below's now-flat
-  // position, reintroducing the #516 hazard `cancel()` exists to prevent.
+  // position, reintroducing the #516 hazard `cancel()` exists to prevent
   describe('cancel() also clears a re-armed residual (#525 follow-up)', () => {
-    /** A `getOrderByClientOrderId` fake that answers per-id, like the real venue. */
+    /** A `getOrderByClientOrderId` fake that answers per-id, like the real venue */
     function byClientOrderId(
       orders: Record<string, ReturnType<typeof acceptedOrder> | null>,
     ): (clientOrderId: string) => Promise<ReturnType<typeof acceptedOrder> | null> {
@@ -2536,7 +2536,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         byClientOrderId({
           'key-1': { ...acceptedOrder(), id: 'bracket-venue-id' },
           // A MATCHING live prior (#549's adopt-or-place compares qty/levels
-          // before adopting), so the rearm below adopts without cancelling.
+          // before adopting), so the rearm below adopts without cancelling
           'key-1:rearm': {
             ...acceptedOrder(),
             id: 'rearm-venue-id',
@@ -2570,21 +2570,21 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         makeClient({ getOrderByClientOrderId, cancelOrder, submitOcoOrder }),
       );
       // The re-arm happened in THIS process, so `rearmedLegs` already has
-      // it — the fast, no-network-round-trip path.
+      // it — the fast, no-network-round-trip path
       await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
-      cancelOrder.mockClear(); // the rearm's own submit isn't a cancel call.
+      cancelOrder.mockClear(); // the rearm's own submit isn't a cancel call
 
       await adapter.cancel('key-1', 'AAPL');
 
       // #867: the ORIGINAL bracket's cancel is the LAST destructive act, so a
-      // failure anywhere earlier leaves the lot no more exposed than it was.
+      // failure anywhere earlier leaves the lot no more exposed than it was
       expect(sequence).toEqual(['rearm-venue-id', 'bracket-venue-id']);
     });
 
     it('finds and cancels a re-armed OCO placed before a restart, when rearmedLegs is empty', async () => {
       // A FRESH adapter — never called `rearmProtectiveLegs` in this
       // process, so `rearmedLegs` starts empty. Only the venue lookup by
-      // the derived id can find the order a PRIOR process re-armed.
+      // the derived id can find the order a PRIOR process re-armed
       const getOrderByClientOrderId = vi.fn(
         byClientOrderId({
           'key-1': { ...acceptedOrder(), id: 'bracket-venue-id' },
@@ -2606,7 +2606,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         byClientOrderId({
           'key-1': { ...acceptedOrder(), id: 'bracket-venue-id' },
           // No 'key-1:rearm' entry — the venue genuinely has no such order,
-          // the ordinary case for a lot that was never partially flattened.
+          // the ordinary case for a lot that was never partially flattened
         }),
       );
       const cancelOrder = vi.fn().mockResolvedValue(undefined);
@@ -2636,14 +2636,14 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       // the original bracket is touched. `executeExit` reads the throw as
       // "cancelling the held lot's legs failed" and refuses to submit the
       // flatten — which is only the safe answer because the lot still has
-      // protection working at the venue, as this assertion pins.
+      // protection working at the venue, as this assertion pins
       expect(cancelOrder).not.toHaveBeenCalledWith('bracket-venue-id');
       expect(cancelOrder).toHaveBeenCalledTimes(1);
     });
 
     // THE #867 DEFECT. Between #546 and #867 the `:rearm` LOOKUP ran AFTER
     // `cancelOrder(bracket)` had already succeeded, and it ran for every lot
-    // on every exit — including this one, which never had a re-arm at all.
+    // on every exit — including this one, which never had a re-arm at all
     // A degraded venue on that lookup therefore threw with the stop and
     // target already gone, `executeExit` refused the flatten, and the lot sat
     // open and naked. Both lookups now happen before either cancel.
@@ -2659,7 +2659,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
 
       // The load-bearing assertion: NO cancel went out. The lot's stop and
       // target are still working, so `executeExit`'s refusal of the flatten
-      // leaves it exactly as protected as it was before the exit was tried.
+      // leaves it exactly as protected as it was before the exit was tried
       expect(cancelOrder).not.toHaveBeenCalled();
     });
 
@@ -2680,13 +2680,13 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
   // #525: re-arming a residual left by a partial flatten. `executeExit`
   // cancels the lot's ENTIRE bracket before flattening, so unlike a resize
   // there is no live leg left to amend — this submits a fresh
-  // protective-legs-only OCO order instead.
+  // protective-legs-only OCO order instead
   it("re-arms with an entry-less OCO order under a FRESH client order id, never the lot's own", async () => {
     const submitOcoOrder = vi
       .fn()
       .mockResolvedValue({ ...acceptedOrder(), id: 'rearm-1', order_class: 'oco', legs: [] });
     // #549 adopt-or-place: null = the venue authoritatively has no prior
-    // re-arm under the deterministic wire id, so this places afresh.
+    // re-arm under the deterministic wire id, so this places afresh
     const getOrderByClientOrderId = vi.fn().mockResolvedValue(null);
     const adapter = adapterWith(makeClient({ submitOcoOrder, getOrderByClientOrderId }));
 
@@ -2695,19 +2695,19 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     expect(submitOcoOrder).toHaveBeenCalledWith({
       symbol: 'AAPL',
       // The CLOSING side — the lot is HELD long ('buy'), so the order that
-      // reduces it sells.
+      // reduces it sells
       side: 'sell',
       qty: '6',
       time_in_force: 'gtc',
       // Never `'key-1'` — that id already named the now-cancelled original
       // bracket (see the method's own doc comment for why reusing it is
-      // refused rather than risked).
+      // refused rather than risked)
       client_order_id: 'key-1:rearm',
       order_class: 'oco',
       // #586, VERIFIED wire shape (#550): the take-profit price NESTED under
       // `take_profit`, never top-level — Alpaca rejects the top-level form
       // for every asset class (422 code 40010001, "oco orders require
-      // take_profit.limit_price").
+      // take_profit.limit_price")
       take_profit: { limit_price: '110.00' },
       stop_loss: { stop_price: '95.00' },
     });
@@ -2717,7 +2717,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
   // `${key}:rearm-1`, ...), so a re-arm that succeeded venue-side before a
   // crash lost its confirmation is ADOPTED by the retry rather than
   // double-submitted (or misread as a fresh failure when the venue rejects the
-  // duplicate client order id).
+  // duplicate client order id)
   describe('re-arm adopt-or-place (#549)', () => {
     /**
      * A venue that answers per `client_order_id` and has nothing under the ids
@@ -2730,7 +2730,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       });
     }
 
-    /** A live prior OCO whose qty/levels match the canonical (6, 95, 110) request. */
+    /** A live prior OCO whose qty/levels match the canonical (6, 95, 110) request */
     function matchingPriorOco() {
       return {
         ...acceptedOrder(),
@@ -2771,13 +2771,13 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     // #549 review: the wire id is per-lot and reused across attempts, so a
     // resting prior sized for a DIFFERENT residual (further exit fills landed
     // between the crashed attempt and this retry) must not be adopted — an
-    // oversized stop over-closes into a reverse position (#516's hazard).
+    // oversized stop over-closes into a reverse position (#516's hazard)
     it('cancels and replaces a live prior whose qty no longer matches the residual', async () => {
       const submitOcoOrder = vi
         .fn()
         .mockResolvedValue({ ...acceptedOrder(), id: 'rearm-2', order_class: 'oco', legs: [] });
       const cancelOrder = vi.fn().mockResolvedValue(undefined);
-      // Sized for the OLD residual (9), request now wants 6.
+      // Sized for the OLD residual (9), request now wants 6
       const getOrderByClientOrderId = venueHolding({
         'key-1:rearm': { ...matchingPriorOco(), qty: '9' },
       });
@@ -2799,7 +2799,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       const cancelOrder = vi.fn().mockResolvedValue(undefined);
       // ABSENT, not `undefined`: `exactOptionalPropertyTypes` makes those
       // different types, and the wire shape this stands in for is a response
-      // that never carried the field.
+      // that never carried the field
       const prior: AlpacaOrder = matchingPriorOco();
       delete prior.limit_price;
       const getOrderByClientOrderId = venueHolding({ 'key-1:rearm': prior });
@@ -2818,7 +2818,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     // so its resting remainder equals what that episode still holds, while
     // the caller's residual may be computed off a store that has not
     // ingested those fills yet. Cancel-and-replace sized to that stale
-    // figure would over-arm; adoption is the safe answer, like `filled`.
+    // figure would over-arm; adoption is the safe answer, like `filled`
     it('adopts a PARTIALLY_FILLED prior without cancel-and-replace, even when the store-side residual disagrees', async () => {
       const submitOcoOrder = vi.fn();
       const cancelOrder = vi.fn();
@@ -2826,7 +2826,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         'key-1:rearm': {
           ...matchingPriorOco(),
           // qty 6 with 2 filled: 4 rest, 4 held from this episode — while the
-          // request (computed off a store missing those fills) still says 6.
+          // request (computed off a store missing those fills) still says 6
           status: 'partially_filled',
           filled_qty: '2',
         },
@@ -2845,7 +2845,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     // status — done_for_day, replaced, stopped — into 'submitted', so a
     // blocklist of dead states would adopt a matching-but-not-resting prior
     // as protection while nothing rests. Adoption is allowlisted on the raw
-    // resting statuses; anything else is retired and replaced.
+    // resting statuses; anything else is retired and replaced
     it('does not adopt a matching prior in an unrecognized status (done_for_day) — cancels and replaces', async () => {
       const submitOcoOrder = vi
         .fn()
@@ -2900,7 +2900,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
 
       // A cancelled prior protects nothing — the retry submits. Under the NEXT
-      // wire id, not `key-1:rearm`: that one is spent for good (#1346).
+      // wire id, not `key-1:rearm`: that one is spent for good (#1346)
       expect(submitOcoOrder).toHaveBeenCalledTimes(1);
       expect(submitOcoOrder).toHaveBeenCalledWith(
         expect.objectContaining({ client_order_id: 'key-1:rearm-1' }),
@@ -2974,7 +2974,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       // `partially_filled` counts as WORKING, not done: an OCO's remainder
       // (`qty − filled_qty`) is still live protection at the venue. Filtering
       // on 'accepted' alone made every `resting()` assertion blind to the one
-      // state where a second leg would be a #516 double-arm.
+      // state where a second leg would be a #516 double-arm
       const WORKING = [
         'new',
         'accepted',
@@ -2994,7 +2994,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     // `:rearm` id the second re-arm 422s, and every later sweep pass 422s
     // identically: the marker never clears and the residual is never
     // protected. A permanent protection gap wearing a transient error's
-    // clothes.
+    // clothes
     it('protects the SAME lot a second time after its first re-arm was cancelled', async () => {
       const venue = measuredAlpacaVenue();
       const adapter = adapterWith(makeClient(venue));
@@ -3012,14 +3012,14 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
 
     // The other direction: advancing must never leave two OCOs able to fire
     // at one residual. A resting prior is either ADOPTED (nothing submitted)
-    // or CANCELLED before the walk moves past it.
+    // or CANCELLED before the walk moves past it
     it('never leaves two live OCOs on one lot across a cancel-and-replace', async () => {
       const venue = measuredAlpacaVenue();
       const adapter = adapterWith(makeClient(venue));
 
       await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
       // Re-armed again for a SMALLER residual while the first still rests:
-      // the mismatch forces cancel-and-replace rather than adoption.
+      // the mismatch forces cancel-and-replace rather than adoption
       await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
 
       expect(venue.resting().map((row) => row.client_order_id)).toEqual(['key-1:rearm-1']);
@@ -3028,7 +3028,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
 
     // Adoption still short-circuits the walk: an unchanged residual whose OCO
     // already rests must cost no second id, or a lot that is merely re-swept
-    // would burn through `MAX_REARM_ATTEMPTS` for nothing.
+    // would burn through `MAX_REARM_ATTEMPTS` for nothing
     it('adopts the resting prior instead of advancing when nothing changed', async () => {
       const venue = measuredAlpacaVenue();
       const adapter = adapterWith(makeClient(venue));
@@ -3042,7 +3042,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     });
 
     // Bounded, and loud at the bound: the walk refuses rather than submitting
-    // under an id the venue is certain to reject.
+    // under an id the venue is certain to reject
     //
     // #1570 review, finding 3: the refusal is PERMANENT, so it is raised as
     // `ProtectiveRearmUnsupportedError` — the existing #1214 discriminant —
@@ -3051,7 +3051,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     // pass can ever succeed on a lot whose ids are all spent: Alpaca never
     // releases a `client_order_id`. Routing it here instead makes both callers
     // re-flatten the residual (David's 2026-09-08 ruling), page against the
-    // permanent-gap dedup column, and stop retrying.
+    // permanent-gap dedup column, and stop retrying
     it('raises the PERMANENT-gap error once every wire id this lot may use is spent', async () => {
       const venue = measuredAlpacaVenue();
       const adapter = adapterWith(makeClient(venue));
@@ -3070,7 +3070,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       expect((thrown as Error).message).toMatch(/exhausted all 4 re-arm wire ids/);
       // Duck-typed, the way the callers ask (`isProtectiveRearmUnsupported`) —
       // and it must survive the adapter's `sanitizeBrokerError` wrapper, which
-      // is why the throw sits OUTSIDE `this.call`.
+      // is why the throw sits OUTSIDE `this.call`
       expect(isProtectiveRearmUnsupported(thrown)).toBe(true);
       expect(venue.submitOcoOrder).toHaveBeenCalledTimes(4);
     });
@@ -3078,7 +3078,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     // `cancel()` must follow the walk. Cancelling `key-1:rearm` — spent and
     // long terminal — while `key-1:rearm-1` rests would leave a protective
     // leg live behind a cancelled bracket, free to fire into the position the
-    // flatten is about to close (#516, #867).
+    // flatten is about to close (#516, #867)
     it('cancel() retires the NEWEST re-arm, not the first id the lot ever used', async () => {
       const venue = measuredAlpacaVenue();
       const adapter = adapterWith(
@@ -3086,7 +3086,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
           ...venue,
           // Forces `resolveCancelTargets` down the venue-lookup path rather
           // than the in-process `rearmedLegs` shortcut, which is what a
-          // restarted process faces.
+          // restarted process faces
           getOrderByClientOrderId: vi.fn(async (clientOrderId: string) =>
             clientOrderId === 'key-1' ? null : (venue.rows.get(clientOrderId) ?? null),
           ),
@@ -3135,13 +3135,13 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
 
       await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
       // Re-armed for a SMALLER residual while attempt 0 still rests: the
-      // mismatch cancels it and the walk places attempt 1.
+      // mismatch cancels it and the walk places attempt 1
       await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
       expect(venue.resting().map((row) => row.client_order_id)).toEqual(['key-1:rearm-1']);
 
       // ...and that cancel LOST the race to attempt 0's own fill. The venue
       // row ends `filled`, not `canceled` — the outcome `cancelOrder`'s
-      // 404/422 tolerance exists to absorb.
+      // 404/422 tolerance exists to absorb
       venue.rows.set('key-1:rearm', {
         ...venue.rows.get('key-1:rearm')!,
         status: 'filled',
@@ -3150,7 +3150,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
 
       // The third pass — the sweep re-verifying a lot it has already re-armed
       // twice. This is where the short-circuit used to overwrite the newest
-      // live id with the filled one.
+      // live id with the filled one
       await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
 
       await adapter.cancel('key-1', 'AAPL');
@@ -3158,7 +3158,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       // LAST, not merely somewhere in the list: `oco-1` was legitimately
       // cancelled by the second re-arm's cancel-and-replace. What the defect
       // produced was `cancel()` reaching for `oco-1` AGAIN — a no-op on a
-      // filled order — and never touching the leg that was actually live.
+      // filled order — and never touching the leg that was actually live
       expect(venue.cancelOrder).toHaveBeenLastCalledWith('oco-2');
       expect(venue.resting()).toEqual([]);
     });
@@ -3183,7 +3183,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         filled_qty: '6',
       });
       // Cancelled AT THE VENUE, not by this walk — the #429 intervention path
-      // (an operator flattening from the Alpaca UI, a day order expiring).
+      // (an operator flattening from the Alpaca UI, a day order expiring)
       venue.rows.set('key-1:rearm-1', {
         ...venue.rows.get('key-1:rearm-1')!,
         status: 'canceled',
@@ -3240,7 +3240,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
       await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
       // The cancel lost the race to a PARTIAL fill — the ordinary outcome for
-      // a stop or target leg, and the remainder keeps working.
+      // a stop or target leg, and the remainder keeps working
       venue.rows.set('key-1:rearm', {
         ...venue.rows.get('key-1:rearm')!,
         status: 'partially_filled',
@@ -3387,7 +3387,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       ];
 
       // Prefixes over the non-absent shapes: the walk stops at the first gap,
-      // so a sequence is fully described by what sits below that gap.
+      // so a sequence is fully described by what sits below that gap
       let sequences: Shape[][] = [[]];
       let frontier: Shape[][] = [[]];
       for (let depth = 0; depth < 4; depth += 1) {
@@ -3423,7 +3423,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         if (shape === 'filled') return { ...row, status: 'filled', filled_qty: '6' };
         // #1573: a full fill of a SMALLER earlier size. Every other shape's
         // fill covers its own request, which made the sweep structurally
-        // blind to a `settled` row the lot outgrew after it was placed.
+        // blind to a `settled` row the lot outgrew after it was placed
         if (shape === 'filled-undersized')
           return { ...row, status: 'filled', qty: '4', filled_qty: '4' };
         return { ...row, status: shape === 'canceled' ? 'canceled' : 'pending_cancel' };
@@ -3435,7 +3435,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       // constructs #1573's step-4 condition — `qty` shrunk under a `settled`
       // row's own fill, where `settled.filled_qty >= qty` passes and is
       // wrong. With 6 alone that condition is unreachable, and the sweep
-      // stayed green against a discriminator reduced to `qty`.
+      // stayed green against a discriminator reduced to `qty`
       const REQUESTS = [2, 4, 6];
 
       const violations: string[] = [];
@@ -3450,7 +3450,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
           });
           const state = new InMemoryBrokerStateStore();
           // A hand-rolled wrapper, not `vi.spyOn`: every spy stays registered
-          // for teardown, and 8403 of them cost more than the sweep itself.
+          // for teardown, and 8403 of them cost more than the sweep itself
           let namedId: string | null | undefined;
           const record = state.recordBracketOrderIds.bind(state);
           state.recordBracketOrderIds = (venueName, key, ids) => {
@@ -3483,14 +3483,14 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
           // 2. A normal return must never leave the lot NAKED after this walk
           // destroyed protection that was working when it started. The caller
           // clears the #549 marker on that return, so a naked residual here is
-          // also an UNWATCHED one.
+          // also an UNWATCHED one
           //
           // Zero working legs is only acceptable when the row the bookkeeping
           // NAMES accounts for every share the lot was OBSERVED to hold — that
           // lot is flat, not unprotected. `status === 'filled'` alone is not
           // that test (#1573): a full fill of a size the lot has since
           // outgrown closes only part of the residual, and excusing it here is
-          // what let the sweep pass over a naked return.
+          // what let the sweep pass over a naked return
           //
           // The size that must be covered is read off the SEEDS, not off the
           // adapter's own running total (#1581): this call's `qty`, and the
@@ -3498,11 +3498,11 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
           // existed after the named row filled, so its fill cannot have closed
           // them. Deriving it from the sweep's own construction is what gives
           // the later-attempt half of the discriminator coverage here at all;
-          // against a hardcoded 6 it had none.
+          // against a hardcoded 6 it had none
           //
           // Scoped to normal returns deliberately: the last-index destructive
           // cancel throws, which is recorded finding 4, not this clause's
-          // business.
+          // business
           const destroyed = [...workingAtEntry].some(
             (id) => !workingAtExit.some((row) => row.id === id),
           );
@@ -3511,7 +3511,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
           // "this call's qty, plus every seed ABOVE the named one". A freshly
           // placed `oco-*` id names no seed, so the loop resets nowhere and
           // sums all of them — unreachable rather than wrong: a fresh OCO
-          // rests, and `covers` is only read where nothing is resting.
+          // rests, and `covers` is only read where nothing is resting
           let observed = qty;
           for (let above = 0; above < sequence.length; above += 1) {
             const id = `seed-${above}`;
@@ -3530,7 +3530,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
 
           // 3. Finding 2's original signature, asserted structurally: the
           // bookkeeping `cancel()` later trusts must name the leg that is
-          // actually live, never a terminal one from a lower index.
+          // actually live, never a terminal one from a lower index
           if (workingAtExit.length === 1) {
             if (namedId !== workingAtExit[0]!.id) {
               violations.push(
@@ -3563,7 +3563,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
 
         await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
         // Attempt 0 closes its own residual normally — no #1573 race at all,
-        // the issue's point that this needs FEWER coincidences.
+        // the issue's point that this needs FEWER coincidences
         venue.rows.set('key-1:rearm', {
           ...venue.rows.get('key-1:rearm')!,
           status: 'filled',
@@ -3572,7 +3572,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         // The entry order itself: this lot has actually bought 6 by now, 2 more
         // than attempt 0 ever knew to close. Same bare `clientOrderId` — no
         // `:rearm` suffix — so this is a DIFFERENT venue row from every attempt
-        // above.
+        // above
         venue.rows.set('key-1', {
           ...acceptedOrder(),
           id: 'entry-1',
@@ -3586,7 +3586,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         // The caller's own residual estimate has ALREADY netted the known exit
         // fill against the known entry growth — 6 − 4 = 2 — so `qty` alone
         // reads as "small enough that the old fill covers it", though the 2 it
-        // names ARE the naked shares.
+        // names ARE the naked shares
         await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 2, 95, 110);
 
         expect(venue.submitOcoOrder).toHaveBeenCalledWith(
@@ -3607,7 +3607,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         });
         // The entry never grew past what attempt 0 was armed for — this lot
         // really is flat, and the new lookup must not turn a correct adopt into
-        // an unnecessary re-arm.
+        // an unnecessary re-arm
         venue.rows.set('key-1', {
           ...acceptedOrder(),
           id: 'entry-1',
@@ -3632,7 +3632,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
   // path either (there is no durable home to write the episode ahead). The
   // contract's required posture is a THROW, which `ingestFills` turns into
   // the #525 fallback alert; a silent no-op would report success for a
-  // residual that is still naked.
+  // residual that is still naked
   it('refuses to re-arm a crypto residual with no journalled emulated bracket (#586)', async () => {
     const submitOcoOrder = vi.fn();
     const adapter = adapterWith(makeClient({ submitOcoOrder }));
@@ -3696,7 +3696,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     // was ever involved (`rearmedLegs`' doc comment). The take-profit leg IS
     // the top-level order (an OCO's own shape, no 'entry' fill), tagged
     // `'target'`; the stop-loss reports zero filled_qty here so it produces
-    // no fill row.
+    // no fill row
     expect(fills).toEqual([
       {
         client_order_id: 'key-1',
@@ -3707,7 +3707,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         fee: 0,
         timestamp: new Date(filledAt),
         // #842: Alpaca reports a running per-order total, flagged for
-        // `ingestFills()` so a later, larger observation books the increment.
+        // `ingestFills()` so a later, larger observation books the increment
         qty_is_cumulative: true,
       },
     ]);
@@ -3732,8 +3732,8 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
   // #585: the venue reports crypto positions under its own slash form —
   // this read-back must convert to dash form before anything above the
   // adapter boundary (Risk's exposure caps, the reconcile diff against
-  // `SharedStore`) compares it against the repo's own 'BTC-USD' identity.
-  // Nothing above `BrokerAdapter` may ever see Alpaca's wire form.
+  // `SharedStore`) compares it against the repo's own 'BTC-USD' identity
+  // Nothing above `BrokerAdapter` may ever see Alpaca's wire form
   it('converts a slash-form crypto position back to dash form', async () => {
     const adapter = adapterWith(
       makeClient({
@@ -3752,7 +3752,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
 
   // #585: a row already reporting dash form (should the venue ever do so)
   // must not be mangled — the read-back conversion is a no-op on input with
-  // no slash to convert, not a blind dash re-insertion.
+  // no slash to convert, not a blind dash re-insertion
   it('does not double-convert a position already in dash form', async () => {
     const adapter = adapterWith(
       makeClient({
@@ -3775,7 +3775,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
   // equity symbol Alpaca returns contains a `/` today, so this pins that a
   // slash-bearing symbol NOT ending in `/USD` is left alone rather than
   // silently mangled (e.g. `'BTC/GBP'` -> `'BTC/GBP'`, not `'BTC-GBP'` or
-  // some other guess this adapter has no basis for).
+  // some other guess this adapter has no basis for)
   it('leaves a slash-bearing symbol that is not /USD-suffixed untouched on read-back', async () => {
     const adapter = adapterWith(
       makeClient({
@@ -3795,7 +3795,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
   it('drops an unparseable row rather than reporting NaN', async () => {
     // This feeds an exposure comparison, and NaN compares false against
     // everything — a poisoned row would read as "no divergence", the one
-    // answer it must never give.
+    // answer it must never give
     const adapter = adapterWith(
       makeClient({
         getPositions: vi.fn().mockResolvedValue([
@@ -3807,7 +3807,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     );
 
     expect(await adapter.getOpenPositions()).toEqual([
-      // The only survivor, with an honest null where the price would not parse.
+      // The only survivor, with an honest null where the price would not parse
       { instrument: 'TSLA', qty: 4, side: 'buy', avg_entry_price: null },
     ]);
   });
@@ -3890,7 +3890,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
     // A SECOND, unrelated lot that stays open throughout. Without it,
     // `ingestFills()`'s own "no open positions, return early" guard would
     // make the second poll below call `fetchNewFills` zero times the
-    // moment AAPL's lot closes — proving nothing about pruning either way.
+    // moment AAPL's lot closes — proving nothing about pruning either way
     const aaplEntry = orderIntent({
       idempotency_key: 'key-aapl-entry',
       instrument: 'AAPL',
@@ -3941,7 +3941,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
             filled_avg_price: '105',
             // `fixedClock` never advances, so `advanceLot`'s no-lookahead
             // filter (`fill.timestamp <= now`) requires this at or before
-            // `NOW`, not after it.
+            // `NOW`, not after it
             filled_at: NOW.toISOString(),
             legs: [],
           });
@@ -3972,7 +3972,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
     );
     // The pre-flatten cancel of AAPL's own bracket (#516): nothing to
     // clear, so `getOrderByClientOrderId` reports no order and `cancel()`
-    // resolves quietly (its own idempotent-by-contract behaviour).
+    // resolves quietly (its own idempotent-by-contract behaviour)
     const getOrderByClientOrderId = vi.fn().mockResolvedValue(null);
 
     const client = makeClient({
@@ -4010,7 +4010,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
 
     await execution.execute(goDecision(aaplEntry));
     await execution.execute(goDecision(tslaEntry));
-    await execution.ingestFills(); // fills both entries — nothing to prune yet.
+    await execution.ingestFills(); // fills both entries — nothing to prune yet
 
     const exitResult = await execution.execute(
       goDecision(
@@ -4023,7 +4023,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
           entry: 105,
           stop: 105,
           target: 105,
-          // #793: `executeExit` now refuses to write ahead without one.
+          // #793: `executeExit` now refuses to write ahead without one
           metadata: { ...orderIntent().metadata, exit_reason: 'flatten' },
         }),
       ),
@@ -4033,7 +4033,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
     // Poll, then ingest: the flatten sweep observes the order 'filled'
     // (terminal), its fill closes the lot, and ONLY THEN — inside the same
     // call, after `collectFill` has already handed the fill to `fills` —
-    // does the adapter prune its own `flattens` entry.
+    // does the adapter prune its own `flattens` entry
     await execution.ingestFills();
 
     expect((await store.getPosition('key-aapl-entry'))?.order_state).toBe('closed');
@@ -4049,7 +4049,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
 
     // A THIRD poll: TSLA is still open, so `fetchNewFills` genuinely runs
     // again (not short-circuited by "no open positions") — proving the
-    // entry is gone, not merely that nothing asked.
+    // entry is gone, not merely that nothing asked
     await execution.ingestFills();
 
     const flattenOrderCallsAfterSecondPoll = getOrder.mock.calls.filter(
@@ -4076,7 +4076,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
     // Poll 1 sees 50 of 100 filled at 100; poll 2 sees the order terminate
     // CANCELLED at 80, average 100.75 — i.e. the last 30 went off at 102.
     // That last 30 is the increment the defect lost forever: a cancelled
-    // order is the venue's final word, so nothing ever offers it again.
+    // order is the venue's final word, so nothing ever offers it again
     const getOrder = vi
       .fn()
       .mockResolvedValueOnce(
@@ -4152,7 +4152,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
     const position = await store.getPosition('key-aapl-entry');
     // Before this ticket: 50 forever. Everything sized off `filled_size` —
     // the exposure caps, flat-by-close's exit (ADR-0014), the realized PnL —
-    // was blind to 30 filled shares.
+    // was blind to 30 filled shares
     expect(position?.filled_size).toBe(80);
     expect(position?.avg_entry_price).toBeCloseTo(100.75, 10);
   });
@@ -4182,7 +4182,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
         status: 'partially_filled',
         filled_qty: '50',
         filled_avg_price: '100',
-        // The combination Alpaca's docs decline to rule out.
+        // The combination Alpaca's docs decline to rule out
         filled_at: null,
         legs: [],
       }),
@@ -4312,7 +4312,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
       // `getOrder` (the bracket counterpart) DOES call both — see the
       // adapter's own "durable index" tests above. A flatten never should:
       // migration 0019's comment on why half-formed bracket-shaped state for
-      // a flatten is the wrong shape.
+      // a flatten is the wrong shape
       expect(saveBracketSpy).not.toHaveBeenCalled();
       expect(recordIdsSpy).not.toHaveBeenCalled();
     });
@@ -4321,7 +4321,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
       // The "venue": one client double shared by both adapter instances, so
       // it is the thing that does NOT forget across the "restart" below —
       // `broker-state-persistence.test.ts`'s own definition of the scenario,
-      // applied to a flatten instead of a bracket.
+      // applied to a flatten instead of a bracket
       const venueOrder = acceptedOrder({
         id: 'aapl-flatten-order',
         client_order_id: 'flatten-1',
@@ -4336,7 +4336,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
       // The ack `first.submitFlatten` below needs — a fresh, unfilled 'accepted'
       // response, distinct from `venueOrder` (the LATER, filled state
       // `getOrderByClientOrderId`/`getOrder` report once the venue has
-      // resolved it, which is what `second.resumeFlatten` reads back).
+      // resolved it, which is what `second.resumeFlatten` reads back)
       const submitMarketOrder = vi.fn().mockResolvedValue(
         acceptedOrder({
           id: 'aapl-flatten-order',
@@ -4350,7 +4350,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
       );
       const client = makeClient({ getOrderByClientOrderId, getOrder, submitMarketOrder });
 
-      // First process: submits the flatten, in-memory `flattens` map has it.
+      // First process: submits the flatten, in-memory `flattens` map has it
       const first = new AlpacaBrokerAdapter({
         client,
         rateLimiter: permissiveLimiter(),
@@ -4362,7 +4362,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
       await first.submitFlatten('AAPL', 'sell', 10, 'flatten-1');
 
       // --- restart: a brand-new adapter instance, same client (the venue),
-      // `flattens` map empty — the exact gap #526 names.
+      // `flattens` map empty — the exact gap #526 names
       const second = new AlpacaBrokerAdapter({
         client,
         rateLimiter: permissiveLimiter(),
@@ -4373,7 +4373,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
       });
 
       // Without resumeFlatten, this would return no fills at all — nothing
-      // in `second.flattens` names 'aapl-flatten-order' to poll.
+      // in `second.flattens` names 'aapl-flatten-order' to poll
       expect(await second.fetchNewFills(new Date(0))).toEqual([]);
 
       const resumed = await second.resumeFlatten('flatten-1', 'AAPL');

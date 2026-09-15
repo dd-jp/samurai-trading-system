@@ -16,12 +16,12 @@ import type { AnalystContribution, Direction } from '../debate-engine/index.js';
 import { getContributionsForAttribution } from './debate-attribution-lookup.js';
 import type { TunableDial } from './types.js';
 
-/** Accumulated signed credit for one analyst across the cycle's window. */
+/** Accumulated signed credit for one analyst across the cycle's window */
 export interface AnalystCredit {
   analyst_id: string;
-  /** Sum of signed, influence-weighted R across every attributed trade. */
+  /** Sum of signed, influence-weighted R across every attributed trade */
   total_credit: number;
-  /** How many trades contributed — the divisor for the per-trade mean. */
+  /** How many trades contributed — the divisor for the per-trade mean */
   trade_count: number;
 }
 
@@ -41,7 +41,7 @@ export function realizedR(trade: ClosedTrade): number | null {
   return trade.realized_pnl_net / initialRisk;
 }
 
-/** The direction a trade's side expresses, for stance comparison. */
+/** The direction a trade's side expresses, for stance comparison */
 function tradeDirection(side: ClosedTrade['side']): Direction {
   return side === 'buy' ? 'bullish' : 'bearish';
 }

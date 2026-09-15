@@ -41,13 +41,13 @@
 import type { MarketDataService } from '../../providers/market-data-service/index.js';
 import type { BenchmarkObservation } from './outside-benchmark.js';
 
-/** Daily closes for one benchmark leg, covering the window AND its anchor bar. */
+/** Daily closes for one benchmark leg, covering the window AND its anchor bar */
 export interface BenchmarkSeriesSource {
   /**
    * Closes for `instrument` spanning at least `[from, to]`, INCLUDING at least
    * one bar at or before `from` — `buildOutsideBenchmark` needs that anchor as
    * the denominator of the window's first daily return, and refuses to measure
-   * without it rather than silently covering a shorter period than the arms.
+   * without it rather than silently covering a shorter period than the arms
    */
   getDailyCloses(instrument: string, from: Date, to: Date): Promise<BenchmarkObservation[]>;
 }
@@ -79,7 +79,7 @@ export class MarketDataBenchmarkSeriesSource implements BenchmarkSeriesSource {
         // than merely degraded, e.g. an SMA computed over 3 bars presented as
         // one over 50) does not apply here. Erroring on a partial window would
         // instead lose a benchmark on every early-soak day the venue simply has
-        // less history than the pad asks for.
+        // less history than the pad asks for
         partial: 'allow',
       },
       to,

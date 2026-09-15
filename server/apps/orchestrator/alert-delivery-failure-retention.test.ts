@@ -79,11 +79,11 @@ describe('alertDeliveryFailureRetentionDaysFromEnvironment', () => {
   // floor — that a 1-day sweep would delete a row the tile still counts —
   // is far too narrow to be the one: the two predicates overlap only for a
   // prune committing after a live request's `asOf`, which is reachable only
-  // inside the sub-second gap between sampling `asOf` and reading the count.
+  // inside the sub-second gap between sampling `asOf` and reading the count
   //
   // This case is also the LOWERED-MINIMUM half of the guard on "retention
   // outlives the window"; the last case in this block is the widened-window
-  // half.
+  // half
   it('refuses a 1-day retention — retention must outlive the window it backstops', () => {
     expect(() => alertDeliveryFailureRetentionDaysFromEnvironment('1')).toThrow(
       /must be an integer >= 2/,
@@ -111,7 +111,7 @@ describe('alertDeliveryFailureRetentionDaysFromEnvironment', () => {
   // it is the assertion that goes red if `ALERT_DELIVERY_FAILURE_WINDOW_MS`
   // is later widened past 48h (or past the 30-day default). The `min = 2`
   // floor alone would not catch that: at a 48h window retention and window
-  // are equal, not ordered.
+  // are equal, not ordered
   it('keeps the minimum retention strictly longer than the count window', () => {
     const minRetentionMs = 2 * 24 * 60 * 60 * 1000;
     expect(minRetentionMs).toBeGreaterThan(ALERT_DELIVERY_FAILURE_WINDOW_MS);
@@ -127,7 +127,7 @@ describe('the alert_delivery_failures purge is spelled at the composition root, 
   // Matched by regex, not exact string, and requiring the FULL argument
   // sequence in order — see mi-archive-retention.test.ts's comment on
   // `callSite` for why a lazy scan anchored only on the function name proved
-  // insufficient there; the same failure mode applies here.
+  // insufficient there; the same failure mode applies here
   const callSite = (trigger: string): RegExp =>
     new RegExp(
       `pruneAlertDeliveryFailuresWithLog\\(\\s*config\\.db,\\s*alertDeliveryFailureRetentionDays,\\s*clock,\\s*logger,\\s*'${trigger}',?\\s*\\)`,
@@ -141,7 +141,7 @@ describe('the alert_delivery_failures purge is spelled at the composition root, 
   it('spells the daily prune ABOVE the feedback cycle try block', () => {
     // Inside it, a persistently throwing `runDailyCycle` would silently
     // disable retention as well: the catch would fire every day while the
-    // table grew forever and the log showed only a feedback failure.
+    // table grew forever and the log showed only a feedback failure
     const cycleStart = source.indexOf('const runFeedbackCycle =');
     expect(cycleStart).toBeGreaterThan(-1);
 
@@ -156,7 +156,7 @@ describe('the alert_delivery_failures purge is spelled at the composition root, 
     // `alert_delivery_failures` is in `STAGE_OWNED_TABLES.orchestrator`
     // (write-guard.ts) — the prune must go through `guardedStore(db,
     // 'orchestrator')` like every other orchestrator-owned table's
-    // housekeeping, not bypass the guard with a raw `StoreHandle`.
+    // housekeeping, not bypass the guard with a raw `StoreHandle`
     expect(source).toMatch(
       /guardedStore\(db, 'orchestrator'\)\)\.pruneOlderThan\(\s*cutoff,?\s*\)/,
     );

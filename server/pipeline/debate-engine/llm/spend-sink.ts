@@ -34,7 +34,7 @@ import { toStoredTimestamp } from '../../../shared/store/index.js';
 import type { Logger } from '../../../shared/types.js';
 import { type PromptTierAlertChannel, PromptTierCrossingThrottle } from './prompt-tier-alert.js';
 
-/** One metered API call, as handed to the sink. */
+/** One metered API call, as handed to the sink */
 export interface LlmSpendRecord {
   trace_id: string;
   /**
@@ -79,7 +79,7 @@ export interface LlmSpendRecord {
    * the model itself is unrecognised.
    */
   server_tool_calls?: number | undefined;
-  /** Wall-clock time for this one API call, as measured by the client. */
+  /** Wall-clock time for this one API call, as measured by the client */
   latency_ms: number;
   /**
    * Time-to-first-byte (#1012): the `latency_ms` prefix spent waiting for
@@ -101,7 +101,7 @@ export interface LlmSpendRecord {
    * one.
    */
   prompt?: string | undefined;
-  /** The model's raw response text, same provenance and same treatment as `prompt`. */
+  /** The model's raw response text, same provenance and same treatment as `prompt` */
   response?: string | undefined;
   /**
    * `hashPromptTemplate("<stageTemplateHash>:<wireEnvelopeHash>")` (#1514,
@@ -151,7 +151,7 @@ export interface LlmSpendSink {
  */
 export const NULL_SPEND_SINK: LlmSpendSink = { record: () => {} };
 
-/** Appends to `llm_spend`, pricing the usage on the way in. */
+/** Appends to `llm_spend`, pricing the usage on the way in */
 export class SqliteLlmSpendStore implements LlmSpendSink {
   constructor(
     private readonly db: StoreHandle,
@@ -200,7 +200,7 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
       // was in force when the call happened. Pricing at read time would make
       // every historical row silently reprice the next time the table in
       // pricing.ts is edited, quietly rewriting spend history that an
-      // operator may have already looked at.
+      // operator may have already looked at
       const tokenCost = priceUsage(entry.model, entry.usage);
       const toolCalls = entry.server_tool_calls ?? 0;
       const toolCost = priceServerToolCalls(toolCalls);
@@ -211,7 +211,7 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
       // would under-count the cap for the same reason the phantom `grok-4`
       // rate over-counted it — a number we hold and throw away is the worst of
       // the three options. Such a row stays recognisable: `server_tool_calls`
-      // is non-zero while `cost_usd` is too small to cover the tokens.
+      // is non-zero while `cost_usd` is too small to cover the tokens
       const cost = tokenCost === null ? (toolCost > 0 ? toolCost : null) : tokenCost + toolCost;
 
       if (tokenCost === null) {
@@ -250,7 +250,7 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
           // `?? null`, not the raw `undefined`: better-sqlite3 refuses to bind
           // `undefined` ("Invalid value"), so an unattributed call would throw
           // into the swallowing catch below and lose the row entirely — a
-          // metering bug that would look exactly like a quiet dashboard.
+          // metering bug that would look exactly like a quiet dashboard
           entry.debate_id ?? null,
           entry.model,
           entry.usage.input_tokens,
@@ -270,7 +270,7 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
       // one: the outer message says the call is missing from the dashboard
       // spend total, which would be false here — the spend row is written and
       // safe, and only the text was lost. A capture failure reported as a
-      // metering failure would send an operator to look at the wrong thing.
+      // metering failure would send an operator to look at the wrong thing
       try {
         this.recordText(entry, Number(spendRow.lastInsertRowid));
       } catch (error) {
@@ -289,7 +289,7 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
       // Its OWN catch, for the same reason `recordText`'s is separate: the
       // spend row is already written and safe by this point, so a channel
       // that throws must not turn into an `llm_spend_write_failed` line that
-      // falsely claims the row is missing.
+      // falsely claims the row is missing
       try {
         this.maybeAlertPromptTierCrossing(entry);
       } catch (error) {
@@ -307,7 +307,7 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
     } catch (error) {
       // See the module doc comment: a metering failure must not surface as a
       // failed LLM call. Logged rather than silent so a persistently broken
-      // meter is visible instead of just producing a flat spend line.
+      // meter is visible instead of just producing a flat spend line
       this.logger?.log({
         trace_id: entry.trace_id,
         stage: 'orchestrator',
@@ -391,7 +391,7 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
       .run(
         // Never null in practice: the caller only reaches here after the spend
         // INSERT returned a rowid. The column stays nullable so a future
-        // writer that captures text without metering has somewhere to go.
+        // writer that captures text without metering has somewhere to go
         spendId,
         entry.trace_id,
         entry.stage,

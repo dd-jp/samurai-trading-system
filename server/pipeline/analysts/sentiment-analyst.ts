@@ -17,7 +17,7 @@ import type { AnalystView, Direction } from '../debate-engine/index.js';
 import type { Analyst, AnalystInput, AssetClass } from './types.js';
 import { NO_DATA_MARKER } from './types.js';
 
-/** 24h social context window, matching technical-analyst's always-on context frame. */
+/** 24h social context window, matching technical-analyst's always-on context frame */
 const MI_CONTEXT_WINDOW_MS = 24 * 60 * 60 * 1000;
 const CONTEXT_TIMEFRAME = '1h';
 const CONTEXT_CANDLE_LOOKBACK = 20;
@@ -36,7 +36,7 @@ function directionFrom(items: IntelligenceItem[]): Direction {
   return 'neutral';
 }
 
-/** Average item confidence, clamped to [0.05, 0.95]; no social items this window reads as low confidence. */
+/** Average item confidence, clamped to [0.05, 0.95]; no social items this window reads as low confidence */
 function confidenceFrom(items: IntelligenceItem[]): number {
   if (items.length === 0) {
     return 0.05;
@@ -64,7 +64,7 @@ export const sentimentAnalyst: Analyst = {
     // #914/#960: entity-scoped, not class-wide — same defect and same fix as
     // fundamental-analyst.ts. `resolveMiSubject` resolves an LSE-listed
     // wrapper to the US underlying MI is keyed on and is the identity for
-    // every non-pool instrument.
+    // every non-pool instrument
     const miSubject = resolveMiSubject(signal.asset);
 
     const [marketContext, candles] = await Promise.all([

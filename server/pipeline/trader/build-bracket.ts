@@ -8,7 +8,7 @@
 import type { OrderIntent } from '../../shared/index.js';
 // The same type-only carve-out `decide.ts` takes for `DebateResult`: a bare
 // `import type` is erased, so this does not pull the debate engine's module
-// graph into the Trader.
+// graph into the Trader
 import type { Direction } from '../debate-engine/types.js';
 import { riskFractionFor, type SubclassBracket } from './subclass-bracket.js';
 import type { AssetClass, TraderConfig, TraderReasonDetail, TraderSkipReason } from './types.js';
@@ -37,10 +37,10 @@ export interface BracketSkip {
 
 export interface PriceBracketInput {
   direction: TradeDirection;
-  /** The mark, already checked finite by the caller. */
+  /** The mark, already checked finite by the caller */
   entry: number;
   atr: number;
-  /** `null` is the pre-ADR-0018 ATR geometry — see `resolveSubclassBracket`. */
+  /** `null` is the pre-ADR-0018 ATR geometry — see `resolveSubclassBracket` */
   bracket: SubclassBracket | null;
   config: Pick<TraderConfig, 'vol_floor_fraction' | 'atr_k' | 'reward_risk_multiple'>;
 }
@@ -115,7 +115,7 @@ export interface SizeBracketInput {
 }
 
 export interface SizedBracket {
-  /** The quantity to submit — floored to whole shares when the venue demands it. */
+  /** The quantity to submit — floored to whole shares when the venue demands it */
   size: number;
   sizing: OrderIntent['metadata']['sizing'];
 }
@@ -166,14 +166,14 @@ export function sizeBracket(input: SizeBracketInput): SizeBracketResult {
   // the remaining headroom — admissible rather than rejected at zero. The
   // asset-class multiplier is superseded on this path (trader-spec.md: the
   // surviving dial is `risk_fraction` keyed on subclass) and cannot express
-  // ADR-0018's split, because both ETP subclasses are the same asset class.
+  // ADR-0018's split, because both ETP subclasses are the same asset class
   const maxRiskFraction =
     bracket === null ? maxRiskFor(asset_class, config) : riskFractionFor(bracket);
   const baseRiskFraction = maxRiskFraction * convictionMult;
   const nonConvergedHaircut = converged ? 1 : config.non_converged_haircut;
 
   // Multiplicative stacking — penalties compound honestly (trader-spec.md
-  // Module: Non-Convergence & Skip Policy).
+  // Module: Non-Convergence & Skip Policy)
   const riskFraction = baseRiskFraction * nonConvergedHaircut * cosine_multiplier;
   const size = (equity * riskFraction) / stopDistance;
 
@@ -182,7 +182,7 @@ export function sizeBracket(input: SizeBracketInput): SizeBracketResult {
   // checks upstream say WHICH input was bad; this one guarantees that no
   // future inlet can reach an emitted intent unchecked. Must precede the
   // min-notional line: `NaN < min_viable_notional` is false, so that check
-  // passes NaN.
+  // passes NaN
   if (!Number.isFinite(size)) {
     return { sized: null, skip: { reason: 'size_not_finite', reason_detail: null } };
   }
@@ -194,19 +194,19 @@ export function sizeBracket(input: SizeBracketInput): SizeBracketResult {
   // a venue accommodation into an unrecorded amendment of ADR-0018 D5. Erring
   // small is the ADR's own declared preference. `size` is always positive here
   // (the direction lives in `side`, not the sign), so a plain floor is a floor
-  // toward zero exposure on both sides.
+  // toward zero exposure on both sides
   //
   // Sited AFTER the finite check so `Math.floor(NaN)` cannot reach the
   // guards below, and BEFORE `min_viable_notional` so the notional test reads
   // the quantity that will actually be submitted rather than the unquantised
   // one — a 0.8-share intent is dust the venue would refuse, and it must not
-  // pass a notional check on the strength of a fraction we cannot send.
+  // pass a notional check on the strength of a fraction we cannot send
   //
   // Exits are NOT quantised here or anywhere: `buildFlattenExit` sizes from
   // `heldQuantitiesFor`, i.e. from what actually filled, and rounding that
   // could stranded a remainder or zero a flatten outright. Under this flag
   // every entry fills whole, so held quantities are whole and no exit needs
-  // it; if that ever stops being true the residual must still go out verbatim.
+  // it; if that ever stops being true the residual must still go out verbatim
   const submittableSize = config.whole_share_sizing ? Math.floor(size) : size;
 
   // Its own reason rather than folding into `below_min_notional`, because the
@@ -217,13 +217,13 @@ export function sizeBracket(input: SizeBracketInput): SizeBracketResult {
   // — a sizing/universe mismatch, not a quiet market. It also cannot be left
   // to the notional check below: 0.8 shares of a $300 name is $240 of intended
   // notional, which passes a $10 dust floor comfortably and would then be
-  // submitted as a zero quantity.
+  // submitted as a zero quantity
   //
   // `size > 0` is what keeps the two distinguishable in the direction that
   // matters. A gate that damped conviction to nothing produces size EXACTLY
   // zero, and that is the strategy declining to deploy, not the venue's grid
   // eating a real position — it belongs in `below_min_notional` where it has
-  // always been reported, and #870's ceiling test asserts precisely that.
+  // always been reported, and #870's ceiling test asserts precisely that
   if (submittableSize <= 0 && size > 0) {
     return { sized: null, skip: { reason: 'rounds_to_zero_shares', reason_detail: null } };
   }
@@ -251,12 +251,12 @@ export function sizeBracket(input: SizeBracketInput): SizeBracketResult {
         non_converged_haircut: nonConvergedHaircut,
         cosine_multiplier,
         // Spread rather than field-by-field so a bracket field added to
-        // config cannot be silently dropped from the audit record.
+        // config cannot be silently dropped from the audit record
         ...(bracket === null ? {} : { frozen_bracket: { ...bracket } }),
         // Spread-or-absent for the same `exactOptionalPropertyTypes` reason
         // the bracket above is, and absent when the floor changed nothing so
         // that its PRESENCE means "this intent under-deploys D5" rather than
-        // merely "the flag is on".
+        // merely "the flag is on"
         ...(submittableSize === size ? {} : { unquantised_size: size }),
       },
     },

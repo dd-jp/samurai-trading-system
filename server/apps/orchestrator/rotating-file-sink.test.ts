@@ -25,11 +25,11 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  // 0o000 directories are created by the degrade tests; make them removable.
+  // 0o000 directories are created by the degrade tests; make them removable
   try {
     chmodSync(dir, 0o700);
   } catch {
-    // Already removable.
+    // Already removable
   }
   rmSync(dir, { recursive: true, force: true });
 });
@@ -67,14 +67,14 @@ describe('RotatingFileSink — writing', () => {
     sink.write('{"a":1}\n');
     sink.close();
 
-    // SECURITY: log payloads are the most detailed record this process keeps.
-    // 0o600 on creation keeps them off a shared host's other accounts.
+    // SECURITY: log payloads are the most detailed record this process keeps
+    // 0o600 on creation keeps them off a shared host's other accounts
     expect(statSync(filePath).mode & 0o777).toBe(0o600);
   });
 
   it('counts bytes, not UTF-16 code units, when deciding to rotate', () => {
     const filePath = join(dir, 'orchestrator.log');
-    // Four 4-byte astral characters + newline = 17 bytes; `.length` says 9.
+    // Four 4-byte astral characters + newline = 17 bytes; `.length` says 9
     const line = `${'𝕊𝕒𝕞𝕦'}\n`;
     expect(line.length).toBeLessThan(Buffer.byteLength(line));
 
@@ -83,8 +83,8 @@ describe('RotatingFileSink — writing', () => {
     sink.write(line);
     sink.close();
 
-    // Byte-accurate accounting rotates after the first line (17 + 17 > 20).
-    // A `.length`-based counter would think 9 + 9 <= 20 and never rotate.
+    // Byte-accurate accounting rotates after the first line (17 + 17 > 20)
+    // A `.length`-based counter would think 9 + 9 <= 20 and never rotate
     expect(lines(`${filePath}.1`)).toEqual(['𝕊𝕒𝕞𝕦']);
     expect(lines(filePath)).toEqual(['𝕊𝕒𝕞𝕦']);
   });
@@ -95,7 +95,7 @@ describe('RotatingFileSink — rotation and retention', () => {
     const filePath = join(dir, 'orchestrator.log');
     const sink = new RotatingFileSink({ filePath, maxBytes: 10, maxRotatedFiles: 3 });
 
-    sink.write('aaaaaaaaa\n'); // 10 bytes — fills the active file exactly.
+    sink.write('aaaaaaaaa\n'); // 10 bytes — fills the active file exactly
     sink.write('bbbbbbbbb\n');
     sink.write('ccccccccc\n');
     sink.close();
@@ -110,19 +110,19 @@ describe('RotatingFileSink — rotation and retention', () => {
     const maxRotatedFiles = 2;
     const sink = new RotatingFileSink({ filePath, maxBytes: 10, maxRotatedFiles });
 
-    // Well past the cap: 6 lines is 5 rotations against a cap of 2.
+    // Well past the cap: 6 lines is 5 rotations against a cap of 2
     for (const marker of ['a', 'b', 'c', 'd', 'e', 'f']) {
       sink.write(`${marker.repeat(9)}\n`);
     }
     sink.close();
 
-    // Exactly the active file plus the cap — nothing else, ever.
+    // Exactly the active file plus the cap — nothing else, ever
     expect(readdirSync(dir).sort()).toEqual([
       'orchestrator.log',
       'orchestrator.log.1',
       'orchestrator.log.2',
     ]);
-    // And the survivors are the NEWEST, not the oldest.
+    // And the survivors are the NEWEST, not the oldest
     expect(lines(filePath)).toEqual(['fffffffff']);
     expect(lines(`${filePath}.1`)).toEqual(['eeeeeeeee']);
     expect(lines(`${filePath}.2`)).toEqual(['ddddddddd']);
@@ -141,7 +141,7 @@ describe('RotatingFileSink — rotation and retention', () => {
 
   it('rotates cleanly when older generations are missing', () => {
     // renameSync on an absent path throws ENOENT; a gap in the sequence (an
-    // operator deleted .1 by hand mid-soak) must not take the sink down.
+    // operator deleted .1 by hand mid-soak) must not take the sink down
     const filePath = join(dir, 'orchestrator.log');
     const sink = new RotatingFileSink({ filePath, maxBytes: 10, maxRotatedFiles: 4 });
 
@@ -183,7 +183,7 @@ describe('RotatingFileSink — degradation (never throws into a tick)', () => {
       maxBytes: 1024,
       maxRotatedFiles: 2,
       onFailure: (message) => failures.push(message),
-      // The seam that stands in for a full disk / revoked fd mid-run.
+      // The seam that stands in for a full disk / revoked fd mid-run
       writeLine: () => {
         throw new Error('ENOSPC: no space left on device');
       },
@@ -197,7 +197,7 @@ describe('RotatingFileSink — degradation (never throws into a tick)', () => {
 
     expect(sink.degraded).toBe(true);
     // Once — not once per tick. A 14-day soak on a full disk must not turn
-    // stdout into the same flood that filled the disk.
+    // stdout into the same flood that filled the disk
     expect(failures).toHaveLength(1);
     expect(failures[0]).toContain('ENOSPC');
     expect(failures[0]).toMatch(/until the process is restarted/i);
@@ -231,7 +231,7 @@ describe('RotatingFileSink — degradation (never throws into a tick)', () => {
     // than as this throw; see `watchStdoutErrors`. A file or TTY stdout throws
     // here.) Without this, a *file* failure would be converted into an
     // exception thrown out of `write()` and straight into a tick, which is the
-    // one thing this class must never do.
+    // one thing this class must never do
     const filePath = join(dir, 'orchestrator.log');
     const sink = new RotatingFileSink({
       filePath,
@@ -247,7 +247,7 @@ describe('RotatingFileSink — degradation (never throws into a tick)', () => {
 
     expect(() => sink.write('{"tick":1}\n')).not.toThrow();
     // And the sink still retired itself, rather than being left half-degraded
-    // by the reporting failure.
+    // by the reporting failure
     expect(sink.degraded).toBe(true);
     expect(() => sink.write('{"tick":2}\n')).not.toThrow();
   });
@@ -288,7 +288,7 @@ describe('writeAll — partial writes and the zero-progress guard', () => {
   it('drains the buffer across partial writes', () => {
     const bytes = Buffer.from('abcdefghij', 'utf8');
     const chunks: string[] = [];
-    // A writer that only ever accepts 3 bytes at a time.
+    // A writer that only ever accepts 3 bytes at a time
     writeAll(7, bytes, (_fd, buffer, offset, length) => {
       const take = Math.min(3, length);
       chunks.push(buffer.subarray(offset, offset + take).toString('utf8'));
@@ -303,7 +303,7 @@ describe('writeAll — partial writes and the zero-progress guard', () => {
     // the offset, so the loop spins forever — inside a tick, with nothing
     // thrown for `attempt` to catch and no way for the heartbeat to notice,
     // because the process is wedged rather than dead. If this test ever hangs
-    // instead of throwing, the guard is gone.
+    // instead of throwing, the guard is gone
     expect(() => writeAll(7, Buffer.from('abc', 'utf8'), () => 0)).toThrow(/no progress/i);
   });
 
@@ -350,7 +350,7 @@ describe('fileSinkConfigFromEnvironment', () => {
   it('caps total on-disk log at a bounded, documented size by default', () => {
     // The retention window is deliberately short: the durable trade record is
     // SQLite, not this file (CLAUDE.md / UK CGT). Guard against a future edit
-    // quietly making the default unbounded-ish.
+    // quietly making the default unbounded-ish
     const cap = DEFAULT_MAX_BYTES * (DEFAULT_MAX_ROTATED_FILES + 1);
     expect(cap).toBeLessThanOrEqual(512 * 1024 * 1024);
   });
@@ -377,7 +377,7 @@ describe('fileSinkConfigFromEnvironment', () => {
   ])('refuses a malformed %s=%s at startup, naming the variable', (key, value) => {
     process.env[key] = value;
     // Config errors fail fast (parseMode / sharedStorePath posture); only
-    // runtime I/O failures degrade.
+    // runtime I/O failures degrade
     expect(() => fileSinkConfigFromEnvironment()).toThrow(new RegExp(key));
   });
 
@@ -402,11 +402,11 @@ describe('fileSinkConfigFromEnvironment', () => {
     // compose file or a quoted-empty shell variable would have silently
     // switched retention from ten generations to none — a retention window
     // nobody chose. `SAMURAI_LOG_MAX_BYTES` was never exposed to this, because
-    // its `min` of 1 already rejects 0; this variable's does not.
+    // its `min` of 1 already rejects 0; this variable's does not
     //
     // Whitespace-only resolves to *unset* — the default — rather than to an
-    // error, matching the established "an empty value counts as absent" rule.
-    // The regression this guards is the 0, not the throw.
+    // error, matching the established "an empty value counts as absent" rule
+    // The regression this guards is the 0, not the throw
     process.env.SAMURAI_LOG_MAX_FILES = ' ';
     const config = fileSinkConfigFromEnvironment();
 
@@ -420,7 +420,7 @@ describe('fileSinkConfigFromEnvironment', () => {
   });
 
   it('still accepts a value with incidental surrounding whitespace', () => {
-    // Trimming is about rejecting *only*-whitespace; ' 3 ' is unambiguous.
+    // Trimming is about rejecting *only*-whitespace; ' 3 ' is unambiguous
     process.env.SAMURAI_LOG_MAX_FILES = ' 3 ';
     expect(fileSinkConfigFromEnvironment().maxRotatedFiles).toBe(3);
   });

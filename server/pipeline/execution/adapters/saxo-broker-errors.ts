@@ -21,10 +21,10 @@ import {
   VenueTimeoutError,
 } from './venue-errors.js';
 
-/** See `HttpMethod` (venue-errors.ts); `SaxoHttpBrokerClient.request` types `init.method` as this. */
+/** See `HttpMethod` (venue-errors.ts); `SaxoHttpBrokerClient.request` types `init.method` as this */
 export type SaxoHttpMethod = HttpMethod;
 
-/** Own classes, not the venue-agnostic bases: `instanceof` and `.name` never cross venues. */
+/** Own classes, not the venue-agnostic bases: `instanceof` and `.name` never cross venues */
 export class SaxoBrokerTimeoutError extends VenueTimeoutError {}
 export class SaxoBrokerRateLimitError extends VenueRateLimitError {}
 
@@ -178,7 +178,7 @@ export function parseSaxoErrorInfo(bodyText: string): {
  * this is, so a 408/504 (`SaxoBrokerTimeoutError`), 429
  * (`SaxoBrokerRateLimitError`) or 5xx (`SaxoBrokerProviderError`) all carry
  * enough to be gated by `isRetrySafeMethod` instead of retrying
- * unconditionally.
+ * unconditionally
  */
 export async function classifySaxoBrokerResponse(
   response: Response,

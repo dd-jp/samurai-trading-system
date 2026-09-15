@@ -21,9 +21,9 @@ import type {
  * Retrieval").
  */
 export interface SetupStore {
-  /** Only setups closed with a known outcome as of `asOf` are returned. */
+  /** Only setups closed with a known outcome as of `asOf` are returned */
   findNeighbors(vector: SetupVector, asOf: Date): SetupNeighbor[];
-  /** Persists the new setup for later outcome labelling by the Feedback Loop. */
+  /** Persists the new setup for later outcome labelling by the Feedback Loop */
   writeSetup(debateId: string, vector: SetupVector, decidedAt: Date): void;
   /**
    * Labels a previously-written setup with its realized outcome on trade
@@ -45,9 +45,9 @@ export interface SetupStore {
  * no update/delete, one row per `debate_id`.
  */
 export interface DebateLogStore {
-  /** Persists the completed debate's log row; called once, after resolution. */
+  /** Persists the completed debate's log row; called once, after resolution */
   writeLog(entry: DebateLog): void;
-  /** FL's attribution join point — absent for a debate never completed. */
+  /** FL's attribution join point — absent for a debate never completed */
   getByDebateId(debate_id: string): DebateLog | undefined;
   /**
    * Persists the completed debate's log row AND its per-round verdicts
@@ -86,7 +86,7 @@ export interface DebateLogStore {
  * accounting.
  */
 export interface VerdictLogStore {
-  /** Persists one row per `VerdictDecision`; called once per `decide()`. */
+  /** Persists one row per `VerdictDecision`; called once per `decide()` */
   writeLog(entry: VerdictLog): void;
 }
 
@@ -119,7 +119,7 @@ export interface ClosedTradeStore {
  * model (CONTEXT.md invariant).
  */
 export interface TuningStore {
-  /** Keyed by `analyst_id`, matching `AnalystContribution.analyst_id`. */
+  /** Keyed by `analyst_id`, matching `AnalystContribution.analyst_id` */
   getAnalystWeights(): Record<string, number>;
   setAnalystWeight(analyst_id: string, weight: number): void;
   /**

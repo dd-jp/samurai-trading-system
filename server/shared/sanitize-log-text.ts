@@ -82,10 +82,10 @@ import { truncateForError } from './http/response-errors.js';
 const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // Telegram bot token in a URL path: `/bot123456:AA...`
   /\bbot\d{4,}:[A-Za-z0-9_-]+/gi,
-  // A bare Telegram-shaped token: long digit run, colon, long opaque suffix.
+  // A bare Telegram-shaped token: long digit run, colon, long opaque suffix
   /\b\d{6,}:[A-Za-z0-9_-]{20,}\b/g,
   // `Bearer <token>`. Value class's negative-lookahead terminator: see the
-  // module doc comment above.
+  // module doc comment above
   /\bBearer\s+(?:(?!\x5c[\x22\x27])[^\s,;\x22\x27\x7d\]])+/gi,
   // `apiKey=x`, `api_secret: x`, `token: x`, `password=x`, `auth: x`, and
   // Alpaca's own header names. `[ \t]*` (not `\s*`) around the operator:
@@ -96,14 +96,14 @@ const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // excludes `\s`, so this only tightens the key-to-value separator, not
   // what counts as a value. `&` is excluded from the value class for the
   // same reason a query-string credential shouldn't swallow its own
-  // trailing params (`?apiKey=x&adjusted=true` must keep `&adjusted=true`).
+  // trailing params (`?apiKey=x&adjusted=true` must keep `&adjusted=true`)
   // The cost of that exclusion: a credential value that itself legitimately
   // contains `&` (`{"password":"p&ssw0rd"}`) is only masked up to the `&`,
   // leaking its tail (`{"[REDACTED]&ssw0rd"...}`) — accepted because a
   // query string is the far more common shape this module sees in
   // practice, and a partially-masked credential is still a shorter,
-  // less-recoverable leak than the un-truncated version.
-  // Separator and value-class treatment: see the module doc comment above.
+  // less-recoverable leak than the un-truncated version
+  // Separator and value-class treatment: see the module doc comment above
   /\b(?:APCA-API-KEY-ID|APCA-API-SECRET-KEY|api[_-]?key|api[_-]?secret|secret|token|password|passwd|pwd|auth)\b(?:\x5c?[\x22\x27])?[ \t]*[:=][ \t]*(?:\x5c?[\x22\x27])?(?:(?!\x5c[\x22\x27])[^\s,;&\x22\x27\x7d\]])+/gi,
   // `clientSecret`/`client_secret`, `accessToken`/`access_token`,
   // `refreshToken`/`refresh_token`, and an underscore-PREFIXED compound
@@ -119,8 +119,8 @@ const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // budget — `max_tokens` in `orchestrator/production/defaults.ts`,
   // `maxTokens` in `market-intelligence/grok/x-search-client.ts`) — a
   // suffix rule would mask both. `[ \t]*`/`&` reasoning: see the bareword
-  // pattern above.
-  // Separator and value-class treatment: see the module doc comment above.
+  // pattern above
+  // Separator and value-class treatment: see the module doc comment above
   /(?<![A-Za-z0-9])(?:client[_-]?secret|access[_-]?token|refresh[_-]?token)(?:\x5c?[\x22\x27])?[ \t]*[:=][ \t]*(?:\x5c?[\x22\x27])?(?:(?!\x5c[\x22\x27])[^\s,;&\x22\x27\x7d\]])+/gi,
   // Underscore-joined ALL-CAPS env-var names (`ALPACA_API_SECRET`,
   // `SAXO_SIM_ACCESS_TOKEN`, `TELEGRAM_BOT_TOKEN` — grepped from this repo's
@@ -136,8 +136,8 @@ const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // upstream-controlled text (see this module's doc comment), not a JSON
   // field name whose case this codebase controls. The lowercase-anchored
   // pattern below closes part of that gap for real credential shapes,
-  // deliberately without reintroducing the `next_page_token` regression.
-  // Separator and value-class treatment: see the module doc comment above.
+  // deliberately without reintroducing the `next_page_token` regression
+  // Separator and value-class treatment: see the module doc comment above
   /\b[A-Z][A-Z0-9_]{0,60}_(?:SECRET_KEY|API_KEY|SECRET|TOKEN|PASSWORD|PASSWD)\b(?:\x5c?[\x22\x27])?[ \t]*[:=][ \t]*(?:\x5c?[\x22\x27])?(?:(?!\x5c[\x22\x27])[^\s,;&\x22\x27\x7d\]])+/g,
   // The lowercase/mixed-case counterpart to the all-caps pattern above, for
   // exactly three suffixes: `_secret_key`, `_api_key`, `_api_secret`
@@ -157,8 +157,8 @@ const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // through both patterns (`Alpaca_Api_Key`, `my_API_KEY`,
   // `Polygon_Api_Secret` — all measured unmasked) — only all-lowercase and
   // all-caps are covered, the two shapes this codebase's own env-var
-  // reads and pagination cursors actually use.
-  // Separator and value-class treatment: see the module doc comment above.
+  // reads and pagination cursors actually use
+  // Separator and value-class treatment: see the module doc comment above
   /\b[a-z][a-z0-9_]{0,60}_(?:secret_key|api_key|api_secret)\b(?:\x5c?[\x22\x27])?[ \t]*[:=][ \t]*(?:\x5c?[\x22\x27])?(?:(?!\x5c[\x22\x27])[^\s,;&\x22\x27\x7d\]])+/g,
   // `Authorization: Basic <base64>` / `Authorization: Token <key>`
   // (`tools/backtest/http-tiingo-client.ts` sends the latter). Anchored to
@@ -182,8 +182,8 @@ const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // equally untouched, for the same out-of-scope reason: `Bearer` has no
   // key-to-value separator to begin with — the word itself is the anchor
   // — so neither F7 nor F8 named it, and it shares this pattern's newline
-  // and `&` gaps unchanged.
-  // Separator and value-class treatment: see the module doc comment above.
+  // and `&` gaps unchanged
+  // Separator and value-class treatment: see the module doc comment above
   /(?<=\bAuthorization(?:\x5c?[\x22\x27])?[ \t]*[:=][ \t]*(?:\x5c?[\x22\x27])?)(?:Basic|Token)\s+(?:(?!\x5c[\x22\x27])[^\s,;&\x22\x27\x7d\]])+/gi,
   // `scheme://user:PASSWORD@host` DSNs: matches only the password segment
   // (via look-around), so the scheme, username and host — the parts an
@@ -195,7 +195,7 @@ const CREDENTIAL_PATTERNS: readonly RegExp[] = [
   // "a@b.com"}`) over-matches through the closing quote and the next key,
   // deleting the port and merging into the following field's `@`. See the
   // module doc comment above for why this pattern's value class is
-  // unmodified from main.
+  // unmodified from main
   /(?<=:\/\/[^\s:@/]{0,100}:)[^\s@/\x22\x27,;]{1,200}(?=@)/g,
 ];
 
@@ -221,7 +221,7 @@ export function maskCredentials(text: string): string {
   return masked;
 }
 
-/** Masks known credential syntaxes, then caps length — mask first, so truncation cannot bisect a token and leave half of it. */
+/** Masks known credential syntaxes, then caps length — mask first, so truncation cannot bisect a token and leave half of it */
 export function sanitizeLogText(text: string): string {
   return truncateForError(maskCredentials(text));
 }

@@ -75,7 +75,7 @@ export interface SessionVwap {
   distance_from_vwap: number | null;
 }
 
-/** `SessionVwap` with both fields `null` — the shared "nothing to anchor to" answer. */
+/** `SessionVwap` with both fields `null` — the shared "nothing to anchor to" answer */
 const NO_SESSION_ANCHOR: SessionVwap = { vwap: null, distance_from_vwap: null };
 
 /**

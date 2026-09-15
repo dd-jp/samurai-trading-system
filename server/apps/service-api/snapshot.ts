@@ -42,10 +42,10 @@ import type {
   RiskCriticRow,
 } from './types.js';
 
-/** Matches the CLI views' default recent-history window; no config surface yet. */
+/** Matches the CLI views' default recent-history window; no config surface yet */
 const RECENT_DEBATES_LIMIT = 10;
 const RECENT_VERDICTS_LIMIT = 10;
-/** #940: same window size as the other recent-history lists above. */
+/** #940: same window size as the other recent-history lists above */
 const RECENT_CLOSED_TRADES_LIMIT = 10;
 /**
  * #1066: the same fixed window again, for the same reason — this rides the
@@ -323,7 +323,7 @@ export function buildSnapshot(
   const openPositions = store.getOpenPositions(asOf, arm);
   // One query for every position's mark rather than one per position — this
   // runs per dashboard HTTP request, not per tick. `getMarks` still throws for
-  // an instrument with no mark, so a priceless row can never be rendered.
+  // an instrument with no mark, so a priceless row can never be rendered
   const marks = store.getMarks(
     openPositions.map((position) => position.instrument),
     asOf,
@@ -355,7 +355,7 @@ export function buildSnapshot(
     created_at: debate.created_at.toISOString(),
     // #1396: omitted (not present as `undefined`) on a pre-migration row —
     // `exactOptionalPropertyTypes` forces the same conditional-spread form
-    // `stanceDuringDebate` below already uses.
+    // `stanceDuringDebate` below already uses
     ...(debate.termination === undefined ? {} : { termination: debate.termination }),
     ...(debate.termination_cause === undefined
       ? {}
@@ -365,7 +365,7 @@ export function buildSnapshot(
       analyst_type: c.analyst_type,
       final_position: c.final_position,
       influence_score: c.influence_score,
-      // #427/#599: how an analyst got there, not only where it ended up.
+      // #427/#599: how an analyst got there, not only where it ended up
       ...stanceDuringDebate(c),
     })),
   }));
@@ -380,7 +380,7 @@ export function buildSnapshot(
   }));
 
   // #1066: the Risk decisions the drawer's invalidation section reads, with
-  // their critic verdicts and measured conditions already joined by the store.
+  // their critic verdicts and measured conditions already joined by the store
   const risk_critics = store
     .getRiskCritics(RECENT_RISK_CRITICS_LIMIT, asOf, arm)
     .map<RiskCriticRow>(riskCriticRow);
@@ -398,7 +398,7 @@ export function buildSnapshot(
   // never recomputed here — FL owns the computation (#636), and this seam's job
   // is the `Date` → ISO conversion the wire needs. Whole `ArmPerformance`
   // values are carried across rather than picked apart, so no branch here can
-  // produce a return without its drawdown (doc 12 D4).
+  // produce a return without its drawdown (doc 12 D4)
   const arm_comparison = store
     .getArmComparisons(RECENT_ARM_COMPARISONS_LIMIT, asOf)
     .map<ArmComparisonRow>((sample) => ({
@@ -412,14 +412,14 @@ export function buildSnapshot(
       divergence_reason: sample.divergence.reason,
       // #982: the per-arm closed-trade floor THIS verdict was tested against,
       // carried across rather than read live off the current constant — see
-      // `ArmComparisonRow.min_trades_per_arm`'s doc for why.
+      // `ArmComparisonRow.min_trades_per_arm`'s doc for why
       min_trades_per_arm: sample.divergence.min_trades_per_arm,
     }));
 
   // #981: the Feedback Loop's outside benchmarks, newest first — SPY and 60/40
   // over the SAME window the arm comparisons above were measured over. Read,
   // never recomputed here, for the reason the arm rows are: FL owns the
-  // computation (#636) and the page must show what FL actually measured.
+  // computation (#636) and the page must show what FL actually measured
   //
   // A benchmark FL could not measure this cycle is simply ABSENT — FL persists
   // nothing it could not measure — so this seam never invents a zero row to
@@ -436,7 +436,7 @@ export function buildSnapshot(
       observation_count: sample.performance.observation_count,
     }));
 
-  // `toProfitFactorWire` doc (contracts/metrics.ts) has the full rationale (#1270).
+  // `toProfitFactorWire` doc (contracts/metrics.ts) has the full rationale (#1270)
   const dailyMetrics = store.getDailyMetrics(asOf, arm);
   const metrics: MetricsSuiteWire = {
     ...dailyMetrics,
@@ -448,7 +448,7 @@ export function buildSnapshot(
   // just read (`getFillsForTrades`, keyed by idempotency_key) rather than as
   // an independent "recent fills" window — a separately-limited recent-fills
   // query would silently starve older closed trades of their fills the
-  // moment open-position churn fills the window with entry-leg noise.
+  // moment open-position churn fills the window with entry-leg noise
   const closedTradesDomain = store.getRecentClosedTrades(RECENT_CLOSED_TRADES_LIMIT, asOf, arm);
   const tradeFills = store.getFillsForTrades(
     closedTradesDomain.map((trade) => trade.idempotency_key),
@@ -492,7 +492,7 @@ export function buildSnapshot(
 
   // #1595: the P&L headline, over EVERY closed trade this arm has ever
   // recorded (not `closedTradesDomain` above, which is windowed for the
-  // recent-history table) plus this arm's current open unrealized PnL.
+  // recent-history table) plus this arm's current open unrealized PnL
   const unrealizedUsd = positions.reduce((sum, position) => sum + position.unrealized_pnl, 0);
   const pnl = buildPnlHeadline(store.getAllClosedTrades(asOf, arm), unrealizedUsd, asOf);
 
@@ -519,14 +519,14 @@ export function buildSnapshot(
     // Same `asOf` as every other field above, which is the reason the Pipeline
     // view rides this payload instead of its own endpoint: two polls would let
     // the lanes and the tables describe different instants and leave the
-    // operator to reconcile them.
+    // operator to reconcile them
     pipeline: buildPipelineView(
       store.getPipelineActivity(PIPELINE_MAX_LANES, PIPELINE_LOOKBACK_MS, asOf, arm),
     ),
     // The running server's stamp of its own wire shape (#1316) — always this
     // process's own compiled-in constant, never read from the store, so a
     // rebuild-without-restart (`server.ts` serves `dist/client/` per request)
-    // is exactly what changes it.
+    // is exactly what changes it
     contract_version: CONTRACT_VERSION,
   };
 }

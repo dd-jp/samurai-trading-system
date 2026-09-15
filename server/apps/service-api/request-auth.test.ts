@@ -47,7 +47,7 @@ describe('isAuthorizedRequest — the request-time half of #887/#1038', () => {
   it('REFUSES a request with no Authorization header once a credential is configured', () => {
     // This is the load-bearing case David's decision named explicitly: a test
     // that only asserted the valid-credential case would still pass against
-    // the pre-#1038 behaviour, which accepts every request unconditionally.
+    // the pre-#1038 behaviour, which accepts every request unconditionally
     expect(isAuthorizedRequest(undefined, FIXTURE_TOKEN)).toBe(false);
   });
 

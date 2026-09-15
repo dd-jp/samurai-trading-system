@@ -52,7 +52,7 @@ import type { Clock } from '../../../shared/index.js';
 import { describeThrownSafely, SystemClock } from '../../../shared/index.js';
 import type { Logger } from '../types.js';
 
-/** One weekly nudge, at the scheduled Sunday-evening instant. */
+/** One weekly nudge, at the scheduled Sunday-evening instant */
 export interface SaxoWeeklyReminderAlert {
   environment: SaxoTradingEnvironment;
   /**
@@ -79,7 +79,7 @@ export interface SaxoWeeklyReminderTimers {
   clear(handle: unknown): void;
 }
 
-/** `unref()` for `Heartbeat.start`'s reason: this timer must never by itself keep the process alive. */
+/** `unref()` for `Heartbeat.start`'s reason: this timer must never by itself keep the process alive */
 const DEFAULT_TIMERS: SaxoWeeklyReminderTimers = {
   set: (callback, delayMs) => setTimeout(callback, delayMs).unref(),
   clear: (handle) => {
@@ -87,10 +87,10 @@ const DEFAULT_TIMERS: SaxoWeeklyReminderTimers = {
   },
 };
 
-/** 18:00 — see the module doc's "Why Sunday 18:00" section. */
+/** 18:00 — see the module doc's "Why Sunday 18:00" section */
 export const SAXO_WEEKLY_REMINDER_LONDON_MINUTES = 18 * 60;
 
-/** `Date.prototype.getUTCDay()`'s numbering (0 = Sunday) — a civil date's weekday is zone-independent. */
+/** `Date.prototype.getUTCDay()`'s numbering (0 = Sunday) — a civil date's weekday is zone-independent */
 function civilWeekday(date: ZonedCivilDate): number {
   return new Date(Date.UTC(date.year, date.month - 1, date.day)).getUTCDay();
 }
@@ -127,7 +127,7 @@ export function nextWeeklySaxoReminderInstant(after: Date): Date {
   return candidateInstant;
 }
 
-/** Reads `loggedInAt` fresh from disk; a missing or unreadable file reports as unknown rather than failing the reminder. */
+/** Reads `loggedInAt` fresh from disk; a missing or unreadable file reports as unknown rather than failing the reminder */
 function readLastLoggedInAt(tokenPath: string): string | undefined {
   try {
     return readTokenFile(tokenPath)?.loggedInAt;
@@ -138,7 +138,7 @@ function readLastLoggedInAt(tokenPath: string): string | undefined {
 
 export interface SaxoWeeklyReminderDeps {
   environment: SaxoTradingEnvironment;
-  /** `tokenFilePath(environment)` in production — overridable for tests, `buildSaxoTokenSource`'s reason. */
+  /** `tokenFilePath(environment)` in production — overridable for tests, `buildSaxoTokenSource`'s reason */
   tokenPath: string;
   channel: SaxoWeeklyReminderAlertChannel;
   logger: Logger;
@@ -184,7 +184,7 @@ export class SaxoWeeklyReminder {
     }, delayMs);
   }
 
-  /** Never throws — a delivery failure is logged, and the next week's reminder is armed regardless. */
+  /** Never throws — a delivery failure is logged, and the next week's reminder is armed regardless */
   private async fire(): Promise<void> {
     const lastLoggedInAt = readLastLoggedInAt(this.deps.tokenPath);
     const alert: SaxoWeeklyReminderAlert = {

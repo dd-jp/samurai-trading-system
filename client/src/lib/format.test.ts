@@ -25,7 +25,7 @@ describe('formatStageDuration', () => {
 
   it('renders NaN and Infinity as an em dash, never NaNm NaNs', () => {
     // PR #582 review: NaN compares false against every branch condition, so
-    // it fell through to the minutes branch instead of the unknown-value path.
+    // it fell through to the minutes branch instead of the unknown-value path
     expect(formatStageDuration(Number.NaN)).toBe('—');
     expect(formatStageDuration(Number.POSITIVE_INFINITY)).toBe('—');
     expect(formatStageDuration(Number.NEGATIVE_INFINITY)).toBe('—');
@@ -51,14 +51,14 @@ describe('formatStageDuration', () => {
 
   it('carries rounded seconds into the minute rather than rendering 60s', () => {
     // PR #582 review: the seconds were rounded independently of the floored
-    // minutes, so these rendered '59m 60s' / '12m 60s'.
+    // minutes, so these rendered '59m 60s' / '12m 60s'
     expect(formatStageDuration(3_599_500)).toBe('60m 00s');
     expect(formatStageDuration(779_500)).toBe('13m 00s');
   });
 
   it('promotes a sub-minute duration that rounds up to 60s into the minute branch', () => {
     // PR #582 review: `toFixed(1)` rounded these up inside the seconds
-    // branch, rendering '60.0s' just below the 60_000ms boundary.
+    // branch, rendering '60.0s' just below the 60_000ms boundary
     expect(formatStageDuration(59_950)).toBe('1m 00s');
     expect(formatStageDuration(59_999)).toBe('1m 00s');
     expect(formatStageDuration(59_949)).toBe('59.9s');
@@ -123,7 +123,7 @@ describe('formatSignedGbp', () => {
 describe('signed formatters — non-finite input', () => {
   it('renders NaN and Infinity as an em dash, never +$NaN', () => {
     // PR #582 review: the unknown-value contract formatStageDuration and
-    // formatClockUtc keep must hold for money and R too.
+    // formatClockUtc keep must hold for money and R too
     expect(formatSignedUsd(Number.NaN)).toBe('—');
     expect(formatSignedUsd(Number.POSITIVE_INFINITY)).toBe('—');
     expect(formatSignedUsd(Number.NEGATIVE_INFINITY)).toBe('—');
@@ -140,11 +140,9 @@ describe('formatSignedR', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
 // The display formatters added for the components (issue #538). Every one of
 // them shares the unknown-value contract above: a value it cannot honestly
-// display renders as the em dash, never as `NaN` and never as a blank.
-// ---------------------------------------------------------------------------
+// display renders as the em dash, never as `NaN` and never as a blank
 
 describe('unsigned formatters', () => {
   it('renders USD with grouping and two decimals', () => {
@@ -186,14 +184,14 @@ describe('barWidth', () => {
 
   it('clamps above the cap rather than painting over the page', () => {
     // A 300%-wide meter would overflow its neighbours; the over-cap fact is
-    // carried by a word beside the meter instead.
+    // carried by a word beside the meter instead
     expect(barWidth(3)).toBe('100.0%');
     expect(barWidth(-1)).toBe('0.0%');
   });
 
   it('returns null — not "0%" — for a value it cannot draw', () => {
     // Zero is a legitimate reading (nothing spent), so unknown must be
-    // distinguishable from it: the caller renders a named state instead.
+    // distinguishable from it: the caller renders a named state instead
     expect(barWidth(Number.NaN)).toBeNull();
     expect(barWidth(Number.POSITIVE_INFINITY)).toBeNull();
   });

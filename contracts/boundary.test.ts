@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url';
 // it's in a `.test.ts` file: `sourceFiles()` below excludes test files from
 // the scan this suite runs, and `tsconfig.build.json` excludes `**/*.test.ts`
 // from what ships — neither mechanism polices what a test file itself
-// imports, so this line relies on staying a test file, not on being checked.
+// imports, so this line relies on staying a test file, not on being checked
 import { stripComments } from '../server/shared/strip-comments.js';
 
 const CONTRACTS_DIR = fileURLToPath(new URL('.', import.meta.url));
@@ -37,7 +37,7 @@ const CONTRACTS_DIR = fileURLToPath(new URL('.', import.meta.url));
  * from the parser the build uses.
  */
 const SPECIFIER_PATTERNS = [
-  /** `import x from 'm'`, `import type { X } from 'm'`, `export { X } from 'm'`. */
+  /** `import x from 'm'`, `import type { X } from 'm'`, `export { X } from 'm'` */
   /(?:import|export)\s[^;]*?from\s+['"]([^'"]+)['"]/g,
   /**
    * `import 'm'` — a side-effect import, which has no `from` clause at all.
@@ -47,7 +47,7 @@ const SPECIFIER_PATTERNS = [
   /(?:^|[;}])\s*import\s+['"]([^'"]+)['"]/gm,
   /**
    * `await import('m')` — deferred, but still a dependency, and one that a
-   * bundler resolves at build time into the same graph.
+   * bundler resolves at build time into the same graph
    */
   /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
 ];
@@ -121,7 +121,7 @@ function assertNoVanishedImportLine(raw: string, stripped: string, file: string)
 
 // Run through `stripComments` first — a doc comment describing an import
 // (`contracts/pipeline.ts`'s module doc names `AssetClass`'s import in
-// prose, exactly the shape this must not misread) must not read as one.
+// prose, exactly the shape this must not misread) must not read as one
 function specifiersOf(file: string, dir: string = CONTRACTS_DIR): string[] {
   const raw = readFileSync(join(dir, file), 'utf8');
   const text = stripComments(raw);
@@ -133,14 +133,14 @@ function specifiersOf(file: string, dir: string = CONTRACTS_DIR): string[] {
 
 describe('contracts boundary', () => {
   it('has source files to check', () => {
-    // Guards the assertions below against silently passing on an empty glob.
+    // Guards the assertions below against silently passing on an empty glob
     expect(sourceFiles().length).toBeGreaterThan(0);
   });
 
   it.each(sourceFiles())('%s imports nothing outside contracts/', (file) => {
     for (const specifier of specifiersOf(file)) {
-      // A relative specifier that climbs out of this directory is the failure.
-      // `./x.js` is fine; `../anything` is not.
+      // A relative specifier that climbs out of this directory is the failure
+      // `./x.js` is fine; `../anything` is not
       expect(
         specifier.startsWith('../'),
         `${file} imports "${specifier}", which escapes contracts/. ` +
@@ -154,7 +154,7 @@ describe('contracts boundary', () => {
     for (const specifier of specifiersOf(file)) {
       // Bare specifiers mean a node_modules dependency. The contract is
       // consumed by a browser bundle and a Node process with exactly one
-      // runtime dependency; neither can afford this directory acquiring more.
+      // runtime dependency; neither can afford this directory acquiring more
       expect(
         specifier.startsWith('.'),
         `${file} imports the package "${specifier}". contracts/ must stay ` +
@@ -165,14 +165,14 @@ describe('contracts boundary', () => {
 
   it('declares no Date-carrying field', () => {
     // The boundary rule, checked rather than documented: anything with a
-    // `Date` is pre-serialization and belongs to the runtime that owns it.
-    // ISO strings cross the wire; `Date` objects do not survive JSON.
+    // `Date` is pre-serialization and belongs to the runtime that owns it
+    // ISO strings cross the wire; `Date` objects do not survive JSON
     //
     // Matches `Date` ANYWHERE in a type position, not just `: Date` — the
     // narrow form let `Date[]`, `readonly Date[]`, `Map<string, Date>` and
     // `Date | null` through, and a guard that admits the container forms while
     // rejecting the bare one fails open exactly where a real contract would
-    // reach for a collection.
+    // reach for a collection
     for (const file of sourceFiles()) {
       const text = readFileSync(`${CONTRACTS_DIR}${file}`, 'utf8');
       const declarations = text
@@ -215,7 +215,7 @@ describe('specifiersOf strips comments before matching (#1398)', () => {
     const specifiers = specifiersOf(file, fixturesDir);
     expect(specifiers).toEqual([]);
     // Same predicate `it.each(sourceFiles())('%s imports nothing outside
-    // contracts/'` uses above — proves a commented-out import can't trip it.
+    // contracts/'` uses above — proves a commented-out import can't trip it
     expect(specifiers.some((s) => s.startsWith('../'))).toBe(false);
   });
 
@@ -225,7 +225,7 @@ describe('specifiersOf strips comments before matching (#1398)', () => {
     const specifiers = specifiersOf(file, fixturesDir);
     expect(specifiers).toEqual(['../server/shared/index.js']);
     // Same predicate, inverted — proves stripComments doesn't also swallow a
-    // real escaping import.
+    // real escaping import
     expect(specifiers.some((s) => s.startsWith('../'))).toBe(true);
   });
 
@@ -308,7 +308,7 @@ describe('inbound routing: nothing bypasses a barrel (#1158)', () => {
 
   interface ImportStatement {
     readonly specifier: string;
-    /** A statement starting `import type` (named, default, or namespace) — see coding-standards.md's carve-out. */
+    /** A statement starting `import type` (named, default, or namespace) — see coding-standards.md's carve-out */
     readonly isBareImportType: boolean;
   }
 
@@ -318,7 +318,7 @@ describe('inbound routing: nothing bypasses a barrel (#1158)', () => {
     // Same failure mode `specifiersOf` above guards against: a regex literal
     // misread as a comment opener can swallow a real import line before this
     // scan ever sees it. Without this call the inbound suite fails open on
-    // exactly the import it exists to catch.
+    // exactly the import it exists to catch
     assertNoVanishedImportLine(raw, text, absPath);
     const statements: ImportStatement[] = [];
     for (const match of text.matchAll(/(?:import|export)\s[^;]*?from\s+['"]([^'"]+)['"]/g)) {
@@ -341,7 +341,7 @@ describe('inbound routing: nothing bypasses a barrel (#1158)', () => {
    * dependency-free by enforced construction (the outbound suite above), so
    * the carve-out's reason — routing a type-only need would manufacture a
    * real import path into a module graph nothing else pulls in — cannot
-   * arise there, and the carve-out does not reach it.
+   * arise there, and the carve-out does not reach it
    */
   function deepImportViolations(
     targetPattern: RegExp,
@@ -371,7 +371,7 @@ describe('inbound routing: nothing bypasses a barrel (#1158)', () => {
   const CONTRACTS_DEEP_IMPORT = /\/contracts\/(?!index\.(?:js|ts)$).+\.(?:js|tsx?)$/;
 
   it('has source files to check', () => {
-    // Guards the assertions below against silently passing on an empty glob.
+    // Guards the assertions below against silently passing on an empty glob
     expect(REPO_SOURCE_FILES.length).toBeGreaterThan(0);
   });
 
@@ -390,7 +390,7 @@ describe('inbound routing: nothing bypasses a barrel (#1158)', () => {
     // (#1398), aimed at `importStatementsOf` instead of `specifiersOf`:
     // without `assertNoVanishedImportLine` in the inbound scan too, this
     // deep import into contracts/ vanishes silently and the suite passes
-    // with the violation undetected.
+    // with the violation undetected
     const dir = mkdtempSync(join(tmpdir(), 'boundary-inbound-fixtures-'));
     try {
       const file = join(dir, 'regex-literal-swallows-import.ts');
@@ -417,7 +417,7 @@ describe('inbound routing: nothing bypasses a barrel (#1158)', () => {
     // carve-out wording. Finding 2/3 (#1158 round 2) was the doc and the
     // predicate disagreeing; this pins the predicate side of that agreement
     // so a future edit to either one fails a test instead of silently
-    // reopening the same drift.
+    // reopening the same drift
     const dir = mkdtempSync(join(tmpdir(), 'boundary-carve-out-fixtures-'));
     try {
       const file = join(dir, 'carve-out-forms.ts');

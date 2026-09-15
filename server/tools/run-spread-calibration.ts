@@ -63,7 +63,7 @@ import {
 import { CRYPTO_SYMBOLS, STOCK_SYMBOLS } from './run-stage2.js';
 import { STAGE2_FREE_STACK_WINDOW } from './stage2-source.js';
 
-/** The ATR window the grid holds fixed, and therefore the one the cost model sees. */
+/** The ATR window the grid holds fixed, and therefore the one the cost model sees */
 const ATR_WINDOW = 14;
 
 /**
@@ -82,13 +82,13 @@ export const CALIBRATION_WINDOW: DateRange = {
   end: new Date('2026-08-05T00:00:00.000Z'),
 };
 
-/** How many trading days to sample across the window. */
+/** How many trading days to sample across the window */
 const DEFAULT_SAMPLE_DAYS = 24;
 
 /** Minutes before the close to sample. See "Point-in-time discipline". */
 const SAMPLE_MINUTES = 5;
 
-/** Alpaca caps a quotes page at 10k; a few hundred is ample for a median. */
+/** Alpaca caps a quotes page at 10k; a few hundred is ample for a median */
 const QUOTE_LIMIT = 500;
 
 interface AlpacaQuote {
@@ -97,26 +97,26 @@ interface AlpacaQuote {
   t: string;
 }
 
-/** One symbol's fitted result. */
+/** One symbol's fitted result */
 export interface SymbolSpreadStats {
   symbol: string;
   asset_class: 'crypto' | 'stocks';
   days_sampled: number;
   quotes_sampled: number;
-  /** Days where an ATR was also available, so a ratio could be formed. */
+  /** Days where an ATR was also available, so a ratio could be formed */
   days_with_atr: number;
-  /** Median across days of (median quoted spread that day), in price units. */
+  /** Median across days of (median quoted spread that day), in price units */
   median_spread: number;
   median_spread_bps: number;
   p90_spread_bps: number;
-  /** Median across days of (that day's spread / that day's ATR14). */
+  /** Median across days of (that day's spread / that day's ATR14) */
   median_spread_over_atr: number;
   p90_spread_over_atr: number;
 }
 
 export interface SpreadCalibration {
   symbols: SymbolSpreadStats[];
-  /** Fitted `spreadVolatilityCoefficient`, per asset class, from the medians. */
+  /** Fitted `spreadVolatilityCoefficient`, per asset class, from the medians */
   fitted: { stocks: number; crypto: number };
 }
 
@@ -160,7 +160,7 @@ function easternOffsetHours(date: Date): number {
   return formatted.includes('EDT') ? 4 : 5;
 }
 
-/** Evenly-spaced calendar dates across `window`, oldest first. */
+/** Evenly-spaced calendar dates across `window`, oldest first */
 export function sampleDates(window: DateRange, count: number): Date[] {
   const span = window.end.getTime() - window.start.getTime();
   const dates: Date[] = [];
@@ -176,7 +176,7 @@ class AlpacaQuoteClient {
     private readonly keyId: string,
     private readonly secret: string,
     // Alpaca's 200 req/min is per ACCOUNT and shared with every other caller
-    // (#391), so this probe paces itself rather than racing the orchestrator.
+    // (#391), so this probe paces itself rather than racing the orchestrator
     private readonly bucket = new TokenBucket({ capacity: 10, refillPerSecond: 2 }),
   ) {}
 
@@ -201,7 +201,7 @@ class AlpacaQuoteClient {
 
   async cryptoQuotes(symbol: string, start: Date, end: Date): Promise<AlpacaQuote[]> {
     // Alpaca's crypto feed uses `BTC/USD` where the rest of this repo uses
-    // `BTC-USD` (CLAUDE.md's universe notation).
+    // `BTC-USD` (CLAUDE.md's universe notation)
     const pair = symbol.replace('-', '/');
     const body = (await this.get(
       `https://data.alpaca.markets/v1beta3/crypto/us/quotes?symbols=${encodeURIComponent(pair)}` +
@@ -316,7 +316,7 @@ export async function runSpreadCalibration(
 
       const spreads = page.map(spreadOf).filter((s): s is number => s !== undefined);
       // An empty page is a market holiday or weekend, not an error — skip it
-      // rather than recording a zero that would drag the median down.
+      // rather than recording a zero that would drag the median down
       if (spreads.length === 0) continue;
 
       const mids = page.filter((q) => q.ap > 0 && q.bp > 0).map((q) => (q.ap + q.bp) / 2);
@@ -376,7 +376,7 @@ export async function runSpreadCalibration(
 
 /**
  * The INTRADAY resolution this calibration fits, and the one an intraday
- * Stage 2 run replays (`STAGE2_TIMEFRAME=1m STAGE2_SOURCE=free-stack`).
+ * Stage 2 run replays (`STAGE2_TIMEFRAME=1m STAGE2_SOURCE=free-stack`)
  */
 export const INTRADAY_CALIBRATION_TIMEFRAME = '1m';
 
@@ -416,13 +416,13 @@ export const SESSION_BUCKETS = [
 
 export type SessionBucketName = (typeof SESSION_BUCKETS)[number]['name'];
 
-/** Length of the US equity regular session. */
+/** Length of the US equity regular session */
 const SESSION_MINUTES = 390;
 
 /**
  * The regular-session open, in UTC, for `date` — derived from the close so the
  * two share one DST source rather than drifting apart across a decade-long
- * window.
+ * window
  */
 export function usEquityOpenUtc(date: Date): Date {
   return new Date(usEquityCloseUtc(date).getTime() - SESSION_MINUTES * 60_000);
@@ -433,7 +433,7 @@ export function bucketSampleEnd(date: Date, minutesAfterOpen: number): Date {
   return new Date(usEquityOpenUtc(date).getTime() + minutesAfterOpen * 60_000);
 }
 
-/** One (symbol, bucket) cell of the intraday fit. */
+/** One (symbol, bucket) cell of the intraday fit */
 export interface IntradayBucketStats {
   bucket: SessionBucketName;
   samples: number;
@@ -446,7 +446,7 @@ export interface IntradayBucketStats {
 export interface IntradaySymbolStats {
   symbol: string;
   buckets: IntradayBucketStats[];
-  /** Pooled across buckets — the per-symbol figure the fit is taken from. */
+  /** Pooled across buckets — the per-symbol figure the fit is taken from */
   median_spread_bps: number;
   p90_spread_bps: number;
   median_spread_over_atr: number;
@@ -464,7 +464,7 @@ export interface IntradaySpreadCalibration {
    * 2026-08-16.
    */
   fitted_stocks: number;
-  /** Spread across symbols, for the "can one coefficient represent this?" question. */
+  /** Spread across symbols, for the "can one coefficient represent this?" question */
   p90_stocks: number;
 }
 
@@ -541,7 +541,7 @@ export async function runIntradaySpreadCalibration(
 
   // The free stack, not Polygon: `HttpPolygonClient` refuses anything but '1d'
   // outright, and the intraday replay this fit serves runs on Alpaca SIP
-  // minute bars (#656, #664).
+  // minute bars (#656, #664)
   const bars = new FreeStackAggregatesClient({ alpacaKeyId: keyId, alpacaSecretKey: secret });
   const quotes = new AlpacaQuoteClient(keyId, secret);
 
@@ -567,7 +567,7 @@ export async function runIntradaySpreadCalibration(
       const sessionOpen = usEquityOpenUtc(date);
       const sessionWindow: DateRange = {
         // A full ATR14 needs 15 prior minute bars; an hour of lead-in covers
-        // that with room for a halt or a thin opening.
+        // that with room for a halt or a thin opening
         start: new Date(sessionOpen.getTime() - 60 * 60_000),
         end: usEquityCloseUtc(date),
       };
@@ -579,7 +579,7 @@ export async function runIntradaySpreadCalibration(
         continue;
       }
       // A holiday or a weekend serves nothing. Skipping is right; recording a
-      // zero would drag the median toward a flattering number.
+      // zero would drag the median toward a flattering number
       if (minuteBars.length === 0) continue;
 
       for (const bucket of SESSION_BUCKETS) {

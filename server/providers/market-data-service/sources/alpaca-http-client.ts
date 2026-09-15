@@ -128,15 +128,15 @@ const ALPACA_STOCKS_API_VERSION = 'v2';
  * would have been a collision waiting to happen in any shared barrel.
  */
 export const ALPACA_BARS_TIMEOUT_MS = 10_000;
-/** Same sizing as the broker client — one Alpaca key's ~200 req/min budget is shared across both APIs. */
+/** Same sizing as the broker client — one Alpaca key's ~200 req/min budget is shared across both APIs */
 export const ALPACA_BARS_RETRY_CONFIG: RetryConfig = {
   maxAttempts: 3,
   baseDelayMs: 250,
   maxDelayMs: 4_000,
 };
-/** Guards against a malformed/cyclical `next_page_token` spinning forever — mirrors `HttpPolygonClient`'s `MAX_PAGES`. */
+/** Guards against a malformed/cyclical `next_page_token` spinning forever — mirrors `HttpPolygonClient`'s `MAX_PAGES` */
 const MAX_PAGES = 25;
-/** Rows requested per page — well under Alpaca's own page-size cap, unrelated to the caller's `limit`. */
+/** Rows requested per page — well under Alpaca's own page-size cap, unrelated to the caller's `limit` */
 const PAGE_SIZE = 1_000;
 /**
  * How many `timeframe`-widths back of `asOf` to search for `limit` bars.
@@ -186,7 +186,7 @@ const RETRY_MIN_WINDOW_MS = 10 * 86_400_000;
  */
 const RETRY_MAX_ROWS = MAX_PAGES * PAGE_SIZE;
 
-/** Alpaca's raw per-bar shape on the wire — a superset of `AlpacaBar` (also carries `n`, `vw`). */
+/** Alpaca's raw per-bar shape on the wire — a superset of `AlpacaBar` (also carries `n`, `vw`) */
 interface RawAlpacaBar {
   t: string;
   o: number;
@@ -224,7 +224,7 @@ function toAlpacaBar(raw: RawAlpacaBar): AlpacaBar {
   return { t: raw.t, o: raw.o, h: raw.h, l: raw.l, c: raw.c, v: raw.v };
 }
 
-/** `typeof x === 'number'` narrowed further to exclude `NaN`/`Infinity` — a vendor can send either on the wire. */
+/** `typeof x === 'number'` narrowed further to exclude `NaN`/`Infinity` — a vendor can send either on the wire */
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
@@ -260,7 +260,7 @@ function validateRawAlpacaBar(raw: unknown, symbol: string, context: string): Ra
   );
 }
 
-/** Same shape guard as `validateRawAlpacaBar`, for the single-quote payload `getLatestQuote` reads. */
+/** Same shape guard as `validateRawAlpacaBar`, for the single-quote payload `getLatestQuote` reads */
 function validateRawAlpacaQuote(raw: unknown, symbol: string, context: string): RawAlpacaQuote {
   if (typeof raw === 'object' && raw !== null) {
     const { t, ap, bp } = raw as Record<string, unknown>;
@@ -279,7 +279,7 @@ function validateRawAlpacaQuote(raw: unknown, symbol: string, context: string): 
  * Guards the top-level envelope before any field is read off it — a `null`
  * or non-object body would otherwise throw an unclassified `TypeError` the
  * instant `.bars`/`.quote` is read, rather than the classified
- * `AlpacaDataProviderError` every other failure on this path produces.
+ * `AlpacaDataProviderError` every other failure on this path produces
  */
 function requireResponseObject(body: unknown, context: string): Record<string, unknown> {
   if (typeof body === 'object' && body !== null) return body as Record<string, unknown>;
@@ -294,7 +294,7 @@ function requireResponseObject(body: unknown, context: string): Record<string, u
  * Validates a raw bars array is actually an array before iterating it —
  * `undefined`/`null` degrade to "no bars" (the existing contract), but any
  * other non-array shape (an object, a string) is a vendor error, not a
- * silently-empty page.
+ * silently-empty page
  */
 function requireBarsArray(value: unknown, symbol: string, context: string): unknown[] {
   if (value === undefined || value === null) return [];
@@ -305,7 +305,7 @@ function requireBarsArray(value: unknown, symbol: string, context: string): unkn
   );
 }
 
-/** `'1m'` -> `'1Min'`, `'5m'` -> `'5Min'`, `'1h'` -> `'1Hour'`, `'1d'` -> `'1Day'` (Alpaca's own vocabulary). */
+/** `'1m'` -> `'1Min'`, `'5m'` -> `'5Min'`, `'1h'` -> `'1Hour'`, `'1d'` -> `'1Day'` (Alpaca's own vocabulary) */
 export function toAlpacaTimeframe(timeframe: string): string {
   const match = /^(\d+)([mhd])$/.exec(timeframe);
   if (!match) {
@@ -400,7 +400,7 @@ function lookupCryptoKey<T>(
  */
 export type AlpacaDataFeed = 'iex' | 'sip';
 
-/** Default equity feed — see `AlpacaDataFeed` for why it is not Alpaca's own default. */
+/** Default equity feed — see `AlpacaDataFeed` for why it is not Alpaca's own default */
 export const DEFAULT_ALPACA_DATA_FEED: AlpacaDataFeed = 'iex';
 
 /** The operator's override. Read once, at construction. */
@@ -409,7 +409,7 @@ export const ALPACA_DATA_FEED_ENV_VAR = 'ALPACA_DATA_FEED';
 /**
  * Unrecognised values are refused rather than passed to the wire: a typo'd
  * `ALPACA_DATA_FEED=sipp` would otherwise be forwarded, rejected by Alpaca as
- * a query error, and read as a data outage on every equity tick.
+ * a query error, and read as a data outage on every equity tick
  */
 export function resolveAlpacaDataFeed(raw: string | undefined): AlpacaDataFeed {
   const value = (raw ?? '').trim();
@@ -423,7 +423,7 @@ export function resolveAlpacaDataFeed(raw: string | undefined): AlpacaDataFeed {
 }
 
 export interface AlpacaHttpDataClientOptions {
-  /** Routes requests through the `/v2/stocks/...` or `/v1beta3/crypto/us/...` path root. */
+  /** Routes requests through the `/v2/stocks/...` or `/v1beta3/crypto/us/...` path root */
   assetClass: 'crypto' | 'stocks';
   /**
    * Equity feed. Defaults to `ALPACA_DATA_FEED`, then to
@@ -435,9 +435,9 @@ export interface AlpacaHttpDataClientOptions {
   apiKey?: string;
   /** Defaults to `process.env.ALPACA_API_SECRET`. Never logged or thrown into an error message. */
   apiSecret?: string;
-  /** Defaults to `https://data.alpaca.markets` — one host serves both paper and live accounts. */
+  /** Defaults to `https://data.alpaca.markets` — one host serves both paper and live accounts */
   baseUrl?: string;
-  /** Per-attempt network timeout passed to `fetchWithTimeout`. */
+  /** Per-attempt network timeout passed to `fetchWithTimeout` */
   timeoutMs?: number;
   retry?: RetryConfig;
   /**
@@ -459,12 +459,12 @@ export interface AlpacaHttpDataClientOptions {
   rateLimiter?: TokenBucket | undefined;
 }
 
-/** Real HTTP market-data `AlpacaMarketDataClient` against Alpaca's Market Data API v2. */
+/** Real HTTP market-data `AlpacaMarketDataClient` against Alpaca's Market Data API v2 */
 export class AlpacaHttpDataClient implements AlpacaMarketDataClient {
   private readonly assetClass: 'crypto' | 'stocks';
   /**
    * Resolved for a STOCKS client only, and `undefined` for crypto — see the
-   * constructor for why an unused env var must not be able to fail a boot.
+   * constructor for why an unused env var must not be able to fail a boot
    */
   private readonly feed: AlpacaDataFeed | undefined;
   private readonly apiKey: string;
@@ -492,13 +492,13 @@ export class AlpacaHttpDataClient implements AlpacaMarketDataClient {
     this.assetClass = options.assetClass;
     // Resolved at construction, not per request: an unrecognised value must
     // fail at wiring time rather than on the first equity tick, and a mid-run
-    // environment edit must not change the tape underneath a running process.
+    // environment edit must not change the tape underneath a running process
     //
     // Resolved for STOCKS ONLY, which keeps the field honest against its own
     // "Ignored for crypto" contract. A crypto client never sends `feed` — the
     // crypto endpoints take no such parameter — so reading the variable here
     // would let a typo'd `ALPACA_DATA_FEED` kill a crypto-only process over a
-    // value it would never use.
+    // value it would never use
     //
     // This does NOT weaken the fail-fast posture, because the failure moves to
     // the client that would actually use the value rather than disappearing:
@@ -507,7 +507,7 @@ export class AlpacaHttpDataClient implements AlpacaMarketDataClient {
     // enter the universe, `buildAlpacaDataSource` constructs a stocks client
     // (both of them, for a mixed universe) and that constructor throws at boot,
     // naming the variable. The window in which a typo goes unnoticed is exactly
-    // the window in which it is inert.
+    // the window in which it is inert
     this.feed =
       options.assetClass === 'stocks'
         ? (options.feed ?? resolveAlpacaDataFeed(process.env[ALPACA_DATA_FEED_ENV_VAR]))
@@ -548,11 +548,11 @@ export class AlpacaHttpDataClient implements AlpacaMarketDataClient {
         // INSIDE the retry body, not outside it (#391): a retried attempt is a
         // second request against the same per-account budget, and pacing only
         // the first attempt would let a degraded venue — the exact moment
-        // #386's widen-and-retry also fires — burst through the bucket.
+        // #386's widen-and-retry also fires — burst through the bucket
         //
         // `acquireBackground` yields to the order path: market data waits for
         // the reserve to be re-minted on top of its own token, so a bar sweep
-        // can be late but cannot delay a protective leg.
+        // can be late but cannot delay a protective leg
         await this.rateLimiter?.acquireBackground();
 
         let response: Response;
@@ -602,7 +602,7 @@ export class AlpacaHttpDataClient implements AlpacaMarketDataClient {
     // trip on a legitimate large request before a malformed/cyclical token ever
     // could. Scale the cap with the window actually being searched instead (so
     // a widened retry gets a widened cap, not the first attempt's); +2 pages of
-    // slack absorbs boundary rounding without weakening the loop guard itself.
+    // slack absorbs boundary rounding without weakening the loop guard itself
     const maxPages = Math.max(
       MAX_PAGES,
       Math.ceil(windowMs / timeframeToMs(timeframe) / PAGE_SIZE) + 2,
@@ -642,7 +642,7 @@ export class AlpacaHttpDataClient implements AlpacaMarketDataClient {
         // `?? undefined` folds an explicit `bars: null` into the same
         // "no key" branch `lookupCryptoKey` already handles — it only guards
         // `undefined`, and a malformed body sending `null` would otherwise
-        // throw an unclassified TypeError reading `byKey[alpacaSymbol]`.
+        // throw an unclassified TypeError reading `byKey[alpacaSymbol]`
         const rawBars = lookupCryptoKey(body.bars ?? undefined, alpacaSymbol, symbol);
         for (const raw of requireBarsArray(rawBars, symbol, 'getBars')) {
           out.push(toAlpacaBar(validateRawAlpacaBar(raw, symbol, 'getBars')));
@@ -651,13 +651,13 @@ export class AlpacaHttpDataClient implements AlpacaMarketDataClient {
         // than throwing: an early stop here is exactly the short-read case
         // `getBars`'s widen-and-retry (RETRY_WIDEN_FACTOR) already exists to
         // recover, so it is caught by the existing sparse-data path instead
-        // of a second bespoke guard.
+        // of a second bespoke guard
         pageToken = typeof body.next_page_token === 'string' ? body.next_page_token : undefined;
       } else {
         // Stocks only — Alpaca's crypto endpoints take no `feed`. Without this
         // every equity bars request 403s, because `end` is always `clock.now()`
-        // and a Basic subscription cannot read SIP data under 15 minutes old.
-        // See `AlpacaDataFeed` for the live status codes.
+        // and a Basic subscription cannot read SIP data under 15 minutes old
+        // See `AlpacaDataFeed` for the live status codes
         params.set('feed', this.equityFeed);
         const body = requireResponseObject(
           await this.requestJson(
@@ -713,13 +713,13 @@ export class AlpacaHttpDataClient implements AlpacaMarketDataClient {
     partial: 'error' | 'allow' = 'error',
   ): Promise<AlpacaBar[]> {
     // `slice(-0)` is `slice(0)` — the WHOLE array, not none of it. Guarded
-    // rather than relied upon: a `lookback: 0` window is operator config away.
+    // rather than relied upon: a `lookback: 0` window is operator config away
     if (limit <= 0) return [];
 
     const timeframeMs = timeframeToMs(timeframe);
     const bufferMs = timeframeMs * limit * BUFFER_MULTIPLIER;
     // Small-`limit` daily requests still need at least a few calendar days of
-    // headroom to cross a weekend; the multiplier alone can underflow at limit=1.
+    // headroom to cross a weekend; the multiplier alone can underflow at limit=1
     const minBufferMs = isDailyTimeframe(timeframe) ? 4 * 86_400_000 : 0;
     const windowMs = Math.max(bufferMs, minBufferMs);
 
@@ -731,7 +731,7 @@ export class AlpacaHttpDataClient implements AlpacaMarketDataClient {
       RETRY_MAX_ROWS * timeframeMs,
     );
     // No room left under the ceiling — don't spend a second full page walk to
-    // re-read a subset of what the first attempt already searched.
+    // re-read a subset of what the first attempt already searched
     const searched =
       widenedMs > windowMs ? await this.fetchRange(symbol, timeframe, asOf, widenedMs) : first;
     if (searched.length >= limit) return searched.slice(-limit);
@@ -770,7 +770,7 @@ export class AlpacaHttpDataClient implements AlpacaMarketDataClient {
     // Passed explicitly even though this endpoint already defaults to IEX for a
     // Basic subscription: the mark and the bars an indicator is computed from
     // must come from the same tape, or an ATR-derived stop is priced against a
-    // venue the mark never saw.
+    // venue the mark never saw
     const quoteParams = new URLSearchParams({ feed: this.equityFeed });
     const body = requireResponseObject(
       await this.requestJson(

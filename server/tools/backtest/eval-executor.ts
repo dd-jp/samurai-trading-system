@@ -37,7 +37,7 @@ import type { MetricsSuite } from './validation-types.js';
 
 export interface EvalExecutorDeps {
   source: ReplayTradeSource;
-  /** The same bar timeline the replay stepped — the return series' periods. */
+  /** The same bar timeline the replay stepped — the return series' periods */
   timeline: ReplayTimeline;
 }
 
@@ -48,8 +48,8 @@ export class EvalExecutorImpl implements EvalExecutor {
     const trades = await this.deps.source.closedTrades(options.window);
 
     // Attestation first (AC 1): if any fill was priced by something other than
-    // CostModel.fill, every number below is computed off optimistic fills.
-    // Fail before producing them rather than after.
+    // CostModel.fill, every number below is computed off optimistic fills
+    // Fail before producing them rather than after
     for (const trade of trades) {
       assertCostModelPriced(trade, await this.deps.source.fills(trade.idempotency_key));
     }
@@ -72,7 +72,7 @@ export class EvalExecutorImpl implements EvalExecutor {
     };
   }
 
-  /** Score one contiguous sample — the whole window, or one split's test slice. */
+  /** Score one contiguous sample — the whole window, or one split's test slice */
   private score(
     trades: readonly ClosedTrade[],
     bars: readonly Date[],
@@ -134,7 +134,7 @@ function testRangeOf(test: readonly DateRange[]): DateRange {
   return range;
 }
 
-/** Inclusive at both ends — a bar or close exactly on a boundary is in sample. */
+/** Inclusive at both ends — a bar or close exactly on a boundary is in sample */
 function within(at: Date, range: DateRange): boolean {
   return at.getTime() >= range.start.getTime() && at.getTime() <= range.end.getTime();
 }

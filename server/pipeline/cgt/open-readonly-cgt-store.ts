@@ -10,7 +10,7 @@
 import BetterSqlite3 from 'better-sqlite3';
 import type { StoreHandle } from '../../shared/store/index.js';
 
-/** Every column `SqliteCgtFillSource`'s query selects, by table — the schema this report was written against. */
+/** Every column `SqliteCgtFillSource`'s query selects, by table — the schema this report was written against */
 const REQUIRED_CGT_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   fills: [
     'idempotency_key',

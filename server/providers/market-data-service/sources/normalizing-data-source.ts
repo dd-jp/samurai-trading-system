@@ -141,13 +141,13 @@ const MAX_RAW_LIMIT_ABSOLUTE = 20_000;
 export class InSessionUnderfetchError extends Error {
   readonly instrument: string;
   readonly timeframe: string;
-  /** Completed, in-session bars the caller asked for. */
+  /** Completed, in-session bars the caller asked for */
   readonly requested: number;
-  /** Completed, in-session bars the widest attempt actually produced. */
+  /** Completed, in-session bars the widest attempt actually produced */
   readonly received: number;
-  /** Raw candles the widest attempt asked the source for. */
+  /** Raw candles the widest attempt asked the source for */
   readonly rawRequested: number;
-  /** How many widening attempts were spent before giving up. */
+  /** How many widening attempts were spent before giving up */
   readonly attempts: number;
 
   constructor(details: {
@@ -216,10 +216,10 @@ export class RawFetchLimitExceededError extends Error {
   }
 }
 
-/** A live price observation, mapped out of a source's quote/trade payload. */
+/** A live price observation, mapped out of a source's quote/trade payload */
 export interface LiveObservation {
   price: number;
-  /** When the price was OBSERVED — the source's trade/quote time. */
+  /** When the price was OBSERVED — the source's trade/quote time */
   observed_at: Date;
 }
 
@@ -227,7 +227,7 @@ export interface SourceConfig {
   /** The vendor that served it, e.g. 'alpaca' — audit only; consumers ignore. */
   source: string;
   asset_class: 'crypto' | 'stocks';
-  /** Gates bar production to trading sessions; always-open for crypto. */
+  /** Gates bar production to trading sessions; always-open for crypto */
   calendar: TradingCalendar;
   /**
    * How `fetchBars` spends its widen budget when the first raw ask does not
@@ -323,7 +323,7 @@ export abstract class NormalizingDataSource implements DataSource {
     partial?: 'error' | 'allow',
   ): Promise<RawCandle[]>;
 
-  /** Map the source's streaming quote/trade payload into an observation. */
+  /** Map the source's streaming quote/trade payload into an observation */
   protected abstract fetchLiveObservation(instrument: string): Promise<LiveObservation>;
 
   /**
@@ -403,7 +403,7 @@ export abstract class NormalizingDataSource implements DataSource {
     );
 
     // #828: the widen budget, and how each step is sized — see
-    // `SourceConfig.rawWidenPolicy`.
+    // `SourceConfig.rawWidenPolicy`
     const widestRetry = this.config.rawWidenPolicy === 'single-widest-retry';
     const maxAttempts = widestRetry
       ? MAX_WIDEST_RETRY_FETCH_ATTEMPTS
@@ -424,13 +424,13 @@ export abstract class NormalizingDataSource implements DataSource {
       );
       served = completedBars(normalizeBars(candles, context), asOf, window.lookback);
 
-      // The guarantee, checked on the bars the CALLER will actually receive.
+      // The guarantee, checked on the bars the CALLER will actually receive
       if (served.length >= window.lookback) return served;
-      // Opted in to a short window (#292): one request, no widen, no throw.
+      // Opted in to a short window (#292): one request, no widen, no throw
       if (window.partial === 'allow') return served;
-      // RAW SCARCITY, NOT SESSION LOSS — and the two must not be conflated.
+      // RAW SCARCITY, NOT SESSION LOSS — and the two must not be conflated
       // The source returned fewer raw candles than asked, so it has no more
-      // history and widening cannot conjure bars that do not exist.
+      // history and widening cannot conjure bars that do not exist
       //
       // Throwing InSessionUnderfetchError here was tried and REJECTED: it
       // misnames the cause. A sparse 24/7 crypto listing under
@@ -438,21 +438,21 @@ export abstract class NormalizingDataSource implements DataSource {
       // bars fell outside a trading session' would be false, and it would
       // displace the loud guard that already covers this exact case —
       // ingestion-round-trip.test.ts's 'still refuses a window that is
-      // genuinely short' pins InsufficientBarsError (#319) for it.
+      // genuinely short' pins InsufficientBarsError (#319) for it
       //
       // So this is NOT a silent path. It is loud one layer up, via an error
       // that names the real cause: computeIndicator throws InsufficientBarsError
       // whenever the serve falls under minimumBarsFor(spec), which every
       // current getIndicator caller sits exactly on. AlpacaHttpDataClient
       // additionally fails loudly BEFORE this branch (AlpacaDataUnderfetchError,
-      // #292), so on the MVP path it is unreachable.
+      // #292), so on the MVP path it is unreachable
       //
       // Residual gap, stated so it is not rediscovered: a caller whose
       // lookback EXCEEDS its indicator minimum, reading from a source whose
       // client has no raw-count guard of its own — `AlpacaHttpDataClient` is
-      // the only one that does — could be served short without any throw.
+      // the only one that does — could be served short without any throw
       // Closing that belongs with those clients' own guards, not here: the shortfall is a property of the venue's history,
-      // not of the calendar, and this method cannot tell the difference.
+      // not of the calendar, and this method cannot tell the difference
       if (candles.length < rawLimit) return served;
       if (attempts >= maxAttempts) break;
 

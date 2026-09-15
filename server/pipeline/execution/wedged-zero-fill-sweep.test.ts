@@ -2,7 +2,7 @@
  * The #1186 wedged-zero-fill sweep, unit-level: `sweepWedgedZeroFillLots`
  * called directly rather than through `reconcile()` (that integration —
  * "a restart finds an already-wedged lot with no adapter memory of it" — is
- * `reconcile.test.ts`'s "the wedged-zero-fill sweep (#1186)" describe block).
+ * `reconcile.test.ts`'s "the wedged-zero-fill sweep (#1186)" describe block)
  */
 import type { Clock, Logger, OpenPosition } from '../../shared/index.js';
 import { recordingLogger } from '../../shared/recording-logger.js';
@@ -47,7 +47,7 @@ async function seedWedgedPosition(
 /**
  * No `broker` here, by type: `WedgedSweepInput` carries none, which is what
  * makes the sweep's store-evidence-only rule (#1215) hold — a future venue
- * call is a `tsc` error in the sweep, not a stub these tests could miss.
+ * call is a `tsc` error in the sweep, not a stub these tests could miss
  */
 function makeInput(
   store: WedgedSweepInput['store'],
@@ -80,7 +80,7 @@ describe('sweepWedgedZeroFillLots (#1186)', () => {
     expect(settled?.abandon_reason).toBeDefined();
     expect(settled?.abandon_reason).toContain('#1186');
 
-    // Terminal: excluded from the live read every other reader trusts.
+    // Terminal: excluded from the live read every other reader trusts
     expect(await store.getOpenPositions()).toEqual([]);
   });
 
@@ -130,12 +130,12 @@ describe('sweepWedgedZeroFillLots (#1186)', () => {
     // call must not overwrite it. Only the `order_state IN ('filled',
     // 'partially_filled')` half of the guard is exercised this way — the
     // row here still has `filled_size = 0` on the second call too, so that
-    // half of the WHERE clause is untested by this case.
+    // half of the WHERE clause is untested by this case
     const abandoned = await store.abandonWedgedZeroFillLot(KEY, 'test-forced');
     expect(abandoned).toBe(true);
     // A second call against the now-'abandoned' row is the guard's own
     // no-op case — the row no longer matches `order_state IN ('filled',
-    // 'partially_filled')`.
+    // 'partially_filled')`
     const secondCall = await store.abandonWedgedZeroFillLot(KEY, 'test-forced-again');
     expect(secondCall).toBe(false);
     expect((await store.getPosition(KEY))?.abandon_reason).toBe('test-forced');
@@ -148,7 +148,7 @@ describe('sweepWedgedZeroFillLots (#1186)', () => {
     // Stands in for `abandonWedgedZeroFillLot`'s SQL WHERE-guard
     // (sqlite-shared-store.ts) having drifted from `isWedgedZeroFillLot`
     // (key-scheme-guard.ts): the row is untouched and still matches the TS
-    // predicate, but the store reports the write as a no-op anyway.
+    // predicate, but the store reports the write as a no-op anyway
     const divergedStore: WedgedSweepInput['store'] = {
       getOpenPositions: () => store.getOpenPositions(),
       getExitFillSizes: (keys) => store.getExitFillSizes(keys),
@@ -171,7 +171,7 @@ describe('sweepWedgedZeroFillLots (#1186)', () => {
     });
     expect(result.divergences[0]?.reason).toContain('shape mismatch');
 
-    // The forced no-op never wrote anything — still wedged, not abandoned.
+    // The forced no-op never wrote anything — still wedged, not abandoned
     expect((await store.getPosition(KEY))?.order_state).toBe('filled');
   });
 
@@ -182,7 +182,7 @@ describe('sweepWedgedZeroFillLots (#1186)', () => {
     // Stands in for the store write itself throwing (a DB failure), the
     // pre-existing `catch` block this sweep has always had — a different
     // event than the SQL-guard no-op above, though both share
-    // `action: 'undetermined'` and `kind: 'sweep'`.
+    // `action: 'undetermined'` and `kind: 'sweep'`
     const failingStore: WedgedSweepInput['store'] = {
       getOpenPositions: () => store.getOpenPositions(),
       getExitFillSizes: (keys) => store.getExitFillSizes(keys),
@@ -217,7 +217,7 @@ describe('sweepWedgedZeroFillLots (#1186)', () => {
     // motivating example (#1601's doc): the first `getOpenPositions()` call
     // is the sweep's own worklist read (still wedged), and every call after
     // is the re-check's fresh read, standing in for what the real store
-    // would show once that fill landed.
+    // would show once that fill landed
     let reads = 0;
     const divergedStore: WedgedSweepInput['store'] = {
       getOpenPositions: async () => {

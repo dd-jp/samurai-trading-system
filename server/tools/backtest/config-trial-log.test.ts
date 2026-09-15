@@ -9,7 +9,7 @@ function report(config_hash: string, seed = 1): BacktestReport {
 /**
  * The trial-count discipline is a property of the `ConfigTrialLog` port;
  * `InMemoryConfigTrialLog` is its one implementation (#1156 deleted the
- * SQLite-backed one as unwired).
+ * SQLite-backed one as unwired)
  */
 const LOG_IMPLEMENTATIONS: Array<[string, () => ConfigTrialLog]> = [
   ['InMemoryConfigTrialLog', () => new InMemoryConfigTrialLog()],
@@ -42,7 +42,7 @@ describe.each(LOG_IMPLEMENTATIONS)('%s', (_name, makeLog) => {
     log.recordTrial('config-a', report('config-a'));
     expect(log.distinctTrialCount()).toBe(1);
 
-    // Same config, evaluated again — a re-run, not a new selection search.
+    // Same config, evaluated again — a re-run, not a new selection search
     log.recordTrial('config-a', report('config-a'));
     log.recordTrial('config-a', report('config-a'));
 
@@ -55,7 +55,7 @@ describe.each(LOG_IMPLEMENTATIONS)('%s', (_name, makeLog) => {
     log.recordTrial('config-a', report('config-a', 1));
     log.recordTrial('config-a', report('config-a', 2));
 
-    // The seed is not part of the config identity — config_hash is.
+    // The seed is not part of the config identity — config_hash is
     expect(log.distinctTrialCount()).toBe(1);
   });
 

@@ -40,7 +40,7 @@ describe('getContributionsForAttribution', () => {
     store.writeLog(
       // #687: `buildDebateLog` no longer takes a bar — it projects
       // `result.bar_timestamp`, so the row and the `debate_id` it is keyed by
-      // cannot name different bars.
+      // cannot name different bars
       buildDebateLog(result, 'BTC-USD', new Date('2026-07-14T09:00:08Z')),
     );
 
@@ -89,7 +89,7 @@ describe('getContributionsForAttribution', () => {
       direction: 'bullish',
       rounds: 2,
       created_at: new Date('2026-07-14T09:00:08Z'),
-      // No `termination` field at all — a row written before migration 0041.
+      // No `termination` field at all — a row written before migration 0041
     });
 
     expect(getContributionsForAttribution(store, 'debate-pre-1081')).toEqual([makeContribution()]);

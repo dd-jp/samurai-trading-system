@@ -50,7 +50,7 @@ import type { ReplayRunResult } from './replay-driver.js';
 import type { BacktestReport } from './types.js';
 import type { DateRange } from './universe.js';
 
-/** One bar's duration — the spec's `barMs`=1 day, fixed for the grid run. */
+/** One bar's duration — the spec's `barMs`=1 day, fixed for the grid run */
 const DAY_MS = 86_400_000;
 
 /**
@@ -65,14 +65,14 @@ const EMBARGO_BARS = 50;
  * This path has no stochastic consumer (`types.ts`: the only seeded mode is
  * `CostModel`'s opt-in slippage, which #87 does not implement) — a fixed seed
  * is recorded for the trial's identity, not per-config, since nothing here
- * varies by it.
+ * varies by it
  */
 const TRIAL_SEED = 0;
 
 export const STOCK_PERIODS_PER_YEAR = 252;
 export const CRYPTO_PERIODS_PER_YEAR = 365;
 
-/** US cash-session length in minutes — 09:30 to 16:00 ET. */
+/** US cash-session length in minutes — 09:30 to 16:00 ET */
 const US_REGULAR_SESSION_MINUTES = 6.5 * 60;
 const MINUTES_PER_DAY = 24 * 60;
 
@@ -101,7 +101,7 @@ export function periodsPerYearFor(assetClass: 'stocks' | 'crypto', timeframe: st
 
   // A day-grained bar is one bar per trading day whatever the venue's session
   // length — the arithmetic below would divide a 6.5-hour session by a 24-hour
-  // bar and report 0.27 stock bars a year.
+  // bar and report 0.27 stock bars a year
   if (isDailyTimeframe(timeframe)) return tradingDays;
 
   const sessionMinutes = assetClass === 'stocks' ? US_REGULAR_SESSION_MINUTES : MINUTES_PER_DAY;
@@ -120,7 +120,7 @@ export function periodsPerYearFor(assetClass: 'stocks' | 'crypto', timeframe: st
 const FAST_WINDOWS = [10, 20] as const;
 const SLOW_WINDOWS = [30, 50] as const;
 
-/** The three paired risk:reward presets — stop:target multipliers of ATR. */
+/** The three paired risk:reward presets — stop:target multipliers of ATR */
 const RISK_REWARD_PRESETS: ReadonlyArray<
   Pick<ProxyStrategyConfig, 'atrStopMult' | 'atrTargetMult'>
 > = [
@@ -129,14 +129,14 @@ const RISK_REWARD_PRESETS: ReadonlyArray<
   { atrStopMult: 3, atrTargetMult: 4 },
 ];
 
-/** Fixed across all 12 configs (spec, "Module: Trial Execution"). */
+/** Fixed across all 12 configs (spec, "Module: Trial Execution") */
 const ATR_WINDOW = 14;
 const ALLOW_SHORT = true;
 
-/** One grid config, paired with its trial identity. */
+/** One grid config, paired with its trial identity */
 export interface TrialGridEntry {
   config: ProxyStrategyConfig;
-  /** Function of `config` alone — see this module's header on why. */
+  /** Function of `config` alone — see this module's header on why */
   config_hash: string;
 }
 
@@ -169,15 +169,15 @@ export function buildTrialGrid(): TrialGridEntry[] {
   return entries;
 }
 
-/** What sizing the grid to the sample decided (#405). */
+/** What sizing the grid to the sample decided (#405) */
 export interface TrialGridSizing {
-  /** The configs that will actually be run. */
+  /** The configs that will actually be run */
   selected: TrialGridEntry[];
-  /** MinBTL's cap for this window — the most trials the sample can support. */
+  /** MinBTL's cap for this window — the most trials the sample can support */
   limit: number;
-  /** How many the full cross-product asked for. */
+  /** How many the full cross-product asked for */
   requested: number;
-  /** Effective sample length, for the positive statement in the report. */
+  /** Effective sample length, for the positive statement in the report */
   years: number;
 }
 
@@ -233,7 +233,7 @@ export function sizeTrialGridToSample(
   // zero trials has no failing config to report — it reads as a pass. That is
   // the single worst outcome this whole function exists to prevent: the cap is
   // here to make the gate harder to pass, and a bug in it that makes the gate
-  // pass vacuously inverts its purpose.
+  // pass vacuously inverts its purpose
   //
   // Stated honestly: this is UNREACHABLE as `minbtl` is written today — it
   // starts its search at `limit = 1` and only ever increments
@@ -241,11 +241,11 @@ export function sizeTrialGridToSample(
   // nothing in the `{ limit: number }` return type says that, the invariant is
   // one refactor away from being lost, and the failure mode it protects
   // against is silent rather than loud. `< 1` rather than `=== 0` for the same
-  // reason: MinBTL is a continuous expression underneath.
+  // reason: MinBTL is a continuous expression underneath
   // Same failure, from the other side and reachable: an EMPTY grid falls
   // through the `requested <= limit` branch below and returns an empty
   // selection with no complaint. This function is exported, so "no caller
-  // passes an empty array today" is not a guarantee it holds.
+  // passes an empty array today" is not a guarantee it holds
   if (requested < 1) {
     throw new Error(
       'sizeTrialGridToSample: an empty grid cannot be sized — there is nothing to run, ' +
@@ -268,7 +268,7 @@ export function sizeTrialGridToSample(
   }
 
   // Evenly spaced indices across the whole grid, endpoints included, so the
-  // retained set spans the parameter space rather than clustering at one end.
+  // retained set spans the parameter space rather than clustering at one end
   const selected: TrialGridEntry[] = [];
   for (let i = 0; i < limit; i++) {
     const index = limit === 1 ? 0 : Math.round((i * (requested - 1)) / (limit - 1));
@@ -277,7 +277,7 @@ export function sizeTrialGridToSample(
     // here, so `index` never exceeds `requested - 1`. Throwing rather than
     // skipping because a silent skip would make `selected` shorter than
     // `limit` with no signal, and `announceSizing` would then report a grid
-    // size that is not the one that ran.
+    // size that is not the one that ran
     if (entry === undefined) {
       throw new Error(
         `sizeTrialGridToSample: index ${index} is out of bounds for ${requested} configs ` +
@@ -290,19 +290,19 @@ export function sizeTrialGridToSample(
   return { selected, limit, requested, years };
 }
 
-/** The subset of `ReplayDriver`'s public API this module drives. */
+/** The subset of `ReplayDriver`'s public API this module drives */
 export interface ReplayRunner {
   run(config: ProxyStrategyConfig, window: DateRange): Promise<ReplayRunResult>;
 }
 
-/** One asset class's replay universe and annualization base. */
+/** One asset class's replay universe and annualization base */
 export interface TrialGridAssetClass {
   asset_class: 'crypto' | 'stocks';
-  /** 252 for stocks, 365 for crypto (`STOCK_PERIODS_PER_YEAR`/`CRYPTO_PERIODS_PER_YEAR`). */
+  /** 252 for stocks, 365 for crypto (`STOCK_PERIODS_PER_YEAR`/`CRYPTO_PERIODS_PER_YEAR`) */
   periodsPerYear: number;
   /**
    * Builds a fresh `ReplayRunner`, called once per config — see this module's
-   * header on why a shared instance across configs is unsafe.
+   * header on why a shared instance across configs is unsafe
    */
   makeRunner: () => ReplayRunner;
 }
@@ -323,7 +323,7 @@ export interface TrialGridAssetClass {
  */
 export type CscvOutcome = { report: EvalReport } | { error: string };
 
-/** One (config, asset class) pair's scored result. */
+/** One (config, asset class) pair's scored result */
 export interface TrialGridResult {
   config_hash: string;
   config: ProxyStrategyConfig;
@@ -335,7 +335,7 @@ export interface TrialGridResult {
 }
 
 export interface TrialGridRunDeps {
-  /** Evaluated independently, in the order given — see this module's header. */
+  /** Evaluated independently, in the order given — see this module's header */
   assetClasses: readonly TrialGridAssetClass[];
   window: DateRange;
   averageCapital: number;
@@ -404,7 +404,7 @@ export async function runTrialGrid(deps: TrialGridRunDeps): Promise<TrialGridRes
     ((run: ReplayRunResult) =>
       new EvalExecutorImpl({ source: run.trades, timeline: run.timeline }));
 
-  // #405: sized from the sample BEFORE any trial runs, not graded afterwards.
+  // #405: sized from the sample BEFORE any trial runs, not graded afterwards
   const sizing = sizeTrialGridToSample(buildTrialGrid(), deps.window, deps.expectedAnnualSharpe);
   deps.announceSizing?.(sizing);
   const grid = sizing.selected;
@@ -434,7 +434,7 @@ export async function runTrialGrid(deps: TrialGridRunDeps): Promise<TrialGridRes
         if (deps.includeCscvPass === true) {
           // Refuse rather than throw — see `CscvOutcome`. Scoped tightly to
           // the second evaluate() so it cannot swallow a walk-forward or
-          // replay failure, both of which must still abort the grid.
+          // replay failure, both of which must still abort the grid
           try {
             cscv = { report: await evaluator.evaluate({ ...evalOptions, scheme: 'cscv' }) };
           } catch (cause) {
@@ -454,7 +454,7 @@ export async function runTrialGrid(deps: TrialGridRunDeps): Promise<TrialGridRes
         // 'passed'` attestation below (which is only honest because `run()`
         // did not throw). What *is* a real gap in the thrown error — no
         // config identity — is fixed here: rethrow with that context
-        // attached via `cause`, still aborting the whole grid.
+        // attached via `cause`, still aborting the whole grid
         throw new Error(
           `runTrialGrid: failed on config_hash=${config_hash} ` +
             `(fastWindow=${config.fastWindow}, slowWindow=${config.slowWindow}, ` +
@@ -472,13 +472,13 @@ export async function runTrialGrid(deps: TrialGridRunDeps): Promise<TrialGridRes
         report,
         // Spread rather than `cscv: cscv` — `exactOptionalPropertyTypes` makes
         // an explicit `undefined` a different thing from an absent key, and
-        // "the pass was not requested" is absence.
+        // "the pass was not requested" is absence
         ...(cscv === undefined ? {} : { cscv }),
       });
 
       // Exactly once per config, regardless of how many asset classes it is
       // scored against — see this module's header ("12 configs, not 12
-      // reports").
+      // reports")
       if (!loggedForSelection) {
         const backtestReport: BacktestReport = {
           config_hash,
@@ -488,10 +488,10 @@ export async function runTrialGrid(deps: TrialGridRunDeps): Promise<TrialGridRes
           // per-instrument-pass trace to carry. `ConfigTrialLog` only needs
           // the report to identify the trial and attest the run's honesty —
           // matching the log's own test fixture precedent
-          // (config-trial-log.test.ts).
+          // (config-trial-log.test.ts)
           tick_outcomes: [],
           // An attestation the auditor earned by not throwing: `run()` above
-          // completed without a `LookaheadViolationError`.
+          // completed without a `LookaheadViolationError`
           lookahead_audit: 'passed',
         };
         deps.configTrialLog.recordTrial(config_hash, backtestReport);

@@ -145,7 +145,7 @@ describe('the LLM rate limiter is in the production path (#388)', () => {
     });
 
     // The limiter reachable from `ProductionComponents` is the one the debate
-    // step closed over — not a second instance counting nothing.
+    // step closed over — not a second instance counting nothing
     expect(components.llmRateLimiter.snapshot().crypto).toEqual({
       debatesUsed: 1,
       llmCallsUsed: llmClient.calls,
@@ -197,7 +197,7 @@ describe('the LLM rate limiter is in the production path (#388)', () => {
     // Placement matters as much as the check: a throw from the middle of
     // `buildProductionComponents` would leave a half-built root behind. The
     // limiter is constructed first, so nothing downstream has run yet — proven
-    // by the broker wire client never being touched.
+    // by the broker wire client never being touched
     const config = stubConfig(db, {
       llmClient: countingLlmClient(),
       rateLimiterConfig: budget({ windowMs: 0 }),
@@ -206,13 +206,13 @@ describe('the LLM rate limiter is in the production path (#388)', () => {
     expect(() => buildProductionComponents(config)).toThrow();
     // `submitOrder`, not `listOrders`: the latter is not on `AlpacaBrokerClient` at
     // all, so the old assertion read an `undefined` off the stub and asserted
-    // that it had not been called — vacuously true whatever the wiring did.
+    // that it had not been called — vacuously true whatever the wiring did
     expect(config.alpacaBrokerClient.submitOrder).not.toHaveBeenCalled();
   });
 
   it('still constructs a finite budget when no rateLimiterConfig is supplied', async () => {
     // The fallback is a ceiling, not an absence: a programmatic caller that
-    // forgets the config must not get today's `undefined` back.
+    // forgets the config must not get today's `undefined` back
     const components = buildProductionComponents(
       stubConfig(db, { llmClient: countingLlmClient() }),
     );
@@ -289,10 +289,10 @@ describe('raising maxConcurrentInstruments no longer removes the only throttle (
 
     // Exactly two of the six debates were admitted, whichever order the
     // workers claimed them in. `reserve` books the debate synchronously, so
-    // six concurrent workers cannot all pass the same check.
+    // six concurrent workers cannot all pass the same check
     expect(rateLimiter.snapshot().crypto?.debatesUsed).toBe(2);
     expect(outcomes).toHaveLength(6);
-    // And the four refusals cost NOTHING at the provider.
+    // And the four refusals cost NOTHING at the provider
     expect(llmClient.calls).toBe(2 * (LLM_CALLS_PER_ROUND + 1));
   });
 
@@ -339,7 +339,7 @@ describe('raising maxConcurrentInstruments no longer removes the only throttle (
   it('degrades the refused instruments instead of failing the whole tick', async () => {
     // A throw would propagate through `runTickPlan`'s `Promise.all` to
     // `startTickLoop`'s catch, discarding every OTHER instrument's pass too —
-    // one instrument's exhausted budget must not be a tick-wide outage.
+    // one instrument's exhausted budget must not be a tick-wide outage
     const rateLimiter = new RateLimiter(CLOCK, budget({ maxDebates: 2 }));
     const { runner, results } = tickRunnerOver(countingLlmClient(), rateLimiter);
 
@@ -357,7 +357,7 @@ describe('raising maxConcurrentInstruments no longer removes the only throttle (
     expect(refused).toHaveLength(4);
     for (const result of refused) {
       // Below any sane `conviction_floor` (0.55 in DEFAULT_TRADER_CONFIG), so
-      // Trader short-circuits to no_trade — the fail-safe direction.
+      // Trader short-circuits to no_trade — the fail-safe direction
       expect(result.confidence).toBe(0);
       expect(result.direction).toBe('neutral');
       expect(result.rounds_completed).toBe(0);
@@ -385,7 +385,7 @@ describe('what a refused debate does', () => {
     expect(llmClient.calls).toBe(0);
     expect(result.rate_limited?.reason).toMatch(/debate budget exhausted/);
     // No row: `debate_id` is a content hash and the PK, so a stub would
-    // permanently block the real row a later re-run would write.
+    // permanently block the real row a later re-run would write
     expect(store.getByDebateId(result.debate_id)).toBeUndefined();
 
     const warned = entries.find((entry) => entry.stage === 'debate' && entry.level === 'warn');
@@ -395,13 +395,13 @@ describe('what a refused debate does', () => {
   it('refuses on the CALL budget too, before a debate can be cut off mid-round', async () => {
     // The point of reserving the worst case up front: a debate admitted with
     // only half its calls affordable would burn those calls and still produce
-    // nothing.
+    // nothing
     const llmClient = countingLlmClient();
     const rateLimiter = new RateLimiter(
       CLOCK,
       // One call short of CRYPTO's worst case (#581): the reservation is
       // per-asset-class now, so the global constant minus one would admit a
-      // 1-round crypto debate instead of refusing it.
+      // 1-round crypto debate instead of refusing it
       budget({ maxDebates: 10, maxLlmCalls: worstCaseLlmCallsForAssetClass('crypto') - 1 }),
     );
     const step = buildDebateStep(
@@ -436,7 +436,7 @@ describe('the reserved worst case matches what a debate can actually spend', () 
     // the budget it was admitted under. Stocks, which #1080 capped at one round
     // alongside crypto — the crypto counterpart is the test below, and this one
     // now asserts the PER-CLASS cap rather than `MAX_ROUNDS`, which remains the
-    // structural ceiling `runDebate` validates against.
+    // structural ceiling `runDebate` validates against
     const llmClient = countingLlmClient({ converged: false });
     const rateLimiter = new RateLimiter(CLOCK, budget());
     const step = buildDebateStep(
@@ -482,7 +482,7 @@ describe('the reserved worst case matches what a debate can actually spend', () 
 
     // One round (bull, bear, mediator) + the once-per-debate disagreement
     // call: round 1 IS the final round under the crypto cap, so the mediator
-    // must gate `detectDisagreements` on the per-class cap, not `MAX_ROUNDS`.
+    // must gate `detectDisagreements` on the per-class cap, not `MAX_ROUNDS`
     expect(result.rounds_completed).toBe(1);
     expect(result.converged).toBe(false);
     expect(llmClient.calls).toBe(4);
@@ -498,9 +498,9 @@ describe('the reserved worst case matches what a debate can actually spend', () 
       MAX_ROUNDS_BY_ASSET_CLASS.stocks * LLM_CALLS_PER_ROUND + 1,
     );
     // #1080 capped stocks at one round, so the per-class reservation is now
-    // strictly below the `MAX_ROUNDS`-sized ceiling the profile sizes against.
+    // strictly below the `MAX_ROUNDS`-sized ceiling the profile sizes against
     // That gap is the point of having both: a ceiling for sizing, a per-class
-    // figure for admission.
+    // figure for admission
     expect(worstCaseLlmCallsForAssetClass('stocks')).toBeLessThan(WORST_CASE_LLM_CALLS_PER_DEBATE);
   });
 });
@@ -537,7 +537,7 @@ describe('the composition root paces the broker from ops config (#299)', () => {
         llmClient: countingLlmClient(),
         // Capacity 1, and a refill so slow the second call cannot be minted
         // inside the window this test advances. The default capacity is 10, so
-        // a root ignoring this config would let both calls straight through.
+        // a root ignoring this config would let both calls straight through
         venuePacing: {
           alpaca: { capacity: 1, refillPerSecond: 0.001 },
           ccxt: { capacity: 1, refillPerSecond: 1 },
@@ -558,10 +558,10 @@ describe('the composition root paces the broker from ops config (#299)', () => {
     await vi.advanceTimersByTimeAsync(200);
 
     // The single token went to the first call; the second is parked behind a
-    // refill this deployment's config made ~1000s long.
+    // refill this deployment's config made ~1000s long
     expect(secondSettled).toBe(false);
 
-    // Drained so the pending promise does not outlive the test.
+    // Drained so the pending promise does not outlive the test
     await vi.advanceTimersByTimeAsync(1_000_000);
     await second;
   });
@@ -602,7 +602,7 @@ describe('the composition root wires wait telemetry onto the shared Alpaca bucke
         logger,
         // Same shape as the pacing test above: one token, and a refill slow
         // enough that the second call is still parked well past the
-        // threshold when this test checks it.
+        // threshold when this test checks it
         venuePacing: {
           alpaca: { capacity: 1, refillPerSecond: 0.001 },
           ccxt: { capacity: 1, refillPerSecond: 1 },
@@ -621,7 +621,7 @@ describe('the composition root wires wait telemetry onto the shared Alpaca bucke
     // one actually discriminating on the constant. So drain in one step
     // rather than stopping at the threshold first; this config's refill
     // takes ~1000s, three orders of magnitude past the threshold, which
-    // would pass here even if the constant were 1 or 100.
+    // would pass here even if the constant were 1 or 100
     await vi.advanceTimersByTimeAsync(1_000_000);
     await second;
 
@@ -664,7 +664,7 @@ describe('the composition root ties the analyst deadline to the resolved Alpaca 
     db.close();
   });
 
-  /** Never settles: a fetch that cannot get a token has not started either way. */
+  /** Never settles: a fetch that cannot get a token has not started either way */
   const stallingDataSource: DataSource = {
     fetchBars: () => new Promise<Bar[]>(() => {}),
     fetchMark: async () => ({
@@ -681,7 +681,7 @@ describe('the composition root ties the analyst deadline to the resolved Alpaca 
     // unset) the DRAIN term alone is 60,000ms — double the compiled-in
     // 30,000ms — before the fetch-bound floor is even added, so the derived
     // deadline is trivially distinguishable from the compiled-in default
-    // rather than coincidentally equal.
+    // rather than coincidentally equal
     const overriddenAlpacaPacing = { capacity: 1, refillPerSecond: 0.05, reserveForPriority: 0 };
     const components = buildProductionComponents(
       stubConfig(db, {
@@ -712,7 +712,7 @@ describe('the composition root ties the analyst deadline to the resolved Alpaca 
       });
 
     // If the composition root had ignored the override, `technical`'s first
-    // attempt would already have timed out (and be mid-retry) by here.
+    // attempt would already have timed out (and be mid-retry) by here
     await vi.advanceTimersByTimeAsync(DEFAULT_ANALYST_TIMEOUT_MS);
     expect(result, 'the compiled-in default deadline must not fire under the widened pacing').toBe(
       undefined,
@@ -723,7 +723,7 @@ describe('the composition root ties the analyst deadline to the resolved Alpaca 
     // attempt) would have fully settled — both attempts exhausted — by
     // `2 * DEFAULT_ANALYST_TIMEOUT_MS`. Wired to the derived deadline, the
     // stage is still on its FIRST attempt at that point, since
-    // `derivedTimeoutMs` (60,000ms) exceeds it.
+    // `derivedTimeoutMs` (60,000ms) exceeds it
     await vi.advanceTimersByTimeAsync(DEFAULT_ANALYST_TIMEOUT_MS);
     expect(
       result,
@@ -733,7 +733,7 @@ describe('the composition root ties the analyst deadline to the resolved Alpaca 
     // Two attempts, each at the derived deadline (`ATTEMPTS_PER_PERSONA`,
     // orchestrator.ts) — the retry joins the same still-pending fetch
     // (single-flight coalescing) rather than re-asking a source that never
-    // answers, so it too runs the full derived deadline before giving up.
+    // answers, so it too runs the full derived deadline before giving up
     await vi.advanceTimersByTimeAsync(2 * derivedTimeoutMs - 2 * DEFAULT_ANALYST_TIMEOUT_MS + 1);
 
     expect(result?.skipped).toBe(true);
@@ -763,7 +763,7 @@ describe('the composition root ties the analyst deadline to the resolved Alpaca 
       stubConfig(db, {
         llmClient: countingLlmClient(),
         dataSource: stallingDataSource,
-        // Deliberately NOT overridden — the checked-in default is the point.
+        // Deliberately NOT overridden — the checked-in default is the point
       }),
     );
 
@@ -781,7 +781,7 @@ describe('the composition root ties the analyst deadline to the resolved Alpaca 
     await vi.advanceTimersByTimeAsync(1);
     expect(result, 'a 0ms-floored deadline would already have settled here').toBe(undefined);
 
-    // Two attempts at the fetch-bound-only deadline (drain contributes 0).
+    // Two attempts at the fetch-bound-only deadline (drain contributes 0)
     await vi.advanceTimersByTimeAsync(2 * alpacaFetchBoundMs + 1);
 
     expect(result?.skipped).toBe(true);
@@ -909,7 +909,7 @@ describe("Alpaca's burst covers one fill-poll sweep of the configured universe (
   it('has capacity for a getOrder per open bracket plus a concurrent submit', () => {
     // `AlpacaBrokerAdapter.fetchNewFills` issues exactly one `getOrder` per
     // open bracket, each through the token bucket; worst case is one bracket
-    // per instrument, with a `submitBracket` from the tick path alongside.
+    // per instrument, with a `submitBracket` from the tick path alongside
     const worstCaseSweep = DEFAULT_UNIVERSE.length + 1;
 
     expect(DEFAULT_VENUE_PACING.alpaca.capacity).toBeGreaterThanOrEqual(worstCaseSweep);
@@ -917,7 +917,7 @@ describe("Alpaca's burst covers one fill-poll sweep of the configured universe (
 
   it('keeps the sustained rate under the documented account ceiling', () => {
     // The axis that actually carries ban risk, and the one with a verified
-    // figure behind it (200/min = 3.33/s).
+    // figure behind it (200/min = 3.33/s)
     expect(DEFAULT_VENUE_PACING.alpaca.refillPerSecond).toBeLessThanOrEqual(200 / 60);
   });
 
@@ -925,7 +925,7 @@ describe("Alpaca's burst covers one fill-poll sweep of the configured universe (
    * #391 put the market-data client inside the same bucket, so the burst is no
    * longer sized by the fill sweep alone — the worst moment is a COLD START,
    * where `TokenBucket` begins full, the bar cache is empty and every
-   * instrument fetches at once while `reconcile()` sweeps.
+   * instrument fetches at once while `reconcile()` sweeps
    */
   it('has capacity for a cold-start bar sweep alongside the order path', () => {
     const coldStart =
@@ -1004,11 +1004,11 @@ describe("Alpaca's burst covers one fill-poll sweep of the configured universe (
   it('reserves enough for the order path to complete a full sweep under a data burst', () => {
     // The reserve is what market data may NOT spend, so it has to cover one
     // fill-poll sweep of the universe — otherwise a bar burst can still park a
-    // getOrder behind the refill, which is the starvation #391 forbids.
+    // getOrder behind the refill, which is the starvation #391 forbids
     const reserve = DEFAULT_VENUE_PACING.alpaca.reserveForPriority ?? 0;
 
     expect(reserve).toBeGreaterThanOrEqual(DEFAULT_UNIVERSE.length);
-    // And it must leave something for market data, or bar fetches park forever.
+    // And it must leave something for market data, or bar fetches park forever
     expect(reserve).toBeLessThan(DEFAULT_VENUE_PACING.alpaca.capacity);
   });
 });
@@ -1022,7 +1022,7 @@ describe('paperStartingProfile supplies the budget (#388)', () => {
       expect(entry).toBeDefined();
       expect(entry?.maxDebates).toBeGreaterThan(0);
       // Any lower and the CALL budget binds first, refusing debates while
-      // `ReserveResult.reason` names the wrong one.
+      // `ReserveResult.reason` names the wrong one
       expect(entry?.maxLlmCalls).toBe((entry?.maxDebates ?? 0) * WORST_CASE_LLM_CALLS_PER_DEBATE);
     }
   });
@@ -1085,7 +1085,7 @@ describe('the LLM spend cap is in the production path (ADR-0008)', () => {
     db.close();
   });
 
-  /** One priced call in the table the cap reads and the sink writes. */
+  /** One priced call in the table the cap reads and the sink writes */
   function spend(costUsd: number, id: string): void {
     db.prepare(
       `INSERT INTO llm_spend (
@@ -1119,7 +1119,7 @@ describe('the LLM spend cap is in the production path (ADR-0008)', () => {
     });
 
     // Not merely "returned a refusal" — NO MONEY WAS SPENT. A cap that
-    // refuses after billing the debate is not a cap.
+    // refuses after billing the debate is not a cap
     expect(llmClient.calls).toBe(0);
     expect(result.rate_limited?.reason).toContain('LLM spend cap reached');
     expect(result.rounds_completed).toBe(0);
@@ -1128,7 +1128,7 @@ describe('the LLM spend cap is in the production path (ADR-0008)', () => {
   it('does not book rate-limit budget for a debate the cap refuses', async () => {
     // Ordering, not decoration: `reserve` MUTATES the limiter's counters, so
     // checking the budget after booking would burn window allowance on a
-    // debate that was never going to run.
+    // debate that was never going to run
     spend(60, 'over-budget');
     const components = buildProductionComponents(
       stubConfig(db, { llmClient: countingLlmClient(), llmBudgetUsd: 50 }),
@@ -1168,7 +1168,7 @@ describe('the LLM spend cap is in the production path (ADR-0008)', () => {
     // `llmBudgetUsd` is optional so the many programmatic callers need not
     // care — but silence would make an uncapped unattended run
     // indistinguishable from a capped one in the log. Same posture as
-    // SAMURAI_ALERTS: no safe default, say what was chosen.
+    // SAMURAI_ALERTS: no safe default, say what was chosen
     const { logger, entries } = recordingLogger();
 
     buildProductionComponents(stubConfig(db, { llmClient: countingLlmClient(), logger }));
@@ -1200,15 +1200,15 @@ describe('the LLM spend cap is in the production path (ADR-0008)', () => {
     buildProductionComponents(stubConfig(db, { llmClient: countingLlmClient() }));
 
     // #1196: `armed uncapped` must be distinguishable from `never armed` —
-    // both carry a null budget, but only the armed one carries `armedAt`.
+    // both carry a null budget, but only the armed one carries `armedAt`
     const state = new SqliteLlmSpendCapStore(db).read();
     expect(state.budgetUsd).toBeNull();
     expect(state.armedAt).not.toBeNull();
   });
 
   it('is what the checked-in paper profile actually carries', () => {
-    // The value the soak runs on, pinned where the arithmetic behind it lives.
-    // $50 over 14 days is David's figure (2026-08-06).
+    // The value the soak runs on, pinned where the arithmetic behind it lives
+    // $50 over 14 days is David's figure (2026-08-06)
     //
     // The cadence was 15 min, derived when spend scaled with 1/τ. #617 closed
     // (`7d68fa0`): `debate-adapter.ts` short-circuits the same bar ahead of
@@ -1217,7 +1217,7 @@ describe('the LLM spend cap is in the production path (ADR-0008)', () => {
     //
     // The budget assertion is the one that still belongs *here* — this file is
     // about the cap being wired. The cadence's own justification, and the
-    // stop-fidelity ceiling that now bounds it, live in `paper-profile.test.ts`.
+    // stop-fidelity ceiling that now bounds it, live in `paper-profile.test.ts`
     const profile = paperStartingProfile('paper');
 
     expect(profile.llmBudgetUsd).toBe(50);
@@ -1225,9 +1225,7 @@ describe('the LLM spend cap is in the production path (ADR-0008)', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
 // Harness
-// ---------------------------------------------------------------------------
 
 function bracketRequest(client_order_id: string) {
   return {
@@ -1256,7 +1254,7 @@ function sixInstrumentPlan(): TickPlan {
  * A tick runner whose debate stage is the REAL `buildDebateStep` and whose
  * other five stages stop the pass immediately after it — the debate is the
  * only stage under test, and Trader returning `null` is the shape a refused
- * debate produces in production anyway.
+ * debate produces in production anyway
  */
 function tickRunnerOver(llmClient: LlmClient, rateLimiter: RateLimiter) {
   const results: Awaited<ReturnType<TickSteps['debate']>>[] = [];
@@ -1270,7 +1268,7 @@ function tickRunnerOver(llmClient: LlmClient, rateLimiter: RateLimiter) {
     exitCheck: async () => null,
     // TWO views, so the converging round also issues its `detectDisagreements`
     // call — one view takes the directional fallback and never reaches the LLM,
-    // which would understate what a real debate costs.
+    // which would understate what a real debate costs
     analysts: async () => [
       makeView(),
       makeView({ analyst_id: 'sentiment-1', direction: 'bearish' }),
@@ -1311,8 +1309,10 @@ function noopCurrentTickStore(): CurrentTickStore {
  * The narrowest `ProductionConfig` that reaches a bound `steps.debate`. Every
  * transport is a stub; nothing here opens a socket or spends a token.
  */
-/** As `production.test.ts`: the seams this stub always supplies, narrowed so
- *  assertions can read them without a non-null assertion at every call site. */
+/**
+ * As `production.test.ts`: the seams this stub always supplies, narrowed so
+ *  assertions can read them without a non-null assertion at every call site
+ */
 type StubConfig = ProductionConfig & Required<Pick<ProductionConfig, 'alpacaBrokerClient'>>;
 
 function stubConfig(db: StoreHandle, overrides: Partial<ProductionConfig>): StubConfig {
@@ -1329,7 +1329,7 @@ function stubConfig(db: StoreHandle, overrides: Partial<ProductionConfig>): Stub
         legs: [],
       })),
       // #586: crypto brackets submit as plain limit entries; the pacing
-      // tests below drive BTC-USD through this method, not submitOrder.
+      // tests below drive BTC-USD through this method, not submitOrder
       submitLimitOrder: vi.fn(async () => ({
         id: 'alpaca-order-1',
         client_order_id: 'k',
@@ -1367,7 +1367,7 @@ function stubConfig(db: StoreHandle, overrides: Partial<ProductionConfig>): Stub
       })),
     } as unknown as ProductionConfig['accountState'],
     // Not an empty cast (#691): the composition root refuses a trader config
-    // whose `flatten_before_close_ms` would silently disable flat-by-close.
+    // whose `flatten_before_close_ms` would silently disable flat-by-close
     traderConfig: DEFAULT_TRADER_CONFIG,
     riskConfig: makeWiringRiskConfig(),
     // Carries the automation dial, which `buildProductionComponents` reads to
@@ -1377,7 +1377,7 @@ function stubConfig(db: StoreHandle, overrides: Partial<ProductionConfig>): Stub
     correlationConfig: makeWiringCorrelationConfig(),
     // Not an empty cast since #634: `CircuitBreakers` validates its
     // hysteresis band (`recovery_drawdown_pct < max_drawdown_pct`) at
-    // construction, so `{}` no longer builds.
+    // construction, so `{}` no longer builds
     breakerConfig: {
       daily_loss_pct: 0.05,
       daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },

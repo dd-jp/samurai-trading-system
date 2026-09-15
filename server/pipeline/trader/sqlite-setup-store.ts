@@ -29,10 +29,10 @@ import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index
 export type SetupAssetClass = 'crypto' | 'stocks';
 
 export interface SqliteSetupStoreOptions {
-  /** Retrieval-scoping column; see the note above on why it is not per-write. */
+  /** Retrieval-scoping column; see the note above on why it is not per-write */
   instrument?: string;
   asset_class?: SetupAssetClass;
-  /** FL's trade-close join column; defaults to the row's own `debate_id`. */
+  /** FL's trade-close join column; defaults to the row's own `debate_id` */
   idempotencyKeyFor?: (debateId: string) => string;
 }
 

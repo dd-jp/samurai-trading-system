@@ -32,13 +32,13 @@
  * omission is a compile error at the point of omission, not a silent default.
  */
 
-/** Every source id that may appear in the archive's `source` column. */
+/** Every source id that may appear in the archive's `source` column */
 export const MI_SOURCES = {
-  /** `MiIngestAgent` — the Alpaca/Benzinga ticker wire. */
+  /** `MiIngestAgent` — the Alpaca/Benzinga ticker wire */
   alpacaNews: 'alpaca-news',
-  /** `GdeltIngestAgent` — the GKG macro batches. */
+  /** `GdeltIngestAgent` — the GKG macro batches */
   gdeltGkg: 'gdelt-gkg',
-  /** `PolymarketAgent` — the curated macro/event probabilities. */
+  /** `PolymarketAgent` — the curated macro/event probabilities */
   polymarket: 'polymarket',
   /**
    * `GrokAgent` + `XSearchClient` — scored X posts retrieved through the
@@ -67,7 +67,7 @@ export type MiHydrationPolicy = 'hydrate' | 'archive-only';
 
 export const MI_SOURCE_HYDRATION: Record<MiSourceId, MiHydrationPolicy> = {
   // Publisher-dated articles with stored scores. A restart that dropped them
-  // is the exact defect `hydrate()` was built for (#554).
+  // is the exact defect `hydrate()` was built for (#554)
   [MI_SOURCES.alpacaNews]: 'hydrate',
   // Archive-only twice over: the GKG scoring pass derives AT READ and writes
   // no `mi_items` at all, so there is nothing on disk here to hydrate — and
@@ -75,30 +75,30 @@ export const MI_SOURCE_HYDRATION: Record<MiSourceId, MiHydrationPolicy> = {
   // trailing statistic in the same sense Polymarket's delta is, and re-serving
   // one at boot would carry the same staleness. This entry is a decision, not
   // a placeholder for "nothing to hydrate": a future writer that started
-  // storing these items would still be wrong to replay them.
+  // storing these items would still be wrong to replay them
   [MI_SOURCES.gdeltGkg]: 'archive-only',
   // A trailing 24h delta, replayed hourly. Boot re-ingestion would re-serve a
   // stale measurement as current AND compound the time-axis inflation recorded
   // in `polymarket-agent.ts`'s limitation 3. The archived items exist so the
-  // source is replayable offline, which is what #835 restored.
+  // source is replayable offline, which is what #835 restored
   [MI_SOURCES.polymarket]: 'archive-only',
   // A post is a DATED OBSERVATION in exactly the sense the `hydrate` policy
   // means: `IntelligenceItem.timestamp` is the post's own publication time
   // (snowflake-decoded from the status id), not the time we fetched it, and
   // not a trailing-window statistic like Polymarket's 24h delta. Replaying
   // yesterday's posts at boot restores what a run that never restarted would
-  // hold, and `getContext`'s window filter drops the ones that have aged out.
+  // hold, and `getContext`'s window filter drops the ones that have aged out
   //
-  // Two things make this safe that were NOT true when this file was written.
+  // Two things make this safe that were NOT true when this file was written
   // First, `MarketIntelligenceStore.ingest` now dedupes by item id (#969), so
   // a replay followed by a live bucket cannot double-count a post — the
   // compounding this file's header warns about. Second, the ids are stable
   // across calls (`x:<statusId>`), which is what gives that dedupe something
-  // to match on.
+  // to match on
   //
   // Note this implies no vendor backfill: `hydrate()` replays `mi_items` from
   // disk. It could not do otherwise here — `x_search` is a live search tool
-  // with day-granular dates and no historical fetch path.
+  // with day-granular dates and no historical fetch path
   [MI_SOURCES.x]: 'hydrate',
 };
 

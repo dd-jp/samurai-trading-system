@@ -112,7 +112,7 @@ describe("EvalExecutorImpl — acceptance criterion 1: our CostModel.fill, not p
   it('refuses to score a run containing a fill no cost model priced', async () => {
     // An unmodeled fill means the sqrt-law market impact (Principle 2) was
     // never applied — the run's metrics would flatter the strategy. The
-    // executor must fail rather than report them.
+    // executor must fail rather than report them
     const unpriced = sourceOf(TRADES, (trade) =>
       pricedFills(trade).map(({ cost_breakdown: _dropped, ...rest }) => rest),
     );
@@ -136,7 +136,7 @@ describe('EvalExecutorImpl — acceptance criterion 2: split boundaries', () => 
     // A wiring guard, not an agreement between two derivations: the executor
     // calls `generateSplits` rather than mining a second copy of the boundary
     // arithmetic (see eval-executor.ts). What it catches is the executor
-    // silently re-cutting, reordering or dropping the splits it was handed.
+    // silently re-cutting, reordering or dropping the splits it was handed
     expect(report.splits.map((evaluated) => evaluated.split)).toEqual(
       generateSplits(WINDOW, 'walk_forward', { embargo: 0, barMs: DAY_MS }),
     );
@@ -153,7 +153,7 @@ describe('EvalExecutorImpl — acceptance criterion 2: split boundaries', () => 
 
     // Each 100-day fold holds exactly the one +1,000 / −400 pair placed in it:
     // gross wins 1,000 / gross losses 400 = 2.5, mean PnL 300, 2 x 2,000
-    // notional over 100k capital = 0.04, 2 days held over 100 = 0.02.
+    // notional over 100k capital = 0.04, 2 days held over 100 = 0.02
     for (const { metrics } of report.splits) {
       expect(metrics.profit_factor).toBeCloseTo(2.5, 12);
       expect(metrics.expectancy).toBeCloseTo(300, 12);
@@ -206,13 +206,13 @@ describe('EvalExecutorImpl — acceptance criterion 3: one metric implementation
   it('agrees with hand-computed values, so neither side is the sole reference', async () => {
     const report = await executorOf(sourceOf(TRADES)).evaluate(OPTIONS);
 
-    // 6 wins x 1,000 gross wins / 6 losses x 400 gross losses = 2.5.
+    // 6 wins x 1,000 gross wins / 6 losses x 400 gross losses = 2.5
     expect(report.window.profit_factor).toBeCloseTo(2.5, 12);
-    // (6 x 1,000 − 6 x 400) / 12 trades = 300 per trade, net of costs.
+    // (6 x 1,000 − 6 x 400) / 12 trades = 300 per trade, net of costs
     expect(report.window.expectancy).toBeCloseTo(300, 12);
-    // 12 round trips x (100 x 10 x 2) = 24,000 traded over 100,000 capital.
+    // 12 round trips x (100 x 10 x 2) = 24,000 traded over 100,000 capital
     expect(report.window.turnover).toBeCloseTo(0.24, 12);
-    // 12 trades held one day each, none overlapping, over a 600-day window.
+    // 12 trades held one day each, none overlapping, over a 600-day window
     expect(report.window.exposure).toBeCloseTo(0.02, 12);
   });
 });

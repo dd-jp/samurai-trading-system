@@ -62,7 +62,7 @@ function meteredCap(budgetUsd: number): SpendCap & { spentUsd: number } {
   return cap;
 }
 
-/** Bills the cap the way a real agent does: admitted first, recorded only after the call returns. */
+/** Bills the cap the way a real agent does: admitted first, recorded only after the call returns */
 function billingRefresher(
   cap: { spentUsd: number },
   costUsd: number,
@@ -72,7 +72,7 @@ function billingRefresher(
     async refresh(_trace_id, instrument) {
       calls.push(instrument);
       // The await is the point: real spend lands after a round trip, so
-      // anything checking the cap during it reads a stale total.
+      // anything checking the cap during it reads a stale total
       await Promise.resolve();
       cap.spentUsd += costUsd;
       return true;
@@ -126,7 +126,7 @@ const UNCAPPED: SpendCap = {
 describe('MiRefreshQueue (#1085)', () => {
   it('returns before the refresh has run, so the analyst stage never waits on an LLM call', async () => {
     // The property the whole change rests on: the stage's wait no longer
-    // includes the refresh, however long the refresh takes.
+    // includes the refresh, however long the refresh takes
     let release = (): void => {};
     const blocked = new Promise<void>((resolve) => {
       release = resolve;
@@ -154,7 +154,7 @@ describe('MiRefreshQueue (#1085)', () => {
   it('never lets two MI calls pass a spend check the pair would fail, across instruments', async () => {
     // The property the sequential composition existed to protect, true
     // globally for the first time. Each call costs the WHOLE budget, so a
-    // second admitted call is exactly "both passed a check the pair fails".
+    // second admitted call is exactly "both passed a check the pair fails"
     const cap = meteredCap(1);
     const calls: string[] = [];
     const queue = new MiRefreshQueue({
@@ -163,7 +163,7 @@ describe('MiRefreshQueue (#1085)', () => {
     });
 
     // Two instruments requested without awaiting the first — the shape
-    // #1013's concurrently-admitted passes produce.
+    // #1013's concurrently-admitted passes produce
     await Promise.all([
       queue.refresh('tick-1', 'TSLA', 'stocks'),
       queue.refresh('tick-1', 'AAPL', 'stocks'),
@@ -177,7 +177,7 @@ describe('MiRefreshQueue (#1085)', () => {
   it('is the only thing enforcing that — the composed agents alone overshoot on the same two requests', async () => {
     // The mutation, run as a test rather than by hand: this is what those two
     // requests did WITHOUT the queue, which is what production did for every
-    // pair of concurrently-admitted instruments.
+    // pair of concurrently-admitted instruments
     const cap = meteredCap(1);
     const calls: string[] = [];
     const composed = composeMarketIntelligence([billingRefresher(cap, 1, calls)]);
@@ -197,7 +197,7 @@ describe('MiRefreshQueue (#1085)', () => {
    * refuses" would let the SAME assertion pass for either row regardless of
    * which label the fixture put first, so each row names its own expected
    * `calls` entry — the property under test is "the FIRST-COMPOSED side
-   * bills, whichever agent that is", not "ingest bills" or "grok bills".
+   * bills, whichever agent that is", not "ingest bills" or "grok bills"
    */
   it.each([
     { first: 'ingest', second: 'grok', instrument: 'TSLA' },
@@ -216,7 +216,7 @@ describe('MiRefreshQueue (#1085)', () => {
     // post-bill total and refuses — which one that is DOES flip with
     // order, and `labeledCapReadingRefresher`'s label is what makes that
     // flip observable rather than the two composed calls being
-    // indistinguishable.
+    // indistinguishable
     const cap = meteredCap(1);
     const calls: string[] = [];
     const queue = new MiRefreshQueue({
@@ -233,11 +233,11 @@ describe('MiRefreshQueue (#1085)', () => {
     // The FIRST-composed side bills, the second reads the post-bill total
     // and refuses — pinned by label, not just by count, so this cannot
     // pass for a pair that billed twice or for the wrong side billing
-    // once.
+    // once
     expect(calls).toEqual([`${first}:${instrument}`]);
     // EXACTLY the budget, not "at most" — `<= 1` would also pass for a
     // pass that spent nothing at all, which is what a queue refusing
-    // everything looks like.
+    // everything looks like
     expect(cap.spentUsd).toBe(1);
   });
 
@@ -245,7 +245,7 @@ describe('MiRefreshQueue (#1085)', () => {
     // The queue's own `#dispatch` check, exercised directly against a
     // generic non-gating refresher — independent of whether the composed
     // agent behind it also self-gates, which both `MiIngestAgent` and
-    // `GrokAgent` do as of #1106.
+    // `GrokAgent` do as of #1106
     const cap = meteredCap(1);
     cap.spentUsd = 1;
     const calls: string[] = [];
@@ -273,7 +273,7 @@ describe('MiRefreshQueue (#1085)', () => {
     // NO_DATA marker, it does not fail a tick that would otherwise have
     // traded. Off the critical path the failure changes shape — an unhandled
     // rejection would kill the WORKER, so every later instrument would
-    // silently stop refreshing — which is what this pins.
+    // silently stop refreshing — which is what this pins
     const calls: string[] = [];
     const logger = recordingLogger();
     const queue = new MiRefreshQueue({
@@ -304,7 +304,7 @@ describe('MiRefreshQueue (#1085)', () => {
     // `SqliteSpendCap` converts its own store failure into a refusal, so this
     // is about any other cap the seam accepts. It sits outside the refresher's
     // own try in the naive shape, which is where an escape would kill the
-    // worker and silently stop every LATER instrument refreshing.
+    // worker and silently stop every LATER instrument refreshing
     const calls: string[] = [];
     const logger = recordingLogger();
     let throwOnce = true;
@@ -336,7 +336,7 @@ describe('MiRefreshQueue (#1085)', () => {
   it('holds at most one entry per instrument, so the queue cannot outgrow the universe', async () => {
     // Backpressure: the tick rate is fixed and the drain is not, so without
     // per-instrument dedup a slow sweep would accumulate one entry per name
-    // per tick for as long as it lagged.
+    // per tick for as long as it lagged
     let release = (): void => {};
     const blocked = new Promise<void>((resolve) => {
       release = resolve;
@@ -356,7 +356,7 @@ describe('MiRefreshQueue (#1085)', () => {
     await queue.refresh('tick-1', 'TSLA', 'stocks');
     for (let i = 0; i < 5; i += 1) {
       await queue.refresh(`tick-${i + 2}`, 'AAPL', 'stocks');
-      // Re-requesting the IN-FLIGHT instrument must not queue a duplicate either.
+      // Re-requesting the IN-FLIGHT instrument must not queue a duplicate either
       await queue.refresh(`tick-${i + 2}`, 'TSLA', 'stocks');
     }
 
@@ -371,7 +371,7 @@ describe('MiRefreshQueue (#1085)', () => {
   it('runs the refresh under its own trace id, not the tick that asked', async () => {
     // The call lands after the requesting tick has closed, so stamping the
     // tick's id on a `market_intelligence` line — and on the `llm_spend` row
-    // behind it — would place off-tick work inside a finished trace.
+    // behind it — would place off-tick work inside a finished trace
     const seen: string[] = [];
     const queue = new MiRefreshQueue({
       spendCap: UNCAPPED,
@@ -421,7 +421,7 @@ describe('MiRefreshQueue (#1085)', () => {
    * The worse arm: one drain serves every queued name, so a leaked context
    * does not merely mislabel the tick that started it — it stamps that tick
    * on a LATER instrument's refresh, which is a wrong join rather than a
-   * missing one.
+   * missing one
    */
   it("does not stamp one tick's id on a later instrument's refresh", async () => {
     let release = (): void => {};
@@ -458,9 +458,9 @@ describe('MiRefreshQueue (#1085)', () => {
   });
 
   it('reports a refresh as attempted however it ended, and not before', async () => {
-    // What the coverage alert gate reads (`CheckMiCoverageDeps.refreshAttempted`).
+    // What the coverage alert gate reads (`CheckMiCoverageDeps.refreshAttempted`)
     // ATTEMPTED, not succeeded: a name whose refresh threw has no data and is
-    // not going to get any, so it must be allowed to alert.
+    // not going to get any, so it must be allowed to alert
     const queue = new MiRefreshQueue({
       spendCap: UNCAPPED,
       refresher: {
@@ -482,7 +482,7 @@ describe('MiRefreshQueue (#1085)', () => {
   it('takes no new work after stop, so a shutdown cannot be outrun by a tick', async () => {
     // `stop()` drains the tick loop and this queue CONCURRENTLY, so a pass
     // still finishing can trigger a refresh after the drain has begun. Latched
-    // rather than merely awaited, or that refresh would write to a closing store.
+    // rather than merely awaited, or that refresh would write to a closing store
     const calls: string[] = [];
     const queue = new MiRefreshQueue({
       spendCap: UNCAPPED,
@@ -505,7 +505,7 @@ describe('MiRefreshQueue (#1085)', () => {
     // The half `mi-refresh-wiring.test.ts` cannot see: a refresh can only be
     // held open here. This is what the orchestrator's drain line buys — the
     // in-flight refresh ends in an archive and store write, so a `stop()` that
-    // resolved early would let it race a closing store.
+    // resolved early would let it race a closing store
     let release = (): void => {};
     const blocked = new Promise<void>((resolve) => {
       release = resolve;
@@ -562,7 +562,7 @@ describe('MiRefreshQueue (#1085)', () => {
     // enqueue used to cause. `#pump` is entered from inside the first
     // dispatch's SYNCHRONOUS prefix, so it must already see a worker by then
     // or two dispatches overlap and both read one pre-spend total, defeating
-    // the single property this class exists for.
+    // the single property this class exists for
     const cap = meteredCap(1);
     const calls: string[] = [];
     let inFlight = 0;
@@ -573,7 +573,7 @@ describe('MiRefreshQueue (#1085)', () => {
       refresher: {
         async refresh(_trace_id, instrument) {
           // Before the first await, so this runs while `#pump` is still on
-          // the stack below it.
+          // the stack below it
           if (!reentered) {
             reentered = true;
             void queue.refresh('tick-2', 'AAPL', 'stocks');
@@ -594,7 +594,7 @@ describe('MiRefreshQueue (#1085)', () => {
 
     expect(mostInFlightAtOnce).toBe(1);
     // The budget is the real assertion: overlapping dispatches would both
-    // read a spent total of 0 and bill on top of each other.
+    // read a spent total of 0 and bill on top of each other
     expect(cap.spentUsd).toBe(1);
     expect(calls).toEqual(['TSLA']);
   });
@@ -605,7 +605,7 @@ describe('MiRefreshQueue (#1085)', () => {
     // — a transient `llm_spend` read failure clears on its own. Assertions
     // below compare against the exported remedy constants, not literal
     // substrings, so a swap of which constant a kind maps to still reddens
-    // here while a wording-only edit does not touch this file.
+    // here while a wording-only edit does not touch this file
     function refusingCap(verdict: Extract<SpendCapVerdict, { admitted: false }>): SpendCap {
       return { check: () => verdict };
     }
@@ -696,7 +696,7 @@ describe('MiRefreshQueue (#1085)', () => {
   });
 
   describe('refusal-log throttle is per spend-cap refusal kind (#1376)', () => {
-    /** Returns each scripted verdict in turn, then repeats the last. */
+    /** Returns each scripted verdict in turn, then repeats the last */
     function scriptedCap(verdicts: Extract<SpendCapVerdict, { admitted: false }>[]): SpendCap {
       let call = 0;
       return {
@@ -713,7 +713,7 @@ describe('MiRefreshQueue (#1085)', () => {
       // AC2: the shared counter this replaces would have consumed the
       // un-throttled "first" slot on the read-fault refusal and pushed the
       // budget refusal's first appearance out to refusal 20 — so this reds
-      // against the old behaviour and greens against the per-kind counter.
+      // against the old behaviour and greens against the per-kind counter
       const calls: string[] = [];
       const logger = recordingLogger();
       const cap = scriptedCap([
@@ -749,7 +749,7 @@ describe('MiRefreshQueue (#1085)', () => {
       expect(refusals).toHaveLength(2);
       // Against the exported remedy constants, never `spendCapRefusalRemedy(kind)`
       // — comparing against the function under test would pass even if the
-      // function itself regressed to the wrong text for a kind.
+      // function itself regressed to the wrong text for a kind
       expect(refusals[0]?.message).toContain(READ_FAULT_REMEDY);
       expect(refusals[0]?.message).not.toContain(BUDGET_REMEDY);
       expect(refusals[1]?.message).toContain(BUDGET_REMEDY);
@@ -759,7 +759,7 @@ describe('MiRefreshQueue (#1085)', () => {
 
     it('leaves a single-kind stream throttled exactly as before (AC3)', async () => {
       // Per-kind counting is observationally identical to the old shared
-      // counter when only one kind is ever seen, which is the count this pins.
+      // counter when only one kind is ever seen, which is the count this pins
       const cap = meteredCap(1);
       cap.spentUsd = 1;
       const calls: string[] = [];
@@ -787,7 +787,7 @@ describe('MiRefreshQueue (#1085)', () => {
       // at 1 and REFUSAL_LOG_EVERY, read_fault logs once at 1, and budget
       // resumes counting through the interleaving to log again at
       // 2 * REFUSAL_LOG_EVERY — 4 lines. A counter that resets on kind change
-      // would instead restart the second budget run at 1, adding a 5th line.
+      // would instead restart the second budget run at 1, adding a 5th line
       const budgetVerdict: Extract<SpendCapVerdict, { admitted: false }> = {
         admitted: false,
         spent_usd: 1,

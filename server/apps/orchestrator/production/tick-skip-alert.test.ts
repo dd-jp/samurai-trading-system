@@ -36,7 +36,7 @@ function recordingChannel(): TickSkipAlertChannel & { alerts: TickSkipAlert[] } 
 }
 
 describe('isMateriallyDegraded', () => {
-  // The six measurements #1084 itself quotes from a real paper-soak session.
+  // The six measurements #1084 itself quotes from a real paper-soak session
   it.each([
     [2, 20, false],
     [1, 20, false],
@@ -51,7 +51,7 @@ describe('isMateriallyDegraded', () => {
   it('stays quiet below the floor even at 100% of a small plan', () => {
     // 2 of 4 is the exact fraction (50%) that would alert on a 20-instrument
     // plan, but on a small plan it is still just two ordinary slow debates —
-    // the case #1084's own AC says must stay quiet.
+    // the case #1084's own AC says must stay quiet
     expect(isMateriallyDegraded(2, 4)).toBe(false);
     expect(isMateriallyDegraded(1, 1)).toBe(false);
   });
@@ -106,7 +106,7 @@ describe('TickSkipThrottle', () => {
       const result = throttle.observe(true);
       if (result.alert) alerted.push(result.consecutive);
     }
-    // 1 (threshold), then every 8th after: 9, 17.
+    // 1 (threshold), then every 8th after: 9, 17
     expect(alerted).toEqual([1, 9, 17]);
   });
 
@@ -119,7 +119,7 @@ describe('TickSkipThrottle', () => {
     expect(clean).toEqual({ alert: false, consecutive: 0 });
 
     // The run has to start over, not resume: the very next degraded tick
-    // reads as consecutive=1 again, and alerts again.
+    // reads as consecutive=1 again, and alerts again
     const result = throttle.observe(true);
     expect(result).toEqual({ alert: true, consecutive: 1 });
   });
@@ -179,13 +179,13 @@ describe('reportTickSkip', () => {
 
     await reportTickSkip(throttle, undefined, undefined, params);
     // If the throttle had not advanced, this second call would also read as
-    // consecutive=1 forever and never reach the repeat boundary correctly.
+    // consecutive=1 forever and never reach the repeat boundary correctly
     const channel = recordingChannel();
     for (let i = 0; i < ALERT_REPEAT_EVERY_DEGRADED_TICKS - 1; i += 1) {
       await reportTickSkip(throttle, channel, undefined, params);
     }
     await reportTickSkip(throttle, channel, undefined, params);
-    // Called once the throttle reaches consecutive=9 (1 + 8), not before.
+    // Called once the throttle reaches consecutive=9 (1 + 8), not before
     expect(channel.alerts).toHaveLength(1);
     expect(channel.alerts[0]?.consecutive_ticks).toBe(9);
   });

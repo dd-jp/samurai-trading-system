@@ -149,7 +149,7 @@ describe('SqliteSetupStore.findNeighbors', () => {
 
     const justBefore = new Date(CLOSED_AT.getTime() - 1);
     expect(store.findNeighbors(VECTOR, justBefore)).toEqual([]);
-    // Inclusive at the boundary, matching the fixture's `<=`.
+    // Inclusive at the boundary, matching the fixture's `<=`
     expect(store.findNeighbors(VECTOR, CLOSED_AT)).toHaveLength(1);
   });
 

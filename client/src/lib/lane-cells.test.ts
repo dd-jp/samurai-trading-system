@@ -33,7 +33,7 @@ describe('resolveLaneCells', () => {
       expect(cell?.hasRecordedDecision).toBe(true);
       // The matrix paints this — dashboard-spec.md:135 gives a cell its
       // decision WORD, not a sentence — so it must stay the bare word even
-      // when degraded.
+      // when degraded
       expect(cell?.decisionWord).toBe(word);
       expect(cell?.decisionText).toBe(`${word} — ${gloss}`);
     }
@@ -76,7 +76,7 @@ describe('resolveLaneCells', () => {
     const byStage = new Map(resolveLaneCells(lane, undefined).map((c) => [c.stage, c]));
     expect(byStage.get('debate')?.decisionText).toBe('in progress');
     expect(byStage.get('trader')?.decisionText).toBe('skipped — the tick continued');
-    // `risk` never records a decision word (#328), regardless of state.
+    // `risk` never records a decision word (#328), regardless of state
     expect(byStage.get('risk')?.decisionText).toBe('no decision word recorded (#328)');
     expect(byStage.get('verdict')?.decisionText).toBe('not reached');
     for (const stage of ['debate', 'trader', 'risk', 'verdict'] as const) {
@@ -173,15 +173,15 @@ describe('resolveLaneCells against the debate row (#1428)', () => {
 
     const cell = debateCellOf('budget_exhausted', truncatedByLlmFailure);
     // Derived from the shared function, not a literal, so a reworded gloss
-    // propagates here instead of the two drifting apart again (#1080's class).
+    // propagates here instead of the two drifting apart again (#1080's class)
     expect(cell?.decisionText.endsWith(gloss as string)).toBe(true);
     // The defect: `audit_log`'s word cannot tell a fired budget from an
     // escaped LLM failure, so stopping at it puts this cell in silent
-    // disagreement with `DebateSection` in the same drawer.
+    // disagreement with `DebateSection` in the same drawer
     expect(cell?.decisionText).not.toBe(
       `budget_exhausted — ${DEGRADED_DECISIONS.budget_exhausted}`,
     );
-    // dashboard-spec.md:135 — the matrix still paints the bare audit word.
+    // dashboard-spec.md:135 — the matrix still paints the bare audit word
     expect(cell?.decisionWord).toBe('budget_exhausted');
     expect(cell?.degraded).toBe(true);
   });
@@ -198,7 +198,7 @@ describe('resolveLaneCells against the debate row (#1428)', () => {
     // never sets `timed_out` and so never writes a `termination_cause`. The
     // lane joins its debate by INSTRUMENT, so the row reachable here can be a
     // DIFFERENT, truncated debate — glossing it on would claim an LLM failure
-    // for a debate that was never admitted.
+    // for a debate that was never admitted
     const cell = debateCellOf('not_admitted', truncatedByLlmFailure);
     expect(cell?.decisionText).toBe(`not_admitted — ${DEGRADED_DECISIONS.not_admitted}`);
   });
@@ -226,7 +226,7 @@ describe('resolveLaneCells against the debate row (#1428)', () => {
     };
     const cell = debateCellOf('budget_exhausted', preMigration);
     // `debateDegradedGloss` says the cause is unrecorded rather than naming
-    // one, and that is what an operator needs here too.
+    // one, and that is what an operator needs here too
     expect(cell?.decisionText.endsWith(debateDegradedGloss(preMigration) as string)).toBe(true);
   });
 

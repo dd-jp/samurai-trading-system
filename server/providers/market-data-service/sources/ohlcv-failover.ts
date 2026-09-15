@@ -34,7 +34,7 @@ export interface FailoverEvent {
   timeframe: string;
   primaryName: string;
   fallbackName: string;
-  /** `primary`'s thrown error, stringified — never the raw error object (never re-thrown from inside the alert). */
+  /** `primary`'s thrown error, stringified — never the raw error object (never re-thrown from inside the alert) */
   primaryError: string;
 }
 
@@ -43,14 +43,14 @@ export type FailoverAlerter = (event: FailoverEvent) => void;
 /**
  * Guards `alert` so a broken alert channel (stdout `EPIPE`, an alerter that
  * itself throws) can never mask the fallback's own result or crash the
- * fetch — same posture as `tick-loop.ts`'s `safeLog`.
+ * fetch — same posture as `tick-loop.ts`'s `safeLog`
  */
 function safeAlert(alert: FailoverAlerter, event: FailoverEvent): void {
   try {
     alert(event);
   } catch {
     // Nothing left to do — see doc comment above; the failover must proceed
-    // regardless of whether the operator could be told about it.
+    // regardless of whether the operator could be told about it
   }
 }
 
@@ -60,7 +60,7 @@ export interface OhlcvFailoverConfig {
   primaryName: string;
   fallback: BarFetcher;
   fallbackName: string;
-  /** Called once, BEFORE the fallback is attempted, so the operator learns about a stall even if the fallback also fails. */
+  /** Called once, BEFORE the fallback is attempted, so the operator learns about a stall even if the fallback also fails */
   alert: FailoverAlerter;
 }
 
@@ -71,7 +71,7 @@ export interface OhlcvFailoverConfig {
  * (`'alpaca'`/`'polygon'`) — persisted per bar by
  * `SqliteMarketDataStore.appendBars` into the `bars.source` column
  * (`0001_init.sql`), so a caller never has to trust this wrapper's own
- * bookkeeping to know which vendor a bar came from.
+ * bookkeeping to know which vendor a bar came from
  */
 export function withOhlcvFailover(config: OhlcvFailoverConfig): BarFetcher {
   return async (symbol, window, asOf) => {

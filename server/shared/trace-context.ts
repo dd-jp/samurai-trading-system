@@ -67,7 +67,7 @@ export function runWithTraceId<T>(trace_id: string, fn: () => T): T {
   return storage.run(trace_id, fn);
 }
 
-/** The enclosing tick's `trace_id`, or `undefined` outside one. */
+/** The enclosing tick's `trace_id`, or `undefined` outside one */
 export function currentTraceId(): string | undefined {
   return storage.getStore();
 }

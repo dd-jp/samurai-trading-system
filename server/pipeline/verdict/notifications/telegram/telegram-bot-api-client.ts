@@ -64,18 +64,18 @@ export function capOutboundText(text: string): string {
   if (text.length <= TELEGRAM_MAX_MESSAGE_CHARS) return text;
   // Slicing to the limit and appending after would still exceed it and still
   // 400. No guard is needed on `cut`: `suffix` is ~30 chars plus the digits
-  // of `text.length`, and no JS string is long enough to make that 4,096.
+  // of `text.length`, and no JS string is long enough to make that 4,096
   const suffix = `… (truncated, ${text.length} chars total)`;
   let cut = TELEGRAM_MAX_MESSAGE_CHARS - suffix.length;
   // A lone high surrogate is not valid UTF-8 on the wire. Telegram counts
   // UTF-16 code units, so `.length` is the right unit and a split pair is the
-  // only slicing hazard it leaves.
+  // only slicing hazard it leaves
   const last = text.charCodeAt(cut - 1);
   if (last >= 0xd800 && last <= 0xdbff) cut -= 1;
   return `${text.slice(0, cut)}${suffix}`;
 }
 
-/** Sized for Telegram's ~30 messages/second ceiling; a send is not on the tick's critical path. */
+/** Sized for Telegram's ~30 messages/second ceiling; a send is not on the tick's critical path */
 const DEFAULT_RETRY: RetryConfig = { maxAttempts: 3, baseDelayMs: 500, maxDelayMs: 5_000 };
 
 /**
@@ -96,7 +96,7 @@ const DEFAULT_RETRY: RetryConfig = { maxAttempts: 3, baseDelayMs: 500, maxDelayM
  */
 const DELIVERY_FAILURE_ALERT_EVERY = 3;
 
-/** Log `stage` for this transport's own lines — the logger's `stage` is a free-form string. */
+/** Log `stage` for this transport's own lines — the logger's `stage` is a free-form string */
 const LOG_STAGE = 'verdict.telegram';
 
 /**
@@ -134,12 +134,12 @@ export interface TelegramBotApiClientOptions {
    * skip durable recording — the failure still logs loudly either way.
    */
   alertDeliveryLog?: AlertDeliveryFailureLog;
-  /** Defaults to `https://api.telegram.org`. */
+  /** Defaults to `https://api.telegram.org` */
   baseUrl?: string;
   /** Per-request timeout. Default 10s. */
   timeoutMs?: number;
   retry?: RetryConfig;
-  /** Structured logger; falls back to `console.error` for warn/error when omitted. */
+  /** Structured logger; falls back to `console.error` for warn/error when omitted */
   logger?: Logger;
 }
 
@@ -158,7 +158,7 @@ export class TelegramBotApiClient implements TelegramClient {
     // Trimmed at the read point, not just validated — same rule #354 applied
     // to the chat ids and SAMURAI_ALERTS: whitespace-only counts as unset,
     // and the *normalized* value is what's handed onward, so a trailing
-    // newline out of an env file never reaches the request URL below.
+    // newline out of an env file never reaches the request URL below
     const botToken = (options.botToken ?? process.env.TELEGRAM_BOT_TOKEN)?.trim();
     if (botToken === undefined || botToken === '') {
       throw new Error(
@@ -357,7 +357,7 @@ export class TelegramBotApiClient implements TelegramClient {
         // doesn't apply, for the same token-bearing-`TypeError` threat this
         // module's header documents — e.g. a misconfigured storage
         // `baseUrl`/driver whose thrown message happens to echo back the
-        // failed insert's own token-bearing text (#1108 third review pass).
+        // failed insert's own token-bearing text (#1108 third review pass)
         this.#log(
           'error',
           'telegram_delivery_record_failed',
@@ -398,7 +398,7 @@ export class TelegramBotApiClient implements TelegramClient {
         // reaches `#call`/`#request` and can fail against the very
         // misconfigured `baseUrl` this module's header names as the threat —
         // `redactPayload` never walks this plain string `message` (#1108
-        // third review pass).
+        // third review pass)
         this.#log(
           'error',
           'telegram_delivery_escalation_failed',
@@ -410,7 +410,7 @@ export class TelegramBotApiClient implements TelegramClient {
     }
   }
 
-  /** Bot API call with the client's retry policy. */
+  /** Bot API call with the client's retry policy */
   async #call(method: string, body: Record<string, unknown>): Promise<unknown> {
     return withRetry(() => this.#request(method, body), this.#retry, isRetryableTelegramError);
   }
@@ -449,7 +449,7 @@ export class TelegramBotApiClient implements TelegramClient {
     }
 
     // Telegram can answer 200 with `{ok: false}` — treat it as a failure, not
-    // a silently empty result.
+    // a silently empty result
     const envelope = parsed as { ok?: unknown; result?: unknown; description?: unknown };
     if (envelope?.ok !== true) {
       const detail = typeof envelope?.description === 'string' ? envelope.description : 'ok=false';

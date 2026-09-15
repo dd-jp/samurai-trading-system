@@ -95,7 +95,7 @@ export function watchDashboardStdout(
 ): void {
   watchStdoutErrors(stderr, () => {
     // Nowhere left to report to — see the module doc. The subscription
-    // itself is the entire mechanism.
+    // itself is the entire mechanism
   });
 
   let reported = false;
@@ -112,7 +112,7 @@ export function watchDashboardStdout(
 
 /**
  * Installs the dashboard's "continue" fault handler — see the module doc for
- * why this entrypoint's answer differs from the orchestrator's.
+ * why this entrypoint's answer differs from the orchestrator's
  */
 export function installDashboardContinueOnFault(effects?: ContinueOnFaultEffects): void {
   installContinueOnFault(

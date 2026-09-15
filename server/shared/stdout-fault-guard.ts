@@ -53,12 +53,12 @@
  * regardless of what it does.
  */
 
-/** The subset of `process.stdout` this module needs to subscribe to. */
+/** The subset of `process.stdout` this module needs to subscribe to */
 export interface StdoutStream {
   on(event: 'error', listener: (error: Error) => void): unknown;
 }
 
-/** The subset of `process.stderr` a fault report is written to. */
+/** The subset of `process.stderr` a fault report is written to */
 export interface ErrorStream {
   write(line: string): unknown;
 }
@@ -86,7 +86,7 @@ export function guardedWrite(stream: ErrorStream, line: string): void {
   try {
     stream.write(line);
   } catch {
-    // Nothing left to try, and nothing to report it on.
+    // Nothing left to try, and nothing to report it on
   }
 }
 

@@ -23,15 +23,15 @@ import { DEFAULT_ALERT_DELIVERY_FAILURE_RETENTION_DAYS } from '../alert-delivery
 import type { ProductionConfig } from './config.js';
 
 export interface ProductionEnvironment {
-  /** #1035: `SAMURAI_LLM_CAPTURE` — both spend sinks receive this one read. */
+  /** #1035: `SAMURAI_LLM_CAPTURE` — both spend sinks receive this one read */
   readonly captureLlmText: boolean;
-  /** #1045: `llm_call_log` row ceiling, applied at boot and on the daily sweep. */
+  /** #1045: `llm_call_log` row ceiling, applied at boot and on the daily sweep */
   readonly llmCallLogMaxRows: number;
-  /** #1060: the MI archive's retention window, applied at boot and on the daily sweep. */
+  /** #1060: the MI archive's retention window, applied at boot and on the daily sweep */
   readonly miArchiveRetentionDays: number;
-  /** #1131: `alert_delivery_failures`'s retention window, applied at boot and on the daily sweep. */
+  /** #1131: `alert_delivery_failures`'s retention window, applied at boot and on the daily sweep */
   readonly alertDeliveryFailureRetentionDays: number;
-  /** #464 / ADR-0009: `config.sentimentEnabled`, else `SAMURAI_SENTIMENT=off` is the only off switch; anything else runs the stage. */
+  /** #464 / ADR-0009: `config.sentimentEnabled`, else `SAMURAI_SENTIMENT=off` is the only off switch; anything else runs the stage */
   readonly sentimentEnabled: boolean;
   /**
    * Whether the sentiment agent RETRIEVES (#969), as opposed to asking a model
@@ -147,17 +147,17 @@ export function captureLlmTextFromEnvironment(value: string | undefined): boolea
   return value?.trim().toLowerCase() !== 'off';
 }
 
-/** The variable that overrides `llm_call_log`'s row ceiling (#1045). */
+/** The variable that overrides `llm_call_log`'s row ceiling (#1045) */
 export const ENV_LLM_CALL_LOG_MAX_ROWS = 'SAMURAI_LLM_CALL_LOG_MAX_ROWS';
 
-/** The variable that overrides the MI archive's retention window (#1060). */
+/** The variable that overrides the MI archive's retention window (#1060) */
 export const ENV_MI_ARCHIVE_RETENTION_DAYS = 'SAMURAI_MI_ARCHIVE_RETENTION_DAYS';
 
-/** The variable that overrides `alert_delivery_failures`'s retention window (#1131). */
+/** The variable that overrides `alert_delivery_failures`'s retention window (#1131) */
 export const ENV_ALERT_DELIVERY_FAILURE_RETENTION_DAYS =
   'SAMURAI_ALERT_DELIVERY_FAILURE_RETENTION_DAYS';
 
-/** The variable that overrides how many X posts a sentiment call fetches (#969). */
+/** The variable that overrides how many X posts a sentiment call fetches (#969) */
 export const ENV_X_MAX_SEARCH_RESULTS = 'SAMURAI_X_MAX_RESULTS';
 
 /**

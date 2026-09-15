@@ -49,7 +49,7 @@ describe('miArchiveRetentionDaysFromEnvironment', () => {
     // `Number(' ')` is `0` — without the trim-to-undefined rule a stray space
     // would parse as a real, in-range window of zero days, purging the table
     // on every sweep. Same near-miss the file sink's and #1045's settings
-    // both name.
+    // both name
     expect(miArchiveRetentionDaysFromEnvironment('   ')).toBe(DEFAULT_MI_ARCHIVE_RETENTION_DAYS);
     expect(miArchiveRetentionDaysFromEnvironment('')).toBe(DEFAULT_MI_ARCHIVE_RETENTION_DAYS);
   });
@@ -79,7 +79,7 @@ describe('the MI archive purge is spelled at the composition root, in full', () 
 
   // Matched by regex, not exact string: the formatter is free to wrap a call
   // across lines, and a retention guard that fails on reformatting would be
-  // deleted by the first person it inconvenienced.
+  // deleted by the first person it inconvenienced
   //
   // The FULL known argument list is required, in order, rather than a lazy
   // `[\s\S]*?` scan from the function name to the trigger literal. A lazy
@@ -92,7 +92,7 @@ describe('the MI archive purge is spelled at the composition root, in full', () 
   // string literal, another call). Both were tried and both left this test
   // green after the real call site was deleted — proven by actually deleting
   // it. Requiring the full parameter sequence bounds the match to one
-  // statement and nothing an unrelated later line can satisfy.
+  // statement and nothing an unrelated later line can satisfy
   const callSite = (trigger: string): RegExp =>
     new RegExp(
       `pruneMiArchiveWithLog\\(\\s*config\\.miArchive,\\s*miArchiveRetentionDays,\\s*clock,\\s*logger,\\s*'${trigger}',?\\s*\\)`,
@@ -101,7 +101,7 @@ describe('the MI archive purge is spelled at the composition root, in full', () 
   it('names both triggers, startup and daily, not one place only', () => {
     // Startup alone fires once when the table is smallest and never again
     // during the unattended run the window exists to bound; the daily sweep
-    // alone leaves a restart-heavy loop pruning nothing.
+    // alone leaves a restart-heavy loop pruning nothing
     expect(source).toMatch(callSite('startup'));
     expect(source).toMatch(callSite('daily'));
   });
@@ -109,7 +109,7 @@ describe('the MI archive purge is spelled at the composition root, in full', () 
   it('spells the daily prune ABOVE the feedback cycle try block', () => {
     // Inside it, a persistently throwing `runDailyCycle` would silently
     // disable retention as well: the catch would fire every day while the
-    // archive grew forever and the log showed only a feedback failure.
+    // archive grew forever and the log showed only a feedback failure
     const cycleStart = source.indexOf('const runFeedbackCycle =');
     expect(cycleStart).toBeGreaterThan(-1);
 

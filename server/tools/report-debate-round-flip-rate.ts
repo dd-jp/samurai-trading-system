@@ -73,11 +73,11 @@ export interface FlipRateReport {
   total_debates: number;
   multi_round_debates: number;
   flips: number;
-  /** `flips / multi_round_debates`, or `null` when that denominator is 0. */
+  /** `flips / multi_round_debates`, or `null` when that denominator is 0 */
   flip_rate: number | null;
 }
 
-/** Round 1's direction and the highest-numbered round's direction, for one debate. */
+/** Round 1's direction and the highest-numbered round's direction, for one debate */
 function firstAndLastDirection(rows: DebateRoundLogEntry[]): {
   first: Direction;
   last: Direction;
@@ -153,7 +153,7 @@ export function formatFlipRateReport(report: FlipRateReport, from: Date, to: Dat
   return lines.join('\n');
 }
 
-/** Parses `--days N`; anything else is rejected rather than silently defaulted. */
+/** Parses `--days N`; anything else is rejected rather than silently defaulted */
 export function parseWindowDays(argv: readonly string[]): number {
   const index = argv.indexOf('--days');
   if (index === -1) return DEFAULT_WINDOW_DAYS;
@@ -171,7 +171,7 @@ export function parseWindowDays(argv: readonly string[]): number {
  * reasoning as `classify-debate-termination.ts`'s `assertDbPathExists`:
  * `better-sqlite3` opens a nonexistent path by silently CREATING an empty
  * database file, which would make this report read a confident "0 debates"
- * off a typo'd path instead of failing loudly.
+ * off a typo'd path instead of failing loudly
  */
 export function assertDbPathExists(dbPath: string): void {
   if (!existsSync(dbPath)) {
@@ -197,7 +197,7 @@ if (isMain) {
   let dbPath: string;
   if (explicitDbPath !== undefined) {
     // An explicit path names its own file — the paper/live filename guard
-    // below exists to protect the environment-resolved default, not this.
+    // below exists to protect the environment-resolved default, not this
     assertDbPathExists(explicitDbPath);
     dbPath = explicitDbPath;
   } else {

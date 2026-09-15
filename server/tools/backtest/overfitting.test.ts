@@ -17,7 +17,7 @@ function yearsWindow(years: number): DateRange {
 describe('deflatedSharpe', () => {
   it('falls as the distinct-config count rises for a fixed Sharpe', () => {
     // The core property (user story 15): the same backtest is worth less when
-    // you had to try a hundred configs to find it.
+    // you had to try a hundred configs to find it
     const one = deflatedSharpe(0.15, 1, 250, 0, 0);
     const ten = deflatedSharpe(0.15, 10, 250, 0, 0);
     const hundred = deflatedSharpe(0.15, 100, 250, 0, 0);
@@ -89,7 +89,7 @@ describe('pbo', () => {
 
   it('accepts a config with genuine, persistent out-of-sample edge', () => {
     // Config 0 is better on every fold — its in-sample win is not luck, so it
-    // stays on top out-of-sample and PBO collapses.
+    // stays on top out-of-sample and PBO collapses
     const performance = [
       [2.0, 2.1, 1.9, 2.0, 2.1, 1.95, 2.05, 2.0],
       [0.1, 0.2, 0.05, 0.15, 0.1, 0.2, 0.05, 0.1],
@@ -104,7 +104,7 @@ describe('pbo', () => {
   });
 
   it('puts the kill line at exactly 0.05 — above rejects, at or below accepts', () => {
-    // 20 partitions (6 folds choose 3) means PBO lands on multiples of 0.05.
+    // 20 partitions (6 folds choose 3) means PBO lands on multiples of 0.05
     const result = pbo(noiseMatrix(6, 6));
 
     expect(result.verdict).toBe(result.pbo > 0.05 ? 'reject' : 'accept');
@@ -164,7 +164,7 @@ describe('minbtl', () => {
   it('defaults expectedAnnualSharpe to the declared E[SR] = 1.0 constant', () => {
     // The default parameter and the exported constant must agree — a caller
     // that omits the argument gets exactly what MINBTL_TARGET_ANNUAL_SHARPE
-    // says it should.
+    // says it should
     const window = yearsWindow(5);
 
     expect(minbtl(window).limit).toBe(minbtl(window, MINBTL_TARGET_ANNUAL_SHARPE).limit);
@@ -230,7 +230,7 @@ describe('minbtlGuard', () => {
   });
 
   it('flags a short window that a large search has out-searched', () => {
-    // 1 year of data cannot support 45 configs, however good they look.
+    // 1 year of data cannot support 45 configs, however good they look
     const verdict = minbtlGuard(yearsWindow(1), 45);
 
     expect(verdict.exceeded).toBe(true);
@@ -243,7 +243,7 @@ describe('minbtlGuard', () => {
 
   it('accepts an explicit expectedAnnualSharpe and flags against that cap, not the default', () => {
     // 11 configs is within the E[SR]=1.0 cap for 5y (45) but exceeds the
-    // E[SR]=0.71 cap for the same window (10).
+    // E[SR]=0.71 cap for the same window (10)
     const window = yearsWindow(5);
 
     expect(minbtlGuard(window, 11).exceeded).toBe(false);

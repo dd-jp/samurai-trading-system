@@ -36,7 +36,7 @@ describe("ADR-0018 D5's fractions reproduce the ADR's own figures", () => {
   it('puts a 3x index ETP at ~£260 and a single-stock ETP at ~£190 on the £750 leg D5 was written against', () => {
     // The fractions are the rule (#739); the cash figures are what they
     // resolve to at the leg D5 was calibrated on, which is the check that the
-    // base is right rather than a cap the system stores.
+    // base is right rather than a cap the system stores
     const fractions = subclassDeploymentCapFractionsOfEquity();
 
     expect((fractions.index_etp_3x as number) * D5_PUBLISHED_LEG).toBeCloseTo(262.5, 6); // "~£260"
@@ -48,7 +48,7 @@ describe("ADR-0018 D5's fractions reproduce the ADR's own figures", () => {
     // £1,000. There is no leg to be a fraction of any more, so the 0.5 scaler
     // that encoded ADR-0015's £750/£750 split is gone and D5's fractions reach
     // `portfolio.equity` unscaled. Asserted as an IDENTITY rather than as a
-    // number so re-introducing any scaler fails here.
+    // number so re-introducing any scaler fails here
     const fractions = subclassDeploymentCapFractionsOfEquity();
 
     expect(fractions.index_etp_3x).toBe(D5_DEPLOYMENT_FRACTION_OF_EQUITY_LEG.index_etp_3x);
@@ -59,10 +59,10 @@ describe("ADR-0018 D5's fractions reproduce the ADR's own figures", () => {
 
   it('resolves to £350 / £250 on the £1,000 book, up from £175 / £125 under the split', () => {
     // The consequence of the ruling, stated where it can be read rather than
-    // discovered in a soak: the cash at risk per position roughly DOUBLES.
+    // discovered in a soak: the cash at risk per position roughly DOUBLES
     // The single-stock row is f = 0.25 unscaled — exactly the fraction
     // ADR-0018 D5 published, and the one whose measured drawdown is ~41.8%
-    // against CONTEXT.md's 20-25% tolerance (#798).
+    // against CONTEXT.md's 20-25% tolerance (#798)
     const fractions = subclassDeploymentCapFractionsOfEquity();
 
     expect(LIVE_BOOK_GBP).toBe(1_000);
@@ -76,7 +76,7 @@ describe("ADR-0018 D5's fractions reproduce the ADR's own figures", () => {
     // D5's own published ~1.2 pp was measured at a bracket it does not
     // declare). The overshoot is accepted rather than sized away, and the
     // named constant is where that is stated, so a reader meeting the number
-    // meets the citation with it.
+    // meets the citation with it
     expect(D5_DEPLOYMENT_FRACTION_OF_EQUITY_LEG.single_stock_etp_3x).toBe(0.25);
     expect(D5_DEPLOYMENT_FRACTION_OF_EQUITY_LEG.index_etp_3x).toBe(0.35);
   });
@@ -89,7 +89,7 @@ describe("ADR-0018 D5's fractions reproduce the ADR's own figures", () => {
   it('is based on nothing the Feedback Loop can move', () => {
     // The disqualifying property of the rejected base: it is a live dial, so
     // D5's envelope would widen at runtime. D5 is measured drift-removed with
-    // zero edge assumed and must not be contingent on what the loop learns.
+    // zero edge assumed and must not be contingent on what the loop learns
     expect(RISK_THRESHOLD_KEYS).toContain('per_asset_class_cap_fraction_of_equity_stocks');
     expect(RISK_THRESHOLD_KEYS).not.toContain('per_subclass_deployment_cap');
   });
@@ -99,7 +99,7 @@ describe('the envelope arms itself off the universe', () => {
   it('is NOT declared on DEFAULT_UNIVERSE, which holds no leveraged ETPs', () => {
     // ADR-0018 prices leveraged ETPs; the default universe is
     // SPY/QQQ/AAPL/TSLA/BTC/ETH. Declaring the field with an empty
-    // `subclass_of` would make every entry throw instead.
+    // `subclass_of` would make every entry throw instead
     expect(d5EnvelopeFor(DEFAULT_UNIVERSE)).toBeUndefined();
     expect(paperStartingProfile('paper').riskConfig.per_subclass_deployment_cap).toBeUndefined();
   });
@@ -131,7 +131,7 @@ describe('what the paper profile actually enforces (#886)', () => {
     // re-scaled. The gate-level assertion (through `RiskManagerImpl.evaluate`,
     // not this file's arithmetic) lives in `d5-trader-cap-agreement.test.ts`,
     // including the acceptance-criteria test and the gap #886 did NOT close
-    // (`per_asset_cap_fraction_of_equity` still binds ahead of D5).
+    // (`per_asset_cap_fraction_of_equity` still binds ahead of D5)
     expect(RISK_CAP_EQUITY_FRACTIONS.max_position_size_fraction_of_equity).toBeLessThan(
       subclassDeploymentCapFractionsOfEquity().index_etp_3x as number,
     );
@@ -143,10 +143,10 @@ describe('the Trader and the Risk Manager classify from ONE derivation (#739)', 
     // The composition root is where a per-subclass table stops being a table
     // nothing consults. Two independently built maps would let the stage that
     // SIZES a position and the stage that CAPS it disagree about what the
-    // instrument is, and the disagreement would be invisible in every log.
+    // instrument is, and the disagreement would be invisible in every log
     // Built against a CLASSIFIED universe on purpose: with `DEFAULT_UNIVERSE`
     // the expected and actual maps are both `{}`, so the assertion passes
-    // whether or not the composition root carries the classification at all.
+    // whether or not the composition root carries the classification at all
     const universe: readonly UniverseInstrument[] = [
       { asset: '3USL', asset_class: 'stocks', subclass: 'index_etp_3x' },
       { asset: '3LAP', asset_class: 'stocks', subclass: 'single_stock_etp_3x' },
@@ -158,13 +158,13 @@ describe('the Trader and the Risk Manager classify from ONE derivation (#739)', 
       '3USL': 'index_etp_3x',
       '3LAP': 'single_stock_etp_3x',
     });
-    // The same rows arm the Risk Manager's envelope, from the same argument.
+    // The same rows arm the Risk Manager's envelope, from the same argument
     expect(configs.riskConfig.per_subclass_deployment_cap?.subclass_of).toEqual(
       configs.traderConfig.subclass_of,
     );
     expect(configs.universe).toBe(universe);
 
-    // And the default profile is unarmed, because `DEFAULT_UNIVERSE` is.
+    // And the default profile is unarmed, because `DEFAULT_UNIVERSE` is
     expect(paperStartingProfile('paper').traderConfig.subclass_of).toEqual({});
   });
 

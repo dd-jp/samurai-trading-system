@@ -20,17 +20,17 @@
  * transport responsible for its own delivery and failure logging.
  */
 
-/** One prompt-tier crossing, as `SqliteLlmSpendStore.record` observes it. */
+/** One prompt-tier crossing, as `SqliteLlmSpendStore.record` observes it */
 export interface PromptTierAlert {
   model: string;
   trace_id: string;
   stage: string;
   debate_id?: string | undefined;
-  /** `promptTokensOf`'s answer for this call — the same sum `priceUsage` tiers against. */
+  /** `promptTokensOf`'s answer for this call — the same sum `priceUsage` tiers against */
   prompt_tokens: number;
-  /** The tier's own threshold (`ModelRate.tier.above_prompt_tokens`), so the alert states what it crossed without a reader looking the model up. */
+  /** The tier's own threshold (`ModelRate.tier.above_prompt_tokens`), so the alert states what it crossed without a reader looking the model up */
   above_prompt_tokens: number;
-  /** How many consecutive metered calls, including this one, this model has crossed the tier on — `PromptTierCrossingThrottle`'s own count. */
+  /** How many consecutive metered calls, including this one, this model has crossed the tier on — `PromptTierCrossingThrottle`'s own count */
   consecutive_crossings: number;
   reported_at: Date;
 }
@@ -46,7 +46,7 @@ import { escalatesAt } from '../../../shared/index.js';
  * two (#431): a 2.5x unit-cost step against ADR-0008's $50/14d cap should
  * never wait out a second occurrence before it is reported, the same
  * reasoning `ALERT_AFTER_CONSECUTIVE_DEGRADED_TICKS` (tick-skip-alert.ts)
- * draws for a materially degraded pass.
+ * draws for a materially degraded pass
  */
 export const ALERT_AFTER_CONSECUTIVE_PROMPT_TIER_CROSSINGS = 1;
 

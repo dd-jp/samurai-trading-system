@@ -36,7 +36,7 @@ describe('InMemoryQueryStore fixture influence scores', () => {
     // are not in that set. Pinning the reachable set here means a future
     // change to computeInfluenceScore's shape (not just its output) would
     // also have to update this test, rather than silently letting an
-    // unreachable fixture value back in.
+    // unreachable fixture value back in
     const reachableFor3Rounds = new Set([0, 0.5, 1]);
 
     const store = new InMemoryQueryStore();

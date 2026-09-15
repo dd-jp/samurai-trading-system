@@ -45,7 +45,7 @@ export class ExecutionImpl implements Execution {
   /**
    * The second surface, delegated whole: the fill lifecycle shares only the
    * injected dependencies with `execute()`, so keeping it out of this class's
-   * body keeps the two surfaces independently readable.
+   * body keeps the two surfaces independently readable
    */
   async ingestFills(): Promise<void> {
     return ingestFills(this.input);
@@ -75,14 +75,14 @@ export class ExecutionImpl implements Execution {
   /**
    * Delegated whole like its siblings, so a caller that only submits (the
    * soak probe, tools/place-soak-position.ts) can hand `executeVerdict` a
-   * `SubmitInput` instead of building the full bag.
+   * `SubmitInput` instead of building the full bag
    */
   async execute(verdict: VerdictDecision): Promise<ExecutionResult> {
     return executeVerdict(this.input, verdict);
   }
 }
 
-/** Acts only on a `go`; records the submission, does not block until filled. */
+/** Acts only on a `go`; records the submission, does not block until filled */
 export async function executeVerdict(
   input: SubmitInput,
   verdict: VerdictDecision,
@@ -101,12 +101,12 @@ export async function executeVerdict(
   const idempotencyKey = order.idempotency_key;
 
   // Dedup layer 1 (local): a key already in the store means this decision
-  // was acted on before — a crash-restart or retry replaying the same bar.
+  // was acted on before — a crash-restart or retry replaying the same bar
   // Never reaches the broker. Layer 2 is the client order id below. Checked
   // ahead of the intent_type branch so entry, scale_in AND exit share one
-  // gate, rather than the exit branch running its own copy of this check.
+  // gate, rather than the exit branch running its own copy of this check
   //
-  // #921: an exit is the one intent type that gets a SECOND chance here.
+  // #921: an exit is the one intent type that gets a SECOND chance here
   // Entry/scale_in dedupe unconditionally — a replayed entry decision must
   // never re-submit under any key, fresh or otherwise, because the original
   // bracket (if it landed) is still exactly what was wanted. A mandatory
@@ -118,7 +118,7 @@ export async function executeVerdict(
   // 'submitting'/'submitted' row whose venue truth is unknown or already
   // succeeded) falls through to the same unconditional dedup entry/scale_in
   // gets, because retrying either of those risks the #516 double-flatten /
-  // reverse-position hazard.
+  // reverse-position hazard
   //
   // 'error' does NOT mean "proven dead at the venue". Some routes into it are
   // proof (the cancel loop failed before the submit; the venue terminally
@@ -128,7 +128,7 @@ export async function executeVerdict(
   // covers everything the store holds (#1500). So this walk can re-arm over a
   // flatten that may still be live. Each such decision is argued where it is
   // made (reconcile.ts); what matters at this call site is that the walk stays
-  // bounded by `MAX_EXIT_RETRY_ATTEMPTS` whichever route produced the row.
+  // bounded by `MAX_EXIT_RETRY_ATTEMPTS` whichever route produced the row
   if (await store.findByKey(idempotencyKey)) {
     if (order.intent_type !== 'exit') {
       return result('deduped', idempotencyKey, now, {
@@ -153,7 +153,7 @@ export async function executeVerdict(
   // flatten and submitting it is enough steps that inlining them here
   // would bury the bracket path below in an unrelated branch. See
   // `executeExit`'s doc for why each of those steps — cancel-before-flatten,
-  // the store cross-check, and the `flatten_submissions` journal — exists.
+  // the store cross-check, and the `flatten_submissions` journal — exists
   if (order.intent_type === 'exit') {
     return executeExit(input, order, idempotencyKey, now);
   }
@@ -173,7 +173,7 @@ export async function executeVerdict(
   // #1001: best-effort snapshot — see `captureSubmitSnapshot`'s doc. Read
   // BEFORE the write-ahead so the snapshot lands in the same durable row a
   // crash-restart would recover, not bolted on after the fact. Deliberately
-  // UNBOUNDED here, unlike the exit path: an entry is not racing the close.
+  // UNBOUNDED here, unlike the exit path: an entry is not racing the close
   const snapshot = await captureSubmitSnapshot(input, order, now);
 
   const position: OpenPosition = {
@@ -198,7 +198,7 @@ export async function executeVerdict(
     // other optional snapshot field below. `decisionPriceFor` only ever
     // returns null on the unpriced-exit path, which never reaches here —
     // an exit builds no `OpenPosition` — but the type is honest about it
-    // rather than asserting a value the function does not promise.
+    // rather than asserting a value the function does not promise
     ...(snapshot.decision_price === null ? {} : { decision_price: snapshot.decision_price }),
     ...(snapshot.quote_bid === null ? {} : { quote_bid: snapshot.quote_bid }),
     ...(snapshot.quote_ask === null ? {} : { quote_ask: snapshot.quote_ask }),
@@ -218,7 +218,7 @@ export async function executeVerdict(
 
   // Write-ahead: `pending` is durable BEFORE the broker call, so a crash in
   // the gap leaves a record to reconcile against the broker (#86) instead
-  // of an invisible order that a restart would submit a second time.
+  // of an invisible order that a restart would submit a second time
   //
   // The `findByKey` gate above is check-then-act, so two callers replaying
   // the same decision can both pass it before either has written. The
@@ -228,7 +228,7 @@ export async function executeVerdict(
   // that retries on error would keep re-losing the same race. Only the
   // typed duplicate is treated as dedup; every other store failure means
   // the write-ahead did NOT happen, and swallowing it would let the broker
-  // call proceed with no durable record behind it.
+  // call proceed with no durable record behind it
   try {
     await store.writeAheadPosition(position);
   } catch (error) {
@@ -247,7 +247,7 @@ export async function executeVerdict(
     // The `pending` record deliberately survives: whether the bracket
     // landed is unknown here, and only the broker can settle that. #86's
     // reconciliation adopts broker truth. Marking it terminal on the way
-    // out would be a guess, and the losing guess double-submits.
+    // out would be a guess, and the losing guess double-submits
     return result('error', idempotencyKey, now, {
       order_state: 'pending',
       reason: describeThrownSafely(error),
@@ -421,7 +421,7 @@ async function captureSubmitSnapshot(
     ]);
   } finally {
     // An uncleared `setTimeout` keeps the Node event loop alive — in a
-    // cadence-driven process that is a run which will not exit.
+    // cadence-driven process that is a run which will not exit
     if (timer !== undefined) clearTimeout(timer);
   }
 }
@@ -459,7 +459,7 @@ function decisionPriceFor(order: OrderIntent): number | null {
   return order.entry;
 }
 
-/** The unbounded body of `captureSubmitSnapshot` — see there for the contract. */
+/** The unbounded body of `captureSubmitSnapshot` — see there for the contract */
 async function readSubmitSnapshot(
   input: SubmitInput,
   order: OrderIntent,
@@ -506,27 +506,27 @@ async function readSubmitSnapshot(
     // AND `NormalizedFill.cost_breakdown`, which `toFill` /
     // `redistributeOneFlatten` (ingest-fills.ts) then persist verbatim, never
     // reaching this snapshot's fallback (both apply ONLY when
-    // `fill.cost_breakdown === undefined`, which a Simulated fill never is).
+    // `fill.cost_breakdown === undefined`, which a Simulated fill never is)
     // So on that path a second pricing here buys nothing and risks something:
     // any non-determinism in the cost model — a random slippage draw, a
     // clock-sensitive market state, a stateful test double — would make
     // `modelled_cost_breakdown_json` disagree with the
     // `fills.cost_breakdown_json` it is supposed to be the estimate FOR, and
     // the #1001 acceptance query would then compare two different draws and
-    // report the difference as realised divergence.
+    // report the difference as realised divergence
     //
     // SKIPPED rather than shared: sharing one `FillResult` across the
     // execute→adapter boundary would mean either handing the adapter a
     // pre-priced fill (it is the venue; it must price its own) or reaching
     // into it from here — both put a simulation detail into the code path
     // live takes. Skipping keeps the boundary intact and leaves the simulated
-    // path with exactly ONE pricing.
+    // path with exactly ONE pricing
     //
     // The quote read above is NOT skipped: nothing else captures a bid/ask on
-    // this path, and it has no second writer to disagree with.
+    // this path, and it has no second writer to disagree with
     // Keyed on the DECLARED capability, not `instanceof SimulatedBrokerAdapter`:
     // "strategy code must not know which broker it's talking to" (CLAUDE.md's
-    // Broker Plan), and any future self-pricing adapter opts in the same way.
+    // Broker Plan), and any future self-pricing adapter opts in the same way
     if (input.broker.prices_own_fills === true) {
       safeLog(logger, {
         trace_id,
@@ -580,12 +580,12 @@ async function readSubmitSnapshot(
       // allows one derivation per priced event and `ingest-fills.ts` must not
       // open a second. An exit submits no bracket, so it has no protective leg
       // to price; `order.stop`/`order.target` on that path are `decide.ts`'s
-      // degenerate placeholders (see `decisionPriceFor`).
+      // degenerate placeholders (see `decisionPriceFor`)
       //
       // Assigned only once BOTH have priced, so the pair is present or absent
       // together — `modelledCostCharged` (closed-trade.ts) covers legs priced
       // from either, and a lot holding one without the other would stamp a
-      // coverage answer no submit-time outcome can actually produce.
+      // coverage answer no submit-time outcome can actually produce
       const protectiveExitCost =
         order.intent_type === 'exit'
           ? null
@@ -689,7 +689,7 @@ async function resolveExitRetryKey(
     if (!retryable) return null;
     // else: candidate names a retryable error — loop tries the NEXT suffix,
     // since this exact candidate key already has a terminal row and must not
-    // be written to twice.
+    // be written to twice
   }
   return null;
 }
@@ -756,21 +756,21 @@ async function executeExit(
   // already recorded — not the lot's entry quantity, which no exit fill
   // reduces and which a partially-flattened (still open) lot therefore keeps
   // at its original value. The SAME derivation `buildExitIntent` sized this
-  // order with, so the guard below compares two answers to one question.
+  // order with, so the guard below compares two answers to one question
   const perLotHeld = await heldQuantitiesFor(heldLots, (keys) => store.getExitFillSizes(keys));
 
   // Fail closed, per lot, BEFORE summing: more closed than ever opened on one
   // lot is the store's own record contradicting itself, and a negative there
   // would net against a positive on a sibling lot into a total that looks
   // plausible and is not. `execute()` is the last checkpoint before funds
-  // move, so it refuses and names the lot rather than trading on the sum.
+  // move, so it refuses and names the lot rather than trading on the sum
   //
   // A bare `< 0`, not ADR-0005's `coversQty` tolerance (shared/held-quantity.ts), and that is not an
   // oversight: a lot whose exit fills merely APPROACH its filled size is
   // marked `closed` by `ingestFills()` (`isFlat`) and
   // so has already left `getOpenPositions()`. Every lot reaching this line
   // therefore holds a residual comfortably outside that epsilon, and a
-  // negative here is a real contradiction rather than summation noise.
+  // negative here is a real contradiction rather than summation noise
   const overExited = perLotHeld.find((lot) => lot.held < 0);
   if (overExited !== undefined) {
     return result('error', idempotencyKey, now, {
@@ -783,7 +783,7 @@ async function executeExit(
   const heldSize = totalHeldQuantity(perLotHeld);
 
   // The closing side is the OPPOSITE of what is held — same derivation
-  // `buildExitIntent` uses, re-run here rather than trusted from the order.
+  // `buildExitIntent` uses, re-run here rather than trusted from the order
   const expectedClosingSide = heldSide === 'buy' ? 'sell' : 'buy';
   if (order.side !== expectedClosingSide) {
     return result('error', idempotencyKey, now, {
@@ -802,7 +802,7 @@ async function executeExit(
   // over with an epsilon built for a different problem (ADR-0005's tolerance
   // in ingest-fills.ts absorbs float SUMMATION-ORDER noise across two
   // reconstructions of the same total; this is a check that the total
-  // itself has not moved).
+  // itself has not moved)
   if (order.size !== heldSize) {
     return result('error', idempotencyKey, now, {
       reason:
@@ -818,20 +818,20 @@ async function executeExit(
   // the intent. `lot_held_quantities` is `buildFlattenExit`'s own per-lot
   // snapshot of what it keyed the exit against (OrderIntentMetadata doc), so
   // when present it is compared lot by lot against `perLotHeld`, independent of
-  // the total.
+  // the total
   //
   // Exact `!==`, for a stronger reason than the total check's: each side of
   // this comparison is one subtraction (`filled_size` minus that lot's own
   // exit-fill sum) for ONE lot, so there is no summation order across lots to
   // differ — unlike the total, which sums every lot's residual and so leans on
-  // the "same derivation, same query order" argument above it.
+  // the "same derivation, same query order" argument above it
   //
   // Only the intent's NAMED lots are iterated; a lot missing from the snapshot
   // reads as 0 held then, which is right for a lot that had not opened yet at
   // decide-time. A lot that appeared AFTER decide-time (not named at all) is
   // not visible to this loop, but it moves `heldSize`, so the total check
   // above already refuses it — the two checks are complete between them, and
-  // this one adds nothing that would duplicate that refusal.
+  // this one adds nothing that would duplicate that refusal
   if (order.metadata.lot_held_quantities !== undefined) {
     const recordedByKey = new Map(
       order.metadata.lot_held_quantities.map((lot) => [lot.idempotency_key, lot.held]),
@@ -856,7 +856,7 @@ async function executeExit(
   // order without going through it. That is a contract violation worth
   // refusing loudly, not defaulting past: a silently-guessed reason would
   // corrupt `flatten_submissions.exit_reason` and, downstream,
-  // `closed_trades.close_reason` on the money path.
+  // `closed_trades.close_reason` on the money path
   if (order.metadata.exit_reason === undefined) {
     return result('error', idempotencyKey, now, {
       reason:
@@ -868,7 +868,7 @@ async function executeExit(
   // #1001: best-effort snapshot — see `captureSubmitSnapshot`'s doc. Read
   // BEFORE the write-ahead, same reasoning as the bracket path, but BOUNDED
   // here: this is the mandatory flat-by-close path, and the budget is carved
-  // out of the #826 flatten window rather than added to it.
+  // out of the #826 flatten window rather than added to it
   const snapshot = await captureSubmitSnapshot(input, order, now, EXIT_SNAPSHOT_BUDGET_MS);
 
   // Write-ahead BEFORE any broker call — see the docstring above for why
@@ -877,7 +877,7 @@ async function executeExit(
   // that) is deliberately NOT caught here: swallowing it would let the
   // cancel/flatten calls below proceed with no durable record behind them,
   // the exact failure `writeAheadPosition`'s catch in the bracket path above
-  // guards against.
+  // guards against
   //
   // The ONE refusal that is caught: #1214's review found this path could
   // submit a second market order over a re-flatten `reflattenResidual` had
@@ -888,7 +888,7 @@ async function executeExit(
   // refuses atomically instead (see its `SharedStore` doc), and it is placed
   // HERE, above the cancel loop, so a refusal destroys no protective legs: the
   // lot is left exactly as it was, still bracketed, with the other flatten
-  // working.
+  // working
   try {
     await store.writeAheadFlatten({
       idempotency_key: idempotencyKey,
@@ -896,7 +896,7 @@ async function executeExit(
       asset_class: order.asset_class,
       side: order.side,
       // #793: threaded through to `closed_trades.close_reason` via
-      // `flatten_submissions.exit_reason` — see `redistributeOneFlatten`.
+      // `flatten_submissions.exit_reason` — see `redistributeOneFlatten`
       exit_reason: order.metadata.exit_reason,
       size: order.size,
       submitted_at: now,
@@ -905,9 +905,9 @@ async function executeExit(
       // either from whatever is still open when it lands (migrations 0020 and
       // 0021 carry both arguments). `perLotHeld` is `heldLots` mapped
       // one-to-one, preserving `getOpenPositions()`'s `ORDER BY opened_at`,
-      // which the split relies on to allocate a partial fill oldest-lot-first.
+      // which the split relies on to allocate a partial fill oldest-lot-first
       //
-      // A lot holding NOTHING — its entry fill has not landed — is still named.
+      // A lot holding NOTHING — its entry fill has not landed — is still named
       // The cancel loop below iterates `heldLots` regardless of this journal, so
       // its protective legs go either way; dropping it here would remove the
       // only thing that re-arms them (#525). Its share is then exactly zero.
@@ -927,13 +927,13 @@ async function executeExit(
     // re-runs this whole function, and the flatten proceeds as soon as the
     // in-flight row resolves (its fills swept, or reconcile settling it —
     // including the terminal-non-fill case #1214's review closed, which is
-    // what keeps this refusal from being permanent).
+    // what keeps this refusal from being permanent)
     //
     // The refusal is INSTRUMENT-scoped while a residual re-flatten closes one
     // lot's remainder, so a sibling lot on the same instrument waits for that
     // row too. Deliberate: `UnresolvedFlattenSubmission` carries no lot
     // identity to narrow it by, and the narrower alternative is the
-    // two-submitters-one-instrument reversal #516 exists to prevent.
+    // two-submitters-one-instrument reversal #516 exists to prevent
     //
     // #1214 review round 2: the STATUS stays `deduped` but the outcome is not
     // the same as the ordinary "already flat" dedup, so it gets its own warn
@@ -969,7 +969,7 @@ async function executeExit(
   }
 
   // Lots this loop has ALREADY cancelled successfully, in order. Load-bearing
-  // for the catch below, which is the only thing that reads it.
+  // for the catch below, which is the only thing that reads it
   const cancelledLots: OpenPosition[] = [];
   for (const lot of heldLots) {
     try {
@@ -980,7 +980,7 @@ async function executeExit(
       // the `submitFlatten` failure below — no order exists under this
       // idempotency key for reconcile to adopt, and the row resolves to
       // 'error' immediately rather than sitting at 'submitting' for a sweep
-      // that would find nothing.
+      // that would find nothing
       //
       // WHAT IS NOT GUARANTEED: that the broker was not reached, or that the
       // lots' protective legs survived. Two ways they may not have:
@@ -991,7 +991,7 @@ async function executeExit(
       // its throw usually means nothing was destroyed (#867, see its doc), and
       // flattening while a protective leg may still be working is the #516
       // reverse-position hazard this whole cancel-first design exists to
-      // prevent — but "refuse" must not also mean "say nothing".
+      // prevent — but "refuse" must not also mean "say nothing"
       //
       // So the lots that are PROVABLY naked (cancel confirmed, flatten not
       // sent) get #549's durable marker, which is not a new mechanism: the
@@ -1021,7 +1021,7 @@ async function executeExit(
     // `submitBracket` failure: only the broker can settle this, via #86's
     // `reconcile()` calling `getOrder` against the clientOrderId this row
     // journalled. Automatic resolution is filed as follow-up, not built
-    // here — this PR's job was making the row exist to resolve against.
+    // here — this PR's job was making the row exist to resolve against
     return result('error', idempotencyKey, now, {
       reason: describeThrownSafely(error),
     });
@@ -1115,7 +1115,7 @@ function result(
     idempotency_key: idempotencyKey,
     broker_order_ids: null,
     // Defaults suit the paths that wrote nothing; callers that did reach the
-    // store or the broker override with what actually happened.
+    // store or the broker override with what actually happened
     order_state: null,
     reason: null,
     timestamp: now,

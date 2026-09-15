@@ -70,7 +70,7 @@ function makePartialState(overrides: Partial<PartialDebateState> = {}): PartialD
   };
 }
 
-/** Resolves after `ms` of (fake) wall-clock time. */
+/** Resolves after `ms` of (fake) wall-clock time */
 function resolvesAfter<T>(ms: number, value: T): Promise<T> {
   return new Promise((resolve) => {
     setTimeout(() => resolve(value), ms);
@@ -352,7 +352,7 @@ describe('enforceLatencyBudget', () => {
     // contributes. Answer — exactly what it contributed before. Cancelling
     // stops the NEXT call; it never rewrites what already completed, so the
     // partial synthesis is still used and the caller-visible fallback is
-    // unchanged.
+    // unchanged
     expect(abortedWhenStateRead).toBe(true);
     expect(result.synthesis).toBe(makePartialState().synthesis);
   });
@@ -373,7 +373,7 @@ describe('enforceLatencyBudget', () => {
     await vi.advanceTimersByTimeAsync(1_000);
     await promise;
 
-    // One unfired 60s timer per tick, held for the whole soak, is its own leak.
+    // One unfired 60s timer per tick, held for the whole soak, is its own leak
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -389,7 +389,7 @@ describe('enforceLatencyBudget', () => {
         debate_id: 'debate-1',
         bar: BAR,
         // The realistic shape post-#347: the debate rejects when its signal
-        // aborts, AFTER the budget has already returned the fallback.
+        // aborts, AFTER the budget has already returned the fallback
         produceResult: (signal) =>
           new Promise((_resolve, reject) => {
             signal.addEventListener('abort', () => reject(signal.reason));
@@ -403,7 +403,7 @@ describe('enforceLatencyBudget', () => {
       await vi.advanceTimersByTimeAsync(0);
 
       expect(result.timed_out).toBeDefined();
-      // A deliberate cancellation is not a fault: one `logTimeout`, nothing else.
+      // A deliberate cancellation is not a fault: one `logTimeout`, nothing else
       expect(logger.logTimeout).toHaveBeenCalledTimes(1);
       expect(logger.logAnalystFailure).not.toHaveBeenCalled();
       expect(unhandled).not.toHaveBeenCalled();
@@ -431,7 +431,7 @@ describe('enforceLatencyBudget', () => {
     // The swallow handler must not turn a real pre-timeout failure into a
     // silent hang — that path is unchanged from before #347. The assertion is
     // attached BEFORE time advances so the rejection is never momentarily
-    // unhandled (which vitest reports as an unhandled error).
+    // unhandled (which vitest reports as an unhandled error)
     const rejects = expect(promise).rejects.toThrow('mediator exploded');
     await vi.advanceTimersByTimeAsync(1_000);
     await rejects;
@@ -446,7 +446,7 @@ describe('enforceLatencyBudget', () => {
   // `LlmFailure`'s doc in latency-budget.ts for why `LlmProviderError` and
   // `LlmCancelledError` are deliberately excluded and still crash the pass,
   // same as an unrelated bug (asserted above in the pre-existing "still
-  // propagates" test).
+  // propagates" test)
   describe('an LlmError from produceResult, before the budget fires (#1380)', () => {
     it('degrades to the low-confidence fallback when no round had completed', async () => {
       const logger = makeLogger();
@@ -532,7 +532,7 @@ describe('enforceLatencyBudget', () => {
       // `cause`) — so this failure reaches `audit_log`/the dashboard as
       // `budget_exhausted`, one of `DEGRADED_DECISIONS`, rather than as a
       // bare `neutral` direction indistinguishable from a converged
-      // no-signal debate.
+      // no-signal debate
       expect(result.timed_out).toBeDefined();
       expect(result.timed_out?.budget_ms).toBe(LATENCY_BUDGET_MS.stocks);
     });
@@ -569,7 +569,7 @@ describe('enforceLatencyBudget', () => {
 
       // Both write the SAME `DEGRADED_DECISIONS` word (`budget_exhausted`,
       // since neither had a round complete) — `cause` is what a query needs
-      // to tell them apart, not the word itself.
+      // to tell them apart, not the word itself
       expect(llmFailureResult.timed_out?.cause).toBe('llm_failure');
       expect(budgetResult.timed_out?.cause).toBe('budget');
     });

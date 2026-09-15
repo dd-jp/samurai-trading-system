@@ -49,7 +49,7 @@ describe('SqliteStage2SelectionStore', () => {
 
   it('keeps a refused PBO or DSR as null, never as zero', () => {
     // A stored 0.0 PBO reads as a perfect result and a stored 0.0 DSR reads as
-    // certain insignificance — both would drive real risk configuration.
+    // certain insignificance — both would drive real risk configuration
     store.record(selection({ pbo: null, dsr: null }));
 
     const stored = store.getLatest('crypto');
@@ -65,7 +65,7 @@ describe('SqliteStage2SelectionStore', () => {
 
     expect(store.getLatest('crypto')?.backtest_sharpe).toBe(1);
     // History survives: the previous verdict is the record of what was believed
-    // when the capital decision was made.
+    // when the capital decision was made
     expect(db.prepare('SELECT COUNT(*) AS n FROM stage2_selected_config').get()).toEqual({ n: 2 });
   });
 

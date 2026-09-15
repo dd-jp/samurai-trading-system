@@ -18,7 +18,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { LogEntry } from './primitives.js';
 
-/** A real no-op, not a `declare`: these probes are compiled AND run. */
+/** A real no-op, not a `declare`: these probes are compiled AND run */
 const log = (_entry: LogEntry): void => undefined;
 const dynamic: boolean = true;
 

@@ -54,7 +54,7 @@ describe('the known-good fixture', () => {
   });
 
   it('scans the unmarked citations rather than skipping the file', () => {
-    // 3 unmarked resolving citations + 4 marked ones.
+    // 3 unmarked resolving citations + 4 marked ones
     expect(report.citationsScanned).toBe(7);
   });
 });
@@ -110,7 +110,7 @@ describe('the known-good code fixture (#1345)', () => {
     // one from a `/** */` block comment) + 5 marked ones (one of each of the 4 exempt
     // reasons via `//`, plus a `historical` marker inside a `/** */` block comment,
     // proving the marker binds the same way there — round-2 review item 4). The string
-    // and template-literal lines each carry a path-shaped token too, and neither counts.
+    // and template-literal lines each carry a path-shaped token too, and neither counts
     expect(report.citationsScanned).toBe(9);
   });
 });
@@ -142,7 +142,7 @@ describe('the known-bad code fixture (#1345)', () => {
 describe('mutation: a deliberately bad in-code citation (#1345)', () => {
   // The AC this satisfies: a checker over comments must actually catch one. Neither
   // direction is meaningful alone — a checker that always fails would pass the first
-  // test, one that never runs would pass the second.
+  // test, one that never runs would pass the second
   const badSource = '// see `server/pipeline/verdict/gone-for-good.ts` for the mechanism\n';
   const fixedSource = '// see `server/pipeline/execution/reconcile.ts` for the mechanism\n';
 
@@ -177,7 +177,7 @@ describe('stringDelim resets per line, not carried across the file (#1375 review
   // the next line, blanking every comment after it for the rest of the file. Every
   // delimiter now resets unconditionally at end-of-line — a real template literal's
   // continuation lines carry no `//` or `/*` of their own, so resetting and re-scanning
-  // them from a clean state blanks them harmlessly rather than losing protection.
+  // them from a clean state blanks them harmlessly rather than losing protection
 
   it('an apostrophe inside a regex literal does not swallow the next line’s citation', () => {
     const source =
@@ -223,7 +223,7 @@ describe('stringDelim resets per line, not carried across the file (#1375 review
   it('a single backtick inside a regex literal does not swallow the next line’s citation', () => {
     // The regex is not a template literal — it just contains a backtick character — but
     // the naive delimiter tracker cannot tell the difference; this is round-2 review
-    // item 1, the same class as the apostrophe cases above, for the third quote type.
+    // item 1, the same class as the apostrophe cases above, for the third quote type
     const source = 'const re = /`/;\n// see `server/pipeline/verdict/gone-for-good.ts` for it\n';
     const report = runCitationCheck({
       root: REPO_ROOT,
@@ -260,7 +260,7 @@ describe('code-comment extraction', () => {
 
   it('does not let a `//` inside a string open a false line comment', () => {
     // Without string-tracking, the `//` in the URL would open a line comment and the
-    // trailing backticked path would read as code, not comment, and go unseen.
+    // trailing backticked path would read as code, not comment, and go unseen
     expect(
       extractCode("const x = 'https://example.com'; // `server/tools/check-path-citations.ts`"),
     ).toEqual(['server/tools/check-path-citations.ts']);
@@ -279,7 +279,7 @@ describe('codeFilesIn', () => {
   it('keeps tracked .ts/.tsx, drops .md and anything under a skipped directory', () => {
     // `node_modules` needs no entry here: it is untracked and never reaches this
     // function at all in real use (`git ls-files --cached` never lists it), the same
-    // reason `SKIPPED_DIRS`'s own doc gives for dropping it from that set.
+    // reason `SKIPPED_DIRS`'s own doc gives for dropping it from that set
     const paths = [
       'server/pipeline/reconcile.ts',
       'client/src/App.tsx',
@@ -296,7 +296,7 @@ describe('extraction', () => {
     extractCitations(markdown, { file: 'docs/x.md', knownRoots }).map((c) => c.raw);
 
   it('ignores a bare top-level directory, which is a concept token not a citation', () => {
-    // CLAUDE.md asserts "There is no root `src/`" — demanding it resolve is absurd.
+    // CLAUDE.md asserts "There is no root `src/`" — demanding it resolve is absurd
     expect(extract('There is no root `src/`.')).toEqual([]);
   });
 
@@ -347,7 +347,7 @@ describe('extraction', () => {
 describe('line counting', () => {
   it('treats a trailing newline as terminating the last line, not starting a new one', () => {
     // Otherwise every citation of a file's final line would be off by one and pass
-    // only by accident.
+    // only by accident
     const report = check([`${FIXTURES}/known-good.md`]);
     expect(report.violations).toEqual([]);
     const path = join(REPO_ROOT, FIXTURES, 'known-good.md');
@@ -403,12 +403,12 @@ describe('the repository as it stands', () => {
     // The check that gives the tool its meaning: it is wired into CI and green on the
     // real tree, not only on fixtures. A failure here is either a genuinely stale
     // citation (fix the citation) or a marker that needs writing — never a reason to
-    // add a directory to IMMUTABLE_RECORD_DIRS.
+    // add a directory to IMMUTABLE_RECORD_DIRS
     const report = runCitationCheck({ root: REPO_ROOT });
     expect(report.violations.map((v) => v.message)).toEqual([]);
     // >500, not >100: code-comment scanning (#1345) roughly doubled the citation count
     // over markdown alone. A drop back toward 100 here would mean code scanning silently
-    // stopped running, not that the repository got smaller.
+    // stopped running, not that the repository got smaller
     expect(report.citationsScanned).toBeGreaterThan(500);
   });
 });
@@ -463,7 +463,7 @@ describe('resolution against the git index rather than the working directory (#8
     rmSync(repo, { recursive: true, force: true });
   });
 
-  /** The state a machine is in after `yarn smoke`: gitignored output, and nothing else. */
+  /** The state a machine is in after `yarn smoke`: gitignored output, and nothing else */
   function createRuntimeArtefacts(): void {
     writeIn(repo, 'data/samurai-live.sqlite', '');
     writeIn(repo, 'data/samurai-backtest.sqlite', '');
@@ -476,7 +476,7 @@ describe('resolution against the git index rather than the working directory (#8
     // citations, 0 violations" on a clean checkout and "268, 4" on a checkout that had
     // run the system, because a `data/` on disk made `data` a known root and made seven
     // tokens into citations. Here the whole Report is compared, so a movement in ANY
-    // field — files scanned, citations, exemption counts, violations — fails.
+    // field — files scanned, citations, exemption counts, violations — fails
     const clean: Report = runCitationCheck({ root: repo });
     expect(existsSync(join(repo, 'data'))).toBe(false);
 
@@ -490,10 +490,10 @@ describe('resolution against the git index rather than the working directory (#8
   it('holds that invariance over a non-empty report, not two empty ones', () => {
     // Guards the test above from passing vacuously. The fixture's "docs/out.log" citation
     // is a violation in BOTH states — it exists on disk in the second, and existing on
-    // disk buys nothing.
+    // disk buys nothing
     const report = runCitationCheck({ root: repo });
     // 2 markdown + 1 code (the "server/thing.ts" fixture, no citations of its own — it
-    // only ever appears as a citation TARGET, in docs/notes.md).
+    // only ever appears as a citation TARGET, in docs/notes.md)
     expect(report.filesScanned).toBe(3);
     expect(report.citationsScanned).toBe(4);
     expect(kinds(report.violations)).toEqual(['missing-path@3:docs/out.log']);
@@ -501,7 +501,7 @@ describe('resolution against the git index rather than the working directory (#8
 
   it('never learns a top-level root from a directory that exists only as ignored output', () => {
     // The specific mechanism of the flip: `data/samurai-live.sqlite` is not extracted as
-    // a citation at all, because nothing in the index puts a `data` root there.
+    // a citation at all, because nothing in the index puts a `data` root there
     const roots = knownRootsFromPaths(listIndexedPaths(repo));
     expect(roots.has('data')).toBe(false);
     expect(roots.has('docs')).toBe(true);
@@ -511,8 +511,8 @@ describe('resolution against the git index rather than the working directory (#8
     expect(existsSync(join(repo, 'docs/report.gen.md'))).toBe(true);
     expect(markdownFilesIn(listIndexedPaths(repo))).toEqual(['docs/keep.md', 'docs/notes.md']);
     // And the run agrees: taking the file set from the index is what makes `filesScanned`
-    // a repository fact rather than a fact about what tooling has written into the tree.
-    // 2 markdown + 1 code (the "server/thing.ts" fixture).
+    // a repository fact rather than a fact about what tooling has written into the tree
+    // 2 markdown + 1 code (the "server/thing.ts" fixture)
     expect(runCitationCheck({ root: repo }).filesScanned).toBe(3);
   });
 
@@ -520,11 +520,11 @@ describe('resolution against the git index rather than the working directory (#8
     // Existence and content now come from different places, so this state exists where it
     // could not before: the index still has the "server/thing.ts" fixture file, the disk
     // does not. Erring toward the false negative — no line violation — beats crashing the
-    // whole run.
+    // whole run
     rmSync(join(repo, 'server/thing.ts'));
     const report = runCitationCheck({ root: repo });
     expect(kinds(report.violations)).toEqual(['missing-path@3:docs/out.log']);
-    // Restored for any later test in this file; the index was never touched.
+    // Restored for any later test in this file; the index was never touched
     writeIn(repo, 'server/thing.ts', 'one\ntwo\nthree\n');
   });
 });
@@ -532,7 +532,7 @@ describe('resolution against the git index rather than the working directory (#8
 describe('the index resolver, against this repository', () => {
   it('calls a path that exists on disk but is not indexed missing — presence grants nothing', () => {
     // The structural statement of the invariant, as opposed to an instance of it: no
-    // amount of gitignored state on this machine can make a path resolve.
+    // amount of gitignored state on this machine can make a path resolve
     const resolver = createIndexResolver(REPO_ROOT, listIndexedPaths(REPO_ROOT));
     expect(existsSync(join(REPO_ROOT, 'node_modules'))).toBe(true);
     expect(resolver.kind('node_modules')).toBe('missing');
@@ -543,11 +543,11 @@ describe('the index resolver, against this repository', () => {
   it('takes its roots from the index, keeping tracked `.github` and dropping tracked `.claude`/`.yarn`', () => {
     // Both dot-directories are in `.gitignore` and both have tracked files anyway, so
     // the index alone would admit them; `SKIPPED_DIRS` is what keeps them out, and it is
-    // now the ONLY reason the dotfile special case could be deleted.
+    // now the ONLY reason the dotfile special case could be deleted
     //
     // Asserted by membership, never as the full set: pinning the exact list would turn
     // "someone added a top-level directory" into a red citation check, which is the
-    // stale-list cost this checker's whole design exists to avoid.
+    // stale-list cost this checker's whole design exists to avoid
     const roots = knownRootsOf(REPO_ROOT);
     expect(roots.has('.github')).toBe(true);
     expect(roots.has('server')).toBe(true);

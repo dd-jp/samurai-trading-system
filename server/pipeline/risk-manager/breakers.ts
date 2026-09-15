@@ -17,11 +17,11 @@ import type { Clock } from '../../shared/index.js';
 import { assertThresholdsWithinBounds } from '../../shared/index.js';
 import type { BreakerState, PersistedBreakerState, PortfolioView } from './types.js';
 
-/** Config for the per-asset-class volatility halt. */
+/** Config for the per-asset-class volatility halt */
 export interface VolatilityBreakerConfig {
-  /** Baseline realized-vol reading per asset class, tuned in paper trading. */
+  /** Baseline realized-vol reading per asset class, tuned in paper trading */
   baseline: { crypto: number; stocks: number };
-  /** Current reading trips the halt once it exceeds baseline * multiplier. */
+  /** Current reading trips the halt once it exceeds baseline * multiplier */
   multiplier: number;
 }
 
@@ -83,9 +83,9 @@ export interface BreakerConfig {
    * scope here (risk-manager-spec.md, "Out of Scope: Exact limit values").
    */
   daily_loss_pct_by_class: { crypto: number; stocks: number };
-  /** Hard, portfolio-level: peak-to-trough drawdown at/above this% halts new entries. */
+  /** Hard, portfolio-level: peak-to-trough drawdown at/above this% halts new entries */
   max_drawdown_pct: number;
-  /** Soft, portfolio-level: N losing trades in a row halts new entries. */
+  /** Soft, portfolio-level: N losing trades in a row halts new entries */
   max_consecutive_losses: number;
   volatility: VolatilityBreakerConfig;
   /**
@@ -97,7 +97,7 @@ export interface BreakerConfig {
   auto_rearm: AutoReArmPolicy;
 }
 
-/** Current realized-vol indicator reading per asset class, fetched by the caller. */
+/** Current realized-vol indicator reading per asset class, fetched by the caller */
 export interface VolatilityReading {
   crypto: number;
   stocks: number;
@@ -148,7 +148,7 @@ export class CircuitBreakers {
     // with `recovery_drawdown_pct: 0.90` passes it and leaves a breaker that
     // stops nothing recognisable. Every construction of this class runs it,
     // including the composition root's, so an out-of-bound breaker config
-    // refuses to boot rather than trading behind a limit nobody meant.
+    // refuses to boot rather than trading behind a limit nobody meant
     assertThresholdsWithinBounds(
       {
         max_drawdown_pct: config.max_drawdown_pct,
@@ -165,7 +165,7 @@ export class CircuitBreakers {
     // `portfolio_drawdown_hard`, and a breaker that halts nothing would look
     // exactly like a breaker that was never breached. The spec's ADR-0013
     // banner makes this a precondition rather than a tidiness item — with
-    // nothing cleared by hand any more, these numbers are the only stop left.
+    // nothing cleared by hand any more, these numbers are the only stop left
     if (!(config.auto_rearm.recovery_drawdown_pct < config.max_drawdown_pct)) {
       throw new Error(
         `BreakerConfig: auto_rearm.recovery_drawdown_pct ` +
@@ -187,7 +187,7 @@ export class CircuitBreakers {
     }
   }
 
-  /** Lossless snapshot of the sticky breakers, one row per tier — for the caller to persist. */
+  /** Lossless snapshot of the sticky breakers, one row per tier — for the caller to persist */
   getPersistedState(): PersistedBreakerState[] {
     return [
       {
@@ -195,7 +195,7 @@ export class CircuitBreakers {
         tripped: this.hardTripped,
         tripped_at: this.hardTrippedAt,
         // Reset timing isn't tracked in-memory (reArm() only clears the trip); the
-        // caller can derive it from its own clock at write time if it needs one.
+        // caller can derive it from its own clock at write time if it needs one
         reset_at: null,
         reason: this.hardTripped ? 'portfolio_drawdown_hard' : null,
       },
@@ -232,7 +232,7 @@ export class CircuitBreakers {
     this.killSwitchReason = reason;
   }
 
-  /** Manual re-arm of the kill-switch. */
+  /** Manual re-arm of the kill-switch */
   releaseKillSwitch(): void {
     this.killSwitchEngaged = false;
     this.killSwitchReason = null;
@@ -252,7 +252,7 @@ export class CircuitBreakers {
     // persisted (`breaker_state`, loaded back into this constructor at boot),
     // so it survived restart too. A soak that dipped past the threshold once
     // halted new entries for the remainder of the run with nobody able to
-    // clear it.
+    // clear it
     if (this.hardTripped) {
       this.maybeAutoReArm(portfolio, clock, mode);
     }
@@ -267,7 +267,7 @@ export class CircuitBreakers {
     // Portfolio-level figure, UTC-bounded (#332). Narrowed explicitly rather
     // than compared directly: an unknown must never reach the threshold test,
     // where a coerced `0 <= -daily_loss_pct` would read a figure nobody has as
-    // a flat day and leave this breaker un-tripped through a real loss.
+    // a flat day and leave this breaker un-tripped through a real loss
     const dailyPnl = portfolio.daily_pnl.portfolio;
     const dailyLossTripped = dailyPnl.known && dailyPnl.pct <= -this.config.daily_loss_pct;
     if (dailyLossTripped) {
@@ -278,13 +278,13 @@ export class CircuitBreakers {
     // decision. Rationale in risk-manager-spec.md, "Module: Circuit Breakers"
     // ("Unknown daily figure blocks"); the one-line version is that
     // `AccountStateProvider.nonPositiveBase` returns unknown in every mode, so
-    // a `paper` run can present one and this breaker must not assume otherwise.
+    // a `paper` run can present one and this breaker must not assume otherwise
     //
     // A live cold start therefore blocks new entries until the next session
     // boundary this process is up for, which after a mid-session restart can be
     // the rest of the session. That is decision 5 as written — "live refuses
     // new entries until a real snapshot exists" — and exits are unaffected,
-    // since `RiskManagerImpl` passes them before reaching this gate.
+    // since `RiskManagerImpl` passes them before reaching this gate
     const dailyUnknown = !dailyPnl.known;
     if (dailyUnknown) {
       armed.push(`daily_pnl_unknown:portfolio (${dailyPnl.reason})`);
@@ -293,7 +293,7 @@ export class CircuitBreakers {
     // The per-class tier (#333, decision 4). Each class is judged over its own
     // session against its own threshold, and a breach halts THAT CLASS ONLY —
     // crypto can stop while stocks keep trading. Same narrowing discipline and
-    // same unknown-blocks rule as the portfolio figure above.
+    // same unknown-blocks rule as the portfolio figure above
     const classTripped = { crypto: false, stocks: false };
     for (const asset_class of ['crypto', 'stocks'] as const) {
       const pnl = portfolio.daily_pnl[asset_class];
@@ -354,8 +354,8 @@ export class CircuitBreakers {
     const daysTripped = this.hardTrippedAt
       ? (clock.now().getTime() - this.hardTrippedAt.getTime()) / MS_PER_DAY
       : 0;
-    // Elapsed time alone re-arms in backtest only — see `max_days_tripped`.
-    // Money is on the line in the other two modes and time is not recovery.
+    // Elapsed time alone re-arms in backtest only — see `max_days_tripped`
+    // Money is on the line in the other two modes and time is not recovery
     const timedOut = mode === 'backtest' && daysTripped >= this.config.auto_rearm.max_days_tripped;
     if (recovered || timedOut) {
       this.hardTripped = false;

@@ -24,7 +24,7 @@ export interface RateLimitConfig {
   maxDebates: number;
 }
 
-/** Asset classes recognized by `OrderIntent`/`OpenPosition` elsewhere in the codebase. */
+/** Asset classes recognized by `OrderIntent`/`OpenPosition` elsewhere in the codebase */
 import type { AssetClass } from '../../shared/index.js';
 
 export type { AssetClass };
@@ -94,9 +94,9 @@ function assertBudget(budget: RateLimitConfig | undefined, where: string): void 
       );
     }
   };
-  // Strictly positive — see the doc above for why 0 disables enforcement.
+  // Strictly positive — see the doc above for why 0 disables enforcement
   check('windowMs', 'positive');
-  // Zero is a legitimate "admit nothing" setting for both counters.
+  // Zero is a legitimate "admit nothing" setting for both counters
   check('maxLlmCalls', 'non-negative');
   check('maxDebates', 'non-negative');
 }
@@ -142,8 +142,8 @@ export class RateLimiter {
     }
     // Called once, here, rather than trusted: `currentWindow` does
     // `this.clock.now().getTime()` on every reserve/recordCall, so a clock that
-    // returns anything else throws on the FIRST debate rather than at startup.
-    // Both in-repo implementations are pure, so calling it costs nothing.
+    // returns anything else throws on the FIRST debate rather than at startup
+    // Both in-repo implementations are pure, so calling it costs nothing
     if (!(clock.now() instanceof Date)) {
       throw new Error('RateLimiter: clock.now() must return a Date.');
     }
@@ -153,7 +153,7 @@ export class RateLimiter {
     assertBudget(config.default, 'default');
     for (const [assetClass, budget] of Object.entries(config.perAssetClass ?? {})) {
       // `?? {}` covers an absent map; an entry explicitly present but undefined
-      // would fall back to `default` at read time, so it is not an error here.
+      // would fall back to `default` at read time, so it is not an error here
       if (budget !== undefined) assertBudget(budget, `perAssetClass.${assetClass}`);
     }
 
@@ -219,7 +219,7 @@ export class RateLimiter {
     return { granted: true };
   }
 
-  /** Decrements remaining LLM-call budget as an admitted debate actually makes calls. */
+  /** Decrements remaining LLM-call budget as an admitted debate actually makes calls */
   recordCall(assetClass: AssetClass): void {
     const window = this.currentWindow(assetClass);
     window.llmCallsUsed += 1;

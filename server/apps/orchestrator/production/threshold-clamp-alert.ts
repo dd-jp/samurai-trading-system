@@ -55,7 +55,7 @@
  * `risk_log`/`audit_log` rows the surrounding catches already write.
  */
 
-/** One clamp trip, at one of the two seams #766 makes audible. */
+/** One clamp trip, at one of the two seams #766 makes audible */
 export interface ThresholdClampAlert {
   /**
    * The trace the trip was observed under, threaded from the seam rather than
@@ -79,7 +79,7 @@ export interface ThresholdClampAlert {
   /**
    * The refusal's own message — carries the threshold name, the offending
    * value, and the bound it crossed (`ThresholdBoundViolationError`'s own
-   * `message`, or the joined text of an aggregate crossing).
+   * `message`, or the joined text of an aggregate crossing)
    */
   message: string;
   reported_at: Date;

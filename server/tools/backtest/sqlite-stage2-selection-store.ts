@@ -61,7 +61,7 @@ export class SqliteStage2SelectionStore {
       );
   }
 
-  /** The newest selection for one asset class, or null if Stage 2 has never run for it. */
+  /** The newest selection for one asset class, or null if Stage 2 has never run for it */
   getLatest(asset_class: 'crypto' | 'stocks'): Stage2Selection | null {
     const row = this.db
       .prepare(
@@ -75,7 +75,7 @@ export class SqliteStage2SelectionStore {
     return row === undefined ? null : toSelection(row);
   }
 
-  /** The newest selection per asset class — at most one crypto and one stocks row. */
+  /** The newest selection per asset class — at most one crypto and one stocks row */
   getLatestPerAssetClass(): Stage2Selection[] {
     return (['crypto', 'stocks'] as const)
       .map((asset_class) => this.getLatest(asset_class))

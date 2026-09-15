@@ -124,14 +124,14 @@ async function seedAckedThenDeniedFlatten(store: ExecutionSharedStore, key: stri
   );
 }
 
-/** `filled-zero-size-wiring.test.ts`'s `StubConfig`, verbatim reasoning. */
+/** `filled-zero-size-wiring.test.ts`'s `StubConfig`, verbatim reasoning */
 type StubConfig = ProductionConfig & Required<Pick<ProductionConfig, 'alpacaBrokerClient'>>;
 
 /**
  * `filled-zero-size-wiring.test.ts`'s stub config for the fields it also sets,
  * plus three this file needs because it boots the orchestrator rather than
  * driving one surface: `tradingCalendar`, `polymarketClient` and
- * `polymarketPollIntervalMs` (each commented at its site).
+ * `polymarketPollIntervalMs` (each commented at its site)
  */
 function stubConfig(db: StoreHandle, logger: Logger): StubConfig {
   return {
@@ -195,14 +195,14 @@ function stubConfig(db: StoreHandle, logger: Logger): StubConfig {
     costConfig: makeWiringCostConfig(),
     ciiConsumerConfig: makeWiringCiiConsumerConfig(),
     // Always open, so `start()` reaches its startup reconcile the same way a
-    // boot inside the session does.
+    // boot inside the session does
     tradingCalendar: new AlwaysOpenCalendar(),
     // `production.test.ts`'s `offlinePolymarketClient`, for its reason: the
     // root builds the Polymarket agent unconditionally (its read APIs are
     // keyless) and `start()` fires `void refresh('startup')` at once, whose
     // rejection is swallowed into a `warn`. Without this the boot reaches
     // `gamma-api.polymarket.com` from a unit suite. The poll interval is
-    // pushed past this test's life so the timer never fires a second one.
+    // pushed past this test's life so the timer never fires a second one
     polymarketClient: new PolymarketClient({
       rateLimiter: new TokenBucket({ capacity: 1_000, refillPerSecond: 1_000 }),
       fetchImpl: (async () => {
@@ -255,11 +255,11 @@ describe("an unresolved flatten's alert names the arm that raised it (#1331)", (
     const logger = recordingLogger();
 
     // Seeded before the boot: the startup reconcile runs inside `start()`,
-    // before the tick loop, so a row written afterwards would never be swept.
+    // before the tick loop, so a row written afterwards would never be swept
     // Each arm gets its own row — same handle, different `arm` column, which
-    // is what `getUnresolvedFlattens()` filters on (migration 0050, #1124).
+    // is what `getUnresolvedFlattens()` filters on (migration 0050, #1124)
     // A row seeded on the live arm alone would never reach the control arm's
-    // sweep at all, and the two arms' lines are the whole point here.
+    // sweep at all, and the two arms' lines are the whole point here
     await seedAckedThenDeniedFlatten(
       new SqliteExecutionStore(guardedStore(db, 'execution')),
       'flatten-live',

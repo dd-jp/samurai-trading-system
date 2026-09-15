@@ -28,11 +28,11 @@ export type ProviderState =
   | 'error'
   | 'not_configured';
 
-/** Alpaca's account ledger, parsed for display. */
+/** Alpaca's account ledger, parsed for display */
 export interface AlpacaBalanceWire {
   cash: number;
   equity: number;
-  /** `null` when Alpaca did not send it — see `AlpacaAccount.buying_power`. */
+  /** `null` when Alpaca did not send it — see `AlpacaAccount.buying_power` */
   buying_power: number | null;
 }
 
@@ -47,13 +47,13 @@ export interface ProviderTile {
   state: ProviderState;
   /** Short human-readable cause. Never contains a credential. */
   detail: string;
-  /** ISO-8601 UTC of the last completed probe, or `null` if none has run yet. */
+  /** ISO-8601 UTC of the last completed probe, or `null` if none has run yet */
   observed_at: string | null;
 }
 
 export interface AlpacaTile extends ProviderTile {
   provider: 'alpaca';
-  /** `null` unless `state === 'ok'` — a stale balance shown next to a failed probe reads as current. */
+  /** `null` unless `state === 'ok'` — a stale balance shown next to a failed probe reads as current */
   balance: AlpacaBalanceWire | null;
 }
 

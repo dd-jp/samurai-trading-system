@@ -43,7 +43,7 @@ const NOW = new Date('2026-09-09T10:00:00.000Z');
 
 /**
  * VERIFIED on SIM 2026-09-08 (doc 44 §2.1): every line this pool can trade
- * today is a GBX-quoted, GBP-settled ETP with `PriceToContractFactor` 0.01.
+ * today is a GBX-quoted, GBP-settled ETP with `PriceToContractFactor` 0.01
  */
 function penceDetails(uic: number, assetType: SaxoAssetType): SaxoInstrumentDetails {
   return {
@@ -125,7 +125,7 @@ function fixtureLseMarkClient(): LseMarkClient {
  */
 const PENCE_PER_SERIES_UNIT = 20;
 
-/** The mark the tick trades against, in the series' own units. */
+/** The mark the tick trades against, in the series' own units */
 const MARK_PRICE_UNITS = 160;
 
 /**
@@ -175,7 +175,7 @@ function offlineInjections(db: StoreHandle): Partial<ProductionConfig> {
       complete: async () => ({ text: '{}' }),
     } as unknown as NonNullable<ProductionConfig['llmClient']>,
     // Both MI vendors reach the live network from the composition root's own
-    // boot-time refresh; the suite's network guard is what catches it.
+    // boot-time refresh; the suite's network guard is what catches it
     gdeltClient: {
       fetchLatestBatch: async () => ({ file_url: 'offline', published_at: NOW, rows: [] }),
       fetchBatch: async () => ({ file_url: 'offline', published_at: NOW, rows: [] }),
@@ -265,7 +265,7 @@ describe('startFromEnvironment (broker venue selection, #1400)', () => {
     expect(orchestrator.universe).toEqual(saxoTradeableUniverse());
     // Named, not just derived: #1220's ruling narrowed the pool's tradeable
     // set to these five, and a silent change to that list changes what a live
-    // ramp would trade.
+    // ramp would trade
     expect(orchestrator.universe.map((instrument) => instrument.asset)).toEqual([
       '3LUS',
       'LQQ3',
@@ -296,7 +296,7 @@ describe('startFromEnvironment (broker venue selection, #1400)', () => {
     const order = gateway.placed[0];
     expect(order?.Uic).toBeGreaterThan(0);
     // The book prices in GBP; the line quotes in pence. Unscaled pence is not
-    // reachable from here — 31.15 leaves as 3115, not as 31.15.
+    // reachable from here — 31.15 leaves as 3115, not as 31.15
     expect(order?.OrderPrice).toBeCloseTo(3115, 6);
     expect(order?.Orders?.map((leg) => leg.OrderPrice)).toEqual([2900, 3300]);
   });
@@ -307,7 +307,7 @@ describe('startFromEnvironment (broker venue selection, #1400)', () => {
 
     // The tick loop's own startup path — orphan scan, bracket reload, scheduler
     // admission of the LSE universe — is where a miswired venue refuses. A tick
-    // itself is not asserted: the mark and LLM sides here are fixtures.
+    // itself is not asserted: the mark and LLM sides here are fixtures
     await expect(orchestrator.start()).resolves.toBeDefined();
   });
 
@@ -361,7 +361,7 @@ describe('startFromEnvironment (broker venue selection, #1400)', () => {
     // `startFromEnvironment` arms the tick loop, and `afterEach` closes the
     // in-memory store under it. Nothing races today only because NOW sits
     // outside #706's entry window, so the scheduler plans zero instruments —
-    // moving NOW without this would make the suite flaky rather than fail.
+    // moving NOW without this would make the suite flaky rather than fail
     started = orchestrator;
     const instrument = orchestrator.universe[0]?.asset ?? '';
     const bar = floorToBar(NOW, DEBATE_BAR_TIMEFRAME_MS);
@@ -389,13 +389,13 @@ describe('startFromEnvironment (broker venue selection, #1400)', () => {
     expect(outcome.verdict_status).toBe('go');
 
     // No refusal: the venue reference derived from the 64-character key fits
-    // Saxo's 50-char field, so `submitBracket` reaches the gateway.
+    // Saxo's 50-char field, so `submitBracket` reaches the gateway
     expect(outcome.execution_result?.status).not.toBe('error');
 
     // The load-bearing one: the bracket actually reached the venue. Read off
     // the SAXO gateway itself, because the control arm executes on a
     // `SimulatedBrokerAdapter` by design (control-arm-wiring.ts) — "an order
-    // was placed" against the control arm would prove nothing about this one.
+    // was placed" against the control arm would prove nothing about this one
     expect(gateway.placed).not.toHaveLength(0);
     const order = gateway.placed[0];
     expect(order?.ExternalReference?.length).toBeLessThanOrEqual(43);
@@ -441,7 +441,7 @@ describe('startFromEnvironment (broker venue selection, #1400)', () => {
       expect((line as { price_to_contract_factor?: unknown }).price_to_contract_factor).toBe(0.01);
     }
     // The gateway is selected by name, never by URL, and no credential is
-    // reachable from a log line.
+    // reachable from a log line
     const rendered = JSON.stringify(built);
     expect(rendered).not.toContain('gateway.saxobank.com');
     expect(rendered.toLowerCase()).not.toContain('token');
@@ -454,7 +454,7 @@ describe('startFromEnvironment (broker venue selection, #1400)', () => {
       orchestrator.scheduler.nextTick({ now: () => LSE_FLATTEN_TAIL }).instruments,
     ).not.toEqual([]);
     // 4.5 hours of overnight-style carry (#668) is what the US tail would buy
-    // on a book that has been closed since 16:30.
+    // on a book that has been closed since 16:30
     expect(orchestrator.scheduler.nextTick({ now: () => US_FLATTEN_TAIL }).instruments).toEqual([]);
   });
 
@@ -463,15 +463,15 @@ describe('startFromEnvironment (broker venue selection, #1400)', () => {
 
     // The account is GBP-native, so the ceiling is the book itself. #1180's
     // conversion is not reversed — it applies to the Alpaca USD account, and
-    // converting again against a GBP account would clamp £1,000 at £1,270.
+    // converting again against a GBP account would clamp £1,000 at £1,270
     expect(profile.capitalCeilingUsd).toBe(LIVE_BOOK_GBP);
     // `in`-narrowed rather than read directly: the live arm of this union has
     // no such field at all, and the assertion is that the Saxo arm announces
-    // no conversion either.
+    // no conversion either
     expect(
       'capitalCeilingUsdPerGbp' in profile && profile.capitalCeilingUsdPerGbp !== undefined,
     ).toBe(false);
-    // The Alpaca path keeps the converted ceiling, unchanged.
+    // The Alpaca path keeps the converted ceiling, unchanged
     expect(startingProfileForMode('paper').capitalCeilingUsd).toBe(LIVE_BOOK_SIZING_USD);
   });
 
@@ -479,7 +479,7 @@ describe('startFromEnvironment (broker venue selection, #1400)', () => {
   // (`paperStartingProfile`'s `bookCurrency === 'GBP'` branch) that actually
   // arms `RiskConfig.long_only_instruments` — the risk-manager suite drives
   // the hand-built `makeConfig()` fixture, which proves the gate logic but
-  // not that the composition root ever wires the config the gate reads.
+  // not that the composition root ever wires the config the gate reads
   it('arms long_only_instruments with the Saxo tradeable set, and only on the Saxo path', () => {
     const saxoProfile = paperStartingProfile('paper', saxoTradeableUniverse(), 'GBP');
 
@@ -489,7 +489,7 @@ describe('startFromEnvironment (broker venue selection, #1400)', () => {
 
     // The Alpaca path — every shipped run today — carries no such field, so
     // the #1511 gate stays inert there by construction, not by an instrument
-    // list that happens to be empty.
+    // list that happens to be empty
     expect(paperStartingProfile('paper').riskConfig.long_only_instruments).toBeUndefined();
   });
 
@@ -523,7 +523,7 @@ describe('startFromEnvironment (broker venue selection, #1400)', () => {
 
     expect(orchestrator.broker).toBeInstanceOf(AlpacaBrokerAdapter);
     // The universe the profile shipped before #1400, unredirected: this is
-    // what goes red if the venue ever defaults to anything but Alpaca.
+    // what goes red if the venue ever defaults to anything but Alpaca
     expect(orchestrator.universe).toEqual(paperStartingProfile('paper').universe);
     expect(orchestrator.universe).not.toEqual(saxoTradeableUniverse());
   });

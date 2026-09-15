@@ -132,7 +132,7 @@ describe('CorrelationEstimate', () => {
     expectTypeOf(estimate).toMatchTypeOf<CorrelationEstimate>();
   });
 
-  /** #303: the uncovered pairs are carried alongside, not folded into the map. */
+  /** #303: the uncovered pairs are carried alongside, not folded into the map */
   it('carries under-min_bars pairs in insufficient_history, separate from correlations', () => {
     const estimate: CorrelationEstimate = {
       correlations: { MSFT: 0.82 },

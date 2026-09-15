@@ -14,12 +14,12 @@
 import type { StoreHandle } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';
 
-/** The three snapshot keys: two asset classes plus the portfolio-level figure. */
+/** The three snapshot keys: two asset classes plus the portfolio-level figure */
 export type SessionEquityKey = 'crypto' | 'stocks' | 'portfolio';
 
 export interface SessionEquitySnapshot {
   open_equity: number;
-  /** The session start instant this snapshot is anchored to — never the write time. */
+  /** The session start instant this snapshot is anchored to — never the write time */
   open_at: Date;
   /**
    * Was the writing process running when this session opened?
@@ -45,7 +45,7 @@ interface RealizedRow {
 export class SqliteSessionEquityStore {
   constructor(private readonly db: StoreHandle) {}
 
-  /** The stored snapshot for `key`, or null before one has ever been written. */
+  /** The stored snapshot for `key`, or null before one has ever been written */
   get(key: SessionEquityKey): SessionEquitySnapshot | null {
     const row = this.db
       .prepare(

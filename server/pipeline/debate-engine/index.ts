@@ -6,7 +6,7 @@
 // Re-exported from `shared/llm` rather than owned here: the sentiment agent
 // prices against the same table, and `shared/llm/nous-config.ts` reads it to
 // refuse an unpriced model at startup. Kept on this barrel because the debate
-// engine's spend meter is still its principal consumer.
+// engine's spend meter is still its principal consumer
 export type { AnthropicUsage, ModelRate } from '../../shared/llm/pricing.js';
 export {
   CACHE_READ_MULTIPLIER,
@@ -81,7 +81,7 @@ export { classifyFailureCause } from './llm/failure-cause.js';
 // bare-JSON instruction, the same fence-tolerant unwrap, and the same
 // untrusted-data wrapper the debate's own prompts use. Sharing them is the
 // point — a second copy of any of the three would drift from the one the
-// personas are tested against.
+// personas are tested against
 export { BARE_JSON_INSTRUCTION, unwrapFencedJson } from './llm/json-response.js';
 export { MockLlmClient } from './llm/mock-client.js';
 export type { NousMessagesClientOptions } from './llm/nous-messages-client.js';

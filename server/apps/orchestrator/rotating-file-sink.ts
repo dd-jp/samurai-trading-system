@@ -124,7 +124,7 @@ import { nonEmpty, positiveIntegerFromEnv } from '../../shared/index.js';
  */
 export const DEFAULT_LOG_FILE = 'logs/orchestrator.log';
 
-/** 16 MiB per generation. */
+/** 16 MiB per generation */
 export const DEFAULT_MAX_BYTES = 16 * 1024 * 1024;
 
 /**
@@ -157,7 +157,7 @@ export interface RotatingFileSinkOptions extends FileSinkConfig {
    * still working — stdout — and must not route it back through this sink.
    */
   onFailure?: (message: string) => void;
-  /** Seam for tests: stands in for the `writeSync` loop. */
+  /** Seam for tests: stands in for the `writeSync` loop */
   writeLine?: (fd: number, bytes: Buffer) => void;
 }
 
@@ -187,7 +187,7 @@ export function fileSinkConfigFromEnvironment(
   // generations to none, which is exactly the "retention window nobody chose"
   // that the validator refuses on every other malformed input. It would not
   // have been caught by `SAMURAI_LOG_MAX_BYTES` either being wrong, because
-  // that one has `min = 1` and so already rejects `0`.
+  // that one has `min = 1` and so already rejects `0`
   const purpose = "the durable log sink's rotation policy (#325)";
   return {
     filePath: nonEmpty(env[ENV_FILE]) ?? DEFAULT_LOG_FILE,
@@ -229,7 +229,7 @@ export class RotatingFileSink {
     });
   }
 
-  /** True once an I/O failure has taken this sink out of service for good. */
+  /** True once an I/O failure has taken this sink out of service for good */
   get degraded(): boolean {
     return this.failed;
   }
@@ -244,7 +244,7 @@ export class RotatingFileSink {
     this.attempt('write to the log file', () => {
       const bytes = Buffer.from(line, 'utf8');
       // `this.bytes > 0` matters: without it a single line larger than
-      // `maxBytes` rotates on every write and never lands anywhere.
+      // `maxBytes` rotates on every write and never lands anywhere
       if (this.bytes > 0 && this.bytes + bytes.length > this.options.maxBytes) this.rotate();
       const fd = this.fd;
       if (fd === null) throw new Error('log file is not open');
@@ -261,7 +261,7 @@ export class RotatingFileSink {
     try {
       closeSync(fd);
     } catch {
-      // Nothing useful to do on a failed close of a log file at shutdown.
+      // Nothing useful to do on a failed close of a log file at shutdown
     }
   }
 
@@ -270,10 +270,10 @@ export class RotatingFileSink {
     if (directory !== '.') mkdirSync(directory, { recursive: true, mode: 0o700 });
     // 'a' — append. Two processes pointed at one file interleave whole lines
     // rather than overwriting each other, since O_APPEND makes each write
-    // seek-and-write atomically.
+    // seek-and-write atomically
     this.fd = openSync(this.options.filePath, 'a', 0o600);
     // From the descriptor, not the path: whatever this fd is attached to is
-    // what the byte counter must describe.
+    // what the byte counter must describe
     this.bytes = fstatSync(this.fd).size;
   }
 
@@ -290,18 +290,18 @@ export class RotatingFileSink {
 
     // Shift every generation up one. Descending order is required — ascending
     // would overwrite each generation with the one below it, leaving
-    // `maxRotatedFiles` copies of the same lines.
+    // `maxRotatedFiles` copies of the same lines
     //
     // Nothing explicitly deletes the oldest generation: POSIX `rename(2)`
     // replaces an existing destination atomically, so the final shift
     // (`.maxRotatedFiles-1` → `.maxRotatedFiles`) *is* the eviction. An
     // explicit `rmSync` here was verified redundant by mutation-testing the
     // retention cap — removing it left the bound intact — and redundant
-    // filesystem calls in a rotation path are a place for bugs to hide.
+    // filesystem calls in a rotation path are a place for bugs to hide
     for (let generation = maxRotatedFiles - 1; generation >= 1; generation -= 1) {
       const from = `${filePath}.${generation}`;
       // renameSync throws ENOENT on a missing source; a hand-deleted
-      // generation is a gap to skip, not a reason to lose the sink.
+      // generation is a gap to skip, not a reason to lose the sink
       if (existsSync(from)) renameSync(from, `${filePath}.${generation + 1}`);
     }
 
@@ -357,7 +357,7 @@ export class RotatingFileSink {
       // losing the run here — this class's one hard guarantee is that IT never
       // throws into a tick. What happens next is `JsonLogger`'s call, not this
       // one's: with nothing left able to record, its next `log` propagates
-      // rather than continuing blind (#714).
+      // rather than continuing blind (#714)
     }
   }
 }

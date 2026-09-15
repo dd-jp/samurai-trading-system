@@ -118,7 +118,7 @@ import {
 } from '../../../shared/index.js';
 import type { UniverseInstrument } from '../types.js';
 
-/** The vendor names this wiring can name in an alert; matches the `bars.source` values each client stamps. */
+/** The vendor names this wiring can name in an alert; matches the `bars.source` values each client stamps */
 export const EQUITIES_PRIMARY_VENDOR = 'alpaca';
 export const EQUITIES_FALLBACK_VENDOR = 'polygon';
 
@@ -150,7 +150,7 @@ export interface DataFailoverAlertChannel {
 
 /**
  * `resolvePolygonPacing()`, downgraded from throwing to warning — see the
- * module doc for why this one variable is not worth refusing a boot over.
+ * module doc for why this one variable is not worth refusing a boot over
  */
 export function resolveFallbackPacing(logger: Logger, env: NodeJS.ProcessEnv = process.env) {
   try {
@@ -207,7 +207,7 @@ export function guardFallbackPacing(pacing: TokenBucketConfig, logger: Logger): 
     // `PolygonBarsClient.getBars` takes the BACKGROUND lane, which asks
     // `TokenBucket.take(reserveForPriority)` for `1 + reserve` tokens; `refill`
     // clamps the balance to `capacity`, so a reserve that leaves no room for
-    // the background caller's own token never admits it at ANY refill rate.
+    // the background caller's own token never admits it at ANY refill rate
     reserve + 1 > pacing.capacity;
   if (!wedges) return pacing;
 
@@ -232,11 +232,11 @@ export function guardFallbackPacing(pacing: TokenBucketConfig, logger: Logger): 
 /**
  * Alert on the first failover of an incident, then every eighth while it
  * persists — the same bounded-repeat constant `ALERT_REPEAT_EVERY_NO_DATA`
- * (mi-coverage.ts) and `ALERT_REPEAT_EVERY_DIAGNOSTICS` (#698) use.
+ * (mi-coverage.ts) and `ALERT_REPEAT_EVERY_DIAGNOSTICS` (#698) use
  */
 export const ALERT_REPEAT_EVERY_FAILOVERS = 8;
 
-/** No grace: the first failover of an incident is already worth a page. */
+/** No grace: the first failover of an incident is already worth a page */
 const FAILOVER_CADENCE = { after: 1, every: ALERT_REPEAT_EVERY_FAILOVERS };
 
 /**
@@ -260,7 +260,7 @@ export const FAILOVER_INCIDENT_GAP_MS = 60 * 60 * 1000;
 export class DataFailoverAlertThrottle {
   readonly #state = new Map<string, { count: number; lastAt: number; suppressed: number }>();
 
-  /** Records a failover and answers whether it should reach the channel. */
+  /** Records a failover and answers whether it should reach the channel */
   decide(event: FailoverEvent, now: Date): { alert: boolean; suppressedSinceLast: number } {
     const key = `${event.symbol}|${event.timeframe}`;
     const at = now.getTime();
@@ -272,7 +272,7 @@ export class DataFailoverAlertThrottle {
       // bounded-repeat alert and the quiet gap — is reported here rather than
       // discarded. Dropping it makes the claimed "true rate" false by
       // construction: 12 failovers then an hour quiet alerts at #1 and #9, and
-      // #10-#12 are never counted anywhere.
+      // #10-#12 are never counted anywhere
       return { alert: true, suppressedSinceLast: previous?.suppressed ?? 0 };
     }
 
@@ -284,7 +284,7 @@ export class DataFailoverAlertThrottle {
 }
 
 export interface LiveDataFailoverDeps {
-  /** The single-vendor source `buildAlpacaDataSource` returns — what this wraps. */
+  /** The single-vendor source `buildAlpacaDataSource` returns — what this wraps */
   primary: DataSource;
   universe: readonly UniverseInstrument[];
   /**
@@ -345,7 +345,7 @@ export function buildFailoverDataSource(deps: LiveDataFailoverDeps): DataSource 
   // run — computing it unconditionally emitted a startup warn about a
   // variable that run would never use. Still eager (constructed here, not
   // inside the returned closure) so the default-branch case keeps resolving
-  // AT BOOT rather than being deferred to first failover (#562's constraint).
+  // AT BOOT rather than being deferred to first failover (#562's constraint)
   let rawFallbackBarFetcher: BarFetcher;
   if (deps.equitiesFallbackBarFetcher !== undefined) {
     rawFallbackBarFetcher = deps.equitiesFallbackBarFetcher;
@@ -365,7 +365,7 @@ export function buildFailoverDataSource(deps: LiveDataFailoverDeps): DataSource 
   // `session-normalized-fetcher.ts`. Applied here rather than inside
   // `FailoverDataSource` because the calendar belongs to the composition
   // root: the primary's own calendar is private to `NormalizingDataSource`,
-  // and the wrapper must use the SAME one rather than a second guess at it.
+  // and the wrapper must use the SAME one rather than a second guess at it
   const fallbackBarFetcher = withSessionNormalization({
     fetch: rawFallbackBarFetcher,
     source: EQUITIES_FALLBACK_VENDOR,
@@ -387,7 +387,7 @@ export function buildFailoverDataSource(deps: LiveDataFailoverDeps): DataSource 
     // The orchestrator's own clock, not wall time (#824): the failover
     // circuit breaker's cooldown must age on the same clock the tick loop
     // runs on, or a simulated run would hold a breaker open forever while its
-    // ticks fly past.
+    // ticks fly past
     now: deps.now,
     fallbackFor: (instrument) => (equities.has(instrument) ? equitiesLeg : undefined),
     alert: (event) => {

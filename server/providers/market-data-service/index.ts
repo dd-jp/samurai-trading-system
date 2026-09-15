@@ -62,7 +62,7 @@ export {
   resolveAlpacaDataFeed,
   // #664: the Stage 2 backfill client (server/tools/backtest) now maps its
   // requested timeframe through this same converter rather than keeping a
-  // second '1m' -> '1Min' table of its own.
+  // second '1m' -> '1Min' table of its own
   toAlpacaTimeframe,
 } from './sources/alpaca-http-client.js';
 export type {
@@ -78,7 +78,7 @@ export { AssetClassRoutingDataSource } from './sources/asset-class-routing-sourc
 // stays off the barrel (the backfill script imports it directly, as it always
 // has); what the composition root needs is the `DataSource`-shaped wrapper
 // built on it, its per-leg config types, and the Polygon client that serves
-// the equities fallback.
+// the equities fallback
 export type {
   DataSourceFallbackLeg,
   FailoverDataSourceConfig,
@@ -92,7 +92,7 @@ export {
 // #734 — the LSE leveraged-ETP mark source, the producer that finally writes
 // `latest_mark` rows keyed by `lse_ticker`. The VENDOR is not decided (see
 // docs/research/34-lse-mark-source-options.md); the port, the GBP/pence
-// normalisation and the no-substitution refusal are.
+// normalisation and the no-substitution refusal are
 export type {
   LseMarkClient,
   LseMarkSourceOptions,
@@ -126,19 +126,19 @@ export {
   AlwaysOpenCalendar,
   // #1524 — the Saxo weekly re-login reminder's own DST-safe wall-clock
   // arithmetic (production/saxo-weekly-reminder-alert.ts) is built on these
-  // three rather than re-deriving the `Intl` fixpoint this file already has.
+  // three rather than re-deriving the `Intl` fixpoint this file already has
   LONDON_ZONE,
   // #1378 — the hand-entered LSE tables' checked coverage cliff (the earlier
   // of the two tables' own checked-through dates); the boot guard in
-  // production/lse-calendar-coverage-guard.ts enforces it.
+  // production/lse-calendar-coverage-guard.ts enforces it
   LSE_TABLE_COVERAGE_END,
   // #668 — the live equity leg's venue (#659: GBP LSE-listed ETFs, restriction
   // re-confirmed against the venue change, #946; venue itself is Saxo GIA per
   // ADR-0015's 2026-08-30 amendment, map #905 — not #659, which never named
-  // a broker).
+  // a broker)
   LseRegularHoursCalendar,
   // #706 — policy, not venue: narrows WHEN equities may be entered inside a
-  // session the calendar has already opened.
+  // session the calendar has already opened
   londonEntryWindow,
   nextCivilDay,
   OVERLAP_WINDOW_LAST_ENTRY_MINUTES,
@@ -146,7 +146,7 @@ export {
   toCivilDate,
   // #684 — the hand-entered US table's checked coverage cliff; the calendar
   // fallback alert reports it so an operator knows how far to trust the
-  // fallback.
+  // fallback
   US_TABLE_COVERAGE_END,
   UsEquityRegularHoursCalendar,
   wallClockToInstant,

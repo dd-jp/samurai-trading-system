@@ -19,6 +19,6 @@ export function debateDegradedGloss(
   if (debate.termination_cause === 'budget') return 'degraded — latency budget exceeded';
   // Truncated, but written before migration 0051 — the cause is genuinely
   // indeterminate (could be budget expiry or an escaped LLM failure), so the
-  // gloss must not name either one.
+  // gloss must not name either one
   return 'degraded — latency-truncated, cause not recorded';
 }

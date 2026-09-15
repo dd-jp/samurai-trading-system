@@ -59,7 +59,7 @@ import {
 } from '../pipeline/control-arm/index.js';
 import { openSharedStore, resolveStoreMode, sharedStorePath } from '../shared/store/index.js';
 
-/** How far back the report looks when no window is given on the command line. */
+/** How far back the report looks when no window is given on the command line */
 export const DEFAULT_WINDOW_DAYS = 30;
 
 function pct(value: number): string {
@@ -115,10 +115,10 @@ export function formatArmComparison(comparison: ArmComparison): string {
   // #1099. Printed BEFORE the zero-trade note below, which reads differently
   // once a refusal count is on the page: a refused pass is positive evidence
   // the arm ran and could not act, which is the one thing that note otherwise
-  // tells the operator to go and check by hand.
+  // tells the operator to go and check by hand
   // Per arm, never a total: today only the control can refuse, but the count is
   // a per-arm field and a merged figure would name no arm on the day that
-  // changes.
+  // changes
   const refusedByArm = [comparison.live, comparison.control]
     .filter((arm) => arm.refused_pass_count > 0)
     .map((arm) => `${arm.arm}: ${arm.refused_pass_count} pass(es)`);
@@ -161,16 +161,16 @@ export function formatArmComparison(comparison: ArmComparison): string {
   // an operator, and the most likely reason the live count is 0 today is the
   // exclusion, not an idle arm: a live row with `modelled_cost_charged = 0` is
   // dropped by `SqliteArmComparisonSource`. Without this note that reads as
-  // "the live arm closed nothing", which is false.
+  // "the live arm closed nothing", which is false
   //
   // BOTH regimes, and staying in step with `modelledCostCharged`'s doc there
   // (#1121 review round 2, finding 4). The historic one is migration 0049's
   // backfill: every live row closed before #1121 stamps 0. The ONGOING one is
   // the derived writer — `captureSubmitSnapshot` is best-effort, so a lot that
-  // closes today with a covered leg missing its `cost_breakdown` stamps 0 too.
+  // closes today with a covered leg missing its `cost_breakdown` stamps 0 too
   // Naming only the historic regime let an operator running a post-fix window
   // conclude the note did not apply to them, which is the exact misreading it
-  // exists to prevent.
+  // exists to prevent
   if (comparison.live.trade_count === 0) {
     lines.push(
       '',
@@ -259,7 +259,7 @@ function costBasisDropLines(comparison: ArmComparison): string[] {
   return lines;
 }
 
-/** Parses `--days N`; anything else is rejected rather than silently defaulted. */
+/** Parses `--days N`; anything else is rejected rather than silently defaulted */
 export function parseWindowDays(argv: readonly string[]): number {
   const index = argv.indexOf('--days');
   if (index === -1) return DEFAULT_WINDOW_DAYS;
@@ -284,7 +284,7 @@ if (isMain) {
   const dbPath = sharedStorePath(mode);
   // Same resolution the orchestrator uses, for the reason `place-soak-position`
   // gives: a report that opened a different database than the running process
-  // writes would be confidently wrong rather than empty.
+  // writes would be confidently wrong rather than empty
   assertStorePathMatchesMode({ dbPath, mode });
   const db = openSharedStore(dbPath);
 
@@ -293,7 +293,7 @@ if (isMain) {
   const source = new SqliteArmComparisonSource(db);
 
   // #1546: trades and exclusion counts in one read, so the composition printed
-  // below is the composition of the population printed above it.
+  // below is the composition of the population printed above it
   const window = source.getClosedTradeWindowBetween(from, to);
 
   console.log(
@@ -304,13 +304,13 @@ if (isMain) {
         // #1099: the same window, from the same reader, in the same expression
         // — a refusal count taken over a different window would be a second
         // window to get wrong, which is what `SqliteArmComparisonSource`'s
-        // header exists to prevent.
+        // header exists to prevent
         refused_passes: source.getRefusedPassCountsBetween(from, to),
         from,
         to,
         // The declared book, not live equity: both arms must be divided by the
         // SAME denominator or the two `return_pct` figures are not comparable,
-        // and live equity is a per-arm quantity.
+        // and live equity is a per-arm quantity
         basis: LIVE_BOOK_SIZING_USD,
       }),
     ),

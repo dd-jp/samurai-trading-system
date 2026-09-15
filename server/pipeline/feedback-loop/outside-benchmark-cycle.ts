@@ -54,7 +54,7 @@ export async function runOutsideBenchmarkCycle(
   // The window is the matched control's, copied — never recomputed from the
   // clock. Recomputing `now - 30d` here would drift from the arm comparison by
   // however long the cycle took, and #636 makes an approximate window noise
-  // rather than a comparison.
+  // rather than a comparison
   const { from, to } = input.comparison;
 
   const result: OutsideBenchmarkCycleResult = { measured: [], unmeasured: [] };

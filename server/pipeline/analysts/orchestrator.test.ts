@@ -24,7 +24,7 @@ class ManualClock implements Clock {
 }
 
 const INSTRUMENT = 'BTC-USD';
-/** #742: the technical analyst's indicators read '5m' bars now, '1h' having moved to context-only. */
+/** #742: the technical analyst's indicators read '5m' bars now, '1h' having moved to context-only */
 const TIMEFRAME = '5m';
 const BAR_INTERVAL_MS = 5 * 60 * 1000;
 const BAR_COUNT = 30;
@@ -170,7 +170,7 @@ describe('AnalystOrchestrator', () => {
     // more often than the misordered-feed throw it joined — a cold
     // instrument, a fresh DB after restart, a venue gap. `runTickPlan` has no
     // per-instrument catch, so if this escaped here it would abort every
-    // OTHER instrument in the tick too.
+    // OTHER instrument in the tick too
     //
     // Instead it lands in the per-persona catch: technical is `mandatory`, so
     // the pass is a quorum skip with the reason recorded, and `runAnalysts`
@@ -192,7 +192,7 @@ describe('AnalystOrchestrator', () => {
         analyst_type: 'technical',
         role: 'mandatory',
         // Whichever of the analyst's two indicator reads rejects first —
-        // `Promise.all` gives no ordering guarantee, and both are short.
+        // `Promise.all` gives no ordering guarantee, and both are short
         reason: expect.stringMatching(/needs \d+ bars but received 5/),
       }),
     );
@@ -219,17 +219,17 @@ describe('AnalystOrchestrator', () => {
       analyst_type: 'technical',
       role: 'mandatory',
       // #431: the reason now records that the retry was spent, so a log line
-      // cannot be read as "failed once" when it failed twice.
+      // cannot be read as "failed once" when it failed twice
       reason: 'technical unavailable (after 2 attempts)',
       // #1080: a thrown persona is a fault, not a deadline — the two are acted
       // on differently downstream, and the reason string is the only other
       // place the difference exists. #1394 replaced the single word `error`
       // with the classified cause; a bare `Error` is `other`, which says
-      // "unclassified" rather than guessing a transport fault.
+      // "unclassified" rather than guessing a transport fault
       kind: 'other',
     });
 
-    // The exact TickSteps.analysts shape must also report the skip as an empty array.
+    // The exact TickSteps.analysts shape must also report the skip as an empty array
     const stepResult = await orchestrator.analysts({
       trace_id: 'trace-1',
       signal,
@@ -267,7 +267,7 @@ describe('AnalystOrchestrator', () => {
   });
 
   /**
-   * #371 — what the composition root seeds `analyst_weights` from.
+   * #371 — what the composition root seeds `analyst_weights` from
    */
   describe('analystIds', () => {
     it('names every persona the default orchestrator builds', () => {
@@ -342,7 +342,7 @@ describe('AnalystOrchestrator', () => {
       };
     }
 
-    /** Never settles — the failure mode a deadline exists for. */
+    /** Never settles — the failure mode a deadline exists for */
     function hangingAnalyst(analyst_type: string, role: 'mandatory' | 'optional'): Analyst {
       return {
         analyst_type,
@@ -409,18 +409,18 @@ describe('AnalystOrchestrator', () => {
       );
 
       expect(result.skipped).toBe(true);
-      // Story 20: one failure path, differing only in the logged reason.
+      // Story 20: one failure path, differing only in the logged reason
       expect(result.failures[0]?.reason).toContain('did not answer within 5ms');
       // #1080: and in the kind, which is the discriminator a reader downstream
       // gets instead of having to match on the reason's wording. This is the
-      // failure mode that starved the analyst stage in the 2026-09-03 session.
+      // failure mode that starved the analyst stage in the 2026-09-03 session
       expect(result.failures[0]?.kind).toBe('timeout');
     });
 
     it('reports a deadline as a timeout even when an earlier attempt threw', async () => {
       // The kind describes the attempt the stage GAVE UP on. A persona that
       // threw once and then hung is a stage waiting on a deadline it cannot
-      // meet, which is acted on differently from a data gap.
+      // meet, which is acted on differently from a data gap
       const { clock, marketData, marketIntelligence } = buildDeps('crypto');
       let attempts = 0;
       const orchestrator = new AnalystOrchestrator(
@@ -521,7 +521,7 @@ describe('AnalystOrchestrator', () => {
       // `views` to `[]` regardless of what else succeeded
       // (orchestrator.ts:257-263). This is the whole guarantee — pinned
       // here because the count-based check in `collectAnalystViews` never
-      // runs in production.
+      // runs in production
       expect(result.skipped).toBe(true);
       expect(result.views).toEqual([]);
       expect(result.analyst_count).toBe(3);
@@ -546,7 +546,7 @@ describe('AnalystOrchestrator', () => {
       // optional slot, a mandatory failure always zeroes `views` entirely,
       // and the one persona allowed to fail alone without zeroing the desk
       // is the sole optional slot. So the only nonzero partial state the
-      // role gate ever lets through is 2-of-3 — comfortably above 50%.
+      // role gate ever lets through is 2-of-3 — comfortably above 50%
       expect(result.skipped).toBe(false);
       expect(result.views).toHaveLength(2);
       expect(result.views.length / result.analyst_count).toBeGreaterThanOrEqual(0.5);
@@ -561,7 +561,7 @@ describe('AnalystOrchestrator', () => {
       // optional), two optional personas could fail together while the sole
       // remaining mandatory persona succeeds — and nothing would notice the
       // desk fell to 33%, because `collectAnalystViews`'s count check has no
-      // production caller either.
+      // production caller either
       const { clock, marketData, marketIntelligence } = buildDeps('stocks');
       const personas = [
         stubAnalyst('technical', 'mandatory', 'succeed'),
@@ -576,11 +576,11 @@ describe('AnalystOrchestrator', () => {
 
       const result = await orchestrator.runAnalysts('trace-1', signal, clock, ASOF);
 
-      // The role gate lets this through: no `mandatory` persona failed.
+      // The role gate lets this through: no `mandatory` persona failed
       expect(result.skipped).toBe(false);
       expect(result.views).toHaveLength(1);
       expect(result.analyst_count).toBe(3);
-      // Genuine quorum miss (33% < 50%) that nothing in production catches.
+      // Genuine quorum miss (33% < 50%) that nothing in production catches
       expect(result.views.length / result.analyst_count).toBeLessThan(0.5);
     });
 
@@ -590,7 +590,7 @@ describe('AnalystOrchestrator', () => {
       // Fundamental (or promotes a second persona to optional), this
       // assertion fails immediately instead of the regression surviving
       // undetected — which is exactly the gap analysts-spec.md now warns
-      // about (#899).
+      // about (#899)
       expect(technicalAnalyst.role).toBe('mandatory');
       expect(fundamentalAnalyst.role).toBe('mandatory');
       expect(sentimentAnalyst.role).toBe('optional');
@@ -613,7 +613,7 @@ describe('AnalystOrchestrator', () => {
 
       // With every persona mandatory, any single failure zeroes the desk,
       // so the only reachable nonzero state is 3-of-3. Promoting a persona
-      // to `mandatory` can only tighten the gate, never loosen it.
+      // to `mandatory` can only tighten the gate, never loosen it
       expect(result.skipped).toBe(true);
       expect(result.views).toEqual([]);
     });
@@ -629,7 +629,7 @@ describe('AnalystOrchestrator', () => {
    * tests pin, plus the cheap non-timeout half the ticket also asks for.
    */
   describe('failure cause logging (#1114)', () => {
-    /** Never settles on its own — the caller controls exactly when (and how) it finally does. */
+    /** Never settles on its own — the caller controls exactly when (and how) it finally does */
     function controlledAnalyst(analyst_type: string): {
       analyst: Analyst;
       settlers: Array<(error: Error) => void>;
@@ -677,20 +677,20 @@ describe('AnalystOrchestrator', () => {
         );
 
         // Both attempts (ATTEMPTS_PER_PERSONA = 2) time out at 5ms each —
-        // `controlledAnalyst` never resolves or rejects on its own.
+        // `controlledAnalyst` never resolves or rejects on its own
         await vi.advanceTimersByTimeAsync(20);
         const result = await resultPromise;
 
         // Captured BEFORE the late rejection below fires — proves what
         // `runAnalysts` already decided, so a later mutation of that decision
-        // by the late arrival would show up as a diff against these values.
+        // by the late arrival would show up as a diff against these values
         expect(result.skipped).toBe(true);
         expect(result.views).toEqual([]);
         expect(result.failures[0]?.kind).toBe('timeout');
         expect(settlers).toHaveLength(2);
 
         // The SECOND (last, abandoned) attempt's work finally rejects, long
-        // after runAnalysts already returned.
+        // after runAnalysts already returned
         settlers[1]?.(new Error('late boom: connection reset'));
         await vi.advanceTimersByTimeAsync(0);
 
@@ -715,7 +715,7 @@ describe('AnalystOrchestrator', () => {
 
         // No unhandled rejection escaped — `Promise.race` already handles
         // the losing side; the late-settlement observer above must not
-        // change that.
+        // change that
         expect(unhandled).not.toHaveBeenCalled();
       } finally {
         process.off('unhandledRejection', unhandled);
@@ -770,7 +770,7 @@ describe('AnalystOrchestrator', () => {
       );
 
       // Unchanged existing behaviour: the reason/kind the adapter's
-      // error/warn line reads are exactly what they were before #1114.
+      // error/warn line reads are exactly what they were before #1114
       expect(result.failures[0]?.kind).toBe('other');
       expect(result.failures[0]?.reason).toContain('technical unavailable (after 2 attempts)');
 
@@ -822,10 +822,10 @@ describe('AnalystOrchestrator', () => {
       expect(payload?.cause).not.toContain('sk-live-abcdef0123456789');
       // A stack is thousands of chars of upstream-controlled text and is the
       // one field here never logged before #1114; the cap is what keeps a
-      // debug line from carrying the whole frame list into the soak log.
+      // debug line from carrying the whole frame list into the soak log
       // `truncateForError` appends its own "chars total" note past the bound,
       // so the kept prefix is what MAX_ERROR_BODY_CHARS limits, not the whole
-      // string.
+      // string
       expect(payload?.stack).toContain('(truncated,');
       expect(payload?.stack?.split('… (truncated,')[0]?.length).toBeLessThanOrEqual(
         MAX_ERROR_BODY_CHARS,
@@ -843,7 +843,7 @@ describe('AnalystOrchestrator', () => {
           const error = new Error('technical unavailable');
           // A lazily-computed `stack` is real: several runtimes and error
           // wrappers define it as a getter. #1114 is what first put this
-          // field in a log payload, so its throw is this diff's to contain.
+          // field in a log payload, so its throw is this diff's to contain
           Object.defineProperty(error, 'stack', {
             get(): string {
               throw new Error('render boom');
@@ -867,7 +867,7 @@ describe('AnalystOrchestrator', () => {
       expect(result.skipped).toBe(true);
       // The render happens while the payload is still being built, so a throw
       // here escapes `safeLog` entirely — and losing the whole payload would
-      // cost the diagnostic the ticket exists to provide.
+      // cost the diagnostic the ticket exists to provide
       expect(logger.entries.find((entry) => entry.level === 'debug')?.payload).toMatchObject({
         analyst_type: 'technical',
         message: 'technical unavailable',
@@ -885,7 +885,7 @@ describe('AnalystOrchestrator', () => {
         run: async () => {
           const error = new Error('technical unavailable');
           // `name` is upstream-settable like every other field here, and was
-          // the one rendered raw.
+          // the one rendered raw
           error.name = 'HttpError(auth=sk-live-abcdef0123456789)';
           throw error;
         },
@@ -936,11 +936,11 @@ describe('AnalystOrchestrator', () => {
 
         // The late path is the one where an escaping render is worst: it
         // rejects the derived `work.then(...)` promise, which nobody holds,
-        // and Node 22 exits the process on an unhandled rejection.
+        // and Node 22 exits the process on an unhandled rejection
         // Not an `Error`, and defeats both of `describeThrown`'s steps: the
         // self-reference makes `JSON.stringify` throw, and the throwing
-        // `Symbol.toPrimitive` makes its `String(value)` fallback throw too.
-        // That is the one render failure no per-field guard sits under.
+        // `Symbol.toPrimitive` makes its `String(value)` fallback throw too
+        // That is the one render failure no per-field guard sits under
         const hostile: Record<string, unknown> = {
           [Symbol.toPrimitive]() {
             throw new Error('render boom');
@@ -986,7 +986,7 @@ describe('AnalystOrchestrator', () => {
       // rejects the derived `work.then(...)` promise that nobody holds
       // (see the hostile-`toString` test above) — the direct path below is
       // now guarded the same way `lastReason` is (#1199), so both reach this
-      // render rather than one of them throwing first.
+      // render rather than one of them throwing first
       const hostile = new Error('unused');
       hostile.name = 'LateBoomError';
       Object.defineProperty(hostile, 'message', {
@@ -1078,7 +1078,7 @@ describe('AnalystOrchestrator', () => {
           // Same construction as the late-settlement `message`-getter test
           // above, but thrown on the DIRECT (non-timeout) path: the catch
           // site this closes reads `error.message` for `lastReason` before
-          // any of `renderErrorDetail`'s guards are reached.
+          // any of `renderErrorDetail`'s guards are reached
           Object.defineProperty(error, 'message', {
             get(): string {
               throw new Error('render boom');
@@ -1095,7 +1095,7 @@ describe('AnalystOrchestrator', () => {
       // Before the fix, `error.message` throws inside the catch handling
       // the analyst failure, which escapes the `Promise.all` in `runAnalysts`
       // and rejects this promise instead of resolving with a recorded
-      // failure.
+      // failure
       const result = await orchestrator.runAnalysts(
         'trace-hostile-message-direct',
         { asset: INSTRUMENT, asset_class: 'crypto' },
@@ -1109,7 +1109,7 @@ describe('AnalystOrchestrator', () => {
       // too (renderField, line ~160) — same hostile `message` getter, guarded
       // independently for the debug payload it builds. Qualified by
       // `attempt === 1`, matching the late-settlement tests' `attempt === 2`
-      // qualifier above, rather than taking whichever debug line comes first.
+      // qualifier above, rather than taking whichever debug line comes first
       expect(
         logger.entries.find(
           (entry) =>
@@ -1126,7 +1126,7 @@ describe('AnalystOrchestrator', () => {
       // is the one under test. Circular (defeats `JSON.stringify`) AND a
       // throwing `Symbol.toPrimitive` (defeats the `String()` fallback too):
       // the same combination the late-settlement test above uses to defeat
-      // `describeThrown` itself, applied here to the direct-rejection catch.
+      // `describeThrown` itself, applied here to the direct-rejection catch
       const hostile: Record<string, unknown> = {
         [Symbol.toPrimitive]() {
           throw new Error('render boom');
@@ -1169,7 +1169,7 @@ describe('AnalystOrchestrator', () => {
       // `message` on a genuine `Error` rather than as the thrown value
       // itself. Before `describeThrown` was hardened to coerce a non-string
       // `message`, this escaped even further downstream — building
-      // `AnalystFailure.reason`'s template literal outside any guard.
+      // `AnalystFailure.reason`'s template literal outside any guard
       const hostileMessage: Record<string, unknown> = {
         [Symbol.toPrimitive]() {
           throw new Error('render boom');
@@ -1206,10 +1206,10 @@ describe('AnalystOrchestrator', () => {
     // through `describeThrown` (#1199 review): a non-`Error` throw used to
     // record `String(error)` (`"[object Object]"` for a plain object) and
     // now records `describeThrown`'s `JSON.stringify` result instead — an
-    // improvement (the actual fields survive), not a guard side effect.
+    // improvement (the actual fields survive), not a guard side effect
     // Nothing parses `AnalystFailure.reason` programmatically downstream
     // (`analysts-adapter.ts` only logs/masks it), so this is safe to pin as
-    // the new, intended text rather than an incidental one.
+    // the new, intended text rather than an incidental one
     it('records JSON.stringify of a plain non-Error throw, not "[object Object]"', async () => {
       const { clock, marketData, marketIntelligence } = buildDeps('crypto');
       const logger = recordingLogger();

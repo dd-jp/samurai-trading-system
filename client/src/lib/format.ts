@@ -9,7 +9,7 @@
  * the ASCII hyphen — matching the spec's own glyph.
  */
 
-/** The string every formatter here renders for a value it cannot display. */
+/** The string every formatter here renders for a value it cannot display */
 export const UNKNOWN = '—';
 const MINUS = '−';
 
@@ -27,7 +27,7 @@ export function formatStageDuration(ms: number | null): string {
   // below, because EVERY comparison against NaN is false: `NaN` fell through
   // all of them into the minutes branch and rendered `NaNm NaNs`, and
   // `Infinity` rendered `Infinitym NaNs` (PR #582 review round 3). Same
-  // unknown-value contract the signed formatters keep.
+  // unknown-value contract the signed formatters keep
   if (ms === null || !Number.isFinite(ms)) return UNKNOWN;
   if (ms < 1_000) return `${Math.round(ms)}ms`;
 
@@ -36,7 +36,7 @@ export function formatStageDuration(ms: number | null): string {
   // bugs (PR #582 review): `59_950ms` rendered `60.0s` because `toFixed(1)`
   // rounded up inside the seconds branch, and `3_599_500ms` rendered
   // `59m 60s` because the minutes were floored off the raw value while the
-  // seconds were rounded up independently of them.
+  // seconds were rounded up independently of them
   const tenths = Math.round(ms / 100);
   if (tenths < 600) return `${(tenths / 10).toFixed(1)}s`;
 
@@ -80,15 +80,11 @@ export function formatSignedR(value: number): string {
 }
 
 /*
- * ---------------------------------------------------------------------------
- * Display formatters added for the components (issue #538).
- *
  * They live here rather than in a sibling module so there is exactly one
  * `UNKNOWN` and exactly one unknown-value contract on this client: every
  * function below renders the same em dash for a value it cannot honestly
  * display, and none of them can emit `NaN` into visible text or — worse — into
- * a CSS length (see `barWidth`).
- * ---------------------------------------------------------------------------
+ * a CSS length (see `barWidth`)
  */
 
 /** Unsigned, grouped USD: `$1,234.56`. Non-finite renders as an em dash. */
@@ -148,7 +144,7 @@ export function barWidth(fraction: number): string | null {
   return `${Math.min(100, Math.max(0, fraction * 100)).toFixed(1)}%`;
 }
 
-/** `+1.87%` / `−0.40%`, sign always explicit — colour is never the only carrier. */
+/** `+1.87%` / `−0.40%`, sign always explicit — colour is never the only carrier */
 export function formatSignedPercent(fraction: number, digits = 2): string {
   if (!Number.isFinite(fraction)) return UNKNOWN;
   const sign = fraction < 0 ? MINUS : '+';
@@ -164,11 +160,11 @@ export function formatQty(value: number): string {
   if (Number.isInteger(value)) return String(value);
   // `\.?` so a value that rounds to a whole number at four decimals without
   // being one (1.00001 -> "1.0000") does not print as "1." — the integer
-  // branch above cannot catch it.
+  // branch above cannot catch it
   return value.toFixed(4).replace(/\.?0+$/, '');
 }
 
-/** How long a trade was held: `41m`, `1h 12m`, `2d 3h`. */
+/** How long a trade was held: `41m`, `1h 12m`, `2d 3h` */
 export function formatHeld(fromIso: string, toIso: string): string {
   const from = Date.parse(fromIso);
   const to = Date.parse(toIso);
@@ -180,7 +176,7 @@ export function formatHeld(fromIso: string, toIso: string): string {
   return `${Math.floor(hours / 24)}d ${hours % 24}h`;
 }
 
-/** The UTC calendar date of an ISO timestamp, `YYYY-MM-DD`; `—` if unparseable. */
+/** The UTC calendar date of an ISO timestamp, `YYYY-MM-DD`; `—` if unparseable */
 export function formatDateUtc(iso: string): string {
   const ms = Date.parse(iso);
   if (Number.isNaN(ms)) return UNKNOWN;

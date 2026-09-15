@@ -270,7 +270,7 @@ function fromBracketRow(row: BracketRow): BrokerBracketRecord {
     stop_order_id: row.stop_order_id,
     target_order_id: row.target_order_id,
     // All-or-nothing: a half-populated request cannot re-place a leg, and
-    // presenting one would let a caller read a price that was never requested.
+    // presenting one would let a caller read a price that was never requested
     request: hasRequest
       ? {
           instrument: row.instrument as string,

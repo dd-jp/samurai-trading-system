@@ -51,7 +51,7 @@ function report(): string {
         trade('live', 40, '2026-09-02T00:00:00.000Z'),
         trade('live', -10, '2026-09-03T00:00:00.000Z'),
         // The control ends AHEAD on return with a deeper hole first — doc 12
-        // D4's exact scenario, and the reason both figures must be on the page.
+        // D4's exact scenario, and the reason both figures must be on the page
         trade('control', -30, '2026-09-02T12:00:00.000Z'),
         trade('control', 90, '2026-09-04T00:00:00.000Z'),
       ],
@@ -63,9 +63,9 @@ describe('formatArmComparison (#753 AC4/AC5)', () => {
   it('prints return AND drawdown for BOTH arms', () => {
     const text = report();
 
-    // live: +30 on 1000 with a 10 fall from the 40 peak.
+    // live: +30 on 1000 with a 10 fall from the 40 peak
     expect(text).toMatch(/live\s+2\s+30\.00\s+3\.00%\s+1\.00%/);
-    // control: +60 on 1000 with a 30 hole first.
+    // control: +60 on 1000 with a 30 hole first
     expect(text).toMatch(/control\s+2\s+60\.00\s+6\.00%\s+3\.00%/);
   });
 
@@ -94,13 +94,13 @@ describe('formatArmComparison (#753 AC4/AC5)', () => {
     expect(text).toContain(TO.toISOString());
     // #1180: the sigil, not just the figure — `basis` is the declared book in
     // the account's currency now, and a `£` would print a USD number behind a
-    // pound sign.
+    // pound sign
     expect(text).toContain('basis:  $1000.00 (the same denominator for both arms)');
   });
 
   /**
    * A silent zero is the failure mode the control arm's own fill-sync loop
-   * exists to prevent, and the report must not let it read as a finding.
+   * exists to prevent, and the report must not let it read as a finding
    */
   it('warns rather than reporting a clean zero when the control closed nothing', () => {
     const text = formatArmComparison(
@@ -116,7 +116,7 @@ describe('formatArmComparison (#753 AC4/AC5)', () => {
 
     expect(text).toContain('the control arm actually ran');
     // Still a full row — the warning supplements the numbers, it does not
-    // replace them.
+    // replace them
     expect(text).toMatch(/control\s+0\s+0\.00\s+0\.00%\s+0\.00%/);
   });
 
@@ -150,7 +150,7 @@ describe('formatArmComparison (#753 AC4/AC5)', () => {
     // reversing the sentence they came from. Flatten the wrapping and pin the
     // contiguous claim instead — both regimes, in order, with the ONGOING one
     // named as such rather than merely as the word "best-effort" somewhere on
-    // the page.
+    // the page
     const flattened = text.replace(/\s+/g, ' ');
     expect(flattened).toContain(
       'every live row closed before #1121 shipped was backfilled to 0, ' +
@@ -289,7 +289,7 @@ describe('formatArmComparison — the cost-basis exclusion by exit class (#1546)
     expect(text).not.toContain('30.00%');
   });
 
-  /** A class nothing closed has no rate, and 0.00% would assert one. */
+  /** A class nothing closed has no rate, and 0.00% would assert one */
   it('prints n/a, not a zero rate, for a class with nothing closed in the window', () => {
     const text = reportWith(
       { protective: { kept: 4, dropped: 1 }, flatten: { kept: 0, dropped: 0 } },
@@ -302,7 +302,7 @@ describe('formatArmComparison — the cost-basis exclusion by exit class (#1546)
   /**
    * Unconditional, unlike the refusal note: "nothing was excluded" is the
    * reading #1412 needs most, and a section that disappeared when it held would
-   * make its absence mean either that or "this report predates the measurement".
+   * make its absence mean either that or "this report predates the measurement"
    */
   it('prints the table even when every count is zero', () => {
     const text = reportWith(noCostBasisDrops(), noCostBasisDrops());

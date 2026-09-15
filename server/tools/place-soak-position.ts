@@ -89,16 +89,16 @@ const PROBE_ENVIRONMENT = 'paper' as const;
 
 const INSTRUMENT = 'SPY';
 const SIZE = 1;
-/** Wide enough that neither protective leg can fire — see the file doc. */
+/** Wide enough that neither protective leg can fire — see the file doc */
 const STOP_FRACTION = 0.95;
 const TARGET_FRACTION = 1.05;
-/** Marketable limit: through the touch so the entry fills promptly. */
+/** Marketable limit: through the touch so the entry fills promptly */
 const ENTRY_SLIPPAGE = 1.001;
 
 async function latestTradePrice(instrument: string): Promise<number> {
   // Named from the exported map rather than as literals here, which is what
   // its own docblock asks of every caller: a second copy of the strings is
-  // free to drift out of agreement with the client that actually reads them.
+  // free to drift out of agreement with the client that actually reads them
   const vars = ALPACA_CREDENTIAL_ENV_VARS[PROBE_ENVIRONMENT];
   const key = process.env[vars.key];
   const secret = process.env[vars.secret];
@@ -161,16 +161,16 @@ async function main(): Promise<void> {
   // hand-entered `UsEquityRegularHoursCalendar` when that fetch fails. The
   // fallback is what this guard used to call directly, and it is wrong on a
   // half-day (13:00 ET close): it would report open, the probe would place,
-  // and the venue would be shut — on exactly the day nobody would look.
+  // and the venue would be shut — on exactly the day nobody would look
   //
   // A limit order placed into a closed market does not fill; it rests, and the
   // operating procedure above — restart, then expect the flatten on the tail
   // tick — quietly becomes untrue while looking like it worked. Checked before
-  // the price lookup so a closed-market run costs no trade API call.
+  // the price lookup so a closed-market run costs no trade API call
   //
   // A dry run WARNS rather than throws: the docblock promises that omitting
   // --confirm previews the wiring, and an operator checking that at 22:00Z
-  // should get the preview, not an exception.
+  // should get the preview, not an exception
   const calendar = await resolveUsEquitySessionCalendar({ logger, now: () => clock.now() });
   if (!calendar.isOpen(now)) {
     const closed =
@@ -190,7 +190,7 @@ async function main(): Promise<void> {
 
   // Marker-shaped, never hash-shaped: a probe lot must be greppable in
   // `trader_log`/`closed_trades` and must not be able to collide with a real
-  // decision's sha256({ instrument, bar, side }[, arm]) key.
+  // decision's sha256({ instrument, bar, side }[, arm]) key
   const idempotencyKey = `soak-lifecycle-probe-${now.toISOString().slice(0, 10)}`;
 
   const intent: OrderIntent = {
@@ -234,7 +234,7 @@ async function main(): Promise<void> {
   // this way (index.ts:610), and a probe that resolved it any other way could
   // write a lot into a database the running process never reads — which is the
   // failure that already cost this soak one false start, on 2026-08-25, when a
-  // stale store made the spend cap read $1.71 of a fresh run's $50.
+  // stale store made the spend cap read $1.71 of a fresh run's $50
   const dbPath = sharedStorePath(PROBE_MODE);
   assertStorePathMatchesMode({ dbPath, mode: PROBE_MODE });
   const db = openSharedStore(dbPath);
@@ -263,7 +263,7 @@ async function main(): Promise<void> {
   // instrument is the same side ("v1 per-lot design", execute.ts), and splits
   // a flatten's fills across them oldest-first — so a second probe opened on
   // top of a live one does not merely double the exposure, it changes what the
-  // flatten this probe exists to observe is actually measuring.
+  // flatten this probe exists to observe is actually measuring
   const held = (await store.getOpenPositions()).filter((lot) => lot.instrument === INSTRUMENT);
   if (held.length > 0) {
     throw new Error(
@@ -276,7 +276,7 @@ async function main(): Promise<void> {
   // The dry run stops HERE, not before the block above: resolving the store,
   // rehydrating the adapter's bracket map and checking for a held lot are the
   // parts most likely to throw, and a preview that returned before reaching
-  // them proved nothing about the wiring it claims to preview.
+  // them proved nothing about the wiring it claims to preview
   if (!confirm) {
     console.log('DRY RUN — nothing submitted. Re-run with --confirm to place.');
     db.close();
@@ -299,7 +299,7 @@ async function main(): Promise<void> {
 
   // An operator tool that prints a refusal and exits 0 is a tool whose failure
   // is invisible to whatever ran it. `deduped` is a success — it means today's
-  // probe lot already exists — so only the genuine refusals are non-zero.
+  // probe lot already exists — so only the genuine refusals are non-zero
   if (outcome.status !== 'submitted' && outcome.status !== 'deduped') {
     process.exitCode = 1;
   }

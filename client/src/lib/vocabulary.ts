@@ -44,7 +44,7 @@ export function sideWord(side: 'buy' | 'sell'): string {
   return side === 'buy' ? 'long' : 'short';
 }
 
-/** What every surface says before the first successful poll. */
+/** What every surface says before the first successful poll */
 export const WAITING_FOR_FIRST_SNAPSHOT = 'waiting for the first snapshot';
 
 const PROVIDER_STATE_WORD: Readonly<Record<string, string>> = {
@@ -56,14 +56,14 @@ const PROVIDER_STATE_WORD: Readonly<Record<string, string>> = {
   not_configured: 'not configured',
 };
 
-/** `null` for a state word this client does not know — never a guess. */
+/** `null` for a state word this client does not know — never a guess */
 export function providerStateWord(state: string): string | null {
   return PROVIDER_STATE_WORD[state] ?? null;
 }
 
 /**
  * `PnlHeadlineWire.rate_source`'s word (#1596) — a `Record`, not a string
- * transform, so a future second source is a compile error here until named.
+ * transform, so a future second source is a compile error here until named
  */
 export const PNL_RATE_SOURCE_WORD: Readonly<Record<PnlRateSource, string>> = {
   static_sizing_rate: 'static sizing rate',

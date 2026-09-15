@@ -10,10 +10,11 @@
   ],
   "jsPlugins": ["eslint-plugin-no-comment-slop"],
   "rules": {
-    "no-comment-slop/no-banner-comment": "warn",
+    "no-comment-slop/no-banner-comment": "error",
     "no-comment-slop/no-foreign-syntax": "error",
     "no-comment-slop/no-jargon": "warn",
     "no-comment-slop/no-trailing-comment": "warn",
-    "no-comment-slop/multiline-jsdoc-format": "warn"
+    "no-comment-slop/multiline-jsdoc-format": "error",
+    "no-comment-slop/no-trailing-period": "error"
   }
 }

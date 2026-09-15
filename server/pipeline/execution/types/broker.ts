@@ -28,19 +28,19 @@ export interface NativeBracketRequest {
   asset_class: 'crypto' | 'stocks';
   side: 'buy' | 'sell';
   size: number;
-  /** Limit/entry price of the entry leg. */
+  /** Limit/entry price of the entry leg */
   entry: number;
   stop: number;
   target: number;
   time_in_force: string;
 }
 
-/** The adapter's acknowledgement of an accepted bracket. */
+/** The adapter's acknowledgement of an accepted bracket */
 export interface BrokerAck {
   client_order_id: string;
-  /** Entry + attached legs (or the adapter's emulated ids). */
+  /** Entry + attached legs (or the adapter's emulated ids) */
   broker_order_ids: string[];
-  /** State as the venue reports it post-ack — normally 'submitted'. */
+  /** State as the venue reports it post-ack — normally 'submitted' */
   order_state: OrderState;
 }
 
@@ -172,10 +172,10 @@ export interface NormalizedFill {
  */
 export interface NormalizedOrder {
   client_order_id: string;
-  /** Entry + attached legs, as the venue reports them now. */
+  /** Entry + attached legs, as the venue reports them now */
   broker_order_ids: string[];
   order_state: OrderState;
-  /** Cumulative filled quantity per the venue. */
+  /** Cumulative filled quantity per the venue */
   filled_qty: number;
 }
 
@@ -189,10 +189,10 @@ export interface NormalizedOrder {
  */
 export interface NormalizedPosition {
   instrument: string;
-  /** Signed by direction: a short shows as a negative quantity, as venues report it. */
+  /** Signed by direction: a short shows as a negative quantity, as venues report it */
   qty: number;
   side: 'buy' | 'sell';
-  /** Venue's average entry price, or null where the venue does not report one. */
+  /** Venue's average entry price, or null where the venue does not report one */
   avg_entry_price: number | null;
 }
 

@@ -67,7 +67,7 @@ const ASOF = new Date('2026-08-07T12:30:00Z');
 /**
  * The derived `1h` depth, read from `WARM_START_WINDOWS` rather than repeated
  * as a literal: #722 moved it from 20 to 57 (the technical analyst's converged
- * RSI warm-up), and three assertions here silently pinned the old number.
+ * RSI warm-up), and three assertions here silently pinned the old number
  */
 const HOURLY_WARM_START = ((): number => {
   const window = WARM_START_WINDOWS.find((candidate) => candidate.timeframe === '1h');
@@ -106,7 +106,7 @@ describe('backfillMarketData', () => {
     expect(coverage.every((row) => row.satisfied)).toBe(true);
     // DEFAULT_UNIVERSE is equities-only since #738. Derived from
     // WARM_START_WINDOWS.length rather than a literal so this doesn't rot
-    // the next time that list gains/loses a timeframe (#742 added '5m').
+    // the next time that list gains/loses a timeframe (#742 added '5m')
     expect(equityFetches).toHaveLength(DEFAULT_UNIVERSE.length * WARM_START_WINDOWS.length);
   });
 
@@ -132,7 +132,7 @@ describe('backfillMarketData', () => {
 
     // QQQ is fetched normally through the equities leg...
     expect(equityFetches.map((f) => f.symbol)).toEqual(['QQQ']);
-    // ...BTC-USD is refused outright, never priced off Alpaca stocks data.
+    // ...BTC-USD is refused outright, never priced off Alpaca stocks data
     expect(coverage).toEqual([
       expect.objectContaining({ instrument: 'QQQ', satisfied: true, error: undefined }),
       expect.objectContaining({
@@ -148,7 +148,7 @@ describe('backfillMarketData', () => {
     const db = openSharedStore(':memory:');
     const store = new SqliteMarketDataStore(db);
     // A crypto pair backfilled before #1157 removed the crypto fetch leg —
-    // the store still holds a full window of stale bars for it.
+    // the store still holds a full window of stale bars for it
     store.appendBars(generateBars('BTC-USD', '1h', ASOF, 20));
 
     const coverage = await backfillMarketData({
@@ -185,7 +185,7 @@ describe('backfillMarketData', () => {
   it('is resumable — only fetches the pairs a prior partial run left short', async () => {
     const db = openSharedStore(':memory:');
     const store = new SqliteMarketDataStore(db);
-    // Simulate a prior run that completed QQQ's 1h window only.
+    // Simulate a prior run that completed QQQ's 1h window only
     store.appendBars(generateBars('QQQ', '1h', ASOF, HOURLY_WARM_START));
 
     const equityFetches: { symbol: string; window: BarWindow }[] = [];
@@ -199,11 +199,11 @@ describe('backfillMarketData', () => {
       print: () => {},
     });
 
-    // QQQ/1h was already warm and must not be re-fetched.
+    // QQQ/1h was already warm and must not be re-fetched
     expect(equityFetches.some((f) => f.symbol === 'QQQ' && f.window.timeframe === '1h')).toBe(
       false,
     );
-    // QQQ/1d and every other pair were still missing and must be fetched.
+    // QQQ/1d and every other pair were still missing and must be fetched
     expect(equityFetches.some((f) => f.symbol === 'QQQ' && f.window.timeframe === '1d')).toBe(true);
     expect(coverage.every((row) => row.satisfied)).toBe(true);
   });
@@ -276,7 +276,7 @@ describe('backfillMarketData', () => {
       print: () => {},
     });
 
-    // Both pairs were attempted — SPY's throw did not stop QQQ from running.
+    // Both pairs were attempted — SPY's throw did not stop QQQ from running
     expect(fetchedInstruments).toEqual(['SPY', 'QQQ']);
     expect(coverage).toEqual([
       expect.objectContaining({
@@ -303,7 +303,7 @@ describe('backfillMarketData', () => {
     // `appendBars` writes per bar (`INSERT OR IGNORE`), so a throw partway
     // through leaves the earlier bars durably stored. Reporting `existing`
     // here would say 0 rows while the store actually holds 12, sending the
-    // operator back to re-fetch bars already on disk.
+    // operator back to re-fetch bars already on disk
     const partiallyAppending = new Proxy(store, {
       get(target, property, receiver) {
         if (property === 'appendBars') {
@@ -330,7 +330,7 @@ describe('backfillMarketData', () => {
       expect.objectContaining({
         instrument: 'SPY',
         timeframe: '1h',
-        // The 12 that landed, NOT the 0 the store held before the attempt.
+        // The 12 that landed, NOT the 0 the store held before the attempt
         rows: 12,
         satisfied: false,
         error: expect.stringContaining('database is locked') as string,
@@ -343,10 +343,10 @@ describe('backfillMarketData', () => {
     const store = new SqliteMarketDataStore(db);
 
     // A SQLITE_BUSY that spans the append and the re-read immediately after
-    // it, then clears — the transient contention the guard is written for.
+    // it, then clears — the transient contention the guard is written for
     // The re-read inside the catch is therefore the second failure in a row,
     // and it must not throw out of the handler: that would abort QQQ, which
-    // is the whole reason the catch is there.
+    // is the whole reason the catch is there
     //
     // Deliberately transient, not permanent. `backfillMarketData` reads the
     // store once per pair BEFORE the try block, to decide whether a fetch is
@@ -354,7 +354,7 @@ describe('backfillMarketData', () => {
     // cannot be read is not a partial-coverage problem to be reported, it is
     // a dead backfill, and it should abort loudly rather than print a table
     // of zeroes. Modelling a permanent failure here would assert on that
-    // separate (and correct) behaviour instead of on this fallback.
+    // separate (and correct) behaviour instead of on this fallback
     let storeIsBusy = false;
     const failingStore = new Proxy(store, {
       get(target, property, receiver) {
@@ -394,10 +394,10 @@ describe('backfillMarketData', () => {
     });
 
     // The run did not abort: QQQ was still attempted after SPY's double
-    // failure.
+    // failure
     expect(attempted).toEqual(['SPY', 'QQQ']);
     // And the operator is TOLD the count is untrustworthy rather than being
-    // handed a confident 0.
+    // handed a confident 0
     expect(coverage[0]).toEqual(
       expect.objectContaining({
         instrument: 'SPY',
@@ -477,7 +477,7 @@ describe('OHLCV failover provenance, through the real store (#496)', () => {
     // Read back from the REAL store, not the in-memory return value — proves
     // `SqliteMarketDataStore.appendBars` actually persisted the fallback's
     // `source` column (`bars.source`, `0001_init.sql`) rather than the
-    // provenance only existing in a test double's memory.
+    // provenance only existing in a test double's memory
     const stored = store.readBars('SPY', '1h', ASOF, 20);
     expect(stored).toHaveLength(20);
     expect(stored.every((bar) => bar.source === 'polygon')).toBe(true);
@@ -487,7 +487,7 @@ describe('OHLCV failover provenance, through the real store (#496)', () => {
    * #791 AC2, named per the ticket's "provable by removal" criterion 3:
    * DELETE `quarantined: rows.some((bar) => QUARANTINED_BAR_SOURCES.has(...))`
    * from `backfillMarketData` (or replace it with `quarantined: false`) and
-   * this test goes red — it is the mechanism, not a description of intent.
+   * this test goes red — it is the mechanism, not a description of intent
    */
   it('flags the pair QUARANTINED when the equities fallback served a polygon-stamped bar (#791 AC2)', async () => {
     const db = openSharedStore(':memory:');
@@ -592,7 +592,7 @@ describe('OHLCV failover provenance, through the real store (#496)', () => {
  * `WARM_START_WINDOWS`/`DEFAULT_UNIVERSE` — the DERIVED list — not a
  * hand-picked timeframe, and a fresh `MarketDataServiceImpl` instance (empty
  * `lastBarFetch`, exactly what a newly started orchestrator process
- * constructs) reading the store `backfillMarketData` just warmed.
+ * constructs) reading the store `backfillMarketData` just warmed
  */
 describe('warm-start payoff (#512 AC: no bar HTTP calls on a warm first tick)', () => {
   class CountingDataSource implements DataSource {
@@ -617,10 +617,10 @@ describe('warm-start payoff (#512 AC: no bar HTTP calls on a warm first tick)', 
     // ASOF (12:30:00Z). #742 added a '5m' window to WARM_START_WINDOWS; a
     // 5-minute offset from a bar boundary would cross into the NEXT 5m bar
     // and legitimately trigger a fetch for that timeframe, which is not what
-    // this AC is testing — 2 minutes stays inside [12:30, 12:35).
+    // this AC is testing — 2 minutes stays inside [12:30, 12:35)
     const tickAsOf = new Date(ASOF.getTime() + 2 * 60_000);
     const source = new CountingDataSource();
-    // Fresh instance: empty lastBarFetch, the same as a newly started process.
+    // Fresh instance: empty lastBarFetch, the same as a newly started process
     const service = new MarketDataServiceImpl(source, new ManualClock(tickAsOf), 'live', store);
 
     for (const instrument of DEFAULT_UNIVERSE) {
@@ -635,7 +635,7 @@ describe('warm-start payoff (#512 AC: no bar HTTP calls on a warm first tick)', 
 
   it('RED CHECK: the same scenario against an UNWARMED store does make fetchBars calls', async () => {
     // Sanity check that the zero-fetch result above is the backfill's doing,
-    // not an artifact of the test harness.
+    // not an artifact of the test harness
     const db = openSharedStore(':memory:');
     const store = new SqliteMarketDataStore(db);
     const tickAsOf = new Date(ASOF.getTime() + 5 * 60_000);
@@ -653,7 +653,7 @@ describe('warm-start payoff (#512 AC: no bar HTTP calls on a warm first tick)', 
   });
 });
 
-/** A `Logger` that records every call rather than writing anywhere. */
+/** A `Logger` that records every call rather than writing anywhere */
 class RecordingLogger implements Logger {
   readonly entries: Parameters<Logger['log']>[0][] = [];
   log(entry: Parameters<Logger['log']>[0]): void {
@@ -675,7 +675,7 @@ const FAILOVER_EVENT: FailoverEvent = {
  * `buildBackfillFailoverAlerter`'s wiring in `runFromEnvironment` back for
  * the old `console.error`-only `alertFailover`, and
  * `postDataFailoverAlert` above and this test go red — nothing left calls
- * the channel.
+ * the channel
  */
 describe('buildBackfillFailoverAlerter (#791 AC1 — backfill failover reaches the routed channel)', () => {
   it('posts to the routed dataFailoverAlerts channel, not console.error', () => {
@@ -734,7 +734,7 @@ describe('buildBackfillFailoverAlerter (#791 AC1 — backfill failover reaches t
     // it runs to completion — including scheduling the fire-and-forget
     // post — before `withOhlcvFailover` calls `config.fallback`. The POST
     // itself may still resolve later; what must happen first is the call
-    // that starts it.
+    // that starts it
     expect(order).toEqual(['alert', 'fallback']);
     expect(posted).toHaveLength(1);
   });
@@ -780,7 +780,7 @@ describe('buildBackfillFailoverAlerter (#791 AC1 — backfill failover reaches t
     expect(bars).toHaveLength(1);
 
     // Let the rejected `postDataFailoverAlert` promise's `.catch` run before
-    // asserting — it is fire-and-forget, not awaited by `alerter` itself.
+    // asserting — it is fire-and-forget, not awaited by `alerter` itself
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(logger.entries.some((e) => e.level === 'error')).toBe(true);
