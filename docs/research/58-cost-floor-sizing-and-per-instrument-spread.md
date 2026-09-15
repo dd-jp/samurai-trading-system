@@ -206,11 +206,22 @@ raw capture at
 [`archive/raw/2026-09-02-58-lse-quotes-preopen.txt`](archive/raw/2026-09-02-58-lse-quotes-preopen.txt) is kept
 per this repo's never-delete rule, with its own retraction header.
 
-**Nothing replaces these numbers.** [#1035](https://github.com/dd-jp/samurai-trading-system/issues/1035) is the
-open ticket that may eventually produce a permissibly-collected in-session per-instrument spread and session
-profile from LSEG Delayed Market Data; until it reports, every place below that cited F2b's endpoint claim,
-F2c's recommendation, or an F6 figure is marked retracted in place rather than silently removed, so the
-reasoning that once rested on them stays visible as what it was.
+**Reported 2026-09-15 — [#1035](https://github.com/dd-jp/samurai-trading-system/issues/1035) (PR #1559)
+produced `46-lseg-dmd-pretrade-surface.md`, which now supersedes the numbers this document retracted below**,
+for 30 of 31 pool
+rows (MST3 confirmed absent from LSEG's SI feed), permissibly collected from LSEG Delayed Market Data's free
+delayed pre-trade files (doc 46's Method section quotes #1034's clearance). Headline: pool open-bucket median
+round-trip **159.0 bps** (79.5 bps half-spread), cross-sectional dispersion **max/median 4.19x, max/min 57.70x**
+open-bucket — narrower dispersion than F6's retracted 12.61x/480.5x, but still **~3.1x** doc 59 §3.1's
+single-stock total round-trip cost budget (52.1 bps) and **~11.2x** its index budget (14.2 bps) at ADR-0017's
+assumed win rate. Against doc 59 §3.1 criterion (b)'s per-subclass spread-only thresholds (≤36 bps
+single-stock, ≤0 bps index — unsatisfiable as bracketed) rather than the single-stock total ceiling
+applied to every row regardless of subclass, only **1 of 30 rows clears its subclass's threshold**
+(NVD3, 30.5 bps); four of the six tightest-quoted rows (3USL, 3LUS, LQQ3, 3KOR) are `index_etp_3x`
+and so have no positive spread budget to clear at all, however tight their spread measures. Every
+place below that cited F2b's endpoint claim, F2c's recommendation, or an F6 figure remains marked retracted in place rather than
+silently removed or rewritten, per this repo's never-delete rule — the reasoning that once rested on them stays
+visible as what it was; doc 46 is the number to cite going forward, not any figure below this line.
 
 This does not reopen the #881/#882 rulings below on their bottom line — David ruled on 2026-09-02 that a
 per-instrument term is justified. It does replace what those rulings called for **next**: the original #881
@@ -369,8 +380,8 @@ cross-listed there. It is the Milan tape, not London, and was not verified again
 **RETRACTED 2026-09-08 ([#1036](https://github.com/dd-jp/samurai-trading-system/issues/1036)).** This section's
 four static-source findings stand — none of them touches LSE's forbidden Information. Its conclusion does not:
 "the realistic path is to sample the free endpoint ourselves" is exactly the collection [#999](https://github.com/dd-jp/samurai-trading-system/issues/999)
-found barred by LSE Terms §8. Nothing replaces that path until [#1035](https://github.com/dd-jp/samurai-trading-system/issues/1035) reports on a licensed
-substitute. See the RETRACTION notice above.
+found barred by LSE Terms §8. [#1035](https://github.com/dd-jp/samurai-trading-system/issues/1035) has since
+reported a licensed substitute — see `46-lseg-dmd-pretrade-surface.md` and the RETRACTION notice above.
 
 ## F3 — the LSE pool, and what #881 actually asked
 
@@ -457,9 +468,10 @@ for two reasons already established above, both of which push the same way:
    range data, and thinness and width are the same phenomenon. What survives is the *liquid tenth* of the pool.
 
 So the estimator arm's dispersion statistic is a **lower bound, reported for completeness — and, with F6
-retracted, the only quantification this document currently has standing.** No number replaces it until
-[#1035](https://github.com/dd-jp/samurai-trading-system/issues/1035) reports a permissibly-collected
-measurement. What the estimator arm *does* establish, on its own screened data with no dependency on F6:
+retracted, the only quantification this document currently has standing.** **[#1035](https://github.com/dd-jp/samurai-trading-system/issues/1035)
+has since reported the permissibly-collected measurement that replaces it** — see
+`46-lseg-dmd-pretrade-surface.md` (159.0 bps pool open-bucket median round-trip, 4.19x/57.70x max/median/max-min
+dispersion). What the estimator arm *does* establish, on its own screened data with no dependency on F6:
 **every one of the ten screened names estimates wider than SPY (2.1x to 15.6x), and eight of the ten estimate
 wider than TSLA** — the name doc 53 measured at 4.216 bps, already **4.2x the 1bp floor**.
 
@@ -474,9 +486,10 @@ the numbers are pessimistic; this one says **the collection method itself disqua
 timing, and re-running at a better time of day does not fix it.** No number below this line — the table, the
 median 88.1 bps, the 480.5x max/min, the 12.61x max/median, the 44.1 bps implied half-spread — may be cited or
 relied on. The script is deleted from the tree (git history retains it); the raw log is kept, retracted, at
-[`archive/raw/2026-09-02-58-lse-quotes-preopen.txt`](archive/raw/2026-09-02-58-lse-quotes-preopen.txt). Nothing
-replaces these numbers until [#1035](https://github.com/dd-jp/samurai-trading-system/issues/1035) reports. The
-table is kept below only as the audit record of what was collected and why it doesn't count.
+[`archive/raw/2026-09-02-58-lse-quotes-preopen.txt`](archive/raw/2026-09-02-58-lse-quotes-preopen.txt).
+[#1035](https://github.com/dd-jp/samurai-trading-system/issues/1035) has since reported the replacement — see
+`46-lseg-dmd-pretrade-surface.md`. The table is kept below only as the audit record of what was collected and
+why it doesn't count.
 
 **The three paragraphs that follow are historical: what the document argued before the 2026-09-08 retraction
 above, kept as audit record — not current guidance, and none of it reopens the retraction.** (The table and the
@@ -502,9 +515,11 @@ session state and point the same way.
 The script printed `IN CONTINUOUS SESSION: False` on this run and refused to imply otherwise — it no longer
 exists to print anything; it is deleted (see the retraction above). The original text said this had to be
 re-sampled in session before any number here was used to size anything. **The retraction above supersedes that
-instruction: no number here may be used at all, in session or out, until** [#1035](https://github.com/dd-jp/samurai-trading-system/issues/1035)
-**reports** — doc 53 G3's measured intraday profile on the US names (TSLA's open median 2.7x its close median) is
-why session timing matters at all, not a license to re-run the deleted collection method at a better hour.
+instruction: no number here may be used at all, in session or out — use** `46-lseg-dmd-pretrade-surface.md`
+**([#1035](https://github.com/dd-jp/samurai-trading-system/issues/1035), reported 2026-09-15) instead** — doc
+53 G3's measured intraday profile on the US names (TSLA's open median 2.7x its close median) is why session
+timing matters at all, and doc 46 now measures the LSE pool's own open/close ratio directly (median 1.67x
+across 30 rows), not a license to re-run the deleted collection method at a better hour.
 
 30/30 coverage. Round-trip spread in bps of mid, tightest first:
 
@@ -650,16 +665,23 @@ all", and states that answering it "needs LSE quote data that does not currently
 paragraph below cited F2b and F6 for the "data exists and is free" and "12.61x max/median and 480x max/min"
 claims. F6 is retracted in full (impermissible collection, [#999](https://github.com/dd-jp/samurai-trading-system/issues/999));
 F2b's premise correction that a free endpoint *exists* stands, but the endpoint may not be used to collect
-research data. **Nothing quantifies the live-universe dispersion until [#1035](https://github.com/dd-jp/samurai-trading-system/issues/1035)
-reports** — until then this ruling's magnitude claim is unsupported, though the ruling itself (a per-instrument
-term is justified, ship #1035's licensed sampler first — **not** the retracted free-endpoint one) is not
-re-opened here; see #1035's own acceptance criteria, which already treat the #881 ruling as "provisional
-indefinitely" if no permissible source is found.
+research data. **Nothing quantified the live-universe dispersion until #1035 reported** — until then this
+ruling's magnitude claim was unsupported, though the ruling itself (a per-instrument term is justified, ship
+#1035's licensed sampler first — **not** the retracted free-endpoint one) was not re-opened here; see #1035's
+own acceptance criteria, which already treated the #881 ruling as "provisional indefinitely" if no permissible
+source was found. **[#1035](https://github.com/dd-jp/samurai-trading-system/issues/1035) has since reported**
+(`46-lseg-dmd-pretrade-surface.md`, 2026-09-15): 4.19x max/median and 57.70x max/min open-bucket dispersion
+across the 30 covered rows — narrower than F6's retracted figures, but the per-instrument-term ruling is not
+reopened by this; doc 46's own dispersion still clears the 2x threshold by a wide margin.
 
 **Both halves of that framing were said to be wrong, and in opposite directions.** The data exists and is free
 (F2b). And once measured, the dispersion was said not to be marginal — it was **12.61x max/median and 480x
 max/min** across the thirty lines (F6, retracted), against a threshold of 2x. That specific magnitude is no
-longer evidenced; whether cost varies *enormously* within the tradeable universe is open again pending #1035.
+longer evidenced; whether cost varies *enormously* within the tradeable universe was open again pending #1035.
+**[#1035](https://github.com/dd-jp/samurai-trading-system/issues/1035) has since reported**
+(`46-lseg-dmd-pretrade-surface.md`, 2026-09-15): the independently-measured dispersion is 4.19x max/median and
+57.70x max/min open-bucket — smaller than F6's retracted claim, but still well past the 2x threshold, so the
+question is answered yes on permissible evidence, though not at F6's specific magnitude.
 
 *An earlier draft of this document ruled the opposite way, on the estimator arm's 1.81x. That ruling was wrong
 and is retracted here rather than quietly edited: the estimator compresses dispersion 3x by construction and its
@@ -676,10 +698,12 @@ The ruling, in order of what should actually be built:
    now retracted in full — **not** because it was out-of-session, but because `58-lse-quote-snapshot.py`
    scraped a source LSE's Terms §8 bars ([#999](https://github.com/dd-jp/samurai-trading-system/issues/999),
    [#1036](https://github.com/dd-jp/samurai-trading-system/issues/1036)); that script is deleted and must not be
-   re-written against the same endpoint. The first ship is **not** that sampler; it is whatever
-   [#1035](https://github.com/dd-jp/samurai-trading-system/issues/1035) finds viable against LSEG Delayed Market
-   Data, producing both the per-instrument level and the session profile that doc 53 G3 showed matters (TSLA's
-   open 2.7x its close).
+   re-written against the same endpoint. The first ship is **not** that sampler; it was
+   [#1035](https://github.com/dd-jp/samurai-trading-system/issues/1035) (reported 2026-09-15, see
+   `46-lseg-dmd-pretrade-surface.md`), which built the sampler against LSEG Delayed Market Data instead and
+   produced both the per-instrument level (159.0 bps pool open-bucket median round-trip) and the session profile
+   that doc 53 G3 showed matters (TSLA's open 2.7x its close; doc 46 measures this LSE pool's own median at
+   1.67x on 2 days of data).
 2. **The per-instrument term is justified and the seam is ready** — F5 records that `fill()` already holds
    `request.instrument`. Build it *against sampled data*, not against this snapshot.
 3. **The functional form may have to change, not just the coefficient — but the evidence for it is retracted.**
@@ -688,7 +712,11 @@ The ruling, in order of what should actually be built:
    *mechanism* is general and independent of F6 — a low-priced line's spread can be dominated by the exchange's
    minimum tick rather than by liquidity — so a minimum-tick-over-price floor, a different shape from anything in
    `CostConfig`, remains worth building once #1035 supplies a permissible per-instrument price; it just cannot be
-   sized from this snapshot.
+   sized from this snapshot. **[#1035](https://github.com/dd-jp/samurai-trading-system/issues/1035) has since
+   reported** (`46-lseg-dmd-pretrade-surface.md`, 2026-09-15): every covered row, LCO3 included, carries
+   `bidLimitPrice`/`offerLimitPrice` per snapshot, so a permissible per-instrument price now exists to build and
+   size the minimum-tick-over-price floor against — this line's blocker is cleared, though the floor itself is
+   not yet built.
 4. **Narrow the universe, and treat that as the larger finding.** Twenty of thirty lines cannot be priced from
    free daily bars; three return **one bar in two years**; 3LSQ and 3RAC are flat on 43% and 38% of sessions.
    ADR-0016's commodity-ETC leg was never encoded, and its whole leverage case rests on one 3USL quote that F6
@@ -698,8 +726,11 @@ The ruling, in order of what should actually be built:
 
 **What would reverse this:** permissibly-collected in-session sampling (#1035) showing continuous-trading
 spreads are both tight and uniform. F6 is retracted rather than merely provisional, and this ruling's magnitude
-claim is unsupported until #1035 reports — which is exactly why the first ship is a licensed sampler, not a
-coefficient fit to a retracted snapshot.
+claim was unsupported until #1035 reported — which is exactly why the first ship was a licensed sampler, not a
+coefficient fit to a retracted snapshot. **[#1035](https://github.com/dd-jp/samurai-trading-system/issues/1035)
+has since reported** (`46-lseg-dmd-pretrade-surface.md`, 2026-09-15): the spreads are neither tight nor
+uniform — 4.19x/57.70x dispersion, pool median 159.0 bps round-trip, ~3.1x the single-stock cost budget — so
+this ruling is not reversed; it is confirmed on independent, permissibly-collected evidence.
 
 ### #882 — the modelled cost is under-sized, and the floors must stop being module constants
 
@@ -716,8 +747,10 @@ coefficient fit to a retracted snapshot.
      full** ([#1036](https://github.com/dd-jp/samurai-trading-system/issues/1036)), and must not be cited. What
      survives independent of F6: F2/F3's estimator arm still shows every screened LSE name estimating wider than
      SPY, and doc 53 §G4 independently argues the sign (an LSE leveraged ETP's real spread is very likely wider
-     than a US mega-cap's) — so the *direction* (under-charged) still holds, but the *magnitude* does not, until
-     [#1035](https://github.com/dd-jp/samurai-trading-system/issues/1035) reports. The model already prefers a
+     than a US mega-cap's) — so the *direction* (under-charged) still holds; the *magnitude* is now reported by
+     [#1035](https://github.com/dd-jp/samurai-trading-system/issues/1035) (`46-lseg-dmd-pretrade-surface.md`):
+     **79.5 bps** half-spread at the pool open-bucket median (this line's retracted 44 bps figure above is not a
+     valid comparison baseline — see F6's retraction). The model already prefers a
      supplied spread (`marketState.spread ?? volatility × coefficient`), so **feeding real sampled LSE spreads
      into `marketState` may be a better fix than raising this floor** — which is another reason a licensed
      sampler, not this retracted snapshot, ships first.
@@ -741,6 +774,7 @@ tier change in Saxo's schedule.
 ([#1036](https://github.com/dd-jp/samurai-trading-system/issues/1036)), not merely out-of-session, so it cannot
 be cited even as a provisional order of magnitude any more; and F2 separately forbids converting an *estimate*
 into bps at all. Commission has a sourced, actionable figure to set as a **rate** (8 bps per side); the
-half-spread has a **sign** and a need for a permissible way to measure it — that is
-[#1035](https://github.com/dd-jp/samurai-trading-system/issues/1035), not a guess and not a re-run of the
-deleted script. It also does not authorise raising `STRUCTURAL_MIN_COMMISSION_RATE`, for the reason in point 1.
+half-spread has a **sign** and now a permissible measurement —
+[#1035](https://github.com/dd-jp/samurai-trading-system/issues/1035) (`46-lseg-dmd-pretrade-surface.md`, reported
+2026-09-15: 79.5 bps pool open-bucket median half-spread), not a guess and not a re-run of the deleted script.
+It also does not authorise raising `STRUCTURAL_MIN_COMMISSION_RATE`, for the reason in point 1.
