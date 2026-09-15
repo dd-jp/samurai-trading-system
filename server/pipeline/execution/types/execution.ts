@@ -408,6 +408,22 @@ export interface ExecutionResult {
  * first. `sweep_shape_mismatch` is `abandonWedgedZeroFillLot`'s SQL guard
  * having drifted from `isWedgedZeroFillLot` (#1601); `sweep_abandon_failed` is
  * the pre-existing store-write failure this sweep's `catch` block reports.
+ * #1615 added the `residual_sweep_*` group for `sweepResidualProtection`'s
+ * (residual-protection-sweep.ts) six `action: 'undetermined'` push sites,
+ * every one of which shares `kind: 'sweep'` too — the bare `sweep_` prefix
+ * was already spoken for by `sweepWedgedZeroFillLots` above, so this group
+ * gets its own to stay distinguishable at a glance. `residual_sweep_rearm_unsupported`
+ * and `residual_sweep_rearm_retry_failed` back what is structurally ONE push
+ * site (`sweepOne`'s final `catch`, one `return`) rather than two: its
+ * `reason` already branches on `isProtectiveRearmUnsupported`, and a failing
+ * Alpaca lot's own lifecycle walks retry -> retry -> ... -> unsupported (the
+ * file doc's `MAX_REARM_ATTEMPTS` section) once its wire-id budget is spent —
+ * exactly the false-to-true transition a single shared value would dedup away
+ * as "same state" the pass it happens, which is #1615's bug class inside the
+ * fix for #1615's bug class. `alertResidualExposureOnce` already treats the
+ * two as separate escalation channels (`rearm_unsupported_alerted_at` vs
+ * `alerted_at` on the same `flags.rearmUnsupported`), so this mirrors an
+ * existing distinction rather than inventing one.
  */
 export type ReconcileEscalation =
   | 'wedge_cancelled'
@@ -415,7 +431,14 @@ export type ReconcileEscalation =
   | 'never_confirmed_cancel_failed'
   | 'never_confirmed_coverage_short'
   | 'sweep_shape_mismatch'
-  | 'sweep_abandon_failed';
+  | 'sweep_abandon_failed'
+  | 'residual_sweep_lot_unsettled'
+  | 'residual_sweep_size_read_failed'
+  | 'residual_sweep_garbage_residual'
+  | 'residual_sweep_reflatten_in_flight'
+  | 'residual_sweep_reflatten_submitted'
+  | 'residual_sweep_rearm_unsupported'
+  | 'residual_sweep_rearm_retry_failed';
 
 export interface ReconcileDivergence {
   idempotency_key: string;
@@ -474,7 +497,12 @@ export interface ReconcileDivergence {
    * push sites that share `action: 'undetermined'` AND `kind: 'sweep'` — the
    * SQL-guard shape mismatch (`sweep_shape_mismatch`) and the store-write
    * `catch` block (`sweep_abandon_failed`) — which collided under the same
-   * dedup before this field told them apart.
+   * dedup before this field told them apart. #1615 tagged
+   * `sweepResidualProtection`'s (residual-protection-sweep.ts) push sites the
+   * same way, and widened `lastSweepAction` (fill-sync.ts) — a SEPARATE dedup
+   * keyed off this same field — to read it too; see `ReconcileEscalation`'s
+   * doc above for the site count and the `rearm_unsupported`/
+   * `rearm_retry_failed` split.
    */
   escalation?: ReconcileEscalation;
   /**
