@@ -1,9 +1,9 @@
 /**
- * Warm-start backfill (#512) — `yarn backfill-market-data`.
+ * Warm-start backfill (#512) — `npm run backfill-market-data`.
  *
  * Fills `SqliteMarketDataStore` for every `DEFAULT_UNIVERSE` instrument,
  * at the timeframes a first orchestrator tick actually requests, BEFORE
- * `yarn orchestrator` starts. Run once before a soak; safe to re-run any
+ * `npm run orchestrator` starts. Run once before a soak; safe to re-run any
  * time (idempotent — see `backfillMarketData` below).
  *
  * ## Same database the orchestrator injects (#512 requirement 1)

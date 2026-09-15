@@ -2,7 +2,7 @@
  * The composition root's capture default (#1035).
  *
  * This file exists because of what the offline smoke run CANNOT prove.
- * `yarn smoke` drives a mock LLM client that returns no `usage` block, so
+ * `npm run smoke` drives a mock LLM client that returns no `usage` block, so
  * `recordSpend` returns early, nothing is metered and no `llm_call_log` row is
  * written — a green smoke gate says nothing about whether capture is reached
  * on the shipped path. That is exactly this repo's dominant defect shape: a

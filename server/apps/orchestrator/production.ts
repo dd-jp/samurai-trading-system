@@ -550,7 +550,7 @@ export interface ProductionComponents {
    * which is the only way to catch this component reverting to having no
    * caller: that defect is invisible to a unit suite by construction.
    *
-   * Note `yarn smoke` does NOT read this field — `startFromEnvironment`
+   * Note `npm run smoke` does NOT read this field — `startFromEnvironment`
    * returns a `ProductionOrchestrator`, which has no such member, so the smoke
    * run injects its own limiter through `ProductionConfig.llmRateLimiter` and
    * holds that reference. The injection seam is the load-bearing one; this
@@ -2263,7 +2263,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       // that true; anchoring to the ceiling itself would remove the margin
       // and is untested territory.
       //
-      // `yarn smoke` once measured a declared-£1,000-anchored control taking
+      // `npm run smoke` once measured a declared-£1,000-anchored control taking
       // zero trades (`rounds_to_zero_shares` on every intent), recorded
       // BEFORE #1112, when paper's `capitalCeilingUsd` did not exist at all:
       // the live arm sized off its full ~$100,000 broker equity unclamped
@@ -3323,7 +3323,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
   /**
    * The matched-control comparison's production caller (#971, under #636 and
    * #913) — the thing that makes falsifier arm 2's numbers reach an operator at
-   * all, rather than only `yarn report:arms` when a human remembers to run it.
+   * all, rather than only `npm run report:arms` when a human remembers to run it.
    *
    * Runs inside the same daily timer as `runDailyCycle`, per #636 ("additional
    * columns in the existing daily/weekly suite, no new scheduling primitive"),

@@ -106,7 +106,7 @@ export interface LlmAttribution {
  * `AnthropicLlmClient` builds its prompt context by reading this map rather
  * than by naming fields, so the classification is load-bearing at runtime and
  * cannot rot into a stale comment. Deliberately declared in this
- * (non-test) module: `tsconfig.build.json` excludes test files from `yarn build`, so
+ * (non-test) module: `tsconfig.build.json` excludes test files from `npm run build`, so
  * a guard living in a `.test.ts` would not be typechecked by the build at all
  * and the enforcement would be imaginary.
  */

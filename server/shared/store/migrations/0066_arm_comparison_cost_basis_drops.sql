@@ -10,7 +10,7 @@
 -- across the legs and left that selection term standing by construction (David,
 -- 2026-09-14, Option 1). #1546 measures it instead of removing it, and this
 -- column is where the measurement becomes durable rather than only printed by
--- `yarn report:arms`.
+-- `npm run report:arms`.
 --
 -- ## One JSON column per arm, not eight INTEGERs
 --

@@ -252,7 +252,7 @@ describe('startSupervisor', () => {
 
     it('settles even when no exit ever follows it', async () => {
       // Node does not promise an 'exit' after an 'error'. If this promise
-      // stayed pending, `yarn serve` would hang with the other half live.
+      // stayed pending, `npm run serve` would hang with the other half live.
       const { supervisor, orchestrator, dashboard } = start();
 
       orchestrator.emit('error', new Error('spawn EACCES'));

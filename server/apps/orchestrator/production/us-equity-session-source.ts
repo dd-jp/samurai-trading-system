@@ -11,7 +11,7 @@
  * the options object handed to `startFromEnvironment`, which spreads
  * `injected` wholesale into `buildProductionOrchestrator` — so the
  * composition root itself stays synchronous and untouched; only the actual
- * `yarn orchestrator` process ever awaits this.
+ * `npm run orchestrator` process ever awaits this.
  *
  * See `calendar-fallback-alert.ts` for the fetch-failure decision this
  * module implements: fetch at startup; on failure, alert loudly and fall

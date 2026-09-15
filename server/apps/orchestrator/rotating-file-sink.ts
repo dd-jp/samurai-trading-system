@@ -11,7 +11,7 @@
  * Everything diagnostic — LLM warn lines, latency-budget overruns,
  * session-open-equity cold-start warnings, alert-transport failures, fill-sync
  * errors — exists *only* as a structured log line. Before this file that line
- * went to stdout and nowhere else, so a `yarn orchestrator` run without a
+ * went to stdout and nowhere else, so a `npm run orchestrator` run without a
  * shell redirect discarded it. "Why did it do that on day 6" is the single
  * question the 14-day soak (#238) exists to answer, and it was unanswerable.
  *

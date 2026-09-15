@@ -7,7 +7,7 @@
  * of a top-level `DashboardSnapshot` field is impossible to ship silently —
  * `DASHBOARD_SNAPSHOT_FIELD_NAMES`'s `as const satisfies` clause plus
  * `_assertDashboardSnapshotFieldNamesCoverAllKeys` (this file's siblings,
- * enforced at `yarn typecheck` time) are together what stop the field list
+ * enforced at `npm run typecheck` time) are together what stop the field list
  * itself from drifting from the interface in either direction — a listed
  * name that isn't a real field, or a real field that's missing from the
  * list; this suite is what proves the value derived from that list actually

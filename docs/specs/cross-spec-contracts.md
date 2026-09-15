@@ -154,7 +154,7 @@ constrain nothing the Feedback Loop does:
 4. `buildProductionComponents` and `computeMetrics` — the kill lines, at boot and
    per cycle.
 
-`yarn smoke` drives a negative probe through each seam for every guarded name and
+`npm run smoke` drives a negative probe through each seam for every guarded name and
 fails the gate if any accepts an out-of-bound value, or if the probe stops
 covering the whole table.
 

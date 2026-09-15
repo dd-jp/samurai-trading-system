@@ -6,7 +6,7 @@
  * a port number.
  *
  * Before this, the suite bound a fixed `8788`, so two checkouts running
- * `yarn e2e` at once collided outright: the second run's `webServer` found the
+ * `npm run e2e` at once collided outright: the second run's `webServer` found the
  * port already answering and refused to start (Playwright's own
  * `reuseExistingServer:false` behaviour), which reads exactly like a real e2e
  * failure. See #1298 for the reproduction.
@@ -17,7 +17,7 @@ import { createServer } from 'node:net';
  * Binds to port 0 on `host`, reads back whatever port the OS assigned, then
  * releases it — the standard "ask the OS, then let go" pattern for finding a
  * free port to hand to a process that binds it itself only much later: the
- * consumer's `webServer.command` is `yarn build && node …`, and the adjacent
+ * consumer's `webServer.command` is `npm run build && node …`, and the adjacent
  * `webServer.timeout` in `playwright.config.ts` is 300s because the 60s
  * default is not enough for a cold `tsc` + `vite build`. The release-to-bind
  * gap here is tens of seconds to minutes, not a moment.
@@ -25,7 +25,7 @@ import { createServer } from 'node:net';
  * This does **not** make two runs unable to collide: the port is free at the
  * instant this resolves, not for the lifetime of the run, and nothing holds
  * it open between the release here and the fixture server's own `listen()`.
- * What it buys is that each concurrent `yarn e2e` draws its own port
+ * What it buys is that each concurrent `npm run e2e` draws its own port
  * independently from the OS's full ephemeral range, instead of every run
  * contending for the same fixed number — which is what turned a rare race
  * into a guaranteed collision before this change.
@@ -57,7 +57,7 @@ export function acquireFreePort(host: string): Promise<number> {
 }
 
 /**
- * The env var one `yarn e2e` invocation uses to make its port choice
+ * The env var one `npm run e2e` invocation uses to make its port choice
  * idempotent across process boundaries.
  *
  * On a green run `playwright.config.ts` is evaluated exactly twice: the root
@@ -89,14 +89,14 @@ export function acquireFreePort(host: string): Promise<number> {
 const PORT_ENV_VAR = 'SAMURAI_E2E_PORT';
 
 /**
- * Resolves this `yarn e2e` invocation's one port: picks it via
+ * Resolves this `npm run e2e` invocation's one port: picks it via
  * `acquireFreePort` the first time any process in the invocation calls this
  * (the root process, always first), stashes it in `process.env[PORT_ENV_VAR]`,
  * and every later call — including from a forked worker, which inherits the
  * parent's environment at fork time — reads that value back instead of
  * drawing a new one.
  *
- * Also honored as an external override: `SAMURAI_E2E_PORT=<port> yarn e2e`
+ * Also honored as an external override: `SAMURAI_E2E_PORT=<port> npm run e2e`
  * binds that port directly instead of drawing one, because this function has
  * no way to tell "the root process stashed this two calls ago" apart from "a
  * shell had this exported already" — both are just a valid integer in the

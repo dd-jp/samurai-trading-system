@@ -3,7 +3,7 @@
  * 1 and its final round, or does every extra round just re-confirm the
  * first?
  *
- *   yarn report:debate-flip-rate [--days N] [--db <path>]
+ *   npm run report:debate-flip-rate -- [--days N] [--db <path>]
  *
  * `--db <path>` points at an explicit SQLite file instead of the
  * environment-resolved store (`SAMURAI_MODE` → `sharedStorePath`) — same

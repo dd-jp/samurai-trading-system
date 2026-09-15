@@ -185,7 +185,7 @@ function assertNoStrandedLegacyStore(path: string): void {
  * convention path is `data/samurai-{env}.sqlite` and `data/` is gitignored, so
  * on every fresh clone the directory is absent and better-sqlite3 throws
  * "Cannot open database because the directory does not exist" — an error that
- * names neither the path nor the fix (#323: it was the first thing `yarn
+ * names neither the path nor the fix (#323: it was the first thing `npm run
  * orchestrator` hit once the config guard stopped throwing).
  *
  * Creating it is the writer's own concern, not the operator's: nothing about a

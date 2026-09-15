@@ -11,7 +11,7 @@
  *
  * ## The rule for editing this list
  *
- * **Verify state before citing.** `yarn check:live-gates` (or `gh issue view <N>`
+ * **Verify state before citing.** `npm run check:live-gates` (or `gh issue view <N>`
  * one at a time) and confirm the issue is OPEN and says what the line claims,
  * every time this list is touched. An issue number in a safety message is a
  * claim about the world, not decoration. Bump `LIVE_MONEY_GATES_VERIFIED_ON` in
@@ -32,7 +32,7 @@
  * moment they flip `SAMURAI_MODE=live`. An open ticket that does not is noise
  * here, and noise is how the previous list became unreadable.
  *
- * ## Why nothing in `yarn test` asserts these are still open (#868)
+ * ## Why nothing in `npm run test` asserts these are still open (#868)
  *
  * The list went 7-for-7 stale between 2026-08-07 and 2026-08-18 and nothing
  * noticed, so the obvious fix is a test that asserts each cited issue is OPEN.
@@ -56,7 +56,7 @@
  *
  * So the decay is made **loud and cheap to settle** instead of silently
  * checked. The rendered summary carries the verification date and names the
- * one command that answers the question — `yarn check:live-gates`
+ * one command that answers the question — `npm run check:live-gates`
  * (`server/tools/check-live-money-gates.ts`), which reads this same list, asks
  * GitHub for each issue's state, and exits non-zero if any cited issue has
  * closed. It is operator- and maintainer-invoked, deliberately NOT wired into
@@ -97,7 +97,7 @@
  * This is NOT a `LIVE_MONEY_GATES` entry, for the reason it never was: it is not an
  * open issue whose closure changes anything here, it is a standing structural
  * refusal in the code itself that this list cannot express and
- * `yarn check:live-gates` cannot verify. **The two are coupled and must not be
+ * `npm run check:live-gates` cannot verify. **The two are coupled and must not be
  * decoupled**: lifting this file's blanket refusal does NOT by itself unblock
  * a single live entry — the currency-mismatch guard still refuses every one,
  * correctly, until a real FX-rate provider exists, or a same-currency account
@@ -112,7 +112,7 @@
  *
  * Kept as data rather than prose so the two callers render one list, so a test
  * can assert that no entry has silently become a bare number with no claim
- * attached to it, and so `yarn check:live-gates` can re-verify the whole list
+ * attached to it, and so `npm run check:live-gates` can re-verify the whole list
  * against GitHub without re-parsing an English sentence.
  */
 export const LIVE_MONEY_GATES: readonly { readonly issue: number; readonly gap: string }[] = [
@@ -169,7 +169,7 @@ export const LIVE_MONEY_GATES_VERIFIED_ON = '2026-08-31';
 // (re-verified same day: #895/#900 confirmed still OPEN, #925 and #932 entries removed above)
 
 /** The command that re-verifies the list, named in the operator-facing summary. */
-export const LIVE_MONEY_GATES_RECHECK_COMMAND = 'yarn check:live-gates';
+export const LIVE_MONEY_GATES_RECHECK_COMMAND = 'npm run check:live-gates';
 
 /**
  * The gate list as one sentence, for an error message or a log line.

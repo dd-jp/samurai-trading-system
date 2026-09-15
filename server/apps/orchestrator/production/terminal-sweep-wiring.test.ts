@@ -20,7 +20,7 @@
  * the tick loop's own composition path — this file is the same "option (b)"
  * substitute `filled-zero-size-wiring.test.ts` used, aimed at
  * `buildProductionComponents` directly rather than the smoke gate, so a
- * regression here fails fast and locally rather than only inside `yarn smoke`.
+ * regression here fails fast and locally rather than only inside `npm run smoke`.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { LlmClient } from '../../../pipeline/debate-engine/index.js';

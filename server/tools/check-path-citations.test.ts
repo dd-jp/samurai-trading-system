@@ -285,7 +285,7 @@ describe('codeFilesIn', () => {
       'client/src/App.tsx',
       'docs/notes.md',
       'server/tools/__fixtures__/path-citations/known-good.ts',
-      '.yarn/releases/yarn-4.0.0.cjs',
+      '.claude/agents/reviewer.ts',
     ];
     expect(codeFilesIn(paths)).toEqual(['server/pipeline/reconcile.ts', 'client/src/App.tsx']);
   });
@@ -463,7 +463,7 @@ describe('resolution against the git index rather than the working directory (#8
     rmSync(repo, { recursive: true, force: true });
   });
 
-  /** The state a machine is in after `yarn smoke`: gitignored output, and nothing else. */
+  /** The state a machine is in after `npm run smoke`: gitignored output, and nothing else. */
   function createRuntimeArtefacts(): void {
     writeIn(repo, 'data/samurai-live.sqlite', '');
     writeIn(repo, 'data/samurai-backtest.sqlite', '');
@@ -540,10 +540,10 @@ describe('the index resolver, against this repository', () => {
     expect(resolver.kind('server/tools')).toBe('directory');
   });
 
-  it('takes its roots from the index, keeping tracked `.github` and dropping tracked `.claude`/`.yarn`', () => {
-    // Both dot-directories are in `.gitignore` and both have tracked files anyway, so
-    // the index alone would admit them; `SKIPPED_DIRS` is what keeps them out, and it is
-    // now the ONLY reason the dotfile special case could be deleted.
+  it('takes its roots from the index, keeping tracked `.github` and dropping tracked `.claude`', () => {
+    // `.claude` is in `.gitignore` and has tracked files anyway, so the index alone
+    // would admit it; `SKIPPED_DIRS` is what keeps it out, and it is now the ONLY
+    // reason the dotfile special case could be deleted.
     //
     // Asserted by membership, never as the full set: pinning the exact list would turn
     // "someone added a top-level directory" into a red citation check, which is the
@@ -553,7 +553,6 @@ describe('the index resolver, against this repository', () => {
     expect(roots.has('server')).toBe(true);
     expect(roots.has('src')).toBe(true);
     expect(roots.has('.claude')).toBe(false);
-    expect(roots.has('.yarn')).toBe(false);
   });
 
   it('refuses to guess outside a git checkout rather than falling back to the filesystem', () => {

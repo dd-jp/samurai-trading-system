@@ -133,14 +133,13 @@ export const IMMUTABLE_RECORD_DIRS = [
  * one of them has a tracked file. Do not re-add them: an entry that can never match is
  * an entry a reader has to disprove.
  *
- * `.claude/` and `.yarn/` appear in `.gitignore` yet have tracked files under them —
- * an explicit `git add` beats an ignore rule — so both are still load-bearing here.
+ * `.claude/` appears in `.gitignore` yet has tracked files under it —
+ * an explicit `git add` beats an ignore rule — so it is still load-bearing here.
  */
 const SKIPPED_DIRS = new Set([
-  // Agent skills and yarn's vendored releases: tracked, but not this repo's prose or
-  // source, and neither is ever the subject of a citation.
+  // Agent skills: tracked, but not this repo's prose or source, and never
+  // the subject of a citation.
   '.claude',
-  '.yarn',
   // Fixture markdown deliberately contains citations that do NOT resolve — that is what
   // it is for. Scanning it would make the checker flag its own test data on every run.
   // Do not remove this entry without moving the fixtures somewhere else first.
@@ -450,8 +449,8 @@ function parseCandidate(
  * amount of runtime output can add one.
  *
  * There is no dotfile rule any more. `.github/**` is tracked, so the listing supplies
- * that root the same way it supplies `server`; the two tracked dot-directories that are
- * NOT wanted (`.claude`, `.yarn`) are named in `SKIPPED_DIRS`, and every other dot
+ * that root the same way it supplies `server`; the one tracked dot-directory that is
+ * NOT wanted (`.claude`) is named in `SKIPPED_DIRS`, and every other dot
  * directory is untracked and therefore already absent.
  */
 export function knownRootsFromPaths(indexedPaths: readonly string[]): ReadonlySet<string> {

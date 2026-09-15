@@ -32,7 +32,7 @@
  * ## What this file does NOT cover, and where that is covered
  *
  * That `start()` actually CALLS `run` on its GDELT timer. Driving the real
- * timer here would mean starting the tick loop against these stubs. `yarn
+ * timer here would mean starting the tick loop against these stubs. `npm run
  * smoke` runs the real composition root through `start()` with a seeded
  * archive and asserts an emitted aggregate reaches the store
  * (`SMOKE_GDELT_EXPECTED_AGGREGATES`), which is that half.

@@ -89,8 +89,8 @@
  * that cannot be enumerated offline, so every desk shape is reported against
  * all three mediator stances (agrees / neutral / opposes).
  *
- * Usage: `yarn build && node dist/server/tools/measure-conviction-ceiling.js`
- * (or `yarn tsx server/tools/measure-conviction-ceiling.ts`). No network, no
+ * Usage: `npm run build && node dist/server/tools/measure-conviction-ceiling.js`
+ * (or `npx tsx server/tools/measure-conviction-ceiling.ts`). No network, no
  * keys, no database — pure functions over an enumerated grid.
  */
 
@@ -248,7 +248,7 @@ export function buildStocksDesk(point: LatticePoint, shape: DeskShape): AnalystV
       // The two analysts read DIFFERENT stores — fundamental takes
       // `marketContext.news`, sentiment takes social — so they hydrate
       // independently and the desk can sit with one on each branch. This is
-      // the shape the current MI stack most likely produces (`yarn smoke`
+      // the shape the current MI stack most likely produces (`npm run smoke`
       // serves news items and no social ones).
       return [
         technical,
@@ -462,7 +462,7 @@ export function report(floor: number): string {
 }
 
 // Matches both the built entry point and a `tsx` run of the source, so the
-// report is reachable without a full `yarn build`.
+// report is reachable without a full `npm run build`.
 if (/measure-conviction-ceiling\.(js|ts)$/.test(process.argv[1] ?? '')) {
   console.log(report(DEFAULT_TRADER_CONFIG.conviction_floor));
 }

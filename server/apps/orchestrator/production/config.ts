@@ -92,7 +92,7 @@ import type { TraderDiagnosticAlertChannel } from './trader-diagnostic-alert.js'
  * fields on `ProductionConfig` (#551): one authoritative list of "what is an
  * alert channel" that both `ProductionConfig` and `ALERT_CHANNEL_FIELDS` are
  * checked against, so a ninth field added here without a matching entry
- * there fails `yarn typecheck` instead of waiting to be noticed by a human —
+ * there fails `npm run typecheck` instead of waiting to be noticed by a human —
  * the same hole found and patched by hand eight times running (#431, #465,
  * #551, …; see `ALERT_CHANNEL_FIELDS`'s own doc comment for the tally).
  *
@@ -552,7 +552,7 @@ export interface AlertChannelSlots {
    * #1524's immediate page — `SaxoTokenRefresher.lose()`
    * (pipeline/execution/adapters/saxo-token-source.ts) posts here the moment
    * a session can no longer be renewed, naming the environment and the exact
-   * `yarn saxo:login` command. Absent = log-only, with deliberately NO
+   * `npm run saxo:login` command. Absent = log-only, with deliberately NO
    * log-only form behind it (`UNLOGGED_ALERT_IDS`) for the reason
    * `nonSterlingFeeAlerts` above documents: `lose()` already writes the
    * `saxo_session_lost` line before this port is reached. At most one post
@@ -562,7 +562,7 @@ export interface AlertChannelSlots {
   /**
    * #1524's weekly nudge — `SaxoWeeklyReminder` (production/saxo-weekly-
    * reminder-alert.ts) posts here every Sunday evening London time, stating
-   * when the saved session was last established by a manual `yarn
+   * when the saved session was last established by a manual `npm run
    * saxo:login`. Defaults to `loggingAlertChannel('saxoWeeklyReminderAlerts', …)`,
    * the same caveat as every other channel here: reachable only by an
    * operator reading the log stream until `SAMURAI_ALERTS=telegram` supplies

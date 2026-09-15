@@ -7,7 +7,7 @@
  * narrower: it is the BOOT-time half — the only thing that ever stood
  * between "loopback" and "published to the LAN" was `process.env.HOST`
  * defaulting to `127.0.0.1` in `index.ts` and `fixture-server.ts` —
- * `HOST=0.0.0.0 yarn dashboard` bound the book wide open, silently, with no
+ * `HOST=0.0.0.0 npm run dashboard` bound the book wide open, silently, with no
  * error and no failing test.
  *
  * The fix decided on #887 (recorded in ADR-0019's Consequences and its
@@ -22,7 +22,7 @@
  * check layered on top of this boot-time one, not a replacement for it.
  *
  * The conjunction matters operationally: loopback-with-no-credential is
- * today's default and every `yarn dashboard` invocation until an operator
+ * today's default and every `npm run dashboard` invocation until an operator
  * deliberately opts into wider reach. A guard that fired whenever no
  * credential exists — dropping the "AND non-loopback" half — would brick
  * that default path, and `server/apps/supervisor/supervisor.ts` stops the

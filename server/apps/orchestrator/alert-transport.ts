@@ -136,7 +136,7 @@ export type AlertsMode = (typeof ALERTS_MODES)[number];
  * that was missing. `ALL_ALERT_CHANNEL_FIELDS_COVERED` below is what closes
  * that direction: a channel added to `AlertChannelSlots` (production/config.ts)
  * with no catalogue entry (`ALERT_IDS`, alert-catalogue.ts) behind it now
- * fails `yarn typecheck` instead of waiting for an eleventh human to notice.
+ * fails `npm run typecheck` instead of waiting for an eleventh human to notice.
  */
 export const ALERT_CHANNEL_FIELDS = [
   ...ALERT_IDS,
@@ -155,14 +155,14 @@ export const ALERT_CHANNEL_FIELDS = [
  * is `never`, the mapped type below has no keys, and `{}` satisfies it. Miss
  * one — say a ninth channel lands on `AlertChannelSlots` with nothing added
  * here — and the mapped type gains a required key for the missing field, so
- * `{}` no longer satisfies it and `yarn typecheck` fails naming that key.
+ * `{}` no longer satisfies it and `npm run typecheck` fails naming that key.
  *
  * Exported, not a throwaway local: the entire point of this binding lives in
  * its TYPE, not in anything read from it at runtime, and an unused local
  * would be exactly the kind of thing a linter flags and a future edit
  * "cleans up" — taking the guard with it. Proven in the #551 PR description
  * by temporarily adding a dummy field to `AlertChannelSlots` and confirming
- * `yarn typecheck` fails on this line, naming the field.
+ * `npm run typecheck` fails on this line, naming the field.
  */
 export const ALL_ALERT_CHANNEL_FIELDS_COVERED: {
   [K in Exclude<keyof AlertChannelSlots, (typeof ALERT_CHANNEL_FIELDS)[number]>]: never;

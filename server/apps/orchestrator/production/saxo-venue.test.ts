@@ -261,7 +261,7 @@ describe('buildSaxoTokenSource', () => {
   it('refuses the boot with neither, naming the login command', () => {
     expect(() =>
       buildSaxoTokenSource('sim', silentLogger, { env: APP_CREDENTIALS, tokenPath }),
-    ).toThrow(/yarn saxo:login --env sim/);
+    ).toThrow(/npm run saxo:login -- --env sim/);
   });
 
   it('resolves the LIVE gateway from the live variables and the live file (#1523)', () => {
@@ -313,7 +313,7 @@ describe('buildSaxoTokenSource', () => {
     // `start()` primed it — before that call it appeared only once something
     // asked for a bearer.
     const lost = logger.entries.find((entry) => entry.event === 'saxo_session_lost');
-    expect(lost?.message).toMatch(/yarn saxo:login --env sim/);
+    expect(lost?.message).toMatch(/npm run saxo:login -- --env sim/);
   });
 
   /**

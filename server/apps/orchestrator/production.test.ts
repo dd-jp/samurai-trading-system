@@ -1055,7 +1055,7 @@ describe('buildProductionComponents', () => {
    * question is what the composition root wired, not what the adapter can do.
    *
    * This is the wiring evidence in place of a smoke-gate assertion, and the
-   * exclusion is structural rather than a shortcut: `yarn smoke` gates on the
+   * exclusion is structural rather than a shortcut: `npm run smoke` gates on the
    * pipeline TRANSACTING end to end, so its fixtures produce views on every
    * tick and no quorum skip occurs in a passing smoke run at all. A gate
    * assertion would have to make the smoke run fail to have anything to read.
@@ -1462,7 +1462,7 @@ describe('buildProductionComponents', () => {
    * so a future edit could wire `spendCap: UNCAPPED_SPEND` unconditionally
    * (the pre-#1106 posture) and every other test in this file would stay
    * green: none of them build `MiIngestAgent` at all (`config.miArchive` is
-   * `undefined` everywhere else), and `yarn smoke` never reaches this
+   * `undefined` everywhere else), and `npm run smoke` never reaches this
    * constructor either, since the offline/keyless smoke run has neither Nous
    * sentiment credentials nor `ALPACA_API_KEY`/`ALPACA_API_SECRET`.
    */
@@ -2550,7 +2550,7 @@ describe('llm-failure-rate guard is wired by the composition root (#1396)', () =
  * defect class #745/#746/#752 above document: a mechanism implemented,
  * unit-tested, and never actually called from the composition root.
  *
- * `yarn smoke` cannot exercise this (see its `tickSkipAlerts` comment):
+ * `npm run smoke` cannot exercise this (see its `tickSkipAlerts` comment):
  * overlapping tick passes never occur in a seconds-long offline run where
  * everything settles inside one `tickIntervalMs`. This suite is the
  * enforcement evidence that comment points to.
@@ -4710,7 +4710,7 @@ describe('buildProductionOrchestrator', () => {
    * Every unit of `runArmComparisonCycle` can pass while nothing in the
    * composition root calls it, which is this repo's dominant defect class and
    * exactly what happened to `buildArmComparison` before this ticket: it was
-   * reachable only from `yarn report:arms`, when a human remembered to run it.
+   * reachable only from `npm run report:arms`, when a human remembered to run it.
    *
    * The `metrics` block is deliberately ABSENT here. The comparison must run on
    * a cycle with no `MetricsSuite` — it is derived from `closed_trades`, not
@@ -4875,7 +4875,7 @@ describe('buildProductionOrchestrator', () => {
    * The smoke gate's probe drives `runOutsideBenchmarkCycle` directly, so it
    * proves the cycle works and proves nothing about the wiring: deleting
    * `runOutsideBenchmarks(comparison)` from `runFeedbackCycle` would leave
-   * `yarn smoke` green. This case is the one that goes red — it starts the
+   * `npm run smoke` green. This case is the one that goes red — it starts the
    * real orchestrator, lets FL's own timer fire, and reads
    * `outside_benchmark_samples`.
    *
@@ -7509,7 +7509,7 @@ describe('buildProductionOrchestrator', () => {
 
     /**
      * #824 — the circuit breaker, asserted from the COMPOSITION ROOT for the
-     * same reason the rest of this block is: `yarn smoke` injects
+     * same reason the rest of this block is: `npm run smoke` injects
      * `config.dataSource` and therefore never reaches `buildFailoverDataSource`
      * at all, so this case (and the recovery one below) is the only proof that
      * a breaker exists on the path a live tick actually takes.
@@ -8190,7 +8190,7 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
    * control anchors its book to the live account once, at boot, because a
    * matched control has to start at the same capital (see the anchor tests in
    * `control-account-state.test.ts`, and the `rounds_to_zero_shares` failure
-   * that a declared-£1,000 control produced under `yarn smoke`). What separates
+   * that a declared-£1,000 control produced under `npm run smoke`). What separates
    * them is the accounting: the control debits its OWN deployed cash and marks
    * its OWN lot, while the live arm reads the harness's fixed 100,000 stub.
    */

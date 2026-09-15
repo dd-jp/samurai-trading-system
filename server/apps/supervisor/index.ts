@@ -1,12 +1,12 @@
 /**
- * `yarn serve` entry point — brings up the orchestrator and the dashboard
+ * `npm run serve` entry point — brings up the orchestrator and the dashboard
  * together in one foreground process, so a single Ctrl-C stops both.
  *
  * Thin by design: everything worth testing lives in `supervisor.ts`, including
  * why a signal is forwarded rather than acted on here. This file only wires
  * the real process to it.
  *
- * `yarn serve` builds first, then runs this; the supervisor spawns the built
+ * `npm run serve` builds first, then runs this; the supervisor spawns the built
  * `dist/` entrypoints directly rather than re-entering the `orchestrator` and
  * `dashboard` scripts, which would each start their own `tsc`.
  */
