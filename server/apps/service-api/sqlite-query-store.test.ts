@@ -147,10 +147,29 @@ describe('SqliteQueryStore', () => {
     );
 
     const store = new SqliteQueryStore(db);
-    const positions = store.getOpenPositions(NOW);
+    const positions = store.getOpenPositions(NOW, 'live');
 
     expect(positions).toHaveLength(1);
     expect(positions[0]).toMatchObject({ idempotency_key: 'key-1', instrument: 'AAPL' });
+  });
+
+  // #1592: the arm parameter itself, on real rows from both arms in one table.
+  it('scopes getOpenPositions to the named arm, excluding the other arm entirely', async () => {
+    const db = makeDb();
+    const liveStore = new SqliteExecutionStore(db, 'live');
+    const controlStore = new SqliteExecutionStore(db, 'control');
+    await liveStore.writeAheadPosition(makePosition({ idempotency_key: 'key-live' }));
+    await controlStore.writeAheadPosition(makePosition({ idempotency_key: 'key-control' }));
+
+    const store = new SqliteQueryStore(db);
+
+    const live = store.getOpenPositions(NOW, 'live');
+    expect(live).toHaveLength(1);
+    expect(live[0]?.idempotency_key).toBe('key-live');
+
+    const control = store.getOpenPositions(NOW, 'control');
+    expect(control).toHaveLength(1);
+    expect(control[0]?.idempotency_key).toBe('key-control');
   });
 
   it('reads recent debates newest-first, respecting the limit', () => {
@@ -501,7 +520,7 @@ describe('SqliteQueryStore', () => {
       );
 
       const store = new SqliteQueryStore(db);
-      const trades = store.getRecentClosedTrades(1, NOW);
+      const trades = store.getRecentClosedTrades(1, NOW, 'live');
 
       expect(trades).toHaveLength(1);
       expect(trades[0]?.idempotency_key).toBe('key-closed-2');
@@ -516,7 +535,29 @@ describe('SqliteQueryStore', () => {
       );
 
       const store = new SqliteQueryStore(db);
-      expect(store.getRecentClosedTrades(10, NOW)).toEqual([]);
+      expect(store.getRecentClosedTrades(10, NOW, 'live')).toEqual([]);
+    });
+
+    // #1592: the arm parameter itself, on real rows from both arms in one table.
+    it('scopes getRecentClosedTrades to the named arm, excluding the other arm entirely', async () => {
+      const db = makeDb();
+      const liveStore = new SqliteExecutionStore(db, 'live');
+      const controlStore = new SqliteExecutionStore(db, 'control');
+      await seedClosedTrade(liveStore, makeClosedTrade({ idempotency_key: 'key-closed-live' }));
+      await seedClosedTrade(
+        controlStore,
+        makeClosedTrade({ idempotency_key: 'key-closed-control' }),
+      );
+
+      const store = new SqliteQueryStore(db);
+
+      const live = store.getRecentClosedTrades(10, NOW, 'live');
+      expect(live).toHaveLength(1);
+      expect(live[0]?.idempotency_key).toBe('key-closed-live');
+
+      const control = store.getRecentClosedTrades(10, NOW, 'control');
+      expect(control).toHaveLength(1);
+      expect(control[0]?.idempotency_key).toBe('key-closed-control');
     });
 
     it('reads every fill for the named lots, ignoring lots not named', async () => {

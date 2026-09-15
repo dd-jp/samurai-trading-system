@@ -20,7 +20,7 @@ import {
   unrealizedFor,
 } from '../../pipeline/risk-manager/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
-import type { ClosedTrade, Fill } from '../../shared/index.js';
+import type { ClosedTrade, Fill, TradingArm } from '../../shared/index.js';
 import { isExitFill, totalQty, weightedAvgPrice } from '../../shared/index.js';
 import type { StoreMode } from '../../shared/store/index.js';
 import { buildPipelineView, PIPELINE_LOOKBACK_MS, PIPELINE_MAX_LANES } from './pipeline-query.js';
@@ -222,10 +222,12 @@ function exitPriceFor(trade: ClosedTrade, fillsByTrade: ReadonlyMap<string, Fill
  * directly because it is the one input here that is live, timer-refreshed
  * state; taking it as a parameter is what preserves this function's purity.
  *
- * `mode` is required and has NO default, deliberately (#539). It is the run
- * the operator is looking at, and the one wrong answer that matters is
- * "paper" during a live run — so the caller that resolved `SAMURAI_MODE`
- * states it, and a caller that never resolved one does not compile. It sits
+ * `mode` and `arm` are both required, with NO default, deliberately (#539,
+ * #1592). Each is a fact the caller must have already resolved — the run the
+ * operator is looking at, and which arm's `positions`/`closed_trades` this
+ * snapshot carries — and the one wrong answer that matters for both is a
+ * silent, defaulted guess (`mode` reporting "paper" during a live run; `arm`
+ * reporting 'live' rows for a request that asked for 'control'). Both sit
  * before `providers` for the same reason: a defaulted trailing parameter is
  * exactly the shape that lets a new call site forget it.
  */
@@ -233,9 +235,10 @@ export function buildSnapshot(
   store: DashboardQueryStore,
   asOf: Date,
   mode: StoreMode,
+  arm: TradingArm,
   providers: ProviderStatusReader = NULL_PROVIDER_STATUS,
 ): DashboardSnapshot {
-  const openPositions = store.getOpenPositions(asOf);
+  const openPositions = store.getOpenPositions(asOf, arm);
   // One query for every position's mark rather than one per position — this
   // runs per dashboard HTTP request, not per tick. `getMarks` still throws for
   // an instrument with no mark, so a priceless row can never be rendered.
@@ -364,7 +367,7 @@ export function buildSnapshot(
   // an independent "recent fills" window — a separately-limited recent-fills
   // query would silently starve older closed trades of their fills the
   // moment open-position churn fills the window with entry-leg noise.
-  const closedTradesDomain = store.getRecentClosedTrades(RECENT_CLOSED_TRADES_LIMIT, asOf);
+  const closedTradesDomain = store.getRecentClosedTrades(RECENT_CLOSED_TRADES_LIMIT, asOf, arm);
   const tradeFills = store.getFillsForTrades(
     closedTradesDomain.map((trade) => trade.idempotency_key),
     asOf,
@@ -409,6 +412,7 @@ export function buildSnapshot(
     generated_at: new Date().toISOString(),
     as_of: asOf.toISOString(),
     mode,
+    arm,
     tick_status: tickStatus,
     positions,
     closed_trades,

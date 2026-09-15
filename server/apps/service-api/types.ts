@@ -28,7 +28,7 @@ import type { PersistedArmComparisonSample } from '../../pipeline/feedback-loop/
 import type { OutsideBenchmarkSample } from '../../pipeline/outside-benchmark/index.js';
 import type { RiskCriticVerdict } from '../../pipeline/risk-manager/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
-import type { ClosedTrade, DebateLog, Fill, OpenPosition } from '../../shared/index.js';
+import type { ClosedTrade, DebateLog, Fill, OpenPosition, TradingArm } from '../../shared/index.js';
 import type { ProviderStatusReader } from './provider-status.js';
 
 /**
@@ -195,6 +195,7 @@ export interface DashboardSnapshotBuilder {
     store: DashboardQueryStore,
     asOf: Date,
     mode: StoreMode,
+    arm: TradingArm,
     providers?: ProviderStatusReader,
   ): DashboardSnapshot;
 }
@@ -207,12 +208,19 @@ export interface DashboardSnapshotBuilder {
 export interface DashboardQueryStore {
   getRecentDebates(limit: number, asOf: Date): DebateLog[];
   getTickStatus(asOf: Date): TickStatus | null;
-  getOpenPositions(asOf: Date): OpenPosition[];
+  /**
+   * #1592: `arm` is required, not optional — the #753/#1318 "no read returns
+   * both arms" guarantee lives in the type here, not just in a convention a
+   * future caller could forget. The dashboard entry point resolves an absent
+   * request-side arm to `'live'` before it ever reaches this interface.
+   */
+  getOpenPositions(asOf: Date, arm: TradingArm): OpenPosition[];
   /**
    * Recent realized round trips (#940), most-recently-closed first — the
    * `closed_trades` mirror of `getRecentDebates`/`getVerdictHistory` above.
+   * `arm` required for the same reason as `getOpenPositions` (#1592).
    */
-  getRecentClosedTrades(limit: number, asOf: Date): ClosedTrade[];
+  getRecentClosedTrades(limit: number, asOf: Date, arm: TradingArm): ClosedTrade[];
   /**
    * Every fill belonging to the named lots, in no particular cross-lot order.
    * Scoped to `idempotencyKeys` rather than a bounded "recent fills" window

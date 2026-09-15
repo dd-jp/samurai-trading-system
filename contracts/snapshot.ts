@@ -662,6 +662,17 @@ export interface DashboardSnapshot {
    * degrades to ignorance rather than to a wrong claim.
    */
   mode: StoreMode;
+  /**
+   * The arm this snapshot's `positions`/`closed_trades` were read for (#1592).
+   * Absent from a request means `'live'` — the server resolves that default,
+   * never the client — and an unrecognised request value is refused with a
+   * 400 before `buildSnapshot` runs, so this field is always one of the two
+   * `TradingArmWire` literals, never a guess. Every other section below
+   * (`debates`, `verdicts`, `risk_critics`, `analysts`, `metrics`,
+   * `pipeline`, …) is unaffected by this field and still reads the live arm
+   * only — #1594 tracks widening those reads to match.
+   */
+  arm: TradingArmWire;
   tick_status: TickStatus | null;
   positions: PositionRow[];
   /** Recent realized round trips (#940) — most-recently-closed first. */
@@ -858,6 +869,7 @@ export const DASHBOARD_SNAPSHOT_FIELD_NAMES = [
   'generated_at',
   'as_of',
   'mode',
+  'arm',
   'tick_status',
   'positions',
   'closed_trades',
@@ -911,7 +923,7 @@ const _assertDashboardSnapshotFieldNamesCoverAllKeys: {
  * cryptographic and does not need to be: the only property this mechanism
  * needs is "the field list changing changes the output", which a 32-bit
  * non-cryptographic hash already gives with a collision risk irrelevant at
- * this input size (19 short field names).
+ * this input size (20 short field names).
  */
 function fnv1aHex(input: string): string {
   let hash = 0x811c9dc5;

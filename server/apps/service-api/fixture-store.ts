@@ -30,7 +30,7 @@ import {
 } from '../../pipeline/feedback-loop/index.js';
 import type { OutsideBenchmarkSample } from '../../pipeline/outside-benchmark/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
-import type { ClosedTrade, DebateLog, Fill, OpenPosition } from '../../shared/index.js';
+import type { ClosedTrade, DebateLog, Fill, OpenPosition, TradingArm } from '../../shared/index.js';
 import { toBrokerFillId } from '../../shared/index.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
 import type {
@@ -856,11 +856,27 @@ export class InMemoryQueryStore implements DashboardQueryStore {
     return TICK_STATUS;
   }
 
-  getOpenPositions(_asOf: Date): OpenPosition[] {
+  /**
+   * #1592: `arm` accepted (so a subclass can override arm-aware, per-arm
+   * behavior — `server.test.ts`'s `TwoArmQueryStore`) but ignored here — this
+   * fixture's data has never varied by arm, and giving it a second, static
+   * "control" fixture set is out of scope for a dev/test seed store.
+   *
+   * Consequence for `fixture-server.ts` (the Playwright/e2e entry): the real
+   * `server.ts` handler stamps the wire snapshot's `arm` field from the
+   * request's own `?arm=` regardless of what the store returns, so hitting
+   * `?arm=control` against the fixture server yields these same live rows
+   * mislabelled `arm: 'control'`. Arm-scoping IS proven at the HTTP layer —
+   * `server.test.ts`'s `TwoArmQueryStore` covers it against the real server —
+   * but any Playwright/e2e test built against this fixture store (#1595)
+   * cannot use position/closed-trade content to tell the arms apart; it would
+   * pass vacuously against a regression that broke real cross-arm scoping.
+   */
+  getOpenPositions(_asOf: Date, _arm: TradingArm): OpenPosition[] {
     return OPEN_POSITIONS;
   }
 
-  getRecentClosedTrades(limit: number, _asOf: Date): ClosedTrade[] {
+  getRecentClosedTrades(limit: number, _asOf: Date, _arm: TradingArm): ClosedTrade[] {
     return CLOSED_TRADES.slice(0, limit);
   }
 

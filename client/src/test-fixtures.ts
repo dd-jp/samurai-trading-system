@@ -310,6 +310,9 @@ export function makeSnapshot(overrides: Partial<WireSnapshot> = {}): WireSnapsho
     generated_at: AS_OF,
     as_of: AS_OF,
     mode: 'paper',
+    // Defaulted to 'live' here purely so this fixture keeps satisfying the
+    // widened `WireSnapshot` type.
+    arm: 'live',
     tick_status: null,
     positions: [makePosition()],
     closed_trades: [makeClosedTrade()],
