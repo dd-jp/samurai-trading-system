@@ -53,6 +53,9 @@ describe('PortfolioView', () => {
       exposure_by_instrument: { AAPL: 19_000 },
       exposure_by_class: { crypto: 0, stocks: 19_000 },
       gross_exposure: 19_000,
+      reserved_exposure_by_instrument: {},
+      reserved_exposure_by_class: { crypto: 0, stocks: 0 },
+      reserved_gross_exposure: 0,
       daily_pnl: {
         crypto: { known: true, pct: -0.01 },
         stocks: { known: true, pct: -0.01 },
@@ -155,6 +158,9 @@ describe('RiskInput', () => {
         exposure_by_instrument: {},
         exposure_by_class: { crypto: 0, stocks: 0 },
         gross_exposure: 0,
+        reserved_exposure_by_instrument: {},
+        reserved_exposure_by_class: { crypto: 0, stocks: 0 },
+        reserved_gross_exposure: 0,
         daily_pnl: {
           crypto: { known: true, pct: 0 },
           stocks: { known: true, pct: 0 },

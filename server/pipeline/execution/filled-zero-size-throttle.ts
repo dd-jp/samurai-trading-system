@@ -41,7 +41,7 @@
  * `advanceLot`, the `filledSize > 0` branch) — the same single site the
  * pre-#1383 design used. `reconcile.ts`'s own `rejected`/`adopted` branches
  * cannot resolve an already-wedged lot: `reconcileLot` only runs for
- * `IN_FLIGHT` (`pending`/`submitted`) positions, and a lot has to be
+ * `IN_FLIGHT_ORDER_STATES` (`pending`/`submitted`) positions, and a lot has to be
  * `filled`/`partially_filled` to reach this throttle at all. The only way a
  * wedged lot leaves that state without going through `advanceLot` is an
  * out-of-band store write — e.g. #1186, the named repair for the incident's

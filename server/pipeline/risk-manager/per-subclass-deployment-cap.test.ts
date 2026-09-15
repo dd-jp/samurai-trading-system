@@ -88,6 +88,13 @@ const NO_CORRELATION: CorrelationEstimate = {
 const portfolioWith = (
   exposure: Record<string, number>,
   equity: number = PORTFOLIO_EQUITY,
+  /**
+   * Submitted-but-unfilled notional (#1019) — the write-ahead rows a fill
+   * poll has not yet advanced. Kept as a separate argument, not folded into
+   * `exposure`, because the whole question these tests ask is whether the
+   * gate nets the two together.
+   */
+  reserved: Record<string, number> = {},
 ): PortfolioView => ({
   equity,
   peak_equity: PORTFOLIO_EQUITY,
@@ -95,6 +102,9 @@ const portfolioWith = (
   exposure_by_instrument: exposure,
   exposure_by_class: { crypto: 0, stocks: 0 },
   gross_exposure: Object.values(exposure).reduce((sum, e) => sum + e, 0),
+  reserved_exposure_by_instrument: reserved,
+  reserved_exposure_by_class: { crypto: 0, stocks: 0 },
+  reserved_gross_exposure: Object.values(reserved).reduce((sum, e) => sum + e, 0),
   // `known: true` throughout: an unknown daily P&L is its own rejection
   // (`daily_pnl_unknown:portfolio`), and every assertion here is about which
   // CAP bound the size, so nothing upstream of the caps may reject first.
@@ -151,12 +161,14 @@ const decide = (
   // parameter cannot distinguish from an omitted argument.
   cap: SubclassDeploymentCap | null = DEPLOYMENT_CAP,
   equity: number = PORTFOLIO_EQUITY,
+  /** Submitted-but-unfilled notional (#1019) — see `portfolioWith`. */
+  reserved: Record<string, number> = {},
 ) =>
   new RiskManagerImpl(configWith(cap ?? undefined)).evaluate({
     trace_id: 'trace-d5',
     intent,
     clock: CLOCK,
-    portfolio: portfolioWith(exposure, equity),
+    portfolio: portfolioWith(exposure, equity, reserved),
     breakers: NO_BREAKERS,
     next_breaker_state: NO_PERSISTED_BREAKERS,
     correlation: NO_CORRELATION,
@@ -277,6 +289,80 @@ describe('ADR-0018 D5 deployment envelope', () => {
     );
     expect(third.status).toBe('rejected');
     expect(third.binding_constraint).toBe('min_viable_size');
+  });
+
+  /**
+   * #1019. Every case above states the netting against exposure the book has
+   * already RECOGNISED. These state it against exposure that has been
+   * submitted to the venue and not come back — the window
+   * `exposure_by_instrument` reports as zero, which at #1013's width 6 is
+   * where every sibling in a tick actually lands.
+   */
+  describe('#1019 — nets submitted-but-unfilled exposure, not only filled', () => {
+    it('shares the envelope with a sibling whose order is in flight and has no fill yet', () => {
+      // The defect: the sibling's write-ahead row values at `filled_size ×
+      // mark` = 0, so before this fix `deployedToSubclass` summed to zero and
+      // this second name took the FULL envelope a moment after the first one
+      // did — 70% of the book into a subclass measured to hold 23.1%
+      // drawdown at 35%.
+      const decision = decide(intentFor('3UKL', 10_000), {}, DEPLOYMENT_CAP, PORTFOLIO_EQUITY, {
+        '3USL': 200,
+      });
+
+      expect(finalSizeOf(decision)).toBeCloseTo(INDEX_CAP - 200, 6);
+      expect(decision.binding_constraint).toBe('per_subclass_deployment_cap');
+    });
+
+    it('produces the same envelope whether the sibling is filled or still in flight', () => {
+      const filled = decide(intentFor('3UKL', 10_000), { '3USL': 200 });
+      const inFlight = decide(intentFor('3UKL', 10_000), {}, DEPLOYMENT_CAP, PORTFOLIO_EQUITY, {
+        '3USL': 200,
+      });
+
+      expect(finalSizeOf(inFlight)).toBeCloseTo(finalSizeOf(filled), 6);
+    });
+
+    it('nets a PARTLY filled sibling once, across both halves of its lot', () => {
+      // A `submitted` lot that has taken half its fill contributes its filled
+      // half to `exposure_by_instrument` and its remainder to the
+      // reservation. Double-counting either half would over-tighten; counting
+      // neither is the original defect.
+      const decision = decide(
+        intentFor('3UKL', 10_000),
+        { '3USL': 120 },
+        DEPLOYMENT_CAP,
+        PORTFOLIO_EQUITY,
+        { '3USL': 80 },
+      );
+
+      expect(finalSizeOf(decision)).toBeCloseTo(INDEX_CAP - 200, 6);
+    });
+
+    it('refuses outright once in-flight orders alone have exhausted the envelope', () => {
+      const decision = decide(intentFor('3UKL', 10_000), {}, DEPLOYMENT_CAP, PORTFOLIO_EQUITY, {
+        '3USL': INDEX_CAP,
+      });
+
+      expect(decision.status).toBe('rejected');
+      expect(decision.binding_constraint).toBe('min_viable_size');
+    });
+
+    it('leaves an in-flight order in ANOTHER subclass out of the netting', () => {
+      const decision = decide(intentFor('3USL', 10_000), {}, DEPLOYMENT_CAP, PORTFOLIO_EQUITY, {
+        '3LAP': 180,
+      });
+
+      expect(finalSizeOf(decision)).toBeCloseTo(INDEX_CAP, 6);
+    });
+
+    it('records the reservation on the decision so the risk_log row explains the trim', () => {
+      const decision = decide(intentFor('3UKL', 10_000), {}, DEPLOYMENT_CAP, PORTFOLIO_EQUITY, {
+        '3USL': 200,
+      });
+
+      expect(decision.reasons).toContainEqual(expect.stringContaining('in_flight_reservation'));
+      expect(decision.reasons).toContainEqual(expect.stringContaining('3USL=200'));
+    });
   });
 
   it('leaves exposure in OTHER subclasses out of the netting', () => {

@@ -72,7 +72,7 @@
  *
  * ## What this does NOT fix
  *
- * Reconcile only visits `IN_FLIGHT` states (`reconcile.ts`: `pending` /
+ * Reconcile only visits `IN_FLIGHT_ORDER_STATES` (`pending` /
  * `submitted`). A lot already `partially_filled` or `filled` at restart is
  * never passed to `getOrder`, so its bracket id is never re-learned, so its
  * exit-leg fills stay invisible to `fetchNewFills` for the rest of the
@@ -160,8 +160,8 @@ export interface FillSyncSurface {
    * every fill poll (see `runOnce`), so a re-arm failure the process
    * survives must not wait for the next restart to be retried. This runs
    * ALONGSIDE `reconcile()`'s own periodic call (#921), not in place of it:
-   * `reconcile()`'s pass is scoped to `IN_FLIGHT` bracket/flatten rows
-   * (`reconcile.ts`), while this sweep is scoped to lots already marked
+   * `reconcile()`'s pass is scoped to `IN_FLIGHT_ORDER_STATES` bracket/
+   * flatten rows, while this sweep is scoped to lots already marked
    * `#549`-unprotected — two different worklists, both worth revisiting
    * every poll. Cheap when healthy: an empty marker worklist makes no
    * broker call.

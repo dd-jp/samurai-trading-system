@@ -3809,6 +3809,9 @@ function makeExitProbeInput(overrides: Partial<OrderIntent> = {}) {
       exposure_by_instrument: {},
       exposure_by_class: { crypto: 0, stocks: 0 },
       gross_exposure: 0,
+      reserved_exposure_by_instrument: {},
+      reserved_exposure_by_class: { crypto: 0, stocks: 0 },
+      reserved_gross_exposure: 0,
       daily_pnl: {
         crypto: { known: true as const, pct: 0 },
         stocks: { known: true as const, pct: 0 },

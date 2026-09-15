@@ -188,6 +188,42 @@ function snapshot(portfolio: PortfolioView, breakers: BreakerState): RiskDecisio
   };
 }
 
+/**
+ * What one instrument has DEPLOYED against the entry caps: what is held plus
+ * what is in flight and not yet filled (#1019).
+ *
+ * Every gate below is shaped `fraction × equity - deployed`, and until #1019
+ * every one of them read `deployed` as `filled_size × mark` alone. An order
+ * submitted seconds earlier has a durable `open_positions` row with
+ * `filled_size = 0` until `ingestFills()` runs on its own 15s poll, so in that
+ * window it subtracted NOTHING — the next instrument evaluated against the
+ * same subclass, class or gross envelope saw an empty book and was handed the
+ * whole envelope a second time. That is the netting failure #1019 describes,
+ * and `PortfolioView.reserved_exposure_by_instrument` is the term that closes
+ * it.
+ *
+ * Read through one helper, at every gate, rather than each gate deciding for
+ * itself: "already deployed" is one question with one answer, and a gate that
+ * answered it differently from its neighbours would be a hole nothing in the
+ * types could find. `equity` is deliberately NOT adjusted — see
+ * `PortfolioView.reserved_exposure_by_instrument` for why the reservation
+ * belongs on this side of the subtraction only.
+ */
+function committedExposureFor(portfolio: PortfolioView, instrument: string): number {
+  return (
+    (portfolio.exposure_by_instrument[instrument] ?? 0) +
+    (portfolio.reserved_exposure_by_instrument[instrument] ?? 0)
+  );
+}
+
+/** See `committedExposureFor` — the same sum over one asset class. */
+function committedExposureForClass(
+  portfolio: PortfolioView,
+  assetClass: RiskInput['intent']['asset_class'],
+): number {
+  return portfolio.exposure_by_class[assetClass] + portfolio.reserved_exposure_by_class[assetClass];
+}
+
 /** Trims `currentNotional` down to `allowedAdditional` (floored at 0) if it exceeds it. Never increases. */
 function trimToAllowed(
   currentNotional: number,
@@ -359,6 +395,21 @@ export class RiskManagerImpl implements RiskManager {
     }
 
     const reasons: string[] = [];
+    // #1019: recorded whenever ANY order is in flight, not only when one of
+    // the caps below actually binds on it. `risk_snapshot.exposure` reports
+    // the VALUED book (`filled_size × mark`), so an entry trimmed against a
+    // reservation would otherwise show a cap binding against exposure the
+    // audit row says is zero — an unreproducible decision. One line naming
+    // the reserved instruments makes the subtraction the gates performed
+    // re-derivable from the `risk_log` row alone.
+    const reservedInstruments = Object.entries(portfolio.reserved_exposure_by_instrument);
+    if (reservedInstruments.length > 0) {
+      reasons.push(
+        `in_flight_reservation: ${portfolio.reserved_gross_exposure} of submitted-but-unfilled ` +
+          `notional counts as deployed against every cap below (` +
+          `${reservedInstruments.map(([name, value]) => `${name}=${value}`).join(', ')})`,
+      );
+    }
     let bindingConstraint: string | null = null;
     const originalNotional = intent.size * intent.entry;
     let notional = originalNotional;
@@ -626,7 +677,7 @@ const perAssetExposureCap: EntryCapGate = (config, intent, portfolio) => {
     name: 'per_asset_exposure_cap',
     allowedAdditional:
       config.per_asset_cap_fraction_of_equity * portfolio.equity -
-      (portfolio.exposure_by_instrument[intent.instrument] ?? 0),
+      committedExposureFor(portfolio, intent.instrument),
   };
 };
 
@@ -634,13 +685,14 @@ const perAssetClassExposureCap: EntryCapGate = (config, intent, portfolio) => ({
   name: 'per_asset_class_exposure_cap',
   allowedAdditional:
     config.per_asset_class_cap_fraction_of_equity[intent.asset_class] * portfolio.equity -
-    portfolio.exposure_by_class[intent.asset_class],
+    committedExposureForClass(portfolio, intent.asset_class),
 });
 
 const portfolioGrossExposureCap: EntryCapGate = (config, _intent, portfolio) => ({
   name: 'portfolio_gross_exposure_cap',
   allowedAdditional:
-    config.portfolio_gross_cap_fraction_of_equity * portfolio.equity - portfolio.gross_exposure,
+    config.portfolio_gross_cap_fraction_of_equity * portfolio.equity -
+    (portfolio.gross_exposure + portfolio.reserved_gross_exposure),
 });
 
 /**
@@ -659,7 +711,7 @@ const concentrationCorrelationCap: EntryCapGate = (config, intent, portfolio, co
 
   const correlatedSet = [intent.instrument, ...correlatedInstruments];
   const existingCorrelatedExposure = correlatedSet.reduce(
-    (sum, instrument) => sum + (portfolio.exposure_by_instrument[instrument] ?? 0),
+    (sum, instrument) => sum + committedExposureFor(portfolio, instrument),
     0,
   );
   return {
@@ -702,6 +754,18 @@ const concentrationCorrelationCap: EntryCapGate = (config, intent, portfolio, co
  * leg deployed to 3x index ETPs", a subclass aggregate, not a per-name
  * allowance. See `d5-trader-cap-agreement.test.ts`'s "#959" describe block
  * for the concurrent-instrument coverage.
+ *
+ * **#1019: the sum is over COMMITTED exposure, and that is what makes the
+ * paragraph above true rather than aspirational.** `exposure_by_instrument`
+ * values a lot at `filled_size × mark`, so a sibling whose order was
+ * submitted moments ago — durable write-ahead row, `filled_size = 0` until
+ * `ingestFills()`'s 15s poll — summed to ZERO here and the "ONE combined
+ * cap" claim collapsed to N independent full envelopes. #1040's tail
+ * turnstile orders sibling evaluations within a pass but cannot make the
+ * first one's exposure visible to the second, and passes across overlapping
+ * ticks are not ordered at all. `committedExposureFor` adds the unfilled
+ * remainder of every in-flight lot, so the envelope is shared from the
+ * instant an order is submitted rather than from the next fill poll.
  *
  * **What the throw can and cannot reach, since it fires on the live decision
  * path.** `evaluate()` returns at `intent.intent_type === 'exit'` BEFORE the
@@ -863,9 +927,21 @@ const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
     ceiling === undefined ? portfolio.equity : Math.min(portfolio.equity, ceiling.book);
   const cap = capFraction * cappedEquity;
 
-  const deployedToSubclass = Object.entries(portfolio.exposure_by_instrument)
-    .filter(([instrument]) => declared.subclass_of[instrument] === subclass)
-    .reduce((sum, [, exposure]) => sum + exposure, 0);
+  // Over the UNION of the held and the in-flight keys (#1019). An instrument
+  // whose only row is a write-ahead `pending` one appears in
+  // `reserved_exposure_by_instrument` and NOT in `exposure_by_instrument`, so
+  // iterating the held record alone would skip exactly the sibling this
+  // netting exists to count — which is what made the invariant this gate's
+  // docstring claims ("N concurrently-armed names share ONE combined cap")
+  // false for anything submitted before the next fill poll.
+  const deployedToSubclass = [
+    ...new Set([
+      ...Object.keys(portfolio.exposure_by_instrument),
+      ...Object.keys(portfolio.reserved_exposure_by_instrument),
+    ]),
+  ]
+    .filter((instrument) => declared.subclass_of[instrument] === subclass)
+    .reduce((sum, instrument) => sum + committedExposureFor(portfolio, instrument), 0);
 
   return {
     name: 'per_subclass_deployment_cap',
