@@ -1171,7 +1171,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     let live: AlpacaOrder | null = null;
     let settled: AlpacaOrder | null = null;
     let settledAttempt = -1;
-    let lastAllocated = -1;
+    let retiredAttempt = -1;
     let freeAttempt: number | null = null;
 
     for (let attempt = 0; attempt < MAX_REARM_ATTEMPTS; attempt += 1) {
@@ -1182,7 +1182,6 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         freeAttempt = attempt;
         break;
       }
-      lastAllocated = attempt;
 
       const priorState = mapOrderState(prior.status);
       if (priorState === 'filled' || priorState === 'partially_filled') {
@@ -1210,6 +1209,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         // 404/422 (already-terminal), so losing the race to the prior's own
         // fill is not a failure here — the submit below is what would
         // surface a real problem.
+        retiredAttempt = attempt;
         await this.call('rearmProtectiveLegs', () => this.input.client.cancelOrder(prior.id));
       }
     }
@@ -1217,15 +1217,19 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // `live` over `settled`: see the two-slot note above. Only one of these is
     // ever protection that can still fire.
     //
-    // A `settled` prior counts ONLY when it is the NEWEST id the lot has
-    // allocated. Below the newest it proves nothing about what is protecting
-    // the lot NOW: the ids above it have since been walked, and any of them
-    // that was live-but-stale-sized was just CANCELLED above. Adopting it
-    // there would return success having retired the only live leg, and the
-    // caller clears the #549 marker on that return — a naked residual that
-    // nothing is watching. When the walk has cancelled its way past the
-    // newest id, the answer is to place, not to reach backwards.
-    const adopted = live ?? (settledAttempt === lastAllocated ? settled : null);
+    // A `settled` prior is disqualified by this walk having RETIRED something
+    // above it — not by anything merely EXISTING above it. The cancel branch
+    // firing at an index is precisely the statement "that id was live and I
+    // just killed it"; adopting a fill from below it would then return success
+    // having destroyed the only live leg, and the caller clears the #549
+    // marker on that return — a naked residual nothing is watching. An id
+    // above that was ALREADY dead retires nothing, so the fill below it is
+    // still the newest thing that ever protected this lot and #549's
+    // adopt-a-fill-regardless-of-size rule stands: placing there would size a
+    // fresh OCO to a residual the store has not yet ingested those very fills
+    // into, which over-protects and fires into a smaller position (#516 from
+    // the other direction).
+    const adopted = live ?? (retiredAttempt > settledAttempt ? null : settled);
     if (adopted !== null) {
       this.rearmedLegs.set(clientOrderId, adopted.id);
       // Same column semantics as the fresh-place path below — the OCO's

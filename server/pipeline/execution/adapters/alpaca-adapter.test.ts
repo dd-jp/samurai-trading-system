@@ -3183,6 +3183,77 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       expect(venue.resting().map((row) => row.client_order_id)).toEqual(['key-1:rearm-2']);
       expect(venue.resting().map((row) => row.qty)).toEqual(['3']);
     });
+
+    /**
+     * The other side of that guard, and the reason it asks what the walk
+     * RETIRED rather than what is merely allocated.
+     *
+     * An id above a filled prior that is ALREADY DEAD retires nothing — the
+     * filled prior is still the newest thing that ever protected this lot, so
+     * #549's adopt-a-fill-regardless-of-size rule stands unchanged. Declining
+     * it here would place a fresh OCO sized to the caller's residual, which is
+     * computed off a store that has not necessarily ingested the prior's own
+     * exit fills yet: over-protection, whose leg fires into a smaller position
+     * and opens a reverse one — #516 from the other direction.
+     */
+    it('still adopts a filled prior when every id above it is already dead', async () => {
+      const venue = measuredAlpacaVenue();
+      const adapter = adapterWith(makeClient(venue));
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
+      venue.rows.set('key-1:rearm', {
+        ...venue.rows.get('key-1:rearm')!,
+        status: 'filled',
+        filled_qty: '6',
+      });
+      // Cancelled AT THE VENUE, not by this walk — the #429 intervention path
+      // (an operator flattening from the Alpaca UI, a day order expiring).
+      venue.rows.set('key-1:rearm-1', {
+        ...venue.rows.get('key-1:rearm-1')!,
+        status: 'canceled',
+      });
+      venue.submitOcoOrder.mockClear();
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
+
+      expect(venue.submitOcoOrder).not.toHaveBeenCalled();
+      expect(venue.rows.has('key-1:rearm-2')).toBe(false);
+    });
+
+    /**
+     * ...and the retire has to be ABOVE the fill to disqualify it, not merely
+     * somewhere in the walk.
+     *
+     * `pending_cancel` is one of the statuses `mapOrderState` folds into
+     * 'submitted', so the walk cannot prove it dead and defensively cancels it
+     * — at an index BELOW the fill, where it retires nothing the fill does not
+     * already supersede. Reading that cancel as "I destroyed the live leg"
+     * would place an oversized OCO against a residual the store has not caught
+     * up to.
+     */
+    it('adopts a filled prior despite a defensive cancel at a LOWER index', async () => {
+      const venue = measuredAlpacaVenue();
+      const adapter = adapterWith(makeClient(venue));
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
+      venue.rows.set('key-1:rearm', {
+        ...venue.rows.get('key-1:rearm')!,
+        status: 'pending_cancel',
+      });
+      venue.rows.set('key-1:rearm-1', {
+        ...venue.rows.get('key-1:rearm-1')!,
+        status: 'filled',
+        filled_qty: '4',
+      });
+      venue.submitOcoOrder.mockClear();
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
+
+      expect(venue.submitOcoOrder).not.toHaveBeenCalled();
+      expect(venue.rows.has('key-1:rearm-2')).toBe(false);
+    });
   });
 
   // #586: a crypto residual never reaches `submitOcoOrder` — the order class
