@@ -1,0 +1,139 @@
+files sampled: 108 (94 in the 07:00-15:30 UTC continuous-session window; the rest are pre-market/post-close, structurally near-empty)
+orderBookType values seen: {'3'}
+sourceVenue values seen: {'1'}
+EMS (bidMarketSize/offerMarketSize) nonzero: 119/49522 (0.24%)
+bidYield/offerYield nonzero: 0/49522
+3USL/3LUS instrumentId classification: 0 rows fell back to the price-scale heuristic (no two-sided quote seen for their instrumentId in pass 1); 0 two-sided rows had a price scale that disagreed with the pool's declared currency for their assigned tik (0 expected if the classification is correct — this check is independent of it, sourced from lse-etp-pool.ts's currency field rather than this script's own price-derived assignment)
+
+=== intermediate evidence (not just final aggregates — re-verifiable without a live DMD window) ===
+EMS-nonzero rows by distributionTime minute (119 total, should equal 119 above):
+  2026-09-11T07:00  1
+  2026-09-11T15:30  51
+  2026-09-14T07:00  24
+  2026-09-14T07:05  12
+  2026-09-14T15:30  31
+granularity evidence — XLON-pre-2026-09-14T11_00.csv, ISIN IE00B7Y34M31 (3USL/3LUS pair): 24 rows
+  instrumentId=72057594038070487  distributionTime=2026-09-14T11:00:24.360207754Z
+  instrumentId=72057594038070487  distributionTime=2026-09-14T11:00:59.325285576Z
+  instrumentId=72057594038056292  distributionTime=2026-09-14T11:00:27.487909959Z
+  instrumentId=72057594038056292  distributionTime=2026-09-14T11:00:59.851003376Z
+  instrumentId=72057594038070487  distributionTime=2026-09-14T11:00:29.065740016Z
+  instrumentId=72057594038056292  distributionTime=2026-09-14T11:00:19.617865563Z
+  instrumentId=72057594038070487  distributionTime=2026-09-14T11:00:19.617919589Z
+  instrumentId=72057594038070487  distributionTime=2026-09-14T11:00:09.672442939Z
+  instrumentId=72057594038056292  distributionTime=2026-09-14T11:00:09.971448818Z
+  instrumentId=72057594038070487  distributionTime=2026-09-14T11:00:04.638099171Z
+  instrumentId=72057594038056292  distributionTime=2026-09-14T11:00:04.842276190Z
+  instrumentId=72057594038056292  distributionTime=2026-09-14T11:00:34.788579392Z
+  instrumentId=72057594038070487  distributionTime=2026-09-14T11:00:44.068466740Z
+  instrumentId=72057594038070487  distributionTime=2026-09-14T11:00:34.818001797Z
+  instrumentId=72057594038056292  distributionTime=2026-09-14T11:00:44.143265307Z
+  instrumentId=72057594038070487  distributionTime=2026-09-14T11:00:48.970404695Z
+  instrumentId=72057594038056292  distributionTime=2026-09-14T11:00:49.449184316Z
+  instrumentId=72057594038070487  distributionTime=2026-09-14T11:00:14.568419654Z
+  instrumentId=72057594038056292  distributionTime=2026-09-14T11:00:38.726723300Z
+  instrumentId=72057594038070487  distributionTime=2026-09-14T11:00:38.908337193Z
+  instrumentId=72057594038056292  distributionTime=2026-09-14T11:00:14.755651857Z
+  instrumentId=72057594038056292  distributionTime=2026-09-14T11:00:53.556273558Z
+  instrumentId=72057594038056292  distributionTime=2026-09-14T11:00:23.752777343Z
+  instrumentId=72057594038070487  distributionTime=2026-09-14T11:00:54.839351393Z
+session-boundary row counts (basis for the open=07:00 / close=15:30 bucket edges):
+  XLON-pre-2026-09-11T06_45.csv  rows=2
+  XLON-pre-2026-09-11T07_00.csv  rows=31349
+  XLON-pre-2026-09-11T07_15.csv  rows=23117
+  XLON-pre-2026-09-11T15_15.csv  rows=32100
+  XLON-pre-2026-09-11T15_30.csv  rows=29418
+  XLON-pre-2026-09-11T15_45.csv  rows=100
+  XLON-pre-2026-09-11T16_00.csv  rows=10
+  XLON-pre-2026-09-14T06_45.csv  rows=94
+  XLON-pre-2026-09-14T07_00.csv  rows=33696
+  XLON-pre-2026-09-14T07_15.csv  rows=22705
+  XLON-pre-2026-09-14T15_15.csv  rows=30370
+  XLON-pre-2026-09-14T15_30.csv  rows=30640
+  XLON-pre-2026-09-14T15_45.csv  rows=85
+  XLON-pre-2026-09-14T16_00.csv  rows=6
+MST3 SI check (one file per participant, from `si`):
+  BARCIE2DSEC-SI_QUOTES-BARCIE2DSEC-2026-09-14T15_34.csv  MST3 present=False
+  NMOPVOF-SI_QUOTES-NMOPVOF-2026-09-14T15_59.csv  MST3 present=False
+  NMTRIAIR-SI_QUOTES-NMTRIAIR-2026-09-14T18_14.csv  MST3 present=False
+
+=== coverage (union across all sampled files) ===
+3USL   rows= 1113 two-sided= 1110 files_present=98/108
+3LUS   rows= 1113 two-sided= 1111 files_present=96/108
+LQQ3   rows= 2249 two-sided= 2243 files_present=98/108
+NVD3   rows= 3032 two-sided= 3031 files_present=98/108
+3LNV   rows= 2560 two-sided= 2556 files_present=96/108
+3QQQ   rows= 1146 two-sided= 1143 files_present=94/108
+3LPA   rows=  835 two-sided=  833 files_present=92/108
+PLT3   rows= 2469 two-sided= 2469 files_present=97/108
+3LME   rows= 2575 two-sided= 2573 files_present=94/108
+3LNP   rows= 1093 two-sided= 1092 files_present=91/108
+3AMZ   rows= 3030 two-sided= 3028 files_present=96/108
+3FB    rows= 3076 two-sided= 3074 files_present=96/108
+3KOR   rows= 2203 two-sided= 2198 files_present=97/108
+3XLE   rows= 1291 two-sided= 1289 files_present=91/108
+3SPY   rows=  781 two-sided=  780 files_present=90/108
+3LTS   rows= 2018 two-sided= 2018 files_present=96/108
+3AAP   rows= 3037 two-sided= 3035 files_present=96/108
+MST3   rows=    0 two-sided=    0 files_present=0/108
+LAM3   rows= 1822 two-sided= 1822 files_present=94/108
+3LAL   rows= 1321 two-sided= 1318 files_present=89/108
+LPP3   rows=  646 two-sided=  645 files_present=82/108
+LCO3   rows= 1549 two-sided= 1544 files_present=94/108
+LAA3   rows=  644 two-sided=  635 files_present=87/108
+3LMO   rows= 1043 two-sided= 1043 files_present=88/108
+3LIP   rows= 1268 two-sided= 1263 files_present=88/108
+3LSQ   rows= 1128 two-sided= 1127 files_present=87/108
+3UBR   rows= 1871 two-sided= 1868 files_present=97/108
+3RAC   rows= 1634 two-sided= 1634 files_present=94/108
+3ARM   rows= 1058 two-sided= 1058 files_present=87/108
+3VT    rows=  503 two-sided=  503 files_present=73/108
+3KWE   rows= 1414 two-sided= 1414 files_present=94/108
+covered: 30/31 rows (29/30 distinct ISINs)
+
+=== per-instrument round-trip / half-spread, open vs midday vs close bucket (median, bps) ===
+3USL   open_rt=   11.6 open_hs=    5.8 mid_rt=   12.2 mid_hs=    6.1 close_rt=   14.2 close_hs=    7.1 n_open= 258 n_mid= 659 n_close= 160
+3LUS   open_rt=   11.9 open_hs=    5.9 mid_rt=   12.7 mid_hs=    6.3 close_rt=   15.2 close_hs=    7.6 n_open= 260 n_mid= 659 n_close= 168
+LQQ3   open_rt=   15.5 open_hs=    7.8 mid_rt=   19.1 mid_hs=    9.5 close_rt=   21.6 close_hs=   10.8 n_open= 519 n_mid=1334 n_close= 321
+NVD3   open_rt=   30.5 open_hs=   15.3 mid_rt=   20.9 mid_hs=   10.5 close_rt=   13.1 close_hs=    6.6 n_open= 647 n_mid=1809 n_close= 501
+3LNV   open_rt=  127.5 open_hs=   63.7 mid_rt=  116.8 mid_hs=   58.4 close_rt=  111.8 close_hs=   55.9 n_open= 538 n_mid=1522 n_close= 426
+3QQQ   open_rt=  107.6 open_hs=   53.8 mid_rt=  108.2 mid_hs=   54.1 close_rt=   92.4 close_hs=   46.2 n_open= 147 n_mid= 686 n_close= 267
+3LPA   open_rt=  226.9 open_hs=  113.5 mid_rt=  192.0 mid_hs=   96.0 close_rt=  163.7 close_hs=   81.8 n_open= 137 n_mid= 514 n_close= 173
+PLT3   open_rt=   44.0 open_hs=   22.0 mid_rt=   37.2 mid_hs=   18.6 close_rt=   19.2 close_hs=    9.6 n_open= 477 n_mid=1481 n_close= 459
+3LME   open_rt=  110.1 open_hs=   55.1 mid_rt=   90.3 mid_hs=   45.2 close_rt=   76.0 close_hs=   38.0 n_open= 379 n_mid=1651 n_close= 477
+3LNP   open_rt=  186.9 open_hs=   93.5 mid_rt=  144.9 mid_hs=   72.5 close_rt=  108.1 close_hs=   54.1 n_open= 158 n_mid= 664 n_close= 232
+3AMZ   open_rt=   66.4 open_hs=   33.2 mid_rt=   50.3 mid_hs=   25.2 close_rt=   36.1 close_hs=   18.1 n_open= 667 n_mid=1842 n_close= 480
+3FB    open_rt=   65.2 open_hs=   32.6 mid_rt=   55.8 mid_hs=   27.9 close_rt=   40.4 close_hs=   20.2 n_open= 648 n_mid=1886 n_close= 465
+3KOR   open_rt=   39.3 open_hs=   19.7 mid_rt=   43.5 mid_hs=   21.7 close_rt=   16.9 close_hs=    8.5 n_open= 328 n_mid=1323 n_close= 487
+3XLE   open_rt=  149.3 open_hs=   74.6 mid_rt=  160.0 mid_hs=   80.0 close_rt=   69.9 close_hs=   35.0 n_open= 307 n_mid= 714 n_close= 238
+3SPY   open_rt=  102.2 open_hs=   51.1 mid_rt=  106.2 mid_hs=   53.1 close_rt=   99.6 close_hs=   49.8 n_open= 127 n_mid= 444 n_close= 178
+3LTS   open_rt=  142.0 open_hs=   71.0 mid_rt=  124.6 mid_hs=   62.3 close_rt=  116.3 close_hs=   58.1 n_open= 322 n_mid=1237 n_close= 395
+3AAP   open_rt=   59.5 open_hs=   29.8 mid_rt=   41.3 mid_hs=   20.6 close_rt=   28.8 close_hs=   14.4 n_open= 680 n_mid=1790 n_close= 496
+MST3   open_rt=      - open_hs=      - mid_rt=      - mid_hs=      - close_rt=      - close_hs=      - n_open=   0 n_mid=   0 n_close=   0
+LAM3   open_rt=  168.7 open_hs=   84.3 mid_rt=  164.4 mid_hs=   82.2 close_rt=  157.0 close_hs=   78.5 n_open= 334 n_mid=1118 n_close= 322
+3LAL   open_rt=  234.4 open_hs=  117.2 mid_rt=  130.3 mid_hs=   65.1 close_rt=  113.2 close_hs=   56.6 n_open= 174 n_mid= 817 n_close= 301
+LPP3   open_rt=  315.8 open_hs=  157.9 mid_rt=  212.0 mid_hs=  106.0 close_rt=  138.9 close_hs=   69.4 n_open= 210 n_mid= 339 n_close=  87
+LCO3   open_rt=  487.8 open_hs=  243.9 mid_rt=  645.2 mid_hs=  322.6 close_rt=  571.4 close_hs=  285.7 n_open= 356 n_mid= 926 n_close= 249
+LAA3   open_rt=  218.8 open_hs=  109.4 mid_rt=  160.5 mid_hs=   80.3 close_rt=  126.8 close_hs=   63.4 n_open= 105 n_mid= 389 n_close= 141
+3LMO   open_rt=  282.2 open_hs=  141.1 mid_rt=  255.1 mid_hs=  127.5 close_rt=  276.2 close_hs=  138.1 n_open= 208 n_mid= 590 n_close= 218
+3LIP   open_rt=  666.7 open_hs=  333.3 mid_rt=  306.1 mid_hs=  153.0 close_rt=  266.9 close_hs=  133.4 n_open= 265 n_mid= 727 n_close= 211
+3LSQ   open_rt=  462.0 open_hs=  231.0 mid_rt=  330.8 mid_hs=  165.4 close_rt=  172.0 close_hs=   86.0 n_open= 240 n_mid= 642 n_close= 219
+3UBR   open_rt=  264.3 open_hs=  132.2 mid_rt=  193.5 mid_hs=   96.8 close_rt=  134.8 close_hs=   67.4 n_open= 371 n_mid=1179 n_close= 297
+3RAC   open_rt=  177.0 open_hs=   88.5 mid_rt=  175.4 mid_hs=   87.7 close_rt=  173.9 close_hs=   87.0 n_open= 316 n_mid=1085 n_close= 193
+3ARM   open_rt=  171.7 open_hs=   85.8 mid_rt=  128.3 mid_hs=   64.2 close_rt=   86.2 close_hs=   43.1 n_open= 147 n_mid= 687 n_close= 198
+3VT    open_rt=  206.2 open_hs=  103.1 mid_rt=  134.4 mid_hs=   67.2 close_rt=   61.3 close_hs=   30.7 n_open=  94 n_mid= 247 n_close= 133
+3KWE   open_rt=  206.4 open_hs=  103.2 mid_rt=  154.0 mid_hs=   77.0 close_rt=  150.4 close_hs=   75.2 n_open= 406 n_mid= 839 n_close= 129
+
+open/close ratio: n=30 median=1.67x min=0.72x max=3.36x
+widen into close (>1x): 26/30
+narrow into close (<1x): ['3USL', '3LUS', 'LQQ3', 'LCO3']
+
+=== cross-sectional half-spread dispersion (restates #875, permissibly collected) ===
+--- open bucket only (matches #875's pre-open capture) --- n_instruments=30
+  median-of-medians=79.48bps  max/median=4.19x  max/min=57.70x  p90/median=2.81x
+  widest 5 (half-spread bps): [('3LIP', 333.3333333333325), ('LCO3', 243.90243902438976), ('3LSQ', 231.0231023102312), ('LPP3', 157.8947368421048), ('3LMO', 141.0934744268079)]
+  tightest 5 (half-spread bps): [('3KOR', 19.67118048704106), ('NVD3', 15.26051885764116), ('LQQ3', 7.755190256429267), ('3LUS', 5.937801659828871), ('3USL', 5.77716644178651)]
+--- full session (open+midday+close) --- n_instruments=30
+  median-of-medians=64.42bps  max/median=4.70x  max/min=49.93x  p90/median=2.62x
+  widest 5 (half-spread bps): [('LCO3', 303.03030303030306), ('3LIP', 177.92379570764203), ('3LSQ', 172.2723543888435), ('3LMO', 136.58147051989334), ('LPP3', 131.9261213720312)]
+  tightest 5 (half-spread bps): [('PLT3', 18.248175182481752), ('NVD3', 10.958046336881697), ('LQQ3', 9.435677647415645), ('3LUS', 6.319937544146622), ('3USL', 6.069300375193083)]
