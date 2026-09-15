@@ -535,7 +535,7 @@ describe('startFillSync', () => {
         reason:
           "flatten journal said 'submitted'; broker reports 'submitted'; the venue still " +
           'reports this flatten after 300s — past the bound, so it is being CANCELLED',
-        escalated: true as const,
+        escalation: 'wedge_cancelled' as const,
       };
       const execution = makeExecution({
         reconcile: vi
@@ -559,10 +559,122 @@ describe('startFillSync', () => {
         (entry) => entry.message === 'reconcile divergence',
       );
       expect(divergenceLines).toHaveLength(2);
-      const firstPayload = divergenceLines[0]?.payload as { action: string; escalated?: true };
+      const firstPayload = divergenceLines[0]?.payload as { action: string; escalation?: string };
       expect(firstPayload).toMatchObject({ action: 'adopted' });
-      expect(firstPayload.escalated).toBeUndefined();
-      expect(divergenceLines[1]?.payload).toMatchObject({ action: 'adopted', escalated: true });
+      expect(firstPayload.escalation).toBeUndefined();
+      expect(divergenceLines[1]?.payload).toMatchObject({
+        action: 'adopted',
+        escalation: 'wedge_cancelled',
+      });
+
+      await sync.stop();
+    });
+
+    // #1585: `cancelNeverConfirmedFlatten`'s three blocking outcomes share
+    // `action: 'undetermined'` with the SAME row's own prior-pass state (a
+    // `resumeFlatten` throw before the age bound is also `undetermined`) — the
+    // exact shape #1577 fixed for `cancelWedgedFlatten`'s `adopted -> adopted`,
+    // just on `undetermined` instead. Without a distinguishing `escalation`
+    // these dedup away and never get their own line.
+    it("logs a never-confirmed-flatten escalation even though it shares action: undetermined with the row's own prior state", async () => {
+      const logger = makeLogger();
+      const priorUndetermined = {
+        idempotency_key: 'key-tsla-flatten',
+        instrument: 'TSLA',
+        store_state: 'submitted' as const,
+        broker_state: null,
+        action: 'undetermined' as const,
+        kind: 'flatten' as const,
+        reason: 'the venue could not describe this flatten (resumeFlatten: venue unreachable)',
+      };
+      const coverageShort = {
+        ...priorUndetermined,
+        reason:
+          `${priorUndetermined.reason}. It was CANCELLED at the venue, but the venue holds ` +
+          'less than the store does, so the row keeps blocking',
+        escalation: 'never_confirmed_coverage_short' as const,
+      };
+      const execution = makeExecution({
+        reconcile: vi
+          .fn()
+          .mockResolvedValueOnce(makeReport({ divergences: [priorUndetermined] }))
+          .mockResolvedValueOnce(makeReport({ divergences: [coverageShort] }))
+          .mockResolvedValue(makeReport()),
+      });
+      const sync = startFillSync({
+        execution,
+        clock: { now: () => new Date() },
+        logger,
+        fillPollIntervalMs: 1_000,
+        reconcileTraceId: 'test-reconcile',
+        fillSyncTraceId: 'test-fill-sync',
+      });
+
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      const divergenceLines = logger.entries.filter(
+        (entry) => entry.message === 'reconcile divergence',
+      );
+      expect(divergenceLines).toHaveLength(2);
+      const firstPayload = divergenceLines[0]?.payload as { action: string; escalation?: string };
+      expect(firstPayload).toMatchObject({ action: 'undetermined' });
+      expect(firstPayload.escalation).toBeUndefined();
+      expect(divergenceLines[1]?.payload).toMatchObject({
+        action: 'undetermined',
+        escalation: 'never_confirmed_coverage_short',
+      });
+
+      await sync.stop();
+    });
+
+    // #1585's round-1-noted separate minor: a boolean can tell "escalated" from
+    // "not", but not WHICH escalation — a cancel that failed and a later cancel
+    // that succeeded but found coverage short are different operator facts,
+    // both `action: 'undetermined'`, and both must log even back-to-back.
+    it('logs two different never-confirmed-flatten escalations on the same row as distinct episodes', async () => {
+      const logger = makeLogger();
+      const base = {
+        idempotency_key: 'key-tsla-flatten',
+        instrument: 'TSLA',
+        store_state: 'submitted' as const,
+        broker_state: null,
+        action: 'undetermined' as const,
+        kind: 'flatten' as const,
+      };
+      const cancelFailed = {
+        ...base,
+        reason: 'the cancel FAILED (venue refused); the row keeps blocking',
+        escalation: 'never_confirmed_cancel_failed' as const,
+      };
+      const coverageShort = {
+        ...base,
+        reason: 'it was CANCELLED at the venue, but the venue holds less than the store does',
+        escalation: 'never_confirmed_coverage_short' as const,
+      };
+      const execution = makeExecution({
+        reconcile: vi
+          .fn()
+          .mockResolvedValueOnce(makeReport({ divergences: [cancelFailed] }))
+          .mockResolvedValueOnce(makeReport({ divergences: [coverageShort] }))
+          .mockResolvedValue(makeReport()),
+      });
+      const sync = startFillSync({
+        execution,
+        clock: { now: () => new Date() },
+        logger,
+        fillPollIntervalMs: 1_000,
+        reconcileTraceId: 'test-reconcile',
+        fillSyncTraceId: 'test-fill-sync',
+      });
+
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      const divergenceLines = logger.entries.filter(
+        (entry) => entry.message === 'reconcile divergence',
+      );
+      expect(
+        divergenceLines.map((entry) => (entry.payload as { escalation?: string }).escalation),
+      ).toEqual(['never_confirmed_cancel_failed', 'never_confirmed_coverage_short']);
 
       await sync.stop();
     });

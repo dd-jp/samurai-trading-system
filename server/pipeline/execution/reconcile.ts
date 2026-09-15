@@ -95,6 +95,7 @@ import type {
   NormalizedOrder,
   NormalizedPosition,
   ReconcileDivergence,
+  ReconcileEscalation,
   ReconcileInput,
   ReconcileReport,
   UnresolvedFlattenSubmission,
@@ -636,7 +637,7 @@ async function reconcileFlatten(
       action: 'adopted',
       kind: 'flatten',
       reason: `${adopted}; ${await cancelWedgedFlatten(input, row, order.order_state, now)}`,
-      escalated: true,
+      escalation: 'wedge_cancelled',
     };
   }
 
@@ -763,7 +764,7 @@ async function cancelNeverConfirmedFlatten(
     `the venue has never once described flatten '${row.idempotency_key}' (resumeFlatten: ` +
     `${context.resumeError}) and the row is ${age}s old — past the ` +
     `${UNRESOLVABLE_FLATTEN_MAX_AGE_MS / 1_000}s bound`;
-  const blocked = (reason: string): ReconcileDivergence => ({
+  const blocked = (reason: string, escalation: ReconcileEscalation): ReconcileDivergence => ({
     idempotency_key: row.idempotency_key,
     instrument: row.instrument,
     store_state: context.storeState,
@@ -771,6 +772,7 @@ async function cancelNeverConfirmedFlatten(
     action: 'undetermined',
     kind: 'flatten',
     reason,
+    escalation,
   });
 
   if (!cancelDue(row, now)) {
@@ -778,6 +780,7 @@ async function cancelNeverConfirmedFlatten(
       `${provenance}. Already cancelled at the venue at ` +
         `${row.cancel_attempted_at?.toISOString()}; still blocking, and not re-cancelled or ` +
         're-paged this pass (FLATTEN_CANCEL_RETRY_EVERY_MS)',
+      'never_confirmed_throttled',
     );
   }
 
@@ -787,7 +790,7 @@ async function cancelNeverConfirmedFlatten(
   } catch (error) {
     const reason = `${provenance}. The cancel FAILED (${describeThrownSafely(error)}); the row keeps blocking`;
     await postFlattenReconcileAlert(input, row, reason, now);
-    return blocked(reason);
+    return blocked(reason, 'never_confirmed_cancel_failed');
   }
 
   // Read AFTER the cancel resolves, never a snapshot taken before it: a fill
@@ -803,7 +806,7 @@ async function cancelNeverConfirmedFlatten(
       'big. The fills cannot be ingested through an adapter that will not describe this ' +
       'order: attribute them by hand';
     await postFlattenReconcileAlert(input, row, reason, now);
-    return blocked(reason);
+    return blocked(reason, 'never_confirmed_coverage_short');
   }
 
   const reason =
