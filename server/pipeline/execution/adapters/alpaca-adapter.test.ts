@@ -125,6 +125,12 @@ function makeClient(overrides: Partial<AlpacaBrokerClient> = {}): AlpacaBrokerCl
       .fn()
       .mockRejectedValue(new Error('makeClient: override submitStopLimitOrder to use it')),
     cancelOrder: vi.fn().mockRejectedValue(new Error('makeClient: override cancelOrder to use it')),
+    // #1500's `cancel()` fallback. Rejecting by default keeps the direct
+    // lookup the primary: a test whose `getOrderByClientOrderId` answers must
+    // never reach this, and one that does reach it has to say so.
+    listOpenOrders: vi
+      .fn()
+      .mockRejectedValue(new Error('makeClient: override listOpenOrders to use it')),
     getPositions: vi
       .fn()
       .mockRejectedValue(new Error('makeClient: override getPositions to use it')),
@@ -2243,6 +2249,195 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
 
     await expect(adapter.cancel('key-gone', 'AAPL')).resolves.toBeUndefined();
     expect(cancelOrder).not.toHaveBeenCalled();
+  });
+
+  /**
+   * #1500 reachability. `reconcile()`'s never-confirmed-flatten branch is
+   * reached only BECAUSE `resumeFlatten` threw, and `resumeFlatten` is
+   * `getOrderByClientOrderId`. While `cancel()` could address the venue only
+   * through that same endpoint, the cancel threw for the same cause every
+   * time and the branch could not fire on Alpaca at all — the branch's tests
+   * passed only because their fake decoupled the two calls, which is Saxo's
+   * shape (`lookup` vs `listOpenOrders`+`cancelOrder`), not Alpaca's.
+   *
+   * Asserted against the real adapter over a fake CLIENT, so the coupling is
+   * proven where it lives rather than assumed in reconcile's own double.
+   */
+  describe('cancel() when the by-client-order-id lookup is the thing that is broken (#1500)', () => {
+    it('reaches the order through the open-order list and cancels it', async () => {
+      const getOrderByClientOrderId = vi
+        .fn()
+        .mockRejectedValue(new Error('order-details endpoint 503'));
+      const listOpenOrders = vi.fn().mockResolvedValue([
+        { ...acceptedOrder(), id: 'venue-77', client_order_id: 'key-1' },
+        { ...acceptedOrder(), id: 'someone-elses', client_order_id: 'key-2' },
+      ]);
+      const cancelOrder = vi.fn().mockResolvedValue(undefined);
+      const adapter = adapterWith(
+        makeClient({ getOrderByClientOrderId, listOpenOrders, cancelOrder }),
+      );
+
+      await expect(adapter.cancel('key-1', 'AAPL')).resolves.toBeUndefined();
+
+      expect(cancelOrder).toHaveBeenCalledTimes(1);
+      expect(cancelOrder).toHaveBeenCalledWith('venue-77');
+    });
+
+    it('takes the lot re-arm from the SAME snapshot rather than a second failing lookup', async () => {
+      const listOpenOrders = vi.fn().mockResolvedValue([
+        { ...acceptedOrder(), id: 'bracket-venue-id', client_order_id: 'key-1' },
+        { ...acceptedOrder(), id: 'rearm-venue-id', client_order_id: 'key-1:rearm' },
+      ]);
+      const cancelOrder = vi.fn().mockResolvedValue(undefined);
+      const adapter = adapterWith(
+        makeClient({
+          getOrderByClientOrderId: vi.fn().mockRejectedValue(new Error('order-details 503')),
+          listOpenOrders,
+          cancelOrder,
+        }),
+      );
+
+      await adapter.cancel('key-1', 'AAPL');
+
+      expect(listOpenOrders).toHaveBeenCalledTimes(1);
+      expect(cancelOrder.mock.calls.map(([id]) => id)).toEqual([
+        'rearm-venue-id',
+        'bracket-venue-id',
+      ]);
+    });
+
+    it('resolves without cancelling when the order is no longer open — a filled flatten is not in the list', async () => {
+      const cancelOrder = vi.fn();
+      const adapter = adapterWith(
+        makeClient({
+          getOrderByClientOrderId: vi.fn().mockRejectedValue(new Error('order-details 503')),
+          listOpenOrders: vi.fn().mockResolvedValue([]),
+          cancelOrder,
+        }),
+      );
+
+      await expect(adapter.cancel('key-1', 'AAPL')).resolves.toBeUndefined();
+      expect(cancelOrder).not.toHaveBeenCalled();
+    });
+
+    it('keeps the id the direct lookup DID answer with when only the :rearm lookup breaks', async () => {
+      // The `:rearm` lookup alone failing says nothing about the original's
+      // id, and that id is already in hand — only the unanswered one is
+      // re-derived from the list.
+      const getOrderByClientOrderId = vi.fn(async (clientOrderId: string) => {
+        if (clientOrderId === 'key-1') return { ...acceptedOrder(), id: 'bracket-venue-id' };
+        throw new Error('order-details 503 on the :rearm key');
+      });
+      const listOpenOrders = vi
+        .fn()
+        .mockResolvedValue([
+          { ...acceptedOrder(), id: 'rearm-venue-id', client_order_id: 'key-1:rearm' },
+        ]);
+      const cancelOrder = vi.fn().mockResolvedValue(undefined);
+      const adapter = adapterWith(
+        makeClient({ getOrderByClientOrderId, listOpenOrders, cancelOrder }),
+      );
+
+      await adapter.cancel('key-1', 'AAPL');
+
+      expect(cancelOrder.mock.calls.map(([id]) => id)).toEqual([
+        'rearm-venue-id',
+        'bracket-venue-id',
+      ]);
+    });
+
+    it('keeps an IN-PROCESS re-arm id even when the direct lookup breaks — it needs no venue', async () => {
+      // The re-armed id was placed by this process, so the venue's outage
+      // cannot cost it. Re-deriving it from the list could only lose it —
+      // one page, and a leg past it reads as `null` — and cancelling the
+      // parent while a protective leg is live is the #516 hazard itself.
+      let directFails = false;
+      const getOrderByClientOrderId = vi.fn(async (clientOrderId: string) => {
+        if (directFails) throw new Error('order-details 503');
+        if (clientOrderId === 'key-1') return { ...acceptedOrder(), id: 'bracket-venue-id' };
+        return {
+          ...acceptedOrder(),
+          id: 'rearm-venue-id',
+          order_class: 'oco' as const,
+          qty: '6',
+          limit_price: '110',
+          legs: [
+            {
+              id: 'rearm-stop-leg',
+              type: 'stop' as const,
+              status: 'held',
+              filled_qty: '0',
+              filled_avg_price: null,
+              filled_at: null,
+              stop_price: '95',
+            },
+          ],
+        };
+      });
+      const listOpenOrders = vi
+        .fn()
+        .mockResolvedValue([
+          { ...acceptedOrder(), id: 'bracket-venue-id', client_order_id: 'key-1' },
+        ]);
+      const cancelOrder = vi.fn().mockResolvedValue(undefined);
+      const adapter = adapterWith(
+        makeClient({ getOrderByClientOrderId, listOpenOrders, cancelOrder }),
+      );
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+      cancelOrder.mockClear();
+      directFails = true;
+
+      await adapter.cancel('key-1', 'AAPL');
+
+      expect(cancelOrder.mock.calls.map(([id]) => id)).toEqual([
+        'rearm-venue-id',
+        'bracket-venue-id',
+      ]);
+      // The list is asked for the PARENT only — the re-arm never needed it.
+      expect(listOpenOrders).toHaveBeenCalledTimes(1);
+    });
+
+    it('still refuses, naming the original cause, when the venue is unreachable on BOTH endpoints', async () => {
+      const cancelOrder = vi.fn();
+      const adapter = adapterWith(
+        makeClient({
+          getOrderByClientOrderId: vi
+            .fn()
+            .mockRejectedValue(Object.assign(new Error('order-details 503'), { status: 503 })),
+          listOpenOrders: vi
+            .fn()
+            .mockRejectedValue(Object.assign(new Error('list endpoint 502'), { status: 502 })),
+          cancelOrder,
+        }),
+      );
+
+      // #867 unchanged: a lookup outage leaves the lot's protection fully
+      // intact, and the caller's fail-closed refusal is still the safe answer.
+      //
+      // Which failure it names is the assertion: the DIRECT lookup's, not the
+      // fallback's. `sanitizeBrokerError` strips the original message by
+      // design (broker-error.ts's credential boundary), so the status it
+      // carried is what survives to say which cause this is.
+      await expect(adapter.cancel('key-1', 'AAPL')).rejects.toMatchObject({ statusCode: 503 });
+      expect(cancelOrder).not.toHaveBeenCalled();
+    });
+
+    it('does not reach for the list at all while the direct lookup answers', async () => {
+      const listOpenOrders = vi.fn();
+      const adapter = adapterWith(
+        makeClient({
+          getOrderByClientOrderId: vi.fn(async (clientOrderId: string) =>
+            clientOrderId === 'key-1' ? { ...acceptedOrder(), id: 'venue-77' } : null,
+          ),
+          listOpenOrders,
+          cancelOrder: vi.fn().mockResolvedValue(undefined),
+        }),
+      );
+
+      await adapter.cancel('key-1', 'AAPL');
+
+      expect(listOpenOrders).not.toHaveBeenCalled();
+    });
   });
 
   /**

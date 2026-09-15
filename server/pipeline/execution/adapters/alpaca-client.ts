@@ -205,6 +205,23 @@ export interface AlpacaBrokerClient {
    */
   getOrderByClientOrderId(clientOrderId: string): Promise<AlpacaOrder | null>;
   /**
+   * Every order the venue currently has open (`GET /v2/orders?status=open`),
+   * matched on `client_order_id` by the caller.
+   *
+   * A DIFFERENT endpoint from `getOrderByClientOrderId` above, and that is the
+   * whole point (#1500): `cancel()` cannot reach an order through a lookup the
+   * venue is failing, and the flatten shapes reconcile has to cancel are
+   * precisely the ones where that lookup is what broke. One snapshot answers
+   * for the bracket AND its `:rearm`, so the fallback costs one round trip
+   * rather than two and keeps `cancel()`'s "every lookup above every
+   * destructive call" ordering (#867) intact.
+   *
+   * ONE page, oldest first, bounded at Alpaca's 500-row maximum — see the
+   * request in `alpaca-http-client.ts` for why that ordering is what makes
+   * the bound safe for this caller.
+   */
+  listOpenOrders(): Promise<AlpacaOrder[]>;
+  /**
    * The account ledger (`GET /v2/account`) — Alpaca's own authoritative view
    * of cash and equity, which `AccountStateProvider` reads rather than
    * reimplementing (transport-layer-spec.md story 23).

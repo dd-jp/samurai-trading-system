@@ -11,13 +11,25 @@ import type {
   TradingCalendar,
 } from '../../providers/market-data-service/index.js';
 import { AlwaysOpenCalendar } from '../../providers/market-data-service/index.js';
-import type { AssetClass, Clock, Logger, OpenPosition, OrderIntent } from '../../shared/index.js';
+import type {
+  AssetClass,
+  Clock,
+  Fill,
+  Logger,
+  OpenPosition,
+  OrderIntent,
+} from '../../shared/index.js';
+import { toBrokerFillId } from '../../shared/index.js';
 import { recordingLogger } from '../../shared/recording-logger.js';
 import type { CostModel } from '../../tools/backtest/index.js';
 import type { VerdictDecision } from '../verdict/index.js';
 import { ExecutionImpl } from './execute.js';
 import { FilledZeroSizeThrottle } from './filled-zero-size-throttle.js';
-import { UNRESOLVABLE_FLATTEN_MAX_AGE_MS } from './reconcile.js';
+import {
+  FLATTEN_CANCEL_RETRY_EVERY_MS,
+  UNRESOLVABLE_FLATTEN_MAX_AGE_MS,
+  UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS,
+} from './reconcile.js';
 import { openTestExecutionStore, type TestExecutionStore } from './sqlite-store-harness.js';
 import type {
   BrokerAck,
@@ -129,10 +141,26 @@ function makeBroker(): BrokerAdapter & {
   failPositions: string | null;
   /** #519/#526: what `resumeFlatten` answers, keyed the same way `book` is for `getOrder`. */
   flattenBook: Map<string, NormalizedOrder>;
-  /** Ignorance, not absence, for `resumeFlatten` — mirrors `failLookup`. */
+  /**
+   * Ignorance, not absence, for `resumeFlatten` — mirrors `failLookup`. It
+   * leaves `cancel` working, and that is a real adapter shape rather than a
+   * convenience of this double: both production adapters reach an order for
+   * cancellation without the lookup `resumeFlatten` uses, each pinned by its
+   * own adapter test (`cancel() when the by-client-order-id lookup is the
+   * thing that is broken` / `cancels a flatten whose activity-trail lookup is
+   * failing`).
+   */
   failFlattenLookup: string | null;
   /** Every `resumeFlatten` call, in order — so a test can assert it ran (or didn't). */
   resumeFlattenCalls: string[];
+  /** Every `cancel` call, in order, with the args it was given. */
+  cancelCalls: Array<{ client_order_id: string; instrument: string }>;
+  /** A venue that refuses the cancel — the case that must leave the row blocking. */
+  failCancel: string | null;
+  /** Fires inside `cancel`, so a test can move the venue's book while it is in flight. */
+  onCancel: (() => void) | null;
+  /** How many times the venue's position book was read — what the #1500 throttles bound. */
+  venueReads: number;
 } {
   return {
     book: new Map<string, NormalizedOrder>(),
@@ -141,6 +169,7 @@ function makeBroker(): BrokerAdapter & {
     flattenBook: new Map<string, NormalizedOrder>(),
     failFlattenLookup: null as string | null,
     resumeFlattenCalls: [] as string[],
+    venueReads: 0,
 
     async submitBracket(order: NativeBracketRequest): Promise<BrokerAck> {
       this.submits.push(order);
@@ -190,6 +219,7 @@ function makeBroker(): BrokerAdapter & {
     venuePositions: [] as NormalizedPosition[],
     failPositions: null as string | null,
     async getOpenPositions(): Promise<NormalizedPosition[]> {
+      this.venueReads += 1;
       if (this.failPositions !== null) throw new Error(this.failPositions);
       return this.venuePositions;
     },
@@ -197,9 +227,15 @@ function makeBroker(): BrokerAdapter & {
     async submitFlatten(): Promise<never> {
       throw new Error('makeBroker.submitFlatten: reconcile() does not flatten');
     },
-    async cancel(): Promise<never> {
-      throw new Error('makeBroker.cancel: reconcile() does not cancel');
+    cancelCalls: [] as Array<{ client_order_id: string; instrument: string }>,
+    failCancel: null as string | null,
+    async cancel(clientOrderId: string, instrument: string): Promise<void> {
+      this.cancelCalls.push({ client_order_id: clientOrderId, instrument });
+      this.onCancel?.();
+      if (this.failCancel !== null) throw new Error(this.failCancel);
     },
+    /** A venue whose book moves while the cancel is in flight. */
+    onCancel: null as (() => void) | null,
   };
 }
 
@@ -848,6 +884,115 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     expect(alerts[0]?.reason).toContain('previously acked');
   });
 
+  /**
+   * An acked flatten the venue keeps reporting WORKING may never be released
+   * on age — that is the #516/#1389 over-sell. The way out is to cancel it at
+   * the venue so one of the ordinary resolution paths can retire the row.
+   */
+  async function ackedFlatten(store: TestExecutionStore, submitted_at: Date): Promise<void> {
+    await writeAheadFlatten(store, { submitted_at });
+    await store.resolveFlattenSubmitted(
+      FLATTEN_KEY,
+      { order_state: 'submitted', broker_order_ids: [`${FLATTEN_KEY}:order`] },
+      submitted_at,
+    );
+  }
+
+  function workingFlattenBook(broker: ReturnType<typeof makeBroker>): void {
+    broker.flattenBook.set(FLATTEN_KEY, {
+      client_order_id: FLATTEN_KEY,
+      broker_order_ids: [`${FLATTEN_KEY}:order`],
+      order_state: 'submitted',
+      filled_qty: 0,
+    });
+  }
+
+  it('cancels an acked flatten the venue still reports WORKING once it is past the bound', async () => {
+    const { store } = openTestExecutionStore();
+    await ackedFlatten(store, new Date(NOW.getTime() - (UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1)));
+    const broker = makeBroker();
+    workingFlattenBook(broker);
+    const alerts: FlattenReconcileAlert[] = [];
+
+    const report = await new ExecutionImpl(
+      makeInput(store, broker, {
+        postFlattenReconcileAlert: async (alert) => {
+          alerts.push(alert);
+        },
+      }),
+    ).reconcile();
+
+    expect(broker.cancelCalls).toEqual([{ client_order_id: FLATTEN_KEY, instrument: 'AAPL' }]);
+    expect(report.divergences[0]?.reason).toContain('CANCELLED');
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]?.idempotency_key).toBe(FLATTEN_KEY);
+
+    // The row itself is NOT released here — only the venue turning the order
+    // terminal AND its fills being swept may do that.
+    const row = await store.getFlattenSubmission(FLATTEN_KEY);
+    expect(row?.status).toBe('submitted');
+    expect(row?.fills_swept_at).toBeNull();
+    expect((await store.getUnresolvedFlattens()).map((r) => r.idempotency_key)).toEqual([
+      FLATTEN_KEY,
+    ]);
+  });
+
+  it('does NOT cancel an acked working flatten that is still inside the bound', async () => {
+    const { store } = openTestExecutionStore();
+    await ackedFlatten(store, new Date(NOW.getTime() - (UNRESOLVABLE_FLATTEN_MAX_AGE_MS - 1)));
+    const broker = makeBroker();
+    workingFlattenBook(broker);
+
+    await new ExecutionImpl(makeInput(store, broker)).reconcile();
+
+    expect(broker.cancelCalls).toEqual([]);
+  });
+
+  it('does NOT cancel a row the venue already reports terminal — there is nothing working to cancel', async () => {
+    const { store } = openTestExecutionStore();
+    await ackedFlatten(store, new Date(NOW.getTime() - (UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1)));
+    const broker = makeBroker();
+    // Cancelled with a PARTIAL fill: terminal, so no cancel is owed, and
+    // `filled_qty > 0` keeps `reconcileFlatten` from resolving the row —
+    // it stays blocking until `ingestFills()` sweeps the partial.
+    broker.flattenBook.set(FLATTEN_KEY, {
+      client_order_id: FLATTEN_KEY,
+      broker_order_ids: [`${FLATTEN_KEY}:order`],
+      order_state: 'cancelled',
+      filled_qty: 4,
+    });
+
+    await new ExecutionImpl(makeInput(store, broker)).reconcile();
+
+    expect(broker.cancelCalls).toEqual([]);
+    expect((await store.getUnresolvedFlattens()).map((r) => r.idempotency_key)).toEqual([
+      FLATTEN_KEY,
+    ]);
+  });
+
+  it('alerts and leaves the row blocking when the venue refuses the cancel', async () => {
+    const { store } = openTestExecutionStore();
+    await ackedFlatten(store, new Date(NOW.getTime() - (UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1)));
+    const broker = makeBroker();
+    workingFlattenBook(broker);
+    broker.failCancel = 'venue refused the cancel';
+    const alerts: FlattenReconcileAlert[] = [];
+
+    const report = await new ExecutionImpl(
+      makeInput(store, broker, {
+        postFlattenReconcileAlert: async (alert) => {
+          alerts.push(alert);
+        },
+      }),
+    ).reconcile();
+
+    expect(report.divergences[0]?.reason).toContain('cancel FAILED');
+    expect(alerts[0]?.reason).toContain('cancel FAILED');
+    expect((await store.getUnresolvedFlattens()).map((r) => r.idempotency_key)).toEqual([
+      FLATTEN_KEY,
+    ]);
+  });
+
   it('leaves the record untouched and alerts when the adapter cannot answer at all', async () => {
     const { store } = openTestExecutionStore();
     await writeAheadFlatten(store);
@@ -880,16 +1025,573 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
   });
 
   /**
-   * #1214 review round 2, finding 1 — the OTHER "left untouched and escalated"
-   * branch, and the case for NOT giving it the age bound the null-on-acked
-   * branch got.
+   * The NEVER-CONFIRMED row (#1500). `writeAheadFlatten`
+   * committed, `submitFlatten` may well have landed at the venue (the ack is
+   * exactly what was lost), and `resumeFlatten` throws on every pass since —
+   * so `order_state` stays null forever and no later pass can turn the row
+   * terminal. Age alone must not release it: the order may be working, and a
+   * venue can serve order placement while its order-details endpoint fails.
+   *
+   * THE MUTATION THESE KILL: releasing such a row on age (or on a delivered
+   * cancel alone). `cancel()` resolves for an order that already FILLED on
+   * both production adapters, so the venue's own position is the only
+   * evidence that separates "nothing filled" from "we just cancelled a fill".
+   */
+  async function heldLot(store: TestExecutionStore, filled_size: number): Promise<void> {
+    await store.writeAheadPosition(
+      pendingPosition({
+        idempotency_key: 'key-aapl-entry',
+        order_state: 'filled',
+        filled_size,
+        requested_size: filled_size,
+        avg_entry_price: 100,
+      }),
+    );
+  }
+
+  function neverConfirmed(broker: ReturnType<typeof makeBroker>, venueQty: number): void {
+    broker.failFlattenLookup = 'order-details endpoint 503';
+    broker.venuePositions = [
+      { instrument: 'AAPL', qty: venueQty, side: 'buy', avg_entry_price: 100 },
+    ];
+  }
+
+  it('cancels a never-confirmed flatten past the bound and releases it only because the venue still holds the whole lot', async () => {
+    const { store } = openTestExecutionStore();
+    await heldLot(store, 10);
+    await writeAheadFlatten(store, {
+      submitted_at: new Date(NOW.getTime() - (UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1)),
+    });
+    const broker = makeBroker();
+    neverConfirmed(broker, 10);
+
+    const report = await new ExecutionImpl(makeInput(store, broker)).reconcile();
+
+    expect(broker.cancelCalls).toEqual([{ client_order_id: FLATTEN_KEY, instrument: 'AAPL' }]);
+    expect(
+      report.divergences.find((divergence) => divergence.idempotency_key === FLATTEN_KEY),
+    ).toMatchObject({ action: 'rejected', kind: 'flatten' });
+    expect((await store.getFlattenSubmission(FLATTEN_KEY))?.status).toBe('error');
+    expect(await store.getUnresolvedFlattens()).toEqual([]);
+  });
+
+  it('keeps a never-confirmed flatten blocking when the venue holds LESS than the store does — something filled', async () => {
+    const { store } = openTestExecutionStore();
+    await heldLot(store, 10);
+    await writeAheadFlatten(store, {
+      submitted_at: new Date(NOW.getTime() - (UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1)),
+    });
+    const broker = makeBroker();
+    neverConfirmed(broker, 6);
+    const alerts: FlattenReconcileAlert[] = [];
+
+    await new ExecutionImpl(
+      makeInput(store, broker, {
+        postFlattenReconcileAlert: async (alert) => {
+          alerts.push(alert);
+        },
+      }),
+    ).reconcile();
+
+    expect(broker.cancelCalls).toHaveLength(1);
+    expect(alerts[0]?.reason).toContain('attribute them by hand');
+    expect((await store.getUnresolvedFlattens()).map((row) => row.idempotency_key)).toEqual([
+      FLATTEN_KEY,
+    ]);
+  });
+
+  /**
+   * A surplus is not coverage either: an unbooked exit fill hides inside it, so
+   * both release paths share the refusal, not just the terminal-unswept one.
+   */
+  it('keeps a never-confirmed flatten blocking when the venue holds MORE than the store does', async () => {
+    const { store } = openTestExecutionStore();
+    await heldLot(store, 10);
+    await writeAheadFlatten(store, {
+      submitted_at: new Date(NOW.getTime() - (UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1)),
+    });
+    const broker = makeBroker();
+    broker.failFlattenLookup = 'order-details endpoint 503';
+    broker.venuePositions = [{ instrument: 'AAPL', qty: 14, side: 'buy', avg_entry_price: 100 }];
+    const alerts: FlattenReconcileAlert[] = [];
+
+    await new ExecutionImpl(
+      makeInput(store, broker, {
+        postFlattenReconcileAlert: async (alert) => {
+          alerts.push(alert);
+        },
+      }),
+    ).reconcile();
+
+    expect(alerts[0]?.reason).toContain('a surplus the store has no lot for');
+    expect((await store.getUnresolvedFlattens()).map((row) => row.idempotency_key)).toEqual([
+      FLATTEN_KEY,
+    ]);
+  });
+
+  /** A venue book on the OTHER side of the store's is the #516/#1389 over-sell, not coverage. */
+  it('keeps a never-confirmed flatten blocking when the venue holds the same size SHORT against a long lot', async () => {
+    const { store } = openTestExecutionStore();
+    await heldLot(store, 10);
+    await writeAheadFlatten(store, {
+      submitted_at: new Date(NOW.getTime() - (UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1)),
+    });
+    const broker = makeBroker();
+    broker.failFlattenLookup = 'order-details endpoint 503';
+    broker.venuePositions = [{ instrument: 'AAPL', qty: -10, side: 'sell', avg_entry_price: 100 }];
+
+    await new ExecutionImpl(makeInput(store, broker)).reconcile();
+
+    expect((await store.getUnresolvedFlattens()).map((row) => row.idempotency_key)).toEqual([
+      FLATTEN_KEY,
+    ]);
+  });
+
+  /**
+   * The evidence must be read AFTER the cancel resolves. A fill can land while
+   * the cancel is in flight — and the sweep spends real time before it,
+   * `resumeFlatten` timeouts and other rows' cancels — so a book read earlier
+   * answers for a venue that no longer exists, and releasing on it is the
+   * #516/#1389 over-sell. Here the venue holds the whole lot right up to the
+   * cancel and less immediately after: only a post-cancel read can see that.
+   */
+  it('refuses to release when the venue book moves WHILE the cancel is in flight', async () => {
+    const { store } = openTestExecutionStore();
+    await heldLot(store, 10);
+    await writeAheadFlatten(store, {
+      submitted_at: new Date(NOW.getTime() - (UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1)),
+    });
+    const broker = makeBroker();
+    neverConfirmed(broker, 10);
+    broker.onCancel = () => {
+      broker.venuePositions = [{ instrument: 'AAPL', qty: 6, side: 'buy', avg_entry_price: 100 }];
+    };
+    const alerts: FlattenReconcileAlert[] = [];
+
+    await new ExecutionImpl(
+      makeInput(store, broker, {
+        postFlattenReconcileAlert: async (alert) => {
+          alerts.push(alert);
+        },
+      }),
+    ).reconcile();
+
+    expect(broker.cancelCalls).toHaveLength(1);
+    expect(alerts[0]?.reason).toContain('attribute them by hand');
+    expect((await store.getUnresolvedFlattens()).map((row) => row.idempotency_key)).toEqual([
+      FLATTEN_KEY,
+    ]);
+  });
+
+  /**
+   * A venue reports ONE netted position per instrument, so it cannot speak for
+   * store lots held on both sides at once: netting them first turns an exactly
+   * offsetting pair into `0` held against `0` at the venue, which reads as
+   * coverage on no evidence at all. `heldQuantitiesFor` refuses to pre-sum for
+   * this reason; so does this check.
+   */
+  it('keeps a never-confirmed flatten blocking when the store holds lots on BOTH sides', async () => {
+    const { store } = openTestExecutionStore();
+    await heldLot(store, 10);
+    await store.writeAheadPosition(
+      pendingPosition({
+        idempotency_key: 'key-aapl-short',
+        side: 'sell',
+        order_state: 'filled',
+        filled_size: 10,
+        requested_size: 10,
+        avg_entry_price: 100,
+      }),
+    );
+    await writeAheadFlatten(store, {
+      submitted_at: new Date(NOW.getTime() - (UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1)),
+    });
+    const broker = makeBroker();
+    broker.failFlattenLookup = 'order-details endpoint 503';
+    // The two lots net to nothing at the venue, which is exactly the book a
+    // venue holding NEITHER of them would report.
+    broker.venuePositions = [];
+    const alerts: FlattenReconcileAlert[] = [];
+
+    await new ExecutionImpl(
+      makeInput(store, broker, {
+        postFlattenReconcileAlert: async (alert) => {
+          alerts.push(alert);
+        },
+      }),
+    ).reconcile();
+
+    expect(alerts[0]?.reason).toContain('NETTED');
+    expect((await store.getUnresolvedFlattens()).map((row) => row.idempotency_key)).toEqual([
+      FLATTEN_KEY,
+    ]);
+  });
+
+  it('keeps a never-confirmed flatten blocking when the venue refuses the cancel', async () => {
+    const { store } = openTestExecutionStore();
+    await heldLot(store, 10);
+    await writeAheadFlatten(store, {
+      submitted_at: new Date(NOW.getTime() - (UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1)),
+    });
+    const broker = makeBroker();
+    neverConfirmed(broker, 10);
+    broker.failCancel = 'venue refused the cancel';
+
+    const report = await new ExecutionImpl(makeInput(store, broker)).reconcile();
+
+    expect(
+      report.divergences.find((divergence) => divergence.idempotency_key === FLATTEN_KEY)?.reason,
+    ).toContain('cancel FAILED');
+    expect((await store.getUnresolvedFlattens()).map((row) => row.idempotency_key)).toEqual([
+      FLATTEN_KEY,
+    ]);
+  });
+
+  it('keeps a never-confirmed flatten blocking when the venue book could not be read this pass', async () => {
+    const { store } = openTestExecutionStore();
+    await heldLot(store, 10);
+    await writeAheadFlatten(store, {
+      submitted_at: new Date(NOW.getTime() - (UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1)),
+    });
+    const broker = makeBroker();
+    neverConfirmed(broker, 10);
+    broker.failPositions = 'positions endpoint 503';
+
+    await new ExecutionImpl(makeInput(store, broker)).reconcile();
+
+    expect(broker.cancelCalls).toHaveLength(1);
+    expect((await store.getUnresolvedFlattens()).map((row) => row.idempotency_key)).toEqual([
+      FLATTEN_KEY,
+    ]);
+  });
+
+  /**
+   * The TERMINAL row whose fills were never swept. `fills_swept_at` is the
+   * only thing that retires it and only `ingestFills()` writes it, as the last
+   * step of a poll that must first attribute the flatten's fills and advance
+   * every lot they name. Any failure before that step leaves the row unswept,
+   * and the fills then age past the poll's `since` floor so the flatten key is
+   * never iterated again — the row blocks its instrument's mandatory
+   * flat-by-close for as long as the store exists, across restarts, with no
+   * operator path but hand-editing SQLite.
+   *
+   * THE MUTATION THESE KILL: releasing such a row on age, or on the venue's
+   * order state alone. What separates "the fills were applied and only the
+   * mark was lost" from "the fills are real and unbooked" is the venue's own
+   * book, and only the second shape may keep blocking. Plus what the window
+   * is measured from, and what looking costs: the clock starts when the row is
+   * first SEEN terminal (never at submission — see the constant), and every
+   * look costs one venue read and at most one page per window.
+   */
+  async function terminalUnsweptFlatten(
+    store: TestExecutionStore,
+    broker: ReturnType<typeof makeBroker>,
+    seenTerminalForMs: number | null,
+    submittedAgoMs = 6 * 60 * 60 * 1_000,
+  ): Promise<void> {
+    await ackedFlatten(store, new Date(NOW.getTime() - submittedAgoMs));
+    if (seenTerminalForMs !== null) {
+      await store.markFlattenTerminalUnsweptChecked(
+        FLATTEN_KEY,
+        new Date(NOW.getTime() - seenTerminalForMs),
+      );
+    }
+    broker.flattenBook.set(FLATTEN_KEY, {
+      client_order_id: FLATTEN_KEY,
+      broker_order_ids: [`${FLATTEN_KEY}:order`],
+      order_state: 'cancelled',
+      filled_qty: 4,
+    });
+  }
+
+  /** Entry 10 then a booked exit of 4: what a partially-filled flatten leaves once ingestFills HAS applied it. */
+  async function bookedPartialExit(store: TestExecutionStore): Promise<void> {
+    await heldLot(store, 10);
+    const exit: Fill = {
+      idempotency_key: 'key-aapl-entry',
+      broker_fill_id: toBrokerFillId('x1'),
+      leg: 'exit',
+      price: 104,
+      qty: 4,
+      fee: 0,
+      timestamp: new Date(NOW.getTime() - 60_000),
+    };
+    await store.applyLotAdvance({ idempotency_key: 'key-aapl-entry', fills: [exit] });
+  }
+
+  it('releases a terminal flatten whose fills were applied but never marked swept, on the venue book', async () => {
+    const { store } = openTestExecutionStore();
+    await bookedPartialExit(store);
+    const broker = makeBroker();
+    await terminalUnsweptFlatten(store, broker, UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS + 1);
+    broker.venuePositions = [{ instrument: 'AAPL', qty: 6, side: 'buy', avg_entry_price: 100 }];
+    const alerts: FlattenReconcileAlert[] = [];
+
+    const report = await new ExecutionImpl(
+      makeInput(store, broker, {
+        postFlattenReconcileAlert: async (alert) => {
+          alerts.push(alert);
+        },
+      }),
+    ).reconcile();
+
+    expect(
+      report.divergences.find((divergence) => divergence.idempotency_key === FLATTEN_KEY),
+    ).toMatchObject({ action: 'rejected', kind: 'flatten' });
+    expect(alerts[0]?.reason).toContain('INFERENCE');
+    expect(await store.getUnresolvedFlattens()).toEqual([]);
+    // Retiring the row is not enough: the remainder the venue still holds has
+    // to be flattenable again, and only `status='error'` lets
+    // `resolveExitRetryKey` walk to a fresh key. Retiring it any other way
+    // (e.g. `markFlattenFillsSwept`) leaves `execute()` on `deduped` and the
+    // remainder never exits. Safe here precisely because the release is gated
+    // on the venue covering everything the store still holds.
+    expect(await store.isRetryableFlattenError(FLATTEN_KEY)).toBe(true);
+  });
+
+  it('keeps a terminal unswept flatten blocking when the venue holds LESS than the store has booked', async () => {
+    const { store } = openTestExecutionStore();
+    // Nothing booked: the attribution-side wedge, where the fills are real,
+    // unbooked, and no venue number can say which lot each belongs to.
+    await heldLot(store, 10);
+    const broker = makeBroker();
+    await terminalUnsweptFlatten(store, broker, UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS + 1);
+    broker.venuePositions = [{ instrument: 'AAPL', qty: 6, side: 'buy', avg_entry_price: 100 }];
+    const alerts: FlattenReconcileAlert[] = [];
+
+    await new ExecutionImpl(
+      makeInput(store, broker, {
+        postFlattenReconcileAlert: async (alert) => {
+          alerts.push(alert);
+        },
+      }),
+    ).reconcile();
+
+    expect(alerts[0]?.reason).toContain('attribute them by hand');
+    expect((await store.getUnresolvedFlattens()).map((row) => row.idempotency_key)).toEqual([
+      FLATTEN_KEY,
+    ]);
+  });
+
+  it('keeps a terminal unswept flatten blocking when the venue book could not be read', async () => {
+    const { store } = openTestExecutionStore();
+    await bookedPartialExit(store);
+    const broker = makeBroker();
+    await terminalUnsweptFlatten(store, broker, UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS + 1);
+    broker.failPositions = 'positions endpoint 503';
+
+    await new ExecutionImpl(makeInput(store, broker)).reconcile();
+
+    expect((await store.getUnresolvedFlattens()).map((row) => row.idempotency_key)).toEqual([
+      FLATTEN_KEY,
+    ]);
+  });
+
+  it('leaves a terminal unswept flatten alone inside the bound — ingestFills is still owed its sweep', async () => {
+    const { store } = openTestExecutionStore();
+    await bookedPartialExit(store);
+    const broker = makeBroker();
+    await terminalUnsweptFlatten(store, broker, UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS - 1);
+    broker.venuePositions = [{ instrument: 'AAPL', qty: 6, side: 'buy', avg_entry_price: 100 }];
+    const alerts: FlattenReconcileAlert[] = [];
+
+    await new ExecutionImpl(
+      makeInput(store, broker, {
+        postFlattenReconcileAlert: async (alert) => {
+          alerts.push(alert);
+        },
+      }),
+    ).reconcile();
+
+    expect(alerts).toEqual([]);
+    expect((await store.getUnresolvedFlattens()).map((row) => row.idempotency_key)).toEqual([
+      FLATTEN_KEY,
+    ]);
+  });
+
+  it('starts the window when the row is FIRST seen terminal, not when it was submitted', async () => {
+    const { store } = openTestExecutionStore();
+    await bookedPartialExit(store);
+    const broker = makeBroker();
+    // Submitted six hours ago and terminal only now: measured from
+    // `submitted_at` this row would be judged on the very poll that observed
+    // the fill, against a venue book that may not have caught up with it yet.
+    await terminalUnsweptFlatten(store, broker, null);
+    broker.venuePositions = [{ instrument: 'AAPL', qty: 6, side: 'buy', avg_entry_price: 100 }];
+    const alerts: FlattenReconcileAlert[] = [];
+    const readsBefore = broker.venueReads;
+
+    await new ExecutionImpl(
+      makeInput(store, broker, {
+        postFlattenReconcileAlert: async (alert) => {
+          alerts.push(alert);
+        },
+      }),
+    ).reconcile();
+
+    // Nothing looked at, nothing paged — and the row still blocks. The venue
+    // read this pass made is `findUnrecordedVenuePositions`', not the
+    // coverage check's.
+    expect(alerts).toEqual([]);
+    expect(broker.venueReads - readsBefore).toBe(1);
+    expect((await store.getUnresolvedFlattens()).map((row) => row.idempotency_key)).toEqual([
+      FLATTEN_KEY,
+    ]);
+    expect((await store.getUnresolvedFlattens())[0]?.terminal_unswept_checked_at).toEqual(NOW);
+  });
+
+  it('costs one venue read and one page per window, not one per poll', async () => {
+    const { store } = openTestExecutionStore();
+    await heldLot(store, 10);
+    const broker = makeBroker();
+    await terminalUnsweptFlatten(store, broker, UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS + 1);
+    broker.venuePositions = [{ instrument: 'AAPL', qty: 6, side: 'buy', avg_entry_price: 100 }];
+    const alerts: FlattenReconcileAlert[] = [];
+    const input = makeInput(store, broker, {
+      postFlattenReconcileAlert: async (alert) => {
+        alerts.push(alert);
+      },
+    });
+
+    await new ExecutionImpl(input).reconcile();
+    await new ExecutionImpl(input).reconcile();
+
+    // Two passes, ONE verdict: the second is inside the window the first
+    // re-armed. Three reads, not four — one per pass for
+    // `findUnrecordedVenuePositions`, plus the one coverage check.
+    expect(alerts).toHaveLength(1);
+    expect(broker.venueReads).toBe(3);
+    expect((await store.getUnresolvedFlattens()).map((row) => row.idempotency_key)).toEqual([
+      FLATTEN_KEY,
+    ]);
+  });
+
+  it('keeps a terminal unswept flatten blocking when the venue holds MORE than the store has booked', async () => {
+    const { store } = openTestExecutionStore();
+    await bookedPartialExit(store);
+    const broker = makeBroker();
+    await terminalUnsweptFlatten(store, broker, UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS + 1);
+    // A surplus the store has no lot for. It covers the 6 the store holds, but
+    // an unbooked exit fill up to its size hides inside that sum, so this book
+    // cannot corroborate the store — no over-sell either way, but a release
+    // here would leave real fills out of the journal.
+    broker.venuePositions = [{ instrument: 'AAPL', qty: 9, side: 'buy', avg_entry_price: 100 }];
+    const alerts: FlattenReconcileAlert[] = [];
+
+    await new ExecutionImpl(
+      makeInput(store, broker, {
+        postFlattenReconcileAlert: async (alert) => {
+          alerts.push(alert);
+        },
+      }),
+    ).reconcile();
+
+    expect(alerts[0]?.reason).toContain('attribute them by hand');
+    // The row was submitted 6h ago but LAST examined a window ago, and the
+    // alert must say the second — the column is re-armed, so it cannot speak
+    // for the age of the wedge.
+    expect(alerts[0]?.reason).toContain('1800s after this sweep last examined it');
+    expect((await store.getUnresolvedFlattens()).map((row) => row.idempotency_key)).toEqual([
+      FLATTEN_KEY,
+    ]);
+  });
+
+  it('writes the venue state it released on — a submitting row is acked before any release', async () => {
+    const { store } = openTestExecutionStore();
+    await bookedPartialExit(store);
+    const broker = makeBroker();
+    // Never acked in-process: `resolveFlattenSubmitted` has never run, so
+    // `broker_order_ids` and `resolved_at` are still unwritten on this row.
+    await writeAheadFlatten(store, {
+      submitted_at: new Date(NOW.getTime() - 6 * 60 * 60 * 1_000),
+    });
+    await store.markFlattenTerminalUnsweptChecked(
+      FLATTEN_KEY,
+      new Date(NOW.getTime() - (UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS + 1)),
+    );
+    broker.flattenBook.set(FLATTEN_KEY, {
+      client_order_id: FLATTEN_KEY,
+      broker_order_ids: [`${FLATTEN_KEY}:order`],
+      order_state: 'cancelled',
+      filled_qty: 4,
+    });
+    broker.venuePositions = [{ instrument: 'AAPL', qty: 6, side: 'buy', avg_entry_price: 100 }];
+
+    await new ExecutionImpl(makeInput(store, broker)).reconcile();
+
+    expect(await store.getUnresolvedFlattens()).toEqual([]);
+    const released = await store.getFlattenSubmission(FLATTEN_KEY);
+    expect(released?.order_state).toBe('cancelled');
+    expect(released?.broker_order_ids).toBe(JSON.stringify([`${FLATTEN_KEY}:order`]));
+    expect(released?.resolved_at).not.toBeNull();
+  });
+
+  it('does NOT cancel a never-confirmed flatten that is still inside the bound', async () => {
+    const { store } = openTestExecutionStore();
+    await heldLot(store, 10);
+    await writeAheadFlatten(store, {
+      submitted_at: new Date(NOW.getTime() - (UNRESOLVABLE_FLATTEN_MAX_AGE_MS - 1)),
+    });
+    const broker = makeBroker();
+    neverConfirmed(broker, 10);
+
+    await new ExecutionImpl(makeInput(store, broker)).reconcile();
+
+    expect(broker.cancelCalls).toEqual([]);
+    expect((await store.getUnresolvedFlattens()).map((row) => row.idempotency_key)).toEqual([
+      FLATTEN_KEY,
+    ]);
+  });
+
+  /**
+   * The cancel and its page are throttled against the DURABLE
+   * `cancel_attempted_at`, not re-issued on every fill-sync poll.
+   */
+  it('does not re-cancel or re-page a wedged row inside FLATTEN_CANCEL_RETRY_EVERY_MS', async () => {
+    const { store } = openTestExecutionStore();
+    await ackedFlatten(store, new Date(NOW.getTime() - (UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1)));
+    const broker = makeBroker();
+    workingFlattenBook(broker);
+    const alerts: FlattenReconcileAlert[] = [];
+    const input = makeInput(store, broker, {
+      postFlattenReconcileAlert: async (alert) => {
+        alerts.push(alert);
+      },
+    });
+
+    await new ExecutionImpl(input).reconcile();
+    await new ExecutionImpl(input).reconcile();
+
+    expect(broker.cancelCalls).toHaveLength(1);
+    expect(alerts).toHaveLength(1);
+  });
+
+  it('cancels again once the last attempt is older than FLATTEN_CANCEL_RETRY_EVERY_MS', async () => {
+    const { store } = openTestExecutionStore();
+    await ackedFlatten(store, new Date(NOW.getTime() - (UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1)));
+    await store.markFlattenCancelAttempted(
+      FLATTEN_KEY,
+      new Date(NOW.getTime() - (FLATTEN_CANCEL_RETRY_EVERY_MS + 1)),
+    );
+    const broker = makeBroker();
+    workingFlattenBook(broker);
+
+    await new ExecutionImpl(makeInput(store, broker)).reconcile();
+
+    expect(broker.cancelCalls).toEqual([{ client_order_id: FLATTEN_KEY, instrument: 'AAPL' }]);
+  });
+
+  /**
+   * The OTHER "left untouched and escalated" branch (#1214), and the case for
+   * NOT giving it the age bound the null-on-acked branch got.
    *
    * A `resumeFlatten` that throws is ignorance, not evidence: nothing observed
-   * the venue's answer, so forcing the row terminal would write a finding into
-   * the journal that nobody made. It also buys nothing operationally — an
-   * adapter that cannot reach the venue to ask about this flatten cannot submit
-   * a replacement one either. Its resolution path is the next pass on which the
-   * adapter CAN answer, and that path terminates, which is what this proves.
+   * the venue's answer, so forcing the row terminal on age would write a
+   * finding into the journal that nobody made. Its resolution path is the next
+   * pass on which the adapter CAN answer, and that path terminates, which is
+   * what this proves. A row whose lookup NEVER answers is not left to it —
+   * `cancelNeverConfirmedFlatten` (#1500) takes that shape past the bound, on
+   * venue evidence rather than on age.
    *
    * THE MUTATION THIS KILLS: extend the age bound to cover the catch branch
    * too. This test still passes (the row resolves either way), so it is paired

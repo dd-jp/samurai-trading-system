@@ -120,14 +120,15 @@ export async function executeVerdict(
   // gets, because retrying either of those risks the #516 double-flatten /
   // reverse-position hazard.
   //
-  // Two of the three ways into 'error' are proof (the cancel loop failed
-  // before submit; the venue terminally refused it having filled nothing).
-  // #1214 review round 2 added a third that is NOT — a row forced terminal
-  // after `UNRESOLVABLE_FLATTEN_MAX_AGE_MS` of the venue denying the order
-  // exists — so this walk can now re-arm over a flatten that may still be
-  // live. That is argued at the constant (reconcile.ts), not here; what
-  // matters at this call site is that the walk stays bounded by
-  // `MAX_EXIT_RETRY_ATTEMPTS` either way.
+  // 'error' does NOT mean "proven dead at the venue". Some routes into it are
+  // proof (the cancel loop failed before the submit; the venue terminally
+  // refused the order having filled nothing); others are `reconcile()`
+  // DECIDING on bounded evidence that a row may stop blocking — an age bound
+  // on a venue that keeps denying the order (#1214), a venue book that still
+  // covers everything the store holds (#1500). So this walk can re-arm over a
+  // flatten that may still be live. Each such decision is argued where it is
+  // made (reconcile.ts); what matters at this call site is that the walk stays
+  // bounded by `MAX_EXIT_RETRY_ATTEMPTS` whichever route produced the row.
   if (await store.findByKey(idempotencyKey)) {
     if (order.intent_type !== 'exit') {
       return result('deduped', idempotencyKey, now, {

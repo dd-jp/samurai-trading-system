@@ -1063,6 +1063,28 @@ describe('SaxoBrokerAdapter flatten', () => {
     expect(await adapter.resumeFlatten('flat-1', '3USL')).toBeNull();
   });
 
+  /**
+   * #1500's reachability premise on THIS adapter: the never-confirmed-flatten
+   * branch is entered because `resumeFlatten` threw, and it then asks for a
+   * cancel — so the two must be able to fail independently. Here they do by
+   * construction: `resumeFlatten` needs the activity trail, `cancel()` needs
+   * only the open-order list and a DELETE. The Alpaca adapter has its own
+   * version of this test, where that independence had to be BUILT.
+   */
+  it('cancels a flatten whose activity-trail lookup is failing — the two use different endpoints', async () => {
+    const client = makeClient({
+      listOrderActivities: vi.fn().mockRejectedValue(new Error('activities endpoint 503')),
+    });
+    const { adapter } = makeAdapter(client);
+
+    // Nothing open under the reference, so the lookup falls through to the
+    // activity trail — the endpoint that is down — and cannot answer.
+    await expect(adapter.resumeFlatten('flat-1', '3USL')).rejects.toThrow();
+    // The cancel never consults that trail, so it completes regardless.
+    await expect(adapter.cancel('flat-1', '3USL')).resolves.toBeUndefined();
+    expect(client.listOpenOrders).toHaveBeenCalled();
+  });
+
   it('adopts an instantly-filled flatten off the audit trail when the 409 retry finds nothing open (#1217)', async () => {
     const listOrderActivities = vi
       .fn()

@@ -897,6 +897,10 @@ export class UnreachableAlpacaClient implements AlpacaBrokerClient {
   async getPositions(): Promise<never> {
     return this.refuse('getPositions');
   }
+
+  async listOpenOrders(): Promise<never> {
+    return this.refuse('listOpenOrders');
+  }
 }
 
 /**
@@ -2713,6 +2717,12 @@ class CryptoEmulationScenarioClient implements AlpacaBrokerClient {
 
   async getPositions(): Promise<never> {
     throw new Error('smoke crypto-emulation scenario: getPositions is not scripted here');
+  }
+
+  async listOpenOrders(): Promise<AlpacaOrder[]> {
+    return [...this.orders.values()]
+      .filter((order) => order.status !== 'filled' && order.status !== 'canceled')
+      .map((order) => ({ ...order }));
   }
 
   async getAccount(): Promise<never> {

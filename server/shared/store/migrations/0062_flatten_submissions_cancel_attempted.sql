@@ -1,0 +1,25 @@
+-- Bounds what ONE wedged flatten row costs the venue and the operator (#1500).
+--
+-- `reconcileFlatten` cancels a flatten the venue is still working, and a
+-- never-confirmed one the adapter cannot describe, once the row is past
+-- `UNRESOLVABLE_FLATTEN_MAX_AGE_MS`. Nothing about such a row changes until
+-- the venue answers, so it qualifies again on the very next pass — and
+-- reconcile runs on the fill-sync poll (#921, 15s by default). Without a
+-- durable record of the last attempt that is ~240 venue cancels and ~240 real
+-- pages per hour per row, and on Saxo each cancel is a full `listOpenOrders()`
+-- plus a DELETE against a pacing budget shared with the trading path.
+--
+-- Durable rather than process-local (the posture `FilledZeroSizeThrottle` takes
+-- in memory) because the failure this throttles survives restarts: a crash
+-- loop, or an operator restarting a wedged process, would otherwise re-arm a
+-- per-pass cancel every time.
+--
+-- NOT a record that the order was cancelled AT the venue, and nothing reads it
+-- as one: permission to submit a replacement flatten is never derived from this
+-- column. It records only that a cancel was ATTEMPTED at this time, success or
+-- failure alike — a cancel that throws on every pass must not escape the
+-- throttle. What releases the instrument is venue evidence, in reconcile.ts.
+--
+-- NULL means "never attempted", which is every row written before this
+-- migration and every healthy flatten since. There is nothing to backfill.
+ALTER TABLE flatten_submissions ADD COLUMN cancel_attempted_at TEXT NULL;

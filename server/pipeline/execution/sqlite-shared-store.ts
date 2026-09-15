@@ -969,9 +969,12 @@ export class SqliteExecutionStore implements SharedStore {
    * `reconcile()`'s worklist (#519, #526) — see `SharedStore.getUnresolvedFlattens`
    * for the bound this query implements: `'submitting'` outright, or
    * `'submitted'` rows not yet confirmed swept (`fills_swept_at IS NULL`).
-   * `'error'` rows are excluded by the `status` clause itself — that status
-   * means the flatten is provably dead at the venue (never landed, or
-   * terminally refused having filled nothing), so there is nothing left to ask.
+   * `'error'` rows are excluded by the `status` clause itself. That status is
+   * not "provably dead at the venue" — some routes into it are proof, others
+   * are `reconcile()` deciding on bounded evidence that the row may stop
+   * blocking (see `resolveFlattenError`'s callers). What it always means is
+   * SETTLED: this flatten has had its answer, and asking the venue again
+   * changes nothing.
    *
    * `writeAheadFlatten`'s one-flatten-per-instrument guard runs this SAME
    * predicate — see its doc. A change here is a change to what may be
@@ -989,7 +992,8 @@ export class SqliteExecutionStore implements SharedStore {
   async getUnresolvedFlattens(): Promise<UnresolvedFlattenSubmission[]> {
     const rows = this.db
       .prepare(
-        `SELECT idempotency_key, instrument, status, submitted_at
+        `SELECT idempotency_key, instrument, status, submitted_at, order_state, cancel_attempted_at,
+                terminal_unswept_checked_at
            FROM flatten_submissions
           WHERE arm = ?
             AND (status = 'submitting'
@@ -1000,6 +1004,9 @@ export class SqliteExecutionStore implements SharedStore {
       instrument: string;
       status: 'submitting' | 'submitted';
       submitted_at: string;
+      order_state: OrderState | null;
+      cancel_attempted_at: string | null;
+      terminal_unswept_checked_at: string | null;
     }>;
 
     return rows.map((row) => ({
@@ -1007,6 +1014,11 @@ export class SqliteExecutionStore implements SharedStore {
       instrument: row.instrument,
       status: row.status,
       submitted_at: new Date(row.submitted_at),
+      order_state: row.order_state,
+      cancel_attempted_at:
+        row.cancel_attempted_at === null ? null : new Date(row.cancel_attempted_at),
+      terminal_unswept_checked_at:
+        row.terminal_unswept_checked_at === null ? null : new Date(row.terminal_unswept_checked_at),
     }));
   }
 
@@ -1030,6 +1042,39 @@ export class SqliteExecutionStore implements SharedStore {
     if (result.changes === 0) {
       throw new Error(
         `SqliteExecutionStore.recordFlattenOrderStateObserved: no flatten_submissions row for ` +
+          `'${idempotency_key}'`,
+      );
+    }
+  }
+
+  /** Migration 0062's throttle input — see `SharedStore.markFlattenCancelAttempted`. */
+  async markFlattenCancelAttempted(idempotency_key: string, attempted_at: Date): Promise<void> {
+    const result = this.db
+      .prepare('UPDATE flatten_submissions SET cancel_attempted_at = ? WHERE idempotency_key = ?')
+      .run(toStoredTimestamp(attempted_at), idempotency_key);
+
+    if (result.changes === 0) {
+      throw new Error(
+        `SqliteExecutionStore.markFlattenCancelAttempted: no flatten_submissions row for ` +
+          `'${idempotency_key}'`,
+      );
+    }
+  }
+
+  /** Migration 0063's window start and throttle — see `SharedStore.markFlattenTerminalUnsweptChecked`. */
+  async markFlattenTerminalUnsweptChecked(
+    idempotency_key: string,
+    checked_at: Date,
+  ): Promise<void> {
+    const result = this.db
+      .prepare(
+        'UPDATE flatten_submissions SET terminal_unswept_checked_at = ? WHERE idempotency_key = ?',
+      )
+      .run(toStoredTimestamp(checked_at), idempotency_key);
+
+    if (result.changes === 0) {
+      throw new Error(
+        `SqliteExecutionStore.markFlattenTerminalUnsweptChecked: no flatten_submissions row for ` +
           `'${idempotency_key}'`,
       );
     }

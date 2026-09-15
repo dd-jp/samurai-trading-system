@@ -88,10 +88,12 @@
  */
 
 import type { OpenPosition, OrderState } from '../../shared/index.js';
-import { describeThrownSafely, safeLog } from '../../shared/index.js';
+import { coversQty, describeThrownSafely, heldQuantitiesFor, safeLog } from '../../shared/index.js';
 import { TERMINAL_ORDER_STATES } from '../../shared/store/index.js';
 import { sweepResidualProtection } from './residual-protection-sweep.js';
 import type {
+  NormalizedOrder,
+  NormalizedPosition,
   ReconcileDivergence,
   ReconcileInput,
   ReconcileReport,
@@ -212,6 +214,62 @@ export const TERMINAL_SWEEP_AGE_MS = 24 * 60 * 60 * 1_000;
  */
 export const UNRESOLVABLE_FLATTEN_MAX_AGE_MS = 5 * 60 * 1_000;
 
+/**
+ * #1500: how often one wedged `flatten_submissions` row may cost a venue
+ * cancel and an operator page.
+ *
+ * `reconcileFlatten` cancels a flatten the venue is still working (and a
+ * never-confirmed one it cannot ask about) once the row is past
+ * `UNRESOLVABLE_FLATTEN_MAX_AGE_MS`, and nothing about that row changes
+ * until the venue answers — so the same row qualifies again on the next
+ * pass, and reconcile runs on the fill-sync poll (#921, 15s by default).
+ * Unthrottled that is ~240 venue cancels and ~240 real pages per hour per
+ * row, and on Saxo each cancel is a full `listOpenOrders()` plus a DELETE
+ * against a pacing budget shared with the trading path.
+ *
+ * The retry buys nothing at poll cadence: the first cancel is the one that
+ * acts, and re-issuing it only covers a delivery failure or a venue that
+ * accepted it and did nothing. Half an hour keeps both the venue cost and
+ * the page cadence at two per hour per row while still retrying well inside
+ * a trading session. The attempt time is DURABLE
+ * (`flatten_submissions.cancel_attempted_at`, migration 0062) rather than
+ * process-local, so a restart loop cannot turn the throttle back into a
+ * per-pass cancel.
+ */
+export const FLATTEN_CANCEL_RETRY_EVERY_MS = 30 * 60 * 1_000;
+
+/**
+ * #1500: how long a TERMINAL flatten whose fills were never swept may keep
+ * blocking its instrument before reconcile decides on venue evidence.
+ *
+ * `fills_swept_at` is the only thing that retires such a row, and only
+ * `ingestFills()` writes it — as the LAST step of a poll that must first
+ * attribute the flatten's fills and advance every lot they name. Any failure
+ * before that step leaves the row unswept, and several of them never recur on
+ * a later poll because the fills themselves have aged past the `since` floor,
+ * so the flatten key is never iterated again. The row then blocks its
+ * instrument's mandatory flat-by-close for as long as the store exists, across
+ * restarts, with no operator path but hand-editing SQLite.
+ *
+ * Measured from `terminal_unswept_checked_at` (migration 0063) — the first
+ * pass that saw the row TERMINAL with its fills unswept — not from
+ * `submitted_at`. Two different failures rule that out: a row that has been
+ * alive for hours and goes terminal NOW is already past any submission-based
+ * bound, so it would be judged within one 15s poll of the fill itself, against
+ * a venue position view that may still lag its own fill processing (the lag
+ * `cancelNeverConfirmedFlatten` reads AFTER its cancel to avoid). Judged too
+ * early, coverage reads true on a venue that has simply not caught up, and the
+ * replacement flatten goes out at full size — the #516/#1389 over-sell.
+ *
+ * Half an hour of the row sitting in that shape is long relative to the 15s
+ * fill poll, so a flatten sweeping NORMALLY is never examined here: a working
+ * sweep has had well over a hundred chances by then.
+ */
+export const UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS = 30 * 60 * 1_000;
+
+/** A `broker.getOpenPositions()` answer, or why this pass has none. */
+type VenuePositions = { positions: readonly NormalizedPosition[] } | { error: string };
+
 export async function reconcile(input: ReconcileInput): Promise<ReconcileReport> {
   const { clock, store } = input;
   const now = clock.now();
@@ -236,7 +294,7 @@ export async function reconcile(input: ReconcileInput): Promise<ReconcileReport>
   // #519/#526 — see the file doc's "flatten-journal sweep" section.
   const unresolvedFlattens = await store.getUnresolvedFlattens();
   for (const row of unresolvedFlattens) {
-    const divergence = await reconcileFlatten(input, row, now);
+    const divergence = await reconcileFlatten(input, row, now, positions);
     divergences.push(divergence);
     if (divergence.action !== 'undetermined') corrected += 1;
   }
@@ -269,7 +327,11 @@ export async function reconcile(input: ReconcileInput): Promise<ReconcileReport>
     if (divergence.action !== 'undetermined') corrected += 1;
   }
 
-  divergences.push(...(await findUnrecordedVenuePositions(input, positions)));
+  // Read HERE rather than hoisted above the sweeps: a snapshot taken before
+  // the flatten loop is stale by every `resumeFlatten` timeout and every
+  // venue cancel that loop spent, and `cancelNeverConfirmedFlatten` takes its
+  // own read after its cancel resolves for exactly that reason (#1500).
+  divergences.push(...findUnrecordedVenuePositions(await readVenuePositions(input), positions));
 
   // #1088 — see the file doc's "terminal-row sweep" section. Unconditional:
   // every pass ages out whatever has crossed the cutoff since the last one,
@@ -304,6 +366,7 @@ async function reconcileFlatten(
   input: ReconcileInput,
   row: UnresolvedFlattenSubmission,
   now: Date,
+  storePositions: readonly OpenPosition[],
 ): Promise<ReconcileDivergence> {
   const { broker, store } = input;
   // `'submitting'` maps onto `'pending'` — the same "written ahead, not yet
@@ -324,16 +387,30 @@ async function reconcileFlatten(
     // paging-worthy on its own (#519) — see `FlattenReconcileAlertChannel`'s
     // doc for why this is not treated as a background diagnostic.
     //
-    // DELIBERATELY NOT age-bounded the way the null-on-`'submitted'` branch
-    // below now is (#1214 review round 2), and the asymmetry is the point of
-    // that bound. Below, the venue ANSWERS — repeatedly, negatively — and a
-    // decision can be forced on consistent evidence. Here the adapter could
-    // not answer at all, so forcing the row terminal would write into the
-    // journal a finding nothing observed, and it would buy nothing: an adapter
-    // that cannot reach the venue to ask about this flatten cannot submit a
-    // replacement one either. The resolution path is the next pass on which
-    // the adapter CAN answer, which routes into the branch below or into a
-    // real order state.
+    // `order_state` is left untouched here, and that is what makes it
+    // STICKY: a row the venue once confirmed WORKING keeps that answer
+    // through any number of later throws, so nothing downstream can mistake
+    // "the adapter went quiet" for "the order went away". Such a row is
+    // handled by `cancelWedgedFlatten` below on the next pass the adapter
+    // CAN answer; while it cannot, the row keeps blocking and the alert is
+    // the whole of the response.
+    //
+    // #1500: a row the venue NEVER confirmed (`order_state` still null) has
+    // no such later pass to wait for — `resumeFlatten` may throw forever, and
+    // no other surface ever writes this row. Past
+    // `UNRESOLVABLE_FLATTEN_MAX_AGE_MS` it is taken through
+    // `cancelNeverConfirmedFlatten`, which is the ONLY path that releases the
+    // instrument, and does so on venue evidence rather than on age.
+    if (
+      row.order_state === null &&
+      now.getTime() - row.submitted_at.getTime() >= UNRESOLVABLE_FLATTEN_MAX_AGE_MS
+    ) {
+      return await cancelNeverConfirmedFlatten(input, row, now, storePositions, {
+        storeState,
+        resumeError: describeThrownSafely(error),
+      });
+    }
+
     const reason = describeThrownSafely(error);
     await postFlattenReconcileAlert(input, row, reason, now);
     return {
@@ -485,6 +562,78 @@ async function reconcileFlatten(
     });
   }
 
+  const adopted = `flatten journal said '${row.status}'; broker reports '${order.order_state}'`;
+
+  // #1500: the terminal row whose fills were never swept. `filled_qty > 0`
+  // here (the branch above took the zero case), so `ingestFills()` owes this
+  // row a `markFlattenFillsSwept` it has not delivered, and once the row has
+  // sat in that shape past `UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS` it is not
+  // going to: the fills have aged past its `since` floor, so the flatten key
+  // is never iterated again.
+  //
+  // Below the record/resolve writes above on purpose, not merely after them:
+  // the venue state that motivates the release is written to the row BEFORE
+  // any pass can release on it, including for a `'submitting'` row whose ack
+  // this is (`resolveFlattenSubmitted` — `broker_order_ids` and `resolved_at`
+  // would otherwise never be written for a row released here).
+  //
+  // The window starts at the FIRST pass that saw this shape and the same
+  // column throttles the verdict's cost — see the constant, and migration
+  // 0063. A pass inside the window does nothing at all: no venue read, no
+  // page, and the row falls through to the 'adopted' answer it had before
+  // this branch existed.
+  if (TERMINAL_ORDER_STATES.includes(order.order_state)) {
+    const firstSeen = row.terminal_unswept_checked_at;
+    if (firstSeen === null) {
+      await store.markFlattenTerminalUnsweptChecked(row.idempotency_key, now);
+    } else if (now.getTime() - firstSeen.getTime() >= UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS) {
+      return await judgeTerminalUnsweptFlatten(
+        input,
+        row,
+        order,
+        firstSeen,
+        storePositions,
+        storeState,
+        now,
+      );
+    }
+  }
+
+  // #1500 — cancel-then-replace, the only path that reaches the shape #1500
+  // was filed for. Every acked row carries a WORKING `order_state`
+  // (`resolveFlattenSubmitted` sets it, the branch just above refreshes it),
+  // and no gate anywhere releases a working row at any age — correctly, since
+  // a second full-size market flatten against an order the venue is still
+  // confirming open is the #516/#1389 over-sell. So a flatten the venue acks
+  // and then never fills would block its instrument's mandatory flat-by-close
+  // forever. The way out is not to release the row, it is to make the row
+  // STOP BEING WORKING: ask the venue to cancel it. The cancel's own terminal
+  // answer then arrives on a later pass and routes into one of the two
+  // resolution paths that already exist — `filled_qty === 0` resolves the row
+  // above, and a partial fill is retired by `markFlattenFillsSwept` once
+  // `ingestFills()` applies it — so what finally unblocks the instrument is
+  // always venue evidence plus swept fills, never elapsed time.
+  //
+  // Gated on the FRESH `order.order_state` rather than `row.status`: a
+  // `'submitting'` row the venue confirms working is the same hazard and
+  // wants the same cancel, and one rule covering both cannot disagree with
+  // itself. `BrokerAdapter.cancel` is idempotent BY CONTRACT (already
+  // cancelled, filled or unknown all resolve rather than throw), so re-issuing
+  // it is safe; `FLATTEN_CANCEL_RETRY_EVERY_MS` is what stops it being issued
+  // every poll.
+  const working = !TERMINAL_ORDER_STATES.includes(order.order_state);
+  if (working && now.getTime() - row.submitted_at.getTime() >= UNRESOLVABLE_FLATTEN_MAX_AGE_MS) {
+    return {
+      idempotency_key: row.idempotency_key,
+      instrument: row.instrument,
+      store_state: storeState,
+      broker_state: order.order_state,
+      action: 'adopted',
+      kind: 'flatten',
+      reason: `${adopted}; ${await cancelWedgedFlatten(input, row, order.order_state, now)}`,
+    };
+  }
+
   return {
     idempotency_key: row.idempotency_key,
     instrument: row.instrument,
@@ -492,7 +641,177 @@ async function reconcileFlatten(
     broker_state: order.order_state,
     action: 'adopted',
     kind: 'flatten',
-    reason: `flatten journal said '${row.status}'; broker reports '${order.order_state}'`,
+    reason: adopted,
+  };
+}
+
+/**
+ * The cancel half of the cancel-then-replace above. Fully swallowed, like
+ * every other venue call on this sweep: a cancel that could not be delivered
+ * leaves the row exactly as it was — still blocking, still working, still
+ * retried once the throttle is next due — which is the same standing this
+ * sweep already gives a `resumeFlatten` that could not answer. Returns the
+ * sentence the caller appends to its divergence `reason`, so a cancel and its
+ * outcome are readable off the reconcile report as well as off the alert, and
+ * so a pass that deliberately did NOT re-cancel says so rather than reading as
+ * a pass that never tried.
+ */
+async function cancelWedgedFlatten(
+  input: ReconcileInput,
+  row: UnresolvedFlattenSubmission,
+  observedState: OrderState,
+  now: Date,
+): Promise<string> {
+  const age = Math.round((now.getTime() - row.submitted_at.getTime()) / 1_000);
+  if (!cancelDue(row, now)) {
+    return (
+      `the venue still reports this flatten '${observedState}' after ${age}s; it was already ` +
+      `cancelled at the venue at ${row.cancel_attempted_at?.toISOString()} and the row keeps ` +
+      'blocking until the venue reports it terminal AND its fills are swept — not re-cancelled ' +
+      'or re-paged this pass (FLATTEN_CANCEL_RETRY_EVERY_MS)'
+    );
+  }
+  const provenance =
+    `the venue still reports this flatten '${observedState}' after ${age}s — past the ` +
+    `${UNRESOLVABLE_FLATTEN_MAX_AGE_MS / 1_000}s bound, so it is being CANCELLED at the venue ` +
+    'rather than left to block every later flatten on this instrument. The journal row is ' +
+    'unchanged and keeps blocking until the venue reports the order terminal AND its fills ' +
+    'are swept — nothing is re-armed on age alone';
+  // Recorded BEFORE the call, and for a failure as well as a success: the
+  // throttle bounds what this sweep costs the venue and the operator, so it
+  // must not be escapable by a cancel that throws on every pass.
+  await input.store.markFlattenCancelAttempted(row.idempotency_key, now);
+  try {
+    await input.broker.cancel(row.idempotency_key, row.instrument);
+  } catch (error) {
+    const reason = `${provenance}. The cancel FAILED (${describeThrownSafely(error)}); retrying when due`;
+    await postFlattenReconcileAlert(input, row, reason, now);
+    return reason;
+  }
+  await postFlattenReconcileAlert(input, row, provenance, now);
+  return provenance;
+}
+
+/**
+ * Whether this row may cost another venue cancel and another page — see
+ * `FLATTEN_CANCEL_RETRY_EVERY_MS`. A row never cancelled is always due.
+ */
+function cancelDue(row: UnresolvedFlattenSubmission, now: Date): boolean {
+  if (row.cancel_attempted_at === null) return true;
+  return now.getTime() - row.cancel_attempted_at.getTime() >= FLATTEN_CANCEL_RETRY_EVERY_MS;
+}
+
+/**
+ * #1500: the never-confirmed row — `order_state` still null past the bound
+ * because `resumeFlatten` has never once answered for it. Reached only from
+ * the throw branch above.
+ *
+ * This is the one row shape with no other way out. `writeAheadFlatten`
+ * committed and `submitFlatten` may well have landed at the venue (the ack
+ * response is exactly what is missing), so the order may be working right
+ * now; but the adapter cannot describe it, so no later pass can turn it
+ * terminal, and `ingestFills()` has nothing to sweep. Releasing it on age
+ * alone would let a second full-size market flatten out against an order that
+ * may be filling — the #516/#1389 reverse position, which a broken read
+ * endpoint is no reason to risk: a venue can serve order placement while its
+ * order-details endpoint fails.
+ *
+ * So the row is released ONLY on two pieces of venue evidence together:
+ *
+ * 1. `cancel(idempotency_key)` resolves. Both production adapters address the
+ *    venue by the key `submitFlatten` registered (Alpaca's `client_order_id`,
+ *    Saxo's `ExternalReference`), so this reaches the order without ever
+ *    needing the lost ack — and by contract it also resolves when the venue
+ *    has no such order, or has one that already filled. On its own it
+ *    therefore proves nothing about whether the flatten filled, which is
+ *    exactly why it is not sufficient.
+ * 2. The venue's own position for the instrument still covers everything the
+ *    store thinks it holds. That is the evidence a `void` cancel cannot
+ *    carry: had this flatten filled — in part or in full, before or despite
+ *    the cancel — the venue would hold LESS than the store's held quantity,
+ *    and the replacement `executeExit` sizes off `heldQuantitiesFor` would be
+ *    too big by whatever filled.
+ *
+ * Anything else keeps the row blocking and pages: a cancel that throws, a
+ * venue book this pass could not read, or a venue position that no longer
+ * covers the store's — the last being the case where something DID fill and
+ * an operator has to attribute it by hand, since the fills cannot be ingested
+ * through an adapter that will not describe the order.
+ *
+ * The residual race is this file's ordinary one: a fill landing between the
+ * position read and the replacement is still sized against the older number
+ * (#429/#1122, tracked as #1506).
+ */
+async function cancelNeverConfirmedFlatten(
+  input: ReconcileInput,
+  row: UnresolvedFlattenSubmission,
+  now: Date,
+  storePositions: readonly OpenPosition[],
+  context: { storeState: OrderState; resumeError: string },
+): Promise<ReconcileDivergence> {
+  const age = Math.round((now.getTime() - row.submitted_at.getTime()) / 1_000);
+  const provenance =
+    `the venue has never once described flatten '${row.idempotency_key}' (resumeFlatten: ` +
+    `${context.resumeError}) and the row is ${age}s old — past the ` +
+    `${UNRESOLVABLE_FLATTEN_MAX_AGE_MS / 1_000}s bound`;
+  const blocked = (reason: string): ReconcileDivergence => ({
+    idempotency_key: row.idempotency_key,
+    instrument: row.instrument,
+    store_state: context.storeState,
+    broker_state: null,
+    action: 'undetermined',
+    kind: 'flatten',
+    reason,
+  });
+
+  if (!cancelDue(row, now)) {
+    return blocked(
+      `${provenance}. Already cancelled at the venue at ` +
+        `${row.cancel_attempted_at?.toISOString()}; still blocking, and not re-cancelled or ` +
+        're-paged this pass (FLATTEN_CANCEL_RETRY_EVERY_MS)',
+    );
+  }
+
+  await input.store.markFlattenCancelAttempted(row.idempotency_key, now);
+  try {
+    await input.broker.cancel(row.idempotency_key, row.instrument);
+  } catch (error) {
+    const reason = `${provenance}. The cancel FAILED (${describeThrownSafely(error)}); the row keeps blocking`;
+    await postFlattenReconcileAlert(input, row, reason, now);
+    return blocked(reason);
+  }
+
+  // Read AFTER the cancel resolves, never a snapshot taken before it: a fill
+  // can land while the cancel is in flight (and a venue's position view lags
+  // its own fill processing), and a pre-cancel snapshot would answer for a book
+  // that no longer exists — releasing the row on coverage the venue no longer
+  // has, which is the #516/#1389 over-sell this check exists to refuse.
+  const coverage = await venueCoversStoreHeld(input, row, storePositions);
+  if (!coverage.covered) {
+    const reason =
+      `${provenance}. It was CANCELLED at the venue, but ${coverage.note}, so the row keeps ` +
+      'blocking rather than let a replacement be sized off a held quantity that may be too ' +
+      'big. The fills cannot be ingested through an adapter that will not describe this ' +
+      'order: attribute them by hand';
+    await postFlattenReconcileAlert(input, row, reason, now);
+    return blocked(reason);
+  }
+
+  const reason =
+    `${provenance}. It was CANCELLED at the venue, and ${coverage.note} — so no replacement ` +
+    'can over-sell, and the journal row is resolved rather than left blocking every later ' +
+    'flatten on the instrument. A fill arriving later is still attributed to the lots this ' +
+    'flatten named (getFlattenAttribution does not filter on status)';
+  await postFlattenReconcileAlert(input, row, reason, now);
+  await input.store.resolveFlattenError(row.idempotency_key, reason, now);
+  return {
+    idempotency_key: row.idempotency_key,
+    instrument: row.instrument,
+    store_state: context.storeState,
+    broker_state: null,
+    action: 'rejected',
+    kind: 'flatten',
+    reason,
   };
 }
 
@@ -540,6 +859,215 @@ async function postFlattenReconcileAlert(
 }
 
 /**
+ * The verdict on a row that has sat TERMINAL with unswept fills for the whole
+ * `UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS` window — reached at most once per
+ * window per row, since every outcome that leaves the row standing re-arms the
+ * throttle this is gated on.
+ *
+ * Released on the same evidence `cancelNeverConfirmedFlatten` uses, never on
+ * age, and for the same reason: the venue's own book agreeing with what the
+ * store considers held means no replacement can over-sell. The fills are
+ * unbooked by construction here (`filled_qty > 0`, `fills_swept_at` null), so
+ * the release is never a claim that they reached the store — it is the claim
+ * that resolving the row is safe. Any disagreement is the case where those
+ * unbooked fills change what is held; no venue number can say which lot each
+ * belongs to, so that one keeps blocking and pages for hand attribution.
+ */
+async function judgeTerminalUnsweptFlatten(
+  input: ReconcileInput,
+  row: UnresolvedFlattenSubmission,
+  order: NormalizedOrder,
+  lastExamined: Date,
+  storePositions: readonly OpenPosition[],
+  storeState: OrderState,
+  now: Date,
+): Promise<ReconcileDivergence> {
+  // Since the LAST look, not since the first: the column is re-armed by every
+  // look that does not release, so on a row wedged for days this reads one
+  // window, never the whole age. See migration 0063.
+  const sat = Math.round((now.getTime() - lastExamined.getTime()) / 1_000);
+  const provenance =
+    `the venue reports this flatten '${order.order_state}' having filled ${order.filled_qty}, ` +
+    `and ${sat}s after this sweep last examined it ingestFills has still not swept its ` +
+    `fills — past the ${UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS / 60_000}min bound`;
+  const coverage = await venueCoversStoreHeld(input, row, storePositions);
+  if (!coverage.covered) {
+    const reason =
+      `${provenance}. ${coverage.note}, so the fills this flatten produced are real and not ` +
+      'in the store, and no venue number can say which lot each belongs to. The row keeps ' +
+      'blocking: attribute them by hand';
+    // Re-armed for the row that stays: the next look — one venue read, one
+    // page — is a window away, not one 15s poll away (migration 0063).
+    await input.store.markFlattenTerminalUnsweptChecked(row.idempotency_key, now);
+    await postFlattenReconcileAlert(input, row, reason, now);
+    return {
+      idempotency_key: row.idempotency_key,
+      instrument: row.instrument,
+      store_state: storeState,
+      broker_state: order.order_state,
+      action: 'undetermined',
+      kind: 'flatten',
+      reason,
+    };
+  }
+  const reason =
+    `${provenance}. ${coverage.note} — so no replacement can over-sell, and the journal row ` +
+    'is resolved rather than left blocking every later flatten on the instrument. Its fills ' +
+    'are still unswept: this is an INFERENCE that resolving is safe, not a completed sweep, ' +
+    'and not a finding that they reached the store';
+  await postFlattenReconcileAlert(input, row, reason, now);
+  await input.store.resolveFlattenError(row.idempotency_key, reason, now);
+  return {
+    idempotency_key: row.idempotency_key,
+    instrument: row.instrument,
+    store_state: storeState,
+    broker_state: order.order_state,
+    action: 'rejected',
+    kind: 'flatten',
+    reason,
+  };
+}
+
+/** Held quantity of one instrument's lots on one OPENING side, per lot, never netted across sides. */
+function sumHeld(
+  lots: readonly OpenPosition[],
+  side: OpenPosition['side'],
+  heldByKey: ReadonlyMap<string, number>,
+): number {
+  return lots
+    .filter((lot) => lot.side === side)
+    .reduce((sum, lot) => sum + (heldByKey.get(lot.idempotency_key) ?? 0), 0);
+}
+
+/**
+ * Does the venue's own book AGREE with everything the store thinks it holds
+ * for this row's instrument? The single piece of evidence both #1500 release
+ * paths rest on: if this flatten closed any quantity the store has not booked,
+ * the venue holds LESS than `heldQuantitiesFor` says, and a replacement sized
+ * off the store would sell that difference twice (#516/#1389). A surplus is
+ * refused too, for the reason given at the test itself.
+ *
+ * `note` is the evidence in words for the caller's `reason`/alert; the caller
+ * appends what it then did. NOT covered is returned for ignorance as well as
+ * for a short venue — a book this pass could not read, or one no single number
+ * can answer for, is never evidence of coverage.
+ *
+ * The venue book is read here, per call, deliberately NOT hoisted: a snapshot
+ * taken before this sweep's `resumeFlatten` timeouts and venue cancels answers
+ * for a book that may no longer exist.
+ */
+async function venueCoversStoreHeld(
+  input: ReconcileInput,
+  row: UnresolvedFlattenSubmission,
+  storePositions: readonly OpenPosition[],
+): Promise<{ covered: boolean; note: string }> {
+  const venue = await readVenuePositions(input);
+  if ('error' in venue) {
+    return {
+      covered: false,
+      note: `this pass could not read the venue's positions (${venue.error}) to check what it holds`,
+    };
+  }
+
+  const lots = storePositions.filter((position) => position.instrument === row.instrument);
+  const held = await heldQuantitiesFor(lots, (keys) => input.store.getExitFillSizes(keys));
+  const heldByKey = new Map(held.map((lot) => [lot.idempotency_key, lot.held]));
+  const longHeld = sumHeld(lots, 'buy', heldByKey);
+  const shortHeld = sumHeld(lots, 'sell', heldByKey);
+  // A venue reports ONE netted position per instrument, so it can corroborate
+  // the store's held quantity only while the store's lots are all one way.
+  // Lots on BOTH sides net inside the venue's own number, and
+  // `heldQuantitiesFor` refuses to pre-sum across lots for that reason
+  // (held-quantity.ts) — exactly offsetting sides would otherwise compare 0
+  // against 0 and read as coverage on no evidence at all. Keyed on the lots
+  // themselves, not on their held sums: an over-closed lot carries a NEGATIVE
+  // held, so summing first would net the two sides right back together.
+  if (lots.some((lot) => lot.side === 'buy') && lots.some((lot) => lot.side === 'sell')) {
+    return {
+      covered: false,
+      note:
+        `the store holds ${longHeld} long and ${shortHeld} short ${row.instrument} across lots ` +
+        'and the venue reports one NETTED position per instrument, so no venue number can ' +
+        'corroborate both sides',
+    };
+  }
+  // Both sides signed the same way before they are compared:
+  // `NormalizedPosition.qty` carries the venue's direction, `held` never does.
+  // A venue book that has crossed to the other side of the store's — the
+  // #516/#1389 over-sell state — must not read as "still holds everything",
+  // which is exactly what comparing magnitudes would say.
+  const direction = shortHeld > 0 ? -1 : 1;
+  const storeHeld = longHeld + shortHeld;
+  const venueQty =
+    direction *
+    venue.positions
+      .filter((position) => position.instrument === row.instrument)
+      .reduce((sum, position) => sum + position.qty, 0);
+  if (!coversQty(venueQty, storeHeld)) {
+    return {
+      covered: false,
+      note:
+        `the venue holds ${venueQty} ${row.instrument} against ${storeHeld} the store still ` +
+        'considers held, so something filled that the store has not booked',
+    };
+  }
+  // A SURPLUS is not coverage either, though it passes the test above. The
+  // venue holding MORE than the store thinks it holds means some of that book
+  // is quantity the store has no lot for, and nothing else reports that:
+  // `findUnrecordedVenuePositions` compares instrument PRESENCE, so a surplus
+  // on an instrument the store already knows is invisible to it. An unbooked
+  // exit fill up to the size of that surplus hides inside it: the sum still
+  // covers, while the lot it belonged to is over-stated. That is the same
+  // fills-not-booked state as a short venue — no over-sell, since a
+  // replacement would be sized off the store's smaller number, but a released
+  // row whose fills are missing from the journal, and the PnL and CGT record
+  // with them. Coverage is therefore agreement, tested both ways under the one
+  // flatness tolerance.
+  if (!coversQty(storeHeld, venueQty)) {
+    return {
+      covered: false,
+      note:
+        `the venue holds ${venueQty} ${row.instrument} against ${storeHeld} the store considers ` +
+        'held — a surplus the store has no lot for, which an unbooked exit fill of its size ' +
+        'would hide inside, so this book cannot corroborate the store',
+    };
+  }
+  // Nothing held is coverage for the only question this answers — a
+  // replacement sized off the store cannot over-sell what the store does not
+  // hold — but it is coverage on an EMPTY comparison, so the note must not
+  // borrow the language of the corroborated case below and claim the venue
+  // confirmed anything about this flatten's fills.
+  if (storeHeld === 0) {
+    return {
+      covered: true,
+      note:
+        `the store holds no ${row.instrument} for this flatten to close, so nothing it could ` +
+        'still be owed is at risk — the venue book says nothing either way about what filled',
+    };
+  }
+  return {
+    covered: true,
+    note:
+      `the venue still holds ${venueQty} ${row.instrument} — everything the store considers ` +
+      `held (${storeHeld})`,
+  };
+}
+
+/**
+ * The venue's own book. A failure is carried as a value rather than thrown:
+ * every consumer treats "the venue could not be asked" as ignorance to report,
+ * never as evidence — `findUnrecordedVenuePositions` reports the gap in its
+ * scan, and `venueCoversStoreHeld` answers NOT covered.
+ */
+async function readVenuePositions(input: ReconcileInput): Promise<VenuePositions> {
+  try {
+    return { positions: await input.broker.getOpenPositions() };
+  } catch (error) {
+    return { error: describeThrownSafely(error) };
+  }
+}
+
+/**
  * The OTHER direction (#429). Everything above walks the STORE's lots and asks
  * the venue about each, which can only ever find a lot the store knows about.
  * execution-spec.md's requirement is symmetric — *"store shows a position the
@@ -563,16 +1091,11 @@ async function postFlattenReconcileAlert(
  * already done real work by this point, and losing it because a positions
  * endpoint was down would be the worse outcome.
  */
-async function findUnrecordedVenuePositions(
-  input: ReconcileInput,
+function findUnrecordedVenuePositions(
+  venue: VenuePositions,
   storePositions: readonly OpenPosition[],
-): Promise<ReconcileDivergence[]> {
-  const { broker } = input;
-
-  let venuePositions: Awaited<ReturnType<typeof broker.getOpenPositions>>;
-  try {
-    venuePositions = await broker.getOpenPositions();
-  } catch (error) {
+): ReconcileDivergence[] {
+  if ('error' in venue) {
     return [
       {
         idempotency_key: '',
@@ -583,10 +1106,11 @@ async function findUnrecordedVenuePositions(
         kind: 'unrecorded',
         reason:
           'broker.getOpenPositions failed, so a position the venue holds and the store does ' +
-          `not would not have been seen this pass: ${describeThrownSafely(error)}`,
+          `not would not have been seen this pass: ${venue.error}`,
       },
     ];
   }
+  const venuePositions = venue.positions;
 
   // Compared per INSTRUMENT, not per lot: a venue reports one netted position
   // where the store may hold several lots, so "the store has any open lot for

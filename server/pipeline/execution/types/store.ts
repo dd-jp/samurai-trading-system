@@ -307,6 +307,29 @@ export interface FlattenJournal {
    */
   getUnresolvedFlattens(): Promise<UnresolvedFlattenSubmission[]>;
   /**
+   * Records that `reconcileFlatten` sent this flatten a venue cancel at
+   * `attempted_at` — success or failure alike, so a cancel that throws every
+   * pass cannot escape the throttle it feeds
+   * (`FLATTEN_CANCEL_RETRY_EVERY_MS`, reconcile.ts). Overwrites: the LAST
+   * attempt is what the throttle measures against.
+   *
+   * Changes nothing about whether the row blocks. It is not a record that the
+   * venue cancelled anything, and nothing may read it as one.
+   */
+  markFlattenCancelAttempted(idempotency_key: string, attempted_at: Date): Promise<void>;
+  /**
+   * Records that a `reconcileFlatten` pass saw this row terminal at the venue
+   * with its fills still unswept at `checked_at` — both the start of the
+   * window that must elapse before any release is considered and the throttle
+   * on what reaching that verdict costs. Overwrites: the LAST look is what
+   * both are measured from. See `UnresolvedFlattenSubmission`'s field doc and
+   * migration 0063.
+   *
+   * Changes nothing about whether the row blocks, and says nothing about what
+   * the venue holds.
+   */
+  markFlattenTerminalUnsweptChecked(idempotency_key: string, checked_at: Date): Promise<void>;
+  /**
    * Refreshes a flatten's known venue state on an ALREADY-`'submitted'` row,
    * without touching `resolved_at` (migration 0019: the moment the ORIGINAL
    * write-ahead was settled — `resolveFlattenSubmitted`'s job, for a row
@@ -537,6 +560,45 @@ export interface UnresolvedFlattenSubmission {
    * and no durable counter of its own.
    */
   submitted_at: Date;
+  /**
+   * The venue's last known answer about this flatten, or `null` if the venue
+   * has never once described it — `resolveFlattenSubmitted` writes the ack's
+   * state and `recordFlattenOrderStateObserved` refreshes it, and nothing
+   * ever clears it back to `null`.
+   *
+   * That stickiness is what `reconcileFlatten` reads it for: a `null` here
+   * means the venue has never answered, so no later pass can be relied on to
+   * turn the row terminal and it takes the never-confirmed cancel path. A
+   * WORKING value means the opposite — the venue is describing a live order,
+   * and the row must keep blocking every later flatten on the instrument no
+   * matter how old it is (#516/#1389).
+   */
+  order_state: OrderState | null;
+  /**
+   * When `markFlattenCancelAttempted` last recorded a venue cancel attempt
+   * for this row, or `null` if none was ever attempted.
+   *
+   * A throttle input ONLY (`FLATTEN_CANCEL_RETRY_EVERY_MS`, reconcile.ts), and
+   * never evidence: it says a cancel was sent, not that the venue cancelled
+   * anything, and no path derives permission to submit a replacement flatten
+   * from it. Migration 0062.
+   */
+  cancel_attempted_at: Date | null;
+  /**
+   * When a `reconcileFlatten` pass last saw this row TERMINAL at the venue
+   * with its fills still unswept, or `null` if no pass ever has.
+   *
+   * Two jobs, one column (migration 0063): it starts the
+   * `UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS` window at the moment that shape
+   * first appeared — not at submission, which would let a long-lived row be
+   * examined within one poll of the fill that ended it, against a venue
+   * position view that may still lag — and it throttles the venue read and
+   * the page that verdict costs, being bumped again by every pass that looks
+   * and does not release.
+   *
+   * Never evidence about the venue, exactly like `cancel_attempted_at`.
+   */
+  terminal_unswept_checked_at: Date | null;
 }
 
 /**

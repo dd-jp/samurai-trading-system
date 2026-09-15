@@ -1000,6 +1000,9 @@ describe('SqliteExecutionStore', () => {
           instrument: 'AAPL',
           status: 'submitting',
           submitted_at: OPENED_AT,
+          order_state: null,
+          cancel_attempted_at: null,
+          terminal_unswept_checked_at: null,
         },
       ]);
     });
@@ -1021,8 +1024,44 @@ describe('SqliteExecutionStore', () => {
           instrument: 'AAPL',
           status: 'submitted',
           submitted_at: OPENED_AT,
+          order_state: 'submitted',
+          cancel_attempted_at: null,
+          terminal_unswept_checked_at: null,
         },
       ]);
+    });
+
+    /**
+     * #1500: the cancel throttle's durable input (migration 0062). A row's
+     * last venue-cancel attempt has to survive a restart, or a crash loop
+     * turns `reconcileFlatten`'s cancel back into one per fill-sync poll.
+     */
+    it('carries the last venue-cancel attempt onto the rows the scan returns, without releasing the row', async () => {
+      const { store } = makeStore();
+      await store.writeAheadFlatten(makeFlattenWriteAhead({ idempotency_key: 'flatten-wedged' }));
+      const attemptedAt = new Date(OPENED_AT.getTime() + 60_000);
+
+      await store.markFlattenCancelAttempted('flatten-wedged', attemptedAt);
+
+      expect(await store.getUnresolvedFlattens()).toEqual([
+        {
+          idempotency_key: 'flatten-wedged',
+          instrument: 'AAPL',
+          status: 'submitting',
+          submitted_at: OPENED_AT,
+          order_state: null,
+          cancel_attempted_at: attemptedAt,
+          terminal_unswept_checked_at: null,
+        },
+      ]);
+    });
+
+    it('refuses a cancel-attempt mark for a flatten that does not exist', async () => {
+      const { store } = makeStore();
+
+      await expect(store.markFlattenCancelAttempted('no-such-flatten', OPENED_AT)).rejects.toThrow(
+        /no flatten_submissions row/,
+      );
     });
 
     it('excludes a row once markFlattenFillsSwept has run — the bound migration 0023 exists for', async () => {
