@@ -370,6 +370,54 @@ describe('buildSnapshot', () => {
     expect(buildSnapshot(fakeStore(), AS_OF, 'backtest').mode).toBe('backtest');
   });
 
+  // #1592: the snapshot's own arm scoping — which arm's positions/closed
+  // trades it carries, and that it names that arm on the wire.
+  describe('arm scoping (#1592)', () => {
+    it('defaults to the live arm when none is given, and stamps it on the snapshot', () => {
+      const snap = buildSnapshot(fakeStore(), AS_OF, 'paper');
+      expect(snap.arm).toBe('live');
+    });
+
+    it('passes the requested arm to getOpenPositions and getRecentClosedTrades, and stamps it on the wire', () => {
+      const seenArms: { positions?: string; closedTrades?: string } = {};
+      const store = fakeStore({
+        getOpenPositions: (_asOf, arm) => {
+          seenArms.positions = arm;
+          return [];
+        },
+        getRecentClosedTrades: (_limit, _asOf, arm) => {
+          seenArms.closedTrades = arm;
+          return [];
+        },
+      });
+
+      const snap = buildSnapshot(store, AS_OF, 'paper', undefined, 'control');
+
+      expect(seenArms).toEqual({ positions: 'control', closedTrades: 'control' });
+      expect(snap.arm).toBe('control');
+    });
+
+    it('a store holding both arms yields only that arm’s rows on each request', () => {
+      const livePosition = makePosition({ idempotency_key: 'live-key' });
+      const controlPosition = makePosition({ idempotency_key: 'control-key' });
+      const liveTrade = makeClosedTrade({ idempotency_key: 'live-trade' });
+      const controlTrade = makeClosedTrade({ idempotency_key: 'control-trade' });
+      const store = fakeStore({
+        getOpenPositions: (_asOf, arm) => (arm === 'live' ? [livePosition] : [controlPosition]),
+        getRecentClosedTrades: (_limit, _asOf, arm) =>
+          arm === 'live' ? [liveTrade] : [controlTrade],
+      });
+
+      const liveSnap = buildSnapshot(store, AS_OF, 'paper', undefined, 'live');
+      expect(liveSnap.positions.map((p) => p.idempotency_key)).toEqual(['live-key']);
+      expect(liveSnap.closed_trades.map((t) => t.idempotency_key)).toEqual(['live-trade']);
+
+      const controlSnap = buildSnapshot(store, AS_OF, 'paper', undefined, 'control');
+      expect(controlSnap.positions.map((p) => p.idempotency_key)).toEqual(['control-key']);
+      expect(controlSnap.closed_trades.map((t) => t.idempotency_key)).toEqual(['control-trade']);
+    });
+  });
+
   it('renders an empty state (zero rows, not a throw) when the store has no data', () => {
     const snap = buildSnapshot(fakeStore(), AS_OF, 'paper');
 

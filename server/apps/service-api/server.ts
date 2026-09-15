@@ -6,12 +6,14 @@
  * react/vite are devDependencies that produce bytes on disk at build time).
  *
  * Two `GET` surfaces:
- *   - `GET /api/snapshot` → `buildSnapshot(store, now, mode, providers)` as JSON.
- *                           Requires a valid `Authorization: Bearer <token>`
+ *   - `GET /api/snapshot` → `buildSnapshot(store, now, mode, providers, arm)` as
+ *                           JSON. Requires a valid `Authorization: Bearer <token>`
  *                           against `SAMURAI_DASHBOARD_TOKEN` whenever that
  *                           credential is configured (#1038, `request-auth.ts`);
  *                           unauthenticated when it is not — see
- *                           `DashboardServerOptions.dashboardCredential`.
+ *                           `DashboardServerOptions.dashboardCredential`. `arm`
+ *                           is `?arm=live|control` (#1592), absent meaning
+ *                           `'live'`; any other value is a 400.
  *   - everything else     → a file inside `bundleRoot` (`/` → `index.html`),
  *                           404 when it is not there or not a servable type.
  *                           Never gated by the credential — see
@@ -32,7 +34,7 @@ import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createServer, type Server, type ServerResponse } from 'node:http';
 import { extname, isAbsolute, join, relative, resolve as resolvePath, sep } from 'node:path';
-import { describeThrownSafely, sanitizeLogText } from '../../shared/index.js';
+import { describeThrownSafely, sanitizeLogText, type TradingArm } from '../../shared/index.js';
 import type { StoreMode } from '../../shared/store/index.js';
 import { assertBindAllowed } from './bind-guard.js';
 import { NULL_PROVIDER_STATUS, type ProviderStatusReader } from './provider-status.js';
@@ -151,6 +153,33 @@ const JSON_HEADERS = {
   'Content-Type': 'application/json; charset=utf-8',
   'Cache-Control': 'no-store',
 } as const;
+
+/** The only two legal `?arm=` values (migration 0033's `CHECK(arm IN (...))`). */
+const TRADING_ARMS: readonly TradingArm[] = ['live', 'control'];
+
+function isTradingArm(value: string): value is TradingArm {
+  return (TRADING_ARMS as readonly string[]).includes(value);
+}
+
+/**
+ * `?arm=` for `GET /api/snapshot` (#1592). Absent means `'live'` — never
+ * guessed otherwise: an unrecognised value, an empty string, or the param
+ * repeated more than once (ambiguous — `URLSearchParams.get` would silently
+ * take only the first) is refused rather than defaulted, so a typo in the
+ * query string can never be misread as a request for the live arm.
+ */
+function parseArmParam(
+  searchParams: URLSearchParams,
+): { ok: true; arm: TradingArm } | { ok: false; reason: string } {
+  const values = searchParams.getAll('arm');
+  if (values.length === 0) return { ok: true, arm: 'live' };
+  if (values.length > 1) {
+    return { ok: false, reason: `arm given more than once (${values.length} values)` };
+  }
+  const [value] = values;
+  if (value !== undefined && isTradingArm(value)) return { ok: true, arm: value };
+  return { ok: false, reason: `unrecognised arm '${value}' — expected 'live' or 'control'` };
+}
 
 /**
  * The extensions this server will serve, and nothing else. An allow-list
@@ -346,9 +375,11 @@ export function createDashboardServer(opts: DashboardServerOptions): DashboardSe
     // Parsed rather than string-compared so a query string cannot change
     // which handler runs, and so the static path is the URL's `pathname` and
     // nothing else.
+    let parsedUrl: URL;
     let urlPath: string;
     try {
-      urlPath = decodeURIComponent(new URL(req.url ?? '/', 'http://localhost').pathname);
+      parsedUrl = new URL(req.url ?? '/', 'http://localhost');
+      urlPath = decodeURIComponent(parsedUrl.pathname);
     } catch {
       // Malformed percent-escapes (`%zz`) — `decodeURIComponent` throws.
       res.writeHead(400, JSON_HEADERS).end(JSON.stringify({ error: 'bad request' }));
@@ -365,8 +396,14 @@ export function createDashboardServer(opts: DashboardServerOptions): DashboardSe
           .end(JSON.stringify({ error: 'unauthorized' }));
         return;
       }
+      // #1592: named arm, or 400 — never a silent fallback to live on a bad value.
+      const parsedArm = parseArmParam(parsedUrl.searchParams);
+      if (!parsedArm.ok) {
+        res.writeHead(400, JSON_HEADERS).end(JSON.stringify({ error: parsedArm.reason }));
+        return;
+      }
       try {
-        const snapshot = buildSnapshot(store, new Date(), mode, providers);
+        const snapshot = buildSnapshot(store, new Date(), mode, providers, parsedArm.arm);
         res.writeHead(200, JSON_HEADERS).end(JSON.stringify(snapshot));
       } catch (err) {
         if (res.headersSent) {

@@ -255,6 +255,92 @@ describe('bundleContentType', () => {
   });
 });
 
+/**
+ * #1592: a store whose `getOpenPositions`/`getRecentClosedTrades` actually
+ * differ by arm — `InMemoryQueryStore`'s fixture data does not vary by arm,
+ * so it cannot prove the HTTP layer threads `?arm=` through to the store.
+ */
+class TwoArmQueryStore extends InMemoryQueryStore {
+  override getOpenPositions(asOf: Date, arm: 'live' | 'control') {
+    return super.getOpenPositions(asOf, arm).map((p) => ({
+      ...p,
+      idempotency_key: `${p.idempotency_key}-${arm}`,
+    }));
+  }
+
+  override getRecentClosedTrades(limit: number, asOf: Date, arm: 'live' | 'control') {
+    return super.getRecentClosedTrades(limit, asOf, arm).map((t) => ({
+      ...t,
+      idempotency_key: `${t.idempotency_key}-${arm}`,
+    }));
+  }
+}
+
+describe('dashboard server — arm scoping (#1592)', () => {
+  let armServer: DashboardServer;
+  let armBase: string;
+
+  beforeAll(async () => {
+    armServer = createDashboardServer({
+      port: 0,
+      host: '127.0.0.1',
+      store: new TwoArmQueryStore(),
+      bundleRoot,
+      mode: 'paper',
+    });
+    await armServer.start();
+    armBase = armServer.url;
+  });
+
+  afterAll(async () => {
+    await armServer.stop();
+  });
+
+  it('serves the live arm by default, with no ?arm= given', async () => {
+    const r = await fetch(`${armBase}/api/snapshot`, { cache: 'no-store' });
+    expect(r.status).toBe(200);
+    const snap = (await r.json()) as { arm: string; positions: { idempotency_key: string }[] };
+    expect(snap.arm).toBe('live');
+    expect(snap.positions[0]?.idempotency_key).toMatch(/-live$/);
+  });
+
+  it('serves the control arm on ?arm=control, never the live rows', async () => {
+    const r = await fetch(`${armBase}/api/snapshot?arm=control`, { cache: 'no-store' });
+    expect(r.status).toBe(200);
+    const snap = (await r.json()) as {
+      arm: string;
+      positions: { idempotency_key: string }[];
+      closed_trades: { idempotency_key: string }[];
+    };
+    expect(snap.arm).toBe('control');
+    expect(snap.positions.every((p) => p.idempotency_key.endsWith('-control'))).toBe(true);
+    expect(snap.closed_trades.every((t) => t.idempotency_key.endsWith('-control'))).toBe(true);
+  });
+
+  it('serves the live arm on the explicit ?arm=live, same as the default', async () => {
+    const r = await fetch(`${armBase}/api/snapshot?arm=live`, { cache: 'no-store' });
+    const snap = (await r.json()) as { arm: string };
+    expect(snap.arm).toBe('live');
+  });
+
+  it('400s an unrecognised arm rather than guessing live', async () => {
+    const r = await fetch(`${armBase}/api/snapshot?arm=bogus`, { cache: 'no-store' });
+    expect(r.status).toBe(400);
+    const body = (await r.json()) as { error: string };
+    expect(body.error).toContain('bogus');
+  });
+
+  it('400s a repeated ?arm= param rather than silently taking the first', async () => {
+    const r = await fetch(`${armBase}/api/snapshot?arm=live&arm=control`, { cache: 'no-store' });
+    expect(r.status).toBe(400);
+  });
+
+  it('400s an empty ?arm= value rather than falling back to live', async () => {
+    const r = await fetch(`${armBase}/api/snapshot?arm=`, { cache: 'no-store' });
+    expect(r.status).toBe(400);
+  });
+});
+
 describe('dashboard server — api', () => {
   it('serves a JSON snapshot at GET /api/snapshot with the four CLI views', async () => {
     const r = await fetch(`${base}/api/snapshot`, { cache: 'no-store' });
@@ -393,7 +479,7 @@ describe('dashboard server — /api/snapshot error responder guard (#1355)', () 
 describe('dashboard server — /api/snapshot headersSent guard (#1355 round 1)', () => {
   class BigIntPoisonedStore extends InMemoryQueryStore {
     override getOpenPositions(asOf: Date) {
-      const [first, ...rest] = super.getOpenPositions(asOf);
+      const [first, ...rest] = super.getOpenPositions(asOf, 'live');
       if (first === undefined) {
         throw new Error('fixture store returned no positions to poison');
       }

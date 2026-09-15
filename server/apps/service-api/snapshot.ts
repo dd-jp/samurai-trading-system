@@ -20,7 +20,7 @@ import {
   unrealizedFor,
 } from '../../pipeline/risk-manager/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
-import type { ClosedTrade, Fill } from '../../shared/index.js';
+import type { ClosedTrade, Fill, TradingArm } from '../../shared/index.js';
 import { isExitFill, totalQty, weightedAvgPrice } from '../../shared/index.js';
 import type { StoreMode } from '../../shared/store/index.js';
 import { buildPipelineView, PIPELINE_LOOKBACK_MS, PIPELINE_MAX_LANES } from './pipeline-query.js';
@@ -234,8 +234,17 @@ export function buildSnapshot(
   asOf: Date,
   mode: StoreMode,
   providers: ProviderStatusReader = NULL_PROVIDER_STATUS,
+  /**
+   * #1592: which arm's `positions`/`closed_trades` this snapshot carries.
+   * Defaults to `'live'` here only for callers that never mention it (most
+   * of this file's own tests) — the real HTTP path (`server.ts`) always
+   * resolves and passes this explicitly, from the request's own `?arm=`
+   * query param, never relying on this default to mean "the request omitted
+   * it" and "the request asked for live" are different facts one layer up.
+   */
+  arm: TradingArm = 'live',
 ): DashboardSnapshot {
-  const openPositions = store.getOpenPositions(asOf);
+  const openPositions = store.getOpenPositions(asOf, arm);
   // One query for every position's mark rather than one per position — this
   // runs per dashboard HTTP request, not per tick. `getMarks` still throws for
   // an instrument with no mark, so a priceless row can never be rendered.
@@ -364,7 +373,7 @@ export function buildSnapshot(
   // an independent "recent fills" window — a separately-limited recent-fills
   // query would silently starve older closed trades of their fills the
   // moment open-position churn fills the window with entry-leg noise.
-  const closedTradesDomain = store.getRecentClosedTrades(RECENT_CLOSED_TRADES_LIMIT, asOf);
+  const closedTradesDomain = store.getRecentClosedTrades(RECENT_CLOSED_TRADES_LIMIT, asOf, arm);
   const tradeFills = store.getFillsForTrades(
     closedTradesDomain.map((trade) => trade.idempotency_key),
     asOf,
@@ -409,6 +418,7 @@ export function buildSnapshot(
     generated_at: new Date().toISOString(),
     as_of: asOf.toISOString(),
     mode,
+    arm,
     tick_status: tickStatus,
     positions,
     closed_trades,

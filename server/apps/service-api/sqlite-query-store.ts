@@ -51,6 +51,7 @@ import type {
   DebateTerminationCause,
   Fill,
   OpenPosition,
+  TradingArm,
 } from '../../shared/index.js';
 import {
   type ClosedTradeRow,
@@ -247,33 +248,38 @@ export class SqliteQueryStore implements DashboardQueryStore {
   }
 
   /**
-   * **LIVE arm only (#753)**, like every other read on this store. The dashboard
-   * shows the book the system is actually trading; falsifier arm 2's shadow lots
-   * are a measurement, not exposure, and mixing them into the operator's view of
-   * open positions would misstate what is at risk. The two arms are compared
-   * deliberately, through the arm comparison report, not incidentally here.
+   * **Exactly one arm's rows (#753, parameterized by #1592)**, like every
+   * other read on this store. The dashboard shows the book the named arm is
+   * actually trading; the other arm's lots are a measurement, not this
+   * arm's exposure, and mixing them in would misstate what is at risk. The
+   * two arms are compared deliberately, through the arm comparison report,
+   * not incidentally here — and never both at once through this method.
    */
-  getOpenPositions(asOf: Date): OpenPosition[] {
+  getOpenPositions(asOf: Date, arm: TradingArm): OpenPosition[] {
     const placeholders = TERMINAL_ORDER_STATES.map(() => '?').join(', ');
     const rows = this.db
       .prepare(
         `SELECT * FROM open_positions
-          WHERE arm = 'live' AND order_state NOT IN (${placeholders}) AND opened_at <= ?
+          WHERE arm = ? AND order_state NOT IN (${placeholders}) AND opened_at <= ?
           ORDER BY opened_at`,
       )
-      .all(...TERMINAL_ORDER_STATES, toStoredTimestamp(asOf)) as OpenPositionRow[];
+      .all(arm, ...TERMINAL_ORDER_STATES, toStoredTimestamp(asOf)) as OpenPositionRow[];
     return rows.map(fromOpenPositionRow);
   }
 
-  /** #940: `closed_trades`' mirror of `getRecentDebates`/`getVerdictHistory` below. */
-  getRecentClosedTrades(limit: number, asOf: Date): ClosedTrade[] {
+  /**
+   * #940: `closed_trades`' mirror of `getRecentDebates`/`getVerdictHistory`
+   * below. Exactly one arm's rows (#753, parameterized by #1592) — see
+   * `getOpenPositions`'s doc for why.
+   */
+  getRecentClosedTrades(limit: number, asOf: Date, arm: TradingArm): ClosedTrade[] {
     const rows = this.db
       .prepare(
         `SELECT * FROM closed_trades
-          WHERE arm = 'live' AND closed_at <= ?
+          WHERE arm = ? AND closed_at <= ?
           ORDER BY closed_at DESC LIMIT ?`,
       )
-      .all(toStoredTimestamp(asOf), limit) as ClosedTradeRow[];
+      .all(arm, toStoredTimestamp(asOf), limit) as ClosedTradeRow[];
     return rows.map(fromClosedTradeRow);
   }
 

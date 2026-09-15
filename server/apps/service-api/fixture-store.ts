@@ -30,7 +30,7 @@ import {
 } from '../../pipeline/feedback-loop/index.js';
 import type { OutsideBenchmarkSample } from '../../pipeline/outside-benchmark/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
-import type { ClosedTrade, DebateLog, Fill, OpenPosition } from '../../shared/index.js';
+import type { ClosedTrade, DebateLog, Fill, OpenPosition, TradingArm } from '../../shared/index.js';
 import { toBrokerFillId } from '../../shared/index.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
 import type {
@@ -856,11 +856,17 @@ export class InMemoryQueryStore implements DashboardQueryStore {
     return TICK_STATUS;
   }
 
-  getOpenPositions(_asOf: Date): OpenPosition[] {
+  /**
+   * #1592: `arm` accepted (so a subclass can override arm-aware, per-arm
+   * behavior — `server.test.ts`'s `TwoArmQueryStore`) but ignored here — this
+   * fixture's data has never varied by arm, and giving it a second, static
+   * "control" fixture set is out of scope for a dev/test seed store.
+   */
+  getOpenPositions(_asOf: Date, _arm: TradingArm): OpenPosition[] {
     return OPEN_POSITIONS;
   }
 
-  getRecentClosedTrades(limit: number, _asOf: Date): ClosedTrade[] {
+  getRecentClosedTrades(limit: number, _asOf: Date, _arm: TradingArm): ClosedTrade[] {
     return CLOSED_TRADES.slice(0, limit);
   }
 

@@ -310,6 +310,10 @@ export function makeSnapshot(overrides: Partial<WireSnapshot> = {}): WireSnapsho
     generated_at: AS_OF,
     as_of: AS_OF,
     mode: 'paper',
+    // #1592: server-only field so far — no client behavior reads it yet
+    // (that's #1594/#1595's arm-selector work). Defaulted to 'live' here
+    // purely so this fixture keeps satisfying `WireSnapshot`.
+    arm: 'live',
     tick_status: null,
     positions: [makePosition()],
     closed_trades: [makeClosedTrade()],
