@@ -249,6 +249,80 @@ describe('computePortfolioView — in-flight reservation (#1019)', () => {
   });
 
   /**
+   * #1568 — the ack-time shape #1019's cases above don't cover: an adapter's
+   * `adopt` (a lookup hit on an idempotent retry, `saxo-adapter.ts`) can
+   * return `filled`/`partially_filled` straight off the venue's own state,
+   * with no quantity to advance `filled_size` past 0. `execute.ts` writes
+   * that ack verbatim, so this shape is real and reachable — not merely
+   * hypothetical the way an adapter fabricating a state would be.
+   */
+  describe('adopted zero-fill lot (#1568)', () => {
+    it('reserves the full requested notional against a lot adopted `filled` with filled_size 0', async () => {
+      const marketData = makeMarketData({ AAPL: 100 });
+      const input = makeInput({
+        positions: [makePosition({ order_state: 'filled', requested_size: 100, filled_size: 0 })],
+        marketData,
+      });
+
+      const view = await computePortfolioView(input);
+
+      expect(view.exposure_by_instrument.AAPL ?? 0).toBe(0);
+      expect(view.reserved_exposure_by_instrument.AAPL).toBe(10_000);
+      expect(view.reserved_exposure_by_class.stocks).toBe(10_000);
+      expect(view.reserved_gross_exposure).toBe(10_000);
+    });
+
+    it('reserves the full requested notional against a lot adopted `partially_filled` with filled_size 0', async () => {
+      const marketData = makeMarketData({ AAPL: 100 });
+      const input = makeInput({
+        positions: [
+          makePosition({ order_state: 'partially_filled', requested_size: 100, filled_size: 0 }),
+        ],
+        marketData,
+      });
+
+      const view = await computePortfolioView(input);
+
+      expect(view.reserved_exposure_by_instrument.AAPL).toBe(10_000);
+      expect(view.reserved_gross_exposure).toBe(10_000);
+    });
+
+    it('still reserves nothing once the lot has real fill progress, even at `filled`/`partially_filled`', async () => {
+      const marketData = makeMarketData({ AAPL: 100 });
+      const input = makeInput({
+        positions: [
+          makePosition({ order_state: 'filled', requested_size: 100, filled_size: 30 }),
+          makePosition({
+            idempotency_key: 'lot-2',
+            order_state: 'partially_filled',
+            requested_size: 100,
+            filled_size: 30,
+          }),
+        ],
+        marketData,
+      });
+
+      const view = await computePortfolioView(input);
+
+      // filled_size > 0 on both lots — the general #1019 exclusion still
+      // applies, this fix only widens the filled_size === 0 subcase.
+      expect(view.reserved_gross_exposure).toBe(0);
+    });
+
+    it('never returns a negative reservation for an adopted lot the venue reports overfilled', async () => {
+      const marketData = makeMarketData({ AAPL: 100 });
+      const input = makeInput({
+        positions: [makePosition({ order_state: 'filled', requested_size: 100, filled_size: 120 })],
+        marketData,
+      });
+
+      const view = await computePortfolioView(input);
+
+      expect(view.reserved_gross_exposure).toBe(0);
+    });
+  });
+
+  /**
    * The load-bearing separation. `equity = cash + gross_exposure`, and `cash`
    * is the broker's figure, which is NOT debited at submit time either —
    * folding a reservation into `gross_exposure` would count the same order on
