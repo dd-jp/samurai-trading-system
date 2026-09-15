@@ -118,9 +118,22 @@ const DEFAULT_BASE_URL = 'https://data.alpaca.markets';
  */
 const ALPACA_CRYPTO_API_VERSION = 'v1beta3';
 const ALPACA_STOCKS_API_VERSION = 'v2';
-const DEFAULT_TIMEOUT_MS = 10_000;
+/**
+ * Exported (#1542) so `deriveAnalystTimeoutMs`'s fetch-bound floor is computed
+ * from these actual bars-fetch constants rather than a re-guessed literal.
+ * Named distinctly from the identically-shaped pair in
+ * `pipeline/execution/adapters/{alpaca,saxo}-http-client.ts` — those are separate
+ * private copies of the same `withRetry` convention (transport-layer-spec.md),
+ * not this module's constants under another name, so a bare `DEFAULT_*` name
+ * would have been a collision waiting to happen in any shared barrel.
+ */
+export const ALPACA_BARS_TIMEOUT_MS = 10_000;
 /** Same sizing as the broker client — one Alpaca key's ~200 req/min budget is shared across both APIs. */
-const DEFAULT_RETRY_CONFIG: RetryConfig = { maxAttempts: 3, baseDelayMs: 250, maxDelayMs: 4_000 };
+export const ALPACA_BARS_RETRY_CONFIG: RetryConfig = {
+  maxAttempts: 3,
+  baseDelayMs: 250,
+  maxDelayMs: 4_000,
+};
 /** Guards against a malformed/cyclical `next_page_token` spinning forever — mirrors `HttpPolygonClient`'s `MAX_PAGES`. */
 const MAX_PAGES = 25;
 /** Rows requested per page — well under Alpaca's own page-size cap, unrelated to the caller's `limit`. */
@@ -502,8 +515,8 @@ export class AlpacaHttpDataClient implements AlpacaMarketDataClient {
     this.apiKey = apiKey;
     this.apiSecret = apiSecret;
     this.baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
-    this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    this.retry = options.retry ?? DEFAULT_RETRY_CONFIG;
+    this.timeoutMs = options.timeoutMs ?? ALPACA_BARS_TIMEOUT_MS;
+    this.retry = options.retry ?? ALPACA_BARS_RETRY_CONFIG;
     this.rateLimiter = options.rateLimiter;
   }
 

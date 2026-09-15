@@ -46,7 +46,7 @@ export {
   truncateForError,
 } from './http/response-errors.js';
 export type { RetryAttemptReport, RetryConfig } from './http/retry.js';
-export { withRetry } from './http/retry.js';
+export { withRetry, worstCaseFetchMs } from './http/retry.js';
 export type { TokenBucketConfig, TokenBucketTelemetry } from './http/token-bucket.js';
 export { TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS, TokenBucket } from './http/token-bucket.js';
 // Only what has a real cross-module consumer: `DEFAULT_VENUE_PACING` for the
@@ -69,6 +69,9 @@ export type { VenuePacingConfig } from './http/venue-pacing.js';
 export {
   DEFAULT_POLYGON_PACING,
   DEFAULT_VENUE_PACING,
+  DISTINCT_BAR_WINDOWS_PER_INSTRUMENT,
+  deriveAnalystDrainMs,
+  deriveAnalystTimeoutMs,
   resolvePolygonPacing,
   resolveVenuePacing,
 } from './http/venue-pacing.js';

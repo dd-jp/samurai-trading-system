@@ -117,6 +117,23 @@ const ALL_PERSONAS: Analyst[] = [technicalAnalyst, fundamentalAnalyst, sentiment
  * what is left, which is why that comment still says to revisit rather than
  * assume.
  */
+/**
+ * This literal is `deriveAnalystDrainMs`'s DRAIN term alone
+ * (`server/shared/http/venue-pacing.ts`), not the full `deriveAnalystTimeoutMs`
+ * a real deployment runs — that also adds a fetch-bound floor (#1542), so the
+ * true per-attempt deadline at even the CHECKED-IN Alpaca defaults is already
+ * ~60,750ms, not this 30,000ms. This constant stays a static fallback ON
+ * PURPOSE (#1542 review, Finding 3): it is what a caller gets who constructs
+ * `AnalystOrchestrator` directly without an explicit `timeout_ms` (tests,
+ * offline paths), and what `ANALYST_STAGE_WALL_CLOCK_MS` below and
+ * `paper-profile.ts`'s pass-duration tripwire comments are sized against.
+ * Making it track the resolved pacing live would cascade into re-deriving a
+ * chain of unrelated static tripwires (`paper-profile.test.ts`'s 172s/688s
+ * pass-duration figures, `pollIntervalMs` bounds) for a minor finding — see
+ * `docs/specs/analysts-spec.md`'s matching amendment for the full accounting.
+ * An operator relying on this figure as a true ceiling must re-run
+ * `deriveAnalystTimeoutMs` against the RESOLVED pacing by hand.
+ */
 export const DEFAULT_ANALYST_TIMEOUT_MS = 30_000;
 
 /** analysts-spec.md story 19: exactly one retry, so a blip is absorbed without a retry storm. */
@@ -134,6 +151,12 @@ const ATTEMPTS_PER_PERSONA = 2;
  * behaviourally by `analyst-stage-wall-clock.test.ts` so a change to the fan-out
  * shape or the attempt count cannot leave this constant describing code that no
  * longer exists.
+ *
+ * Inherits `DEFAULT_ANALYST_TIMEOUT_MS`'s staleness (#1542 review, Finding 3 —
+ * see that constant's doc comment): this is `ATTEMPTS_PER_PERSONA` times the
+ * static DRAIN-only literal, not the real per-attempt deadline a production
+ * boot wires (which also floors at a fetch-bound term), so the real worst-case
+ * wall clock at even the checked-in defaults already exceeds this figure.
  */
 export const ANALYST_STAGE_WALL_CLOCK_MS = ATTEMPTS_PER_PERSONA * DEFAULT_ANALYST_TIMEOUT_MS;
 

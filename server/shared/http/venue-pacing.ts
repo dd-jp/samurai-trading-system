@@ -609,6 +609,73 @@ export function resolvePolygonPacing(env: NodeJS.ProcessEnv = process.env): Toke
 }
 
 /**
+ * MEASURED (#1080), not derived: a warm-store sweep asks the venue for at
+ * most this many distinct bar windows per instrument. See
+ * `server/apps/orchestrator/production/rate-limit-wiring.test.ts`'s
+ * "Alpaca's burst covers one fill-poll sweep" describe block, which pins the
+ * same figure against the same measurement — kept as one exported constant
+ * rather than two copies so the two sides cannot drift apart silently.
+ */
+export const DISTINCT_BAR_WINDOWS_PER_INSTRUMENT = 4;
+
+/**
+ * The queue wait `pacing` forces on the LAST token a warm-store sweep of
+ * `universeSize` instruments needs, before that fetch can even start
+ * (#1542, follow-up to #1104).
+ *
+ * A fetch that cannot get a token has not started (`orchestrator.ts`'s own
+ * doc), so this is the drain of the background headroom
+ * (`capacity - reserveForPriority`) at `refillPerSecond`, for a sweep of
+ * `DISTINCT_BAR_WINDOWS_PER_INSTRUMENT` windows per instrument. Floored at
+ * zero: a universe small enough that headroom alone covers the sweep queues
+ * for none of the tokens it needs, not a negative amount of time.
+ *
+ * Exported separately from `deriveAnalystTimeoutMs` (rather than folded into
+ * it silently) so `rate-limit-wiring.test.ts`'s #1080 drift guard — "the
+ * compiled-in 30s literal equals the derived DRAIN at checked-in defaults" —
+ * keeps asserting on the term it actually means, once the deadline itself
+ * becomes drain-plus-a-floor and stops equaling this number alone.
+ */
+export function deriveAnalystDrainMs(pacing: TokenBucketConfig, universeSize: number): number {
+  const backgroundHeadroom = pacing.capacity - (pacing.reserveForPriority ?? 0);
+  const sweepRequests = universeSize * DISTINCT_BAR_WINDOWS_PER_INSTRUMENT;
+  return Math.max(((sweepRequests - backgroundHeadroom) / pacing.refillPerSecond) * 1_000, 0);
+}
+
+/**
+ * The analyst per-attempt deadline `pacing` forces on a warm-store sweep of
+ * `universeSize` instruments (#1542, follow-up to #1104).
+ *
+ * `pipeline/analysts/orchestrator.ts`'s `DEFAULT_ANALYST_TIMEOUT_MS` was this
+ * arithmetic run once, by hand, against `DEFAULT_VENUE_PACING.alpaca` and
+ * `DEFAULT_UNIVERSE.length` — correct at boot only while both stayed at their
+ * checked-in defaults. `resolveVenuePacing` lets `SAMURAI_PACING_ALPACA_*`
+ * change the live bucket without touching that constant, which is what let
+ * an operator override silently outrun the analyst deadline. This function
+ * is the derivation the composition root runs against the RESOLVED bucket
+ * instead, so the deadline moves with whatever bucket the fetches actually
+ * queue behind.
+ *
+ * `deriveAnalystDrainMs` alone is not a safe deadline: it is QUEUE wait only,
+ * and floors at zero the moment headroom covers the sweep outright (a small
+ * enough universe, e.g. the shipped 5-instrument Saxo profile) — a 0ms
+ * deadline on a fetch that still has to run. `fetchBoundMs` is the worst case
+ * of the bounded fetch itself once a token IS granted (`worstCaseFetchMs`
+ * against the client's own timeout/retry config — see production.ts's call
+ * site), and the two wait sequentially: queue first, then the fetch. Their
+ * SUM is the deadline, not `max` — `max` would silently drop the queue wait
+ * whenever the fetch bound happens to dominate, which is exactly backwards
+ * from what a deadline is supposed to cover.
+ */
+export function deriveAnalystTimeoutMs(
+  pacing: TokenBucketConfig,
+  universeSize: number,
+  fetchBoundMs: number,
+): number {
+  return deriveAnalystDrainMs(pacing, universeSize) + fetchBoundMs;
+}
+
+/**
  * The tokens `acquireBackground()` may not spend (#391).
  *
  * Validated against the RESOLVED capacity rather than the default, because

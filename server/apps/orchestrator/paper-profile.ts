@@ -1128,7 +1128,11 @@ const LLM_BUDGET_WINDOW_MS = 300_000;
  * - The burst does NOT reliably complete inside one window. At #1013's width 6,
  *   20 names walk in `ceil(20 / 6) = 4` groups; #1080 (2026-09-14) sized each
  *   group's worst case at 172s (`ANALYST_STAGE_WALL_CLOCK_MS`, 60s, plus a
- *   112,000ms debate budget), so the
+ *   112,000ms debate budget) — a STATIC figure that #1542 (2026-09-15) left
+ *   un-derived from the resolved Alpaca pacing on purpose (see
+ *   `orchestrator.ts`'s `ANALYST_STAGE_WALL_CLOCK_MS` doc comment); the real
+ *   worst case at even checked-in defaults already runs longer, so 172s is a
+ *   floor for this budget math, not a ceiling — so the
  *   worst-case walk is ~11.5 min against `LLM_BUDGET_WINDOW_MS` (5 min), and
  *   even a clean walk at the measured post-fan-out per-call p50 (18,306ms, so
  *   ~73s of debate) is ~4.9 min of debate alone before analyst time.
@@ -2223,6 +2227,8 @@ export function buildStartingProfileConfigs(
      * #1080 (2026-09-14) — 4 groups of 172s, being `ANALYST_STAGE_WALL_CLOCK_MS`
      * (60s) plus a 112,000ms debate budget — against 320s (4 groups of 80s) at
      * the 60,000ms debate budget and 10,000ms analyst deadline this replaces.
+     * `ANALYST_STAGE_WALL_CLOCK_MS` is a static floor as of #1542 (2026-09-15),
+     * not a live ceiling — see its doc comment in `orchestrator.ts`.
      *
      * **NOTHING ENFORCES THAT FIGURE, and an earlier version of this comment
      * claimed otherwise (#1104).** It read the walk's ~11.5 min against

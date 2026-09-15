@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RetryAttemptReport, RetryConfig } from './retry.js';
-import { withRetry } from './retry.js';
+import { withRetry, worstCaseFetchMs } from './retry.js';
 
 const CONFIG: RetryConfig = { maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 1_000 };
 
@@ -351,5 +351,27 @@ describe('withRetry retry observer (#1080)', () => {
 
     await expect(promise).resolves.toBe('ok');
     expect(fn).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('worstCaseFetchMs', () => {
+  it('sums every attempt timeout plus every backoff cap between attempts, not after the last one', () => {
+    // 3 attempts against ALPACA_BARS_RETRY_CONFIG-shaped config: 3 timeouts,
+    // and backoff caps for attempts 1 and 2 only (min(250*2^0,4000)=250,
+    // min(250*2^1,4000)=500) — attempt 3 is the last and is not followed by a
+    // sleep.
+    const config: RetryConfig = { maxAttempts: 3, baseDelayMs: 250, maxDelayMs: 4_000 };
+    expect(worstCaseFetchMs(10_000, config)).toBe(3 * 10_000 + 250 + 500);
+  });
+
+  it('is a single-attempt bound at maxAttempts 1: no backoff at all', () => {
+    const config: RetryConfig = { maxAttempts: 1, baseDelayMs: 250, maxDelayMs: 4_000 };
+    expect(worstCaseFetchMs(10_000, config)).toBe(10_000);
+  });
+
+  it('caps each backoff term at maxDelayMs once the exponential curve exceeds it', () => {
+    const config: RetryConfig = { maxAttempts: 4, baseDelayMs: 1_000, maxDelayMs: 1_500 };
+    // Uncapped terms would be 1000, 2000, 4000; capped: 1000, 1500, 1500.
+    expect(worstCaseFetchMs(0, config)).toBe(1_000 + 1_500 + 1_500);
   });
 });

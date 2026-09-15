@@ -54,6 +54,8 @@ export {
 } from './sources/alpaca-data-errors.js';
 export type { AlpacaDataFeed, AlpacaHttpDataClientOptions } from './sources/alpaca-http-client.js';
 export {
+  ALPACA_BARS_RETRY_CONFIG,
+  ALPACA_BARS_TIMEOUT_MS,
   ALPACA_DATA_FEED_ENV_VAR,
   AlpacaHttpDataClient,
   DEFAULT_ALPACA_DATA_FEED,

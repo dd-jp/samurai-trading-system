@@ -1,6 +1,9 @@
 import {
   DEFAULT_POLYGON_PACING,
   DEFAULT_VENUE_PACING,
+  DISTINCT_BAR_WINDOWS_PER_INSTRUMENT,
+  deriveAnalystDrainMs,
+  deriveAnalystTimeoutMs,
   POLYGON_DOCUMENTED_CEILING_PER_SECOND,
   resolvePolygonPacing,
   resolveVenuePacing,
@@ -235,5 +238,95 @@ describe('resolvePolygonPacing', () => {
       ceilingPerSecond: 'SAMURAI_PACING_POLYGON_CEILING_PER_SEC',
       reserveForPriority: 'SAMURAI_PACING_POLYGON_PRIORITY_RESERVE',
     });
+  });
+});
+
+/**
+ * #1542: the analyst deadline moves with whatever bucket the fetches are
+ * actually resolved against — the follow-up to #1104, whose
+ * `DEFAULT_ANALYST_TIMEOUT_MS` is this same arithmetic run once, by hand,
+ * against `DEFAULT_VENUE_PACING.alpaca` and `DEFAULT_UNIVERSE.length`.
+ */
+describe('deriveAnalystDrainMs', () => {
+  it("reproduces DEFAULT_ANALYST_TIMEOUT_MS's own derivation at the checked-in defaults", () => {
+    // `DEFAULT_UNIVERSE.length` is 20 as of #1080's widening — pinned as a
+    // literal here (not imported from `scheduler.ts`) so this test does not
+    // gain a dependency on the orchestrator layer for a module that has none
+    // today; `rate-limit-wiring.test.ts`'s "affords the analyst deadline..."
+    // test is what actually pins this function against the live
+    // `DEFAULT_UNIVERSE` array. This is the #1080 drift guard: it asserts on
+    // the DRAIN term alone, which is still exactly what
+    // `DEFAULT_ANALYST_TIMEOUT_MS`'s original hand-derivation computed — the
+    // fetch-bound floor `deriveAnalystTimeoutMs` now adds on top (#1542) is a
+    // separate term this guard does not and should not speak to.
+    const DEFAULT_UNIVERSE_LENGTH = 20;
+    expect(deriveAnalystDrainMs(DEFAULT_VENUE_PACING.alpaca, DEFAULT_UNIVERSE_LENGTH)).toBe(30_000);
+  });
+
+  it('moves with a widened override rather than staying pinned to the default', () => {
+    const widened = { capacity: 1, refillPerSecond: 0.05, reserveForPriority: 0 };
+    const derived = deriveAnalystDrainMs(widened, 1);
+
+    // sweepRequests = 1 * 4 = 4; headroom = 1 - 0 = 1; (4 - 1) / 0.05 * 1000.
+    expect(derived).toBe(60_000);
+    expect(derived).toBeGreaterThan(30_000);
+  });
+
+  it('moves the other direction too: a tighter override shrinks the deadline', () => {
+    const tightened = { capacity: 41, refillPerSecond: 4, reserveForPriority: 21 };
+    const derived = deriveAnalystDrainMs(tightened, 20);
+
+    expect(derived).toBeLessThan(30_000);
+  });
+
+  it('scales sweep demand off DISTINCT_BAR_WINDOWS_PER_INSTRUMENT, not a second hardcoded count', () => {
+    const pacing = { capacity: 0, refillPerSecond: 1, reserveForPriority: 0 };
+    expect(deriveAnalystDrainMs(pacing, 5)).toBe(5 * DISTINCT_BAR_WINDOWS_PER_INSTRUMENT * 1_000);
+  });
+
+  it('floors at zero when headroom alone already covers the sweep', () => {
+    expect(deriveAnalystDrainMs({ capacity: 1_000, refillPerSecond: 1 }, 1)).toBe(0);
+  });
+});
+
+describe('deriveAnalystTimeoutMs', () => {
+  it('adds the fetch-bound floor to the drain rather than taking the max of the two', () => {
+    // Chosen so BOTH terms are positive and neither dominates the other —
+    // `max` and `+` would otherwise agree by coincidence and this test would
+    // not tell them apart.
+    const pacing = { capacity: 1, refillPerSecond: 1, reserveForPriority: 0 };
+    const drainMs = deriveAnalystDrainMs(pacing, 1);
+    expect(drainMs).toBe(3_000);
+
+    const fetchBoundMs = 5_000;
+    expect(deriveAnalystTimeoutMs(pacing, 1, fetchBoundMs)).toBe(drainMs + fetchBoundMs);
+    expect(deriveAnalystTimeoutMs(pacing, 1, fetchBoundMs)).not.toBe(
+      Math.max(drainMs, fetchBoundMs),
+    );
+  });
+
+  it('on the shipped Saxo profile (5-instrument universe), the drain floors at zero and the fetch bound alone is the deadline', () => {
+    // 5 instruments is `saxoTradeableUniverse()`'s size (production/saxo-venue.ts)
+    // — the universe `startingProfileForMode` resolves to on `SAMURAI_BROKER_VENUE=saxo`.
+    // At the checked-in Alpaca pacing (capacity 41, reserveForPriority 21,
+    // refillPerSecond 2) a 5-instrument sweep is `5 * 4 = 20` requests against
+    // `41 - 21 = 20` headroom — the drain is 0 even though this bucket does not
+    // actually pace the Saxo/LSE fetches (production.ts documents why it is the
+    // input used anyway: no LSE-specific pacing model exists in this codebase).
+    expect(deriveAnalystDrainMs(DEFAULT_VENUE_PACING.alpaca, 5)).toBe(0);
+
+    // 3 * ALPACA_BARS_TIMEOUT_MS(10_000) + backoffCap(250) + backoffCap(500),
+    // from ALPACA_BARS_RETRY_CONFIG (alpaca-http-client.ts) run through
+    // `worstCaseFetchMs` — hardcoded here rather than imported so this
+    // `shared/http` test does not gain a dependency on `providers/`, mirroring
+    // the `DEFAULT_UNIVERSE_LENGTH` literal above. `rate-limit-wiring.test.ts`
+    // pins the real composition against the live constants.
+    const alpacaFetchBoundMs = 30_750;
+    const deadline = deriveAnalystTimeoutMs(DEFAULT_VENUE_PACING.alpaca, 5, alpacaFetchBoundMs);
+
+    expect(deadline).toBe(alpacaFetchBoundMs);
+    expect(deadline).toBeGreaterThanOrEqual(alpacaFetchBoundMs);
+    // The pre-#1542 compiled-in default must not become an unsafe floor.
+    expect(deadline).toBeGreaterThanOrEqual(30_000);
   });
 });
