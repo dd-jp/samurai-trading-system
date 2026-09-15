@@ -17,6 +17,7 @@
  */
 import { RSI_SPEC, SMA_SPEC } from '../../pipeline/analysts/technical-analyst.js';
 import type { ArmPerformance } from '../../pipeline/control-arm/index.js';
+import { noCostBasisDrops } from '../../pipeline/control-arm/index.js';
 import type { ReconcileDivergence } from '../../pipeline/execution/index.js';
 import { computeIndicator } from '../../providers/market-data-service/index.js';
 import { GUARDED_THRESHOLD_NAMES } from '../../shared/index.js';
@@ -386,6 +387,7 @@ function healthyArmComparison(
     return_pct: 0,
     max_drawdown_pct: 0,
     refused_pass_count: 0,
+    cost_basis_drops: noCostBasisDrops(),
   });
   return {
     live: arm('live'),

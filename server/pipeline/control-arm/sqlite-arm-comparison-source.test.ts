@@ -67,7 +67,7 @@ function seed(
 const from = new Date('2026-07-18T00:00:00Z');
 const to = new Date('2026-07-19T00:00:00Z');
 
-describe('SqliteArmComparisonSource.getClosedTradesBetween — #1112 AC5 regime guard', () => {
+describe('SqliteArmComparisonSource.getClosedTradeWindowBetween — #1112 AC5 regime guard', () => {
   it('drops the pre-fix rows when a window straddles the #1112 cutover', () => {
     const db = openSharedStore(':memory:');
     seed(db, makeTrade({ idempotency_key: 'live-1' }), 'live', 1000);
@@ -79,7 +79,7 @@ describe('SqliteArmComparisonSource.getClosedTradesBetween — #1112 AC5 regime 
     );
     const source = new SqliteArmComparisonSource(db);
 
-    const trades = source.getClosedTradesBetween(from, to);
+    const trades = source.getClosedTradeWindowBetween(from, to).trades;
 
     expect(trades.map((trade) => trade.idempotency_key)).toEqual(['live-1']);
   });
@@ -95,7 +95,7 @@ describe('SqliteArmComparisonSource.getClosedTradesBetween — #1112 AC5 regime 
     );
     const source = new SqliteArmComparisonSource(db);
 
-    expect(() => source.getClosedTradesBetween(from, to)).toThrow(
+    expect(() => source.getClosedTradeWindowBetween(from, to).trades).toThrow(
       /mixes closed_trades sized under different declared ceilings \(1000, 2000\)/,
     );
   });
@@ -111,7 +111,7 @@ describe('SqliteArmComparisonSource.getClosedTradesBetween — #1112 AC5 regime 
     );
     const source = new SqliteArmComparisonSource(db);
 
-    expect(source.getClosedTradesBetween(from, to)).toHaveLength(2);
+    expect(source.getClosedTradeWindowBetween(from, to).trades).toHaveLength(2);
   });
 
   it('does not throw over a window where every row was sized under the same declared ceiling', () => {
@@ -125,7 +125,7 @@ describe('SqliteArmComparisonSource.getClosedTradesBetween — #1112 AC5 regime 
     );
     const source = new SqliteArmComparisonSource(db);
 
-    expect(source.getClosedTradesBetween(from, to)).toHaveLength(2);
+    expect(source.getClosedTradeWindowBetween(from, to).trades).toHaveLength(2);
   });
 
   /**
@@ -171,7 +171,9 @@ describe('SqliteArmComparisonSource.getClosedTradesBetween — #1112 AC5 regime 
         1270,
       );
 
-      expect(new SqliteArmComparisonSource(db).getClosedTradesBetween(from, to)).toHaveLength(2);
+      expect(
+        new SqliteArmComparisonSource(db).getClosedTradeWindowBetween(from, to).trades,
+      ).toHaveLength(2);
     } finally {
       raw.close();
       rmSync(preCutoverDir, { recursive: true, force: true });
@@ -179,7 +181,7 @@ describe('SqliteArmComparisonSource.getClosedTradesBetween — #1112 AC5 regime 
   });
 });
 
-describe('SqliteArmComparisonSource.getClosedTradesBetween — #1121 AC5 cost-charged guard', () => {
+describe('SqliteArmComparisonSource.getClosedTradeWindowBetween — #1121 AC5 cost-charged guard', () => {
   it('drops an uncharged live row even when the window also has a correctly-charged control row', () => {
     const db = openSharedStore(':memory:');
     seed(db, makeTrade({ idempotency_key: 'live-uncharged' }), 'live', null, 0);
@@ -195,7 +197,7 @@ describe('SqliteArmComparisonSource.getClosedTradesBetween — #1121 AC5 cost-ch
     );
     const source = new SqliteArmComparisonSource(db);
 
-    const trades = source.getClosedTradesBetween(from, to);
+    const trades = source.getClosedTradeWindowBetween(from, to).trades;
 
     expect(trades.map((trade) => trade.idempotency_key)).toEqual(['control-charged']);
   });
@@ -220,7 +222,7 @@ describe('SqliteArmComparisonSource.getClosedTradesBetween — #1121 AC5 cost-ch
     // case, this one is not a benign consistent view. It must still empty,
     // not merely "not throw and pass through" the way `oneSizingRegime`
     // would for an all-null sizing window.
-    expect(source.getClosedTradesBetween(from, to)).toEqual([]);
+    expect(source.getClosedTradeWindowBetween(from, to).trades).toEqual([]);
   });
 
   it('never throws on a mixed charged/uncharged window — the old rows are known-wrong, not ambiguous', () => {
@@ -235,10 +237,10 @@ describe('SqliteArmComparisonSource.getClosedTradesBetween — #1121 AC5 cost-ch
     );
     const source = new SqliteArmComparisonSource(db);
 
-    expect(() => source.getClosedTradesBetween(from, to)).not.toThrow();
-    expect(source.getClosedTradesBetween(from, to).map((trade) => trade.idempotency_key)).toEqual([
-      'live-charged',
-    ]);
+    expect(() => source.getClosedTradeWindowBetween(from, to).trades).not.toThrow();
+    expect(
+      source.getClosedTradeWindowBetween(from, to).trades.map((trade) => trade.idempotency_key),
+    ).toEqual(['live-charged']);
   });
 
   it('keeps a correctly-charged live row', () => {
@@ -246,9 +248,122 @@ describe('SqliteArmComparisonSource.getClosedTradesBetween — #1121 AC5 cost-ch
     seed(db, makeTrade({ idempotency_key: 'live-charged' }), 'live', null, 1);
     const source = new SqliteArmComparisonSource(db);
 
-    expect(source.getClosedTradesBetween(from, to).map((trade) => trade.idempotency_key)).toEqual([
-      'live-charged',
+    expect(
+      source.getClosedTradeWindowBetween(from, to).trades.map((trade) => trade.idempotency_key),
+    ).toEqual(['live-charged']);
+  });
+});
+
+describe('SqliteArmComparisonSource.getClosedTradeWindowBetween — #1546 per-exit-class drop counts', () => {
+  /**
+   * The measurement #1546 exists for: the exclusion is not even-handed across
+   * exit classes, so a single "N rows dropped" figure cannot answer whether the
+   * surviving population is selected. A protective close needs one successful
+   * submit-time capture and a flatten close needs two, so the flatten class is
+   * expected to carry the higher rate — and only a per-class count can show it.
+   */
+  it('counts kept and dropped rows per arm and per exit class', () => {
+    const db = openSharedStore(':memory:');
+    let clock = 0;
+    const at = (): Date => new Date(new Date('2026-07-18T12:00:00Z').getTime() + clock++ * 60_000);
+    const add = (
+      key: string,
+      arm: TradingArm,
+      close_reason: ClosedTrade['close_reason'],
+      charged: 0 | 1,
+    ): void =>
+      seed(
+        db,
+        makeTrade({ idempotency_key: key, close_reason, closed_at: at() }),
+        arm,
+        null,
+        charged,
+      );
+
+    add('live-stop-kept', 'live', 'stop', 1);
+    add('live-target-kept', 'live', 'target', 1);
+    add('live-stop-dropped', 'live', 'stop', 0);
+    add('live-flatten-kept', 'live', 'flatten', 1);
+    add('live-flatten-dropped-1', 'live', 'flatten', 0);
+    add('live-flatten-dropped-2', 'live', 'signal_decay', 0);
+    // The legacy pre-migration-0031 spelling of a flatten, which must not fall
+    // into the protective bucket.
+    add('live-legacy-exit-dropped', 'live', 'exit', 0);
+    add('control-stop-kept', 'control', 'stop', 1);
+    add('control-flatten-kept', 'control', 'direction_flip', 1);
+
+    const { trades, cost_basis_drops } = new SqliteArmComparisonSource(
+      db,
+    ).getClosedTradeWindowBetween(from, to);
+
+    expect(cost_basis_drops).toEqual({
+      live: {
+        protective: { kept: 2, dropped: 1 },
+        flatten: { kept: 1, dropped: 3 },
+      },
+      control: {
+        protective: { kept: 1, dropped: 0 },
+        flatten: { kept: 1, dropped: 0 },
+      },
+    });
+    // The counts describe the population the trades were taken from: every kept
+    // row above is one of these, and nothing dropped is.
+    expect(trades.map((trade) => trade.idempotency_key).sort()).toEqual([
+      'control-flatten-kept',
+      'control-stop-kept',
+      'live-flatten-kept',
+      'live-stop-kept',
+      'live-target-kept',
     ]);
+  });
+
+  /**
+   * The counts are taken AFTER `oneSizingRegime` and BEFORE the cost-basis
+   * filter. A row from the incomparable sizing regime is not part of this
+   * window's population at all, so attributing its removal to the cost-basis
+   * filter would overstate the exclusion this measurement is about.
+   */
+  it('does not count a row the sizing-regime filter removed as a cost-basis drop', () => {
+    const db = openSharedStore(':memory:');
+    seed(
+      db,
+      makeTrade({ idempotency_key: 'pre-cutover', close_reason: 'flatten' }),
+      'live',
+      null,
+      0,
+    );
+    seed(
+      db,
+      makeTrade({
+        idempotency_key: 'sized',
+        close_reason: 'stop',
+        closed_at: new Date('2026-07-18T21:00:00Z'),
+      }),
+      'live',
+      1000,
+      1,
+    );
+
+    const { cost_basis_drops } = new SqliteArmComparisonSource(db).getClosedTradeWindowBetween(
+      from,
+      to,
+    );
+
+    expect(cost_basis_drops.live).toEqual({
+      protective: { kept: 1, dropped: 0 },
+      flatten: { kept: 0, dropped: 0 },
+    });
+  });
+
+  it('reports zeros for a window with no rows at all, rather than omitting an arm', () => {
+    const { cost_basis_drops } = new SqliteArmComparisonSource(
+      openSharedStore(':memory:'),
+    ).getClosedTradeWindowBetween(from, to);
+
+    expect(cost_basis_drops).toEqual({
+      live: { protective: { kept: 0, dropped: 0 }, flatten: { kept: 0, dropped: 0 } },
+      control: { protective: { kept: 0, dropped: 0 }, flatten: { kept: 0, dropped: 0 } },
+    });
   });
 });
 
@@ -314,7 +429,7 @@ describe('SqliteArmComparisonSource.getRefusedPassCountsBetween — #1099', () =
       created_at: new Date('2026-07-17T23:59:59.999Z'),
     });
     // Exactly `from`: excluded, so consecutive windows partition the timeline
-    // exactly as `getClosedTradesBetween` does.
+    // exactly as `getClosedTradeWindowBetween` does.
     seedTraderLog(db, {
       trace_id: 'at-from:control',
       skip_reason: 'control_arm_valuation_refused',

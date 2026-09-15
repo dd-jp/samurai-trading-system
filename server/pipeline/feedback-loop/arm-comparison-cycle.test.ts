@@ -1,4 +1,10 @@
-import type { ArmedClosedTrade, ArmRefusedPassCounts } from '../control-arm/index.js';
+import type {
+  ArmCostBasisDrops,
+  ArmedClosedTrade,
+  ArmRefusedPassCounts,
+  ClosedTradeWindow,
+} from '../control-arm/index.js';
+import { noCostBasisDrops } from '../control-arm/index.js';
 import {
   ARM_DIVERGENCE_RETURN_GAP_PCT,
   DEFAULT_ARM_COMPARISON_WINDOW_MS,
@@ -49,11 +55,16 @@ class FakeSource implements ArmComparisonSource {
   constructor(
     private readonly trades: ArmedClosedTrade[],
     private readonly refusals: ArmRefusedPassCounts = { live: 0, control: 0 },
+    private readonly drops: ArmCostBasisDrops = {
+      live: noCostBasisDrops(),
+      control: noCostBasisDrops(),
+    },
   ) {}
 
-  getClosedTradesBetween(from: Date, to: Date): ArmedClosedTrade[] {
+  getClosedTradeWindowBetween(from: Date, to: Date): ClosedTradeWindow {
     this.windows.push({ from, to });
-    return this.trades.filter((row) => row.closed_at > from && row.closed_at <= to);
+    const trades = this.trades.filter((row) => row.closed_at > from && row.closed_at <= to);
+    return { trades, cost_basis_drops: this.drops };
   }
 
   getRefusedPassCountsBetween(from: Date, to: Date): ArmRefusedPassCounts {
@@ -106,6 +117,7 @@ describe('evaluateArmDivergence', () => {
         return_pct: input.liveReturn,
         max_drawdown_pct: input.liveDrawdown,
         refused_pass_count: 0,
+        cost_basis_drops: noCostBasisDrops(),
       },
       control: {
         arm: 'control' as const,
@@ -114,6 +126,7 @@ describe('evaluateArmDivergence', () => {
         return_pct: input.controlReturn,
         max_drawdown_pct: input.controlDrawdown,
         refused_pass_count: 0,
+        cost_basis_drops: noCostBasisDrops(),
       },
     };
   }

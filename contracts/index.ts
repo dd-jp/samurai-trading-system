@@ -60,12 +60,15 @@ export type {
   ArmPerformanceWire,
   ClosedTradeRow,
   CloseReason,
+  CostBasisDropCountWire,
   DashboardSnapshot,
   DebateRow,
   DebateTerminationCauseWire,
   DebateTerminationWire,
   DroppedConditionWire,
   EvaluatedConditionWire,
+  ExitClassDropCountsWire,
+  ExitClassWire,
   FillRow,
   InvalidationComparatorWire,
   InvalidationConditionStateWire,
@@ -85,4 +88,5 @@ export type {
 export {
   CONTRACT_VERSION,
   contractVersionOf,
+  EXIT_CLASSES_WIRE,
 } from './snapshot.js';

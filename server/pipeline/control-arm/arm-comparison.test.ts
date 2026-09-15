@@ -11,7 +11,12 @@
  * drawdown-less literal and this file fails to type-check.
  */
 import type { ClosedTrade, TradingArm } from '../../shared/index.js';
-import { type ArmPerformance, buildArmComparison } from './arm-comparison.js';
+import {
+  type ArmPerformance,
+  buildArmComparison,
+  exitClassOf,
+  noCostBasisDrops,
+} from './arm-comparison.js';
 
 const WINDOW_FROM = new Date('2026-09-01T08:00:00.000Z');
 const WINDOW_TO = new Date('2026-09-01T16:00:00.000Z');
@@ -41,6 +46,7 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
   it('reports return AND drawdown for BOTH arms over one shared window', () => {
     const comparison = buildArmComparison({
       refused_passes: { live: 0, control: 0 },
+      cost_basis_drops: { live: noCostBasisDrops(), control: noCostBasisDrops() },
       basis: 1_000,
       from: WINDOW_FROM,
       to: WINDOW_TO,
@@ -72,6 +78,7 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
       return_pct: 0.05,
       max_drawdown_pct: 0.01,
       refused_pass_count: 0,
+      cost_basis_drops: noCostBasisDrops(),
     });
     expect(comparison.control).toEqual<ArmPerformance>({
       arm: 'control',
@@ -80,6 +87,7 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
       return_pct: 0.06,
       max_drawdown_pct: 0.03,
       refused_pass_count: 0,
+      cost_basis_drops: noCostBasisDrops(),
     });
 
     // The same window and the same denominator for both — which is what makes
@@ -96,6 +104,7 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
   it('cannot express a per-arm result without a drawdown', () => {
     const comparison = buildArmComparison({
       refused_passes: { live: 0, control: 0 },
+      cost_basis_drops: { live: noCostBasisDrops(), control: noCostBasisDrops() },
       basis: 1_000,
       from: WINDOW_FROM,
       to: WINDOW_TO,
@@ -105,6 +114,7 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
     for (const arm of [comparison.live, comparison.control]) {
       expect(Object.keys(arm).sort()).toEqual([
         'arm',
+        'cost_basis_drops',
         'max_drawdown_pct',
         'realized_pnl_net',
         'refused_pass_count',
@@ -129,6 +139,7 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
   it('measures both arms over the identical window — a trade outside it counts for neither', () => {
     const comparison = buildArmComparison({
       refused_passes: { live: 0, control: 0 },
+      cost_basis_drops: { live: noCostBasisDrops(), control: noCostBasisDrops() },
       basis: 500,
       from: WINDOW_FROM,
       to: WINDOW_TO,
@@ -159,6 +170,7 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
   it('reports refused passes per arm, so a refusal stretch is not silence', () => {
     const comparison = buildArmComparison({
       refused_passes: { live: 0, control: 6 },
+      cost_basis_drops: { live: noCostBasisDrops(), control: noCostBasisDrops() },
       basis: 1_000,
       from: WINDOW_FROM,
       to: WINDOW_TO,
@@ -174,6 +186,7 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
     const trades = [trade({ arm: 'control', closed_at: WINDOW_TO, realized_pnl_net: -50 })];
     const quiet = buildArmComparison({
       refused_passes: { live: 0, control: 0 },
+      cost_basis_drops: { live: noCostBasisDrops(), control: noCostBasisDrops() },
       basis: 1_000,
       from: WINDOW_FROM,
       to: WINDOW_TO,
@@ -181,6 +194,7 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
     });
     const refused = buildArmComparison({
       refused_passes: { live: 0, control: 12 },
+      cost_basis_drops: { live: noCostBasisDrops(), control: noCostBasisDrops() },
       basis: 1_000,
       from: WINDOW_FROM,
       to: WINDOW_TO,
@@ -195,6 +209,7 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
   it('counts an arm-less row as live — every pre-#753 row was the live arm', () => {
     const comparison = buildArmComparison({
       refused_passes: { live: 0, control: 0 },
+      cost_basis_drops: { live: noCostBasisDrops(), control: noCostBasisDrops() },
       basis: 1_000,
       from: WINDOW_FROM,
       to: WINDOW_TO,
@@ -212,6 +227,7 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
   it('measures drawdown from the starting capital, not from the first peak', () => {
     const comparison = buildArmComparison({
       refused_passes: { live: 0, control: 0 },
+      cost_basis_drops: { live: noCostBasisDrops(), control: noCostBasisDrops() },
       basis: 1_000,
       from: WINDOW_FROM,
       to: WINDOW_TO,
@@ -247,6 +263,7 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
     ];
     const forward = buildArmComparison({
       refused_passes: { live: 0, control: 0 },
+      cost_basis_drops: { live: noCostBasisDrops(), control: noCostBasisDrops() },
       basis: 1_000,
       from: WINDOW_FROM,
       to: WINDOW_TO,
@@ -254,6 +271,7 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
     });
     const reversed = buildArmComparison({
       refused_passes: { live: 0, control: 0 },
+      cost_basis_drops: { live: noCostBasisDrops(), control: noCostBasisDrops() },
       basis: 1_000,
       from: WINDOW_FROM,
       to: WINDOW_TO,
@@ -271,11 +289,65 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
         buildArmComparison({
           basis,
           refused_passes: { live: 0, control: 0 },
+          cost_basis_drops: { live: noCostBasisDrops(), control: noCostBasisDrops() },
           from: WINDOW_FROM,
           to: WINDOW_TO,
           trades: [],
         }),
       ).toThrow(/basis must be a positive, finite number/);
     }
+  });
+
+  /**
+   * #1546. The counts are produced by the reader and carried through untouched
+   * — `buildArmComparison` does not re-derive them from `trades`, and could
+   * not: the dropped rows are precisely the ones absent from `trades`.
+   */
+  it('carries each arm its own cost-basis drop counts', () => {
+    const comparison = buildArmComparison({
+      refused_passes: { live: 0, control: 0 },
+      cost_basis_drops: {
+        live: { protective: { kept: 4, dropped: 1 }, flatten: { kept: 2, dropped: 5 } },
+        control: { protective: { kept: 6, dropped: 0 }, flatten: { kept: 3, dropped: 0 } },
+      },
+      basis: 1_000,
+      from: WINDOW_FROM,
+      to: WINDOW_TO,
+      trades: [],
+    });
+
+    expect(comparison.live.cost_basis_drops.flatten).toEqual({ kept: 2, dropped: 5 });
+    expect(comparison.live.cost_basis_drops.protective).toEqual({ kept: 4, dropped: 1 });
+    expect(comparison.control.cost_basis_drops.flatten).toEqual({ kept: 3, dropped: 0 });
+  });
+});
+
+/**
+ * #1546. The partition is the whole measurement: a `close_reason` in the wrong
+ * bucket moves a row between the one-capture and the two-capture population and
+ * silently flattens the asymmetry the counts exist to show.
+ */
+describe('exitClassOf', () => {
+  it('puts venue-resting bracket legs in the protective class', () => {
+    expect(exitClassOf('stop')).toBe('protective');
+    expect(exitClassOf('target')).toBe('protective');
+  });
+
+  it('puts every in-process exit, including the legacy spelling, in the flatten class', () => {
+    expect(exitClassOf('exit')).toBe('flatten');
+    expect(exitClassOf('flatten')).toBe('flatten');
+    expect(exitClassOf('signal_decay')).toBe('flatten');
+    expect(exitClassOf('direction_flip')).toBe('flatten');
+  });
+
+  /**
+   * The `never` arm is the real guard — a fifth `close_reason` is a compile
+   * error, not a silent flatten. This pins the runtime half for a row that
+   * reached the database outside the type system (a hand-edited or
+   * future-migration value), which must be loud rather than miscounted.
+   */
+  it('throws on a close_reason it cannot classify', () => {
+    const unclassifiable = 'partial_liquidation' as ClosedTrade['close_reason'];
+    expect(() => exitClassOf(unclassifiable)).toThrow(/unhandled close_reason/);
   });
 });

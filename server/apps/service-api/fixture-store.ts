@@ -670,6 +670,13 @@ const ARM_COMPARISONS: PersistedArmComparisonSample[] = [
         return_pct: 0.0184,
         max_drawdown_pct: 0.021,
         refused_pass_count: 0,
+        // #1546: the flatten class dropped where the protective one did not —
+        // the asymmetry this column exists to make visible, demoed rather than
+        // flattened to zeros.
+        cost_basis_drops: {
+          protective: { kept: 15, dropped: 0 },
+          flatten: { kept: 9, dropped: 3 },
+        },
       },
       control: {
         arm: 'control',
@@ -678,6 +685,13 @@ const ARM_COMPARISONS: PersistedArmComparisonSample[] = [
         return_pct: 0.0062,
         max_drawdown_pct: 0.028,
         refused_pass_count: 2,
+        // The control arm can only ever be kept: `SimulatedBrokerAdapter`
+        // prices its own fills, so no leg of a control lot can be missing a
+        // `cost_breakdown`.
+        cost_basis_drops: {
+          protective: { kept: 11, dropped: 0 },
+          flatten: { kept: 8, dropped: 0 },
+        },
       },
     },
     divergence: {
@@ -687,9 +701,10 @@ const ARM_COMPARISONS: PersistedArmComparisonSample[] = [
     },
   },
   {
-    // Predates migration 0057 (#1483): `refused_pass_count` is `null` on both
-    // arms, not `0` — the fixture server's demo of the honest historical case
-    // a real pre-migration row reads back as.
+    // Predates migrations 0057 (#1483) and 0066 (#1546): `refused_pass_count`
+    // and `cost_basis_drops` are `null` on both arms, not `0`/all-zero — the
+    // fixture server's demo of the honest historical case a real pre-migration
+    // row reads back as.
     computed_at: new Date(NOW.getTime() - 24 * 3_600_000),
     comparison: {
       from: new Date(NOW.getTime() - 31 * 24 * 3_600_000),
@@ -702,6 +717,7 @@ const ARM_COMPARISONS: PersistedArmComparisonSample[] = [
         return_pct: 0.0151,
         max_drawdown_pct: 0.021,
         refused_pass_count: null,
+        cost_basis_drops: null,
       },
       control: {
         arm: 'control',
@@ -710,6 +726,7 @@ const ARM_COMPARISONS: PersistedArmComparisonSample[] = [
         return_pct: 0.0079,
         max_drawdown_pct: 0.026,
         refused_pass_count: null,
+        cost_basis_drops: null,
       },
     },
     divergence: {

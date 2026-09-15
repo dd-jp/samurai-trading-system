@@ -769,6 +769,12 @@ export interface ClosedTrade {
    * `false` excludes the row from `SqliteArmComparisonSource` unconditionally:
    * an uncharged live row mixed into a window is exactly the asymmetry #1121
    * closes.
+   *
+   * That exclusion is not even-handed across `close_reason`, and since #1546 it
+   * is counted rather than merely noted: a flatten close needs two successful
+   * submit-time captures to reach `true` where a protective close needs one, so
+   * `ArmPerformance.cost_basis_drops` reports the kept/dropped split per exit
+   * class alongside every comparison. See `exitClassOf` (arm-comparison.ts).
    */
   modelled_cost_charged: boolean;
 }
