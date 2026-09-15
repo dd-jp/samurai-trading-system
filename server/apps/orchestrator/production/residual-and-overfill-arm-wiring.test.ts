@@ -237,8 +237,8 @@ async function seedPosition(
     avg_entry_price: 0,
     stop: 95,
     target: 110,
-    // `'partially_filled'`, not `'submitted'`: the latter is IN_FLIGHT
-    // (reconcile.ts), so the startup reconcile's OWN positions loop would
+    // `'partially_filled'`, not `'submitted'`: the latter is in
+    // `IN_FLIGHT_ORDER_STATES`, so the startup reconcile's OWN positions loop would
     // ask the (unrelated) broker double `getOrder(residual-live)`, get
     // `null` back, and reject the lot before `ingestFills()` below ever
     // runs — a real partial-flatten residual is well past that state.

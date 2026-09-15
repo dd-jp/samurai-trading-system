@@ -128,10 +128,13 @@ export interface PortfolioView {
    * reservation open, and both are the SAFE direction — a resting order is
    * committed notional, and over-reserving on an adapter outage withholds
    * headroom rather than inventing it, the same asymmetry `reservedNotional`'s
-   * `Math.max(…, 0)` is written for. Only the flatten journal has a forced
-   * age-out (`UNRESOLVABLE_FLATTEN_MAX_AGE_MS`), because an unresolved row
-   * there BLOCKS the mandatory flat-by-close; nothing comparable is at stake
-   * here.
+   * `Math.max(…, 0)` is written for. The forced age-outs that do exist
+   * elsewhere are each there because the aged row BLOCKS something — an
+   * unresolved flatten-journal row blocks the mandatory flat-by-close
+   * (`UNRESOLVABLE_FLATTEN_MAX_AGE_MS`), and a wedged zero-fill lot never
+   * terminalizes at all (`WEDGED_ZERO_FILL_ABANDON_AFTER_MS`). A held
+   * reservation blocks nothing comparable: it withholds headroom from the
+   * subclass the resting order is already committed to.
    *
    * **Never folded into `gross_exposure`, `equity` or `drawdown_pct`, and
    * never into `BreakerEvalInput`.** `equity = cash + gross_exposure`, and
