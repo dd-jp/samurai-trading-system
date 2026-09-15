@@ -348,6 +348,14 @@ def load_observations():
                     # the classification rule agreeing with itself, not a real
                     # cross-check; an earlier version of this counter did that and
                     # was structurally incapable of ever firing on this path.
+                    # That independence holds on the `key in instid_to_tik` branch
+                    # above (line 328) but NOT on the fallback branch (line 340):
+                    # there, `tik` is itself chosen by `bid > 1000`, the same
+                    # predicate this check re-tests, so on a fallback row the check
+                    # is tautological again and cannot fire. Currently inert — 0
+                    # rows take the fallback branch on this pool (see the
+                    # `unclassified_fallback` figure in `analyze`'s output) — but
+                    # would silently stop being independent the moment one did.
                     if bid > 0 and off > 0:
                         expect_gbx = SHARED_ISIN_TIK_CURRENCY[tik] == "GBX"
                         if expect_gbx != (bid > 1000):
