@@ -3163,49 +3163,12 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     });
 
     /**
-     * The other half of finding 2's fix, and the hole the first draft of it
-     * opened: a `settled` prior may only be adopted when it is the NEWEST id
-     * the lot has allocated.
-     *
-     * With attempt 0 `filled` and attempt 1 resting at a STALE size, the walk
-     * cancels attempt 1 (correctly — it is mis-sized) and then reaches the
-     * gap. Honouring attempt 0's filled row there would report protection
-     * confirmed while the lot has no live leg at all: `maybeRearmResidual`
-     * clears the #549 marker on that return, so the residual goes naked AND
-     * unwatched. Adopting a stale terminal row must never be the answer to
-     * having just cancelled the only live one — the walk places instead.
-     */
-    it('places a replacement rather than adopting a filled row below the newest id', async () => {
-      const venue = measuredAlpacaVenue();
-      const adapter = adapterWith(makeClient(venue));
-
-      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
-      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
-      venue.rows.set('key-1:rearm', {
-        ...venue.rows.get('key-1:rearm')!,
-        status: 'filled',
-        filled_qty: '6',
-      });
-
-      // The residual shrank again, so attempt 1 is now mis-sized too.
-      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 3, 95, 110);
-
-      expect(venue.rows.get('key-1:rearm-1')?.status).toBe('canceled');
-      expect(venue.resting().map((row) => row.client_order_id)).toEqual(['key-1:rearm-2']);
-      expect(venue.resting().map((row) => row.qty)).toEqual(['3']);
-    });
-
-    /**
-     * The other side of that guard, and the reason it asks what the walk
-     * RETIRED rather than what is merely allocated.
-     *
-     * An id above a filled prior that is ALREADY DEAD retires nothing — the
-     * filled prior is still the newest thing that ever protected this lot, so
-     * #549's adopt-a-fill-regardless-of-size rule stands unchanged. Declining
-     * it here would place a fresh OCO sized to the caller's residual, which is
-     * computed off a store that has not necessarily ingested the prior's own
-     * exit fills yet: over-protection, whose leg fires into a smaller position
-     * and opens a reverse one — #516 from the other direction.
+     * A FULLY filled prior is adopted wherever it sits in the walk, and it is
+     * not evidence of a naked lot: its remainder — `qty − filled_qty`, the
+     * quantity #549 says an adopted prior still holds — is zero, so that
+     * episode closed itself and the store's residual follows once the fills
+     * ingest. Placing instead would arm a fresh leg over a flat position,
+     * which fires into nothing and opens a reverse one.
      */
     it('still adopts a filled prior when every id above it is already dead', async () => {
       const venue = measuredAlpacaVenue();
@@ -3233,15 +3196,10 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     });
 
     /**
-     * ...and the retire has to be ABOVE the fill to disqualify it, not merely
-     * somewhere in the walk.
-     *
-     * `pending_cancel` is one of the statuses `mapOrderState` folds into
-     * 'submitted', so the walk cannot prove it dead and defensively cancels it
-     * — at an index BELOW the fill, where it retires nothing the fill does not
-     * already supersede. Reading that cancel as "I destroyed the live leg"
-     * would place an oversized OCO against a residual the store has not caught
-     * up to.
+     * ...including when the walk cancelled something on its way past. A
+     * `pending_cancel` prior is one `mapOrderState` folds into 'submitted', so
+     * the walk cannot prove it dead and retires it defensively. That cancel is
+     * not a reason to re-arm over a fill that has already closed the lot.
      */
     it('adopts a filled prior despite a defensive cancel at a LOWER index', async () => {
       const venue = measuredAlpacaVenue();
@@ -3293,6 +3251,155 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
 
       expect(venue.submitOcoOrder).not.toHaveBeenCalled();
       expect(venue.resting().map((row) => row.client_order_id)).toEqual(['key-1:rearm']);
+    });
+
+    /**
+     * WHY A SWEEP AND NOT MORE HAND-BUILT CASES.
+     *
+     * The four tests above were each written for one named sequence, and three
+     * separate defects in this walk survived the tests written for the
+     * sequence before them — every one of them living in a COMBINATION nobody
+     * had thought to build. A per-case mutation run proves the case it was
+     * written for and says nothing about the rest of the space.
+     *
+     * The space is small enough to close by enumeration: a prior is one of six
+     * shapes, an absent id ends the walk, so four indices give 1+6+36+216+1296
+     * reachable sequences. This asserts the MONEY invariants over all of them,
+     * so a future edit cannot open a hole in a corner that has no named test.
+     *
+     * Some sequences are unreachable under the allocation invariant (a resting
+     * prior below an allocated index). The walk ENFORCES that invariant rather
+     * than assuming it, so they are swept too and must hold.
+     */
+    it('holds the money invariants across every reachable prior-status sequence', async () => {
+      const SHAPES = [
+        'resting-match',
+        'resting-mismatch',
+        'partially_filled',
+        'filled',
+        'canceled',
+        'pending_cancel',
+      ] as const;
+      type Shape = (typeof SHAPES)[number];
+
+      const WORKING = [
+        'new',
+        'accepted',
+        'pending_new',
+        'accepted_for_bidding',
+        'partially_filled',
+      ];
+
+      // Prefixes over the non-absent shapes: the walk stops at the first gap,
+      // so a sequence is fully described by what sits below that gap.
+      let sequences: Shape[][] = [[]];
+      let frontier: Shape[][] = [[]];
+      for (let depth = 0; depth < 4; depth += 1) {
+        frontier = frontier.flatMap((prefix) => SHAPES.map((shape) => [...prefix, shape]));
+        sequences = [...sequences, ...frontier];
+      }
+      expect(sequences).toHaveLength(1555);
+
+      function seed(attempt: number, shape: Shape): AlpacaOrder {
+        const row: AlpacaOrder = {
+          ...acceptedOrder(),
+          id: `seed-${attempt}`,
+          client_order_id: attempt === 0 ? 'key-1:rearm' : `key-1:rearm-${attempt}`,
+          order_class: 'oco',
+          qty: '6',
+          limit_price: '110',
+          legs: [
+            {
+              id: `seed-${attempt}-stop`,
+              type: 'stop',
+              status: 'held',
+              filled_qty: '0',
+              filled_avg_price: null,
+              filled_at: null,
+              stop_price: '95',
+            },
+          ],
+        };
+        if (shape === 'resting-match') return row;
+        if (shape === 'resting-mismatch') return { ...row, qty: '5' };
+        if (shape === 'partially_filled')
+          return { ...row, status: 'partially_filled', filled_qty: '2' };
+        if (shape === 'filled') return { ...row, status: 'filled', filled_qty: '6' };
+        return { ...row, status: shape === 'canceled' ? 'canceled' : 'pending_cancel' };
+      }
+
+      const violations: string[] = [];
+      for (const sequence of sequences) {
+        const venue = measuredAlpacaVenue();
+        sequence.forEach((shape, attempt) => {
+          const row = seed(attempt, shape);
+          venue.rows.set(row.client_order_id, row);
+        });
+        const state = new InMemoryBrokerStateStore();
+        const recordIds = vi.spyOn(state, 'recordBracketOrderIds');
+        const adapter = new AlpacaBrokerAdapter({
+          client: makeClient(venue),
+          rateLimiter: permissiveLimiter(),
+          unpricedFillAlerts: recordingAlerts(),
+          ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+          logger: recordingLogger(),
+          state,
+        });
+
+        const workingAtEntry = new Set(venue.resting().map((row) => row.id));
+        const threw = await adapter
+          .rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110)
+          .then(() => false)
+          .catch(() => true);
+
+        const workingAtExit = venue.resting();
+        const where = `[${sequence.join(', ')}]`;
+
+        // 1. #516 DIRECTLY: never two legs that can still fire on one lot.
+        if (workingAtExit.length > 1) violations.push(`${where} two working legs`);
+
+        if (threw) continue;
+
+        // 2. A normal return must never leave the lot NAKED after this walk
+        // destroyed protection that was working when it started. The caller
+        // clears the #549 marker on that return, so a naked residual here is
+        // also an UNWATCHED one.
+        //
+        // Zero working legs is only acceptable when the row the bookkeeping
+        // NAMES is fully filled — that lot is flat, not unprotected. Checking
+        // the named row's status rather than merely tolerating a zero count is
+        // what keeps this from excusing a genuine naked return.
+        //
+        // Scoped to normal returns deliberately: the last-index destructive
+        // cancel throws, which is recorded finding 4, not this clause's
+        // business.
+        const destroyed = [...workingAtEntry].some(
+          (id) => !workingAtExit.some((row) => row.id === id),
+        );
+        const namedId = recordIds.mock.lastCall?.[2]?.target_order_id;
+        const named = [...venue.rows.values()].find((row) => row.id === namedId);
+        if (destroyed && workingAtExit.length === 0 && named?.status !== 'filled') {
+          violations.push(
+            `${where} destroyed working protection and left none; ` +
+              `bookkeeping names ${String(namedId)} (${String(named?.status)})`,
+          );
+        }
+
+        // 3. Finding 2's original signature, asserted structurally: the
+        // bookkeeping `cancel()` later trusts must name the leg that is
+        // actually live, never a terminal one from a lower index.
+        if (workingAtExit.length === 1) {
+          const last = recordIds.mock.lastCall;
+          if (last?.[2]?.target_order_id !== workingAtExit[0]!.id) {
+            violations.push(
+              `${where} bookkeeping names ${String(last?.[2]?.target_order_id)}, ` +
+                `working leg is ${workingAtExit[0]!.id}`,
+            );
+          }
+        }
+      }
+
+      expect(violations).toEqual([]);
     });
   });
 
