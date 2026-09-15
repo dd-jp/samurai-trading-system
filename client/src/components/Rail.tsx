@@ -305,8 +305,9 @@ function ProvidersBlock({ snapshot }: { snapshot: WireSnapshot }) {
       {alpaca !== undefined &&
         (alpaca.balance === null ? (
           <span className="rail-note">
-            equity unavailable —{' '}
-            {alpaca.detail === '' ? 'the probe did not read ok' : alpaca.detail}
+            {`equity unavailable — ${
+              alpaca.detail === '' ? 'the probe did not read ok' : alpaca.detail
+            }`}
           </span>
         ) : (
           <div className="rail-figures" data-field="alpaca-balance">
@@ -566,8 +567,9 @@ function SpendBlock({ snapshot }: { snapshot: WireSnapshot }) {
           <SystemTag />
           {windows != null && (
             <span className="rail-note mono" data-field="llm-windows">
-              24h {formatUsd(windows.last_24h.cost_usd)} · 7d {formatUsd(windows.last_7d.cost_usd)}{' '}
-              · all {formatUsd(windows.all_time.cost_usd)}
+              {`24h ${formatUsd(windows.last_24h.cost_usd)} · 7d ${formatUsd(
+                windows.last_7d.cost_usd,
+              )} · all ${formatUsd(windows.all_time.cost_usd)}`}
             </span>
           )}
           <span className="rail-note">

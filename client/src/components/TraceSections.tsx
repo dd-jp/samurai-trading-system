@@ -179,8 +179,7 @@ function RiskCriticBody({
               <span>
                 {condition.observable} {condition.comparator} {condition.threshold}
                 <span className="muted mono">
-                  {' '}
-                  · observed {condition.observed === null ? 'not read' : condition.observed}
+                  {` · observed ${condition.observed === null ? 'not read' : condition.observed}`}
                 </span>
               </span>
             </li>
@@ -228,13 +227,12 @@ export function DebateSection({ debate, inFlight, linkedBy, isControl }: DebateS
   return (
     <div data-section="debate">
       <p className="drawer-line" data-degraded={gloss === null ? undefined : 'true'}>
-        <b>{debate.direction}</b> · {debate.rounds} rounds · opened{' '}
-        {formatClockUtc(debate.created_at)}
+        <b>{debate.direction}</b>
+        {` · ${debate.rounds} rounds · opened ${formatClockUtc(debate.created_at)}`}
         {gloss === null ? null : <span className="muted"> · {gloss}</span>}
         {linkedBy.exact ? null : (
           <span className="muted">
-            {' '}
-            · the instrument's latest completed debate, not keyed to this trace
+            {" · the instrument's latest completed debate, not keyed to this trace"}
           </span>
         )}
       </p>
@@ -269,8 +267,7 @@ export function FillsList({ fills }: { fills: readonly FillRow[] }) {
     <ul className="fill-list mono" aria-label="Fills">
       {fills.map((fill) => (
         <li key={fill.broker_fill_id}>
-          {formatClockUtc(fill.timestamp)} · {fill.leg} · {formatQty(fill.qty)} @{' '}
-          {formatPrice(fill.price)}
+          {`${formatClockUtc(fill.timestamp)} · ${fill.leg} · ${formatQty(fill.qty)} @ ${formatPrice(fill.price)}`}
           {fill.fee !== 0 ? ` · fee ${formatPrice(fill.fee)}` : ''}{' '}
           <span className="muted">{fill.broker_fill_id}</span>
         </li>

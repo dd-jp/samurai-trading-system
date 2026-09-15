@@ -215,13 +215,13 @@ function OpenRiskCard({ snapshot }: Pick<GlanceTabProps, 'snapshot'>) {
       <h2>
         Open risk
         <span className="h2-note">
-          {' '}
-          · {formatUsd(deployed)} deployed
-          {isControl
-            ? ` · ${CONTROL_NO_EQUITY}`
-            : equity === null
-              ? ''
-              : ` of ${formatUsd(equity)}`}
+          {` · ${formatUsd(deployed)} deployed${
+            isControl
+              ? ` · ${CONTROL_NO_EQUITY}`
+              : equity === null
+                ? ''
+                : ` of ${formatUsd(equity)}`
+          }`}
         </span>
       </h2>
       {positions.length === 0 ? (
@@ -243,8 +243,9 @@ function OpenRiskCard({ snapshot }: Pick<GlanceTabProps, 'snapshot'>) {
                   <span>
                     <b className="display">{position.instrument}</b>{' '}
                     <span className="muted">
-                      {sideWord(position.side)} {formatQty(position.filled_size)} ·{' '}
-                      {formatUsd(row.notional)} · mark {formatPrice(position.mark_price)}
+                      {`${sideWord(position.side)} ${formatQty(position.filled_size)} · ${formatUsd(
+                        row.notional,
+                      )} · mark ${formatPrice(position.mark_price)}`}
                     </span>
                   </span>
                   <span className={`mono ${tone}`}>{formatSignedUsd(position.unrealized_pnl)}</span>
@@ -264,12 +265,13 @@ function OpenRiskCard({ snapshot }: Pick<GlanceTabProps, 'snapshot'>) {
                 )}
                 <div className="risk-foot mono muted">
                   <span>
-                    stop {formatPrice(position.stop)} ·{' '}
-                    {Number.isFinite(row.stopDistance)
-                      ? row.stopDistance < 0
-                        ? `${formatPercent(-row.stopDistance)} through`
-                        : `${formatPercent(row.stopDistance)} away`
-                      : UNKNOWN}
+                    {`stop ${formatPrice(position.stop)} · ${
+                      Number.isFinite(row.stopDistance)
+                        ? row.stopDistance < 0
+                          ? `${formatPercent(-row.stopDistance)} through`
+                          : `${formatPercent(row.stopDistance)} away`
+                        : UNKNOWN
+                    }`}
                   </span>
                   <span>target {formatPrice(position.target)}</span>
                 </div>

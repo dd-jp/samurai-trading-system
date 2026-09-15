@@ -293,8 +293,10 @@ function ArmLine({ arm }: { arm: ArmPerformanceWire }) {
         {formatSignedUsd(arm.realized_pnl_net)}
       </span>
       <span className="mono muted small">
-        return {formatPercent(arm.return_pct, 2)} · drawdown{' '}
-        {formatPercent(arm.max_drawdown_pct, 2)} · {formatCount(arm.trade_count)} trades
+        {`return ${formatPercent(arm.return_pct, 2)} · drawdown ${formatPercent(
+          arm.max_drawdown_pct,
+          2,
+        )} · ${formatCount(arm.trade_count)} trades`}
         <RefusedPassCount count={arm.refused_pass_count} />
       </span>
     </li>
@@ -344,12 +346,16 @@ function ArmCard({ comparisons }: { comparisons: readonly ArmComparisonRow[] }) 
                   <li key={row.computed_at} className={ARM_TREND_CLASS[state]}>
                     <span className="mono muted">{formatDateUtc(row.computed_at)}</span>
                     <span className="mono">
-                      live {formatPercent(row.live.return_pct, 2)} /{' '}
-                      {formatPercent(row.live.max_drawdown_pct, 2)} dd
+                      {`live ${formatPercent(row.live.return_pct, 2)} / ${formatPercent(
+                        row.live.max_drawdown_pct,
+                        2,
+                      )} dd`}
                     </span>
                     <span className="mono">
-                      control {formatPercent(row.control.return_pct, 2)} /{' '}
-                      {formatPercent(row.control.max_drawdown_pct, 2)} dd
+                      {`control ${formatPercent(row.control.return_pct, 2)} / ${formatPercent(
+                        row.control.max_drawdown_pct,
+                        2,
+                      )} dd`}
                     </span>
                     {state === 'below-floor' ? <span>below floor</span> : null}
                   </li>
@@ -399,9 +405,10 @@ function BenchmarksCard({ benchmarks }: { benchmarks: readonly OutsideBenchmarkR
               <li key={row.benchmark} className="benchmark-row">
                 <span>{BENCHMARK_LABEL[row.benchmark]}</span>
                 <span className="mono muted small">
-                  return {formatPercent(row.buy_and_hold_return_pct, 2)} · drawdown{' '}
-                  {formatPercent(row.max_drawdown_pct, 2)} · {formatCount(row.observation_count)}{' '}
-                  daily obs
+                  {`return ${formatPercent(row.buy_and_hold_return_pct, 2)} · drawdown ${formatPercent(
+                    row.max_drawdown_pct,
+                    2,
+                  )} · ${formatCount(row.observation_count)} daily obs`}
                 </span>
               </li>
             ))}
@@ -618,9 +625,9 @@ function TradeDrawer({ snapshot, selectedKey }: Pick<ReviewTabProps, 'snapshot' 
         <span className="mono muted drawer-trace">{trade.idempotency_key}</span>
       </div>
       <p className="drawer-line muted">
-        {sideWord(trade.side)} {formatQty(trade.filled_size)} · {trade.asset_class} ·{' '}
-        {presentCloseReason(trade.close_reason).word} · {formatClockUtc(trade.opened_at)} to{' '}
-        {formatClockUtc(trade.closed_at)}
+        {`${sideWord(trade.side)} ${formatQty(trade.filled_size)} · ${trade.asset_class} · ${
+          presentCloseReason(trade.close_reason).word
+        } · ${formatClockUtc(trade.opened_at)} to ${formatClockUtc(trade.closed_at)}`}
       </p>
 
       <h3>Why it was taken</h3>
@@ -662,9 +669,11 @@ function TradeDrawer({ snapshot, selectedKey }: Pick<ReviewTabProps, 'snapshot' 
         </div>
       </dl>
       <p className="muted small">
-        Fees are the only cost the wire itemises; spread is inside the fill prices. Entry{' '}
-        {formatPrice(trade.entry_price)} · exit {formatPrice(trade.exit_price)} ·{' '}
-        {formatUsd(trade.filled_size * trade.entry_price)} notional at entry.
+        {`Fees are the only cost the wire itemises; spread is inside the fill prices. Entry ${formatPrice(
+          trade.entry_price,
+        )} · exit ${formatPrice(trade.exit_price)} · ${formatUsd(
+          trade.filled_size * trade.entry_price,
+        )} notional at entry.`}
       </p>
 
       <h3>Fills</h3>
