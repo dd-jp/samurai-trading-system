@@ -88,8 +88,10 @@ export const CONTROL_NO_ANALYSTS = 'Control arm: no debate, no analyst weights â
  * (#1623, ADR-0021 point 6 / dashboard-spec.md): different population
  * (all-time vs `oneSizingRegime`/`modelledCostCharged`-filtered), different
  * window (all-time vs Feedback Loop's configured window), different
- * freshness (render time vs FL's last cycle). Named once here so Glance
- * cannot drift from the wording the spec documents.
+ * freshness (render time vs FL's last cycle), and realized vs realized-plus-
+ * unrealized (`net_gbp` carries today's open unrealized P&L, the panel's
+ * `realized_pnl_net` does not). Named once here so Glance cannot drift from
+ * the wording the spec documents.
  */
 export const PNL_OVERALL_CAVEAT =
-  'All-time, every closed trade â€” the Review arm-comparison panel uses a filtered, narrower window sampled on its own cadence, and can report a different figure for the same arm.';
+  'All-time: net adds open unrealized to every closed trade; drawdown and trade count are closed trades only. The Review arm-comparison panel reports realized only, over a filtered window sampled on its own cadence, and can report a different figure for the same arm.';

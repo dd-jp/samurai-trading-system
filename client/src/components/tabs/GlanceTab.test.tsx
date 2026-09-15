@@ -57,7 +57,7 @@ describe('P&L', () => {
     renderGlance(makeSnapshot());
     const card = screen.getByRole('region', { name: 'P&L' });
     const caveat = within(card).getByText(
-      'All-time, every closed trade — the Review arm-comparison panel uses a filtered, narrower window sampled on its own cadence, and can report a different figure for the same arm.',
+      'All-time: net adds open unrealized to every closed trade; drawdown and trade count are closed trades only. The Review arm-comparison panel reports realized only, over a filtered window sampled on its own cadence, and can report a different figure for the same arm.',
     );
     const overallBlock = within(card).getByText('Overall').closest('.pnl-block');
     expect(overallBlock?.contains(caveat)).toBe(true);
