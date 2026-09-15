@@ -16,11 +16,7 @@ import type { Mark } from '../../providers/market-data-service/index.js';
 import type { ClosedTrade, DebateLog, Fill, OpenPosition } from '../../shared/index.js';
 import { toBrokerFillId } from '../../shared/index.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
-import {
-  LIVE_BOOK_GBP,
-  LIVE_BOOK_SIZING_USD,
-  SIZING_USD_PER_GBP,
-} from '../orchestrator/paper-profile.js';
+import { LIVE_BOOK_GBP, LIVE_BOOK_SIZING_USD, SIZING_USD_PER_GBP } from '../orchestrator/index.js';
 import { PIPELINE_LOOKBACK_MS, PIPELINE_MAX_LANES } from './pipeline-query.js';
 import { buildSnapshot } from './snapshot.js';
 import type {

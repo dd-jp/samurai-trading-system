@@ -319,8 +319,8 @@ export function makePnlHeadline(overrides: Partial<PnlHeadlineWire> = {}): PnlHe
       trade_count: 43,
     },
     today: {
-      net_gbp: 3.1,
-      net_pct_of_book: 0.0031,
+      net_gbp: 3.3,
+      net_pct_of_book: 0.0033,
       realized_gbp: 1.8,
       unrealized_gbp: 1.5,
       costs_gbp: 0.2,

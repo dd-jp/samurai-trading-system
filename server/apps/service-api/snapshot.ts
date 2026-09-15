@@ -25,11 +25,7 @@ import type { Mark } from '../../providers/market-data-service/index.js';
 import type { ClosedTrade, Fill, TradingArm } from '../../shared/index.js';
 import { isExitFill, totalQty, weightedAvgPrice } from '../../shared/index.js';
 import type { StoreMode } from '../../shared/store/index.js';
-import {
-  LIVE_BOOK_GBP,
-  LIVE_BOOK_SIZING_USD,
-  SIZING_USD_PER_GBP,
-} from '../orchestrator/paper-profile.js';
+import { LIVE_BOOK_GBP, LIVE_BOOK_SIZING_USD, SIZING_USD_PER_GBP } from '../orchestrator/index.js';
 import { buildPipelineView, PIPELINE_LOOKBACK_MS, PIPELINE_MAX_LANES } from './pipeline-query.js';
 import { NULL_PROVIDER_STATUS, type ProviderStatusReader } from './provider-status.js';
 import type {
@@ -233,8 +229,10 @@ function exitPriceFor(trade: ClosedTrade, fillsByTrade: ReadonlyMap<string, Fill
  * locale whose default date format is already `YYYY-MM-DD`, so no
  * `formatToParts` reassembly is needed.
  */
+const LONDON_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London' });
+
 function londonCalendarDay(instant: Date): string {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London' }).format(instant);
+  return LONDON_DAY.format(instant);
 }
 
 const PNL_RATE_SOURCE: PnlRateSource = 'static_sizing_rate';

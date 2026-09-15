@@ -295,17 +295,6 @@ export function buildArmComparison(input: {
   };
 }
 
-/**
- * The cumulative realized-PnL series for a set of closed trades, and its
- * peak-to-trough drawdown — the one derivation both `performanceFor` below
- * and the dashboard's all-time P&L headline (#1595) build on, so the two
- * never compute return or drawdown by separate arithmetic that could drift
- * apart.
- *
- * Takes no `arm`: the caller has already filtered to one arm (or, for the
- * headline, already read one arm's rows from the store) — this function only
- * ever sees the population it should sum, not the whole table.
- */
 export interface CumulativePnl {
   /** Cumulative `realized_pnl_net`, net of fees, in account currency. Signed. */
   net: number;
@@ -316,6 +305,16 @@ export interface CumulativePnl {
 }
 
 /**
+ * The cumulative realized-PnL series for a set of closed trades, and its
+ * peak-to-trough drawdown — the one derivation both `performanceFor` below
+ * and the dashboard's all-time P&L headline (#1595) build on, so the two
+ * never compute return or drawdown by separate arithmetic that could drift
+ * apart.
+ *
+ * Takes no `arm`: the caller has already filtered to one arm (or, for the
+ * headline, already read one arm's rows from the store) — this function only
+ * ever sees the population it should sum, not the whole table.
+ *
  * Sorted by close time and then by key: `closed_at` is stored at second
  * resolution in some paths, so two lots closing in the same second would
  * otherwise order non-deterministically and move the drawdown between runs. The
