@@ -16,6 +16,7 @@ import type { Mark } from '../../providers/market-data-service/index.js';
 import type { ClosedTrade, DebateLog, Fill, OpenPosition } from '../../shared/index.js';
 import { toBrokerFillId } from '../../shared/index.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
+import { LIVE_BOOK_GBP, SIZING_USD_PER_GBP } from '../orchestrator/index.js';
 import { PIPELINE_LOOKBACK_MS, PIPELINE_MAX_LANES } from './pipeline-query.js';
 import { buildSnapshot } from './snapshot.js';
 import type {
@@ -166,6 +167,7 @@ function fakeStore(overrides: Partial<DashboardQueryStore> = {}): DashboardQuery
     getTickStatus: () => null,
     getOpenPositions: () => [],
     getRecentClosedTrades: () => [],
+    getAllClosedTrades: () => [],
     getFillsForTrades: () => [],
     getVerdictHistory: () => [],
     getRiskCritics: () => [],
@@ -1122,5 +1124,168 @@ describe('buildSnapshot', () => {
     // the lanes must still be there to say so.
     expect(snap.pipeline.lanes.map((l) => l.outcome)).toEqual(['idle', 'idle']);
     expect(snap.pipeline.live_trace_id).toBeNull();
+  });
+
+  // #1595: the Glance P&L headline — all-time with drawdown, Europe/London
+  // "today", GBP at the static sizing rate.
+  describe('pnl headline (#1595)', () => {
+    it('reads every closed trade for the requested arm, unbounded, via getAllClosedTrades', () => {
+      let seen: { asOf?: Date; arm?: string } = {};
+      const store = fakeStore({
+        getAllClosedTrades: (asOf, arm) => {
+          seen = { asOf, arm };
+          return [];
+        },
+      });
+
+      buildSnapshot(store, AS_OF, 'paper', 'control');
+
+      expect(seen).toEqual({ asOf: AS_OF, arm: 'control' });
+    });
+
+    it('computes overall net_gbp as all-time closed-trade net plus open unrealized, converted at the static rate', () => {
+      const trade = makeClosedTrade({ realized_pnl_net: 127, closed_at: AS_OF });
+      const position = makePosition({ side: 'buy', avg_entry_price: 100, filled_size: 10 });
+      const store = fakeStore({
+        getAllClosedTrades: () => [trade],
+        getOpenPositions: () => [position],
+        getMark: () => makeMark(101),
+      });
+
+      const snap = buildSnapshot(store, AS_OF, 'paper', 'live');
+
+      // realized 127 USD + unrealized (101-100)*10=10 USD = 137 USD, converted to GBP.
+      const expectedGbp = 137 / SIZING_USD_PER_GBP;
+      expect(snap.pnl_headline.overall.net_gbp).toBeCloseTo(expectedGbp, 6);
+      expect(snap.pnl_headline.overall.pct_of_book).toBeCloseTo(expectedGbp / LIVE_BOOK_GBP, 6);
+      expect(snap.pnl_headline.overall.trade_count).toBe(1);
+    });
+
+    it('overall.max_drawdown_pct is the realized series only, unaffected by open unrealized profit', () => {
+      const upThenDown = [
+        makeClosedTrade({
+          idempotency_key: 'up',
+          realized_pnl_net: 100,
+          closed_at: new Date('2026-07-01T12:00:00Z'),
+        }),
+        makeClosedTrade({
+          idempotency_key: 'down',
+          realized_pnl_net: -150,
+          closed_at: new Date('2026-07-10T12:00:00Z'),
+        }),
+      ];
+      // A huge open unrealized PROFIT must not mask the realized drawdown.
+      const hugeUnrealizedProfit = makePosition({
+        side: 'buy',
+        avg_entry_price: 100,
+        filled_size: 1000,
+      });
+      const store = fakeStore({
+        getAllClosedTrades: () => upThenDown,
+        getOpenPositions: () => [hugeUnrealizedProfit],
+        getMark: () => makeMark(1000),
+      });
+
+      const snap = buildSnapshot(store, AS_OF, 'paper', 'live');
+
+      // Peak 100, trough -50 -> raw drawdown 150 USD, converted then divided by the book.
+      const expectedDrawdownPct = 150 / SIZING_USD_PER_GBP / LIVE_BOOK_GBP;
+      expect(snap.pnl_headline.overall.max_drawdown_pct).toBeCloseTo(expectedDrawdownPct, 6);
+    });
+
+    it('a close at 00:30 BST counts on that London day, not the previous UTC one', () => {
+      // AS_OF is 2026-07-19T12:00:00Z = 13:00 BST, so "today" is 19 July in London.
+      const midnightBst = makeClosedTrade({
+        idempotency_key: 'midnight-bst',
+        realized_pnl_net: 50,
+        // 2026-07-18T23:30:00Z is 00:30 BST on 19 July — the previous UTC date.
+        closed_at: new Date('2026-07-18T23:30:00Z'),
+      });
+      const previousLondonDay = makeClosedTrade({
+        idempotency_key: 'previous-london-day',
+        realized_pnl_net: 999,
+        // 21:00 BST on 18 July — genuinely the previous London day.
+        closed_at: new Date('2026-07-18T20:00:00Z'),
+      });
+      const store = fakeStore({ getAllClosedTrades: () => [midnightBst, previousLondonDay] });
+
+      const snap = buildSnapshot(store, AS_OF, 'paper', 'live');
+
+      expect(snap.pnl_headline.today.trade_count).toBe(1);
+      expect(snap.pnl_headline.today.realized_gbp).toBeCloseTo(50 / SIZING_USD_PER_GBP, 6);
+    });
+
+    it('a winter close counts on its UTC-equal London day', () => {
+      const winterAsOf = new Date('2026-01-15T18:00:00Z');
+      const trade = makeClosedTrade({
+        realized_pnl_net: 80,
+        closed_at: new Date('2026-01-15T09:00:00Z'),
+      });
+      const store = fakeStore({ getAllClosedTrades: () => [trade] });
+
+      const snap = buildSnapshot(store, winterAsOf, 'paper', 'live');
+
+      expect(snap.pnl_headline.today.trade_count).toBe(1);
+      expect(snap.pnl_headline.today.realized_gbp).toBeCloseTo(80 / SIZING_USD_PER_GBP, 6);
+    });
+
+    it('control rows never reach the live headline and live rows never reach the control headline', () => {
+      const liveTrade = makeClosedTrade({
+        idempotency_key: 'live-trade',
+        realized_pnl_net: 254,
+        closed_at: AS_OF,
+      });
+      const controlTrade = makeClosedTrade({
+        idempotency_key: 'control-trade',
+        realized_pnl_net: 127,
+        closed_at: AS_OF,
+      });
+      const store = fakeStore({
+        getAllClosedTrades: (_asOf, arm) => (arm === 'live' ? [liveTrade] : [controlTrade]),
+      });
+
+      const liveSnap = buildSnapshot(store, AS_OF, 'paper', 'live');
+      expect(liveSnap.pnl_headline.overall.net_gbp).toBeCloseTo(254 / SIZING_USD_PER_GBP, 6);
+      expect(liveSnap.pnl_headline.overall.trade_count).toBe(1);
+
+      const controlSnap = buildSnapshot(store, AS_OF, 'paper', 'control');
+      expect(controlSnap.pnl_headline.overall.net_gbp).toBeCloseTo(127 / SIZING_USD_PER_GBP, 6);
+      expect(controlSnap.pnl_headline.overall.trade_count).toBe(1);
+    });
+
+    it('costs_gbp is already inside realized_gbp, carried alongside rather than subtracted a second time', () => {
+      const trade = makeClosedTrade({ realized_pnl_net: 90, fees_total: 10, closed_at: AS_OF });
+      const store = fakeStore({ getAllClosedTrades: () => [trade] });
+
+      const snap = buildSnapshot(store, AS_OF, 'paper', 'live');
+
+      expect(snap.pnl_headline.today.realized_gbp).toBeCloseTo(90 / SIZING_USD_PER_GBP, 6);
+      expect(snap.pnl_headline.today.costs_gbp).toBeCloseTo(10 / SIZING_USD_PER_GBP, 6);
+      // No open positions here, so net === realized.
+      expect(snap.pnl_headline.today.net_gbp).toBeCloseTo(90 / SIZING_USD_PER_GBP, 6);
+    });
+
+    it('carries the conversion rate and its source beside the figures', () => {
+      const snap = buildSnapshot(fakeStore(), AS_OF, 'paper', 'live');
+
+      expect(snap.pnl_headline.conversion.usd_per_gbp).toBe(SIZING_USD_PER_GBP);
+      expect(snap.pnl_headline.conversion.source).toBe(
+        'SIZING_USD_PER_GBP (paper-profile.ts), configured constant',
+      );
+    });
+
+    it('never carries a P&L figure without its drawdown (doc 12 D4)', () => {
+      const trade = makeClosedTrade({ realized_pnl_net: 500, closed_at: AS_OF });
+      const snap = buildSnapshot(
+        fakeStore({ getAllClosedTrades: () => [trade] }),
+        AS_OF,
+        'paper',
+        'live',
+      );
+
+      expect(snap.pnl_headline.overall.net_gbp).not.toBe(0);
+      expect(typeof snap.pnl_headline.overall.max_drawdown_pct).toBe('number');
+      expect(Number.isFinite(snap.pnl_headline.overall.max_drawdown_pct)).toBe(true);
+    });
   });
 });

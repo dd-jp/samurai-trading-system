@@ -180,6 +180,62 @@ export interface ArmPerformanceWire {
 }
 
 /**
+ * One arm's P&L headline (#1595, ADR-0021's 2026-09-15 amendment) — Glance's
+ * server-computed overall and today figures, in GBP.
+ *
+ * ## Two different series, on purpose
+ *
+ * `overall` is all-time: every closed trade this arm has ever made, plus the
+ * arm's currently open unrealized P&L. `overall.max_drawdown_pct` is the
+ * REALIZED series only — peak-to-trough on cumulative closed-trade P&L, the
+ * same derivation `ArmPerformanceWire.max_drawdown_pct` uses (doc 12 D4: no
+ * return-only headline, enforced by making this field required exactly as
+ * that one is). Open unrealized P&L is a mark-to-market snapshot, not a
+ * point on the realized series a drawdown is measured against, so it moves
+ * `overall.net_gbp` without moving `overall.max_drawdown_pct`.
+ *
+ * `today` has NO drawdown field — a single Europe/London calendar day's
+ * realized-plus-unrealized total is not a return series to measure a fall
+ * against; `overall` carries the D4 obligation for this whole headline.
+ * `today.unrealized_gbp` is the SAME now-figure as `overall`'s unrealized
+ * term (a mark is a point in time, not a today-scoped one) — only the
+ * realized half is filtered to trades that closed on this London day.
+ * `today.costs_gbp` is already included inside `today.realized_gbp` (fees are
+ * netted into `realized_pnl_net` at the source), carried alongside it so the
+ * drag from costs is visible rather than folded away.
+ */
+export interface PnlHeadlineWire {
+  overall: {
+    net_gbp: number;
+    /** Fraction of the £1,000 declared book (ADR-0015's 2026-08-18 amendment) — 0.0125 is 1.25%. */
+    pct_of_book: number;
+    /** Fraction of the book, peak-to-trough on the REALIZED series only. See the type header. */
+    max_drawdown_pct: number;
+    trade_count: number;
+  };
+  today: {
+    net_gbp: number;
+    /** Fraction of the £1,000 declared book, same basis as `overall.pct_of_book`. */
+    pct_of_book: number;
+    realized_gbp: number;
+    unrealized_gbp: number;
+    /** Already inside `realized_gbp` — see the type header. */
+    costs_gbp: number;
+    trade_count: number;
+  };
+  conversion: {
+    /**
+     * USD per GBP — the same static `SIZING_USD_PER_GBP` (#1180) the Feedback
+     * Loop's arm-comparison `basis` already converts with. Display-only: this
+     * never reaches `same_currency_verified`, the live-money currency gate,
+     * which stays refusing for #1180's reasons.
+     */
+    usd_per_gbp: number;
+    source: string;
+  };
+}
+
+/**
  * The exit classes the cost-basis exclusion is counted over (#1546).
  *
  * Structurally identical to the server-side `EXIT_CLASSES`/`ExitClass`
@@ -673,6 +729,13 @@ export interface DashboardSnapshot {
    * only — #1594 tracks widening those reads to match.
    */
   arm: TradingArmWire;
+  /**
+   * This arm's P&L headline (#1595) — server-computed, GBP, all-time with
+   * drawdown and a Europe/London "today". Scoped by the SAME `arm` above,
+   * not a second parameter: a control-arm request gets the control arm's
+   * headline, never a mix. See `PnlHeadlineWire`'s own doc for the shape.
+   */
+  pnl_headline: PnlHeadlineWire;
   tick_status: TickStatus | null;
   positions: PositionRow[];
   /** Recent realized round trips (#940) — most-recently-closed first. */
@@ -870,6 +933,7 @@ export const DASHBOARD_SNAPSHOT_FIELD_NAMES = [
   'as_of',
   'mode',
   'arm',
+  'pnl_headline',
   'tick_status',
   'positions',
   'closed_trades',

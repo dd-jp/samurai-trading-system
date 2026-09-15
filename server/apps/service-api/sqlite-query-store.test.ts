@@ -560,6 +560,60 @@ describe('SqliteQueryStore', () => {
       expect(control[0]?.idempotency_key).toBe('key-closed-control');
     });
 
+    // #1595: the P&L headline's all-time population — unbounded, unlike the
+    // ten-row read above.
+    describe('getAllClosedTrades (#1595)', () => {
+      it('reads every closed trade for the arm, with no LIMIT', async () => {
+        const db = makeDb();
+        const execStore = new SqliteExecutionStore(db);
+        for (let i = 0; i < 15; i++) {
+          await seedClosedTrade(
+            execStore,
+            makeClosedTrade({
+              idempotency_key: `key-closed-${i}`,
+              closed_at: new Date(NOW.getTime() - i * 1000),
+            }),
+          );
+        }
+
+        const store = new SqliteQueryStore(db);
+        expect(store.getAllClosedTrades(NOW, 'live')).toHaveLength(15);
+      });
+
+      it('excludes a closed trade that closed after asOf, matching every other read on this store', async () => {
+        const db = makeDb();
+        const execStore = new SqliteExecutionStore(db);
+        await seedClosedTrade(
+          execStore,
+          makeClosedTrade({ closed_at: new Date('2026-07-28T00:00:00Z') }), // after NOW
+        );
+
+        const store = new SqliteQueryStore(db);
+        expect(store.getAllClosedTrades(NOW, 'live')).toEqual([]);
+      });
+
+      it('scopes to the named arm, excluding the other arm entirely', async () => {
+        const db = makeDb();
+        const liveStore = new SqliteExecutionStore(db, 'live');
+        const controlStore = new SqliteExecutionStore(db, 'control');
+        await seedClosedTrade(liveStore, makeClosedTrade({ idempotency_key: 'key-closed-live' }));
+        await seedClosedTrade(
+          controlStore,
+          makeClosedTrade({ idempotency_key: 'key-closed-control' }),
+        );
+
+        const store = new SqliteQueryStore(db);
+
+        const live = store.getAllClosedTrades(NOW, 'live');
+        expect(live).toHaveLength(1);
+        expect(live[0]?.idempotency_key).toBe('key-closed-live');
+
+        const control = store.getAllClosedTrades(NOW, 'control');
+        expect(control).toHaveLength(1);
+        expect(control[0]?.idempotency_key).toBe('key-closed-control');
+      });
+    });
+
     it('reads every fill for the named lots, ignoring lots not named', async () => {
       const db = makeDb();
       const execStore = new SqliteExecutionStore(db);

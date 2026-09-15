@@ -19,6 +19,8 @@ export {
   type ArmRefusedPassCounts,
   buildArmComparison,
   type CostBasisDropCount,
+  type CumulativePnlAndDrawdown,
+  cumulativePnlAndDrawdown,
   EXIT_CLASSES,
   type ExitClass,
   type ExitClassDropCounts,

@@ -79,6 +79,7 @@ export type {
   MetricsSuiteWire,
   OutsideBenchmarkRow,
   OutsideBenchmarkWire,
+  PnlHeadlineWire,
   PositionRow,
   RiskCriticRow,
   TickStatus,

@@ -313,6 +313,23 @@ export function makeSnapshot(overrides: Partial<WireSnapshot> = {}): WireSnapsho
     // Defaulted to 'live' here purely so this fixture keeps satisfying the
     // widened `WireSnapshot` type.
     arm: 'live',
+    // #1595: not yet rendered anywhere (Glance rendering is #1596), defaulted
+    // to all-zero purely so this fixture keeps satisfying the wire type.
+    pnl_headline: {
+      overall: { net_gbp: 0, pct_of_book: 0, max_drawdown_pct: 0, trade_count: 0 },
+      today: {
+        net_gbp: 0,
+        pct_of_book: 0,
+        realized_gbp: 0,
+        unrealized_gbp: 0,
+        costs_gbp: 0,
+        trade_count: 0,
+      },
+      conversion: {
+        usd_per_gbp: 1.27,
+        source: 'SIZING_USD_PER_GBP (paper-profile.ts), configured constant',
+      },
+    },
     tick_status: null,
     positions: [makePosition()],
     closed_trades: [makeClosedTrade()],

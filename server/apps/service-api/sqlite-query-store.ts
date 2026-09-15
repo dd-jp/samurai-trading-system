@@ -284,6 +284,22 @@ export class SqliteQueryStore implements DashboardQueryStore {
   }
 
   /**
+   * EVERY closed trade for one arm, up through `asOf` (#1595) — deliberately
+   * unbounded, unlike `getRecentClosedTrades` above: the all-time P&L headline
+   * needs the whole population, not the 3-second-poll window.
+   */
+  getAllClosedTrades(asOf: Date, arm: TradingArm): ClosedTrade[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM closed_trades
+          WHERE arm = ? AND closed_at <= ?
+          ORDER BY closed_at DESC`,
+      )
+      .all(arm, toStoredTimestamp(asOf)) as ClosedTradeRow[];
+    return rows.map(fromClosedTradeRow);
+  }
+
+  /**
    * #940: every fill for the named lots. Scoped by `idempotency_key IN (...)`
    * rather than a bounded time window — `buildSnapshot` always calls this with
    * the closed trades it just read, so the placeholder list (built from

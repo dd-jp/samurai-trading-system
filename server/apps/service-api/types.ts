@@ -52,6 +52,7 @@ export type {
   MetricsSuiteWire,
   OutsideBenchmarkRow,
   OutsideBenchmarkWire,
+  PnlHeadlineWire,
   PositionRow,
   RiskCriticRow,
   TickStatus,
@@ -221,6 +222,16 @@ export interface DashboardQueryStore {
    * `arm` required for the same reason as `getOpenPositions` (#1592).
    */
   getRecentClosedTrades(limit: number, asOf: Date, arm: TradingArm): ClosedTrade[];
+  /**
+   * EVERY closed trade for one arm, up through `asOf` — the all-time P&L
+   * headline's population (#1595). Deliberately unbounded, unlike every other
+   * reader on this interface: `getRecentClosedTrades` above rides the 3-second
+   * poll and must never grow with the trade history, but "all-time" is the
+   * literal requirement here, and a windowed read would silently under-report
+   * a book old enough to have more than the window's worth of round trips.
+   * `arm` required for the same #1592 reason as the other reads.
+   */
+  getAllClosedTrades(asOf: Date, arm: TradingArm): ClosedTrade[];
   /**
    * Every fill belonging to the named lots, in no particular cross-lot order.
    * Scoped to `idempotencyKeys` rather than a bounded "recent fills" window

@@ -23,7 +23,9 @@ import type { Mark } from '../../providers/market-data-service/index.js';
 import type { ClosedTrade, Fill, TradingArm } from '../../shared/index.js';
 import { isExitFill, totalQty, weightedAvgPrice } from '../../shared/index.js';
 import type { StoreMode } from '../../shared/store/index.js';
+import { LIVE_BOOK_GBP, SIZING_USD_PER_GBP } from '../orchestrator/index.js';
 import { buildPipelineView, PIPELINE_LOOKBACK_MS, PIPELINE_MAX_LANES } from './pipeline-query.js';
+import { buildPnlHeadline } from './pnl-headline.js';
 import { NULL_PROVIDER_STATUS, type ProviderStatusReader } from './provider-status.js';
 import type {
   ArmComparisonRow,
@@ -38,6 +40,13 @@ import type {
   RiskCriticRecord,
   RiskCriticRow,
 } from './types.js';
+
+/**
+ * Matches `production.ts`'s `usd_per_gbp_provenance` string exactly — one
+ * sentence naming the same constant, so an operator reading either surface
+ * sees the same provenance rather than two names for one rate.
+ */
+const USD_PER_GBP_SOURCE = 'SIZING_USD_PER_GBP (paper-profile.ts), configured constant';
 
 /** Matches the CLI views' default recent-history window; no config surface yet. */
 const RECENT_DEBATES_LIMIT = 10;
@@ -265,6 +274,19 @@ export function buildSnapshot(
     };
   });
 
+  // #1595: the Glance P&L headline. Reuses `positions` above for open
+  // unrealized P&L rather than re-fetching marks, and a fresh unbounded read
+  // (`getAllClosedTrades`, unlike the 10-row `getRecentClosedTrades` below)
+  // for the all-time closed-trade population the headline needs.
+  const pnl_headline = buildPnlHeadline({
+    asOf,
+    allClosedTrades: store.getAllClosedTrades(asOf, arm),
+    openUnrealizedUsd: positions.reduce((sum, position) => sum + position.unrealized_pnl, 0),
+    usdPerGbp: SIZING_USD_PER_GBP,
+    bookGbp: LIVE_BOOK_GBP,
+    conversionSource: USD_PER_GBP_SOURCE,
+  });
+
   const debates = store.getRecentDebates(RECENT_DEBATES_LIMIT, asOf).map((debate) => ({
     debate_id: debate.debate_id,
     instrument: debate.instrument,
@@ -413,6 +435,7 @@ export function buildSnapshot(
     as_of: asOf.toISOString(),
     mode,
     arm,
+    pnl_headline,
     tick_status: tickStatus,
     positions,
     closed_trades,
