@@ -301,6 +301,11 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * `getRecentClosedTrades` above. The P&L headline's all-time drawdown needs
    * the whole realized series; truncating it to a recent-history window would
    * silently understate (or entirely miss) the true peak-to-trough fall.
+   *
+   * Also unfiltered on `oneSizingRegime`/`modelled_cost_charged`, unlike
+   * `SqliteArmComparisonSource.getClosedTradeWindowBetween` — a DIFFERENT
+   * population of the same table, deliberately (#1616): see `PnlOverallWire`
+   * (contracts/snapshot.ts) for why and what it does to the headline.
    */
   getAllClosedTrades(asOf: Date, arm: TradingArm): ClosedTrade[] {
     const rows = this.db
