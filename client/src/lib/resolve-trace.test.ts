@@ -374,14 +374,38 @@ describe('laneDebate', () => {
     });
     // Identity, not equality: the matrix and the drawer disagree the moment
     // they reach two different rows, whatever either then renders.
-    expect(laneDebate(snapshot.debates, lane)).toBe(
+    expect(laneDebate(snapshot, lane)).toBe(
       resolveTrace(snapshot, { instrument: 'SPY', traceId: null }).debate,
     );
-    expect(laneDebate(snapshot.debates, lane)?.debate_id).toBe('newest-spy');
+    expect(laneDebate(snapshot, lane)?.debate_id).toBe('newest-spy');
   });
 
   it('has no row for an instrument whose debates have left the window', () => {
     const lane = doneThrough('SPY', 'trace-spy', 'execution', { outcome: 'go' });
-    expect(laneDebate([makeDebate({ instrument: 'QQQ' })], lane)).toBeUndefined();
+    const snapshot = makeSnapshot({
+      pipeline: makeView([lane]),
+      debates: [makeDebate({ instrument: 'QQQ' })],
+    });
+    expect(laneDebate(snapshot, lane)).toBeUndefined();
+  });
+
+  /**
+   * #1597 review round 1: the guard moved INTO `laneDebate` so the matrix and
+   * the drawer cannot disagree on a control-arm snapshot either — before this
+   * round, only the `LiveTab.tsx` call site starved the array, so this
+   * function alone still returned the live arm's row for a control lane.
+   * Same instrument as the lane, matching the round-1 finding's own repro.
+   */
+  it('agrees with resolveTrace’s undefined on a control-arm snapshot, same instrument', () => {
+    const lane = doneThrough('SPY', 'trace-spy', 'execution', { outcome: 'go' });
+    const snapshot = makeSnapshot({
+      arm: 'control',
+      pipeline: makeView([lane]),
+      debates: [makeDebate({ debate_id: 'spy-newest', instrument: 'SPY' })],
+    });
+    expect(laneDebate(snapshot, lane)).toBeUndefined();
+    expect(laneDebate(snapshot, lane)).toBe(
+      resolveTrace(snapshot, { instrument: 'SPY', traceId: null }).debate,
+    );
   });
 });

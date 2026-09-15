@@ -111,13 +111,6 @@ function LaneRow(props: {
 function LaneList(props: LiveTabProps) {
   const { snapshot, selection, onSelect } = props;
   const lanes = snapshot.pipeline.lanes;
-  // `snapshot.debates` is always the live arm's debates (#1594's doc comment,
-  // `contracts/snapshot.ts`) and `laneDebate` matches by instrument alone, so
-  // reading it under the control arm would decorate a control lane's
-  // `debate` cell with the live arm's actual debate for the same instrument
-  // (#1597). The control arm structurally has no debate, so the join is
-  // starved rather than filtered.
-  const debates = snapshot.arm === 'control' ? [] : snapshot.debates;
   const running = lanes.filter((lane) => lane.outcome === 'in_flight').length;
   return (
     <section className="lanes" aria-label="Lanes">
@@ -146,7 +139,7 @@ function LaneList(props: LiveTabProps) {
             <LaneRow
               key={lane.instrument}
               lane={lane}
-              debate={laneDebate(debates, lane)}
+              debate={laneDebate(snapshot, lane)}
               selected={
                 selection !== null &&
                 selection.instrument === lane.instrument &&

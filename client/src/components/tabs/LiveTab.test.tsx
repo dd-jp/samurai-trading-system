@@ -9,7 +9,7 @@
 import { render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import type { Selection } from '../../lib/resolve-trace.ts';
-import { doneThrough, makeView } from '../../lib/test-support.ts';
+import { at, doneThrough, makeLane, makeView } from '../../lib/test-support.ts';
 import { makeDebate, makeRiskCritic, makeSnapshot } from '../../test-fixtures.ts';
 import { LiveTab } from './LiveTab.tsx';
 
@@ -65,16 +65,45 @@ describe('LiveTab — control arm', () => {
     expect(within(drawer).queryByText(/critic reject/)).toBeNull();
   });
 
-  it('shows the lane list with no debate cell decorated from the live arm’s debate log', () => {
+  /**
+   * #1597 review round 1: the prior version of this test only asserted a
+   * lane button exists, which passed identically whether or not `LaneList`'s
+   * arm guard on `laneDebate` actually ran — reverting the guard left the
+   * suite green. A degraded `debate` cell is the one place the joined row is
+   * OBSERVABLE on the matrix (`lane-cells.ts`'s `degradedText` appends the
+   * debate's own termination cause to a `budget_exhausted`/`timed_out_partial`
+   * decision's title), so this fixture gives the live arm's row a recorded
+   * cause the control lane must not inherit.
+   */
+  it('carries no debate decoration on the lane matrix, even when a live debate for the same instrument is degraded', () => {
     renderLive(
       makeSnapshot({
         arm: 'control',
-        pipeline: makeView([doneThrough('SPY', 'trace-spy', 'execution', { outcome: 'go' })]),
-        debates: [makeDebate({ debate_id: 'd1', instrument: 'SPY' })],
+        pipeline: makeView([
+          makeLane({
+            instrument: 'SPY',
+            trace_id: 'trace-spy',
+            outcome: 'stopped',
+            final_stage: 'debate',
+            cells: { debate: { state: 'done', decision: 'budget_exhausted', recorded_at: at(0) } },
+          }),
+        ]),
+        // Same instrument as the lane, with a recorded termination cause —
+        // proves the matrix reads no cause from the live arm's row, not
+        // merely that this fixture has none to read.
+        debates: [
+          makeDebate({
+            debate_id: 'd1',
+            instrument: 'SPY',
+            termination: 'latency_truncated',
+            termination_cause: 'budget',
+          }),
+        ],
       }),
       null,
     );
-    expect(screen.getByRole('button', { name: /SPY/ })).toBeTruthy();
+    const decision = screen.getByText(/budget_exhausted/);
+    expect(decision.title).not.toContain('latency budget exceeded');
   });
 });
 
