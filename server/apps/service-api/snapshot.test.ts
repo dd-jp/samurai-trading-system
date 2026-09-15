@@ -7,7 +7,7 @@
  * no setters, and the snapshot function calls only get-* methods.
  */
 
-import type { ExitClassWire } from '../../../contracts/index.js';
+import type { ExitClassWire, PnlHeadlineWire } from '../../../contracts/index.js';
 import { CONTRACT_VERSION, EXIT_CLASSES_WIRE } from '../../../contracts/index.js';
 import type { ExitClass } from '../../pipeline/control-arm/index.js';
 import { EXIT_CLASSES } from '../../pipeline/control-arm/index.js';
@@ -1286,6 +1286,19 @@ describe('buildSnapshot', () => {
       expect(snap.pnl_headline.overall.net_gbp).not.toBe(0);
       expect(typeof snap.pnl_headline.overall.max_drawdown_pct).toBe('number');
       expect(Number.isFinite(snap.pnl_headline.overall.max_drawdown_pct)).toBe(true);
+
+      // The runtime asserts above pass even if max_drawdown_pct were hardcoded
+      // to 0 — dashboard-spec.md's own convention for this obligation (line
+      // 588, the arm-comparison panel) is a compile-time proof instead, so add
+      // one here too: if `overall.max_drawdown_pct` were ever loosened to
+      // optional, this stops erroring and the file fails to type-check.
+      // @ts-expect-error — an `overall` without `max_drawdown_pct` must not type-check.
+      const returnOnly: PnlHeadlineWire['overall'] = {
+        net_gbp: 500,
+        pct_of_book: 0.5,
+        trade_count: 1,
+      };
+      expect(returnOnly.net_gbp).toBe(500);
     });
   });
 });

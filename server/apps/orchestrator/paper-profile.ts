@@ -465,6 +465,14 @@ export const LIVE_BOOK_GBP = 1_000;
 export const SIZING_USD_PER_GBP = 1.27;
 
 /**
+ * The one sentence naming `SIZING_USD_PER_GBP`'s provenance, shared so
+ * `production.ts`'s `usd_per_gbp_provenance` and the dashboard's
+ * `pnl_headline.conversion.source` (`snapshot.ts`) state the same rate
+ * origin rather than two independently hand-kept copies drifting apart.
+ */
+export const USD_PER_GBP_PROVENANCE = 'SIZING_USD_PER_GBP (paper-profile.ts), configured constant';
+
+/**
  * `LIVE_BOOK_GBP` in the currency `portfolio.equity` is denominated in — the
  * one converted quantity that reaches the Trader's sizing inlet (#1180).
  *

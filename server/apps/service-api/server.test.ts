@@ -259,6 +259,12 @@ describe('bundleContentType', () => {
  * #1592: a store whose `getOpenPositions`/`getRecentClosedTrades` actually
  * differ by arm — `InMemoryQueryStore`'s fixture data does not vary by arm,
  * so it cannot prove the HTTP layer threads `?arm=` through to the store.
+ *
+ * `getAllClosedTrades` (#1595) is overridden too, and NOT just suffixed like
+ * the other two: `pnl_headline` carries no `idempotency_key`, so a
+ * suffix-only override would leave its figures identical for both arms and
+ * prove nothing. Control is scoped to one trade instead, so
+ * `pnl_headline.overall.trade_count` actually differs by arm below.
  */
 class TwoArmQueryStore extends InMemoryQueryStore {
   override getOpenPositions(asOf: Date, arm: 'live' | 'control') {
@@ -273,6 +279,12 @@ class TwoArmQueryStore extends InMemoryQueryStore {
       ...t,
       idempotency_key: `${t.idempotency_key}-${arm}`,
     }));
+  }
+
+  override getAllClosedTrades(asOf: Date, arm: 'live' | 'control') {
+    const all = super.getAllClosedTrades(asOf, arm);
+    const scoped = arm === 'control' ? all.slice(0, 1) : all;
+    return scoped.map((t) => ({ ...t, idempotency_key: `${t.idempotency_key}-${arm}` }));
   }
 }
 
@@ -315,6 +327,20 @@ describe('dashboard server — arm scoping (#1592)', () => {
     expect(snap.arm).toBe('control');
     expect(snap.positions.every((p) => p.idempotency_key.endsWith('-control'))).toBe(true);
     expect(snap.closed_trades.every((t) => t.idempotency_key.endsWith('-control'))).toBe(true);
+  });
+
+  it('scopes pnl_headline to the requested arm too, not just positions/closed_trades', async () => {
+    const liveR = await fetch(`${armBase}/api/snapshot?arm=live`, { cache: 'no-store' });
+    const liveSnap = (await liveR.json()) as { pnl_headline: { overall: { trade_count: number } } };
+
+    const controlR = await fetch(`${armBase}/api/snapshot?arm=control`, { cache: 'no-store' });
+    const controlSnap = (await controlR.json()) as {
+      pnl_headline: { overall: { trade_count: number } };
+    };
+
+    expect(controlSnap.pnl_headline.overall.trade_count).not.toBe(
+      liveSnap.pnl_headline.overall.trade_count,
+    );
   });
 
   it('serves the live arm on the explicit ?arm=live, same as the default', async () => {

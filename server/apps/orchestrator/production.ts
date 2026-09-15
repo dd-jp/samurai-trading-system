@@ -254,7 +254,7 @@ import { orderHeldFirst } from './flatten-tail-priority.js';
 import { Heartbeat } from './heartbeat.js';
 import { JsonLogger } from './logger.js';
 import type { OrphanGoVerdict, OrphanVerdictScanner } from './orphan-verdict-scan.js';
-import { LIVE_BOOK_SIZING_USD } from './paper-profile.js';
+import { LIVE_BOOK_SIZING_USD, USD_PER_GBP_PROVENANCE } from './paper-profile.js';
 import { alpacaFunding, BrokerAccountStateProvider } from './production/account-state.js';
 import { buildAnalystsStep, composeMarketIntelligence } from './production/analysts-adapter.js';
 import { prefetchBars } from './production/bar-prefetch.js';
@@ -1064,7 +1064,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
           ? {}
           : {
               usd_per_gbp: config.capitalCeilingUsdPerGbp,
-              usd_per_gbp_provenance: 'SIZING_USD_PER_GBP (paper-profile.ts), configured constant',
+              usd_per_gbp_provenance: USD_PER_GBP_PROVENANCE,
             }),
       },
     });

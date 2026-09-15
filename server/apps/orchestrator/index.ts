@@ -175,6 +175,7 @@ export {
   paperStartingProfile,
   RISK_CAP_EQUITY_FRACTIONS,
   SIZING_USD_PER_GBP,
+  USD_PER_GBP_PROVENANCE,
 } from './paper-profile.js';
 export {
   ALERT_AFTER_CONSECUTIVE_SKIPS,

@@ -23,7 +23,11 @@ import type { Mark } from '../../providers/market-data-service/index.js';
 import type { ClosedTrade, Fill, TradingArm } from '../../shared/index.js';
 import { isExitFill, totalQty, weightedAvgPrice } from '../../shared/index.js';
 import type { StoreMode } from '../../shared/store/index.js';
-import { LIVE_BOOK_GBP, SIZING_USD_PER_GBP } from '../orchestrator/index.js';
+import {
+  LIVE_BOOK_GBP,
+  SIZING_USD_PER_GBP,
+  USD_PER_GBP_PROVENANCE,
+} from '../orchestrator/index.js';
 import { buildPipelineView, PIPELINE_LOOKBACK_MS, PIPELINE_MAX_LANES } from './pipeline-query.js';
 import { buildPnlHeadline } from './pnl-headline.js';
 import { NULL_PROVIDER_STATUS, type ProviderStatusReader } from './provider-status.js';
@@ -42,11 +46,11 @@ import type {
 } from './types.js';
 
 /**
- * Matches `production.ts`'s `usd_per_gbp_provenance` string exactly — one
- * sentence naming the same constant, so an operator reading either surface
- * sees the same provenance rather than two names for one rate.
+ * `production.ts`'s `usd_per_gbp_provenance` is the same exported constant,
+ * not a hand-kept second copy — an operator reading either surface sees the
+ * same provenance sentence rather than two names for one rate.
  */
-const USD_PER_GBP_SOURCE = 'SIZING_USD_PER_GBP (paper-profile.ts), configured constant';
+const USD_PER_GBP_SOURCE = USD_PER_GBP_PROVENANCE;
 
 /** Matches the CLI views' default recent-history window; no config surface yet. */
 const RECENT_DEBATES_LIMIT = 10;

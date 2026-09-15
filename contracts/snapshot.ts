@@ -192,7 +192,11 @@ export interface ArmPerformanceWire {
  * return-only headline, enforced by making this field required exactly as
  * that one is). Open unrealized P&L is a mark-to-market snapshot, not a
  * point on the realized series a drawdown is measured against, so it moves
- * `overall.net_gbp` without moving `overall.max_drawdown_pct`.
+ * `overall.net_gbp` without moving `overall.max_drawdown_pct`. Named case: an
+ * arm with zero closed trades and a large open LOSS reports a nonzero
+ * (negative) `overall.net_gbp` beside `overall.max_drawdown_pct: 0` — there is
+ * no realized series yet to have fallen from a peak. Matches
+ * `ArmPerformanceWire`'s existing convention, not a new gap.
  *
  * `today` has NO drawdown field — a single Europe/London calendar day's
  * realized-plus-unrealized total is not a return series to measure a fall
@@ -203,6 +207,45 @@ export interface ArmPerformanceWire {
  * `today.costs_gbp` is already included inside `today.realized_gbp` (fees are
  * netted into `realized_pnl_net` at the source), carried alongside it so the
  * drag from costs is visible rather than folded away.
+ *
+ * ## Population: every closed row this arm has, not the comparable subset
+ *
+ * `overall`/`today` are built from **every** `closed_trades` row for the arm
+ * (`getAllClosedTrades`) — deliberately NOT the same population the Feedback
+ * Loop's arm-comparison figure (`ArmPerformanceWire`,
+ * `sqlite-arm-comparison-source.ts`) uses. That figure first drops rows
+ * outside the current sizing regime (`oneSizingRegime`) and rows whose fee
+ * was never brought onto the two arms' shared cost basis
+ * (`modelledCostCharged`, #1121) — filters that exist to make live and
+ * control COMPARABLE, not to make either arm's own number accurate. This
+ * headline answers a different question — "what did this arm actually net"
+ * — so it keeps every row a real fill produced.
+ *
+ * This is a deliberate choice, not an oversight, for two reasons:
+ *
+ * 1. `modelledCostCharged` alone can gut a population to a handful of rows —
+ *    its own doc (`sqlite-arm-comparison-source.ts`) records that it "can
+ *    gut the live arm's `trade_count` to 0", historically (pre-#1121
+ *    backfill) and on an ONGOING basis (a lot whose submit-time cost capture
+ *    fails still stamps uncharged today). Applying it here would let Glance
+ *    show "£0.00 · 0 trades" for an arm that in fact closed real, filled
+ *    trades — a worse misrepresentation to the person reading Glance than a
+ *    cost-optimistic total.
+ * 2. Full parity with the FL figure also needs `oneSizingRegime`, which
+ *    filters on `sizing_capital_ceiling` — a column `ClosedTradeRow`/
+ *    `ClosedTrade` do not carry (unlike `modelled_cost_charged`, which is
+ *    projected onto `ClosedTrade` and could be filtered here). Filtering on
+ *    `modelledCostCharged` alone would drop real trades AND still not
+ *    reproduce the FL number, so it would fail both the "accurate" and the
+ *    "matches the comparison panel" goals at once.
+ *
+ * Direction, not just divergence: an uncharged live row is missing a real
+ * cost the matched control always pays, so `ArmPerformanceWire`'s
+ * FL-comparison figure for the live arm is cost-conservative relative to
+ * this headline — this headline can therefore read BETTER (less loss / more
+ * gain) than the arm-comparison panel's figure for the same arm and window.
+ * The two are never interchangeable and a reader comparing them literally is
+ * comparing an all-rows actual to a comparison-filtered estimate.
  */
 export interface PnlHeadlineWire {
   overall: {

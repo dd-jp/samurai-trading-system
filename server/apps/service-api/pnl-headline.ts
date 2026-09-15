@@ -9,6 +9,12 @@
  * `getAllClosedTrades`) and this arm's already-computed open unrealized P&L
  * (`positions[].unrealized_pnl`, summed) so this module stays a pure function
  * with no store access of its own.
+ *
+ * Shares the derivation, NOT the row population, with the FL's
+ * `ArmPerformanceWire` figure — `getAllClosedTrades` is every row for the
+ * arm, unfiltered by `oneSizingRegime`/`modelledCostCharged`. See
+ * `PnlHeadlineWire`'s header (`contracts/snapshot.ts`) for why, and which way
+ * the two figures can diverge.
  */
 import { cumulativePnlAndDrawdown } from '../../pipeline/control-arm/index.js';
 import { LONDON_ZONE, toCivilDate } from '../../providers/market-data-service/index.js';

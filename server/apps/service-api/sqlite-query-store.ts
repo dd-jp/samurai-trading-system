@@ -286,7 +286,10 @@ export class SqliteQueryStore implements DashboardQueryStore {
   /**
    * EVERY closed trade for one arm, up through `asOf` (#1595) — deliberately
    * unbounded, unlike `getRecentClosedTrades` above: the all-time P&L headline
-   * needs the whole population, not the 3-second-poll window.
+   * needs the whole population, not the 3-second-poll window. Also unfiltered
+   * by sizing regime or cost-basis — see `PnlHeadlineWire`'s header
+   * (`contracts/snapshot.ts`) for why this population differs from the FL
+   * arm-comparison figure's.
    */
   getAllClosedTrades(asOf: Date, arm: TradingArm): ClosedTrade[] {
     const rows = this.db
