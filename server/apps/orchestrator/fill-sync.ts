@@ -178,6 +178,13 @@ function reconcileDivergenceLevel(divergence: ReconcileDivergence): LogLevel {
  * value, distinct from the benign action AND from each other — a row cancelled
  * and still short of coverage is not the same fact as the same row merely
  * throttled from an earlier cancel.
+ *
+ * Shared with `lastSweepAction`'s loop below (#1615) — that loop used to
+ * compare bare `action` on its own, which is the identical collision for a
+ * different source: `sweepResidualProtection`'s (residual-protection-sweep.ts)
+ * six push sites all share `action: 'undetermined'` and `kind: 'sweep'`, so a
+ * lot moving between two of them logged only the first. One function, so the
+ * two loops cannot drift on what "same dedup state" means.
  */
 function reconcileDedupState(divergence: ReconcileDivergence): string {
   return divergence.escalation
@@ -337,12 +344,21 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
    * Per-lot dedup for the sweep-divergence log line (#549 review, #342's
    * repeated-line lesson): a lot stuck `undetermined` is returned by EVERY
    * pass, and a warn re-fired on every poll cadence indefinitely is a line
-   * nobody reads. Logged on first observation and on state TRANSITIONS
-   * (`undetermined` -> `adopted` and vice versa) only; a lot that leaves the
-   * sweep's report is forgotten here, so a LATER episode on the same lot
-   * logs afresh — the same episode scoping the durable alert dedup uses.
-   * In-memory deliberately: this dedups a log line, not the page, and a
-   * restart re-logging current state once is a feature.
+   * nobody reads. Logged on first observation and on state TRANSITIONS only;
+   * a lot that leaves the sweep's report is forgotten here, so a LATER
+   * episode on the same lot logs afresh — the same episode scoping the
+   * durable alert dedup uses. In-memory deliberately: this dedups a log
+   * line, not the page, and a restart re-logging current state once is a
+   * feature.
+   *
+   * Keyed on `reconcileDedupState()` (#1615), not bare `action`, for the
+   * same reason `lastReconcileAction` below is: `sweepResidualProtection`'s
+   * (residual-protection-sweep.ts) six push sites all share
+   * `action: 'undetermined'`, so a bare-`action` key logged only the first of
+   * whichever one a lot hit first and stayed silent through every later,
+   * distinct one — the transition this map exists to report. Naming what
+   * "state" means here was previously just `action`; it is now this file's
+   * one dedup-state shape, matching `lastReconcileAction`'s.
    */
   const lastSweepAction = new Map<string, string>();
   /**
@@ -440,9 +456,10 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
         const reportedThisPass = new Set<string>();
         for (const divergence of sweep.divergences) {
           reportedThisPass.add(divergence.idempotency_key);
+          const dedupState = reconcileDedupState(divergence);
           // Repeat pass, same state: already logged — see `lastSweepAction`.
-          if (lastSweepAction.get(divergence.idempotency_key) === divergence.action) continue;
-          lastSweepAction.set(divergence.idempotency_key, divergence.action);
+          if (lastSweepAction.get(divergence.idempotency_key) === dedupState) continue;
+          lastSweepAction.set(divergence.idempotency_key, dedupState);
           deps.logger.log({
             trace_id: deps.fillSyncTraceId,
             stage: 'execution',

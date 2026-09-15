@@ -181,6 +181,7 @@ export async function sweepResidualProtection(
         // pass here and leave every later marked lot naked, which is the one
         // thing this loop's containment exists to prevent.
         reason: `residual-protection sweep failed: ${describeThrownSafely(error)}`,
+        escalation: 'residual_sweep_lot_unsettled',
       });
     }
   }
@@ -239,6 +240,7 @@ async function sweepOne(
       reason: `marked residual could not be recomputed (fill read failed): ${describeThrownSafely(
         error,
       )}`,
+      escalation: 'residual_sweep_size_read_failed',
     };
   }
 
@@ -288,6 +290,7 @@ async function sweepOne(
       reason:
         `marked residual recomputes to ${residual} (non-finite or non-positive) while the fill ` +
         'record reads not-flat — refusing to re-arm a garbage quantity; check the store by hand',
+      escalation: 'residual_sweep_garbage_residual',
     };
   }
 
@@ -359,6 +362,7 @@ async function sweepOne(
           action: 'undetermined',
           kind: 'sweep',
           reason: reflatten.detail,
+          escalation: 'residual_sweep_reflatten_in_flight',
         };
       }
       if (reflatten.kind === 'submitted') {
@@ -377,6 +381,7 @@ async function sweepOne(
             `this lot can never be re-armed, so residual ${residual} was CLOSED instead ` +
             `(#1214): market order '${reflatten.idempotency_key}' is live at the venue and the ` +
             'marker clears when its fill lands',
+          escalation: 'residual_sweep_reflatten_submitted',
         };
       }
     }
@@ -394,6 +399,16 @@ async function sweepOne(
           `be closed either — see the residual_reflatten_* log line for which gate stood the ` +
           `re-flatten down: ${describeThrownSafely(error)}`
         : `re-arm retry failed for residual ${residual}: ${describeThrownSafely(error)}`,
+      // Two escalation values for one push site, not one: `unsupported` is
+      // `sweepOne`'s own permanent-vs-retryable distinction (this file's
+      // "no pass can ever re-arm" doc), and a failing lot's ordinary retries
+      // exhaust its re-arm budget and land here `unsupported` on a LATER
+      // pass — a shared value would dedup that transition away as "same
+      // state" (#1615), collapsing a page-worthy permanent gap into the
+      // retryable line a prior pass already logged.
+      escalation: unsupported
+        ? 'residual_sweep_rearm_unsupported'
+        : 'residual_sweep_rearm_retry_failed',
     };
   }
 

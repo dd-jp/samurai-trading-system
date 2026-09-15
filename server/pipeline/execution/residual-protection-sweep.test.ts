@@ -545,6 +545,9 @@ describe('residual-protection sweep (#549)', () => {
     expect(result.divergences).toHaveLength(1);
     expect(result.divergences[0]?.action).toBe('undetermined');
     expect(result.divergences[0]?.reason).toMatch(/was CLOSED instead/);
+    // #1615: distinct from the reflatten-in-flight/rearm-unsupported rows,
+    // which share `action`/`kind` with this one.
+    expect(result.divergences[0]?.escalation).toBe('residual_sweep_reflatten_submitted');
     // Still marked: the order is live, not filled. The marker clears when the
     // fill lands and the lot reads flat.
     expect(
@@ -591,6 +594,9 @@ describe('residual-protection sweep (#549)', () => {
       }),
     );
     expect(result.divergences[0]?.reason).toMatch(/could not be closed either/);
+    // #1615: distinct from the ordinary-retry-failure escalation, which
+    // shares `action`/`kind` with this row but is retryable, not permanent.
+    expect(result.divergences[0]?.escalation).toBe('residual_sweep_rearm_unsupported');
   });
 
   it('stands down while a flatten on the same instrument is still unresolved (#1214)', async () => {
@@ -647,7 +653,7 @@ describe('residual-protection sweep (#549)', () => {
     const logger = recordingLogger();
     const execution = new ExecutionImpl(makeInput(broker, restartedStore, alerts, logger));
 
-    await execution.sweepResidualProtection();
+    const result = await execution.sweepResidualProtection();
 
     expect(broker.flattenCalls).toEqual([]);
     expect(alerts.alerts).toEqual([]);
@@ -662,6 +668,9 @@ describe('residual-protection sweep (#549)', () => {
         payload: expect.objectContaining({ reason: 'own_reflatten_in_flight' }),
       }),
     );
+    // #1615: distinct from the shut-venue/other-flatten-in-flight page below,
+    // which shares `action: 'undetermined'`/`kind: 'sweep'` with this row.
+    expect(result.divergences[0]?.escalation).toBe('residual_sweep_reflatten_in_flight');
   });
 
   it('prefers this lot’s OWN re-flatten when several unresolved rows name the instrument (#1214 review round 2, finding 6)', async () => {
@@ -936,6 +945,10 @@ describe('residual-protection sweep (#549)', () => {
     const result = await execution.sweepResidualProtection();
 
     expect(result.divergences[0]?.reason).toMatch(/re-arm retry failed/);
+    // #1615: distinct from the permanently-unsupported branch below this
+    // one shares `action`/`kind` with — an ordinary retryable failure must
+    // not dedup away a later pass's permanent-gap escalation on the same lot.
+    expect(result.divergences[0]?.escalation).toBe('residual_sweep_rearm_retry_failed');
     expect(alerts.alerts[0]).toMatchObject({ rearm_unsupported: false });
     // #1214 is scoped to a PERMANENT gap. An ordinary failure is still a
     // retry, and a market order must not be spent on one.
@@ -1130,6 +1143,10 @@ describe('residual-protection sweep (#549)', () => {
       const failed = result.divergences.find((entry) => entry.idempotency_key === FIRST);
       expect(failed?.action).toBe('undetermined');
       expect(failed?.reason).toContain('[unrenderable error]');
+      // #1615: this outer-catch row must carry its own escalation, distinct
+      // from every other `action: 'undetermined'`/`kind: 'sweep'` row this
+      // file can push.
+      expect(failed?.escalation).toBe('residual_sweep_lot_unsettled');
     });
 
     it('pages the upper-bound requested_size and keeps the marker when the fill read fails', async () => {
@@ -1161,6 +1178,9 @@ describe('residual-protection sweep (#549)', () => {
       // No re-arm was attempted off a figure that could not be computed.
       expect(broker.rearmCalls).toEqual([]);
       expect(result.divergences.map((entry) => entry.action)).toEqual(['undetermined']);
+      // #1615: distinct from every other `action: 'undetermined'`/
+      // `kind: 'sweep'` row this file can push.
+      expect(result.divergences[0]?.escalation).toBe('residual_sweep_size_read_failed');
       // The marker stays for the next pass's fresh read.
       expect(
         (await failingStore.getResidualProtectionMarker(LOT))?.unprotected_since,
@@ -1218,6 +1238,9 @@ describe('residual-protection sweep (#549)', () => {
       expect(result.divergences.map((entry) => entry.action)).toEqual(['undetermined']);
       expect(result.divergences.map((entry) => entry.kind)).toEqual(['sweep']);
       expect(result.divergences[0]?.reason).toContain('NaN');
+      // #1615: distinct from every other `action: 'undetermined'`/
+      // `kind: 'sweep'` row this file can push.
+      expect(result.divergences[0]?.escalation).toBe('residual_sweep_garbage_residual');
       expect(
         (await garbageStore.getResidualProtectionMarker(LOT))?.unprotected_since,
       ).not.toBeNull();

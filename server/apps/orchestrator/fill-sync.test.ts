@@ -351,6 +351,60 @@ describe('startFillSync', () => {
 
       await sync.stop();
     });
+
+    // #1615: `sweepResidualProtection`'s six push sites all share
+    // `action: 'undetermined'` and `kind: 'sweep'`; before this fix
+    // `lastSweepAction` compared bare `action` alone, so a lot that moved
+    // between two of them (a garbage-residual pass, then a genuinely
+    // unsupported re-arm) would have deduped the second as "same state" and
+    // never logged it.
+    it('logs two different residual-sweep escalations on the same lot as distinct episodes, not deduped as one', async () => {
+      const logger = makeLogger();
+      const base = {
+        idempotency_key: 'key-nvda-9001',
+        instrument: 'NVDA',
+        store_state: 'partially_filled' as const,
+        broker_state: null,
+        action: 'undetermined' as const,
+        kind: 'sweep' as const,
+      };
+      const garbageResidual = {
+        ...base,
+        reason: 'marked residual recomputes to -1 (non-finite or non-positive)',
+        escalation: 'residual_sweep_garbage_residual' as const,
+      };
+      const rearmUnsupported = {
+        ...base,
+        reason: 'this lot can never be re-armed and the residual could not be closed either',
+        escalation: 'residual_sweep_rearm_unsupported' as const,
+      };
+      const execution = makeExecution({
+        sweepResidualProtection: vi
+          .fn()
+          .mockResolvedValueOnce({ checked: 1, divergences: [garbageResidual] })
+          .mockResolvedValueOnce({ checked: 1, divergences: [rearmUnsupported] })
+          .mockResolvedValue({ checked: 0, divergences: [] }),
+      });
+      const sync = startFillSync({
+        execution,
+        clock: { now: () => new Date() },
+        logger,
+        fillPollIntervalMs: 1_000,
+        reconcileTraceId: 'test-reconcile',
+        fillSyncTraceId: 'test-fill-sync',
+      });
+
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      const divergenceLines = logger.entries.filter(
+        (entry) => entry.message === 'residual-protection sweep divergence',
+      );
+      expect(
+        divergenceLines.map((entry) => (entry.payload as { escalation?: string }).escalation),
+      ).toEqual(['residual_sweep_garbage_residual', 'residual_sweep_rearm_unsupported']);
+
+      await sync.stop();
+    });
   });
 
   // #921: `reconcile()` moves from startup-only to also running on every
