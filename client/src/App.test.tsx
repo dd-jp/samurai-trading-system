@@ -906,3 +906,128 @@ describe('dashboard token from the URL (#1038)', () => {
     }
   });
 });
+
+/**
+ * #1593: the rail's Live/Control selector, the hash it lives in beside the
+ * tab, and the Control banner. `App.tsx`'s `ArmView` is keyed by `arm`, so
+ * switching arms remounts the whole snapshot-derived subtree rather than
+ * mutating it in place — the tests below that assert the PREVIOUS arm's data
+ * is gone, not just joined by the new arm's, are the mutation evidence for
+ * that: they fail against a version that swaps `snapshot` in place inside one
+ * `useSnapshot` call (a plausible, WRONG first implementation) whenever that
+ * version's poll for the new arm has not landed yet, because the old arm's
+ * numbers would still be on screen instead of the cold start.
+ */
+describe('arm selector (#1593)', () => {
+  /** Routes a fake poll by whether its URL asked for the control arm. */
+  function fetchByArm(payloads: { live: unknown; control: unknown }): typeof fetch {
+    const impl = async (input: unknown): Promise<Response> => {
+      const url = typeof input === 'string' ? input : String(input);
+      const payload = url.includes('arm=control') ? payloads.control : payloads.live;
+      if (payload === HANGS) return new Promise<Response>(() => {});
+      return { ok: true, status: 200, json: async () => payload } as Response;
+    };
+    return impl as unknown as typeof fetch;
+  }
+
+  it('opens on Live with no hash, and there is no Control banner', async () => {
+    renderApp([makeSnapshot()]);
+    await screen.findByRole('tab', { name: 'Glance' });
+    expect(window.location.hash).toBe('');
+    expect(screen.getByRole('button', { name: 'Live arm, selected' })).toBeTruthy();
+    expect(screen.queryByText(/CONTROL ARM/)).toBeNull();
+  });
+
+  it('writes the arm into the hash beside the tab, and the banner follows onto every tab', async () => {
+    renderApp([makeSnapshot()]);
+    await screen.findByRole('tab', { name: 'Glance' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Control arm' }));
+    expect(window.location.hash).toBe('#glance/control');
+    expect(await screen.findByText('CONTROL ARM — simulated fills, no money')).toBeTruthy();
+
+    await openTab('Live');
+    expect(window.location.hash).toBe('#live/control');
+    expect(screen.getByText('CONTROL ARM — simulated fills, no money')).toBeTruthy();
+
+    await openTab('Review');
+    expect(window.location.hash).toBe('#review/control');
+    expect(screen.getByText('CONTROL ARM — simulated fills, no money')).toBeTruthy();
+
+    // Round trip back to Live: no second segment, not `#review/live`.
+    fireEvent.click(screen.getByRole('button', { name: 'Live arm' }));
+    await waitFor(() => expect(screen.queryByText(/CONTROL ARM/)).toBeNull());
+    expect(window.location.hash).toBe('#review');
+  });
+
+  it('never renders the banner in Live, on any tab', async () => {
+    renderApp([makeSnapshot()]);
+    await openTab('Live');
+    expect(screen.queryByText(/CONTROL ARM/)).toBeNull();
+    await openTab('Review');
+    expect(screen.queryByText(/CONTROL ARM/)).toBeNull();
+  });
+
+  it('boots straight into Control when the hash names it — a reload keeps the arm', async () => {
+    window.history.replaceState(null, '', '#review/control');
+    renderApp([makeSnapshot()]);
+
+    expect(await screen.findByText('CONTROL ARM — simulated fills, no money')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Control arm, selected' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Closed trades' })).toBeTruthy();
+  });
+
+  it('reads an unrecognised arm hash segment as Live', async () => {
+    window.history.replaceState(null, '', '#glance/bogus');
+    renderApp([makeSnapshot()]);
+
+    await screen.findByRole('tab', { name: 'Glance' });
+    expect(screen.getByRole('button', { name: 'Live arm, selected' })).toBeTruthy();
+    expect(screen.queryByText(/CONTROL ARM/)).toBeNull();
+  });
+
+  it('polls ?arm=control only once Control is selected, and drops the live arm’s data once Control’s own snapshot lands', async () => {
+    const liveSnapshot = makeSnapshot({ positions: [makePosition({ instrument: 'LIVE-ONLY' })] });
+    const controlSnapshot = makeSnapshot({
+      positions: [makePosition({ instrument: 'CONTROL-ONLY' })],
+    });
+    render(
+      <App
+        snapshotOptions={{
+          fetchImpl: fetchByArm({ live: liveSnapshot, control: controlSnapshot }),
+          intervalMs: POLL_MS,
+        }}
+      />,
+    );
+
+    const openRisk = await screen.findByRole('region', { name: 'Open risk' });
+    expect(within(openRisk).getByText('LIVE-ONLY')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Control arm' }));
+
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole('region', { name: 'Open risk' })).getByText('CONTROL-ONLY'),
+      ).toBeTruthy(),
+    );
+    expect(screen.queryByText('LIVE-ONLY')).toBeNull();
+  });
+
+  it('cold-starts on switching to Control while its first poll hangs, rather than leaving the live arm’s numbers on screen', async () => {
+    const liveSnapshot = makeSnapshot({ positions: [makePosition({ instrument: 'LIVE-ONLY' })] });
+    render(
+      <App
+        snapshotOptions={{
+          fetchImpl: fetchByArm({ live: liveSnapshot, control: HANGS }),
+          intervalMs: POLL_MS,
+        }}
+      />,
+    );
+
+    await screen.findByText('LIVE-ONLY');
+    fireEvent.click(screen.getByRole('button', { name: 'Control arm' }));
+
+    expect(await screen.findByText('waiting for the first snapshot')).toBeTruthy();
+    expect(screen.queryByText('LIVE-ONLY')).toBeNull();
+  });
+});

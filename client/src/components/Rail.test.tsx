@@ -5,8 +5,9 @@
  * snapshot — those are two different clocks, and a stall in one must not
  * read as freshness in the other.
  */
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import type { TradingArmWire } from '@contracts';
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import type { LiveFeed } from '../hooks/useSnapshot.ts';
 import { makeMetrics, makeSnapshot } from '../test-fixtures.ts';
 import { Rail } from './Rail.tsx';
@@ -35,7 +36,11 @@ function makeFeed(overrides: Partial<LiveFeed> = {}): LiveFeed {
 }
 
 function renderRail(feed: LiveFeed) {
-  return render(<Rail feed={feed} tab="glance" onTab={() => {}} />);
+  return render(<Rail feed={feed} tab="glance" onTab={() => {}} arm="live" onArm={() => {}} />);
+}
+
+function renderRailArm(arm: TradingArmWire, onArm: (next: TradingArmWire) => void) {
+  return render(<Rail feed={makeFeed()} tab="glance" onTab={() => {}} arm={arm} onArm={onArm} />);
 }
 
 describe('Rail — poll clock', () => {
@@ -59,6 +64,8 @@ describe('Rail — poll clock', () => {
         feed={makeFeed({ lastSuccessAt: '2026-08-07T12:00:35.000Z' })}
         tab="glance"
         onTab={() => {}}
+        arm="live"
+        onArm={() => {}}
       />,
     );
 
@@ -340,5 +347,63 @@ describe('Rail — drawdown meter', () => {
     expect(
       screen.getByText('daily suite drawdown figure could not be read — meter not drawable'),
     ).toBeTruthy();
+  });
+});
+
+/**
+ * #1593: the arm selector's accessible name carries the selection state
+ * itself (AC), not a separate `aria-selected`/`aria-pressed` an operator has
+ * to cross-reference — so these tests read names, the same posture the rest
+ * of this file's `getByRole(..., { name })` assertions already take.
+ */
+describe('Rail — arm selector', () => {
+  it('names Live as selected and Control as not, when arm is live', () => {
+    renderRailArm('live', () => {});
+
+    const liveButton = screen.getByRole('button', { name: 'Live arm, selected' });
+    expect(liveButton).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Control arm' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Control arm, selected' })).toBeNull();
+
+    // Colour alone never carries selection (dashboard-spec.md:310/:560) — the
+    // selected arm also carries a visible word, not just `.arm-btn-on`.
+    expect(within(liveButton).getByText('· selected')).toBeTruthy();
+    expect(
+      within(screen.getByRole('button', { name: 'Control arm' })).queryByText('· selected'),
+    ).toBeNull();
+  });
+
+  it('names Control as selected and Live as not, when arm is control', () => {
+    renderRailArm('control', () => {});
+
+    const controlButton = screen.getByRole('button', { name: 'Control arm, selected' });
+    expect(controlButton).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Live arm' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Live arm, selected' })).toBeNull();
+
+    expect(within(controlButton).getByText('· selected')).toBeTruthy();
+    expect(
+      within(screen.getByRole('button', { name: 'Live arm' })).queryByText('· selected'),
+    ).toBeNull();
+  });
+
+  it('is reachable and operable by keyboard — a native button needs no roving tabindex', () => {
+    const onArm = vi.fn();
+    renderRailArm('live', onArm);
+
+    const control = screen.getByRole('button', { name: 'Control arm' });
+    control.focus();
+    expect(document.activeElement).toBe(control);
+    fireEvent.click(control);
+    expect(onArm).toHaveBeenCalledWith('control');
+  });
+
+  it('calls onArm with the clicked arm, not the current one', () => {
+    const onArm = vi.fn();
+    renderRailArm('control', onArm);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Live arm' }));
+    expect(onArm).toHaveBeenCalledWith('live');
+    expect(onArm).not.toHaveBeenCalledWith('control');
   });
 });

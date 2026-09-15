@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { makeMetrics, makeSnapshot } from '../test-fixtures.ts';
-import { RECOGNISED_MODES, toWireSnapshot } from './useSnapshot.ts';
+import { RECOGNISED_MODES, snapshotUrl, toWireSnapshot } from './useSnapshot.ts';
 
 /** A payload as it comes off `response.json()`: untyped, possibly wrong. */
 function raw(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -257,5 +257,26 @@ describe('toWireSnapshot', () => {
       const body = raw({ metrics: { ...makeMetrics(), profit_factor: malformed } });
       expect(toWireSnapshot(body)?.metrics.profit_factor).toEqual({ kind: 'unreadable' });
     });
+  });
+});
+
+/**
+ * #1593: the URL a poll actually fetches. `undefined` and `'live'` must be
+ * the SAME request as before this option existed — a byte-for-byte identical
+ * string, not merely an equivalent one the server happens to answer the same
+ * way — because the default, no-arm-selected dashboard must not change its
+ * request shape at all.
+ */
+describe('snapshotUrl', () => {
+  it('leaves the URL untouched when arm is undefined', () => {
+    expect(snapshotUrl('/api/snapshot')).toBe('/api/snapshot');
+  });
+
+  it('leaves the URL untouched when arm is explicitly live', () => {
+    expect(snapshotUrl('/api/snapshot', 'live')).toBe('/api/snapshot');
+  });
+
+  it('appends ?arm=control only for the control arm', () => {
+    expect(snapshotUrl('/api/snapshot', 'control')).toBe('/api/snapshot?arm=control');
   });
 });

@@ -28,6 +28,7 @@ import {
   type LlmSpendSummary,
   type MetricsSuiteWire,
   type ProfitFactorWire,
+  type TradingArmWire,
   toProfitFactorWire,
 } from '@contracts';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -268,6 +269,31 @@ export interface UseSnapshotOptions {
    * identical to before this option existed.
    */
   authToken?: string | null;
+  /**
+   * Which arm's `positions`/`closed_trades` to poll for (#1593). `undefined`
+   * and `'live'` are the same request — see `snapshotUrl` — so a caller that
+   * never heard of arms still sends the pre-#1592 request byte-for-byte.
+   */
+  arm?: TradingArmWire;
+}
+
+/**
+ * The URL a poll actually fetches. `arm=control` is appended ONLY for the
+ * control arm — every other case (`undefined`, `'live'`) leaves `url`
+ * untouched, so the default dashboard's request stays byte-for-byte the same
+ * shape it was before this option existed (the same posture `authToken`'s
+ * header takes above). The server's own default is `'live'` too
+ * (`server.ts`'s `parseArmParam`), so an explicit `?arm=live` would be
+ * redundant, not merely equivalent.
+ *
+ * The separator is chosen from whether `url` already carries a query string
+ * (`SNAPSHOT_URL` never does, but `UseSnapshotOptions.url` is a public,
+ * caller-supplied option) — appending a bare `?arm=control` unconditionally
+ * would produce `?foo=1?arm=control` for any base URL that already has one.
+ */
+export function snapshotUrl(url: string, arm?: TradingArmWire): string {
+  if (arm !== 'control') return url;
+  return `${url}${url.includes('?') ? '&' : '?'}arm=control`;
 }
 
 /**
@@ -607,15 +633,16 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
     fetchImpl,
     now = Date.now,
     authToken,
+    arm,
   } = options;
 
   const [state, setState] = useState<FeedState>(INITIAL);
 
   // A ref, not state: the interval callback must see the current
-  // url/fetch/now/authToken without the effect being torn down and rebuilt,
-  // which would restart the poll clock on every payload.
-  const optionsRef = useRef({ url, fetchImpl, now, authToken });
-  optionsRef.current = { url, fetchImpl, now, authToken };
+  // url/fetch/now/authToken/arm without the effect being torn down and
+  // rebuilt, which would restart the poll clock on every payload.
+  const optionsRef = useRef({ url, fetchImpl, now, authToken, arm });
+  optionsRef.current = { url, fetchImpl, now, authToken, arm };
 
   useEffect(() => {
     let cancelled = false;
@@ -684,11 +711,14 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
           token !== undefined && token !== null && token !== ''
             ? { Authorization: `Bearer ${token}` }
             : undefined;
-        const response = await doFetch(optionsRef.current.url, {
-          cache: 'no-store',
-          signal: controller.signal,
-          ...(headers !== undefined ? { headers } : {}),
-        });
+        const response = await doFetch(
+          snapshotUrl(optionsRef.current.url, optionsRef.current.arm),
+          {
+            cache: 'no-store',
+            signal: controller.signal,
+            ...(headers !== undefined ? { headers } : {}),
+          },
+        );
         if (!response.ok) throw new Error(`snapshot request failed: HTTP ${response.status}`);
         const body: unknown = await response.json();
         // `timedOut` is checked after BOTH awaits, so a response whose headers

@@ -270,13 +270,16 @@ describe('useSnapshot polling', () => {
 function recordingFetch(payload: unknown): {
   fetchImpl: typeof fetch;
   lastInit: () => RequestInit | undefined;
+  lastUrl: () => unknown;
 } {
   let lastInit: RequestInit | undefined;
-  const fetchImpl = (async (_input: unknown, init?: RequestInit) => {
+  let lastUrl: unknown;
+  const fetchImpl = (async (input: unknown, init?: RequestInit) => {
+    lastUrl = input;
     lastInit = init;
     return { ok: true, status: 200, json: async () => payload } as Response;
   }) as typeof fetch;
-  return { fetchImpl, lastInit: () => lastInit };
+  return { fetchImpl, lastInit: () => lastInit, lastUrl: () => lastUrl };
 }
 
 /**
@@ -437,5 +440,43 @@ describe('useSnapshot — Authorization header (#1038)', () => {
 
     const headers = lastInit()?.headers as Record<string, string> | undefined;
     expect(headers?.Authorization).toBe('Bearer fixture-dashboard-token');
+  });
+});
+
+/**
+ * #1593: the poll's request URL, end to end through the hook — not just
+ * `snapshotUrl` in isolation (`useSnapshot.test.ts`). This is the mutation
+ * evidence that the hook actually calls that helper rather than the raw
+ * `optionsRef.current.url`: reverting the `poll()` fetch call to the
+ * pre-#1593 line (`doFetch(optionsRef.current.url, …)`) makes the third case
+ * below fail, since `arm` would then have nowhere to reach the request from.
+ */
+describe('useSnapshot — arm query param (#1593)', () => {
+  it('polls the plain URL when arm is not given', async () => {
+    const { fetchImpl, lastUrl } = recordingFetch(makeSnapshot());
+    const { result } = renderHook(() => useSnapshot({ fetchImpl, intervalMs: INTERVAL_MS }));
+
+    await waitFor(() => expect(result.current.snapshot).not.toBeNull());
+    expect(lastUrl()).toBe('/api/snapshot');
+  });
+
+  it('polls the plain URL when arm is explicitly live', async () => {
+    const { fetchImpl, lastUrl } = recordingFetch(makeSnapshot());
+    const { result } = renderHook(() =>
+      useSnapshot({ fetchImpl, intervalMs: INTERVAL_MS, arm: 'live' }),
+    );
+
+    await waitFor(() => expect(result.current.snapshot).not.toBeNull());
+    expect(lastUrl()).toBe('/api/snapshot');
+  });
+
+  it('polls ?arm=control when arm is control', async () => {
+    const { fetchImpl, lastUrl } = recordingFetch(makeSnapshot());
+    const { result } = renderHook(() =>
+      useSnapshot({ fetchImpl, intervalMs: INTERVAL_MS, arm: 'control' }),
+    );
+
+    await waitFor(() => expect(result.current.snapshot).not.toBeNull());
+    expect(lastUrl()).toBe('/api/snapshot?arm=control');
   });
 });
