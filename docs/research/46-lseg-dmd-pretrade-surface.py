@@ -204,7 +204,10 @@ def load_observations():
 
 def cmd_analyze():
     obs, files, meta = load_observations()
-    print(f"files sampled: {len(files)}")
+    in_session = sum(1 for f in files if bucket_of(f.split("/")[-1])
+                      not in ("pre-market", "post-close"))
+    print(f"files sampled: {len(files)} ({in_session} in the 07:00-15:30 UTC continuous-session "
+          f"window; the rest are pre-market/post-close, structurally near-empty)")
     print(f"orderBookType values seen: {meta['orderbooktypes']}")
     print(f"sourceVenue values seen: {meta['sourcevenues']}")
     print(f"EMS (bidMarketSize/offerMarketSize) nonzero: {meta['ems_nonzero']}/{meta['ems_total']} "
@@ -225,7 +228,7 @@ def cmd_analyze():
           f"{len(set(i for _,i in POOL))} distinct ISINs)")
     print()
 
-    print("=== per-instrument round-trip / half-spread, open vs close bucket (median, bps) ===")
+    print("=== per-instrument round-trip / half-spread, open vs midday vs close bucket (median, bps) ===")
     BUCKETS = ["open", "midday", "close"]
     per_tik = {tik: {b: [] for b in BUCKETS} for tik, _ in POOL}
     for tik, _ in POOL:
@@ -241,10 +244,11 @@ def cmd_analyze():
         meds = {b: (st.median(d[b]) if d[b] else None) for b in BUCKETS}
         if meds["open"] and meds["close"]:
             ratios.append((tik, meds["open"] / meds["close"]))
-        o, c = meds["open"], meds["close"]
+        o, mid, c = meds["open"], meds["midday"], meds["close"]
         print(f"{tik:6s} open_rt={f'{o:.1f}' if o else '-':>7s} open_hs={f'{o/2:.1f}' if o else '-':>7s} "
+              f"mid_rt={f'{mid:.1f}' if mid else '-':>7s} mid_hs={f'{mid/2:.1f}' if mid else '-':>7s} "
               f"close_rt={f'{c:.1f}' if c else '-':>7s} close_hs={f'{c/2:.1f}' if c else '-':>7s} "
-              f"n_open={len(d['open']):4d} n_close={len(d['close']):4d}")
+              f"n_open={len(d['open']):4d} n_mid={len(d['midday']):4d} n_close={len(d['close']):4d}")
     print()
     if ratios:
         rs = [r for _, r in ratios]
@@ -265,10 +269,13 @@ def cmd_analyze():
                 meds[tik] = st.median(vals)
         vals = sorted(meds.values())
         med = st.median(vals)
+        ordered = sorted(meds.items(), key=lambda kv: -kv[1])
         print(f"--- {label} --- n_instruments={len(vals)}")
         print(f"  median-of-medians={med:.2f}bps  max/median={max(vals)/med:.2f}x  "
               f"min/median: max/min={max(vals)/min(vals):.2f}x  "
               f"p90/median={st.quantiles(vals, n=100)[89]/med:.2f}x")
+        print(f"  widest 5 (half-spread bps): {ordered[:5]}")
+        print(f"  tightest 5 (half-spread bps): {ordered[-5:]}")
 
 
 if __name__ == "__main__":

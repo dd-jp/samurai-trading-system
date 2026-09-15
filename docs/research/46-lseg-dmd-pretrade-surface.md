@@ -22,9 +22,11 @@ the stale 30.
 ## What must be answered (the ticket's four setup questions)
 
 **1. Coverage — YES for 30/31 rows, with one gap.** Across 108 sampled `LSE Pre-Trade Documents`
-files (§ Method) spanning both available trading dates, **30 of the pool's 31 rows appear** with
-two-sided quote activity in the large majority of session-time files each was sampled in (typically
-present in 85-98 of 108 files; see the per-ticker table in § Coverage). **MST3 (ISIN
+files (§ Method) spanning both available trading dates — of which 94 fall inside the 07:00-15:30
+UTC continuous-trading window and the remaining 14 are pre-market/post-close files that are
+structurally near-empty (e.g. 05:00 carries 1 total row, 16:00 carries 6) — **30 of the pool's 31
+rows appear**, present in 73-98 of the 108 sampled files each (see the per-ticker `files_present`
+column in § Coverage; the low end, 3VT at 73, is the thinnest-traded name, not a DMD gap). **MST3 (ISIN
 `XS2901882618`) appears in zero of the 108 sampled `LSE Pre-Trade Documents` files across both
 dates.** It is also absent from the one most-recent file pulled from each of DMD's three `SI`
 (systematic-internaliser) participant feeds (`NMTRIAIR`, `NMOPVOF`, `BARCIE2DSEC` — the parallel
@@ -50,10 +52,12 @@ already ended for the day (see next question).
 real basis for cost-floor sizing). `bidMarketSize`/`offerMarketSize` ("EMS" in the ticket's
 term) are the field DMD calls market size, and across every matched pool-ISIN row sampled
 (49,522 rows) they are **non-zero in only 119 (0.24%)**. Those 119 rows are not scattered noise:
-every one falls in the opening-auction window (07:00-07:01 UTC) or the closing-auction window
-(15:30-15:31 UTC onward) of the two sampled dates, and several show a crossed/aggressor-looking
-book (`offerMarketSize` populated with `offerLimitPrice` at or through the bid) consistent with an
-auction-cross market-order fill rather than a resting two-sided quote. `bidYield`/`offerYield` are
+grouping all 119 by their `distributionTime` minute (not just spot-checked) shows every one falls
+in exactly three filename-minutes across the two sampled dates — `07:00` (1 + 24 rows),
+`07:05` (12 rows, immediate aftermath of the opening auction), and `15:30` (51 + 31 rows, the
+closing-auction print) — and several show a crossed/aggressor-looking book (`offerMarketSize`
+populated with `offerLimitPrice` at or through the bid) consistent with an auction-cross
+market-order fill rather than a resting two-sided quote. `bidYield`/`offerYield` are
 **identically zero across every one of the 49,522 matched rows** — a field this schema evidently
 shares with a fixed-income flow, structurally unpopulated for XLON equity/ETP order-book rows.
 **Practical answer: EMS is present in the schema but not usable as a continuous-session sizing
@@ -119,8 +123,13 @@ these calls):
 post-close), densified to 5-minute cadence inside the open (07:00-07:59) and close (15:00-15:29)
 windows to reduce per-instrument sample noise in those buckets. Every fetch is logged
 (`fileKey`, request URL, request/fetch timestamps) to `/tmp/dmd_cache/fetch_log.jsonl` at pull
-time — this is the reproducible sampling basis; the log itself is not committed (see below), but
-`46-lseg-dmd-pretrade-surface.py fetch` reproduces the identical pull.
+time; the full 108-line log and the `analyze` output it produced are committed verbatim at
+[`archive/raw/2026-09-15-46-dmd-fetch-log.jsonl`](archive/raw/2026-09-15-46-dmd-fetch-log.jsonl) and
+[`archive/raw/2026-09-15-46-dmd-analyze-output.txt`](archive/raw/2026-09-15-46-dmd-analyze-output.txt)
+— that is the durable evidence this pull happened and its exact sampling basis. **Given DMD's
+observed ~2-3 trading-day retention (§ Q4), re-running `fetch` will not retrieve these same
+fileKeys** once they age out — it reproduces the sampling *method* (same dates relative to the run,
+same minute cadence) against whatever DMD serves at re-run time, not this specific data.
 
 **Session buckets**, in filename-time UTC coordinates, measured rather than assumed: total and
 two-sided row counts step from ~0 to 20,000-37,000 rows precisely at `T07:00` (opening) and
@@ -137,10 +146,11 @@ GBX/GBP/USD currency-scale question needs resolving to report them. No cash pric
 this doc.
 
 **Data handling:** the 108 pulled CSVs stay outside the repo (`/tmp/dmd_cache`, matching doc 53's
-"pulled quotes stay outside the repo" rule) — only the aggregates below and in
-[`46-lseg-dmd-pretrade-surface.py`](46-lseg-dmd-pretrade-surface.py) are committed. The script's
-`fetch` subcommand reproduces the identical pull (same dates, same minute cadence) and `analyze`
-reproduces every table below byte-for-byte from the cached files.
+"pulled quotes stay outside the repo" rule) — only the aggregates below, the fetch/analyze logs in
+`archive/raw/` (above), and [`46-lseg-dmd-pretrade-surface.py`](46-lseg-dmd-pretrade-surface.py)
+itself are committed. Running `analyze` against a fresh pull reproduces every number in the tables
+below (they are reformatted for the doc, not pasted output — `git diff` against
+`archive/raw/2026-09-15-46-dmd-analyze-output.txt` is the byte-for-byte check).
 
 ## Coverage
 
@@ -170,46 +180,48 @@ PLT3    2469       2469       97                3LMO    1043       1043       88
 
 `rows` = quote-update ticks matched to that ISIN across the 108-file sample; `two-sided` = the
 subset with both `bidLimitPrice`/`offerLimitPrice` > 0; `files_present` = how many of the 108
-files carried at least one row for that ISIN. `covered: 30/31 rows (29/30 distinct ISINs)`.
+files carried at least one row for that ISIN (94 of the 108 are inside the 07:00-15:30 UTC
+continuous-session window; a name can still appear in a pre-market/post-close file, which is why
+some counts run above 94). `covered: 30/31 rows (29/30 distinct ISINs)`.
 Reproduces via `python3 46-lseg-dmd-pretrade-surface.py analyze`.
 
-## Per-instrument round-trip and half-spread, session profile (open vs. close, median bps)
+## Per-instrument round-trip and half-spread, session profile (open vs. midday vs. close, median bps)
 
-30 rows; MST3 excluded (no data). `n_open`/`n_close` are quote-update ticks matched in that bucket
-across both sampled dates — the sampling basis for every median below.
+30 rows; MST3 excluded (no data). `n_open`/`n_mid`/`n_close` are quote-update ticks matched in that
+bucket across both sampled dates — the sampling basis for every median below.
 
 ```
-ticker  open_rt  open_hs  close_rt  close_hs  n_open  n_close
-3USL      11.9      5.9      15.2      7.6      260      168
-3LUS      11.6      5.8      14.2      7.1      258      160
-LQQ3      15.5      7.8      21.6     10.8      519      321
-NVD3      30.5     15.3      13.1      6.6      647      501
-3LNV     127.5     63.7     111.8     55.9      538      426
-3QQQ     107.6     53.8      92.4     46.2      147      267
-3LPA     226.9    113.5     163.7     81.8      137      173
-PLT3      44.0     22.0      19.2      9.6      477      459
-3LME     110.1     55.1      76.0     38.0      379      477
-3LNP     186.9     93.5     108.1     54.1      158      232
-3AMZ      66.4     33.2      36.1     18.1      667      480
-3FB       65.2     32.6      40.4     20.2      648      465
-3KOR      39.3     19.7      16.9      8.5      328      487
-3XLE     149.3     74.6      69.9     35.0      307      238
-3SPY     102.2     51.1      99.6     49.8      127      178
-3LTS     142.0     71.0     116.3     58.1      322      395
-3AAP      59.5     29.8      28.8     14.4      680      496
-LAM3     168.7     84.3     157.0     78.5      334      322
-3LAL     234.4    117.2     113.2     56.6      174      301
-LPP3     315.8    157.9     138.9     69.4      210       87
-LCO3     487.8    243.9     571.4    285.7      356      249
-LAA3     218.8    109.4     126.8     63.4      105      141
-3LMO     282.2    141.1     276.2    138.1      208      218
-3LIP     666.7    333.3     266.9    133.4      265      211
-3LSQ     462.0    231.0     172.0     86.0      240      219
-3UBR     264.3    132.2     134.8     67.4      371      297
-3RAC     177.0     88.5     173.9     87.0      316      193
-3ARM     171.7     85.8      86.2     43.1      147      198
-3VT      206.2    103.1      61.3     30.7       94      133
-3KWE     206.4    103.2     150.4     75.2      406      129
+ticker  open_rt  open_hs   mid_rt   mid_hs  close_rt  close_hs  n_open   n_mid  n_close
+3USL      11.9      5.9     12.7      6.3      15.2      7.6      260     659      168
+3LUS      11.6      5.8     12.2      6.1      14.2      7.1      258     659      160
+LQQ3      15.5      7.8     19.1      9.5      21.6     10.8      519    1334      321
+NVD3      30.5     15.3     20.9     10.5      13.1      6.6      647    1809      501
+3LNV     127.5     63.7    116.8     58.4     111.8     55.9      538    1522      426
+3QQQ     107.6     53.8    108.2     54.1      92.4     46.2      147     686      267
+3LPA     226.9    113.5    192.0     96.0     163.7     81.8      137     514      173
+PLT3      44.0     22.0     37.2     18.6      19.2      9.6      477    1481      459
+3LME     110.1     55.1     90.3     45.2      76.0     38.0      379    1651      477
+3LNP     186.9     93.5    144.9     72.5     108.1     54.1      158     664      232
+3AMZ      66.4     33.2     50.3     25.2      36.1     18.1      667    1842      480
+3FB       65.2     32.6     55.8     27.9      40.4     20.2      648    1886      465
+3KOR      39.3     19.7     43.5     21.7      16.9      8.5      328    1323      487
+3XLE     149.3     74.6    160.0     80.0      69.9     35.0      307     714      238
+3SPY     102.2     51.1    106.2     53.1      99.6     49.8      127     444      178
+3LTS     142.0     71.0    124.6     62.3     116.3     58.1      322    1237      395
+3AAP      59.5     29.8     41.3     20.6      28.8     14.4      680    1790      496
+LAM3     168.7     84.3    164.4     82.2     157.0     78.5      334    1118      322
+3LAL     234.4    117.2    130.3     65.1     113.2     56.6      174     817      301
+LPP3     315.8    157.9    212.0    106.0     138.9     69.4      210     339       87
+LCO3     487.8    243.9    645.2    322.6     571.4    285.7      356     926      249
+LAA3     218.8    109.4    160.5     80.3     126.8     63.4      105     389      141
+3LMO     282.2    141.1    255.1    127.5     276.2    138.1      208     590      218
+3LIP     666.7    333.3    306.1    153.0     266.9    133.4      265     727      211
+3LSQ     462.0    231.0    330.8    165.4     172.0     86.0      240     642      219
+3UBR     264.3    132.2    193.5     96.8     134.8     67.4      371    1179      297
+3RAC     177.0     88.5    175.4     87.7     173.9     87.0      316    1085      193
+3ARM     171.7     85.8    128.3     64.2      86.2     43.1      147     687      198
+3VT      206.2    103.1    134.4     67.2      61.3     30.7       94     247      133
+3KWE     206.4    103.2    154.0     77.0     150.4     75.2      406     839      129
 ```
 
 **Session profile: real, and directionally consistent with doc 53's G3, on 2 days of data.**
@@ -222,10 +234,17 @@ pool's median (1.67x) sits right at AAPL's figure and below TSLA's, on a differe
 independent confirmation of doc 53's specific multiplier** — 2 dates cannot settle that, per §
 Q4's underpowered-sample caveat.
 
-**The 4 rows that narrow into the close instead of widening are exactly the pool's tightest,
-most-liquid names**: 3USL (0.78x), 3LUS (0.82x), LQQ3 (0.72x), LCO3 (0.85x) — the four smallest
-open-bucket round-trip spreads in the whole table (11.6-15.5 bps, against a pool open-bucket median
-around 150-200 bps). **This is the decision-relevant asymmetry for Samurai specifically**: the
+**3 of the 4 rows that narrow into the close instead of widening are the pool's tightest,
+most-liquid names**: 3USL (0.78x), 3LUS (0.82x), LQQ3 (0.72x) — the three smallest open-bucket
+round-trip spreads in the whole table (11.6-15.5 bps), against a pool open-bucket median round-trip
+of **159.0 bps** (79.5 bps half-spread — this is the same quantity, computed
+per-instrument-then-medianed across the table above rather than per-tick, as the dispersion
+section's 79.48 bps open-bucket median-of-medians). **The fourth, LCO3 (0.85x), is the opposite
+case** — it is one of the pool's *widest* names (487.8 bps open-bucket round-trip, second only to
+3LIP's 666.7) and still narrows, its close-bucket spread (571.4 bps) actually *widening in absolute
+terms* even as the open/close ratio reads below 1x; its own count of ticks is thin enough
+(n_close=249) that this could be tick-level noise rather than a real pattern — flagged, not
+resolved, by this 2-day sample. **This is the decision-relevant asymmetry for Samurai specifically**: the
 names most likely to actually get traded are the ones whose spread is worst, relatively, right at
 the close — which is exactly when ADR-0014's flat-by-close horizon forces every exit. Figures are
 round-trip bps; add Saxo's measured 16 bps round-trip commission (ADR-0015) to size the total exit
@@ -257,10 +276,11 @@ retracted pre-open capture caught auction-adjacent artifacts (this doc's own ope
 exclude the equivalent `T07:00` auction print explicitly; the retracted capture's method is
 unknown and not reconstructable — #999/#1036), a genuinely wider pre-open regime than the
 in-session open bucket measured here, or a sampling difference, is **not answerable from this
-investigation** — the retracted script and its raw pull no longer exist to compare against. The
-widest instruments here (3LIP, LCO3, 3LSQ, LAM3, LAL — all in the 900-1200+ bps open-bucket
-round-trip range) and the tightest (3LUS, 3USL, LQQ3, all single-digit-to-low-teens bps
-half-spread) are the same tight/wide split as the session-profile table above.
+investigation** — the retracted script and its raw pull no longer exist to compare against. By
+open-bucket median half-spread, the widest instruments are **3LIP (333.3 bps), LCO3 (243.9 bps),
+3LSQ (231.0 bps), LPP3 (157.9 bps), 3LMO (141.1 bps)**, and the tightest are **3KOR (19.7 bps),
+NVD3 (15.3 bps), LQQ3 (7.8 bps), 3USL (5.9 bps), 3LUS (5.8 bps)** — reproduced via `analyze`'s
+"widest 5"/"tightest 5" lines — the same tight/wide split as the session-profile table above.
 
 ## Acceptance criteria — met, with the stated gap and caveats
 
