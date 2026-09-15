@@ -53,6 +53,25 @@ describe('P&L', () => {
     expect(within(card).getByText('at $1.27/£, static sizing rate')).toBeTruthy();
   });
 
+  it('states the declared book from the wire, not a client literal (#1620)', () => {
+    renderGlance(
+      makeSnapshot({
+        pnl: makePnlHeadline({
+          overall: {
+            net_gbp: 42.5,
+            net_pct_of_book: 0.0425,
+            max_drawdown_pct: 0.018,
+            trade_count: 43,
+          },
+          book_gbp: 2_000,
+        }),
+      }),
+    );
+    const card = screen.getByRole('region', { name: 'P&L' });
+    expect(within(card).getByText('+4.25% of the £2,000 book')).toBeTruthy();
+    expect(within(card).queryByText(/£1,000 book/)).toBeNull();
+  });
+
   it('shows a negative overall net beside its drawdown, tone included, never a return without its drawdown', () => {
     renderGlance(
       makeSnapshot({

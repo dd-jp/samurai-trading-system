@@ -4,6 +4,7 @@ import type { WireSnapshot } from '../../hooks/useSnapshot.ts';
 import {
   formatClockUtc,
   formatCount,
+  formatGbpWhole,
   formatPercent,
   formatPrice,
   formatQty,
@@ -87,9 +88,15 @@ function EquitySparkline({ samples }: { samples: readonly EquitySample[] }) {
   );
 }
 
-/** "X% of the £1,000 book" — the same basis phrase beside both headline figures. */
-function ofBook(fraction: number): string {
-  return `${formatSignedPercent(fraction)} of the £1,000 book`;
+/**
+ * "X% of the £N book" — the same basis phrase beside both headline figures.
+ * `bookGbp` comes off the wire (`PnlHeadlineWire.book_gbp`), not a client
+ * literal — the declared book has already moved once (£1,500 → £1,000,
+ * ADR-0015's 2026-08-18 amendment) and a hard-coded figure here would keep
+ * stating the old one the moment it moves again (#1620).
+ */
+function ofBook(fraction: number, bookGbp: number): string {
+  return `${formatSignedPercent(fraction)} of the ${formatGbpWhole(bookGbp)} book`;
 }
 
 function PnlCard({ snapshot, equitySamples }: Pick<GlanceTabProps, 'snapshot' | 'equitySamples'>) {
@@ -132,7 +139,7 @@ function PnlCard({ snapshot, equitySamples }: Pick<GlanceTabProps, 'snapshot' | 
           <span className={`big ${pnlTone(overall.net_gbp)}`} data-field="pnl-overall">
             {formatSignedGbp(overall.net_gbp)}
           </span>
-          <span className="muted">{ofBook(overall.net_pct_of_book)}</span>
+          <span className="muted">{ofBook(overall.net_pct_of_book, pnl.book_gbp)}</span>
         </div>
         <div className="figure-row">
           <div>
@@ -153,7 +160,7 @@ function PnlCard({ snapshot, equitySamples }: Pick<GlanceTabProps, 'snapshot' | 
           <span className={`big ${pnlTone(today.net_gbp)}`} data-field="pnl-today">
             {formatSignedGbp(today.net_gbp)}
           </span>
-          <span className="muted">{ofBook(today.net_pct_of_book)}</span>
+          <span className="muted">{ofBook(today.net_pct_of_book, pnl.book_gbp)}</span>
         </div>
         <div className="figure-row">
           <div>

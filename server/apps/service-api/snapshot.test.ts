@@ -1011,6 +1011,7 @@ describe('buildSnapshot', () => {
       expect(snap.pnl.overall.trade_count).toBe(2);
       expect(snap.pnl.rate_usd_per_gbp).toBe(SIZING_USD_PER_GBP);
       expect(snap.pnl.rate_source).toBe('static_sizing_rate');
+      expect(snap.pnl.book_gbp).toBe(LIVE_BOOK_GBP);
     });
 
     /**
