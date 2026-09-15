@@ -865,12 +865,13 @@ async function postFlattenReconcileAlert(
  * throttle this is gated on.
  *
  * Released on the same evidence `cancelNeverConfirmedFlatten` uses, never on
- * age: the venue's own book agreeing with everything the store considers held
- * means the fills WERE applied to the store and only the sweep mark was lost —
- * so there is nothing left to sweep and nothing a replacement could
- * double-sell. Any disagreement is the case where the fills are real and
- * unbooked; no venue number can say which lot each belongs to, so that one
- * keeps blocking and pages for hand attribution.
+ * age, and for the same reason: the venue's own book agreeing with what the
+ * store considers held means no replacement can over-sell. The fills are
+ * unbooked by construction here (`filled_qty > 0`, `fills_swept_at` null), so
+ * the release is never a claim that they reached the store — it is the claim
+ * that resolving the row is safe. Any disagreement is the case where those
+ * unbooked fills change what is held; no venue number can say which lot each
+ * belongs to, so that one keeps blocking and pages for hand attribution.
  */
 async function judgeTerminalUnsweptFlatten(
   input: ReconcileInput,
@@ -910,10 +911,10 @@ async function judgeTerminalUnsweptFlatten(
     };
   }
   const reason =
-    `${provenance}. ${coverage.note} — so nothing this flatten filled is missing from the ` +
-    'store, and only the sweep mark was lost. The journal row is resolved rather than ' +
-    'left blocking every later flatten on the instrument. This is an INFERENCE from the ' +
-    "venue's book, not a completed sweep";
+    `${provenance}. ${coverage.note} — so no replacement can over-sell, and the journal row ` +
+    'is resolved rather than left blocking every later flatten on the instrument. Its fills ' +
+    'are still unswept: this is an INFERENCE that resolving is safe, not a completed sweep, ' +
+    'and not a finding that they reached the store';
   await postFlattenReconcileAlert(input, row, reason, now);
   await input.store.resolveFlattenError(row.idempotency_key, reason, now);
   return {
@@ -1016,12 +1017,12 @@ async function venueCoversStoreHeld(
   // `findUnrecordedVenuePositions` compares instrument PRESENCE, so a surplus
   // on an instrument the store already knows is invisible to it. An unbooked
   // exit fill up to the size of that surplus hides inside it: the sum still
-  // covers, while the lot it belonged
-  // to is over-stated. That is the same fills-not-booked state as a short
-  // venue — no over-sell, since a replacement would be sized off the store's
-  // smaller number, but a released row whose fills are missing from the
-  // journal, and the PnL and CGT record with them. Coverage is therefore
-  // agreement, tested both ways under the one flatness tolerance.
+  // covers, while the lot it belonged to is over-stated. That is the same
+  // fills-not-booked state as a short venue — no over-sell, since a
+  // replacement would be sized off the store's smaller number, but a released
+  // row whose fills are missing from the journal, and the PnL and CGT record
+  // with them. Coverage is therefore agreement, tested both ways under the one
+  // flatness tolerance.
   if (!coversQty(storeHeld, venueQty)) {
     return {
       covered: false,
