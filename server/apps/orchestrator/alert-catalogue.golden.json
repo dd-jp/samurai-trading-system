@@ -152,7 +152,7 @@
         "stage": "execution",
         "event": "residual_exposure_unprotected",
         "level": "error",
-        "message": "a residual position is unprotected and this venue cannot arm protective legs at all, so no retry will ever protect it — close or protect the order by hand",
+        "message": "a residual position is unprotected and re-arming it is PERMANENTLY refused, so no retry will ever protect it — close or protect the order by hand",
         "payload": {
           "idempotency_key": "lot-2",
           "instrument": "AAPL",
@@ -170,7 +170,7 @@
         "stage": "execution",
         "event": "residual_exposure_unprotected",
         "level": "error",
-        "message": "a residual position is unprotected and this venue cannot arm protective legs at all, so no retry will ever protect it — close or protect the order by hand",
+        "message": "a residual position is unprotected and re-arming it is PERMANENTLY refused, so no retry will ever protect it — close or protect the order by hand",
         "payload": {
           "idempotency_key": "lot-2",
           "instrument": "AAPL",
@@ -183,7 +183,7 @@
           "observed_at": "2026-09-10T08:15:00.000Z"
         }
       },
-      "text": "Samurai UNPROTECTED RESIDUAL: AAPL has at most 5 (upper bound — the exact residual could not be read) units left open on the sell side with NO protective legs armed, as of 2026-09-10T08:15:00.000Z.\nLot lot-2. This venue cannot arm protective legs at all (no entry-less stop+target), so NOTHING will retry stop 180 / target 190.\nClose or protect this position by hand.",
+      "text": "Samurai UNPROTECTED RESIDUAL: AAPL has at most 5 (upper bound — the exact residual could not be read) units left open on the sell side with NO protective legs armed, as of 2026-09-10T08:15:00.000Z.\nLot lot-2. Re-arming this lot is PERMANENTLY refused — not a bad minute at the venue — so NOTHING will retry stop 180 / target 190.\nClose or protect this position by hand.",
       "rejected": "telegram 502",
       "sendFailed": null,
       "sendFailedInTrace": null

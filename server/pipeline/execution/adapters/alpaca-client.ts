@@ -212,9 +212,9 @@ export interface AlpacaBrokerClient {
    * whole point (#1500): `cancel()` cannot reach an order through a lookup the
    * venue is failing, and the flatten shapes reconcile has to cancel are
    * precisely the ones where that lookup is what broke. One snapshot answers
-   * for the bracket AND its `:rearm`, so the fallback costs one round trip
-   * rather than two and keeps `cancel()`'s "every lookup above every
-   * destructive call" ordering (#867) intact.
+   * for the bracket AND every re-arm wire id the lot has spent, so the
+   * fallback costs one round trip rather than one per id and keeps `cancel()`'s
+   * "every lookup above every destructive call" ordering (#867) intact.
    *
    * ONE page, oldest first, bounded at Alpaca's 500-row maximum — see the
    * request in `alpaca-http-client.ts` for why that ordering is what makes

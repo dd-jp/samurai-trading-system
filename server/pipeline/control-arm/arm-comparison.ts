@@ -101,6 +101,97 @@ export interface ArmPerformance {
    * counts survive different filters.
    */
   refused_pass_count: number;
+  /**
+   * What the shared-cost-basis exclusion kept and dropped in this window, split
+   * by exit class (#1546).
+   *
+   * REQUIRED, for the structural reason `refused_pass_count` above is. The
+   * exclusion is UNEVEN along this axis by construction (see `ExitClass`), so a
+   * `trade_count` read without it is a population of unknown composition — and
+   * an optional field would leave that unknown wherever a caller omitted it,
+   * which is the ambiguity this field exists to remove.
+   *
+   * `kept` sums to `trade_count` across both classes on BOTH arms —
+   * `SqliteArmComparisonSource.getClosedTradeWindowBetween` runs
+   * `oneSizingRegime` FIRST and takes this count from that same output, so
+   * `modelledCostCharged` (which produces `trade_count`) and this count agree
+   * on the population they're each dividing, live and control alike. The
+   * sizing filter's removals happen upstream of both, not between them.
+   */
+  cost_basis_drops: ExitClassDropCounts;
+}
+
+/**
+ * Which of the two exit classes a closed trade ended in (#1546) — the axis the
+ * live arm's `modelled_cost_charged` exclusion is UNEVEN along.
+ *
+ * Not a cosmetic grouping. A live lot's protective (`'stop'`/`'target'`) legs
+ * are priced from the ENTRY submission's single `captureSubmitSnapshot`
+ * (`modelledLotCostsFor`, fill-cost.ts) — the same capture its entry legs
+ * already need — while a flatten leg is priced from the FLATTEN submission's
+ * own capture (`splitFlattenFills`, flatten-attribution.ts). So a flatten close
+ * needs TWO successful captures to stamp `modelled_cost_charged = 1` where a
+ * protective close needs ONE. Both are best-effort, and the flatten's runs
+ * under a budget (`EXIT_SNAPSHOT_BUDGET_MS`, execute.ts) the entry's does not,
+ * so the flatten class drops at a weakly higher rate and the surviving live
+ * population is enriched in protective exits.
+ *
+ * The array is the single definition and the union is derived from it, so a
+ * third class cannot be added to the type without every list that enumerates
+ * the classes (`noCostBasisDrops`, the persisted-column parser) seeing it.
+ */
+export const EXIT_CLASSES = ['protective', 'flatten'] as const;
+
+export type ExitClass = (typeof EXIT_CLASSES)[number];
+
+/** One arm's rows in one exit class: what the cost-basis filter let through, and what it removed. */
+export interface CostBasisDropCount {
+  kept: number;
+  dropped: number;
+}
+
+export type ExitClassDropCounts = Readonly<Record<ExitClass, CostBasisDropCount>>;
+
+/** Both arms' per-class counts, produced by the same read the trades come from. */
+export type ArmCostBasisDrops = Readonly<Record<TradingArm, ExitClassDropCounts>>;
+
+/**
+ * The exit class of a `close_reason`, exhaustively.
+ *
+ * A `switch` with a `never` arm rather than a set membership test: `ExitReason`
+ * is open to a fourth member (`records.ts` says as much), and a new value
+ * falling silently into the flatten bucket would put a protective exit in the
+ * wrong population without any test failing — this repo's dominant bug class.
+ * The compiler refuses the widening instead.
+ *
+ * `'exit'` is the legacy pre-migration-0031 spelling of a flatten, and the
+ * three `ExitReason` members are all in-process exits submitted as their own
+ * order, so all four are priced by a flatten submission's own capture.
+ */
+export function exitClassOf(close_reason: ClosedTrade['close_reason']): ExitClass {
+  switch (close_reason) {
+    case 'stop':
+    case 'target':
+      return 'protective';
+    case 'exit':
+    case 'flatten':
+    case 'signal_decay':
+    case 'direction_flip':
+      return 'flatten';
+    default: {
+      const unhandled: never = close_reason;
+      throw new Error(
+        `exitClassOf: unhandled close_reason ${JSON.stringify(unhandled)} — a new value must be ` +
+          'classified as protective (priced by the entry capture) or flatten (priced by its own), ' +
+          'because #1546 counts the cost-basis exclusion along exactly that split.',
+      );
+    }
+  }
+}
+
+/** Zero of every class, for an arm with no rows at all in the window. */
+export function noCostBasisDrops(): ExitClassDropCounts {
+  return { protective: { kept: 0, dropped: 0 }, flatten: { kept: 0, dropped: 0 } };
 }
 
 /**
@@ -151,6 +242,15 @@ export function buildArmComparison(input: {
    * result the field exists to end.
    */
   refused_passes: ArmRefusedPassCounts;
+  /**
+   * What the shared-cost-basis exclusion kept and dropped over the SAME read
+   * the trades came from (#1546). Required rather than defaulted to zeros for
+   * `refused_passes`' reason: a caller with no drop reading has no composition
+   * reading either, and publishing all-zeros would assert "nothing was
+   * excluded" — the precise claim this field exists to stop anyone making by
+   * omission.
+   */
+  cost_basis_drops: ArmCostBasisDrops;
   from: Date;
   to: Date;
   /**
@@ -178,8 +278,20 @@ export function buildArmComparison(input: {
     from: input.from,
     to: input.to,
     basis: input.basis,
-    live: performanceFor('live', inWindow, input.basis, input.refused_passes.live),
-    control: performanceFor('control', inWindow, input.basis, input.refused_passes.control),
+    live: performanceFor(
+      'live',
+      inWindow,
+      input.basis,
+      input.refused_passes.live,
+      input.cost_basis_drops.live,
+    ),
+    control: performanceFor(
+      'control',
+      inWindow,
+      input.basis,
+      input.refused_passes.control,
+      input.cost_basis_drops.control,
+    ),
   };
 }
 
@@ -197,6 +309,7 @@ function performanceFor(
   trades: readonly (ClosedTrade & { arm?: TradingArm })[],
   basis: number,
   refusedPassCount: number,
+  costBasisDrops: ExitClassDropCounts,
 ): ArmPerformance {
   const mine = trades
     .filter((trade) => (trade.arm ?? 'live') === arm)
@@ -226,5 +339,6 @@ function performanceFor(
     return_pct: cumulative / basis,
     max_drawdown_pct: maxDrawdown / basis,
     refused_pass_count: refusedPassCount,
+    cost_basis_drops: costBasisDrops,
   };
 }

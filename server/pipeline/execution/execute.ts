@@ -318,9 +318,15 @@ interface SubmitSnapshot {
  * What this capture does NOT equalize is how many successful captures each
  * exit type needs: a protective exit's legs are all covered by THIS one, while
  * a flatten additionally needs the flatten submission's own, so the two exit
- * types still drop out of the arm comparison at different rates. That
- * selection term is #1546's, not #1301's — see `modelledCostCharged`
- * (closed-trade.ts).
+ * types still drop out of the arm comparison at different rates. #1546 settled
+ * that by measuring it rather than levelling it — `countCostBasisDrops`
+ * (sqlite-arm-comparison-source.ts) reports each class's kept/dropped counts per
+ * window on `ArmPerformance.cost_basis_drops`. This function is unchanged by
+ * that decision, and deliberately: the alternative was reusing
+ * `modelled_protective_exit_cost_breakdown` as a flatten's charge when the
+ * flatten's own capture failed, which would spend one submission's
+ * `MarketState` on a second priced event (#1121 AC6) and move live
+ * `realized_pnl_net`. See `modelledCostCharged` (closed-trade.ts).
  *
  * ONE breakdown covers BOTH protective legs, and it is not a shortcut. The
  * stop and the target are OCO — at most one ever fills — and `CostModel.fill`
