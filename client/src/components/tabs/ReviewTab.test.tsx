@@ -427,9 +427,10 @@ describe('closed trades', () => {
     expect(within(drawer).getByText('+$11.20')).toBeTruthy();
     expect(within(drawer).getByText('−$2.41')).toBeTruthy();
     expect(within(drawer).getAllByText('+$8.79').length).toBeGreaterThan(0);
-    expect(
-      within(drawer).getByText(/Entry 552\.10 · exit 559\.80 · \$11,042\.00 notional at entry/),
-    ).toBeTruthy();
+    const pnl = drawer.querySelector('[data-section="pnl"]') as HTMLElement;
+    expect(within(pnl).getByText('552.10')).toBeTruthy();
+    expect(within(pnl).getByText('559.80')).toBeTruthy();
+    expect(within(pnl).getByText('$11,042.00')).toBeTruthy();
     const fills = within(drawer).getByRole('list', { name: 'Fills' });
     expect(within(fills).getByText(/f-entry/)).toBeTruthy();
     expect(within(fills).getByText(/f-target/)).toBeTruthy();
