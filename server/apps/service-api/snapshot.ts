@@ -288,7 +288,7 @@ export function buildSnapshot(
     })),
   }));
 
-  const verdicts = store.getVerdictHistory(RECENT_VERDICTS_LIMIT, asOf).map((v) => ({
+  const verdicts = store.getVerdictHistory(RECENT_VERDICTS_LIMIT, asOf, arm).map((v) => ({
     trace_id: v.trace_id,
     instrument: v.instrument,
     status: v.status,
@@ -300,11 +300,11 @@ export function buildSnapshot(
   // #1066: the Risk decisions the drawer's invalidation section reads, with
   // their critic verdicts and measured conditions already joined by the store.
   const risk_critics = store
-    .getRiskCritics(RECENT_RISK_CRITICS_LIMIT, asOf)
+    .getRiskCritics(RECENT_RISK_CRITICS_LIMIT, asOf, arm)
     .map<RiskCriticRow>(riskCriticRow);
 
   const weights = store.getAnalystWeights(asOf);
-  const attribution = store.getAttribution(asOf);
+  const attribution = store.getAttribution(asOf, arm);
   const analysts = Object.keys(weights).map((analyst_id) => ({
     analyst_id,
     weight: weights[analyst_id] ?? 0,
@@ -355,7 +355,7 @@ export function buildSnapshot(
     }));
 
   // `toProfitFactorWire` doc (contracts/metrics.ts) has the full rationale (#1270).
-  const dailyMetrics = store.getDailyMetrics(asOf);
+  const dailyMetrics = store.getDailyMetrics(asOf, arm);
   const metrics: MetricsSuiteWire = {
     ...dailyMetrics,
     profit_factor: toProfitFactorWire(dailyMetrics.profit_factor),
@@ -432,7 +432,7 @@ export function buildSnapshot(
     // the lanes and the tables describe different instants and leave the
     // operator to reconcile them.
     pipeline: buildPipelineView(
-      store.getPipelineActivity(PIPELINE_MAX_LANES, PIPELINE_LOOKBACK_MS, asOf),
+      store.getPipelineActivity(PIPELINE_MAX_LANES, PIPELINE_LOOKBACK_MS, asOf, arm),
     ),
     // The running server's stamp of its own wire shape (#1316) — always this
     // process's own compiled-in constant, never read from the store, so a

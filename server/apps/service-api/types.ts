@@ -230,7 +230,13 @@ export interface DashboardQueryStore {
    * coincidentally so.
    */
   getFillsForTrades(idempotencyKeys: readonly string[], asOf: Date): Fill[];
-  getVerdictHistory(limit: number, asOf: Date): VerdictAuditEntry[];
+  /**
+   * #1594: `arm` required, same guarantee as `getOpenPositions` (#1592) —
+   * `verdict_log` carries no `arm` column, so the store discriminates on
+   * `trace_id` instead, but the type-level contract is identical: a read
+   * names exactly one arm, and no read returns both.
+   */
+  getVerdictHistory(limit: number, asOf: Date, arm: TradingArm): VerdictAuditEntry[];
   /**
    * Recent Risk decisions with their critic verdicts (#1066), most recent
    * first — the drawer's invalidation section.
@@ -238,11 +244,25 @@ export interface DashboardQueryStore {
    * Keyed by `(trace_id, instrument)` like `risk_log` itself, so the drawer
    * looks a decision up by the trace it is showing rather than by the debate,
    * which a retried tick shares across traces (migration 0015).
+   *
+   * `arm` required (#1594), same guarantee as `getOpenPositions` (#1592). A
+   * control-arm read still returns rows — the control arm's own Risk
+   * decisions — each with `critic: undefined`, since the control calls no
+   * model and consults no critic; it does not mean "no risk decisions".
    */
-  getRiskCritics(limit: number, asOf: Date): RiskCriticRecord[];
+  getRiskCritics(limit: number, asOf: Date, arm: TradingArm): RiskCriticRecord[];
   getAnalystWeights(asOf: Date): Record<string, number>;
-  getAttribution(asOf: Date): Record<string, AttributionSummary>;
-  getDailyMetrics(asOf: Date): MetricsSuite;
+  /**
+   * #1594: `arm` required, same guarantee as `getOpenPositions` (#1592).
+   * `getAttribution(asOf, 'control')` returns `{}`: the join is onto
+   * `debate_log`, which the control arm never writes (`axis-vote-decision.ts`
+   * — the control's `DebateResult` is synthesized in-memory and has no
+   * `debate_log` row), so there is nothing for a control-scoped read to
+   * attribute, not a bug in the join.
+   */
+  getAttribution(asOf: Date, arm: TradingArm): Record<string, AttributionSummary>;
+  /** `arm` required (#1594), same guarantee as `getOpenPositions` (#1592). */
+  getDailyMetrics(asOf: Date, arm: TradingArm): MetricsSuite;
   /**
    * The Feedback Loop's persisted matched-control comparisons (#971),
    * most-recently-computed first — the panel's whole data source.
@@ -297,8 +317,22 @@ export interface DashboardQueryStore {
    * Bounded on purpose: this rides the 3-second poll, so it must never grow
    * with the audit history. At most one settled candidate trace and one live
    * trace per lane are returned.
+   *
+   * `arm` required (#1594), same guarantee as `getOpenPositions` (#1592).
+   * `PipelineActivity.live` is always `[]` for `arm: 'control'`: `current_tick`
+   * is written only by the live arm's `SequentialTickRunner` (the control arm
+   * is wired to its own never-persisted `InMemoryCurrentTickStore`,
+   * `control-arm-wiring.ts`), so a control-arm request excludes that table's
+   * leg from the universe query entirely rather than reading a table that
+   * structurally cannot hold a control row — the same "no read returns both"
+   * guarantee, applied to a table with no `arm` column and no rows to filter.
    */
-  getPipelineActivity(maxLanes: number, lookbackMs: number, asOf: Date): PipelineActivity;
+  getPipelineActivity(
+    maxLanes: number,
+    lookbackMs: number,
+    asOf: Date,
+    arm: TradingArm,
+  ): PipelineActivity;
   /**
    * Count of alert sends to the ESCALATION chat recorded in
    * `alert_delivery_failures` in the TRAILING 24 HOURS as of `asOf` (#1108,

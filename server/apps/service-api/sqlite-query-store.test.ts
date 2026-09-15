@@ -265,7 +265,7 @@ describe('SqliteQueryStore', () => {
     ).run('trace-2', 'key-2', 'TSLA', 'no_go', 'risk_max_positions', 1, '2026-07-27T09:00:00Z');
 
     const store = new SqliteQueryStore(db);
-    const verdicts = store.getVerdictHistory(10, NOW);
+    const verdicts = store.getVerdictHistory(10, NOW, 'live');
 
     expect(verdicts).toHaveLength(2);
     expect(verdicts[0]).toMatchObject({
@@ -313,16 +313,29 @@ describe('SqliteQueryStore', () => {
     const store = new SqliteQueryStore(db);
 
     // Unbounded: only the two live rows come back, newest first.
-    expect(store.getVerdictHistory(10, NOW).map((v) => v.trace_id)).toEqual([
+    expect(store.getVerdictHistory(10, NOW, 'live').map((v) => v.trace_id)).toEqual([
       'trace-live-1',
       'trace-live-2',
     ]);
 
     // Bounded to 2, with the two most recent rows both control-arm: a
     // pre-filter LIMIT would return an empty page here.
-    expect(store.getVerdictHistory(2, NOW).map((v) => v.trace_id)).toEqual([
+    expect(store.getVerdictHistory(2, NOW, 'live').map((v) => v.trace_id)).toEqual([
       'trace-live-1',
       'trace-live-2',
+    ]);
+
+    // #1594's mirror: `arm: 'control'` must return exactly the control rows,
+    // and the same pre-filter-then-limit ordering holds with the arms
+    // reversed — `limit: 2` against two live rows newer than both control
+    // rows must not starve the control page.
+    expect(store.getVerdictHistory(10, NOW, 'control').map((v) => v.trace_id)).toEqual([
+      `trace-control-2${CONTROL_TRACE_SUFFIX}`,
+      `trace-control-1${CONTROL_TRACE_SUFFIX}`,
+    ]);
+    expect(store.getVerdictHistory(2, NOW, 'control').map((v) => v.trace_id)).toEqual([
+      `trace-control-2${CONTROL_TRACE_SUFFIX}`,
+      `trace-control-1${CONTROL_TRACE_SUFFIX}`,
     ]);
   });
 
@@ -396,7 +409,7 @@ describe('SqliteQueryStore', () => {
     );
 
     const store = new SqliteQueryStore(db);
-    const metrics = store.getDailyMetrics(NOW);
+    const metrics = store.getDailyMetrics(NOW, 'live');
 
     expect(metrics.profit_factor).toBeCloseTo(50 / 20);
     expect(metrics.expectancy).toBeCloseTo(0.5 * 50 - 0.5 * 20);
@@ -423,7 +436,7 @@ describe('SqliteQueryStore', () => {
     );
 
     const store = new SqliteQueryStore(db);
-    const metrics = store.getDailyMetrics(NOW);
+    const metrics = store.getDailyMetrics(NOW, 'live');
 
     expect(metrics.profit_factor).toBe(Number.POSITIVE_INFINITY);
   });
@@ -438,9 +451,33 @@ describe('SqliteQueryStore', () => {
   it('returns a finite 0 for profit_factor on a window with no closed trades at all', () => {
     const db = makeDb();
     const store = new SqliteQueryStore(db);
-    const metrics = store.getDailyMetrics(NOW);
+    const metrics = store.getDailyMetrics(NOW, 'live');
 
     expect(metrics.profit_factor).toBe(0);
+  });
+
+  /**
+   * #1594: `arm` is bound, not a literal — this pins that a control-arm
+   * trade with a bigger P&L is excluded from `arm: 'live'`, and the mirror,
+   * a live-arm trade, is excluded from `arm: 'control'`. Before this ticket
+   * `getDailyMetrics` hardcoded `arm = 'live'`, so only the first direction
+   * had ever been exercised; the second is the one a hardcoded literal could
+   * still have passed while silently ignoring its `arm` parameter.
+   */
+  it('scopes profit_factor/expectancy to the named arm, each excluding the other', async () => {
+    const db = makeDb();
+    await seedClosedTrade(
+      new SqliteExecutionStore(db, 'live'),
+      makeClosedTrade({ idempotency_key: 'key-live', realized_pnl_net: 50 }),
+    );
+    await seedClosedTrade(
+      new SqliteExecutionStore(db, 'control'),
+      makeClosedTrade({ idempotency_key: 'key-control', realized_pnl_net: 999 }),
+    );
+
+    const store = new SqliteQueryStore(db);
+    expect(store.getDailyMetrics(NOW, 'live').expectancy).toBeCloseTo(50);
+    expect(store.getDailyMetrics(NOW, 'control').expectancy).toBeCloseTo(999);
   });
 
   it('accumulates attribution credit per analyst from closed trades joined to their debate log', async () => {
@@ -452,7 +489,7 @@ describe('SqliteQueryStore', () => {
     await seedClosedTrade(execStore, makeClosedTrade({ realized_pnl_net: 50 })); // R = 50 / (5*10) = 1
 
     const store = new SqliteQueryStore(db, 30);
-    const attribution = store.getAttribution(NOW);
+    const attribution = store.getAttribution(NOW, 'live');
 
     expect(attribution['technical-analyst']).toMatchObject({
       analyst_id: 'technical-analyst',
@@ -469,7 +506,7 @@ describe('SqliteQueryStore', () => {
     await seedClosedTrade(execStore, makeClosedTrade());
 
     const store = new SqliteQueryStore(db);
-    expect(store.getAttribution(NOW)).toEqual({});
+    expect(store.getAttribution(NOW, 'live')).toEqual({});
   });
 
   /**
@@ -489,7 +526,7 @@ describe('SqliteQueryStore', () => {
     await seedClosedTrade(execStore, makeClosedTrade({ realized_pnl_net: 50 }));
 
     const store = new SqliteQueryStore(db);
-    expect(store.getAttribution(NOW)).toEqual({});
+    expect(store.getAttribution(NOW, 'live')).toEqual({});
   });
 
   it('keeps attribution for a pre-#1081 row with no termination recorded (indeterminate, not excluded)', async () => {
@@ -502,7 +539,72 @@ describe('SqliteQueryStore', () => {
     await seedClosedTrade(execStore, makeClosedTrade({ realized_pnl_net: 50 }));
 
     const store = new SqliteQueryStore(db);
-    expect(store.getAttribution(NOW)['technical-analyst']?.rolling_r).toBeCloseTo(1);
+    expect(store.getAttribution(NOW, 'live')['technical-analyst']?.rolling_r).toBeCloseTo(1);
+  });
+
+  /**
+   * #1594: `closed_trades.arm = ?` is now a BOUND parameter, not the literal
+   * `'live'` it was before this ticket. A literal that silently ignored its
+   * `arm` argument would still pass every test above (none of them ever
+   * construct a control-arm trade), so this constructs one closed trade per
+   * arm — sharing one `debate_log` row, which is what a hand-written literal
+   * would still join against for BOTH arms if the bound parameter were
+   * dropped — and asserts each arm's read sees only its own trade's R.
+   *
+   * Production never actually shares a `debate_id` across arms this way (the
+   * control arm's own decisions never reach `debate_log` at all — see
+   * `getAttribution`'s doc), so this is a deliberately synthetic setup that
+   * isolates the ONE thing this test needs to isolate: whether `arm` is
+   * really filtering `closed_trades`, independent of the join's own
+   * (production-real) emptiness for the control arm.
+   */
+  it('scopes attribution to the named arm even when both arms would join the same debate_log row', async () => {
+    const db = makeDb();
+    const debateStore = new SqliteDebateLogStore(db);
+    debateStore.writeLog(makeDebateLog({ debate_id: 'debate-shared' }));
+
+    await seedClosedTrade(
+      new SqliteExecutionStore(db, 'live'),
+      makeClosedTrade({
+        idempotency_key: 'key-live',
+        debate_id: 'debate-shared',
+        realized_pnl_net: 50,
+      }),
+    );
+    await seedClosedTrade(
+      new SqliteExecutionStore(db, 'control'),
+      makeClosedTrade({
+        idempotency_key: 'key-control',
+        debate_id: 'debate-shared',
+        realized_pnl_net: 999,
+      }),
+    );
+
+    const store = new SqliteQueryStore(db, 30);
+    // R = 50 / (5 * 10) = 1 for the live trade.
+    expect(store.getAttribution(NOW, 'live')['technical-analyst']?.rolling_r).toBeCloseTo(1);
+    // R = 999 / (5 * 10) = 19.98 for the control trade — a different value,
+    // proving this came from the control row, not a copy of the live one.
+    expect(store.getAttribution(NOW, 'control')['technical-analyst']?.rolling_r).toBeCloseTo(19.98);
+  });
+
+  /**
+   * The production-real case (contrast the synthetic one above): the control
+   * arm's own `DebateResult` is synthesized in-memory
+   * (`axis-vote-decision.ts`) and never reaches `debate_log`, so a control
+   * closed trade's `JOIN ON debate_log.debate_id = closed_trades.debate_id`
+   * never matches anything, no matter what `debate_id` string the trade
+   * carries. `{}` here is the honest "nothing to attribute", not a bug.
+   */
+  it('returns no attribution for the control arm when no debate_log row exists at all (the real case)', async () => {
+    const db = makeDb();
+    await seedClosedTrade(
+      new SqliteExecutionStore(db, 'control'),
+      makeClosedTrade({ debate_id: 'control:deadbeef', realized_pnl_net: 999 }),
+    );
+
+    const store = new SqliteQueryStore(db);
+    expect(store.getAttribution(NOW, 'control')).toEqual({});
   });
 
   // #940: closed trades and their fills, surfaced for the dashboard.
@@ -1132,7 +1234,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
       at: minutesBefore(1),
     });
 
-    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW, 'live');
 
     expect(activity.universe).toEqual([
       { instrument: 'BTC-USD', asset_class: 'crypto' },
@@ -1147,7 +1249,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
       seedMark(db, instrument, 'stocks');
     }
 
-    const activity = new SqliteQueryStore(db).getPipelineActivity(2, LOOKBACK_MS, NOW);
+    const activity = new SqliteQueryStore(db).getPipelineActivity(2, LOOKBACK_MS, NOW, 'live');
 
     expect(activity.universe.map((u) => u.instrument)).toEqual(['AAPL', 'MSFT']);
   });
@@ -1179,7 +1281,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
       asset_class: 'crypto',
     });
 
-    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW, 'live');
 
     expect(activity.universe).toEqual([
       { instrument: 'BTC-USD', asset_class: 'crypto' },
@@ -1205,7 +1307,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
       asset_class: 'stocks',
     });
 
-    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW, 'live');
 
     expect(activity.universe).toEqual([{ instrument: 'TSLA', asset_class: 'stocks' }]);
     expect(activity.events).toEqual([]);
@@ -1227,7 +1329,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
       asset_class: 'stocks',
     });
 
-    const activity = new SqliteQueryStore(db).getPipelineActivity(1, LOOKBACK_MS, NOW);
+    const activity = new SqliteQueryStore(db).getPipelineActivity(1, LOOKBACK_MS, NOW, 'live');
 
     expect(activity.universe).toEqual([{ instrument: 'ZETA', asset_class: 'stocks' }]);
   });
@@ -1267,7 +1369,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
       asset_class: 'stocks',
     });
 
-    const activity = new SqliteQueryStore(db).getPipelineActivity(1, LOOKBACK_MS, NOW);
+    const activity = new SqliteQueryStore(db).getPipelineActivity(1, LOOKBACK_MS, NOW, 'live');
 
     expect(activity.universe).toEqual([{ instrument: 'ZETA', asset_class: 'stocks' }]);
   });
@@ -1287,7 +1389,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
       asset_class: 'crypto',
     });
 
-    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW, 'live');
 
     expect(activity.universe).toEqual([]);
   });
@@ -1320,9 +1422,146 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
       asset_class: 'stocks',
     });
 
-    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW, 'live');
 
     expect(activity.universe).toEqual([{ instrument: 'AAPL', asset_class: 'stocks' }]);
+  });
+
+  /**
+   * #1594's mirror of #1319: the same three tests above, arm-flipped. A
+   * `trace_id` with no `CONTROL_TRACE_SUFFIX` is the LIVE arm's own row, so
+   * requesting `arm: 'control'` must exclude it exactly as requesting
+   * `arm: 'live'` excludes a `:control`-suffixed one — proving the guarantee
+   * holds in both directions, not only the one #1319 originally fixed.
+   */
+  describe('the mirror image for arm: "control" (#1594)', () => {
+    it('does not let a live-only instrument displace a control one at the maxLanes cap', () => {
+      const db = makeDb();
+      seedAudit(db, {
+        trace_id: 'trace-live',
+        stage: 'analysts',
+        decision: 'quorum_met',
+        at: minutesBefore(1),
+        instrument: 'AAPL',
+        asset_class: 'stocks',
+      });
+      seedAudit(db, {
+        trace_id: `trace-zeta${CONTROL_TRACE_SUFFIX}`,
+        stage: 'analysts',
+        decision: 'quorum_met',
+        at: minutesBefore(1),
+        instrument: 'ZETA',
+        asset_class: 'stocks',
+      });
+
+      const activity = new SqliteQueryStore(db).getPipelineActivity(1, LOOKBACK_MS, NOW, 'control');
+
+      expect(activity.universe).toEqual([{ instrument: 'ZETA', asset_class: 'stocks' }]);
+    });
+
+    it('gives no lane to an instrument only the live arm touched', () => {
+      const db = makeDb();
+      seedAudit(db, {
+        trace_id: 'trace-live',
+        stage: 'analysts',
+        decision: 'quorum_met',
+        at: minutesBefore(1),
+        instrument: 'BTC-USD',
+        asset_class: 'crypto',
+      });
+
+      const activity = new SqliteQueryStore(db).getPipelineActivity(
+        10,
+        LOOKBACK_MS,
+        NOW,
+        'control',
+      );
+
+      expect(activity.universe).toEqual([]);
+    });
+
+    it('keeps an instrument both arms touched, from its control row alone', () => {
+      const db = makeDb();
+      seedAudit(db, {
+        trace_id: 'trace-live',
+        stage: 'analysts',
+        decision: 'quorum_met',
+        at: minutesBefore(1),
+        instrument: 'AAPL',
+        asset_class: 'stocks',
+      });
+      seedAudit(db, {
+        trace_id: `trace-live${CONTROL_TRACE_SUFFIX}`,
+        stage: 'analysts',
+        decision: 'quorum_met',
+        at: minutesBefore(1),
+        instrument: 'AAPL',
+        asset_class: 'stocks',
+      });
+
+      const activity = new SqliteQueryStore(db).getPipelineActivity(
+        10,
+        LOOKBACK_MS,
+        NOW,
+        'control',
+      );
+
+      expect(activity.universe).toEqual([{ instrument: 'AAPL', asset_class: 'stocks' }]);
+    });
+
+    /**
+     * `current_tick` structurally holds only live rows (the control arm is
+     * wired to its own never-persisted `InMemoryCurrentTickStore`,
+     * `control-arm-wiring.ts`) — this pins that `getPipelineActivity` treats
+     * that as a reason to EXCLUDE the leg for `arm: 'control'`, not read it
+     * unconditionally. Unfiltered, this in-flight live tick would both win
+     * ZETA's only lane at the cap and populate `PipelineActivity.live` with a
+     * tick belonging to the other arm — the same "no read returns both arms"
+     * leak #1319 fixed for `audit_log`, reopened through the one table with no
+     * `trace_id` to filter on.
+     */
+    it('excludes current_tick entirely from a control-arm read, universe and live alike', () => {
+      const db = makeDb();
+      seedTick(db, {
+        instrument: 'ETH-USD',
+        asset_class: 'crypto',
+        stage: 'debate',
+        trace_id: 'trace-live',
+        at: minutesBefore(1),
+      });
+      seedAudit(db, {
+        trace_id: `trace-zeta${CONTROL_TRACE_SUFFIX}`,
+        stage: 'analysts',
+        decision: 'quorum_met',
+        at: minutesBefore(1),
+        instrument: 'ZETA',
+        asset_class: 'stocks',
+      });
+
+      const activity = new SqliteQueryStore(db).getPipelineActivity(1, LOOKBACK_MS, NOW, 'control');
+
+      expect(activity.universe).toEqual([{ instrument: 'ZETA', asset_class: 'stocks' }]);
+      expect(activity.live).toEqual([]);
+    });
+
+    /** The `arm: 'live'` mirror of the test above: unaffected by the new branch. */
+    it('still includes current_tick for arm: "live"', () => {
+      const db = makeDb();
+      seedTick(db, {
+        instrument: 'ETH-USD',
+        asset_class: 'crypto',
+        stage: 'debate',
+        trace_id: 'trace-live',
+        at: minutesBefore(1),
+      });
+
+      const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW, 'live');
+
+      expect(activity.universe).toEqual([{ instrument: 'ETH-USD', asset_class: 'crypto' }]);
+      expect(activity.live).toEqual([
+        expect.objectContaining({ instrument: 'ETH-USD', trace_id: 'trace-live' }),
+      ]);
+    });
   });
 
   it('resolves an instrument whose sources disagree on asset class to one stable lane', () => {
@@ -1352,12 +1591,12 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
 
     const store = new SqliteQueryStore(db);
 
-    expect(store.getPipelineActivity(10, LOOKBACK_MS, NOW).universe).toEqual([
+    expect(store.getPipelineActivity(10, LOOKBACK_MS, NOW, 'live').universe).toEqual([
       { instrument: 'AAPL', asset_class: 'crypto' },
     ]);
     // Repeated because the failure this guards is a value that VARIES, which a
     // single assertion cannot distinguish from a value that is merely lucky.
-    expect(store.getPipelineActivity(10, LOOKBACK_MS, NOW).universe).toEqual([
+    expect(store.getPipelineActivity(10, LOOKBACK_MS, NOW, 'live').universe).toEqual([
       { instrument: 'AAPL', asset_class: 'crypto' },
     ]);
   });
@@ -1384,7 +1623,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
       at: minutesBefore(2),
     });
 
-    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW, 'live');
 
     expect(activity.events).toHaveLength(2);
     expect(activity.events[0]).toMatchObject({
@@ -1418,7 +1657,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
       asset_class: 'crypto',
     });
 
-    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW, 'live');
 
     expect(activity.live).toEqual([
       {
@@ -1440,7 +1679,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
     seedAudit(db, { trace_id: 'old', stage: 'verdict', decision: 'go', at: minutesBefore(9) });
     seedAudit(db, { trace_id: 'new', stage: 'verdict', decision: 'go', at: minutesBefore(2) });
 
-    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW, 'live');
 
     // One lane holds one trace, so fetching every trace in the window would be
     // payload the view cannot use — on a 3-second poll that is the difference
@@ -1465,7 +1704,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
       at: minutesBefore(90),
     });
 
-    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW, 'live');
 
     expect(activity.events).toEqual([]);
     expect(activity.live).toEqual([]);
@@ -1496,7 +1735,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
       at: new Date(NOW.getTime() + 60_000).toISOString(),
     });
 
-    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW, 'live');
 
     expect(activity.events.map((e) => e.stage)).toEqual(['analysts']);
   });
@@ -1522,7 +1761,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
       at: minutesBefore(2),
     });
 
-    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW, 'live');
 
     expect(activity.events.map((e) => e.stage)).toEqual(['verdict']);
   });
@@ -1543,7 +1782,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
       seedAudit(db, { trace_id: 'trace-1', stage, decision: 'ok', at: sameMs });
     }
 
-    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW, 'live');
 
     expect(activity.events.map((e) => e.stage)).toEqual([
       'analysts',
@@ -1575,7 +1814,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
       at: minutesBefore(3),
     });
 
-    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW, 'live');
 
     expect(activity.events.map((e) => e.stage)).toEqual(['analysts', 'trader']);
     expect(activity.events[1]).toMatchObject({ instrument: 'AAPL', decision: 'no_trade' });
@@ -1596,7 +1835,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
       asset_class: null,
     });
 
-    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW, 'live');
 
     expect(activity.events).toEqual([]);
     expect(activity.universe).toEqual([{ instrument: 'AAPL', asset_class: 'stocks' }]);
@@ -1618,7 +1857,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
       asset_class: null,
     });
 
-    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW, 'live');
 
     expect(activity.universe).toEqual([{ instrument: 'AAPL', asset_class: 'stocks' }]);
     expect(activity.events).toEqual([]);
@@ -1652,7 +1891,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
       asset_class: null,
     });
 
-    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW, 'live');
 
     expect(activity.events.map((e) => e.trace_id)).toEqual(['real', 'real']);
     expect(activity.events.map((e) => e.stage)).toEqual(['analysts', 'trader']);
@@ -1702,7 +1941,7 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
       at: minutesBefore(1),
     });
 
-    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW, 'live');
 
     expect(activity.events.map((e) => e.trace_id)).toEqual(['trace-live']);
     expect(activity.events.map((e) => e.stage)).toEqual(['analysts']);
@@ -1755,9 +1994,77 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
       at: minutesBefore(3),
     });
 
-    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW);
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW, 'live');
 
     expect(activity.events.map((e) => e.trace_id)).toEqual(['trace-live', 'trace-live']);
+    expect(activity.events.map((e) => e.stage)).toEqual(['analysts', 'trader']);
+  });
+
+  /**
+   * #1594's mirror of #1326: the roles reversed. A control-arm request must
+   * not let a newer LIVE row win the newest-trace pick for an instrument the
+   * control arm also touched — the same nested-pass mechanism, read from the
+   * other arm's side. `armLikeOperator('control')` flips `NOT LIKE` to `LIKE`,
+   * so this pins that the flip, not just the live-only predicate, filters
+   * ahead of the fold.
+   */
+  it('does not let a newer live-arm row win the newest-trace pick for a control-arm request', () => {
+    const db = makeDb();
+    seedMark(db, 'AAPL', 'stocks');
+    seedAudit(db, {
+      trace_id: `trace-live${CONTROL_TRACE_SUFFIX}`,
+      stage: 'analysts',
+      decision: 'quorum_skip_analyst_split',
+      at: minutesBefore(5),
+    });
+    seedAudit(db, {
+      trace_id: 'trace-live',
+      stage: 'analysts',
+      decision: 'quorum_skip_analyst_split',
+      at: minutesBefore(1),
+    });
+
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW, 'control');
+
+    expect(activity.events.map((e) => e.trace_id)).toEqual([`trace-live${CONTROL_TRACE_SUFFIX}`]);
+    expect(activity.events.map((e) => e.stage)).toEqual(['analysts']);
+  });
+
+  /** The control-arm mirror of "keeps an instrument's live stage sequence…" above. */
+  it("keeps an instrument's control stage sequence when the live arm touched it too", () => {
+    const db = makeDb();
+    seedMark(db, 'AAPL', 'stocks');
+    seedAudit(db, {
+      trace_id: `trace-live${CONTROL_TRACE_SUFFIX}`,
+      stage: 'analysts',
+      decision: 'quorum_met',
+      at: minutesBefore(5),
+    });
+    seedAudit(db, {
+      trace_id: `trace-live${CONTROL_TRACE_SUFFIX}`,
+      stage: 'trader',
+      decision: 'no_trade',
+      at: minutesBefore(4),
+    });
+    seedAudit(db, {
+      trace_id: 'trace-live',
+      stage: 'analysts',
+      decision: 'quorum_met',
+      at: minutesBefore(5),
+    });
+    seedAudit(db, {
+      trace_id: 'trace-live',
+      stage: 'verdict',
+      decision: 'go',
+      at: minutesBefore(3),
+    });
+
+    const activity = new SqliteQueryStore(db).getPipelineActivity(10, LOOKBACK_MS, NOW, 'control');
+
+    expect(activity.events.map((e) => e.trace_id)).toEqual([
+      `trace-live${CONTROL_TRACE_SUFFIX}`,
+      `trace-live${CONTROL_TRACE_SUFFIX}`,
+    ]);
     expect(activity.events.map((e) => e.stage)).toEqual(['analysts', 'trader']);
   });
 });
@@ -1856,7 +2163,7 @@ describe('SqliteQueryStore.getRiskCritics', () => {
       dropped_conditions: [{ id: null, raw: 'nonsense', reason: 'unparseable' }],
     });
 
-    const records = new SqliteQueryStore(db).getRiskCritics(10, NOW);
+    const records = new SqliteQueryStore(db).getRiskCritics(10, NOW, 'live');
 
     expect(records).toHaveLength(1);
     expect(records[0]?.trace_id).toBe('trace-1');
@@ -1889,7 +2196,7 @@ describe('SqliteQueryStore.getRiskCritics', () => {
       conditions: [BREACHED_CONDITION],
     });
 
-    const records = new SqliteQueryStore(db).getRiskCritics(10, NOW);
+    const records = new SqliteQueryStore(db).getRiskCritics(10, NOW, 'live');
 
     expect(records).toHaveLength(2);
     expect(new Set(records.map((r) => r.trace_id))).toEqual(
@@ -1913,7 +2220,7 @@ describe('SqliteQueryStore.getRiskCritics', () => {
        VALUES ('debate-old', 'pass', NULL, 'written before the fold', '2026-07-27T12:00:00.000Z')`,
     ).run();
 
-    const records = new SqliteQueryStore(db).getRiskCritics(10, NOW);
+    const records = new SqliteQueryStore(db).getRiskCritics(10, NOW, 'live');
 
     expect(records[0]?.critic?.verdict).toBe('pass');
     expect(records[0]?.critic?.conditions).toBeUndefined();
@@ -1942,7 +2249,9 @@ describe('SqliteQueryStore.getRiskCritics', () => {
     });
 
     const byTrace = new Map(
-      new SqliteQueryStore(db).getRiskCritics(10, NOW).map((record) => [record.trace_id, record]),
+      new SqliteQueryStore(db)
+        .getRiskCritics(10, NOW, 'live')
+        .map((record) => [record.trace_id, record]),
     );
 
     expect(byTrace.get('trace-no-trader')?.debate_id).toBeNull();
@@ -1983,9 +2292,49 @@ describe('SqliteQueryStore.getRiskCritics', () => {
     seedRisk(db, { trace_id: 'trace-1', instrument: 'AAPL', binding_constraint: null, at: NOW });
     seedTrader(db, { trace_id: 'trace-1', instrument: 'AAPL', debate_id: 'debate-live', at: NOW });
 
-    const records = new SqliteQueryStore(db).getRiskCritics(10, NOW);
+    const records = new SqliteQueryStore(db).getRiskCritics(10, NOW, 'live');
 
     expect(records.map((record) => record.trace_id)).toEqual(['trace-1']);
+  });
+
+  /**
+   * #1594's mirror of the test above: `arm: 'control'` must return exactly
+   * the control arm's own Risk decisions (both discriminators flipped, the
+   * `trace_id`-only and the `trace_id` + `debate_id` cases alike) and exclude
+   * the live one. Each comes back with `critic: undefined` — the control arm
+   * calls no model, so it consults no critic — but the DECISIONS themselves
+   * are not excluded; that is the "not applicable" reading ADR-0021's
+   * 2026-09-15 amendment names, not an empty result.
+   */
+  it('returns control-arm decisions for arm: "control", each with no critic verdict', () => {
+    const db = makeDb();
+    seedRisk(db, {
+      trace_id: `trace-1${CONTROL_TRACE_SUFFIX}`,
+      instrument: 'AAPL',
+      binding_constraint: null,
+      at: NOW,
+    });
+    seedTrader(db, {
+      trace_id: `trace-1${CONTROL_TRACE_SUFFIX}`,
+      instrument: 'AAPL',
+      debate_id: `${CONTROL_DEBATE_ID_PREFIX}abc`,
+      at: NOW,
+    });
+    seedRisk(db, {
+      trace_id: `trace-2${CONTROL_TRACE_SUFFIX}`,
+      instrument: 'AAPL',
+      binding_constraint: null,
+      at: NOW,
+    });
+    seedRisk(db, { trace_id: 'trace-1', instrument: 'AAPL', binding_constraint: null, at: NOW });
+    seedTrader(db, { trace_id: 'trace-1', instrument: 'AAPL', debate_id: 'debate-live', at: NOW });
+
+    const records = new SqliteQueryStore(db).getRiskCritics(10, NOW, 'control');
+
+    expect(new Set(records.map((record) => record.trace_id))).toEqual(
+      new Set([`trace-1${CONTROL_TRACE_SUFFIX}`, `trace-2${CONTROL_TRACE_SUFFIX}`]),
+    );
+    expect(records.every((record) => record.critic === undefined)).toBe(true);
   });
 
   it('returns the most recent decisions first, bounded by the limit and by asOf', () => {
@@ -2003,12 +2352,12 @@ describe('SqliteQueryStore.getRiskCritics', () => {
 
     const store = new SqliteQueryStore(db);
 
-    expect(store.getRiskCritics(10, NOW).map((record) => record.trace_id)).toEqual([
+    expect(store.getRiskCritics(10, NOW, 'live').map((record) => record.trace_id)).toEqual([
       'newest',
       'middle',
       'oldest',
     ]);
-    expect(store.getRiskCritics(2, NOW).map((record) => record.trace_id)).toEqual([
+    expect(store.getRiskCritics(2, NOW, 'live').map((record) => record.trace_id)).toEqual([
       'newest',
       'middle',
     ]);

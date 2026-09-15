@@ -886,12 +886,16 @@ export class InMemoryQueryStore implements DashboardQueryStore {
     return FILLS.filter((fill) => keys.has(fill.idempotency_key));
   }
 
-  getVerdictHistory(limit: number, _asOf: Date): VerdictAuditEntry[] {
+  /** `arm` accepted and ignored — see `getOpenPositions`'s doc (#1592/#1594). */
+  getVerdictHistory(limit: number, _asOf: Date, _arm: TradingArm): VerdictAuditEntry[] {
     return VERDICT_HISTORY.slice(0, limit);
   }
 
-  /** #1066. `limit` is honoured for `getPipelineActivity`'s reason. */
-  getRiskCritics(limit: number, _asOf: Date): RiskCriticRecord[] {
+  /**
+   * #1066. `limit` is honoured for `getPipelineActivity`'s reason. `arm`
+   * accepted and ignored — see `getOpenPositions`'s doc (#1592/#1594).
+   */
+  getRiskCritics(limit: number, _asOf: Date, _arm: TradingArm): RiskCriticRecord[] {
     return RISK_CRITICS.slice(0, limit).map((record) => ({ ...record }));
   }
 
@@ -899,11 +903,13 @@ export class InMemoryQueryStore implements DashboardQueryStore {
     return { ...ANALYST_WEIGHTS };
   }
 
-  getAttribution(_asOf: Date): Record<string, AttributionSummary> {
+  /** `arm` accepted and ignored — see `getOpenPositions`'s doc (#1592/#1594). */
+  getAttribution(_asOf: Date, _arm: TradingArm): Record<string, AttributionSummary> {
     return { ...ATTRIBUTION };
   }
 
-  getDailyMetrics(_asOf: Date): MetricsSuite {
+  /** `arm` accepted and ignored — see `getOpenPositions`'s doc (#1592/#1594). */
+  getDailyMetrics(_asOf: Date, _arm: TradingArm): MetricsSuite {
     return { ...DAILY_METRICS };
   }
 
@@ -951,9 +957,17 @@ export class InMemoryQueryStore implements DashboardQueryStore {
    * ignored its own bound would let the dashboard ship never having exercised
    * one); `lookbackMs` and `asOf` are not, for the same reason every method
    * above ignores `asOf` — the fixture data is static, so every trace is
-   * always "recent".
+   * always "recent". `arm` accepted and ignored — see `getOpenPositions`'s doc
+   * (#1592/#1594); unlike `SqliteQueryStore`, there is no `current_tick`
+   * table here for `live` to vary by, so `arm: 'control'` returns the same
+   * `live` array as `arm: 'live'` rather than `[]`.
    */
-  getPipelineActivity(maxLanes: number, _lookbackMs: number, _asOf: Date): PipelineActivity {
+  getPipelineActivity(
+    maxLanes: number,
+    _lookbackMs: number,
+    _asOf: Date,
+    _arm: TradingArm,
+  ): PipelineActivity {
     const universe = Object.entries(MARKS)
       .map(([instrument, mark]) => ({ instrument, asset_class: mark.asset_class }))
       .slice(0, maxLanes);
