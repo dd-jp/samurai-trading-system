@@ -1010,7 +1010,7 @@ describe('SaxoBrokerAdapter.getOrder', () => {
     expect(client.cancelOrder).not.toHaveBeenCalled();
   });
 
-  it("keeps an activated leg pair filled when the master's terminal audit row carries a nonzero FillAmount — a terminal status alone must not be read as 'never filled' (#1215/#1426)", async () => {
+  it("keeps an activated leg pair filled when the master's terminal audit row carries a nonzero FillAmount, and reports that FillAmount rather than the leg's resting Amount (#1215/#1426, #1563)", async () => {
     const client = makeClient({
       listOpenOrders: vi
         .fn()
@@ -1023,11 +1023,13 @@ describe('SaxoBrokerAdapter.getOrder', () => {
 
     const order = await adapter.getOrder('key-3usl-0930', '3USL');
 
-    expect(order).toMatchObject({ order_state: 'filled', filled_qty: 3 });
+    // Leg Amount is 3 (dormantLeg/targetLeg default); the audit trail's own
+    // FillAmount (2) is the real fill size and is what is reported (#1563).
+    expect(order).toMatchObject({ order_state: 'filled', filled_qty: 2 });
     expect(client.cancelOrder).not.toHaveBeenCalled();
   });
 
-  it("keeps an activated leg pair filled when a fill row is followed by a SEPARATE later terminal row for the same reference — a partial-fill residual cancelled at close must not read as 'never filled' just because it is the latest row (#1215/#1426 round 3)", async () => {
+  it("keeps an activated leg pair filled when a fill row is followed by a SEPARATE later terminal row for the same reference, reporting the fill row's own FillAmount rather than the leg's resting Amount — a partial-fill residual cancelled at close must not read as 'never filled' just because it is the latest row (#1215/#1426 round 3, #1563)", async () => {
     const client = makeClient({
       listOpenOrders: vi
         .fn()
@@ -1038,6 +1040,30 @@ describe('SaxoBrokerAdapter.getOrder', () => {
           LogId: 'log-2',
           Status: 'Cancelled',
           ActivityTime: '2026-09-05T16:30:00.000000Z',
+        }),
+      ]),
+    });
+    const { adapter } = makeAdapter(client);
+
+    const order = await adapter.getOrder('key-3usl-0930', '3USL');
+
+    expect(order).toMatchObject({ order_state: 'filled', filled_qty: 2 });
+    expect(client.cancelOrder).not.toHaveBeenCalled();
+  });
+
+  it('sums FillAmount across every fill-evidencing row rather than the latest one, so a fill split across multiple activity rows is not under-reported (#1563)', async () => {
+    const client = makeClient({
+      listOpenOrders: vi
+        .fn()
+        .mockResolvedValue([dormantLeg({ Status: 'Working' }), targetLeg({ Status: 'Working' })]),
+      listOrderActivities: vi.fn().mockResolvedValue([
+        activity({ Status: 'FinalFill', FillAmount: 1, AveragePrice: 10 }),
+        activity({
+          LogId: 'log-2',
+          Status: 'FinalFill',
+          FillAmount: 2,
+          AveragePrice: 10,
+          ActivityTime: '2026-09-05T08:31:00.000000Z',
         }),
       ]),
     });
