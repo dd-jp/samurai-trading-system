@@ -71,11 +71,12 @@ describe('no reachable model is unpriced', () => {
     expect(priceUsage(model, { input_tokens: 1_000, output_tokens: 1_000 })).not.toBeNull();
   });
 
-  it.each(
-    Object.entries(DEFAULT_NOUS_MODELS),
-  )('has a rate for the %s role default', (_role, model) => {
-    expect(rateFor(model)).not.toBeNull();
-  });
+  it.each(Object.entries(DEFAULT_NOUS_MODELS))(
+    'has a rate for the %s role default',
+    (_role, model) => {
+      expect(rateFor(model)).not.toBeNull();
+    },
+  );
 
   it('refuses to build credentials for a model it cannot price', () => {
     const previous = { ...process.env };

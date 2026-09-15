@@ -50,18 +50,12 @@ describe('resolveLiveCapitalCeilingUsd', () => {
     expect(() => resolveLiveCapitalCeilingUsd(raw)).toThrow(LIVE_MAX_CAPITAL_ENV_VAR);
   });
 
-  it.each([
-    '0',
-    '-1',
-    '-0.01',
-    'abc',
-    'NaN',
-    'Infinity',
-    '2000abc',
-    '',
-  ])('refuses %j rather than coercing it', (raw) => {
-    expect(() => resolveLiveCapitalCeilingUsd(raw)).toThrow(/cannot start/);
-  });
+  it.each(['0', '-1', '-0.01', 'abc', 'NaN', 'Infinity', '2000abc', ''])(
+    'refuses %j rather than coercing it',
+    (raw) => {
+      expect(() => resolveLiveCapitalCeilingUsd(raw)).toThrow(/cannot start/);
+    },
+  );
 
   it("refuses '2000abc' instead of silently reading 2000 out of it", () => {
     // `parseFloat` would return 2000 here and turn a typo into an accepted
@@ -212,14 +206,12 @@ describe('liveStartingProfile', () => {
     expect(first.riskConfig).toEqual(second.riskConfig);
   });
 
-  it.each([
-    0,
-    -1,
-    Number.NaN,
-    Number.POSITIVE_INFINITY,
-  ])('refuses an injected ceiling of %j rather than trusting a programmatic caller', (ceiling) => {
-    expect(() => liveStartingProfile(ceiling)).toThrow(/cannot start/);
-  });
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    'refuses an injected ceiling of %j rather than trusting a programmatic caller',
+    (ceiling) => {
+      expect(() => liveStartingProfile(ceiling)).toThrow(/cannot start/);
+    },
+  );
 
   it('warns, naming the live-money gates and the ceiling, before anything is constructed', () => {
     const logger = makeLogger();

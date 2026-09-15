@@ -82,3 +82,16 @@ export const CONTROL_NO_EQUITY = 'Control arm: simulated broker — no equity fi
 export const CONTROL_NO_TICK = 'Control arm: tick status is not persisted';
 export const CONTROL_NO_CRITIC = 'Control arm: no LLM critic — not applicable';
 export const CONTROL_NO_ANALYSTS = 'Control arm: no debate, no analyst weights — not applicable';
+
+/**
+ * `pnl.overall`'s caveat against the Review tab's arm-comparison panel
+ * (#1623, ADR-0021 point 6 / dashboard-spec.md): different population
+ * (all-time vs `oneSizingRegime`/`modelledCostCharged`-filtered), different
+ * window (all-time vs Feedback Loop's configured window), different
+ * freshness (render time vs FL's last cycle), and realized vs realized-plus-
+ * unrealized (`net_gbp` carries today's open unrealized P&L, the panel's
+ * `realized_pnl_net` does not). Named once here so Glance cannot drift from
+ * the wording the spec documents.
+ */
+export const PNL_OVERALL_CAVEAT =
+  'All-time: net adds open unrealized to every closed trade; drawdown and trade count are closed trades only. The Review arm-comparison panel reports realized only, over a filtered window sampled on its own cadence, and can report a different figure for the same arm.';

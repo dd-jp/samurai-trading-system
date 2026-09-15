@@ -20,6 +20,7 @@ import type { Selection } from '../../lib/resolve-trace.ts';
 import {
   CONTROL_NO_EQUITY,
   OUTCOME_WORD,
+  PNL_OVERALL_CAVEAT,
   PNL_RATE_SOURCE_WORD,
   sideWord,
   stageName,
@@ -151,6 +152,7 @@ function PnlCard({ snapshot, equitySamples }: Pick<GlanceTabProps, 'snapshot' | 
             <span className="mono">{formatCount(overall.trade_count)}</span>
           </div>
         </div>
+        <p className="muted small">{PNL_OVERALL_CAVEAT}</p>
       </div>
       <div className="pnl-block">
         <h3>
