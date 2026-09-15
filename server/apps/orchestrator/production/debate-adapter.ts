@@ -424,7 +424,7 @@ export function buildDebatePersonas(
  * PARTIAL/timed-out debate with `rounds_completed >= 1` through this
  * function is otherwise unreachable via `buildDebateStep`: that function
  * hardwires `maxRounds` to `MAX_ROUNDS_BY_ASSET_CLASS[asset_class]` (line
- * ~1070), which is 1 for both asset classes as of #1080, so a debate that
+ * ~1069), which is 1 for both asset classes as of #1080, so a debate that
  * times out with any partial round data already recorded cannot be produced
  * through the public step today. This is the same structural fact #1517's
  * flip-rate report states: nothing exercises this branch in production

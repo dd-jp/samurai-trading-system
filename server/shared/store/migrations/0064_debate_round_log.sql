@@ -22,10 +22,10 @@
 -- WHY A FOREIGN KEY, UNLIKE llm_call_log's debate_id. That table's FK is
 -- deliberately absent because its write is best-effort and independent of
 -- debate_log's (see its own migration's header). This write is neither:
--- `persistDebateLog` (debate-adapter.ts) calls store.writeLogWithRounds,
--- which writes debate_log and this table's rows in one transaction, only in
--- the SAME branch that just wrote the owning debate_log row, after the
--- first-write-wins duplicate guard returns — so the debate_log row always
+-- `persistDebateLog` (debate-adapter.ts) calls store.writeLogWithRounds only
+-- in the branch that survives the first-write-wins duplicate guard (i.e. not
+-- a repeat write for this debate_id) — that single transaction inserts the
+-- debate_log row before this table's rows, so the referenced row always
 -- exists first, in the same synchronous call, and an orphaned round row
 -- would only mean this table's own writer has a bug worth catching loudly
 -- rather than swallowing.
