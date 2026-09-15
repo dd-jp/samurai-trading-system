@@ -238,7 +238,7 @@ export async function maybeRearmResidual(
     // adapter adopted legs it verified already live) — so the marker clears.
     // Best-effort: if this write fails the sweep retries a re-arm that is
     // already in place, which every adapter path tolerates (equities
-    // adopt-or-place on the deterministic `:rearm` wire id; crypto emulation
+    // adopt-or-place over the lot's derived re-arm wire ids; crypto emulation
     // retires stale legs before arming; Simulated re-sets the same qty).
     await bestEffortMarkerWrite(input, position, now, 'confirm-protected');
   } catch (error) {
@@ -253,11 +253,12 @@ export async function maybeRearmResidual(
     // credential-free error before it is visible here, so the credentialed
     // original never reaches this catch either.
     //
-    // #1214: a venue that cannot express an entry-less protective pair at
-    // all refuses this call permanently, so no retry of it can protect this
-    // residual. The recorded decision (David, 2026-09-08, option 2) is to
-    // CLOSE the residual instead — see residual-reflatten.ts, called below
-    // once the failure is traced.
+    // #1214: some refusals of this call are permanent, so no retry of it can
+    // protect this residual — a venue that cannot express an entry-less
+    // protective pair at all (Saxo), or a lot that has spent every re-arm wire
+    // id the venue will grant it (Alpaca, #1346). The recorded decision (David,
+    // 2026-09-08, option 2) is to CLOSE the residual instead — see
+    // residual-reflatten.ts, called below once the failure is traced.
     const unsupported = isProtectiveRearmUnsupported(error);
     logCaughtFailure(
       input.logger,
@@ -271,8 +272,8 @@ export async function maybeRearmResidual(
             event: 'residual_rearm_unsupported',
             level: 'error',
             message:
-              'maybeRearmResidual: this venue cannot arm protective legs at all, so no retry ' +
-              'can protect this residual — closing it instead (#1214)',
+              'maybeRearmResidual: arming protective legs for this lot is permanently refused, ' +
+              'so no retry can protect this residual — closing it instead (#1214)',
           }
         : {
             trace_id: input.trace_id,
@@ -441,8 +442,9 @@ export interface ResidualExposureFlags {
    */
   residualQtyIsUpperBound?: boolean;
   /**
-   * `true` when the re-arm was refused as impossible on this venue rather
-   * than merely failing (#1214, `isProtectiveRearmUnsupported`) — see
+   * `true` when the re-arm was refused PERMANENTLY rather than merely failing
+   * (#1214, `isProtectiveRearmUnsupported` — a venue with no entry-less
+   * protective pair, or a lot that has spent every re-arm wire id) — see
    * `ResidualExposureAlert.rearm_unsupported`. Only the two paths that
    * actually attempted a re-arm can set it; the paths that never got that
    * far leave it false, which reads as "not known to be impossible", the

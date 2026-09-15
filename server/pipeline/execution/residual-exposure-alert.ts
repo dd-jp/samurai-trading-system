@@ -86,12 +86,18 @@ export interface ResidualExposureAlert {
    */
   residual_qty_is_upper_bound: boolean;
   /**
-   * `true` when the venue cannot express an entry-less protective pair AT
-   * ALL (#1214) — Saxo, where every pool line reports
-   * `IsOcoOrderSupported: false` (doc 43) — so the #549 sweep's retries can
-   * never clear this and the operator is the only remedy. `false` is the
-   * ordinary case: a re-arm that failed and will be retried on cadence, or a
-   * path that could not safely attempt one.
+   * `true` when re-arming this residual is refused PERMANENTLY (#1214,
+   * `isProtectiveRearmUnsupported`) — so the #549 sweep's retries can never
+   * clear it and the operator is the only remedy. `false` is the ordinary
+   * case: a re-arm that failed and will be retried on cadence, or a path that
+   * could not safely attempt one.
+   *
+   * Two refusals earn it, and the flag deliberately does not distinguish them
+   * because the operator's action is the same (#1570): a venue that cannot
+   * express an entry-less protective pair AT ALL — Saxo, where every pool line
+   * reports `IsOcoOrderSupported: false` (doc 43) — and a LOT that has spent
+   * every re-arm wire id the venue will grant it, Alpaca having measurably
+   * never released a `client_order_id` (#1346, doc 43 round 3).
    *
    * The distinction is the whole point of the page. Without it both cases
    * read "re-arming failed", and an operator who has learned that the sweep

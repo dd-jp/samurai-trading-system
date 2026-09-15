@@ -1,0 +1,53 @@
+-- Persists #1546's per-exit-class cost-basis exclusion counts on
+-- arm_comparison_samples.
+--
+-- #1121's `modelled_cost_charged` filter (sqlite-arm-comparison-source.ts)
+-- drops a live closed trade whose fees were never brought onto the two arms'
+-- shared cost basis, and it drops the two exit classes at DIFFERENT rates: a
+-- protective ('stop'/'target') close is priced by the entry submission's single
+-- best-effort `captureSubmitSnapshot`, while a flatten close needs that same
+-- capture AND the flatten submission's own. #1301 equalised the cost MAGNITUDE
+-- across the legs and left that selection term standing by construction (David,
+-- 2026-09-14, Option 1). #1546 measures it instead of removing it, and this
+-- column is where the measurement becomes durable rather than only printed by
+-- `yarn report:arms`.
+--
+-- ## One JSON column per arm, not eight INTEGERs
+--
+-- The value is `ExitClassDropCounts` — two classes, each with a kept and a
+-- dropped count — and the class set is not closed: `ExitReason` (records.ts) is
+-- open to a fourth member, and `exitClassOf` is a `switch` with a `never` arm
+-- precisely so adding one is a compile error rather than a silent
+-- miscategorisation. Eight columns would fix today's shape into the schema and
+-- make that widening a migration; one TEXT column per arm holds whatever
+-- `exitClassOf` currently partitions into. It keeps the `live_*`/`control_*`
+-- naming this table already uses for every per-arm quantity.
+--
+-- Nothing queries inside this JSON. The dashboard and the report read the value
+-- whole, exactly as `PersistedArmPerformance` types it, so there is no index to
+-- lose by not decomposing it.
+--
+-- ## Nullable, not `NOT NULL DEFAULT '...'` — migration 0057's rule, again
+--
+-- Every row already in this table was computed by a cycle that never counted
+-- the exclusion, so an all-zero default would not be "the value the row
+-- actually had": it would assert "FL looked and nothing was excluded" for a
+-- window where FL never looked. NULL is the honest record of "not measured for
+-- this cycle". It is not recoverable after the fact either — the `closed_trades`
+-- rows are still there, but re-counting them today applies today's filter to
+-- yesterday's window and reports the result as what FL saw, which is a
+-- different claim.
+--
+-- Every row appended from here carries a real, non-null value on both columns:
+-- `ArmPerformance.cost_basis_drops` is a required field on the value the
+-- Feedback Loop hands `append`, and `buildArmComparison` never omits it. NULL
+-- therefore narrows over time to rows computed before this migration and ages
+-- out of `getRecent`'s window exactly as those rows do.
+--
+-- ## ALTER TABLE, not a rebuild
+--
+-- Two columns, no CHECK, so SQLite's `ALTER TABLE ... ADD COLUMN` applies
+-- without a table rebuild, as 0033/0035/0045/0057 did before it.
+
+ALTER TABLE arm_comparison_samples ADD COLUMN live_cost_basis_drops_json TEXT;
+ALTER TABLE arm_comparison_samples ADD COLUMN control_cost_basis_drops_json TEXT;

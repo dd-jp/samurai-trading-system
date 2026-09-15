@@ -167,9 +167,15 @@ export function runArmComparisonCycle(input: ArmComparisonCycleInput): ArmCompar
   const now = input.clock.now();
   const from = new Date(now.getTime() - input.window_ms);
 
+  // ONE call, both arms — see `ArmComparisonSource`. It also carries the #1546
+  // per-exit-class exclusion counts, from the same rows, so the composition of
+  // the population below cannot be measured over a different window than the
+  // population itself.
+  const window = input.trades.getClosedTradeWindowBetween(from, now);
+
   const comparison = buildArmComparison({
-    // ONE call, both arms — see `ArmComparisonSource`.
-    trades: input.trades.getClosedTradesBetween(from, now),
+    trades: window.trades,
+    cost_basis_drops: window.cost_basis_drops,
     // #1099. The same `from`/`now` pair, so the refusal count and the trade
     // count are the same window by construction rather than by review.
     refused_passes: input.trades.getRefusedPassCountsBetween(from, now),

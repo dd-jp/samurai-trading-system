@@ -162,7 +162,43 @@ export interface ArmPerformanceWire {
    * for those rows.
    */
   refused_pass_count: number | null;
+  /**
+   * How `trade_count` was SELECTED (#1546). A closed trade whose fees were
+   * never brought onto the two arms' shared cost basis
+   * (`modelled_cost_charged = 0`, #1121) is dropped before `trade_count` is
+   * taken, and the two exit classes are dropped at different rates: a
+   * protective close is priced by the entry submission's single best-effort
+   * cost capture, a flatten needs that capture AND its own. The gap between
+   * the two `dropped / (kept + dropped)` rates bounds how far this arm's
+   * population is selected on exit type.
+   *
+   * `null` for a row computed before migration 0066 persisted the counts,
+   * never an all-zero object: all-zero asserts "the Feedback Loop counted and
+   * excluded nothing", which those rows never measured.
+   */
+  cost_basis_drops: ExitClassDropCountsWire | null;
 }
+
+/**
+ * The exit classes the cost-basis exclusion is counted over (#1546).
+ *
+ * Structurally identical to the server-side `EXIT_CLASSES`/`ExitClass`
+ * (`server/pipeline/control-arm/arm-comparison.ts`) and duplicated here for
+ * `TradingArmWire`'s reason — `contracts/` may import from neither `server/`
+ * nor `client/`. Widen both sides together; `snapshot.test.ts` holds a
+ * compile-time parity check in both directions.
+ */
+export const EXIT_CLASSES_WIRE = ['protective', 'flatten'] as const;
+export type ExitClassWire = (typeof EXIT_CLASSES_WIRE)[number];
+
+export interface CostBasisDropCountWire {
+  kept: number;
+  dropped: number;
+}
+
+export type ExitClassDropCountsWire = Readonly<
+  Record<ExitClassWire, Readonly<CostBasisDropCountWire>>
+>;
 
 /**
  * One Feedback Loop cycle's comparison of the two arms (#971).

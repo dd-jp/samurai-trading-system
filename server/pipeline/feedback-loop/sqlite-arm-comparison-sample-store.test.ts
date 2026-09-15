@@ -1,4 +1,5 @@
 import { openSharedStore } from '../../shared/store/index.js';
+import { noCostBasisDrops } from '../control-arm/index.js';
 import { InMemoryArmComparisonSampleStore } from './fixture-stores.js';
 import { SqliteArmComparisonSampleStore } from './sqlite-arm-comparison-sample-store.js';
 import type { ArmComparisonSample, ArmComparisonSampleStore } from './types.js';
@@ -20,6 +21,7 @@ function makeSample(overrides: Partial<ArmComparisonSample> = {}): ArmComparison
         return_pct: 0.0215,
         max_drawdown_pct: 0.04,
         refused_pass_count: 3,
+        cost_basis_drops: noCostBasisDrops(),
       },
       control: {
         arm: 'control',
@@ -28,6 +30,7 @@ function makeSample(overrides: Partial<ArmComparisonSample> = {}): ArmComparison
         return_pct: 0.004,
         max_drawdown_pct: 0.02,
         refused_pass_count: 9,
+        cost_basis_drops: noCostBasisDrops(),
       },
     },
     divergence: { diverged: false, reason: null, min_trades_per_arm: 5 },
@@ -98,6 +101,104 @@ describe('SqliteArmComparisonSampleStore', () => {
     const [read] = store.getRecent(10, COMPUTED_AT);
     expect(read?.comparison.live.refused_pass_count).toBeNull();
     expect(read?.comparison.control.refused_pass_count).toBeNull();
+  });
+
+  /**
+   * #1546, migration 0066. Every count is distinct and no two arms or classes
+   * share a value, so a swapped bound parameter or a swapped arm in `fromRow`
+   * fails rather than passing on symmetry.
+   */
+  it('round-trips each arm per-exit-class cost_basis_drops independently', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteArmComparisonSampleStore(db);
+    const sample = makeSample();
+    sample.comparison.live.cost_basis_drops = {
+      protective: { kept: 11, dropped: 2 },
+      flatten: { kept: 3, dropped: 7 },
+    };
+    sample.comparison.control.cost_basis_drops = {
+      protective: { kept: 5, dropped: 0 },
+      flatten: { kept: 13, dropped: 1 },
+    };
+
+    store.append(sample);
+
+    const [read] = store.getRecent(10, COMPUTED_AT);
+    expect(read?.comparison.live.cost_basis_drops).toEqual({
+      protective: { kept: 11, dropped: 2 },
+      flatten: { kept: 3, dropped: 7 },
+    });
+    expect(read?.comparison.control.cost_basis_drops).toEqual({
+      protective: { kept: 5, dropped: 0 },
+      flatten: { kept: 13, dropped: 1 },
+    });
+  });
+
+  /**
+   * A row written before migration 0066 stored no counts. It must read back
+   * `null`, never `noCostBasisDrops()` — an all-zero table asserts "FL counted
+   * this window and nothing was excluded", which for this row is a claim no
+   * cycle ever made. Same distinction as `refused_pass_count`'s NULL above.
+   */
+  it('reads back null cost_basis_drops for a pre-migration-0065 row', () => {
+    const db = openSharedStore(':memory:');
+    db.prepare(
+      `INSERT INTO arm_comparison_samples (
+         computed_at, window_from, window_to, basis,
+         live_trade_count, live_realized_pnl_net, live_return_pct, live_max_drawdown_pct,
+         control_trade_count, control_realized_pnl_net, control_return_pct,
+         control_max_drawdown_pct, diverged, divergence_reason,
+         live_refused_pass_count, control_refused_pass_count
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, 3, 9)`,
+    ).run(
+      COMPUTED_AT.toISOString(),
+      WINDOW_FROM.toISOString(),
+      COMPUTED_AT.toISOString(),
+      1_000,
+      7,
+      21.5,
+      0.0215,
+      0.04,
+      6,
+      4,
+      0.004,
+      0.02,
+    );
+    const store = new SqliteArmComparisonSampleStore(db);
+
+    const [read] = store.getRecent(10, COMPUTED_AT);
+    expect(read?.comparison.live.cost_basis_drops).toBeNull();
+    expect(read?.comparison.control.cost_basis_drops).toBeNull();
+    expect(read?.comparison.live.refused_pass_count).toBe(3);
+  });
+
+  /**
+   * A corrupted payload must not abort the dashboard's read of the comparison
+   * it describes: the numbers the operator came for still arrive, and the
+   * measurement about them collapses to "not counted".
+   */
+  it.each([
+    ['unparseable JSON', '{not json'],
+    ['a class missing', '{"protective":{"kept":1,"dropped":0}}'],
+    ['a negative count', '{"protective":{"kept":-1,"dropped":0},"flatten":{"kept":0,"dropped":0}}'],
+    [
+      'a fractional count',
+      '{"protective":{"kept":1.5,"dropped":0},"flatten":{"kept":0,"dropped":0}}',
+    ],
+    [
+      'an unknown extra class',
+      '{"protective":{"kept":1,"dropped":0},"flatten":{"kept":0,"dropped":0},"decay":{"kept":0,"dropped":0}}',
+    ],
+  ])('degrades cost_basis_drops to null on %s, keeping the rest of the sample', (_case, raw) => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteArmComparisonSampleStore(db);
+    store.append(makeSample());
+    db.prepare(`UPDATE arm_comparison_samples SET live_cost_basis_drops_json = ?`).run(raw);
+
+    const [read] = store.getRecent(10, COMPUTED_AT);
+    expect(read?.comparison.live.cost_basis_drops).toBeNull();
+    expect(read?.comparison.live.realized_pnl_net).toBe(21.5);
+    expect(read?.comparison.control.cost_basis_drops).toEqual(noCostBasisDrops());
   });
 
   /**

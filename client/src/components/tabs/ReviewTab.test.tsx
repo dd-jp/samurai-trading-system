@@ -130,6 +130,74 @@ describe('summary cards', () => {
     expect(within(arms).getAllByText(/refusals not tracked for this cycle/)).toHaveLength(1);
   });
 
+  /**
+   * #1546. The panel is the dashboard's only reader of migration 0065's two
+   * columns, so without these the persisted counts would be this repo's
+   * dominant defect — a measurement nothing consumes.
+   */
+  it('shows each arm its own per-exit-class drop rate', () => {
+    renderReview(makeSnapshot({ arm_comparison: [makeArmComparison()] }));
+    const arms = screen.getByRole('region', { name: 'Arm comparison' });
+
+    // live: 2 of 18 protective, 6 of 14 flatten. control: none of either.
+    expect(within(arms).getByText(/Live arm protective 2\/18 \(11\.1%\)/)).toBeTruthy();
+    expect(within(arms).getByText(/flatten 6\/14 \(42\.9%\)/)).toBeTruthy();
+    expect(within(arms).getByText(/Control protective 0\/12 \(0\.0%\)/)).toBeTruthy();
+  });
+
+  /**
+   * A class nothing closed has no rate to report, and `0.0%` would assert one.
+   */
+  it('reads a class with nothing closed as n/a rather than a zero drop rate', () => {
+    const row = makeArmComparison();
+    row.live = {
+      ...row.live,
+      cost_basis_drops: {
+        protective: { kept: 4, dropped: 1 },
+        flatten: { kept: 0, dropped: 0 },
+      },
+    };
+    renderReview(makeSnapshot({ arm_comparison: [row] }));
+    const arms = screen.getByRole('region', { name: 'Arm comparison' });
+
+    expect(within(arms).getByText(/flatten 0\/0 \(n\/a\)/)).toBeTruthy();
+  });
+
+  /**
+   * Unlike the refused count, an all-zero exclusion is rendered rather than
+   * suppressed: "nothing was excluded from this window" is the reading #1412
+   * needs, and a block that vanished when it held would be indistinguishable
+   * from a row that predates the measurement.
+   */
+  it('still renders the exclusion block when nothing was dropped', () => {
+    const row = makeArmComparison();
+    const none = {
+      protective: { kept: 9, dropped: 0 },
+      flatten: { kept: 4, dropped: 0 },
+    };
+    row.live = { ...row.live, cost_basis_drops: none };
+    row.control = { ...row.control, cost_basis_drops: none };
+    renderReview(makeSnapshot({ arm_comparison: [row] }));
+    const arms = screen.getByRole('region', { name: 'Arm comparison' });
+
+    expect(within(arms).getByText(/Dropped before these counts/)).toBeTruthy();
+    expect(within(arms).queryByText(/not counted for this cycle/)).toBeNull();
+  });
+
+  /** Pre-migration-0065 rows say so, exactly once, rather than reading as zero. */
+  it('names an uncounted pre-migration cycle rather than drawing it as no exclusions', () => {
+    const row = makeArmComparison();
+    row.live = { ...row.live, cost_basis_drops: null };
+    row.control = { ...row.control, cost_basis_drops: null };
+    renderReview(makeSnapshot({ arm_comparison: [row] }));
+    const arms = screen.getByRole('region', { name: 'Arm comparison' });
+
+    expect(
+      within(arms).getAllByText(/cost-basis exclusion not counted for this cycle/),
+    ).toHaveLength(1);
+    expect(within(arms).queryByText(/Dropped before these counts/)).toBeNull();
+  });
+
   it('names an unmeasured benchmark rather than drawing it as zero', () => {
     renderReview(makeSnapshot({ outside_benchmarks: [makeOutsideBenchmark()] }));
     expect(screen.getByText(/Not measured this cycle: 60\/40/)).toBeTruthy();

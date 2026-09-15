@@ -12,6 +12,7 @@
  * predicate on surfaces the fixtures do not cover.
  */
 import { readFileSync } from 'node:fs';
+import { noCostBasisDrops } from '../../pipeline/control-arm/index.js';
 import type { TelegramClient } from '../../pipeline/verdict/index.js';
 import { runWithTraceId } from '../../shared/index.js';
 import {
@@ -262,6 +263,7 @@ const FIXTURES: { readonly [K in AlertId]: readonly AlertOf<K>[] } = {
           return_pct: -0.0045,
           max_drawdown_pct: 0.031,
           refused_pass_count: 0,
+          cost_basis_drops: noCostBasisDrops(),
         },
         control: {
           arm: 'control',
@@ -270,6 +272,7 @@ const FIXTURES: { readonly [K in AlertId]: readonly AlertOf<K>[] } = {
           return_pct: 0.0182,
           max_drawdown_pct: 0.019,
           refused_pass_count: 0,
+          cost_basis_drops: noCostBasisDrops(),
         },
       },
       reason: 'the control arm is ahead by 2.27% of the book over this window',

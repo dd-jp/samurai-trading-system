@@ -93,16 +93,29 @@ export function closedTrade(
  * one — which now closes 0 on a bracket exit where it would have closed 1.
  * That is the honest answer for it: its stop leg genuinely was not charged.
  *
- * WHAT THIS STILL DOES NOT EQUALIZE. Each covered leg needs its own successful
- * best-effort capture, and the two exit types do not need the same NUMBER of
- * them: a protective exit's legs are all covered by the entry submission's
- * single capture, while a flatten exit needs that one AND the flatten's. So
- * the drop-rate differential #1301's round-2 finding names survives this
- * widening unchanged — it is a property of which submissions get captured, not
- * of which legs are covered, and Option 1 (David, 2026-09-14) was chosen over
- * the control-arm bracket path knowing that. #1546 owns that surviving term.
- * See `toFill`'s "What this still does not cover" (ingest-fills.ts) and the
- * filter of the same name in `sqlite-arm-comparison-source.ts`.
+ * WHAT THIS STILL DOES NOT EQUALIZE, AND WHAT NOW MEASURES IT. Each covered leg
+ * needs its own successful best-effort capture, and the two exit types do not
+ * need the same NUMBER of them: a protective exit's legs are all covered by the
+ * entry submission's single capture, while a flatten exit needs that one AND the
+ * flatten's. So the drop-rate differential #1301's round-2 finding names
+ * survives this widening unchanged — it is a property of which submissions get
+ * captured, not of which legs are covered, and Option 1 (David, 2026-09-14) was
+ * chosen over the control-arm bracket path knowing that.
+ *
+ * #1546 answered it by MEASURING rather than equalizing: `countCostBasisDrops`
+ * (sqlite-arm-comparison-source.ts) counts kept and dropped rows per arm and per
+ * exit class over each comparison window, and `ArmPerformance.cost_basis_drops`
+ * carries the two classes' drop rates to every reader. Equalizing would have
+ * meant charging a flatten leg off the entry's protective estimate when the
+ * flatten's own capture failed — a second money-path use of one submission's
+ * `MarketState`, which is Option 1 and #1121 AC6 to reopen, not this function's.
+ *
+ * This function's OWN rule is therefore unchanged by #1546: every covered leg
+ * still needs its own breakdown, and a lot missing one still stamps `false`.
+ * Nothing here decides which exit class a lot is in — that is `close_reason`'s
+ * answer, read downstream by `exitClassOf`. See `toFill`'s "What this still does
+ * not cover" (ingest-fills.ts) and the filter of the same name in
+ * `sqlite-arm-comparison-source.ts`.
  *
  * The control arm always answers `true`: `SimulatedBrokerAdapter` prices its
  * own fills and stamps `cost_breakdown` on every one of them.

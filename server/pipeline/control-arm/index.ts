@@ -14,9 +14,16 @@
  */
 export {
   type ArmComparison,
+  type ArmCostBasisDrops,
   type ArmPerformance,
   type ArmRefusedPassCounts,
   buildArmComparison,
+  type CostBasisDropCount,
+  EXIT_CLASSES,
+  type ExitClass,
+  type ExitClassDropCounts,
+  exitClassOf,
+  noCostBasisDrops,
 } from './arm-comparison.js';
 export {
   AXIS_VOTE_ANALYST_TYPE,
@@ -26,5 +33,6 @@ export {
 } from './axis-vote-decision.js';
 export {
   type ArmedClosedTrade,
+  type ClosedTradeWindow,
   SqliteArmComparisonSource,
 } from './sqlite-arm-comparison-source.js';
