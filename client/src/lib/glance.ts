@@ -2,53 +2,12 @@
  * The Glance tab's arithmetic, kept pure so it is tested without a DOM.
  *
  * Everything here is presentation arithmetic over figures the wire already
- * carries — sums and ratios of `positions[]` and `closed_trades[]`. Nothing is
- * a domain computation the server should own: no P&L is re-derived from
- * prices, no risk is re-measured. The one judgement call is what "today"
- * means, and it is the snapshot's own UTC date, never the browser's clock.
+ * carries — sums and ratios of `positions[]`. Nothing is a domain computation
+ * the server should own: no P&L is re-derived from prices, no risk is
+ * re-measured. The P&L headline itself (`snapshot.pnl`, #1595) is computed
+ * server-side and rendered as-is — see `GlanceTab.tsx`'s `PnlCard`.
  */
-import type { ClosedTradeRow, PositionRow } from '@contracts';
-import { formatDateUtc, UNKNOWN } from './format.ts';
-
-export interface PnlToday {
-  /** Net realized P&L of the closed trades whose `closed_at` falls on the snapshot's UTC date. */
-  realized: number;
-  /** Sum of `unrealized_pnl` over every open position — marked, not settled. */
-  unrealized: number;
-  /** `realized + unrealized`. */
-  total: number;
-  /** Fees on today's closed trades. Already inside `realized`; shown so the drag is visible. */
-  costs: number;
-  closedCount: number;
-  openCount: number;
-}
-
-function utcDay(iso: string): string | null {
-  const day = formatDateUtc(iso);
-  return day === UNKNOWN ? null : day;
-}
-
-export function pnlToday(
-  positions: readonly PositionRow[],
-  closedTrades: readonly ClosedTradeRow[],
-  asOf: string,
-): PnlToday {
-  const today = utcDay(asOf);
-  const closedToday = closedTrades.filter(
-    (trade) => today !== null && utcDay(trade.closed_at) === today,
-  );
-  const realized = closedToday.reduce((sum, trade) => sum + trade.realized_pnl_net, 0);
-  const costs = closedToday.reduce((sum, trade) => sum + trade.fees_total, 0);
-  const unrealized = positions.reduce((sum, position) => sum + position.unrealized_pnl, 0);
-  return {
-    realized,
-    unrealized,
-    total: realized + unrealized,
-    costs,
-    closedCount: closedToday.length,
-    openCount: positions.length,
-  };
-}
+import type { PositionRow } from '@contracts';
 
 export interface OpenRiskRow {
   position: PositionRow;

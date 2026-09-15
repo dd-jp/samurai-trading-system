@@ -479,7 +479,8 @@ main {
 }
 
 .card h3,
-.drawer h3 {
+.drawer h3,
+.panel h3 {
   font-family: var(--font-display);
   font-weight: 600;
   font-size: 12px;
@@ -678,6 +679,10 @@ main {
 
 .glance .small {
   margin: 10px 0 0;
+}
+
+.pnl-block + .pnl-block {
+  margin-top: var(--space-4);
 }
 
 .spark-figure {

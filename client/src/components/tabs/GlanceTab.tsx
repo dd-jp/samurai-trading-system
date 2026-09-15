@@ -3,18 +3,20 @@ import type { EquitySample } from '../../hooks/useEquitySamples.ts';
 import type { WireSnapshot } from '../../hooks/useSnapshot.ts';
 import {
   formatClockUtc,
+  formatCount,
   formatPercent,
   formatPrice,
   formatQty,
+  formatSignedGbp,
   formatSignedPercent,
   formatSignedUsd,
   formatUsd,
   UNKNOWN,
 } from '../../lib/format.ts';
-import { deployedNotional, openRiskRow, pnlToday } from '../../lib/glance.ts';
+import { deployedNotional, openRiskRow } from '../../lib/glance.ts';
 import type { LedgerEntry } from '../../lib/ledger.ts';
 import type { Selection } from '../../lib/resolve-trace.ts';
-import { OUTCOME_WORD, sideWord, stageName } from '../../lib/vocabulary.ts';
+import { OUTCOME_WORD, PNL_RATE_SOURCE_WORD, sideWord, stageName } from '../../lib/vocabulary.ts';
 import { Seal } from '../Seal.tsx';
 import { pnlTone } from '../StateWord.tsx';
 import { Track } from '../Track.tsx';
@@ -79,50 +81,108 @@ function EquitySparkline({ samples }: { samples: readonly EquitySample[] }) {
   );
 }
 
+/** "X% of the £1,000 book" — the same basis phrase beside both headline figures. */
+function ofBook(fraction: number): string {
+  return `${formatSignedPercent(fraction)} of the £1,000 book`;
+}
+
 function PnlCard({ snapshot, equitySamples }: Pick<GlanceTabProps, 'snapshot' | 'equitySamples'>) {
-  const pnl = pnlToday(snapshot.positions, snapshot.closed_trades, snapshot.as_of);
+  const { pnl, arm } = snapshot;
+  const isControl = arm === 'control';
   const equity = snapshot.providers.alpaca.balance?.equity ?? null;
-  const tone = pnlTone(pnl.total);
+
+  // `pnl` is `PnlHeadlineWire | null` on `useSnapshot.ts`'s `WireSnapshot` —
+  // widened there (PR #1619 review, finding 1) because `CONTRACT_VERSION`'s
+  // hash is deliberately shallow (top-level field names only, per
+  // `contracts/snapshot.ts`), so a rename inside `PnlHeadlineWire.overall`/
+  // `.today` moves nothing there and this component would otherwise
+  // dereference straight into a shape it never checked. `null` is also what
+  // an intermediary that stripped a build failure looks like. Either way it
+  // must read as a named absence, never as £0.00 (AC).
+  if (pnl == null) {
+    return (
+      <section className="panel" aria-label="P&L">
+        <h2>P&amp;L</h2>
+        <p className="empty-state">
+          No P&amp;L headline on this snapshot — the server did not include one.
+        </p>
+      </section>
+    );
+  }
+
+  const { overall, today } = pnl;
+  // `rate_source` is a `Record` lookup, not a formatter call, so an
+  // unrecognised value (the same nested-rename skew `isPnlHeadline` guards
+  // above, one field `isPnlHeadline` doesn't check) needs its own fallback —
+  // an unguarded lookup would interpolate the literal string "undefined".
+  const rate = `at ${formatUsd(pnl.rate_usd_per_gbp)}/£, ${PNL_RATE_SOURCE_WORD[pnl.rate_source] ?? UNKNOWN}`;
+
   return (
-    <section className="panel" aria-label="P&L today">
-      <h2>P&amp;L today</h2>
-      <div className="big-row">
-        <span className={`big ${tone}`} data-field="pnl-today">
-          {formatSignedUsd(pnl.total)}
-        </span>
-        <span className="muted">
-          {equity === null
-            ? 'Alpaca equity unavailable — no book figure to measure against'
-            : `${formatSignedPercent(pnl.total / equity)} of ${formatUsd(equity)} equity`}
-        </span>
-      </div>
-      <div className="figure-row">
-        <div>
-          <span className="label">Realized</span>
-          <span className={`mono ${pnlTone(pnl.realized)}`}>{formatSignedUsd(pnl.realized)}</span>
-        </div>
-        <div>
-          <span className="label">Unrealized</span>
-          <span className={`mono ${pnlTone(pnl.unrealized)}`}>
-            {formatSignedUsd(pnl.unrealized)}
+    <section className="panel" aria-label="P&L">
+      <h2>P&amp;L</h2>
+      <div className="pnl-block">
+        <h3>Overall</h3>
+        <div className="big-row">
+          <span className={`big ${pnlTone(overall.net_gbp)}`} data-field="pnl-overall">
+            {formatSignedGbp(overall.net_gbp)}
           </span>
+          <span className="muted">{ofBook(overall.net_pct_of_book)}</span>
         </div>
-        <div>
-          <span className="label">Costs</span>
-          <span className="mono muted">{formatSignedUsd(-pnl.costs)}</span>
-        </div>
-        <div>
-          <span className="label">Trades</span>
-          <span className="mono">
-            {pnl.closedCount} closed · {pnl.openCount} open
-          </span>
+        <div className="figure-row">
+          <div>
+            <span className="label">Max drawdown</span>
+            <span className="mono">{formatPercent(overall.max_drawdown_pct)}</span>
+          </div>
+          <div>
+            <span className="label">Trades</span>
+            <span className="mono">{formatCount(overall.trade_count)}</span>
+          </div>
         </div>
       </div>
-      <p className="muted small">
-        Realized and costs are today's UTC closes on this snapshot's recent-history window;
-        unrealized is every open position at its mark.
-      </p>
-      <EquitySparkline samples={equitySamples} />
+      <div className="pnl-block">
+        <h3>
+          Today <span className="muted small">(Europe/London calendar day)</span>
+        </h3>
+        <div className="big-row">
+          <span className={`big ${pnlTone(today.net_gbp)}`} data-field="pnl-today">
+            {formatSignedGbp(today.net_gbp)}
+          </span>
+          <span className="muted">{ofBook(today.net_pct_of_book)}</span>
+        </div>
+        <div className="figure-row">
+          <div>
+            <span className="label">Realized</span>
+            <span className={`mono ${pnlTone(today.realized_gbp)}`}>
+              {formatSignedGbp(today.realized_gbp)}
+            </span>
+          </div>
+          <div>
+            <span className="label">Unrealized</span>
+            <span className={`mono ${pnlTone(today.unrealized_gbp)}`}>
+              {formatSignedGbp(today.unrealized_gbp)}
+            </span>
+          </div>
+          <div>
+            <span className="label">Costs</span>
+            <span className="mono muted">{formatSignedGbp(-today.costs_gbp)}</span>
+          </div>
+          <div>
+            <span className="label">Trades</span>
+            <span className="mono">{formatCount(today.trade_count)}</span>
+          </div>
+        </div>
+      </div>
+      <p className="muted small">{rate}</p>
+      {isControl ? (
+        <p className="empty-state">Control arm: simulated broker — no equity figure</p>
+      ) : (
+        <>
+          <p className="muted">
+            {equity === null ? 'Alpaca equity unavailable' : `Alpaca equity: ${formatUsd(equity)}`}
+          </p>
+          <EquitySparkline samples={equitySamples} />
+        </>
+      )}
     </section>
   );
 }
