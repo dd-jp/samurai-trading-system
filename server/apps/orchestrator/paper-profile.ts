@@ -2861,14 +2861,32 @@ export function paperStartingProfile(
     // reference tick's BOUNDED deployment under the cap; a higher-conviction
     // entry at the same realized ATR is not prevented from exceeding it.
     //
-    // Structurally unreachable regardless of this multiplier: any name whose
-    // share price exceeds D5's ~$250 single-stock per-position cash (25% of
-    // the $1,000 book) cannot be entered in whole shares at any deployment at
-    // or under that cap — e.g. MU (~$996) and GOOGL (~$342). This is
-    // arithmetic, not a tuning failure, and is exactly what ADR-0016
-    // anticipates: `DEFAULT_UNIVERSE`'s SPY/QQQ/AAPL/TSLA-style names are not
-    // the tradeable product; LSE leveraged ETPs are. See the follow-up issue
-    // this PR links for the fuller census of excluded names.
+    // #1136 measured this rather than reasoning further from the Caveat
+    // above: real paper-soak decisions (`trader_log`,
+    // `data/samurai-paper.sqlite`) from the corrected book scale landing
+    // (ddce6e6, 2026-09-05T15:25:33Z)
+    // through 2026-09-15T13:48:30Z — 325 decisions — show this path has no
+    // $250 ceiling in practice, because (per the Caveat above) it has no
+    // code-enforced ceiling of any kind. Real entries were submitted at
+    // notional well above $250 for every one of the highest-priced names a
+    // 25%-of-$1,000 reading would predict excluded: GOOGL (~$346-348,
+    // notional $1,043-1,384), QQQ (~$707-717, notional $2,126-2,826), MSFT
+    // (~$500, notional $1,500), plus AVGO/AMZN/META/TSLA/AAPL — 17 of
+    // `DEFAULT_UNIVERSE`'s 20 names traded at least once in this window.
+    // `whole_share_sizing`'s floor (#941's `rounds_to_zero_shares`) fired
+    // only 6 times across the 325 decisions (MSTR x2, QQQ/AAPL/MU/AMD x1
+    // each) — a rare, borderline event: QQQ, AAPL and MSTR each ALSO entered
+    // successfully on other ticks in the same window. Only MU and AMD never
+    // entered here, and for both, `below_conviction_floor` plus
+    // `neutral_direction_while_flat` (the strategy not wanting in) outnumber
+    // `rounds_to_zero_shares` (the sizing floor) 8:1 and 9:1 — sizing is not
+    // the binding constraint even for the two names closest to it. This
+    // replaces a version of this paragraph that had treated D5's 25%/$250
+    // figure as a code-enforced ceiling on this path; it is not — it is a
+    // retune TARGET #1137 aimed at for one reference tick (full conviction,
+    // the #1112-logged MU trim), not a maximum this path's real deployment
+    // ever respects. The 10-of-20 "structurally excluded" census in #1149
+    // inherits that same error.
     ...(mode === 'paper'
       ? {
           traderConfig: {
