@@ -2373,11 +2373,14 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       tuningStore,
       // #1396: the llm-failure-rate window read + monitor + alert channel.
       // `windowSource` is `debateLogStore` itself — see its hoist above.
+      // `gateRefusalSink` (#1533) is the SAME store: `SqliteDebateLogStore`
+      // implements both capabilities directly (see that class's doc).
       {
         windowSource: debateLogStore,
         monitor: llmFailureRateMonitor,
         alertChannel:
           config.llmFailureRateAlerts ?? loggingAlertChannel('llmFailureRateAlerts', logger),
+        gateRefusalSink: debateLogStore,
       },
     ),
     // #328: `traderLog`/`riskLog` are what make the two stages that decide WHAT

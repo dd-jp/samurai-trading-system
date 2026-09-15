@@ -123,6 +123,7 @@ import {
   type LlmFailureRateAlertChannel,
   type LlmFailureRateMonitor,
   type LlmFailureRateWindowSource,
+  type LlmGateRefusalSink,
 } from './llm-failure-rate-guard.js';
 import { RateLimitedLlmClient } from './rate-limited-llm-client.js';
 
@@ -138,6 +139,43 @@ export interface LlmFailureRateGuardDeps {
   windowSource: LlmFailureRateWindowSource;
   monitor: LlmFailureRateMonitor;
   alertChannel: LlmFailureRateAlertChannel | undefined;
+  /**
+   * Where a gate-refused debate is recorded (#1533) so a soak where every
+   * debate is gate-refused still trips the guard — see
+   * `gateRefusedDebateResult`'s call site below, which is the only place this
+   * is written. Required (not optional like the rest of this bundle): a
+   * caller that supplies `LlmFailureRateGuardDeps` at all wants the guard to
+   * see refusals too, and `SqliteDebateLogStore` (the same concrete store
+   * already passed as `windowSource`) implements this directly.
+   */
+  gateRefusalSink: LlmGateRefusalSink;
+}
+
+/**
+ * #1396/#1533, fire-and-forget: invokes the window check when a guard is
+ * configured. Shared by BOTH call sites in `buildDebateStep`'s returned
+ * step — a completed debate and a gate refusal alike. Before #1533 this was
+ * only called on the success path: a soak window where every debate was
+ * gate-refused never reached this call at all, so AC1 ("a soak window where
+ * every debate is gate-refused trips an operator alert") had a widened
+ * denominator (`getTerminationCauseWindowCounts`'s `gate_refused`) but no
+ * invocation left to notice it.
+ */
+function checkLlmFailureRateIfConfigured(
+  llmFailureRateGuard: LlmFailureRateGuardDeps | undefined,
+  logger: Logger | undefined,
+  now: Date,
+): void {
+  if (llmFailureRateGuard === undefined) return;
+  void checkLlmFailureRate(
+    {
+      windowSource: llmFailureRateGuard.windowSource,
+      monitor: llmFailureRateGuard.monitor,
+      alertChannel: llmFailureRateGuard.alertChannel,
+      logger,
+    },
+    now,
+  );
 }
 
 /**
@@ -1146,6 +1184,28 @@ export function buildDebateStep(
             waited_ms: cause.waited_ms,
           },
         });
+        // #1533: no `debate_log` row is written for this debate (see the
+        // comment above), so without this the guard's window never learns a
+        // refusal happened at all. Recorded in its own try/catch — a bad
+        // write here must not turn a degrade-not-fault gate refusal into an
+        // unhandled tick failure.
+        if (llmFailureRateGuard !== undefined) {
+          try {
+            llmFailureRateGuard.gateRefusalSink.recordGateRefusal(clock.now());
+          } catch (recordError) {
+            logger?.log({
+              trace_id,
+              stage: 'debate',
+              event: 'llm_gate_refusal_record_failed',
+              level: 'error',
+              message:
+                'Failed to record a gate refusal for the failure-rate guard — this refusal is ' +
+                'undercounted in its window',
+              payload: { instrument, debate_id, error: describeThrownSafely(recordError) },
+            });
+          }
+          checkLlmFailureRateIfConfigured(llmFailureRateGuard, logger, clock.now());
+        }
         return gateRefusedDebateResult(debate_id, bar, cause.message);
       }
       logDebateFailure({ logger, trace_id, instrument, bar, views, cause });
@@ -1191,17 +1251,7 @@ export function buildDebateStep(
     // read (a small, indexed range scan) still runs inline here, before its
     // first `await`; `void` only keeps the alert POST — the part that could
     // actually be slow — off this tick's critical path.
-    if (llmFailureRateGuard !== undefined) {
-      void checkLlmFailureRate(
-        {
-          windowSource: llmFailureRateGuard.windowSource,
-          monitor: llmFailureRateGuard.monitor,
-          alertChannel: llmFailureRateGuard.alertChannel,
-          logger,
-        },
-        clock.now(),
-      );
-    }
+    checkLlmFailureRateIfConfigured(llmFailureRateGuard, logger, clock.now());
 
     // Lost the write race: another writer already owns this `debate_id`'s row.
     // Return THEIR row, so the Trader sizes on the same bytes the Feedback Loop

@@ -1044,6 +1044,21 @@ CREATE INDEX idx_debate_round_log_debate_id ON debate_round_log(debate_id);
 
 **Not part of the twenty-two/twenty-three-table non-collision pass; checked here.** `debate_id`/`direction`/`created_at` match `debate_log`'s own columns of the same name (same CHECK on `direction`, same ISO-8601 UTC convention on `created_at`) by design — this table is that row's per-round breakdown. **`confidence` does NOT match `debate_log.confidence` for the final round whenever `applyAnalystWeights` rescales** (`weighted-conviction.ts`): it is called AFTER `runDebate` returns, on the already-resolved `DebateResult`, and rewrites only `result.confidence` — `result.round_verdicts` (built inside `runDebate`'s loop, one `assessment.synthesis.confidence` per round) is spread through untouched. So `debate_log.confidence` is post-weight while every `debate_round_log.confidence`, including the final round's, is pre-weight; they agree only when the weighting factor is exactly 1 (no analyst-agreement adjustment). Reading the two together for the same debate can show a "mismatch" that is not a divergence bug — it is `debate_round_log` recording what the mediator actually said each round, deliberately upstream of the Trader-facing rescale.
 
+#### `llm_gate_refusals` (migration `0065`, [#1533](https://github.com/dd-jp/samurai-trading-system/issues/1533))
+
+Owned by the Debate Engine (`SqliteDebateLogStore.recordGateRefusal`). A gate-refused debate — the in-flight LLM cap's `admission`/`queue_deadline` refusal (#1080) — writes NO `debate_log` row at all: `debate_id` is a content hash of (instrument, bar, views) and the PK, so a refusal occupying that key would permanently block the real retry's row. That correctly-absent row also made a gate-refused debate invisible to `LlmFailureRateGuard`'s window read, so a soak where every debate was refused read as an empty, healthy window instead of the outage it was. This table exists only so that guard has something to sum — an append-only counter, no FK to `debate_log` (there usually isn't a row to reference) and no instrument/reason/trace_id, mirroring `llm_call_log`'s no-FK posture (migration 0039) rather than `debate_round_log`'s FK'd one: richer detail already lives on the `debate_refused_gate` log line the call site writes immediately before this insert.
+
+```sql
+CREATE TABLE llm_gate_refusals (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  occurred_at TEXT    NOT NULL
+);
+
+CREATE INDEX idx_llm_gate_refusals_occurred_at ON llm_gate_refusals(occurred_at);
+```
+
+**Not part of the twenty-two/twenty-three-table non-collision pass; checked here.** `occurred_at` is a new name found nowhere else, but the same ISO-8601 UTC convention every other `_at`/`created_at` column in this schema already follows. The one access pattern is a `COUNT` over a trailing `(from, to]` window — the same shape `debate_log`'s own `created_at` index serves its sibling query with — so the index is on `occurred_at` alone, with no other column. No divergence found.
+
 #### `llm_spend_cap` (migration `0047`, [#1140](https://github.com/dd-jp/samurai-trading-system/issues/1140)) — DDL added by [#1174](https://github.com/dd-jp/samurai-trading-system/issues/1174)
 
 Owned by the Orchestrator — the composition root arms it at boot with the LLM spend ceiling actually enforced, and the dashboard reads this row so its meter measures against that cap rather than a copy of the number. One row, rewritten at every boot; `budget_usd` NULL records an uncapped run. No later migration touches this table.

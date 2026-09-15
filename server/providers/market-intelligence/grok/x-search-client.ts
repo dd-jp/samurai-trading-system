@@ -309,13 +309,13 @@ export class XSearchClient implements GrokSentimentClient {
         // reported count wins, which is the only number that matches the bill.
         maxServerToolCalls: this.#maxSearchResults,
         gate: this.#gate,
-        // The gate budget bounds the WAIT, the network timeout bounds the CALL,
-        // and there is no outer race above a retrieval call to reconcile them —
-        // so worst-case wall clock here is their sum, not `this.#timeoutMs`. A
-        // whole-call budget would need `nousResponses` to shorten its own
-        // timeout by the wait it just served; that is a follow-up, not this
-        // change (#1080 review round 1, finding 6).
+        // The gate budget bounds wait + call: `clampCallToBudget` shrinks the
+        // network timeout by however long the wait already took (#1533),
+        // closing the gap #1080 review round 1 finding 6 left open (worst
+        // case used to be wait + full `timeoutMs`, their sum, not
+        // `this.#timeoutMs`).
         gateBudgetMs: this.#timeoutMs,
+        clampCallToBudget: true,
         // Declared, because a retrieval call is nothing like a debate call: it
         // runs the provider's own search loop, measured at 5–26 s against a
         // debate call's ~13 s. A caller queued behind one that estimated its

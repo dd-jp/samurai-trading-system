@@ -1054,7 +1054,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
       level: 'warn',
       message:
         `llm_failure rate ${(alert.rate * 100).toFixed(1)}% over the last ${Math.round(alert.window_ms / 3_600_000)}h ` +
-        `(${alert.llm_failure_count}/${alert.total_count} truncations) — ` +
+        `(${alert.llm_failure_count}/${alert.total_count} truncated-or-gate-refused) — ` +
         LOG_ONLY_CANNOT_PAGE,
       payload: {
         rate: alert.rate,
@@ -1064,15 +1064,23 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
         reported_at: alert.reported_at.toISOString(),
       },
     }),
+    // #1533: the count behind this alert blends outright LLM-call truncations
+    // with in-flight-gate refusals (see llm-failure-rate-guard.ts's "Gate
+    // refusals count too" doc) — a window that is 100% gate refusals and 0%
+    // provider truncations still reaches this text, so it must not name only
+    // the provider-failure cause or the remedy misdirects the operator away
+    // from the actual one (an undersized maxInFlightLlmCalls).
     text: (alert) => {
       const hours = Math.round(alert.window_ms / 3_600_000);
       const rate = (alert.rate * 100).toFixed(1);
       return (
-        `Samurai LLM FAILURE RATE ELEVATED: ${rate}% of truncations over the last ${hours}h ` +
-        `(${alert.llm_failure_count}/${alert.total_count}) truncated on an outright LLM call ` +
-        `failure, as of ${alert.reported_at.toISOString()}.\n` +
-        'Check the LLM provider status and the rate-limited client for sustained 429s/5xxs — a ' +
-        'debate log row alone cannot tell live provider trouble from a spend-cap refusal.'
+        `Samurai LLM FAILURE RATE ELEVATED: ${rate}% of debates over the last ${hours}h ` +
+        `(${alert.llm_failure_count}/${alert.total_count}) ended in an outright LLM call ` +
+        `failure or were refused admission by the in-flight gate, as of ` +
+        `${alert.reported_at.toISOString()}.\n` +
+        'Check the LLM provider status and the rate-limited client for sustained 429s/5xxs, AND ' +
+        'whether maxInFlightLlmCalls is sized under the pass width — a debate log row alone ' +
+        'cannot tell provider trouble from a spend-cap refusal from a gate refusal.'
       );
     },
   },

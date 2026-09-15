@@ -93,6 +93,10 @@ const TABLES = [
   // round's without `debate_log` (one row per debate, final state only)
   // having to carry a transcript.
   'debate_round_log',
+  // `llm_gate_refusals` (0065) — a gate-refused debate writes no `debate_log`
+  // row (#1533), so `LlmFailureRateGuard`'s window read would otherwise never
+  // learn a refusal happened at all; see the migration's header.
+  'llm_gate_refusals',
 ];
 
 /**
@@ -101,7 +105,7 @@ const TABLES = [
  * That prose number silently drifted twice (it read "twenty" and "twenty-one"
  * simultaneously while the schema held 22), so it is pinned here.
  */
-const CONSOLIDATED_SCHEMA_TABLE_COUNT = 35;
+const CONSOLIDATED_SCHEMA_TABLE_COUNT = 36;
 
 /**
  * The migration list, derived from disk so a new `NNNN_*.sql` file changes no
@@ -112,7 +116,7 @@ const CONSOLIDATED_SCHEMA_TABLE_COUNT = 35;
  */
 const MIGRATIONS = listMigrations(MIGRATIONS_DIR);
 const MIGRATION_VERSIONS = MIGRATIONS.map((migration) => migration.version);
-const HIGHEST_KNOWN_MIGRATION_VERSION = 64;
+const HIGHEST_KNOWN_MIGRATION_VERSION = 65;
 
 /** A temp copy of `MIGRATIONS_DIR` holding every migration through `throughVersion`, inclusive. */
 function copyMigrationsUpTo(throughVersion: number): string {

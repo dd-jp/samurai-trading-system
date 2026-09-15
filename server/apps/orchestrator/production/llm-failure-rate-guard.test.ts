@@ -169,6 +169,83 @@ describe('checkLlmFailureRate', () => {
     expect(posted).toHaveLength(0);
   });
 
+  describe('gate refusals (#1533)', () => {
+    it('fires on a window that is 100% gate-refused with debate_log itself reporting nothing (AC1)', async () => {
+      // The scenario the acceptance criterion names verbatim: every debate in
+      // the window was gate-refused. `debate_log` has zero rows for any of
+      // them (`gateRefusedDebateResult` writes none), so `llm_failure`/`total`
+      // read 0/0 — without folding `gate_refused` in, this window would look
+      // like NO EVIDENCE rather than a 100%-refused outage.
+      const { channel, posted } = capturingChannel();
+      await checkLlmFailureRate(
+        {
+          windowSource: fixedSource({ llm_failure: 0, total: 0, gate_refused: 6 }),
+          monitor: new LlmFailureRateMonitor(),
+          alertChannel: channel,
+          logger: undefined,
+        },
+        NOW,
+      );
+
+      expect(posted).toHaveLength(1);
+      expect(posted[0]).toMatchObject({
+        rate: 1,
+        llm_failure_count: 6,
+        total_count: 6,
+      });
+    });
+
+    it('blends gate refusals with genuine llm_failure rows in both numerator and denominator', async () => {
+      const { channel, posted } = capturingChannel();
+      await checkLlmFailureRate(
+        {
+          // 2 llm_failure + 3 gate_refused = 5 failure-like of (4 total + 3
+          // gate_refused) = 7 sample -> ~0.714, over threshold.
+          windowSource: fixedSource({ llm_failure: 2, total: 4, gate_refused: 3 }),
+          monitor: new LlmFailureRateMonitor(),
+          alertChannel: channel,
+          logger: undefined,
+        },
+        NOW,
+      );
+
+      expect(posted).toHaveLength(1);
+      expect(posted[0]?.rate).toBeCloseTo(5 / 7);
+      expect(posted[0]).toMatchObject({ llm_failure_count: 5, total_count: 7 });
+    });
+
+    it('treats an absent gate_refused field as zero — a source that never reports refusals behaves exactly as before', async () => {
+      const { channel, posted } = capturingChannel();
+      await checkLlmFailureRate(
+        {
+          windowSource: fixedSource({ llm_failure: 1, total: 10 }),
+          monitor: new LlmFailureRateMonitor(),
+          alertChannel: channel,
+          logger: undefined,
+        },
+        NOW,
+      );
+
+      expect(posted).toHaveLength(0);
+    });
+
+    it('does not fire below the sample floor even when gate refusals alone would read 100%', async () => {
+      const { channel, posted } = capturingChannel();
+      await checkLlmFailureRate(
+        {
+          // 3 gate_refused, 0 truncations -> sampleSize 3 < floor of 5.
+          windowSource: fixedSource({ llm_failure: 0, total: 0, gate_refused: 3 }),
+          monitor: new LlmFailureRateMonitor(),
+          alertChannel: channel,
+          logger: undefined,
+        },
+        NOW,
+      );
+
+      expect(posted).toHaveLength(0);
+    });
+  });
+
   it('does not fire, and does not divide by zero, on an empty window', async () => {
     const { channel, posted } = capturingChannel();
     await checkLlmFailureRate(

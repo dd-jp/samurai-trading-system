@@ -232,8 +232,18 @@ export class SqliteDebateLogStore implements DebateLogStore {
    * pre-migration-0051 NULL cause — a truncation this build cannot classify
    * must not skew the rate toward "failing" just because it predates the
    * cause column.
+   *
+   * `gate_refused` (#1533, migration 0065) is a SEPARATE query over
+   * `llm_gate_refusals`, not another `debate_log` aggregate — a gate-refused
+   * debate has no `debate_log` row at all (see `recordGateRefusal`'s doc), so
+   * there is nothing to select alongside `termination_cause` here. The guard
+   * (`llm-failure-rate-guard.ts`) folds this into its own rate math; this
+   * method only reports what each source independently knows.
    */
-  getTerminationCauseWindowCounts(from: Date, to: Date): { llm_failure: number; total: number } {
+  getTerminationCauseWindowCounts(
+    from: Date,
+    to: Date,
+  ): { llm_failure: number; total: number; gate_refused: number } {
     const row = this.db
       .prepare(
         `SELECT
@@ -249,7 +259,40 @@ export class SqliteDebateLogStore implements DebateLogStore {
     // `SUM` over zero matched rows is NULL, not 0 — an empty window.
     const llm_failure = row.llm_failure ?? 0;
     const non_failure = row.non_failure ?? 0;
-    return { llm_failure, total: llm_failure + non_failure };
+    return {
+      llm_failure,
+      total: llm_failure + non_failure,
+      gate_refused: this.countGateRefusals(from, to),
+    };
+  }
+
+  /**
+   * Records one gate-refused debate (#1533) so the failure-rate guard's
+   * window can count it — see migration 0065's header for why this is a
+   * standalone append-only table rather than a `debate_log` column.
+   *
+   * Never throws on a malformed input: `occurred_at` is always a fresh
+   * `clock.now()` from the call site (`debate-adapter.ts`), so there is
+   * nothing here to validate. A `better-sqlite3` failure (SQLITE_BUSY, a
+   * closed handle) DOES propagate — the call site wraps this call in its own
+   * try/catch, the same discipline `checkLlmFailureRate` uses for its own
+   * synchronous read, so one bad write logs a warning rather than crashing a
+   * tick that has already degraded to `gateRefusedDebateResult`.
+   */
+  recordGateRefusal(occurred_at: Date): void {
+    this.db
+      .prepare('INSERT INTO llm_gate_refusals (occurred_at) VALUES (?)')
+      .run(toStoredTimestamp(occurred_at));
+  }
+
+  /** `(from, to]` count backing `getTerminationCauseWindowCounts`'s `gate_refused` field. */
+  private countGateRefusals(from: Date, to: Date): number {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS count FROM llm_gate_refusals WHERE occurred_at > ? AND occurred_at <= ?`,
+      )
+      .get(toStoredTimestamp(from), toStoredTimestamp(to)) as { count: number };
+    return row.count;
   }
 
   /**
