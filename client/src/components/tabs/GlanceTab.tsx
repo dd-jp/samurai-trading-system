@@ -16,7 +16,13 @@ import {
 import { deployedNotional, openRiskRow } from '../../lib/glance.ts';
 import type { LedgerEntry } from '../../lib/ledger.ts';
 import type { Selection } from '../../lib/resolve-trace.ts';
-import { OUTCOME_WORD, PNL_RATE_SOURCE_WORD, sideWord, stageName } from '../../lib/vocabulary.ts';
+import {
+  CONTROL_NO_EQUITY,
+  OUTCOME_WORD,
+  PNL_RATE_SOURCE_WORD,
+  sideWord,
+  stageName,
+} from '../../lib/vocabulary.ts';
 import { Seal } from '../Seal.tsx';
 import { pnlTone } from '../StateWord.tsx';
 import { Track } from '../Track.tsx';
@@ -174,7 +180,7 @@ function PnlCard({ snapshot, equitySamples }: Pick<GlanceTabProps, 'snapshot' | 
       </div>
       <p className="muted small">{rate}</p>
       {isControl ? (
-        <p className="empty-state">Control arm: simulated broker — no equity figure</p>
+        <p className="empty-state">{CONTROL_NO_EQUITY}</p>
       ) : (
         <>
           <p className="muted">
@@ -189,7 +195,13 @@ function PnlCard({ snapshot, equitySamples }: Pick<GlanceTabProps, 'snapshot' | 
 
 function OpenRiskCard({ snapshot }: Pick<GlanceTabProps, 'snapshot'>) {
   const positions = snapshot.positions;
-  const equity = snapshot.providers.alpaca.balance?.equity ?? null;
+  const isControl = snapshot.arm === 'control';
+  // Alpaca's balance is the LIVE broker's equity — reading it as the
+  // control arm's denominator would render a live-arm-only figure under the
+  // control view (dashboard-spec.md's arm selector rule; #1597). The
+  // control's own open-position notional above still applies (`positions`
+  // is arm-scoped, #1592), only the "of $equity" denominator is N/A.
+  const equity = isControl ? null : (snapshot.providers.alpaca.balance?.equity ?? null);
   const deployed = deployedNotional(positions);
   return (
     <section className="panel" aria-label="Open risk">
@@ -198,7 +210,11 @@ function OpenRiskCard({ snapshot }: Pick<GlanceTabProps, 'snapshot'>) {
         <span className="h2-note">
           {' '}
           · {formatUsd(deployed)} deployed
-          {equity === null ? '' : ` of ${formatUsd(equity)}`}
+          {isControl
+            ? ` · ${CONTROL_NO_EQUITY}`
+            : equity === null
+              ? ''
+              : ` of ${formatUsd(equity)}`}
         </span>
       </h2>
       {positions.length === 0 ? (

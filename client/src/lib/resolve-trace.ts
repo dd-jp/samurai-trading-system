@@ -155,7 +155,18 @@ export function resolveTrace(snapshot: WireSnapshot, selection: Selection): Trac
   // One row for both the timeline's degraded `debate` cell and the debate
   // section beneath it — the drawer cannot state two causes for one debate
   // if it only ever reads one row (#1428).
-  const debate = latestDebateFor(snapshot.debates, instrument);
+  //
+  // `snapshot.debates` is NOT arm-scoped on the wire (#1594's doc comment,
+  // `contracts/snapshot.ts`) — the control arm never writes `debate_log`, so
+  // this array is always the live arm's debates, matched by INSTRUMENT alone
+  // (`latestDebateFor`). Reading it while viewing the control arm would
+  // attribute the live arm's actual LLM debate to a control lane trading the
+  // same instrument, which is exactly the leak dashboard-spec.md's "no
+  // component shows a figure from the other arm" forbids (#1597). The
+  // control arm structurally has no debate at all, so the join is skipped
+  // outright rather than filtered.
+  const debate =
+    snapshot.arm === 'control' ? undefined : latestDebateFor(snapshot.debates, instrument);
   return {
     instrument,
     traceId,

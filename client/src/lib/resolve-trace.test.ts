@@ -136,6 +136,28 @@ describe('resolveTrace', () => {
     expect(detail.debateJoin).toEqual({ by: 'instrument', exact: false });
   });
 
+  /**
+   * #1597: `snapshot.debates` is always the LIVE arm's debates — the control
+   * arm never writes `debate_log` (`contracts/snapshot.ts`'s `arm` doc
+   * comment) — so an instrument-only join (`latestDebateFor`) run against a
+   * control-arm snapshot would attribute the live arm's real debate to a
+   * control lane trading the same instrument. This is the mutation this
+   * ticket's fix closes: reverting `resolveTrace`'s `snapshot.arm ===
+   * 'control'` guard turns this assertion into `detail.debate?.debate_id ===
+   * 'spy-newest'`, a real cross-arm leak.
+   */
+  it('never attributes the live arm’s debate to a control-arm lane on the same instrument', () => {
+    const detail = resolveTrace(
+      makeSnapshot({
+        arm: 'control',
+        pipeline: makeView([doneThrough('SPY', 'trace-spy', 'execution', { outcome: 'go' })]),
+        debates: [makeDebate({ debate_id: 'spy-newest', instrument: 'SPY' })],
+      }),
+      { instrument: 'SPY', traceId: null },
+    );
+    expect(detail.debate).toBeUndefined();
+  });
+
   it('finds no debate for an instrument with none in the window', () => {
     const detail = resolveTrace(
       makeSnapshot({
