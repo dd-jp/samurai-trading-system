@@ -61,7 +61,9 @@ describe('LiveTab — control arm', () => {
     );
     const drawer = screen.getByRole('complementary', { name: 'Trace detail' });
     expect(within(drawer).getByText('Control arm: no LLM critic — not applicable')).toBeTruthy();
-    expect(within(drawer).getByText(/bound by risk_critic:invalidated/)).toBeTruthy();
+    expect(
+      within(drawer).getByText(/risk_critic:invalidated — measured breach of a condition below/),
+    ).toBeTruthy();
     expect(within(drawer).queryByText(/critic reject/)).toBeNull();
   });
 
