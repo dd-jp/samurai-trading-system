@@ -167,11 +167,45 @@ describe('sweepWedgedZeroFillLots (#1186)', () => {
       broker_state: null,
       action: 'undetermined',
       kind: 'sweep',
+      escalation: 'sweep_shape_mismatch',
     });
     expect(result.divergences[0]?.reason).toContain('shape mismatch');
 
     // The forced no-op never wrote anything — still wedged, not abandoned.
     expect((await store.getPosition(KEY))?.order_state).toBe('filled');
+  });
+
+  it('reports an abandon-failed divergence with its own escalation, distinct from the shape-mismatch one (#1609)', async () => {
+    const { store } = openTestExecutionStore();
+    await seedWedgedPosition(store);
+
+    // Stands in for the store write itself throwing (a DB failure), the
+    // pre-existing `catch` block this sweep has always had — a different
+    // event than the SQL-guard no-op above, though both share
+    // `action: 'undetermined'` and `kind: 'sweep'`.
+    const failingStore: WedgedSweepInput['store'] = {
+      getOpenPositions: () => store.getOpenPositions(),
+      getExitFillSizes: (keys) => store.getExitFillSizes(keys),
+      sweepTerminalPositions: (cutoff) => store.sweepTerminalPositions(cutoff),
+      abandonWedgedZeroFillLot: async () => {
+        throw new Error('store write failed');
+      },
+    };
+
+    const result = await sweepWedgedZeroFillLots(makeInput(failingStore));
+
+    expect(result.checked).toBe(1);
+    expect(result.divergences).toHaveLength(1);
+    expect(result.divergences[0]).toMatchObject({
+      idempotency_key: KEY,
+      instrument: 'META',
+      store_state: 'filled',
+      broker_state: null,
+      action: 'undetermined',
+      kind: 'sweep',
+      escalation: 'sweep_abandon_failed',
+    });
+    expect(result.divergences[0]?.reason).toContain('abandon failed');
   });
 
   it('treats a no-op abandon as the benign race when a fresh read no longer matches isWedgedZeroFillLot', async () => {
