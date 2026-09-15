@@ -6,7 +6,7 @@
  * read as freshness in the other.
  */
 import type { TradingArmWire } from '@contracts';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { LiveFeed } from '../hooks/useSnapshot.ts';
 import { makeMetrics, makeSnapshot } from '../test-fixtures.ts';
@@ -360,17 +360,31 @@ describe('Rail — arm selector', () => {
   it('names Live as selected and Control as not, when arm is live', () => {
     renderRailArm('live', () => {});
 
-    expect(screen.getByRole('button', { name: 'Live arm, selected' })).toBeTruthy();
+    const liveButton = screen.getByRole('button', { name: 'Live arm, selected' });
+    expect(liveButton).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Control arm' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Control arm, selected' })).toBeNull();
+
+    // Colour alone never carries selection (dashboard-spec.md:310/:560) — the
+    // selected arm also carries a visible word, not just `.arm-btn-on`.
+    expect(within(liveButton).getByText('· selected')).toBeTruthy();
+    expect(
+      within(screen.getByRole('button', { name: 'Control arm' })).queryByText('· selected'),
+    ).toBeNull();
   });
 
   it('names Control as selected and Live as not, when arm is control', () => {
     renderRailArm('control', () => {});
 
-    expect(screen.getByRole('button', { name: 'Control arm, selected' })).toBeTruthy();
+    const controlButton = screen.getByRole('button', { name: 'Control arm, selected' });
+    expect(controlButton).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Live arm' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Live arm, selected' })).toBeNull();
+
+    expect(within(controlButton).getByText('· selected')).toBeTruthy();
+    expect(
+      within(screen.getByRole('button', { name: 'Live arm' })).queryByText('· selected'),
+    ).toBeNull();
   });
 
   it('is reachable and operable by keyboard — a native button needs no roving tabindex', () => {
