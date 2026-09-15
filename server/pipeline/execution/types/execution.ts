@@ -18,6 +18,8 @@ import type { FlattenReconcileAlertChannel } from '../flatten-reconcile-alert.js
 import type { NonSterlingFeeAlertChannel } from '../non-sterling-fee-alert.js';
 import type { ResidualExposureAlertChannel } from '../residual-exposure-alert.js';
 import type { UnattributedFlattenFillAlertChannel } from '../unattributed-flatten-fill-alert.js';
+import type { UnrecordedVenuePositionAlertChannel } from '../unrecorded-venue-position-alert.js';
+import type { UnrecordedVenuePositionThrottle } from '../unrecorded-venue-position-throttle.js';
 import type { BrokerAdapter } from './broker.js';
 import type {
   FillJournal,
@@ -116,6 +118,28 @@ export interface ExecutionInput {
    * is still held, and an omitted channel would make that invisible again.
    */
   flattenReconcileAlerts: FlattenReconcileAlertChannel;
+  /**
+   * #1550: where a position the VENUE holds and no open lot in the store
+   * explains is escalated — `findUnrecordedVenuePositions` (reconcile.ts).
+   *
+   * Required, for the same "no silent default" reason the three channels above
+   * are, and with a sharper case than any of them: this is the one exposure
+   * the Risk Manager structurally cannot see (it computes exposure from the
+   * store, and the store has no row), and until this field existed the
+   * condition reached a `warn` LOG line in a different module and nothing
+   * else. Absent would mean the same silence again.
+   */
+  unrecordedVenuePositionAlerts: UnrecordedVenuePositionAlertChannel;
+  /**
+   * #1550's per-instrument page throttle
+   * (unrecorded-venue-position-throttle.ts) — required for the same reason
+   * `filledZeroSizeThrottle` below is, and for a condition that needs it more:
+   * the unrecorded shape is a STATE re-derived from a fresh venue read on
+   * every 15s reconcile pass, so an omitted throttle is ~240 pages an hour
+   * until someone acts. One instance per composition root, constructed once
+   * and threaded here, not a module-level singleton — see the class doc.
+   */
+  unrecordedVenuePositionThrottle: UnrecordedVenuePositionThrottle;
   /**
    * #573's recorded decision: the execution port DOES carry a `Logger`, for
    * a LOCAL diagnostic trace — "what actually failed" — that is distinct
@@ -277,7 +301,14 @@ export type FillIngestInput = Pick<
  */
 export type ReconcileInput = Pick<
   ExecutionInput,
-  'trace_id' | 'clock' | 'broker' | 'residualExposureAlerts' | 'flattenReconcileAlerts' | 'logger'
+  | 'trace_id'
+  | 'clock'
+  | 'broker'
+  | 'residualExposureAlerts'
+  | 'flattenReconcileAlerts'
+  | 'unrecordedVenuePositionAlerts'
+  | 'unrecordedVenuePositionThrottle'
+  | 'logger'
 > &
   ResidualReflattenInput & {
     store: PositionReader &
@@ -393,7 +424,10 @@ export interface ReconcileDivergence {
    *   `reconcileDivergenceLevel()` (fill-sync.ts) logs it at `warn`
    *   alongside `undetermined` rather than at `info` (#1506): having no
    *   backstop detector is the argument for raising the level, not for
-   *   leaving it quiet.
+   *   leaving it quiet. Since #1550 it also PAGES, through
+   *   `unrecordedVenuePositionAlerts` raised by
+   *   `findUnrecordedVenuePositions` itself — a log level escalates to
+   *   nothing, and this is the one exposure Risk structurally cannot see.
    */
   action: 'adopted' | 'rejected' | 'undetermined' | 'unrecorded';
   /** Operator-facing detail — the adapter's error on `undetermined`. */

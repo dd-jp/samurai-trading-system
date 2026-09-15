@@ -838,6 +838,11 @@ describe('SqliteExecutionStore', () => {
         lot_idempotency_keys: ['key-lot-1', 'key-lot-2'],
         lot_held_quantities: null,
         exit_reason: 'flatten',
+        // #1550: read off migration 0019's own columns, so a pre-0021 row
+        // carries them too — which is the point of taking them from here
+        // rather than from a lot that may already be swept.
+        instrument: 'AAPL',
+        side: 'sell',
         modelled_cost_breakdown: null,
         // #1014 review, finding 3 — the flatten's SUBMITTED size, now the
         // denominator `redistributeOneFlatten` prorates the modelled cost

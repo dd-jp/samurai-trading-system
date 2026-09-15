@@ -34,7 +34,10 @@ import type {
   ExecutionConfig,
   SharedStore as ExecutionSharedStore,
 } from '../../../pipeline/execution/index.js';
-import { FilledZeroSizeThrottle } from '../../../pipeline/execution/index.js';
+import {
+  FilledZeroSizeThrottle,
+  UnrecordedVenuePositionThrottle,
+} from '../../../pipeline/execution/index.js';
 import type {
   BreakerStatePersistence,
   CircuitBreakers,
@@ -219,6 +222,16 @@ export function buildControlArmWiring(deps: ControlArmWiringDeps): ControlArmWir
     // gets its own throttle too, same as `broker`/`store`/`costModel`/
     // `marketData`/`config` above.
     filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
+    // #1550: an OWN throttle, and unlike `filledZeroSizeThrottle` above this
+    // one IS guarding against cross-arm leakage. Its key is the bare
+    // INSTRUMENT — a venue position no lot explains carries no idempotency key
+    // by construction, which is the finding — and both arms scan the same
+    // venue, so a shared instance would let whichever arm polled first take
+    // the page and leave the other silent for half an hour. The channel is
+    // inherited from the spread above and drops the control arm's post on its
+    // `page` predicate, so in practice this keeps the LIVE arm's page from
+    // being swallowed by the control arm's scan.
+    unrecordedVenuePositionThrottle: new UnrecordedVenuePositionThrottle(),
   };
 
   // Per-arm breaker plumbing, spread into all three stage builders exactly as

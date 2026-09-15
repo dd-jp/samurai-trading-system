@@ -43,6 +43,14 @@ import type {
   NormalizedOrder,
   NormalizedPosition,
 } from './types.js';
+import type {
+  UnrecordedVenuePositionAlert,
+  UnrecordedVenuePositionAlertChannel,
+} from './unrecorded-venue-position-alert.js';
+import {
+  UNRECORDED_VENUE_POSITION_REPAGE_EVERY_MS,
+  UnrecordedVenuePositionThrottle,
+} from './unrecorded-venue-position-throttle.js';
 import { WEDGED_ZERO_FILL_ABANDON_AFTER_MS } from './wedged-zero-fill-sweep.js';
 
 /**
@@ -246,6 +254,10 @@ function makeInput(
     postFlattenReconcileAlert: async () => {},
   },
   logger: Logger = recordingLogger(),
+  unrecordedVenuePositionAlerts: UnrecordedVenuePositionAlertChannel = {
+    postUnrecordedVenuePositionAlert: async () => {},
+  },
+  unrecordedVenuePositionThrottle: UnrecordedVenuePositionThrottle = new UnrecordedVenuePositionThrottle(),
 ): ExecutionInput {
   const config: ExecutionConfig = {
     simulated: {
@@ -273,6 +285,8 @@ function makeInput(
     residualExposureAlerts: { postResidualExposureAlert: async () => {} },
     flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
     flattenReconcileAlerts,
+    unrecordedVenuePositionAlerts,
+    unrecordedVenuePositionThrottle,
     filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
     logger,
   };
@@ -1853,6 +1867,249 @@ describe('reconcile — a position the venue holds and the store does not (#429)
     expect(report.divergences.map((d) => d.instrument).sort()).toEqual(['ETH-USD', 'SOL-USD']);
   });
 });
+
+/**
+ * #1550. The scan above has reported this shape since #429 and warned about it
+ * since #1506, but `reconcileDivergenceLevel`'s `warn` is a LOG level and
+ * nothing escalated off it. These pin the page itself, and the throttle that
+ * makes it survivable at a 15s reconcile cadence.
+ */
+describe('reconcile — the unrecorded venue position PAGES (#1550)', () => {
+  /** A clock the test moves, unlike the module-level `fixedClock`. */
+  function movableClock(at: Date): Clock & { advanceBy: (ms: number) => void } {
+    let now = at;
+    return { now: () => now, advanceBy: (ms) => (now = new Date(now.getTime() + ms)) };
+  }
+
+  it('pages on the pass that finds it, carrying the venue instrument, quantity and side', async () => {
+    const { store } = openTestExecutionStore();
+    const broker = makeBroker();
+    broker.venuePositions = [
+      { instrument: 'ETH-USD', qty: -3, side: 'sell', avg_entry_price: 2_000 },
+    ];
+    const alerts = recordingUnrecordedAlertsFor();
+
+    await new ExecutionImpl(makeInput(store, broker, undefined, undefined, alerts)).reconcile();
+
+    expect(alerts.posted).toEqual([
+      { trace_id: 'trace-86', instrument: 'ETH-USD', qty: -3, side: 'sell', observed_at: NOW },
+    ]);
+  });
+
+  // The throttle is not a nicety: reconcile runs on the fill-sync poll (#921,
+  // 15s), the scan re-derives this condition from a fresh venue read every
+  // pass, and nothing the system does resolves it — so an unthrottled page is
+  // ~240 an hour for as long as the position stands.
+  it('does not page again on the next pass inside the re-page window', async () => {
+    const { store } = openTestExecutionStore();
+    const broker = makeBroker();
+    broker.venuePositions = [{ instrument: 'ETH-USD', qty: 3, side: 'buy', avg_entry_price: null }];
+    const alerts = recordingUnrecordedAlertsFor();
+    const clock = movableClock(NOW);
+    const input = { ...makeInput(store, broker, undefined, undefined, alerts), clock };
+
+    await new ExecutionImpl(input).reconcile();
+    clock.advanceBy(UNRECORDED_VENUE_POSITION_REPAGE_EVERY_MS - 1);
+    await new ExecutionImpl(input).reconcile();
+
+    expect(alerts.posted).toHaveLength(1);
+  });
+
+  it('pages again once the re-page window has elapsed, so a standing exposure does not go quiet', async () => {
+    const { store } = openTestExecutionStore();
+    const broker = makeBroker();
+    broker.venuePositions = [{ instrument: 'ETH-USD', qty: 3, side: 'buy', avg_entry_price: null }];
+    const alerts = recordingUnrecordedAlertsFor();
+    const clock = movableClock(NOW);
+    const input = { ...makeInput(store, broker, undefined, undefined, alerts), clock };
+
+    await new ExecutionImpl(input).reconcile();
+    clock.advanceBy(UNRECORDED_VENUE_POSITION_REPAGE_EVERY_MS);
+    await new ExecutionImpl(input).reconcile();
+
+    expect(alerts.posted).toHaveLength(2);
+  });
+
+  it('pages each unrecorded instrument on its own schedule', async () => {
+    const { store } = openTestExecutionStore();
+    const broker = makeBroker();
+    broker.venuePositions = [{ instrument: 'ETH-USD', qty: 3, side: 'buy', avg_entry_price: null }];
+    const alerts = recordingUnrecordedAlertsFor();
+    const clock = movableClock(NOW);
+    const input = { ...makeInput(store, broker, undefined, undefined, alerts), clock };
+
+    await new ExecutionImpl(input).reconcile();
+    clock.advanceBy(1_000);
+    broker.venuePositions = [
+      { instrument: 'ETH-USD', qty: 3, side: 'buy', avg_entry_price: null },
+      { instrument: 'SOL-USD', qty: 10, side: 'buy', avg_entry_price: null },
+    ];
+    await new ExecutionImpl(input).reconcile();
+
+    // The second instrument is new, so it pages immediately; the first is
+    // still inside its own window and stays quiet.
+    expect(alerts.posted.map((alert) => alert.instrument)).toEqual(['ETH-USD', 'SOL-USD']);
+  });
+
+  // Ignorance is not resolution. A venue read that failed says nothing about
+  // whether the exposure is still there, so the pass must neither page on it
+  // nor treat it as the episode ending — forgetting here would re-page
+  // everything standing the instant the endpoint recovered.
+  it('never pages the venue-read failure, and does not end a standing episode on it', async () => {
+    const { store } = openTestExecutionStore();
+    const broker = makeBroker();
+    broker.venuePositions = [{ instrument: 'ETH-USD', qty: 3, side: 'buy', avg_entry_price: null }];
+    const alerts = recordingUnrecordedAlertsFor();
+    const clock = movableClock(NOW);
+    const input = { ...makeInput(store, broker, undefined, undefined, alerts), clock };
+
+    await new ExecutionImpl(input).reconcile();
+    clock.advanceBy(1_000);
+    broker.failPositions = 'venue positions unreachable';
+    await new ExecutionImpl(input).reconcile();
+    clock.advanceBy(1_000);
+    broker.failPositions = null;
+    await new ExecutionImpl(input).reconcile();
+
+    expect(alerts.posted).toHaveLength(1);
+  });
+
+  it('re-pages immediately for an instrument that cleared and came back', async () => {
+    const { store } = openTestExecutionStore();
+    const broker = makeBroker();
+    broker.venuePositions = [{ instrument: 'ETH-USD', qty: 3, side: 'buy', avg_entry_price: null }];
+    const alerts = recordingUnrecordedAlertsFor();
+    const clock = movableClock(NOW);
+    const input = { ...makeInput(store, broker, undefined, undefined, alerts), clock };
+
+    await new ExecutionImpl(input).reconcile();
+    clock.advanceBy(1_000);
+    broker.venuePositions = [];
+    await new ExecutionImpl(input).reconcile();
+    clock.advanceBy(1_000);
+    broker.venuePositions = [{ instrument: 'ETH-USD', qty: 3, side: 'buy', avg_entry_price: null }];
+    await new ExecutionImpl(input).reconcile();
+
+    // A second, separate incident — not a repeat of the first, so it is not
+    // held back by the window the first one opened.
+    expect(alerts.posted).toHaveLength(2);
+  });
+
+  // The scan's job is to REPORT. A transport that cannot deliver must not cost
+  // the sweeps that already ran this pass, and the channel's own error text
+  // never reaches the log (it can quote a URL carrying a bot token).
+  it('survives a channel that throws, still reports the divergence, and logs a fixed line', async () => {
+    const { store } = openTestExecutionStore();
+    const broker = makeBroker();
+    broker.venuePositions = [{ instrument: 'ETH-USD', qty: 3, side: 'buy', avg_entry_price: null }];
+    const logger = recordingLogger();
+
+    const report = await new ExecutionImpl(
+      makeInput(store, broker, undefined, logger, {
+        postUnrecordedVenuePositionAlert: async () => {
+          throw new Error('telegram 502 https://api.telegram.org/botSECRET/sendMessage');
+        },
+      }),
+    ).reconcile();
+
+    expect(report.divergences.map((d) => d.action)).toEqual(['unrecorded']);
+    const failure = logger.entries.find(
+      (entry) => entry.event === 'unrecorded_venue_position_alert_send_failed',
+    );
+    expect(failure?.level).toBe('error');
+    expect(JSON.stringify(failure)).not.toContain('SECRET');
+  });
+});
+
+/**
+ * #1550 item 1 — the LAST-OPEN-LOT shape, and the resolution
+ * execution-spec.md records for it.
+ *
+ * A flatten whose fill closes the last open lot leaves the store with zero
+ * open positions. `ingestFills` returns at its own `positions.length === 0`
+ * guard before redistribution, so the #1506 booking path is unreachable for
+ * this shape — and that guard is not an efficiency check that could simply be
+ * deleted: `since`, the fill-feed floor, is `earliest(positions.map(…))`, a
+ * `reduce` with no initial value that THROWS on an empty array. Running
+ * ingestion anyway would mean inventing a second floor source, a new
+ * per-adapter invariant on the money path.
+ *
+ * The answer the spec records is the reconcile-side detector alone. These pin
+ * both halves of it.
+ */
+describe('reconcile — the last open lot, closed by a flatten (#1550)', () => {
+  it('ingestFills never reaches the fill feed with no open lots, so nothing invents a floor', async () => {
+    const { store } = openTestExecutionStore();
+    const broker = makeBroker();
+    // The feed itself is the assertion: a poll that reached it would throw,
+    // and the only way to reach it is to have computed a `since` from a set of
+    // open lots that does not exist.
+    broker.fetchNewFills = async () => {
+      throw new Error('fetchNewFills must not be called with no open lots');
+    };
+    broker.venuePositions = [{ instrument: 'AAPL', qty: 10, side: 'buy', avg_entry_price: 100 }];
+
+    await expect(
+      new ExecutionImpl(makeInput(store, broker)).ingestFills(),
+    ).resolves.toBeUndefined();
+    expect(await store.countAllPositions()).toBe(0);
+  });
+
+  it('one reconcile pass surfaces and pages the exposure the venue is left holding', async () => {
+    const { store } = openTestExecutionStore();
+    const broker = makeBroker();
+    // The end state the shape produces: the store is flat (its last lot
+    // closed), the venue is not.
+    broker.venuePositions = [{ instrument: 'AAPL', qty: -4, side: 'sell', avg_entry_price: 100 }];
+    const alerts = recordingUnrecordedAlertsFor();
+
+    const report = await new ExecutionImpl(
+      makeInput(store, broker, undefined, undefined, alerts),
+    ).reconcile();
+
+    // ONE pass, not a later one: the scan is unconditional on every reconcile,
+    // and never gated on there being an open lot to walk.
+    expect(report.divergences).toMatchObject([
+      { instrument: 'AAPL', action: 'unrecorded', kind: 'unrecorded' },
+    ]);
+    expect(alerts.posted).toMatchObject([{ instrument: 'AAPL', qty: -4, side: 'sell' }]);
+  });
+
+  // The honest limit on the criterion above, stated as a test rather than as
+  // prose: the scan compares instrument PRESENCE, so it covers "no store lot
+  // on this instrument at all" — which the last-open-lot shape is — and NOT
+  // "the store holds fewer than the venue does", the surplus case
+  // `venueCoversStoreHeld` documents from its own side.
+  it('says nothing when the store still holds SOME lot on the instrument, however short', async () => {
+    const { store } = openTestExecutionStore();
+    await store.writeAheadPosition(pendingPosition());
+    const known = (await store.getOpenPositions())[0];
+    const broker = makeBroker();
+    broker.venuePositions = [
+      { instrument: known?.instrument ?? '', qty: 999, side: 'buy', avg_entry_price: 100 },
+    ];
+    const alerts = recordingUnrecordedAlertsFor();
+
+    const report = await new ExecutionImpl(
+      makeInput(store, broker, undefined, undefined, alerts),
+    ).reconcile();
+
+    expect(report.divergences.filter((d) => d.action === 'unrecorded')).toEqual([]);
+    expect(alerts.posted).toEqual([]);
+  });
+});
+
+function recordingUnrecordedAlertsFor(): UnrecordedVenuePositionAlertChannel & {
+  posted: UnrecordedVenuePositionAlert[];
+} {
+  const posted: UnrecordedVenuePositionAlert[] = [];
+  return {
+    posted,
+    postUnrecordedVenuePositionAlert: async (alert) => {
+      posted.push(alert);
+    },
+  };
+}
 
 describe('reconcile — the wedged-zero-fill sweep (#1186)', () => {
   it('a restart finds an already-wedged lot with no adapter memory of it, and retires it to a bookkeeping terminal state', async () => {

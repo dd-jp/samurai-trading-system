@@ -178,6 +178,7 @@ import {
   SqliteBrokerStateStore,
   SqliteExecutionStore,
   TERMINAL_SWEEP_AGE_MS,
+  UnrecordedVenuePositionThrottle,
 } from '../../pipeline/execution/index.js';
 // #1125: not re-exported through the barrel above (see ingest-fills.ts's own
 // exports) — imported directly, the same way `filled-zero-size-wiring.test.ts`
@@ -1762,6 +1763,13 @@ async function runExitPathScenarios(input: {
       // either).
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
       flattenReconcileAlerts,
+      // #1550: not recorded/gated, for the reason `flattenOverfillAlerts`
+      // above gives — every scenario in this harness drives the venue through
+      // the same `SimulatedBrokerAdapter` the store is written from, so its
+      // book and the store's can never disagree about which instruments are
+      // held, and the unrecorded shape is unreachable here by construction.
+      unrecordedVenuePositionAlerts: { postUnrecordedVenuePositionAlert: async () => {} },
+      unrecordedVenuePositionThrottle: new UnrecordedVenuePositionThrottle(),
       logger,
       // #1087: NOT recorded/gated on THIS harness's own evidence, unlike
       // `residualAlerts`/`flattenReconcileAlerts` above. `FILLED_WITH_ZERO_SIZE`
@@ -2594,6 +2602,8 @@ async function restartExecutionAndReconcile(ctx: PostSweepScenarioContext): Prom
       residualExposureAlerts: ctx.residualAlerts,
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
       flattenReconcileAlerts: ctx.flattenReconcileAlerts,
+      unrecordedVenuePositionAlerts: { postUnrecordedVenuePositionAlert: async () => {} },
+      unrecordedVenuePositionThrottle: new UnrecordedVenuePositionThrottle(),
       logger: ctx.logger,
       // Fresh, not the pre-restart `execution`'s instance — a real restart's
       // process is gone too, and `FilledZeroSizeThrottle` is documented
@@ -5408,6 +5418,15 @@ async function runFilledZeroSizeWedgeScenario(
             throw new Error('SmokeWedgedLotBroker: this scenario never flattens');
           },
         },
+        // #1550: this broker's `getOpenPositions()` answers with the wedged
+        // lot's own instrument, so the scan finds nothing unrecorded — the
+        // same throw-if-reached shape the two channels above take.
+        unrecordedVenuePositionAlerts: {
+          postUnrecordedVenuePositionAlert: async () => {
+            throw new Error('SmokeWedgedLotBroker: the venue holds only the wedged lot');
+          },
+        },
+        unrecordedVenuePositionThrottle: new UnrecordedVenuePositionThrottle(),
         logger: recorder,
         filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
       },
@@ -6909,6 +6928,12 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // end against a scripted broker.
       nonSterlingFeeAlerts: { postNonSterlingFeeAlert: async () => {} },
       unattributedFlattenFillAlerts: { postUnattributedFlattenFillAlert: async () => {} },
+      // #1550 — log-only, NOT a bare no-op: this port has a log form
+      // (reconcile.ts writes no `error` line of its own), so the posture is
+      // `flattenReconcileAlerts`' above, not `nonSterlingFeeAlerts`'. The
+      // tick loop's venue is the Simulated adapter, whose book is derived from
+      // the same store, so nothing here can be unrecorded.
+      unrecordedVenuePositionAlerts: loggingAlertChannel('unrecordedVenuePositionAlerts', logger),
     } satisfies Required<AlertChannels>;
 
     const orchestrator = await startFromEnvironment({

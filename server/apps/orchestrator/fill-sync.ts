@@ -145,9 +145,14 @@ import type { Logger } from './types.js';
  * real anomaly among the benign ones").
  *
  * `warn` is a LOG level, not a page: this feeds `logger.log` and nothing
- * escalates off it. Making the unrecorded shape audible on a phone needs an
- * `AlertChannelSlots` channel raised by `findUnrecordedVenuePositions`
- * itself — named as follow-up work in #1506's PR, not done here.
+ * escalates off it. That is no longer the whole story for the unrecorded
+ * shape — #1550 gave it an `AlertChannelSlots` channel
+ * (`UnrecordedVenuePositionAlertChannel`) raised by
+ * `findUnrecordedVenuePositions` itself, throttled per instrument, so the page
+ * exists independently of what this function returns. The `warn` here is still
+ * the log-side record, and the two are deliberately separate: the page fires
+ * once per instrument per re-page window, this line once per poll per
+ * divergence (collapsed by `lastReconcileAction` below).
  */
 function reconcileDivergenceLevel(divergence: ReconcileDivergence): LogLevel {
   if (divergence.action === 'undetermined' || divergence.action === 'unrecorded') return 'warn';

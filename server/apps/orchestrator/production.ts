@@ -140,6 +140,7 @@ import {
   SimulatedBrokerAdapter,
   SqliteBrokerStateStore,
   SqliteExecutionStore,
+  UnrecordedVenuePositionThrottle,
 } from '../../pipeline/execution/index.js';
 import type {
   ArmDivergenceAlertChannel,
@@ -1672,6 +1673,18 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     // make an unresolved flatten's ambiguity invisible again.
     flattenReconcileAlerts:
       config.flattenReconcileAlerts ?? loggingAlertChannel('flattenReconcileAlerts', logger),
+    // #1550: where `findUnrecordedVenuePositions` escalates a venue position no
+    // open lot explains. Required, with a `loggingAlertChannel` default rather
+    // than an optional slot, for the reason `AlertChannelSlots`'s own field doc
+    // gives: nothing else writes an `error` line for this condition.
+    unrecordedVenuePositionAlerts:
+      config.unrecordedVenuePositionAlerts ??
+      loggingAlertChannel('unrecordedVenuePositionAlerts', logger),
+    // #1550: one throttle per arm, shared by `fillSyncExecution`/
+    // `reconcileExecution` below for the reason `filledZeroSizeThrottle` gives
+    // — and load-bearing here, since only `reconcileExecution` scans but the
+    // page cadence is a property of the process, not of the surface.
+    unrecordedVenuePositionThrottle: new UnrecordedVenuePositionThrottle(),
     // #573: the execution port's own local diagnostic trace — see
     // `ExecutionInput.logger`'s decision doc. Required, so a composition
     // root that forgets it is a `tsc` error rather than a silent gap.

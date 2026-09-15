@@ -35,6 +35,8 @@ import type {
   ResidualExposureAlertChannel,
   SharedStore,
   UnattributedFlattenFillAlertChannel,
+  UnrecordedVenuePositionAlertChannel,
+  UnrecordedVenuePositionThrottle,
 } from '../../../pipeline/execution/index.js';
 import { ExecutionImpl } from '../../../pipeline/execution/index.js';
 import type {
@@ -1513,6 +1515,10 @@ export interface ExecutionStepDeps {
   flattenOverfillAlerts: FlattenOverfillAlertChannel;
   /** The #519 unresolved-flatten escalation — see `ExecutionInput.flattenReconcileAlerts`. */
   flattenReconcileAlerts: FlattenReconcileAlertChannel;
+  /** #1550's unrecorded-venue-position page — see `ExecutionInput.unrecordedVenuePositionAlerts`. */
+  unrecordedVenuePositionAlerts: UnrecordedVenuePositionAlertChannel;
+  /** #1550's per-instrument page throttle — see `ExecutionInput.unrecordedVenuePositionThrottle`. */
+  unrecordedVenuePositionThrottle: UnrecordedVenuePositionThrottle;
   /** #573's local diagnostic trace — see `ExecutionInput.logger`'s decision doc. */
   logger: Logger;
   /** #1087's per-lot throttle — see `ExecutionInput.filledZeroSizeThrottle`. */
@@ -1555,6 +1561,8 @@ export function buildExecutionStep(deps: ExecutionStepDeps): TickSteps['executio
       residualExposureAlerts: deps.residualExposureAlerts,
       flattenOverfillAlerts: deps.flattenOverfillAlerts,
       flattenReconcileAlerts: deps.flattenReconcileAlerts,
+      unrecordedVenuePositionAlerts: deps.unrecordedVenuePositionAlerts,
+      unrecordedVenuePositionThrottle: deps.unrecordedVenuePositionThrottle,
       logger: deps.logger,
       filledZeroSizeThrottle: deps.filledZeroSizeThrottle,
       sessionCalendars: deps.sessionCalendars,
@@ -1597,6 +1605,8 @@ export function buildExecutionSurface(deps: ExecutionStepDeps, traceId: string):
     residualExposureAlerts: deps.residualExposureAlerts,
     flattenOverfillAlerts: deps.flattenOverfillAlerts,
     flattenReconcileAlerts: deps.flattenReconcileAlerts,
+    unrecordedVenuePositionAlerts: deps.unrecordedVenuePositionAlerts,
+    unrecordedVenuePositionThrottle: deps.unrecordedVenuePositionThrottle,
     logger: deps.logger,
     filledZeroSizeThrottle: deps.filledZeroSizeThrottle,
     sessionCalendars: deps.sessionCalendars,

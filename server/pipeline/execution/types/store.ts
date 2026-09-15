@@ -613,6 +613,30 @@ export interface FlattenAttribution {
   /** In the `opened_at` order `executeExit` read the lots in — the FIFO order the split allocates in. */
   lot_idempotency_keys: readonly string[];
   /**
+   * #1550: the flatten's own instrument, read off the same write-ahead row
+   * (`FlattenSubmissionWriteAhead.instrument`, migration 0019's column).
+   *
+   * Carried here because `persistUnattributedSplits` (ingest-fills.ts) books
+   * a split against a lot that has ALREADY left `getOpenPositions()`, so it
+   * holds no `OpenPosition` to read an instrument off — and the CGT fee check
+   * (`warnOnNonSterlingFee`, #1220/#1465) and the operator page both need
+   * one. A `findByKey(lotKey)` lookup would be the alternative and is worse:
+   * `sweepTerminalPositions` deletes terminal rows, so it can answer `null`
+   * on exactly the path that needs it, where this row is the one the caller
+   * just read.
+   */
+  instrument: string;
+  /**
+   * #1550: the CLOSING side (`FlattenSubmissionWriteAhead.side`), not the
+   * lot's opening side.
+   *
+   * That distinction is the point: `'sell'` closes a long, `'buy'` closes a
+   * short, and the operator text for an unattributed split says what the
+   * VENUE did. Reading the lot's own side instead would invert the sentence
+   * on every buy-to-close.
+   */
+  side: 'buy' | 'sell';
+  /**
    * Each lot's held quantity (`filled_size` minus its already-recorded exit
    * fills) AT WRITE-AHEAD TIME, summing to the flatten's own `size` — the
    * fixed per-lot share `redistributeFlattenFills` allocates against (#571).

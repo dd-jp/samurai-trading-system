@@ -866,7 +866,7 @@ export class SqliteExecutionStore implements SharedStore {
     const row = this.db
       .prepare(
         `SELECT lot_idempotency_keys, lot_held_quantities, exit_reason, size,
-                modelled_cost_breakdown_json
+                instrument, side, modelled_cost_breakdown_json
            FROM flatten_submissions WHERE idempotency_key = ?`,
       )
       .get(idempotency_key) as
@@ -875,6 +875,8 @@ export class SqliteExecutionStore implements SharedStore {
           lot_held_quantities: string | null;
           exit_reason: ExitReason | null;
           size: number;
+          instrument: string;
+          side: 'buy' | 'sell';
           modelled_cost_breakdown_json: string | null;
         }
       | undefined;
@@ -919,6 +921,8 @@ export class SqliteExecutionStore implements SharedStore {
         lot_idempotency_keys: keys,
         lot_held_quantities: null,
         exit_reason: row.exit_reason,
+        instrument: row.instrument,
+        side: row.side,
         modelled_cost_breakdown: modelledCostBreakdown,
         size: row.size,
       };
@@ -960,6 +964,8 @@ export class SqliteExecutionStore implements SharedStore {
       lot_idempotency_keys: keys,
       lot_held_quantities: paired,
       exit_reason: row.exit_reason,
+      instrument: row.instrument,
+      side: row.side,
       modelled_cost_breakdown: modelledCostBreakdown,
       size: row.size,
     };

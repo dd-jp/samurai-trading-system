@@ -96,3 +96,7 @@ export type {
   UnattributedFlattenFillAlert,
   UnattributedFlattenFillAlertChannel,
 } from './unattributed-flatten-fill-alert.js';
+export type {
+  UnrecordedVenuePositionAlert,
+  UnrecordedVenuePositionAlertChannel,
+} from './unrecorded-venue-position-alert.js';

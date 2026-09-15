@@ -17,6 +17,7 @@ import { isProtectiveRearmUnsupported } from '../protective-rearm-unsupported.js
 import { openTestExecutionStore } from '../sqlite-store-harness.js';
 import type { ExecutionConfig, ExecutionInput, NativeBracketRequest } from '../types.js';
 import type { UnpricedFillAlert, UnpricedFillAlertChannel } from '../unpriced-fill-alert.js';
+import { UnrecordedVenuePositionThrottle } from '../unrecorded-venue-position-throttle.js';
 import { AlpacaBrokerAdapter, DEFAULT_UNPRICED_FILL_AGE_OUT_MS } from './alpaca-adapter.js';
 import { AlpacaBrokerProviderError } from './alpaca-broker-errors.js';
 import type { AlpacaBrokerClient, AlpacaOcoOrderRequest, AlpacaOrder } from './alpaca-client.js';
@@ -3867,6 +3868,8 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
       filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
       flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
+      unrecordedVenuePositionAlerts: { postUnrecordedVenuePositionAlert: async () => {} },
+      unrecordedVenuePositionThrottle: new UnrecordedVenuePositionThrottle(),
       logger: { log: () => {} },
     };
     const execution = new ExecutionImpl(input);
@@ -3999,6 +4002,8 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
       filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
       flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
+      unrecordedVenuePositionAlerts: { postUnrecordedVenuePositionAlert: async () => {} },
+      unrecordedVenuePositionThrottle: new UnrecordedVenuePositionThrottle(),
       logger: { log: () => {} },
     });
 
@@ -4083,6 +4088,8 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
       filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
       flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
+      unrecordedVenuePositionAlerts: { postUnrecordedVenuePositionAlert: async () => {} },
+      unrecordedVenuePositionThrottle: new UnrecordedVenuePositionThrottle(),
       logger: { log: () => {} },
     });
 
