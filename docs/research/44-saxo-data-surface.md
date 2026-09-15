@@ -15,8 +15,9 @@ market sentiment or intelligence"*.
 ## 1. Method, and what the evidence is worth
 
 Every figure below was pulled from the **SIM gateway** (`gateway.saxobank.com/sim/openapi`)
-on 2026-09-07/08 with a 24-hour developer token, against `ClientId 22690838` — except §2.1a, which
-was measured on the same gateway and client on **2026-09-10** and says so in place. Three
+on 2026-09-07/08 with a 24-hour developer token, against `ClientId 22690838` — except §2.1a and
+§2.1b, measured on the same gateway and client on **2026-09-10** and **2026-09-15** respectively,
+each saying so in place. Three
 qualifications bound this survey; a fourth is now resolved:
 
 - **The SIM account is a trial account, not the UK GIA.** `port/v1/accounts/me` reports
@@ -194,6 +195,80 @@ price) is untouched by any of this. Both are the live/in-session follow-ups #144
 The €18.62 intercept is **account-shaped** — a trial EUR account's fixed cost, per §1's split —
 and is *not* evidence about the live UK GIA's tariff or about ADR-0015's "no per-order minimum".
 It is recorded here only because it is the constant the slope fit had to subtract.
+
+### 2.1b Third reading, 2026-09-15 — the unit fields are stable across a week, and live is still 401
+
+Measured on SIM at **2026-09-15T07:37Z**, same gateway and `ClientId 22690838`, while re-checking
+[#1302](https://github.com/dd-jp/samurai-trading-system/issues/1302)'s premise against the tree.
+Two readings were on record (2026-09-08 §2.1, 2026-09-10 §2.1a); this is a third, five days after
+the second and seven after the first, and it exists to answer whether the field every cash figure
+in `saxo-adapter.ts` now depends on is *stable* rather than merely *present once*.
+
+**Every unit field reproduced exactly, on both lines:**
+
+| field | `29391797` (LQQ3, GBX) | `3347273` (3USL, USD) |
+| --- | --- | --- |
+| `CurrencyCode` | `"GBP"` | `"USD"` |
+| `PriceCurrency` | `"GBX"` | `"USD"` |
+| `PriceToContractFactor` | `0.01` | `1.0` |
+| `Format` | `{ "Decimals": 2, "OrderDecimals": 2 }` | same |
+| `TickSize` | absent | absent |
+| `TickSizeScheme` | `DefaultTickSize 0.01`, same four Elements | byte-identical |
+| `AmountDecimals` / `MinimumLotSize` / `LotSizeType` | `0` / `1.0` / `OddLotsNotAllowed` | same |
+
+The envelope is a **bare object** on both, no `Data` member — §2.1a's shape finding reproduces, so
+`validateInstrumentDetails`'s bare parse stays correct.
+
+**One drift worth recording: the response carries 44 top-level keys, where §2.1a counted 43.**
+Which key arrived is not recoverable — no raw capture of the 2026-09-10 body was kept, only its
+count — so the full key list is written down here for the next reading to diff against:
+
+> `AffiliateInfoRequired, AmountDecimals, AssetType, CurrencyCode, DefaultAmount, DefaultSlippage,
+> DefaultSlippageType, Description, Exchange, Format, FractionalMinimumLotSize, GroupId,
+> IncrementSize, IsBailIn, IsBarrierEqualsStrike, IsComplex, IsExtendedTradingHoursEnabled,
+> IsOcoOrderSupported, IsPEAEligible, IsPEASMEEligible, IsRedemptionByAmounts,
+> IsSwitchBySameCurrency, IsSystematicInternaliser, IsTradable, LotSizeType, MinimumLotSize,
+> MinimumTradeSize, NonTradableReason, OrderDistances, PriceCurrency, PriceToContractFactor,
+> PrimaryListing, StandardAmounts, SupportedOrderTriggerPriceTypes, SupportedOrderTypes,
+> SupportedStrategies, Symbol, TickSizeScheme, TradableAs, TradableOn, TradingSignals,
+> TradingStatus, Uic, UnderlyingTypeCategory`
+
+The drift is in a key the adapter does not read — every field `saxoInstrumentResolverFromVenue`
+and `validateInstrumentDetails` require is in the list above and carries the same value as before.
+It is recorded because a reference endpoint that grows a field silently can shrink one the same
+way, and the resolver fails closed on `PriceToContractFactor` going missing.
+
+#### The live gateway is still unreachable — 401, and the refresh token is dead too
+
+`GET https://gateway.saxobank.com/openapi/ref/v1/instruments/details/29391797/Etn` and the same
+call for `3347273/Etn`, with the live token on hand, both returned:
+
+```
+HTTPError 401 Unauthorized
+```
+
+with an empty body. `data/saxo-tokens/live.json` explains it without ambiguity: `accessTokenExpiresAt`
+`2026-09-14T20:52:02Z` and `refreshTokenExpiresAt` `2026-09-14T21:32:02Z`, both ~11 hours before the
+attempt. So this is not a refreshable session — closing #1302's AC2 needs a **fresh OAuth round
+trip** on the live app, not a token refresh. AC2 and AC3's live halves stay open and stay
+[#1444](https://github.com/dd-jp/samurai-trading-system/issues/1444)'s.
+
+#### The in-session window #1444 needs was open during this reading
+
+§2.1a records the marketability probe as not-run because the LSE ETF session had closed. It was
+**open** at the time of this reading, and the calendar is worth having in writing:
+
+- `GET /ref/v1/exchanges/LSE_ETF` at 07:37Z: `OpeningAuction` 06:50–07:00Z, **`AutomatedTrading`
+  07:00–15:30Z**, `CallAuctionTrading` 15:30–15:35:30Z, `Closed` until 06:50Z next day. The same
+  shape repeats for each following session, so the window is a daily 07:00–15:30Z.
+- `GET /trade/v1/infoprices?Uic=29391797&AssetType=Etn` at 07:37Z: `MarketState: "Open"`,
+  `Bid 29597 / Ask 29659 / Mid 29628`, `DelayedByMinutes: 15`, `PriceTypeAsk/Bid: "OldIndicative"`
+  — the 15-minute delay §2.9 measures, so an *open* market still quotes `OldIndicative` here.
+
+The probe was not placed: it is #1444's item, one of its two branches fills by design, and the
+unit it would test is already settled in the same direction by §2.1a's precheck fit. Recorded so
+whoever runs #1444 knows the window without re-deriving it — and so that "the market was closed"
+is not re-used as the reason a second time.
 
 ### 2.2 Intraday LSE bars on the tradeable line **do** exist — but not at Stage 2's depth
 
