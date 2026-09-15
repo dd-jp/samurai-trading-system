@@ -294,17 +294,17 @@ describe('computeIndicator — a period-N indicator is never computed over fewer
     { indicator: 'atr', required: PERIOD + 1 },
   ] as const;
 
-  it.each(CASES)('throws for $indicator one bar short of its $required', ({
-    indicator,
-    required,
-  }) => {
-    const spec = { indicator, params: { period: PERIOD }, timeframe: '1h', lookback: required };
+  it.each(CASES)(
+    'throws for $indicator one bar short of its $required',
+    ({ indicator, required }) => {
+      const spec = { indicator, params: { period: PERIOD }, timeframe: '1h', lookback: required };
 
-    expect(minimumBarsFor(spec)).toBe(required);
-    expect(() => computeIndicator(buildBars(required - 1, start), spec)).toThrow(
-      InsufficientBarsError,
-    );
-  });
+      expect(minimumBarsFor(spec)).toBe(required);
+      expect(() => computeIndicator(buildBars(required - 1, start), spec)).toThrow(
+        InsufficientBarsError,
+      );
+    },
+  );
 
   it.each(CASES)('computes $indicator at exactly its $required', ({ indicator, required }) => {
     const spec = { indicator, params: { period: PERIOD }, timeframe: '1h', lookback: required };

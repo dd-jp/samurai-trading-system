@@ -714,26 +714,29 @@ describe('enforceLatencyBudget', () => {
         'cancelled by an unrelated caller',
       ] as const,
       ['a generic bug', () => new Error('mediator exploded'), 'mediator exploded'] as const,
-    ])('still crashes the pass on %s, deliberately NOT absorbed here', async (_name, makeError, expectedMessage) => {
-      const logger = makeLogger();
+    ])(
+      'still crashes the pass on %s, deliberately NOT absorbed here',
+      async (_name, makeError, expectedMessage) => {
+        const logger = makeLogger();
 
-      const promise = enforceLatencyBudget({
-        assetClass: 'stocks',
-        trace_id: 'trace-1',
-        debate_id: 'debate-1',
-        bar: BAR,
-        produceResult: () =>
-          new Promise((_resolve, reject) => {
-            setTimeout(() => reject(makeError()), 1_000);
-          }),
-        getCurrentState: () => undefined,
-        logger,
-      });
+        const promise = enforceLatencyBudget({
+          assetClass: 'stocks',
+          trace_id: 'trace-1',
+          debate_id: 'debate-1',
+          bar: BAR,
+          produceResult: () =>
+            new Promise((_resolve, reject) => {
+              setTimeout(() => reject(makeError()), 1_000);
+            }),
+          getCurrentState: () => undefined,
+          logger,
+        });
 
-      const rejects = expect(promise).rejects.toThrow(expectedMessage);
-      await vi.advanceTimersByTimeAsync(1_000);
-      await rejects;
-    });
+        const rejects = expect(promise).rejects.toThrow(expectedMessage);
+        await vi.advanceTimersByTimeAsync(1_000);
+        await rejects;
+      },
+    );
   });
 
   it('does not log a timeout event when the debate completes in time', async () => {

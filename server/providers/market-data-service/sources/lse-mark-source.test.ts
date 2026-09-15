@@ -100,18 +100,19 @@ describe('toBookCurrency', () => {
 });
 
 describe('LseMarkDataSource — the no-substitution invariant (#734 DoD)', () => {
-  it.each([
-    ...SCREENING,
-  ])('refuses to serve a mark for screening instrument %s', async (screening) => {
-    const client = fakeClient();
-    const source = sourceWith(client);
+  it.each([...SCREENING])(
+    'refuses to serve a mark for screening instrument %s',
+    async (screening) => {
+      const client = fakeClient();
+      const source = sourceWith(client);
 
-    await expect(source.fetchMark(screening, IN_SESSION, 'live')).rejects.toThrow(
-      NonTradeableInstrumentError,
-    );
-    // The refusal happens BEFORE any vendor call — nothing was even asked.
-    expect(client.calls).toEqual([]);
-  });
+      await expect(source.fetchMark(screening, IN_SESSION, 'live')).rejects.toThrow(
+        NonTradeableInstrumentError,
+      );
+      // The refusal happens BEFORE any vendor call — nothing was even asked.
+      expect(client.calls).toEqual([]);
+    },
+  );
 
   it('names the substitution in the refusal, not just "unknown symbol"', async () => {
     const source = sourceWith(fakeClient());
