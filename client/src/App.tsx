@@ -22,7 +22,7 @@
 import type { TradingArmWire, VerdictRow } from '@contracts';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ColdStart } from './components/ColdStart.tsx';
-import { Rail, TABS, type Tab } from './components/Rail.tsx';
+import { ARMS, Rail, TABS, type Tab } from './components/Rail.tsx';
 import { GlanceTab } from './components/tabs/GlanceTab.tsx';
 import { LiveTab } from './components/tabs/LiveTab.tsx';
 import { ReviewTab } from './components/tabs/ReviewTab.tsx';
@@ -46,8 +46,13 @@ function isTab(value: string): value is Tab {
   return TABS.some((entry) => entry.id === value);
 }
 
+/**
+ * `ARMS` is `Rail.tsx`'s own list — imported rather than re-listed here, so
+ * this and the rail's selector read the same two arms (`contracts/snapshot.ts:78`
+ * warns "widen both sides together" about exactly this class of duplication).
+ */
 function isArm(value: string | undefined): value is TradingArmWire {
-  return value === 'live' || value === 'control';
+  return value !== undefined && ARMS.some((entry) => entry.id === value);
 }
 
 /**
@@ -240,7 +245,10 @@ interface ArmViewProps {
  */
 function ArmView(props: ArmViewProps) {
   const { arm, onArm, authToken, snapshotOptions, ...rest } = props;
-  const feed = useSnapshot({ authToken, arm, ...snapshotOptions });
+  // `arm` after the spread: the rail's selected arm must win over a
+  // caller-supplied `snapshotOptions.arm`, not the other way round — no
+  // caller does this today, but `arm` is a public `UseSnapshotOptions` field.
+  const feed = useSnapshot({ authToken, ...snapshotOptions, arm });
 
   // The one place the client asks whether a snapshot exists (#1520), now
   // scoped to the currently-selected arm's own feed.

@@ -53,6 +53,13 @@ export interface RailProps {
  * alone, because a screen reader user switching arms needs to hear WHICH
  * arm is current from the name it just activated, not a separate state
  * announcement that may or may not be read depending on the AT.
+ *
+ * `aria-label` covers assistive tech, but the selected button's colour tint
+ * (`.arm-btn-on`) is otherwise the ONLY thing telling a sighted user which
+ * arm is current — exactly what dashboard-spec.md's "colour is never the
+ * sole carrier of a signal" rule forbids. The " · selected" span rendered
+ * beside the label below is the visible word that rule requires; it plays no
+ * part in the accessible name, which `aria-label` already fully replaces.
  */
 function armAriaLabel(
   entry: { id: TradingArmWire; label: string },
@@ -654,7 +661,7 @@ export function Rail(props: RailProps) {
       <span className="brand">
         <i aria-hidden="true">侍</i> SAMURAI
       </span>
-      <nav className="rail-arms" aria-label="Trading arm">
+      <nav aria-label="Trading arm">
         <div className="arm-toggle">
           {ARMS.map((entry) => (
             <button
@@ -665,6 +672,7 @@ export function Rail(props: RailProps) {
               onClick={() => onArm(entry.id)}
             >
               {entry.label}
+              {arm === entry.id && <span className="arm-btn-mark"> · selected</span>}
             </button>
           ))}
         </div>

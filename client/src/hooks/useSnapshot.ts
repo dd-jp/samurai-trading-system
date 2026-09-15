@@ -278,16 +278,22 @@ export interface UseSnapshotOptions {
 }
 
 /**
- * The URL a poll actually fetches. `?arm=control` is appended ONLY for the
+ * The URL a poll actually fetches. `arm=control` is appended ONLY for the
  * control arm — every other case (`undefined`, `'live'`) leaves `url`
  * untouched, so the default dashboard's request stays byte-for-byte the same
  * shape it was before this option existed (the same posture `authToken`'s
  * header takes above). The server's own default is `'live'` too
  * (`server.ts`'s `parseArmParam`), so an explicit `?arm=live` would be
  * redundant, not merely equivalent.
+ *
+ * The separator is chosen from whether `url` already carries a query string
+ * (`SNAPSHOT_URL` never does, but `UseSnapshotOptions.url` is a public,
+ * caller-supplied option) — appending a bare `?arm=control` unconditionally
+ * would produce `?foo=1?arm=control` for any base URL that already has one.
  */
 export function snapshotUrl(url: string, arm?: TradingArmWire): string {
-  return arm === 'control' ? `${url}?arm=control` : url;
+  if (arm !== 'control') return url;
+  return `${url}${url.includes('?') ? '&' : '?'}arm=control`;
 }
 
 /**
