@@ -301,4 +301,32 @@ describe('deriveGdeltAggregate', () => {
     expect(without.emitted).toBe(true);
     expect(JSON.stringify(withFuture)).toBe(JSON.stringify(without));
   });
+
+  // #688 asks to measure "the empirical distribution of |toneDelta| per
+  // theme" — a quantity this function does not produce. It pools every
+  // watched theme into one mean before taking the delta, so two themes
+  // moving sharply in OPPOSITE directions in the same window cancel rather
+  // than each registering as a signal. Pinned here so a per-theme
+  // calibration cannot be built by accident on top of this shape, and so an
+  // intentional per-theme rewrite reads as a deliberate break of this test,
+  // not a silent regression.
+  it('pools opposite-direction theme shocks into one class-wide delta (#688)', () => {
+    const start = WINDOW_END.getTime() - SIGNAL_MS;
+    const signal = [
+      ...Array.from({ length: MIN_SIGNAL_RECORDS }, (_, n) =>
+        row(new Date(start + n * 60_000), ['ECON_STOCKMARKET'], 3),
+      ),
+      ...Array.from({ length: MIN_SIGNAL_RECORDS }, (_, n) =>
+        row(new Date(start + (n + MIN_SIGNAL_RECORDS) * 60_000), ['ECON_BANKRUPTCY'], -3),
+      ),
+    ];
+    const result = derive([...healthyBaseline(0), ...signal]);
+    expect(result.emitted).toBe(true);
+    if (!result.emitted) return;
+    // ECON_STOCKMARKET moved +3 and ECON_BANKRUPTCY moved -3 — each a large,
+    // unambiguous per-theme shock — but the class-wide mean is exactly 0.
+    expect(result.stats.signal_tone_mean).toBe(0);
+    expect(result.stats.tone_delta).toBe(0);
+    expect(confidenceFromToneDelta(result.stats.tone_delta ?? NaN)).toBe(0);
+  });
 });
