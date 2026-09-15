@@ -309,6 +309,28 @@ The index bar moves further in absolute terms (+3.85 pp) than the single-stock b
 
 **What this does not change.** The neutral-bracket levels (+2.00%/−2.16% index, +6.00%/−6.25% single-stock), the resolve-at-a-level percentages, D4's selection budget, and D5's sizing and drawdown figures are all untouched — this amendment is Decision 3's cost column and its two downstream bars only.
 
+## Amendment — 2026-09-15, [#1557](https://github.com/dd-jp/samurai-trading-system/issues/1557): the debate round count — structural cap kept as headroom, policy cap stays at one
+
+- **Adds a subject, amends no decision.** Nothing above states a debate round count; this records the ruling #1557 asked for here.
+- **Source:** [#1517](https://github.com/dd-jp/samurai-trading-system/issues/1517) (PR #1558) — the per-round verdict log (`debate_round_log`) and `yarn report:debate-flip-rate`.
+
+Two constants carry the round count. `MAX_ROUNDS = 3` (`round-orchestrator.ts`) is the **structural** cap; `MAX_ROUNDS_BY_ASSET_CLASS` (`latency-budget.ts`) is the **policy** cap production passes to `runDebate`, **1** since [#1080](https://github.com/dd-jp/samurai-trading-system/issues/1080).
+
+**Ruling: the policy cap stays at 1; the structural cap stays at 3, as headroom.**
+
+**The evidence supports the policy value, and says nothing about the ceiling.** Of the debates that ran two or more rounds and fall inside `llm_call_log`'s retention, **0 of 3** changed the mediator's verdict between round 1 and the final round; across all 48 pre-#1080 multi-round debates, **0** analysts changed `stance_during_debate`. Extra rounds were not observed to add information, so one round is the right policy. No debate can reach round 2 today, so the evidence cannot bound the ceiling.
+
+**Why the structural cap is not lowered to 1:**
+
+1. **It is the validation bound on the policy cap.** `runDebate` throws when `maxRounds > MAX_ROUNDS`. At 1, raising rounds for any asset class stops being a policy change and becomes an engine change.
+2. **It sizes the rate limiter so `maxDebates` stays the one binding dial.** `maxLlmCalls = maxDebates × llmCallsPerDebate(MAX_ROUNDS)` = ×10 is deliberately above the per-class reserve (×4 at one round). Lowered, the call budget equals the reserve and co-binds with the debate budget, so a refusal can name the wrong budget, which is the failure `paper-profile.ts`'s rate-limit docblock exists to prevent.
+
+**Not a capacity lever.** On the 2026-09-15 soak 34 of 40 debate attempts were refused at the LLM admission gate (one call already in flight, per-account queue). Every debate already runs one round, so the structural cap contributes no calls to those refusals and lowering it would relieve none.
+
+**Raising the policy cap above 1 requires a further amendment here**, citing `yarn report:debate-flip-rate` over rounds it can only measure once rounds are allowed again.
+
+**What this does not change.** Decisions 1–5, the 2026-09-14 charged bars, and every sizing figure above.
+
 ## Known weaknesses
 
 **The baseline is an unconditional long at the open.** That is deliberately naive — it is the bar, not a prediction that the strategy loses money. It is also **long-only**; the short ETP lines are unmeasured.
