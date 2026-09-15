@@ -946,6 +946,131 @@ describe('SaxoBrokerAdapter.getOrder', () => {
     expect(client.cancelOrder).not.toHaveBeenCalled();
   });
 
+  it('downgrades an activated leg pair to the venue-confirmed terminal state when the master expired without filling (#1215/#1426)', async () => {
+    const client = makeClient({
+      listOpenOrders: vi
+        .fn()
+        .mockResolvedValue([dormantLeg({ Status: 'Working' }), targetLeg({ Status: 'Working' })]),
+      listOrderActivities: vi.fn().mockResolvedValue([activity({ Status: 'Expired' })]),
+    });
+    const { adapter } = makeAdapter(client);
+
+    const order = await adapter.getOrder('key-3usl-0930', '3USL');
+
+    expect(order?.order_state).toBe('expired');
+    expect(client.cancelOrder).toHaveBeenCalledTimes(2);
+    expect(client.cancelOrder).toHaveBeenCalledWith('5040047178');
+    expect(client.cancelOrder).toHaveBeenCalledWith('5040047179');
+  });
+
+  it('keeps an activated leg pair filled when the audit trail carries no row at all — absence of evidence never downgrades a possibly live fill, unlike the dormant-legs check (#1215/#1426)', async () => {
+    const client = makeClient({
+      listOpenOrders: vi
+        .fn()
+        .mockResolvedValue([dormantLeg({ Status: 'Working' }), targetLeg({ Status: 'Working' })]),
+      listOrderActivities: vi.fn().mockResolvedValue([]),
+    });
+    const { adapter } = makeAdapter(client);
+
+    const order = await adapter.getOrder('key-3usl-0930', '3USL');
+
+    expect(order).toMatchObject({ order_state: 'filled', filled_qty: 3 });
+    expect(client.cancelOrder).not.toHaveBeenCalled();
+  });
+
+  it("keeps an activated leg pair filled while the master's audit row has not settled yet — deferring here would delay recognizing a live position (#1215/#1426)", async () => {
+    const client = makeClient({
+      listOpenOrders: vi
+        .fn()
+        .mockResolvedValue([dormantLeg({ Status: 'Working' }), targetLeg({ Status: 'Working' })]),
+      listOrderActivities: vi.fn().mockResolvedValue([activity()]),
+    });
+    const { adapter } = makeAdapter(client);
+
+    const order = await adapter.getOrder('key-3usl-0930', '3USL');
+
+    expect(order).toMatchObject({ order_state: 'filled', filled_qty: 3 });
+    expect(client.cancelOrder).not.toHaveBeenCalled();
+  });
+
+  it("keeps an activated leg pair filled when the master's own audit row confirms Filled — the genuine-fill path is unchanged (#1215/#1426)", async () => {
+    const client = makeClient({
+      listOpenOrders: vi
+        .fn()
+        .mockResolvedValue([dormantLeg({ Status: 'Working' }), targetLeg({ Status: 'Working' })]),
+      listOrderActivities: vi
+        .fn()
+        .mockResolvedValue([activity({ Status: 'FinalFill', FillAmount: 3 })]),
+    });
+    const { adapter } = makeAdapter(client);
+
+    const order = await adapter.getOrder('key-3usl-0930', '3USL');
+
+    expect(order).toMatchObject({ order_state: 'filled', filled_qty: 3 });
+    expect(client.cancelOrder).not.toHaveBeenCalled();
+  });
+
+  it("keeps an activated leg pair filled when the master's terminal audit row carries a nonzero FillAmount — a terminal status alone must not be read as 'never filled' (#1215/#1426)", async () => {
+    const client = makeClient({
+      listOpenOrders: vi
+        .fn()
+        .mockResolvedValue([dormantLeg({ Status: 'Working' }), targetLeg({ Status: 'Working' })]),
+      listOrderActivities: vi
+        .fn()
+        .mockResolvedValue([activity({ Status: 'Cancelled', FillAmount: 2 })]),
+    });
+    const { adapter } = makeAdapter(client);
+
+    const order = await adapter.getOrder('key-3usl-0930', '3USL');
+
+    expect(order).toMatchObject({ order_state: 'filled', filled_qty: 3 });
+    expect(client.cancelOrder).not.toHaveBeenCalled();
+  });
+
+  it("keeps an activated leg pair filled when a fill row is followed by a SEPARATE later terminal row for the same reference — a partial-fill residual cancelled at close must not read as 'never filled' just because it is the latest row (#1215/#1426 round 3)", async () => {
+    const client = makeClient({
+      listOpenOrders: vi
+        .fn()
+        .mockResolvedValue([dormantLeg({ Status: 'Working' }), targetLeg({ Status: 'Working' })]),
+      listOrderActivities: vi.fn().mockResolvedValue([
+        activity({ Status: 'FinalFill', FillAmount: 2, AveragePrice: 10 }),
+        activity({
+          LogId: 'log-2',
+          Status: 'Cancelled',
+          ActivityTime: '2026-09-05T16:30:00.000000Z',
+        }),
+      ]),
+    });
+    const { adapter } = makeAdapter(client);
+
+    const order = await adapter.getOrder('key-3usl-0930', '3USL');
+
+    expect(order).toMatchObject({ order_state: 'filled', filled_qty: 3 });
+    expect(client.cancelOrder).not.toHaveBeenCalled();
+  });
+
+  it('cancels every leg row on an activated-legs expiry, not just one per role — a duplicate row under the same leg reference must not be left resting (#1215 round 3)', async () => {
+    const client = makeClient({
+      listOpenOrders: vi
+        .fn()
+        .mockResolvedValue([
+          dormantLeg({ Status: 'Working' }),
+          dormantLeg({ OrderId: '5040047180', Status: 'Working' }),
+          targetLeg({ Status: 'Working' }),
+        ]),
+      listOrderActivities: vi.fn().mockResolvedValue([activity({ Status: 'Expired' })]),
+    });
+    const { adapter } = makeAdapter(client);
+
+    const order = await adapter.getOrder('key-3usl-0930', '3USL');
+
+    expect(order?.order_state).toBe('expired');
+    expect(client.cancelOrder).toHaveBeenCalledTimes(3);
+    expect(client.cancelOrder).toHaveBeenCalledWith('5040047178');
+    expect(client.cancelOrder).toHaveBeenCalledWith('5040047180');
+    expect(client.cancelOrder).toHaveBeenCalledWith('5040047179');
+  });
+
   it('falls back to the audit trail for an order no longer open', async () => {
     const client = makeClient({
       listOrderActivities: vi
