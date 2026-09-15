@@ -217,4 +217,12 @@ export class InMemoryDebateLogStore implements DebateLogStore {
   // fixture that constructs one, rather than throwing on a method the port
   // now requires.
   writeRoundLog(_entries: DebateRoundLogEntry[]): void {}
+
+  // A `Map.set` cannot partially fail, so there is no atomicity gap for this
+  // in-memory implementation to close — sequencing the same two calls
+  // satisfies the port without a transaction that has nothing to protect.
+  writeLogWithRounds(entry: DebateLog, rounds: DebateRoundLogEntry[]): void {
+    this.writeLog(entry);
+    this.writeRoundLog(rounds);
+  }
 }

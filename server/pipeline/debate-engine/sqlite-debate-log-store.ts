@@ -147,6 +147,20 @@ export class SqliteDebateLogStore implements DebateLogStore {
     })(entries);
   }
 
+  /**
+   * `writeLog` + `writeRoundLog` under one `better-sqlite3` transaction
+   * (`writeRoundLog`'s own transaction nests as a SAVEPOINT): a throw from
+   * either leaves neither the `debate_log` row nor any `debate_round_log`
+   * rows, so a crash never strands a debate past `persistDebateLog`'s
+   * first-write-wins guard with its round rows unwritable forever.
+   */
+  writeLogWithRounds(entry: DebateLog, rounds: DebateRoundLogEntry[]): void {
+    this.db.transaction(() => {
+      this.writeLog(entry);
+      this.writeRoundLog(rounds);
+    })();
+  }
+
   getByDebateId(debate_id: string): DebateLog | undefined {
     const row = this.db.prepare('SELECT * FROM debate_log WHERE debate_id = ?').get(debate_id) as
       | DebateLogRow

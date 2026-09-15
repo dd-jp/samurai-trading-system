@@ -32,6 +32,18 @@
  * `flip_rate` is computed over `multi_round_debates` alone, and is `null`
  * (not 0) when that denominator is 0 — a genuine "cannot measure this", not
  * a padded "no flips found".
+ *
+ * ## `openSharedStore` applies pending migrations to whatever it opens
+ *
+ * Same hazard `classify-debate-termination.ts` documents in its own header:
+ * `openSharedStore` unconditionally applies pending schema migrations to the
+ * file it is pointed at, regardless of this tool's own flags. Never point
+ * this at a store a running orchestrator/soak process still holds open —
+ * migrating it out from under that process is unsafe. To check this report's
+ * output against a soak's data without touching the live file, copy the
+ * `.sqlite` file (the running process's `-wal`/`-shm` companions can be left
+ * behind; a checkpointed copy is enough to read) to the path `sharedStorePath`
+ * resolves for the target `SAMURAI_MODE`, then run this tool against the copy.
  */
 
 import { isAbsolute, resolve } from 'node:path';
@@ -111,8 +123,9 @@ export function formatFlipRateReport(report: FlipRateReport, from: Date, to: Dat
       '  NO FLIP RATE: no multi-round debates in this window. Since #1080,',
       '  MAX_ROUNDS_BY_ASSET_CLASS is 1 for both asset classes, so a debate',
       '  logged AFTER that change has exactly one round and cannot flip by',
-      '  construction. This is expected, not a defect — widen --days to reach',
-      '  back before #1080, or re-run once the round cap changes.',
+      '  construction. This is expected, not a defect — widening --days cannot',
+      '  reach a pre-#1080 row (debate_round_log only exists from migration',
+      '  0064 onward); re-run once the round cap changes instead.',
     );
   } else {
     const rate = report.flip_rate ?? 0;

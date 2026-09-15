@@ -60,6 +60,15 @@ export interface DebateLogStore {
    * that as a no-op, not an error.
    */
   writeRoundLog(entries: DebateRoundLogEntry[]): void;
+  /**
+   * `writeLog` + `writeRoundLog` as one unit (coding-standards.md "Multi-write
+   * store mutations are transactional", `applyLotAdvance` precedent) — the
+   * caller's own duplicate guard (`getByDebateId`) means a debate_log row
+   * written without its round rows can never be repaired by a retry, so a
+   * crash between the two writes must leave neither rather than an
+   * unrepairable orphan.
+   */
+  writeLogWithRounds(entry: DebateLog, rounds: DebateRoundLogEntry[]): void;
 }
 
 /**

@@ -309,6 +309,19 @@ describe('InMemoryDebateLogStore', () => {
       ),
     ).not.toThrow();
   });
+
+  it('writeLogWithRounds writes the log and is readable by getByDebateId (#1558 review)', () => {
+    const store = new InMemoryDebateLogStore();
+    const result = makeResult({
+      round_verdicts: [{ round: 1, direction: 'bullish', confidence: 0.5 }],
+    });
+    const created_at = new Date('2026-07-14T09:00:08Z');
+    const log = buildDebateLog(result, 'BTC-USD', created_at);
+
+    store.writeLogWithRounds(log, buildDebateRoundLogRows(result, created_at));
+
+    expect(store.getByDebateId(log.debate_id)).toEqual(log);
+  });
 });
 
 /**

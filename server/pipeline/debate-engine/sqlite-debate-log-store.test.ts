@@ -545,3 +545,69 @@ describe('SqliteDebateLogStore.writeRoundLog / listRoundVerdicts (#1517)', () =>
     ).toEqual([]);
   });
 });
+
+describe('SqliteDebateLogStore.writeLogWithRounds (#1558 review)', () => {
+  it('writes the debate_log row and all round rows together', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+
+    store.writeLogWithRounds(makeLog({ debate_id: 'debate-1' }), [
+      {
+        debate_id: 'debate-1',
+        round: 1,
+        direction: 'bearish',
+        confidence: 0.3,
+        created_at: new Date('2026-07-14T09:00:08Z'),
+      },
+      {
+        debate_id: 'debate-1',
+        round: 2,
+        direction: 'bullish',
+        confidence: 0.7,
+        created_at: new Date('2026-07-14T09:00:08Z'),
+      },
+    ]);
+
+    expect(store.getByDebateId('debate-1')).toBeDefined();
+    expect(
+      store.listRoundVerdicts(new Date('2026-07-14T08:00:00Z'), new Date('2026-07-14T10:00:00Z')),
+    ).toHaveLength(2);
+  });
+
+  it('rolls back the debate_log row when the round write fails partway through', () => {
+    const db = openSharedStore(':memory:');
+    const store = new SqliteDebateLogStore(db);
+
+    // Two entries sharing round 1 violate debate_round_log's UNIQUE(debate_id,
+    // round) (migration 0064) on the second insert — standing in for the
+    // "mid-loop failure" writeLogWithRounds' own doc comment names, without a
+    // second call to writeLog to break the log write itself.
+    expect(() =>
+      store.writeLogWithRounds(makeLog({ debate_id: 'debate-1' }), [
+        {
+          debate_id: 'debate-1',
+          round: 1,
+          direction: 'bearish',
+          confidence: 0.3,
+          created_at: new Date('2026-07-14T09:00:08Z'),
+        },
+        {
+          debate_id: 'debate-1',
+          round: 1,
+          direction: 'bullish',
+          confidence: 0.7,
+          created_at: new Date('2026-07-14T09:00:09Z'),
+        },
+      ]),
+    ).toThrow();
+
+    // The debate_log row from the SAME writeLogWithRounds call must not
+    // survive the round write's failure — otherwise persistDebateLog's
+    // first-write-wins guard (getByDebateId) would permanently block the
+    // round rows from ever being written on retry.
+    expect(store.getByDebateId('debate-1')).toBeUndefined();
+    expect(
+      store.listRoundVerdicts(new Date('2026-07-14T08:00:00Z'), new Date('2026-07-14T10:00:00Z')),
+    ).toEqual([]);
+  });
+});

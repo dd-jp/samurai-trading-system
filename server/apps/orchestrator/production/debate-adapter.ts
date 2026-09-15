@@ -420,7 +420,18 @@ export function buildDebatePersonas(
  * fail-safe direction (no trade), and matches `auditLog.record`'s unguarded
  * call in `tick-runner.ts`.
  */
-function persistDebateLog(params: {
+/**
+ * Exported for `debate-adapter.test.ts` alone (#1558 review) — driving a
+ * PARTIAL/timed-out debate with `rounds_completed >= 1` through this
+ * function is otherwise unreachable via `buildDebateStep`: that function
+ * hardwires `maxRounds` to `MAX_ROUNDS_BY_ASSET_CLASS[asset_class]` (line
+ * ~1059), which is 1 for both asset classes as of #1080, so a debate that
+ * times out with any partial round data already recorded cannot be produced
+ * through the public step today. This is the same structural fact #1517's
+ * flip-rate report states: nothing exercises this branch in production
+ * either, currently.
+ */
+export function persistDebateLog(params: {
   store: DebateLogStore;
   result: DebateResult;
   instrument: string;
@@ -462,12 +473,16 @@ function persistDebateLog(params: {
   // `debate_id` and must not overwrite the attribution of the debate it did
   // not run.
   const written_at = clock.now();
-  store.writeLog(buildDebateLog(result, instrument, written_at, trace_id));
-  // Same call, same non-duplicate branch, same clock read as the debate_log
-  // row above — so debate_round_log's FK (migration 0064) always resolves,
-  // and both rows carry an identical created_at rather than two clock reads
-  // that could straddle a millisecond.
-  store.writeRoundLog(buildDebateRoundLogRows(result, written_at));
+  // One transaction (`writeLogWithRounds`): the FK on debate_round_log
+  // (migration 0064) always resolves since debate_log commits first inside
+  // it, and a throw from either write leaves neither row — this function's
+  // own first-write-wins guard above (`getByDebateId`) would otherwise block
+  // every retry from ever gaining the round rows for a debate_log row that
+  // made it in alone.
+  store.writeLogWithRounds(
+    buildDebateLog(result, instrument, written_at, trace_id),
+    buildDebateRoundLogRows(result, written_at),
+  );
 
   return undefined;
 }
