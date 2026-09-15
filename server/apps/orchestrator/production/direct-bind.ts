@@ -816,6 +816,22 @@ interface BreakerStateDeps {
 export interface PortfolioSnapshot {
   portfolio: Awaited<ReturnType<typeof computePortfolioView>>;
   breakers: ReturnType<CircuitBreakers['evaluate']>;
+  /**
+   * The persisted tiers as of THIS observation (#1019's folded gap 2), read
+   * in the same synchronous step as `breakers` rather than by the caller
+   * after its `await`.
+   *
+   * `circuitBreakers` is ONE instance shared by every instrument's bind, and
+   * since #1013 sibling instruments run concurrently. A caller that awaited
+   * the snapshot and then called `getPersistedState()` could therefore read
+   * state another instrument's `evaluate()` had advanced in between, and
+   * write it into this instrument's `risk_log` row as `next_breaker_state`.
+   * That never bypassed a gate — the gating `breakers` value is the one
+   * captured here, before any interleaving window — but it made the audit
+   * trail non-attributable per instrument, which is the whole point of a
+   * per-instrument row. Captured beside `breakers` there is no window at all.
+   */
+  next_breaker_state: ReturnType<CircuitBreakers['getPersistedState']>;
 }
 
 /**
@@ -864,8 +880,14 @@ async function computeCurrentPortfolioAndBreakers(deps: BreakerStateDeps, clock:
   // Persist the sticky tiers immediately: `evaluate` is where a trip becomes
   // real, and a restart between this call and any later persist point would
   // silently re-arm the one mechanism ADR-0007 left standing.
-  deps.breakerState.save(deps.circuitBreakers.getPersistedState());
-  return { portfolio, breakers };
+  //
+  // Read ONCE and both persisted and carried on the snapshot (#1019 gap 2) —
+  // see `PortfolioSnapshot.next_breaker_state`. Two reads either side of this
+  // `save` would be two chances for a sibling instrument's `evaluate()` to
+  // land in between.
+  const next_breaker_state = deps.circuitBreakers.getPersistedState();
+  deps.breakerState.save(next_breaker_state);
+  return { portfolio, breakers, next_breaker_state };
 }
 
 /** One tick's exit valuation, and what it had to leave out to produce one (#841). */
@@ -947,7 +969,12 @@ async function degradedPortfolioForExit(
     // `PortfolioAccountingInput.unvaluable_marks`.
     unvaluable_marks: 'exclude',
   });
-  return { portfolio, breakers: breakersFromStickyState(deps.circuitBreakers.getPersistedState()) };
+  const next_breaker_state = deps.circuitBreakers.getPersistedState();
+  return {
+    portfolio,
+    breakers: breakersFromStickyState(next_breaker_state),
+    next_breaker_state,
+  };
 }
 
 /**
@@ -1203,7 +1230,10 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
         degradation,
       );
     }
-    const next_breaker_state: PersistedBreakerState[] = deps.circuitBreakers.getPersistedState();
+    // Taken off the snapshot, not re-read here (#1019 gap 2) — see
+    // `PortfolioSnapshot.next_breaker_state` for what a second read after the
+    // `await` above could attribute to this instrument.
+    const next_breaker_state: PersistedBreakerState[] = snapshot.next_breaker_state;
 
     const otherInstruments = Object.keys(portfolio.exposure_by_instrument).filter(
       (instrument) => instrument !== intent.instrument,

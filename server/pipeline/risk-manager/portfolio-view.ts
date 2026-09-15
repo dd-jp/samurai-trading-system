@@ -231,6 +231,37 @@ export function unrealizedFor(position: OpenPosition, mark: number): number {
 }
 
 /**
+ * The states whose unfilled remainder is RESERVED against the entry caps
+ * (#1019) — see `PortfolioView.reserved_exposure_by_instrument` for why this
+ * is `pending`/`submitted` and deliberately not `partially_filled`.
+ *
+ * Kept in step with `reconcile.ts`'s `IN_FLIGHT` on purpose: that pass is the
+ * only mechanism that ever terminalizes one of these rows from broker truth,
+ * so a state reserved here but not revisited there would be a reservation
+ * with no release.
+ */
+const RESERVABLE_ORDER_STATES: ReadonlySet<OpenPosition['order_state']> = new Set([
+  'pending',
+  'submitted',
+]);
+
+/**
+ * Notional this lot has committed to the venue and not yet received: the
+ * unfilled remainder at mark, or 0 for a lot whose order is no longer
+ * in flight.
+ *
+ * `Math.max(…, 0)` rather than a bare subtraction: an overfill (`filled_size`
+ * above `requested_size`, which `ingest-fills.ts` records as broker truth
+ * rather than rejecting) would otherwise produce a NEGATIVE reservation and
+ * hand the caps back headroom the book does not have — the one direction a
+ * risk term must never move.
+ */
+function reservedNotional(position: OpenPosition, mark: number): number {
+  if (!RESERVABLE_ORDER_STATES.has(position.order_state)) return 0;
+  return Math.max(position.requested_size - position.filled_size, 0) * mark;
+}
+
+/**
  * Completes one class's daily PnL: `(realized + unrealized) / open_equity`.
  *
  * An unknown basis stays unknown — there is no arithmetic that recovers a
@@ -442,6 +473,8 @@ export async function computePortfolioView(
 
   const exposure_by_instrument: Record<string, number> = {};
   const exposure_by_class = { crypto: 0, stocks: 0 };
+  const reserved_exposure_by_instrument: Record<string, number> = {};
+  const reserved_exposure_by_class = { crypto: 0, stocks: 0 };
   // Same single pass as the exposure math, over the same `marks` map — #332
   // requires the marks be fetched once, and this is what makes that true.
   const unrealized_by_class: Record<AssetClass, number> = { crypto: 0, stocks: 0 };
@@ -454,14 +487,26 @@ export async function computePortfolioView(
     // non-empty one. Under the default `'refuse'` policy this list is empty
     // and the loop is byte-for-byte what it was.
     if (unvalued.includes(position.instrument)) continue;
-    // Freeze §4: always filled_size, never requested_size — a partially-filled
-    // lot is marked at what actually filled.
+    // Freeze §4: the VALUATION is always filled_size, never requested_size —
+    // a partially-filled lot is marked at what actually filled, and an
+    // unfilled one is worth nothing to equity, drawdown or PnL. The
+    // RESERVATION below is a different question asked of the same row (what
+    // has been committed to the venue and not come back), kept in its own
+    // fields for exactly that reason — see
+    // `PortfolioView.reserved_exposure_by_instrument`.
     const mark = markFor(marks, position.instrument);
     const notional = position.filled_size * mark;
     exposure_by_instrument[position.instrument] =
       (exposure_by_instrument[position.instrument] ?? 0) + notional;
     exposure_by_class[position.asset_class] += notional;
     unrealized_by_class[position.asset_class] += unrealizedFor(position, mark);
+
+    const reserved = reservedNotional(position, mark);
+    if (reserved > 0) {
+      reserved_exposure_by_instrument[position.instrument] =
+        (reserved_exposure_by_instrument[position.instrument] ?? 0) + reserved;
+      reserved_exposure_by_class[position.asset_class] += reserved;
+    }
   }
 
   const gross_exposure = exposure_by_class.crypto + exposure_by_class.stocks;
@@ -475,6 +520,9 @@ export async function computePortfolioView(
     exposure_by_instrument,
     exposure_by_class,
     gross_exposure,
+    reserved_exposure_by_instrument,
+    reserved_exposure_by_class,
+    reserved_gross_exposure: reserved_exposure_by_class.crypto + reserved_exposure_by_class.stocks,
     daily_pnl: {
       crypto: dailyPnlFor(daily_basis.crypto, unrealized_by_class.crypto),
       stocks: dailyPnlFor(daily_basis.stocks, unrealized_by_class.stocks),

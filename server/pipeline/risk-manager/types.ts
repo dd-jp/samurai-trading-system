@@ -88,6 +88,52 @@ export interface PortfolioView {
   exposure_by_class: { crypto: number; stocks: number };
   gross_exposure: number;
   /**
+   * Notional of orders SUBMITTED but not yet filled, at mark, per instrument
+   * (#1019). Disjoint from `exposure_by_instrument` — that one values what is
+   * held (`filled_size`), this one values what has been committed to the
+   * venue and has not come back yet (`requested_size - filled_size` on a
+   * `pending`/`submitted` lot).
+   *
+   * **This is the submit-time reservation, and the write-ahead row IS the
+   * ledger.** `execute.ts` writes an `OpenPosition` with `filled_size: 0`
+   * BEFORE it calls the broker, and `ingestFills()` advances it on its own
+   * 15s poll. Between those two instants the lot valued at `filled_size`
+   * alone is worth ZERO to every exposure cap, so a second instrument
+   * evaluated in that window nets against nothing and reaches the same
+   * subclass/class/gross envelope independently. #1040's tail turnstile
+   * orders those evaluations but does not make the first one's exposure
+   * VISIBLE to the second, and nothing orders passes across overlapping
+   * ticks at all. Valuing the unfilled remainder here is what closes it:
+   * `getOpenPositions()` is durable, arm-scoped and already excludes every
+   * terminal state, so the reservation survives a restart and is released by
+   * the fill or the terminalization rather than by a separate release path.
+   *
+   * **Scoped to `pending`/`submitted`, never `partially_filled`.** A
+   * partially-filled lot whose venue-side remainder is dead has no mechanism
+   * that ever advances it — `ingestFills` recomputes only from a NEW fill,
+   * `sweepTerminalPositions` deletes only already-terminal rows, and
+   * `wedged-zero-fill-sweep.ts` covers the zero-fill case alone — so counting
+   * its remainder would strand a reservation that blocks the subclass
+   * forever. `reconcile()`'s bracket pass revisits exactly `pending` and
+   * `submitted` (`IN_FLIGHT`), so those two states have a bounded lifetime
+   * and are the only ones safe to reserve against. Nothing is lost for the
+   * race this closes: reaching `partially_filled` requires a fill poll to
+   * have run, which is the same event that closes the window.
+   *
+   * **Never folded into `gross_exposure`, `equity` or `drawdown_pct`, and
+   * never into `BreakerEvalInput`.** `equity = cash + gross_exposure`, and
+   * `cash` is the broker's own figure, which is not debited at submit time
+   * either — adding the reservation to `gross_exposure` would inflate equity
+   * by the reserved notional, double-counting the same order on both sides of
+   * the balance and moving a STICKY drawdown breaker off a position that does
+   * not exist yet. The reservation belongs strictly on the DEPLOYED side of
+   * every `fraction × equity - deployed` cap in `index.ts`, which is where
+   * `committedExposureFor` reads it.
+   */
+  reserved_exposure_by_instrument: Record<string, number>;
+  reserved_exposure_by_class: { crypto: number; stocks: number };
+  reserved_gross_exposure: number;
+  /**
    * Replaces the former single `daily_pnl_pct: number`, which was Alpaca's
    * blended `last_equity` figure on an unverified boundary (GAP-8, #332).
    */

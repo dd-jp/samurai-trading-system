@@ -58,6 +58,9 @@ function makePortfolio(overrides: Partial<PortfolioView> = {}): PortfolioView {
     exposure_by_instrument: {},
     exposure_by_class: { crypto: 0, stocks: 0 },
     gross_exposure: 0,
+    reserved_exposure_by_instrument: {},
+    reserved_exposure_by_class: { crypto: 0, stocks: 0 },
+    reserved_gross_exposure: 0,
     daily_pnl: {
       crypto: { known: true, pct: 0 },
       stocks: { known: true, pct: 0 },
@@ -550,6 +553,159 @@ describe('RiskManagerImpl.evaluate — trim steps', () => {
     // Allowed additional = 9,000 - 4,000 (existing MSFT, AAPL has none) = 5,000 -> size 50
     expect(decision.order_intent?.size).toBe(50);
     expect(decision.binding_constraint).toBe('concentration_correlation_cap');
+  });
+
+  /**
+   * #1019 — the same four caps, stated against SUBMITTED exposure instead of
+   * filled. Each pairs with the filled-exposure case directly above it and
+   * asserts the identical allowance, which is the whole claim: a gate must
+   * not care whether the exposure ahead of it has come back from the venue
+   * yet, only that it has been committed.
+   */
+  describe('in-flight reservations count as deployed (#1019)', () => {
+    it('trims to the per-asset exposure cap against an in-flight order on the same name', () => {
+      const manager = new RiskManagerImpl(makeConfig({ per_asset_cap_fraction_of_equity: 0.12 }));
+      const input = makeInput({
+        intent: makeIntent({ size: 100, entry: 100 }),
+        portfolio: makePortfolio({
+          reserved_exposure_by_instrument: { AAPL: 5_000 },
+          reserved_exposure_by_class: { crypto: 0, stocks: 5_000 },
+          reserved_gross_exposure: 5_000,
+        }),
+      });
+
+      const decision = manager.evaluate(input);
+
+      expect(decision.order_intent?.size).toBe(70);
+      expect(decision.binding_constraint).toBe('per_asset_exposure_cap');
+    });
+
+    it('trims to the per-asset-class cap against an in-flight order elsewhere in the class', () => {
+      const manager = new RiskManagerImpl(
+        makeConfig({ per_asset_class_cap_fraction_of_equity: { crypto: 10, stocks: 0.08 } }),
+      );
+      const input = makeInput({
+        intent: makeIntent({ size: 100, entry: 100, asset_class: 'stocks' }),
+        portfolio: makePortfolio({
+          reserved_exposure_by_instrument: { MSFT: 3_000 },
+          reserved_exposure_by_class: { crypto: 0, stocks: 3_000 },
+          reserved_gross_exposure: 3_000,
+        }),
+      });
+
+      const decision = manager.evaluate(input);
+
+      expect(decision.order_intent?.size).toBe(50);
+      expect(decision.binding_constraint).toBe('per_asset_class_exposure_cap');
+    });
+
+    it('trims to the portfolio gross cap against an in-flight order', () => {
+      const manager = new RiskManagerImpl(
+        makeConfig({ portfolio_gross_cap_fraction_of_equity: 0.06 }),
+      );
+      const input = makeInput({
+        intent: makeIntent({ size: 100, entry: 100 }),
+        portfolio: makePortfolio({
+          reserved_exposure_by_instrument: { MSFT: 2_000 },
+          reserved_exposure_by_class: { crypto: 0, stocks: 2_000 },
+          reserved_gross_exposure: 2_000,
+        }),
+      });
+
+      const decision = manager.evaluate(input);
+
+      expect(decision.order_intent?.size).toBe(40);
+      expect(decision.binding_constraint).toBe('portfolio_gross_exposure_cap');
+    });
+
+    it('trims to the concentration cap against an in-flight order in the correlated set', () => {
+      const manager = new RiskManagerImpl(
+        makeConfig({ concentration: { cap_fraction_of_equity: 0.09, threshold: 0.7 } }),
+      );
+      const input = makeInput({
+        intent: makeIntent({ size: 100, entry: 100, instrument: 'AAPL' }),
+        portfolio: makePortfolio({
+          reserved_exposure_by_instrument: { MSFT: 4_000 },
+          reserved_exposure_by_class: { crypto: 0, stocks: 4_000 },
+          reserved_gross_exposure: 4_000,
+        }),
+        correlation: makeCorrelation({ correlations: { MSFT: 0.82 } }),
+      });
+
+      const decision = manager.evaluate(input);
+
+      expect(decision.order_intent?.size).toBe(50);
+      expect(decision.binding_constraint).toBe('concentration_correlation_cap');
+    });
+
+    it('adds the filled and in-flight halves of one name rather than taking either alone', () => {
+      const manager = new RiskManagerImpl(makeConfig({ per_asset_cap_fraction_of_equity: 0.12 }));
+      const input = makeInput({
+        intent: makeIntent({ size: 100, entry: 100 }),
+        portfolio: makePortfolio({
+          exposure_by_instrument: { AAPL: 3_000 },
+          reserved_exposure_by_instrument: { AAPL: 2_000 },
+          reserved_exposure_by_class: { crypto: 0, stocks: 2_000 },
+          reserved_gross_exposure: 2_000,
+        }),
+      });
+
+      const decision = manager.evaluate(input);
+
+      // 12,000 - (3,000 filled + 2,000 in flight) = 7,000 -> size 70.
+      expect(decision.order_intent?.size).toBe(70);
+    });
+
+    it('leaves a book with nothing in flight byte-identical — the reservation is purely additive', () => {
+      const manager = new RiskManagerImpl(makeConfig({ per_asset_cap_fraction_of_equity: 0.12 }));
+      const input = makeInput({
+        intent: makeIntent({ size: 100, entry: 100 }),
+        portfolio: makePortfolio({ exposure_by_instrument: { AAPL: 5_000 } }),
+      });
+
+      const decision = manager.evaluate(input);
+
+      expect(decision.order_intent?.size).toBe(70);
+      expect(decision.reasons).not.toContainEqual(expect.stringContaining('in_flight_reservation'));
+    });
+
+    it('records the reservation on an APPROVED decision no cap bound on, not only on a trim', () => {
+      const manager = new RiskManagerImpl(makeConfig());
+      const input = makeInput({
+        intent: makeIntent({ size: 100, entry: 100 }),
+        portfolio: makePortfolio({
+          reserved_exposure_by_instrument: { MSFT: 250 },
+          reserved_exposure_by_class: { crypto: 0, stocks: 250 },
+          reserved_gross_exposure: 250,
+        }),
+      });
+
+      const decision = manager.evaluate(input);
+
+      expect(decision.status).toBe('approved');
+      expect(decision.binding_constraint).toBeNull();
+      expect(decision.reasons).toContainEqual(expect.stringContaining('in_flight_reservation'));
+      expect(decision.reasons).toContainEqual(expect.stringContaining('MSFT=250'));
+    });
+
+    it('an exit still bypasses every cap, reservation or not', () => {
+      const manager = new RiskManagerImpl(
+        makeConfig({ portfolio_gross_cap_fraction_of_equity: 0.0001 }),
+      );
+      const input = makeInput({
+        intent: makeIntent({ size: 100, entry: 100, intent_type: 'exit' }),
+        portfolio: makePortfolio({
+          reserved_exposure_by_instrument: { AAPL: 500_000 },
+          reserved_exposure_by_class: { crypto: 0, stocks: 500_000 },
+          reserved_gross_exposure: 500_000,
+        }),
+      });
+
+      const decision = manager.evaluate(input);
+
+      expect(decision.status).toBe('approved');
+      expect(decision.order_intent?.size).toBe(100);
+    });
   });
 
   it('does not trim on a held instrument whose correlation is below the threshold', () => {
