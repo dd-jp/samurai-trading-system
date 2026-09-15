@@ -766,9 +766,6 @@ describe('buildDebateStep', () => {
       writeLog: (log) => {
         store.writeLog(log);
       },
-      writeRoundLog: (entries) => {
-        store.writeRoundLog(entries);
-      },
       writeLogWithRounds: (log, entries) => {
         store.writeLogWithRounds(log, entries);
       },

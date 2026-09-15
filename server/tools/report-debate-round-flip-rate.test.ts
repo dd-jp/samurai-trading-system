@@ -1,5 +1,9 @@
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { DebateRoundLogEntry } from '../shared/index.js';
 import {
+  assertDbPathExists,
   computeFlipRate,
   DEFAULT_WINDOW_DAYS,
   formatFlipRateReport,
@@ -141,5 +145,25 @@ describe('parseWindowDays', () => {
 
   it('refuses a non-positive window', () => {
     expect(() => parseWindowDays(['--days', '0'])).toThrow();
+  });
+});
+
+describe('assertDbPathExists (#1558 review round 2, finding 5) — mirrors classify-debate-termination.ts', () => {
+  it('throws for a path that does not exist', () => {
+    const missingPath = join(
+      mkdtempSync(join(tmpdir(), 'report-debate-round-flip-rate-')),
+      'nope.sqlite',
+    );
+
+    expect(() => assertDbPathExists(missingPath)).toThrow(missingPath);
+    expect(() => assertDbPathExists(missingPath)).toThrow('does not exist');
+  });
+
+  it('does not throw for a path that exists', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'report-debate-round-flip-rate-'));
+    const existingPath = join(dir, 'real.sqlite');
+    writeFileSync(existingPath, '');
+
+    expect(() => assertDbPathExists(existingPath)).not.toThrow();
   });
 });

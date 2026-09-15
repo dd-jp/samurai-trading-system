@@ -1,7 +1,17 @@
 /**
  * #1517's flip-rate report: does a debate's verdict ever differ between round
  * 1 and its final round, or does every extra round just re-confirm the
- * first? — `yarn report:debate-flip-rate`.
+ * first?
+ *
+ *   yarn report:debate-flip-rate [--days N] [--db <path>]
+ *
+ * `--db <path>` points at an explicit SQLite file instead of the
+ * environment-resolved store (`SAMURAI_MODE` → `sharedStorePath`) — same
+ * flag, same reasoning, as `classify-debate-termination.ts`: it is what
+ * makes this report checkable against a point-in-time COPY of a soak's
+ * database without the environment-resolved default hazard the next
+ * section describes. `assertStorePathMatchesMode`'s paper/live filename
+ * guard is skipped for `--db`, since the operator named the file directly.
  *
  * ## Why this exists as a command, not a dashboard panel
  *
@@ -40,12 +50,17 @@
  * file it is pointed at, regardless of this tool's own flags. Never point
  * this at a store a running orchestrator/soak process still holds open —
  * migrating it out from under that process is unsafe. To check this report's
- * output against a soak's data without touching the live file, copy the
- * `.sqlite` file (the running process's `-wal`/`-shm` companions can be left
- * behind; a checkpointed copy is enough to read) to the path `sharedStorePath`
- * resolves for the target `SAMURAI_MODE`, then run this tool against the copy.
+ * output against a soak's data without touching the live file, use `--db
+ * <path>` (mirroring `classify-debate-termination.ts`'s flag) against a
+ * checkpointed COPY of the `.sqlite` file, never the live one: for
+ * `SAMURAI_MODE=paper` run from the repo root, the environment-resolved
+ * default (`sharedStorePath`, no `--db`) is a repo-relative
+ * `data/samurai-paper.sqlite` — the SAME path a live soak process running
+ * from that same cwd holds open, so omitting `--db` there does not read a
+ * separate file at all.
  */
 
+import { existsSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import { assertStorePathMatchesMode } from '../apps/orchestrator/index.js';
 import type { DebateRoundLogEntry, Direction } from '../pipeline/debate-engine/index.js';
@@ -151,6 +166,19 @@ export function parseWindowDays(argv: readonly string[]): number {
   return days;
 }
 
+/**
+ * Guards an explicit `--db <path>` before it reaches `openSharedStore`, same
+ * reasoning as `classify-debate-termination.ts`'s `assertDbPathExists`:
+ * `better-sqlite3` opens a nonexistent path by silently CREATING an empty
+ * database file, which would make this report read a confident "0 debates"
+ * off a typo'd path instead of failing loudly.
+ */
+export function assertDbPathExists(dbPath: string): void {
+  if (!existsSync(dbPath)) {
+    throw new Error(`--db ${dbPath} does not exist — refusing to create a new database file.`);
+  }
+}
+
 const invokedPath = process.argv[1];
 const isMain =
   invokedPath !== undefined &&
@@ -158,10 +186,25 @@ const isMain =
     new URL(`file://${isAbsolute(invokedPath) ? invokedPath : resolve(invokedPath)}`).href;
 
 if (isMain) {
-  const days = parseWindowDays(process.argv.slice(2));
-  const mode = resolveStoreMode();
-  const dbPath = sharedStorePath(mode);
-  assertStorePathMatchesMode({ dbPath, mode });
+  const argv = process.argv.slice(2);
+  const days = parseWindowDays(argv);
+  const explicitDbIndex = argv.indexOf('--db');
+  const explicitDbPath = explicitDbIndex === -1 ? undefined : argv[explicitDbIndex + 1];
+  if (explicitDbIndex !== -1 && explicitDbPath === undefined) {
+    throw new Error('--db requires a path argument.');
+  }
+
+  let dbPath: string;
+  if (explicitDbPath !== undefined) {
+    // An explicit path names its own file — the paper/live filename guard
+    // below exists to protect the environment-resolved default, not this.
+    assertDbPathExists(explicitDbPath);
+    dbPath = explicitDbPath;
+  } else {
+    const mode = resolveStoreMode();
+    dbPath = sharedStorePath(mode);
+    assertStorePathMatchesMode({ dbPath, mode });
+  }
   const db = openSharedStore(dbPath);
   const store = new SqliteDebateLogStore(db);
 

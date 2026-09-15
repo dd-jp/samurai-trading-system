@@ -212,17 +212,12 @@ export class InMemoryDebateLogStore implements DebateLogStore {
 
   // No reader exists on this in-memory store (#1517's flip-rate tool reads
   // SqliteDebateLogStore only, matching getTerminationCauseWindowCounts'
-  // precedent of a concrete-class-only accessor) — accepting and discarding
-  // the rows keeps this a real DebateLogStore implementation for every test
-  // fixture that constructs one, rather than throwing on a method the port
-  // now requires.
-  writeRoundLog(_entries: DebateRoundLogEntry[]): void {}
-
-  // A `Map.set` cannot partially fail, so there is no atomicity gap for this
-  // in-memory implementation to close — sequencing the same two calls
-  // satisfies the port without a transaction that has nothing to protect.
-  writeLogWithRounds(entry: DebateLog, rounds: DebateRoundLogEntry[]): void {
+  // precedent of a concrete-class-only accessor), and `writeRoundLog` itself
+  // is off the `DebateLogStore` port (#1558 review round 2) — so `rounds`
+  // is discarded here rather than routed through a same-named method this
+  // class has no use for. A `Map.set` cannot partially fail, so there is no
+  // atomicity gap for this in-memory implementation to close either.
+  writeLogWithRounds(entry: DebateLog, _rounds: DebateRoundLogEntry[]): void {
     this.writeLog(entry);
-    this.writeRoundLog(rounds);
   }
 }

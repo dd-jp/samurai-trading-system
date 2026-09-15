@@ -119,12 +119,17 @@ export class SqliteDebateLogStore implements DebateLogStore {
 
   /**
    * Persists this debate's per-round verdicts (#1517), one row per entry.
-   * Called once, in the same non-duplicate branch as `writeLog` — the FK on
-   * `debate_round_log.debate_id` (migration 0064) therefore always resolves,
-   * since the owning `debate_log` row lands first in the same synchronous
-   * call. Wrapped in one transaction: a debate's rounds are a unit, and a
-   * mid-loop failure should leave none of them rather than a truncated
-   * prefix a flip-rate query would silently misread as the whole debate.
+   * NOT part of the `DebateLogStore` port (#1558 review round 2 — nothing
+   * outside this class and `InMemoryDebateLogStore`'s discard called it
+   * through the port; same off-port-but-public precedent as
+   * `getTerminationCauseWindowCounts` below, kept public rather than
+   * `private` so this file's own tests can exercise it directly). Called
+   * only by `writeLogWithRounds`, which wraps this and `writeLog` in one
+   * transaction — the FK on `debate_round_log.debate_id` (migration 0064)
+   * therefore always resolves, since the owning `debate_log` row lands
+   * first in the same transaction. A mid-loop failure leaves none of a
+   * debate's rounds written rather than a truncated prefix a flip-rate
+   * query would silently misread as the whole debate.
    */
   writeRoundLog(entries: DebateRoundLogEntry[]): void {
     if (entries.length === 0) {

@@ -298,19 +298,7 @@ describe('InMemoryDebateLogStore', () => {
     expect(store.getByDebateId('debate-2')).toEqual(second);
   });
 
-  it('accepts writeRoundLog without throwing (#1517) — no reader exists on this port', () => {
-    const store = new InMemoryDebateLogStore();
-    expect(() =>
-      store.writeRoundLog(
-        buildDebateRoundLogRows(
-          makeResult({ round_verdicts: [{ round: 1, direction: 'bullish', confidence: 0.5 }] }),
-          new Date('2026-07-14T09:00:08Z'),
-        ),
-      ),
-    ).not.toThrow();
-  });
-
-  it('writeLogWithRounds writes the log and is readable by getByDebateId (#1558 review)', () => {
+  it('writeLogWithRounds writes the log, readable by getByDebateId, and discards rounds without throwing (#1558 review) — writeRoundLog is off this store now, no reader exists on this port', () => {
     const store = new InMemoryDebateLogStore();
     const result = makeResult({
       round_verdicts: [{ round: 1, direction: 'bullish', confidence: 0.5 }],
@@ -318,8 +306,9 @@ describe('InMemoryDebateLogStore', () => {
     const created_at = new Date('2026-07-14T09:00:08Z');
     const log = buildDebateLog(result, 'BTC-USD', created_at);
 
-    store.writeLogWithRounds(log, buildDebateRoundLogRows(result, created_at));
-
+    expect(() =>
+      store.writeLogWithRounds(log, buildDebateRoundLogRows(result, created_at)),
+    ).not.toThrow();
     expect(store.getByDebateId(log.debate_id)).toEqual(log);
   });
 });

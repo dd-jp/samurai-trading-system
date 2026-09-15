@@ -50,23 +50,20 @@ export interface DebateLogStore {
   /** FL's attribution join point — absent for a debate never completed. */
   getByDebateId(debate_id: string): DebateLog | undefined;
   /**
-   * Persists this debate's per-round verdicts (#1517) — called once,
-   * alongside `writeLog`, in the same non-duplicate branch. On the port
-   * (not left to `SqliteDebateLogStore` alone, unlike the read-only
-   * aggregates below it) because it is a WRITE on the primary path, the same
-   * ownership `writeLog` already has — every implementer that can accept a
-   * `DebateLog` row must be able to accept its round rows too. `entries` may
-   * be empty (a producer with no round data); implementations should treat
-   * that as a no-op, not an error.
-   */
-  writeRoundLog(entries: DebateRoundLogEntry[]): void;
-  /**
-   * `writeLog` + `writeRoundLog` as one unit (coding-standards.md "Multi-write
-   * store mutations are transactional", `applyLotAdvance` precedent) — the
-   * caller's own duplicate guard (`getByDebateId`) means a debate_log row
-   * written without its round rows can never be repaired by a retry, so a
-   * crash between the two writes must leave neither rather than an
-   * unrepairable orphan.
+   * Persists the completed debate's log row AND its per-round verdicts
+   * (#1517) as one unit (coding-standards.md "Multi-write store mutations
+   * are transactional", `applyLotAdvance` precedent) — the caller's own
+   * duplicate guard (`getByDebateId`) means a debate_log row written
+   * without its round rows can never be repaired by a retry, so a crash
+   * between the two writes must leave neither rather than an unrepairable
+   * orphan. `rounds` may be empty (a producer with no round data);
+   * implementations should treat that as writing no round rows, not an
+   * error. The per-round write itself (`writeRoundLog` on
+   * `SqliteDebateLogStore`) is deliberately NOT part of this port (#1558
+   * review round 2) — nothing outside this method's own implementations
+   * called it separately, so widening the port for it would advertise a
+   * capability only this method needs, the same reasoning #785 already
+   * applied to the read-only aggregates below.
    */
   writeLogWithRounds(entry: DebateLog, rounds: DebateRoundLogEntry[]): void;
 }

@@ -419,13 +419,12 @@ export function buildDebatePersonas(
  * a broken store, so failing the tick before the Trader stage is the
  * fail-safe direction (no trade), and matches `auditLog.record`'s unguarded
  * call in `tick-runner.ts`.
- */
-/**
+ *
  * Exported for `debate-adapter.test.ts` alone (#1558 review) — driving a
  * PARTIAL/timed-out debate with `rounds_completed >= 1` through this
  * function is otherwise unreachable via `buildDebateStep`: that function
  * hardwires `maxRounds` to `MAX_ROUNDS_BY_ASSET_CLASS[asset_class]` (line
- * ~1059), which is 1 for both asset classes as of #1080, so a debate that
+ * ~1070), which is 1 for both asset classes as of #1080, so a debate that
  * times out with any partial round data already recorded cannot be produced
  * through the public step today. This is the same structural fact #1517's
  * flip-rate report states: nothing exercises this branch in production
