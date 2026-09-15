@@ -223,7 +223,15 @@ The envelope is a **bare object** on both, no `Data` member — §2.1a's shape f
 
 **One drift worth recording: the response carries 44 top-level keys, where §2.1a counted 43.**
 Which key arrived is not recoverable — no raw capture of the 2026-09-10 body was kept, only its
-count — so the full key list is written down here for the next reading to diff against:
+count. **That omission is not repeated here:** both bodies are archived at
+`docs/research/archive/raw/2026-09-15-44-saxo-instrument-details-sim.json`, so the next reading
+diffs against an actual response rather than against a table someone transcribed. Every field is
+as the gateway returned it — the file is pretty-printed, key-sorted and lint-formatted, so it is
+verbatim in *value*, not byte-identical framing; nothing was added, dropped or rounded. The capture is
+timestamped `2026-09-15T07:57:57Z`, twenty minutes after the 07:37Z reading tabulated above,
+because the first probe's output was not retained either — it reproduces every value in the table
+identically, which is itself a fourth confirmation. The key list below is kept as the human-
+readable index of that file:
 
 > `AffiliateInfoRequired, AmountDecimals, AssetType, CurrencyCode, DefaultAmount, DefaultSlippage,
 > DefaultSlippageType, Description, Exchange, Format, FractionalMinimumLotSize, GroupId,
@@ -239,6 +247,12 @@ The drift is in a key the adapter does not read — every field `saxoInstrumentR
 and `validateInstrumentDetails` require is in the list above and carries the same value as before.
 It is recorded because a reference endpoint that grows a field silently can shrink one the same
 way, and the resolver fails closed on `PriceToContractFactor` going missing.
+
+The archived body is safe to commit: `/ref/v1/instruments/details` is pure instrument reference
+data, and both responses were scanned for keys matching `account|client|token|secret|user|key$`
+before the file was written — zero hits on either, and no `ClientId`, `AccountKey` or credential
+material anywhere in the 44 keys. Nothing account-shaped is in the file, which is also why §1's
+SIM-vs-live split does not limit it: this is a reference-shaped reading, and those carry.
 
 #### The pool's GBX row count moved 17 → 18, which is the staleness argument happening
 
