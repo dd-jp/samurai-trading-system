@@ -68,6 +68,12 @@ Locked-in choices, versions, and rationale. Update as stack crystallizes.
 | MinBTL check | Cap independent trials by data length |
 | Custom cost model (ours, not pybroker's) | pybroker's built-in fill model isn't pessimistic enough for the √-law market-impact requirement; injected into pybroker's eval path instead. |
 
+## Static Analysis
+
+| Tool | Choice | Why |
+|------|--------|-----|
+| Dead-code / unused-export detection | knip, advisory `npm run knip` only | [#1625](https://github.com/dd-jp/samurai-trading-system/issues/1625): adopted to target the `no-caller-defect-pattern` (tested mechanisms nothing calls). Needs an explicit `entry` list (`knip.json`) — this repo's `tsc`-then-run-`dist` scripts and `tsx`-run CLIs aren't reachable by knip's default inference. Not wired into `npm run smoke`, CI, or any implementer gate ([#1633](https://github.com/dd-jp/samurai-trading-system/issues/1633)); gate promotion is a separate, later decision. |
+
 ## Dashboard (operator view)
 
 **Supersedes the CLI decision below** — OPEN-GAP-B reversed 2026-07-21; dashboard-spec.md (formerly cli-spec.md) is now canonical.
