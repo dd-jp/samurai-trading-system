@@ -124,7 +124,7 @@ export interface ArmComparisonSample {
  * so a write can never itself be the source of a NULL. Only pre-0057 rows read
  * back NULL.
  *
- * `cost_basis_drops` (#1546) has a column since migration 0065 and reads back
+ * `cost_basis_drops` (#1546) has a column since migration 0066 and reads back
  * the same way, for the same reason: a row computed before it was written by a
  * cycle that never counted the per-class exclusion, and there is no after-the-
  * fact recovery — the `closed_trades` rows a historical window covered are

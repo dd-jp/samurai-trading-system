@@ -701,7 +701,7 @@ const ARM_COMPARISONS: PersistedArmComparisonSample[] = [
     },
   },
   {
-    // Predates migrations 0057 (#1483) and 0065 (#1546): `refused_pass_count`
+    // Predates migrations 0057 (#1483) and 0066 (#1546): `refused_pass_count`
     // and `cost_basis_drops` are `null` on both arms, not `0`/all-zero — the
     // fixture server's demo of the honest historical case a real pre-migration
     // row reads back as.

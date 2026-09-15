@@ -67,7 +67,7 @@ function seed(
 const from = new Date('2026-07-18T00:00:00Z');
 const to = new Date('2026-07-19T00:00:00Z');
 
-describe('SqliteArmComparisonSource.getClosedTradesBetween — #1112 AC5 regime guard', () => {
+describe('SqliteArmComparisonSource.getClosedTradeWindowBetween — #1112 AC5 regime guard', () => {
   it('drops the pre-fix rows when a window straddles the #1112 cutover', () => {
     const db = openSharedStore(':memory:');
     seed(db, makeTrade({ idempotency_key: 'live-1' }), 'live', 1000);
@@ -181,7 +181,7 @@ describe('SqliteArmComparisonSource.getClosedTradesBetween — #1112 AC5 regime 
   });
 });
 
-describe('SqliteArmComparisonSource.getClosedTradesBetween — #1121 AC5 cost-charged guard', () => {
+describe('SqliteArmComparisonSource.getClosedTradeWindowBetween — #1121 AC5 cost-charged guard', () => {
   it('drops an uncharged live row even when the window also has a correctly-charged control row', () => {
     const db = openSharedStore(':memory:');
     seed(db, makeTrade({ idempotency_key: 'live-uncharged' }), 'live', null, 0);
@@ -429,7 +429,7 @@ describe('SqliteArmComparisonSource.getRefusedPassCountsBetween — #1099', () =
       created_at: new Date('2026-07-17T23:59:59.999Z'),
     });
     // Exactly `from`: excluded, so consecutive windows partition the timeline
-    // exactly as `getClosedTradesBetween` does.
+    // exactly as `getClosedTradeWindowBetween` does.
     seedTraderLog(db, {
       trace_id: 'at-from:control',
       skip_reason: 'control_arm_valuation_refused',

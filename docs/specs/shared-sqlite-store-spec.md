@@ -741,7 +741,7 @@ migration `0045`'s `sizing_capital_ceiling` gives its own pre-cutover NULLs. Eve
 NULL only ever describes a row computed before this migration, and ages out of the dashboard's
 `getRecent` window exactly as those rows do.
 
-**`live_cost_basis_drops_json`/`control_cost_basis_drops_json` (migration `0065`,
+**`live_cost_basis_drops_json`/`control_cost_basis_drops_json` (migration `0066`,
 [#1546](https://github.com/dd-jp/samurai-trading-system/issues/1546)) hold that arm's
 `ExitClassDropCounts` as JSON — per exit class, how many closed trades this comparison KEPT and how
 many `modelled_cost_charged = 0` dropped before the counts above were taken.** The filter

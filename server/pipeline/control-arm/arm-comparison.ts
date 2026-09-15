@@ -111,10 +111,12 @@ export interface ArmPerformance {
    * an optional field would leave that unknown wherever a caller omitted it,
    * which is the ambiguity this field exists to remove.
    *
-   * `kept` sums to `trade_count` across both classes on the live arm. It does
-   * NOT on the control arm in general — `oneSizingRegime` drops rows after this
-   * count is taken — so the two are not a partition of each other and the
-   * difference is the sizing filter's, not this one's.
+   * `kept` sums to `trade_count` across both classes on BOTH arms —
+   * `SqliteArmComparisonSource.getClosedTradeWindowBetween` runs
+   * `oneSizingRegime` FIRST and takes this count from that same output, so
+   * `modelledCostCharged` (which produces `trade_count`) and this count agree
+   * on the population they're each dividing, live and control alike. The
+   * sizing filter's removals happen upstream of both, not between them.
    */
   cost_basis_drops: ExitClassDropCounts;
 }

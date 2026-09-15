@@ -19,7 +19,7 @@ import type {
 } from './types.js';
 
 /**
- * #1546, migration 0065 — the per-exit-class exclusion counts, read back as
+ * #1546, migration 0066 — the per-exit-class exclusion counts, read back as
  * `ExitClassDropCounts` or `null`.
  *
  * Degrades to `null` rather than throwing, for
@@ -86,7 +86,7 @@ interface ArmComparisonSampleRow {
   live_return_pct: number;
   live_max_drawdown_pct: number;
   live_refused_pass_count: number | null;
-  /** #1546, migration 0065 — `ExitClassDropCounts` as JSON, NULL on a pre-0065 row. */
+  /** #1546, migration 0066 — `ExitClassDropCounts` as JSON, NULL on a pre-0066 row. */
   live_cost_basis_drops_json: string | null;
   control_trade_count: number;
   control_realized_pnl_net: number;

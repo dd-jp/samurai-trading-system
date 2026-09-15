@@ -172,7 +172,7 @@ export interface ArmPerformanceWire {
    * the two `dropped / (kept + dropped)` rates bounds how far this arm's
    * population is selected on exit type.
    *
-   * `null` for a row computed before migration 0065 persisted the counts,
+   * `null` for a row computed before migration 0066 persisted the counts,
    * never an all-zero object: all-zero asserts "the Feedback Loop counted and
    * excluded nothing", which those rows never measured.
    */

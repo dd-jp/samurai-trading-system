@@ -104,7 +104,7 @@ describe('SqliteArmComparisonSampleStore', () => {
   });
 
   /**
-   * #1546, migration 0065. Every count is distinct and no two arms or classes
+   * #1546, migration 0066. Every count is distinct and no two arms or classes
    * share a value, so a swapped bound parameter or a swapped arm in `fromRow`
    * fails rather than passing on symmetry.
    */
@@ -135,7 +135,7 @@ describe('SqliteArmComparisonSampleStore', () => {
   });
 
   /**
-   * A row written before migration 0065 stored no counts. It must read back
+   * A row written before migration 0066 stored no counts. It must read back
    * `null`, never `noCostBasisDrops()` — an all-zero table asserts "FL counted
    * this window and nothing was excluded", which for this row is a claim no
    * cycle ever made. Same distinction as `refused_pass_count`'s NULL above.

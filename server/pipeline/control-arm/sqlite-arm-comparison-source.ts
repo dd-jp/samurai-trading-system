@@ -234,7 +234,8 @@ export class SqliteArmComparisonSource {
  * `countCostBasisDrops` below counts kept and dropped rows per arm and per exit
  * class off the SAME rows this filter runs on, and
  * `ArmPerformance.cost_basis_drops` carries them to every reader
- * (`formatArmComparison`, the FL sample, the divergence alert). A reader can
+ * (`formatArmComparison`, the FL sample — `armDivergenceAlerts`
+ * (alert-catalogue.ts) does not render this field). A reader can
  * therefore take the per-class drop RATE this comment could previously only
  * name in the abstract, and #1412 can weight or bound the selection term
  * against it instead of assuming it away. What is NOT done is equalizing the

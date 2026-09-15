@@ -1481,10 +1481,10 @@ async function cumulativeTopUp(
  * `countCostBasisDrops` (sqlite-arm-comparison-source.ts) counts kept and
  * dropped rows per arm and per exit class off the same read the comparison is
  * built from, and `ArmPerformance.cost_basis_drops` carries both classes' drop
- * rates to `yarn report:arms`, the FL sample (migration 0065) and the
- * divergence alert — so #1412 can weight or bound the selection term instead of
- * assuming it away. Nothing about the charge taken here changed: this fallback
- * still fires only for a leg whose own submission captured, and a flatten whose
+ * rates to `yarn report:arms` and the FL sample (migration 0066) — so #1412
+ * can weight or bound the selection term instead of assuming it away. Nothing
+ * about the charge taken here changed: this fallback still fires only for a
+ * leg whose own submission captured, and a flatten whose
  * capture failed is still charged the venue's fee alone. Charging it off the
  * ENTRY's protective estimate instead would equalize the capture COUNT at the
  * price of a second money-path use of one submission's `MarketState` — Option
