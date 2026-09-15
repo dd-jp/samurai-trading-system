@@ -96,7 +96,7 @@ describe('P&L', () => {
     expect(within(card).queryByRole('img', { name: /Alpaca equity observed/ })).toBeNull();
   });
 
-  it('names an absent headline instead of drawing £0.00 — the "type that lies" boundary gap', () => {
+  it('names an absent headline instead of drawing £0.00', () => {
     const snapshot = makeSnapshot({ pnl: null });
     renderGlance(snapshot);
     expect(

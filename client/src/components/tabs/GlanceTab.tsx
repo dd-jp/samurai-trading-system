@@ -111,7 +111,11 @@ function PnlCard({ snapshot, equitySamples }: Pick<GlanceTabProps, 'snapshot' | 
   }
 
   const { overall, today } = pnl;
-  const rate = `at ${formatUsd(pnl.rate_usd_per_gbp)}/£, ${PNL_RATE_SOURCE_WORD[pnl.rate_source]}`;
+  // `rate_source` is a `Record` lookup, not a formatter call, so an
+  // unrecognised value (the same nested-rename skew `isPnlHeadline` guards
+  // above, one field `isPnlHeadline` doesn't check) needs its own fallback —
+  // an unguarded lookup would interpolate the literal string "undefined".
+  const rate = `at ${formatUsd(pnl.rate_usd_per_gbp)}/£, ${PNL_RATE_SOURCE_WORD[pnl.rate_source] ?? UNKNOWN}`;
 
   return (
     <section className="panel" aria-label="P&L">
