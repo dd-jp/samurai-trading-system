@@ -1123,6 +1123,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     }
     return {
       ids,
+      legs,
       side: first.BuySell === 'Buy' ? 'sell' : 'buy',
       amount: first.Amount,
       normalized: {
@@ -1256,17 +1257,31 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     this.dormantDefer.delete(refusedKey(externalReference));
   }
 
-  /** The most recent audit-trail row for `externalReference` inside `lookbackMs`, or none. */
+  /** Every audit-trail row for `externalReference` inside `lookbackMs`, unordered. */
+  private async activitiesFor(
+    externalReference: string,
+    lookbackMs: number,
+  ): Promise<SaxoOrderActivity[]> {
+    const from = new Date(this.clock.now().getTime() - lookbackMs);
+    const wireReference = saxoExternalReference(externalReference);
+    const activities = await this.client.listOrderActivities(from);
+    return activities.filter((activity) => activity.ExternalReference === wireReference);
+  }
+
+  /**
+   * The most recent audit-trail row for `externalReference` inside
+   * `lookbackMs`, or none. Ties on `ActivityTime` break by array order — a
+   * real concern only for callers that read terminal state off this single
+   * row; `corroborateActivatedLegs` reads `activitiesFor` directly instead of
+   * this, for exactly that reason (#1215 round 3).
+   */
   private async latestActivityFor(
     externalReference: string,
     lookbackMs: number,
   ): Promise<SaxoOrderActivity | undefined> {
-    const from = new Date(this.clock.now().getTime() - lookbackMs);
-    const wireReference = saxoExternalReference(externalReference);
-    const activities = await this.client.listOrderActivities(from);
+    const rows = await this.activitiesFor(externalReference, lookbackMs);
     let latest: SaxoOrderActivity | undefined;
-    for (const activity of activities) {
-      if (activity.ExternalReference !== wireReference) continue;
+    for (const activity of rows) {
       if (latest === undefined || activity.ActivityTime >= latest.ActivityTime) latest = activity;
     }
     return latest;
@@ -1318,11 +1333,16 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     if (open !== null && !isDormantLegs(open)) {
       // `ids.entry` is absent only on `findOpen`'s activated-legs-no-master
       // branch (the master-present branch always sets it) — the read
-      // `corroborateActivatedLegs` exists to check (#1215, #1426).
+      // `corroborateActivatedLegs` exists to check (#1215, #1426). That same
+      // branch is the only one that populates `open.legs`, so cancelling off
+      // it here — rather than the role-deduped `orderIdList(open.ids)` —
+      // matches `clearLegs`' own behavior on the mirror branch and does not
+      // silently drop a duplicate row under one leg's reference (#1215
+      // round 3).
       if (open.ids.entry === undefined) {
         const verdict = await this.corroborateActivatedLegs(externalReference, lookbackMs);
         if (verdict.kind === 'expired') {
-          await this.cancelOrderIds(orderIdList(open.ids));
+          await this.cancelOrderIds((open.legs ?? []).map((leg) => leg.OrderId));
           this.clearDormantDefer(externalReference);
           return fromActivity(verdict.latest, externalReference);
         }
@@ -1425,30 +1445,40 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
    * would mean declining to recognize a position that may be live — delaying
    * fill ingestion, Risk's exposure view and flat-by-close — which is worse
    * than the phantom-fill risk this exists to catch. So only a SETTLED,
-   * TERMINAL non-`Filled` master row that ALSO carries a zero `FillAmount`
-   * (the master expired, was cancelled, or was rejected — never filled, not
-   * even partially) downgrades the read. `activityState`'s terminal branches
-   * (`Cancelled`/`Expired`/`Rejected`) key off `Status`/`SubStatus` alone and
-   * ignore `FillAmount`, so a terminal row by itself cannot tell "never
-   * filled" apart from "filled some or all, then a terminal row landed" (a
-   * partial-fill residual cancelled at close; a `FinalFill` followed by a
-   * later `Cancelled` row for the same reference, since `latestActivityFor`
-   * picks the chronologically-latest row). A `Filled` row, a terminal row
-   * with a nonzero `FillAmount`, any non-terminal row, or no row at all
-   * inside the lookback leaves today's `filled` reading — the VERIFIED (doc
-   * 43 round 2) genuine-fill path — unchanged, with no new
+   * TERMINAL non-`Filled` master row downgrades the read, and only once NO
+   * row for this reference in the lookback shows any evidence of a fill.
+   * `FillAmount` is a per-event field, carried on the fill's own activity
+   * row (`fetchNewFills`/`toQuotedFill` book one fill per row off that row's
+   * own `FillAmount`, and refuse a row with `FillAmount` but no
+   * `AveragePrice` — a cumulative-on-a-later-row shape would trip that), so
+   * a `FinalFill` row can be followed by a separate, later `Cancelled` row
+   * for the same reference (a partial-fill residual cancelled at close) —
+   * that `Cancelled` row itself carries no `FillAmount`, but the earlier
+   * `FinalFill` row is still in the lookback and still evidence. Reading
+   * only the chronologically-latest row (as round 2 did, via
+   * `latestActivityFor`) misses exactly that shape, and ties on
+   * `ActivityTime` between a fill row and a terminal one would additionally
+   * pick a winner by array order — both fixed by scanning every row instead
+   * of the single latest one (#1215 round 3). A `Filled`/`FinalFill` row, a
+   * terminal row with its own nonzero `FillAmount`, any non-terminal row, or
+   * no row at all inside the lookback leaves today's `filled` reading — the
+   * VERIFIED (doc 43 round 2) genuine-fill path — unchanged, with no new
    * defer/escalate/page exposure added to it.
    */
   private async corroborateActivatedLegs(
     externalReference: string,
     lookbackMs: number,
   ): Promise<{ kind: 'confirmed' } | { kind: 'expired'; latest: SaxoOrderActivity }> {
-    const latest = await this.latestActivityFor(externalReference, lookbackMs);
-    if (
-      latest !== undefined &&
-      DEAD_STATES.has(activityState(latest)) &&
-      (latest.FillAmount ?? 0) === 0
-    ) {
+    const rows = await this.activitiesFor(externalReference, lookbackMs);
+    const everFilled = rows.some(
+      (row) => activityState(row) === 'filled' || (row.FillAmount ?? 0) > 0,
+    );
+    if (everFilled) return { kind: 'confirmed' };
+    let latest: SaxoOrderActivity | undefined;
+    for (const row of rows) {
+      if (latest === undefined || row.ActivityTime >= latest.ActivityTime) latest = row;
+    }
+    if (latest !== undefined && DEAD_STATES.has(activityState(latest))) {
       return { kind: 'expired', latest };
     }
     return { kind: 'confirmed' };
@@ -1499,6 +1529,16 @@ interface OrderIds {
 
 interface LookedUpOrder {
   ids: OrderIds;
+  /**
+   * The raw `listOpenOrders` rows behind `ids`, set only on `findOpen`'s
+   * activated-legs-no-master branch. `ids.stop`/`ids.target` collapse by
+   * role, so a duplicate row under the same leg reference (the adapter has
+   * no durable idempotency inside its ~15s retry window, doc 43) would be
+   * silently dropped from `ids` — `lookup` cancels off this list instead,
+   * matching `clearLegs`' `legs.map(leg => leg.OrderId)` on the same branch
+   * (#1215 round 3).
+   */
+  legs?: readonly SaxoOpenOrder[];
   side: 'buy' | 'sell';
   amount: number;
   normalized: NormalizedOrder;
