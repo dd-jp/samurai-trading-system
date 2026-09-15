@@ -443,7 +443,7 @@ describe('tabs', () => {
     expect((await screen.findByRole('tab', { name: 'Glance' })).getAttribute('aria-selected')).toBe(
       'true',
     );
-    await screen.findByRole('region', { name: 'P&L today' });
+    await screen.findByRole('region', { name: 'P&L' });
     await openTab('Review');
     expect(window.location.hash).toBe('#review');
     expect(screen.getByRole('region', { name: 'Closed trades' })).toBeTruthy();

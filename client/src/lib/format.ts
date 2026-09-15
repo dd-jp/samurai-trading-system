@@ -97,6 +97,18 @@ export function formatUsd(value: number): string {
   return `$${USD.format(value)}`;
 }
 
+/**
+ * Signed, grouped GBP: `+£1,234.56` / `−£0.50`. Same grammar as
+ * `formatSignedUsd` — grouping and decimal rules don't differ between the two
+ * locales, so this reuses `USD`'s formatter rather than a second
+ * `Intl.NumberFormat` instance carrying the same options.
+ */
+export function formatSignedGbp(value: number): string {
+  if (!Number.isFinite(value)) return UNKNOWN;
+  const sign = value < 0 ? MINUS : '+';
+  return `${sign}£${USD.format(Math.abs(value))}`;
+}
+
 /** A fixed-precision figure (Sharpe, profit factor, …). Non-finite is an em dash. */
 export function formatFixed(value: number, digits = 2): string {
   if (!Number.isFinite(value)) return UNKNOWN;

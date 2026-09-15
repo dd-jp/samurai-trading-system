@@ -7,7 +7,7 @@
  * "Accessibility floor"), so every state has a word, and the word lives here so
  * a tab, a drawer and an accessible name cannot disagree about it.
  */
-import type { PipelineOutcome, PipelineStage } from '@contracts';
+import type { PipelineOutcome, PipelineStage, PnlRateSource } from '@contracts';
 import type { SettledOutcome } from './ledger.ts';
 
 export const OUTCOME_WORD: Readonly<Record<PipelineOutcome, string>> = {
@@ -60,3 +60,11 @@ const PROVIDER_STATE_WORD: Readonly<Record<string, string>> = {
 export function providerStateWord(state: string): string | null {
   return PROVIDER_STATE_WORD[state] ?? null;
 }
+
+/**
+ * `PnlHeadlineWire.rate_source`'s word (#1596) — a `Record`, not a string
+ * transform, so a future second source is a compile error here until named.
+ */
+export const PNL_RATE_SOURCE_WORD: Readonly<Record<PnlRateSource, string>> = {
+  static_sizing_rate: 'static sizing rate',
+};
