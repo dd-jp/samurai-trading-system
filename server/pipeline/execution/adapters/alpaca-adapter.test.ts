@@ -3254,18 +3254,96 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     });
 
     /**
+     * #1573 — a FULL fill only proves the lot closed itself when it covers
+     * what the lot was later observed to hold.
+     *
+     * The sequence needs a post-re-arm ENTRY fill, which is what makes it
+     * narrow: without one, a full fill of attempt_k contributes
+     * `qty_k = E − X_k` to the exit total, so `X_final ≥ E` and the caller
+     * reads the lot flat before ever reaching the adapter.
+     *
+     *   1. attempt 0 armed at the then-residual of 4.
+     *   2. a further ENTRY fill lands — the residual is 6.
+     *   3. the walk cancels attempt 0 as mis-sized and LOSES that race to its
+     *      own full fill of 4 (`cancelOrder` tolerates that deliberately),
+     *      then arms attempt 1 at 6.
+     *   4. those 4 exit fills ingest, so the residual is 2. attempt 1
+     *      mismatches and is cancelled — and attempt 0's 4 cannot have closed
+     *      a lot attempt 1 was sized 6 for.
+     *
+     * Adopting there returns success with nothing resting, and
+     * `maybeRearmResidual` clears the #549 marker on that return: 2 shares
+     * naked AND unwatched.
+     */
+    it('re-arms rather than adopting a full fill that a later attempt outgrew', async () => {
+      const venue = measuredAlpacaVenue();
+      const adapter = adapterWith(makeClient(venue));
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+      venue.rows.set('key-1:rearm', {
+        ...venue.rows.get('key-1:rearm')!,
+        status: 'filled',
+        filled_qty: '4',
+      });
+      expect(venue.resting().map((row) => row.client_order_id)).toEqual(['key-1:rearm-1']);
+      venue.submitOcoOrder.mockClear();
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 2, 95, 110);
+
+      expect(venue.resting().map((row) => row.client_order_id)).toEqual(['key-1:rearm-2']);
+      expect(venue.resting().map((row) => row.qty)).toEqual(['2']);
+    });
+
+    /**
+     * The same hazard with NOTHING retired by this walk — the case that
+     * separates the size evidence from `4ea06cba`'s reverted attempt, which
+     * asked what the walk had just cancelled.
+     *
+     * attempt 1 is `canceled` AT THE VENUE before this pass (the #429
+     * intervention path), so no cancel fires here at all. The lot is still
+     * naked, and the only thing that says so is attempt 1 having been sized
+     * 6 against a fill of 4.
+     */
+    it('re-arms over a full fill outgrown by an attempt this walk never touched', async () => {
+      const venue = measuredAlpacaVenue();
+      const adapter = adapterWith(makeClient(venue));
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+      venue.rows.set('key-1:rearm', {
+        ...venue.rows.get('key-1:rearm')!,
+        status: 'filled',
+        filled_qty: '4',
+      });
+      venue.rows.set('key-1:rearm-1', {
+        ...venue.rows.get('key-1:rearm-1')!,
+        status: 'canceled',
+      });
+      venue.submitOcoOrder.mockClear();
+      venue.cancelOrder.mockClear();
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 2, 95, 110);
+
+      expect(venue.cancelOrder).not.toHaveBeenCalled();
+      expect(venue.resting().map((row) => row.client_order_id)).toEqual(['key-1:rearm-2']);
+      expect(venue.resting().map((row) => row.qty)).toEqual(['2']);
+    });
+
+    /**
      * WHY A SWEEP AND NOT MORE HAND-BUILT CASES.
      *
-     * The four tests above were each written for one named sequence, and three
+     * The tests above were each written for one named sequence, and four
      * separate defects in this walk survived the tests written for the
      * sequence before them — every one of them living in a COMBINATION nobody
      * had thought to build. A per-case mutation run proves the case it was
      * written for and says nothing about the rest of the space.
      *
-     * The space is small enough to close by enumeration: a prior is one of six
-     * shapes, an absent id ends the walk, so four indices give 1+6+36+216+1296
-     * reachable sequences. This asserts the MONEY invariants over all of them,
-     * so a future edit cannot open a hole in a corner that has no named test.
+     * The space is small enough to close by enumeration: a prior is one of
+     * seven shapes, an absent id ends the walk, so four indices give
+     * 1+7+49+343+2401 reachable sequences. This asserts the MONEY invariants
+     * over all of them, so a future edit cannot open a hole in a corner that
+     * has no named test.
      *
      * Some sequences are unreachable under the allocation invariant (a resting
      * prior below an allocated index). The walk ENFORCES that invariant rather
@@ -3277,6 +3355,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         'resting-mismatch',
         'partially_filled',
         'filled',
+        'filled-undersized',
         'canceled',
         'pending_cancel',
       ] as const;
@@ -3298,7 +3377,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         frontier = frontier.flatMap((prefix) => SHAPES.map((shape) => [...prefix, shape]));
         sequences = [...sequences, ...frontier];
       }
-      expect(sequences).toHaveLength(1555);
+      expect(sequences).toHaveLength(2801);
 
       function seed(attempt: number, shape: Shape): AlpacaOrder {
         const row: AlpacaOrder = {
@@ -3325,6 +3404,11 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         if (shape === 'partially_filled')
           return { ...row, status: 'partially_filled', filled_qty: '2' };
         if (shape === 'filled') return { ...row, status: 'filled', filled_qty: '6' };
+        // #1573: a full fill of a SMALLER earlier size. Every other shape's
+        // fill covers its own request, which made the sweep structurally
+        // blind to a `settled` row the lot outgrew after it was placed.
+        if (shape === 'filled-undersized')
+          return { ...row, status: 'filled', qty: '4', filled_qty: '4' };
         return { ...row, status: shape === 'canceled' ? 'canceled' : 'pending_cancel' };
       }
 
@@ -3366,9 +3450,11 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         // also an UNWATCHED one.
         //
         // Zero working legs is only acceptable when the row the bookkeeping
-        // NAMES is fully filled — that lot is flat, not unprotected. Checking
-        // the named row's status rather than merely tolerating a zero count is
-        // what keeps this from excusing a genuine naked return.
+        // NAMES accounts for every share this call was asked to protect —
+        // that lot is flat, not unprotected. `status === 'filled'` alone is
+        // not that test (#1573): a full fill of a size the lot has since
+        // outgrown closes only part of the residual, and excusing it here is
+        // what let the sweep pass over a naked return.
         //
         // Scoped to normal returns deliberately: the last-index destructive
         // cancel throws, which is recorded finding 4, not this clause's
@@ -3378,10 +3464,12 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         );
         const namedId = recordIds.mock.lastCall?.[2]?.target_order_id;
         const named = [...venue.rows.values()].find((row) => row.id === namedId);
-        if (destroyed && workingAtExit.length === 0 && named?.status !== 'filled') {
+        const covers = named?.status === 'filled' && Number(named.filled_qty) >= 6;
+        if (destroyed && workingAtExit.length === 0 && !covers) {
           violations.push(
             `${where} destroyed working protection and left none; ` +
-              `bookkeeping names ${String(namedId)} (${String(named?.status)})`,
+              `bookkeeping names ${String(namedId)} ` +
+              `(${String(named?.status)} ${String(named?.filled_qty)}/6)`,
           );
         }
 
