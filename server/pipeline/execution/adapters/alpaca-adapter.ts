@@ -1171,6 +1171,9 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     let live: AlpacaOrder | null = null;
     let settled: AlpacaOrder | null = null;
     let freeAttempt: number | null = null;
+    // The largest size this lot was observed to hold at an index ABOVE
+    // `settled` — the #1573 discriminator, reset whenever `settled` moves up.
+    let sizedAboveSettled = 0;
 
     for (let attempt = 0; attempt < MAX_REARM_ATTEMPTS; attempt += 1) {
       const prior = await this.call('rearmProtectiveLegs', () =>
@@ -1184,8 +1187,10 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       const priorState = mapOrderState(prior.status);
       if (priorState === 'filled') {
         settled = prior;
+        sizedAboveSettled = 0;
         continue;
       }
+      sizedAboveSettled = Math.max(sizedAboveSettled, Number(prior.qty));
       // `partially_filled` belongs with the LIVE priors, not the terminal
       // ones: its remainder (`qty − filled_qty`) is still working at the
       // venue and can still fire. It needs no match check — #549 adopts a
@@ -1230,7 +1235,32 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // is the lot being FLAT, not the lot being naked. Declining it and placing
     // would arm a fresh leg over a closed position, which fires into nothing
     // and opens a reverse one — #516 from the other direction.
-    const adopted = live ?? settled;
+    //
+    // That reasoning holds only while the fill COVERS every size this lot has
+    // been observed to hold since (#1573). A post-re-arm ENTRY fill grows the
+    // residual, so a `settled` of 4 can sit under an attempt sized 6: those
+    // 6 shares existed after the 4 closed, and adopting returns success with
+    // nothing resting — which clears the #549 marker over the 2 that are
+    // naked.
+    //
+    // Two independent observations bound the size, and the hazard needs both
+    // because they see different halves of it. `qty` catches it while
+    // `settled`'s own fills are still un-ingested (the store reads the grown
+    // residual); the sizes of LATER ATTEMPTS catch it once they have ingested
+    // — which is exactly when `qty` has shrunk back under the fill and the
+    // `settled.filled_qty >= qty` test alone passes 4 ≥ 2 and is wrong.
+    //
+    // Neither reads the walk itself, deliberately: whether this pass RETIRED
+    // those attempts (`4ea06cba`) and whether anything still sits ABOVE them
+    // (`df222403`) were both tried and reverted, each answering a question
+    // about the walk rather than about the position.
+    //
+    // A fill that will not parse cannot prove flatness, so it declines —
+    // placing over a flat lot is bounded (the leg fires into nothing), a lot
+    // believed protected on unreadable evidence is not.
+    const observedSize = Math.max(qty, sizedAboveSettled);
+    const adopted =
+      live ?? (settled !== null && Number(settled.filled_qty) >= observedSize ? settled : null);
     if (adopted !== null) {
       this.rearmedLegs.set(clientOrderId, adopted.id);
       // Same column semantics as the fresh-place path below — the OCO's
