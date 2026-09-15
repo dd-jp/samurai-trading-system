@@ -108,18 +108,28 @@ export interface PortfolioView {
    * terminal state, so the reservation survives a restart and is released by
    * the fill or the terminalization rather than by a separate release path.
    *
-   * **Scoped to `pending`/`submitted`, never `partially_filled` — the test is
-   * a RELEASE PATH, not a time bound.** A partially-filled lot whose
-   * venue-side remainder is dead has no mechanism that ever advances it:
-   * `ingestFills` recomputes only from a NEW fill, `sweepTerminalPositions`
-   * deletes only already-terminal rows, and `wedged-zero-fill-sweep.ts`
-   * covers the zero-fill case alone. Counting its remainder would strand a
-   * reservation that blocks the subclass forever. `pending`/`submitted` are
-   * exactly the states `reconcile()`'s bracket pass revisits
-   * (`IN_FLIGHT_ORDER_STATES`, which `portfolio-view.ts` derives this scope
-   * from), and adopting broker truth there is what releases the reservation —
-   * on a fill, on a `rejected` for an order the venue never received, on any
-   * terminalization.
+   * **Scoped to `pending`/`submitted`, plus one narrow exception — the test is
+   * a RELEASE PATH, not a time bound.** A `partially_filled` lot with real
+   * progress (`filled_size > 0`) whose venue-side remainder is dead has no
+   * mechanism that ever advances it: `ingestFills` recomputes only from a NEW
+   * fill, and `sweepTerminalPositions` deletes only already-terminal rows.
+   * Counting its remainder would strand a reservation that blocks the
+   * subclass forever. `pending`/`submitted` are exactly the states
+   * `reconcile()`'s bracket pass revisits (`IN_FLIGHT_ORDER_STATES`, which
+   * `portfolio-view.ts` derives most of this scope from), and adopting broker
+   * truth there is what releases the reservation — on a fill, on a `rejected`
+   * for an order the venue never received, on any terminalization.
+   *
+   * The exception (#1568): a lot adopted `filled`/`partially_filled` at
+   * submit time with `filled_size` STILL `0` — Saxo's `adopt` (or any
+   * adapter) can ack a lookup hit in either state before a quantity is ever
+   * known, and `execute.ts` writes that ack straight onto the row. This IS
+   * reserved, at the full `requested_size`, because it has the release path
+   * the general case above lacks: it is exactly `wedged-zero-fill-sweep.ts`'s
+   * own selection, so either `ingestFills()` advances `filled_size` off zero
+   * (ordinary exposure math takes over) or that sweep abandons the row after
+   * `WEDGED_ZERO_FILL_ABANDON_AFTER_MS` — either way this reservation stops
+   * applying. See `isAdoptedZeroFillLot` in `portfolio-view.ts`.
    *
    * That release is not on a clock. `reconcileLot` has no age-out: its
    * `undetermined` branch (the adapter threw, which is evidence of nothing)

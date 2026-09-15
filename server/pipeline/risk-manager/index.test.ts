@@ -1,7 +1,18 @@
-import type { Clock, OrderIntent } from '../../shared/index.js';
+import type {
+  Bar,
+  BarWindow,
+  IndicatorSpec,
+  IndicatorValue,
+  Mark,
+  MarketDataService,
+  MarkRead,
+} from '../../providers/market-data-service/index.js';
+import { collectMarks } from '../../providers/market-data-service/index.js';
+import type { Clock, OpenPosition, OrderIntent } from '../../shared/index.js';
 import { CircuitBreakers } from './breakers.js';
 import { RiskManagerImpl } from './index.js';
 import { INVALIDATED_BINDING_CONSTRAINT, NO_CONDITIONS_REASON } from './invalidation.js';
+import { computePortfolioView } from './portfolio-view.js';
 import type {
   BreakerState,
   CorrelationEstimate,
@@ -705,6 +716,114 @@ describe('RiskManagerImpl.evaluate — trim steps', () => {
 
       expect(decision.status).toBe('approved');
       expect(decision.order_intent?.size).toBe(100);
+    });
+  });
+
+  /**
+   * #1568 — the specific in-flight shape #1019 above did not cover: a lot
+   * `saxo-adapter.ts`'s `adopt` acks `filled`/`partially_filled` at submit
+   * time with `filled_size` still 0. Unlike the `#1019` cases above, this
+   * portfolio is produced by the REAL `computePortfolioView`, not a hand-built
+   * fixture — the point being proven is that the reservation `portfolio-view.ts`
+   * now computes for this shape actually reaches a SECOND instrument's caps,
+   * not merely that `evaluate` trusts whatever `reserved_exposure_by_instrument`
+   * it is handed (already proven above).
+   */
+  describe('adopted zero-fill lot reaches a second instrument’s caps (#1568)', () => {
+    function makeMarketData(prices: Record<string, number>): MarketDataService {
+      const getMark = vi.fn(
+        async (instrument: string, _asOf: Date): Promise<Mark> => ({
+          price: prices[instrument] ?? 0,
+          observed_at: fixedClock.now(),
+          source: 'test',
+          asset_class: 'stocks',
+        }),
+      );
+      const service: MarketDataService = {
+        getBars: vi.fn(async (_i: string, _w: BarWindow, _a: Date): Promise<Bar[]> => []),
+        getIndicator: vi.fn(
+          async (_i: string, _s: IndicatorSpec, _a: Date): Promise<IndicatorValue> => {
+            throw new Error('not used in this test');
+          },
+        ),
+        getMark,
+        getMarks: vi.fn(
+          async (instruments: readonly string[], at: Date): Promise<Map<string, MarkRead>> =>
+            collectMarks((instrument, a) => service.getMark(instrument, a), instruments, at),
+        ),
+        getSpreadEstimate: vi.fn(async (_i: string, _a: Date): Promise<number | null> => null),
+        getQuote: vi.fn(async (_i: string, _a: Date): Promise<null> => null),
+        getADV: vi.fn(async (_i: string, _w: BarWindow, _a: Date): Promise<number> => 0),
+      };
+      return service;
+    }
+
+    function makeAdoptedZeroFillPosition(overrides: Partial<OpenPosition> = {}): OpenPosition {
+      return {
+        idempotency_key: 'AAPL-2026-07-15T09:30:00Z',
+        debate_id: 'debate-abc123',
+        instrument: 'AAPL',
+        asset_class: 'stocks',
+        side: 'buy',
+        intent_type: 'entry',
+        requested_size: 100,
+        filled_size: 0,
+        avg_entry_price: 0,
+        stop: 95,
+        target: 110,
+        // Saxo's `adopt` returning the venue's own state verbatim on a
+        // lookup hit — the ack this ticket is about.
+        order_state: 'filled',
+        broker_order_ids: ['order-1'],
+        opened_at: fixedClock.now(),
+        decision_timestamp: fixedClock.now(),
+        conviction: 0.7,
+        converged: true,
+        ...overrides,
+      };
+    }
+
+    it('trims a second instrument’s entry against the first lot’s reservation on the class/gross caps', async () => {
+      const portfolio = await computePortfolioView({
+        positions: [makeAdoptedZeroFillPosition()],
+        marketData: makeMarketData({ AAPL: 100 }),
+        asOf: fixedClock.now(),
+        clock: fixedClock,
+        cash: 100_000,
+        peak_equity: 100_000,
+        daily_basis: {
+          crypto: { known: true, open_equity: 100_000, realized_pnl: 0 },
+          stocks: { known: true, open_equity: 100_000, realized_pnl: 0 },
+          portfolio: { known: true, open_equity: 100_000, realized_pnl: 0 },
+        },
+        consecutive_losses: 0,
+        max_mark_age: { crypto: 2 * 60_000, stocks: 15 * 60_000 },
+      });
+
+      // AAPL never advances `exposure_by_instrument` (filled_size is still 0)
+      // — the reservation is the ONLY place this lot's notional shows up.
+      expect(portfolio.exposure_by_instrument.AAPL ?? 0).toBe(0);
+      expect(portfolio.reserved_exposure_by_instrument.AAPL).toBe(10_000);
+      expect(portfolio.reserved_exposure_by_class.stocks).toBe(10_000);
+      expect(portfolio.reserved_gross_exposure).toBe(10_000);
+
+      // A second, DIFFERENT instrument's gross cap, evaluated against this
+      // same portfolio before any `ingestFills()` pass has run.
+      const manager = new RiskManagerImpl(
+        makeConfig({ portfolio_gross_cap_fraction_of_equity: 0.15 }),
+      );
+      const decision = manager.evaluate(
+        makeInput({
+          intent: makeIntent({ instrument: 'MSFT', size: 100, entry: 100 }),
+          portfolio,
+        }),
+      );
+
+      // Cap allows 15,000; AAPL's 10,000 reservation leaves 5,000 -> size 50.
+      // Without #1568's fix, AAPL's reservation reads 0 and MSFT gets the
+      // full 100.
+      expect(decision.order_intent?.size).toBe(50);
+      expect(decision.binding_constraint).toBe('portfolio_gross_exposure_cap');
     });
   });
 

@@ -234,7 +234,8 @@ export function unrealizedFor(position: OpenPosition, mark: number): number {
 /**
  * The states whose unfilled remainder is RESERVED against the entry caps
  * (#1019) — see `PortfolioView.reserved_exposure_by_instrument` for what the
- * reservation is and why it excludes `partially_filled`.
+ * reservation is and why it excludes a `partially_filled` lot with real
+ * progress.
  *
  * DERIVED from `IN_FLIGHT_ORDER_STATES` rather than written out, because the
  * invariant is not that the two lists happen to match — it is **reserve only
@@ -249,6 +250,34 @@ const RESERVABLE_ORDER_STATES: ReadonlySet<OpenPosition['order_state']> = new Se
 );
 
 /**
+ * #1568: a lot the ADAPTER adopted `filled`/`partially_filled` at submit time
+ * (`saxo-adapter.ts`'s `adopt`, on a lookup hit) with `filled_size` still 0 —
+ * `execute.ts` writes the ack's `order_state` straight onto the write-ahead
+ * row without a quantity to advance `filled_size` with. Neither
+ * `RESERVABLE_ORDER_STATES` above nor `exposure_by_instrument` (valued at
+ * `filled_size`) sees this lot, so a second instrument evaluated before the
+ * next `ingestFills()` poll nets against nothing.
+ *
+ * Reserving it does not strand the reservation the way a genuine
+ * `partially_filled` remainder would: this is exactly
+ * `wedged-zero-fill-sweep.ts`'s own selection (`order_state` filled/
+ * partially_filled AND `filled_size === 0`), so the same two outcomes that
+ * sweep relies on both release it here too — `ingestFills()` advances
+ * `filled_size` off zero on a real fill (this stops matching, ordinary
+ * exposure math takes over), or the sweep abandons the row into a terminal
+ * state after `WEDGED_ZERO_FILL_ABANDON_AFTER_MS` if no fill ever lands
+ * (also stops matching). Bounded at 24h in the pathological case — the same
+ * safe-direction over-reservation `PortfolioView.reserved_exposure_by_instrument`
+ * already accepts for a resting `submitted` order.
+ */
+function isAdoptedZeroFillLot(position: OpenPosition): boolean {
+  return (
+    (position.order_state === 'filled' || position.order_state === 'partially_filled') &&
+    position.filled_size === 0
+  );
+}
+
+/**
  * Notional this lot has committed to the venue and not yet received: the
  * unfilled remainder at mark, or 0 for a lot whose order is no longer
  * in flight.
@@ -260,7 +289,9 @@ const RESERVABLE_ORDER_STATES: ReadonlySet<OpenPosition['order_state']> = new Se
  * risk term must never move.
  */
 function reservedNotional(position: OpenPosition, mark: number): number {
-  if (!RESERVABLE_ORDER_STATES.has(position.order_state)) return 0;
+  if (!RESERVABLE_ORDER_STATES.has(position.order_state) && !isAdoptedZeroFillLot(position)) {
+    return 0;
+  }
   return Math.max(position.requested_size - position.filled_size, 0) * mark;
 }
 
