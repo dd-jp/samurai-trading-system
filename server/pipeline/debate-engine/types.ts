@@ -191,6 +191,13 @@ export interface DebateResult {
    * debate, or already carries its own `timed_out`/`rate_limited` flag.
    * This field has a reader now and no writer; behaviour is unchanged
    * until a fallback exists to set it `false`.
+   *
+   * Setting `false` here is not, on its own, the whole job (#1418):
+   * `debate_log` has no column for this field, so `buildDebateLog` cannot
+   * write it and `replayedDebateResult` cannot read it back — a persisted
+   * `read: false` row would replay as `true`, undoing this classification
+   * on the very next #617 replay of the same bar. A producer that persists
+   * `read: false` results must close that gap first.
    */
   read: boolean;
   /**

@@ -46,6 +46,11 @@ export function buildDebateLog(
     disagreement_summary: result.disagreement_summary,
     open_items: result.open_items,
     converged: result.converged,
+    // `result.read` has no field here, unlike every other property above:
+    // `DebateLog` has no `read` column to project it into (#1418). Harmless
+    // while every producer sets `read: true`, but a future `read: false`
+    // producer would need this row to carry it before `replayedDebateResult`
+    // could read anything but `true` back off a replay.
     // #1081. Derived from the SAME `result` the row's other fields come off,
     // so a truncated debate cannot be mis-tagged converged by a caller that
     // forgot to pass a separate flag: `timed_out` is set by exactly one
