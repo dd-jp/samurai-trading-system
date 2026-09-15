@@ -192,6 +192,19 @@ function fromVerdictLogRow(row: VerdictLogRow): VerdictAuditEntry {
   };
 }
 
+/**
+ * The SQL operator that keeps a `trace_id`/`debate_id` row for the named arm
+ * (#1594): live wants rows NOT carrying the control markers
+ * (`CONTROL_TRACE_SUFFIX`/`CONTROL_DEBATE_ID_PREFIX`), control wants rows that
+ * DO. Returned as a validated union rather than built inline per call site, so
+ * a typo can't silently produce a syntactically-valid SQL fragment that
+ * filters the wrong arm — the mistake #1318/#1319/#1326 exist to prevent.
+ */
+type ArmLikeOperator = 'NOT LIKE' | 'LIKE';
+function armLikeOperator(arm: TradingArm): ArmLikeOperator {
+  return arm === 'live' ? 'NOT LIKE' : 'LIKE';
+}
+
 const ZERO_METRICS: Omit<MetricsSuite, 'profit_factor' | 'expectancy'> = {
   sharpe: 0,
   sortino: 0,
@@ -342,22 +355,23 @@ export class SqliteQueryStore implements DashboardQueryStore {
   }
 
   /**
-   * **LIVE arm only (#1318)**, like `getAttribution` and `getRiskCritics`
-   * below; `getOpenPositions` and `getRecentClosedTrades` above are scoped by
-   * their own `arm` parameter instead. Falsifier arm 2 writes its own
-   * `verdict_log` rows under a `trace_id` carrying `CONTROL_TRACE_SUFFIX`
-   * (#753) — `verdict_log` has no `debate_id` column, so unlike
-   * `getRiskCritics` there is only the one discriminator to apply. The filter
-   * is in the `WHERE` clause, ahead of `ORDER BY ... LIMIT`: a `LIMIT` applied
-   * before the arm is decided would let control rows displace live ones out of
-   * the page instead of merely appearing beside them, which is the bug this
-   * fixes.
+   * Scoped by `arm`, like `getOpenPositions` and `getRecentClosedTrades`
+   * above — a read names exactly one arm, and no read returns both.
+   * `verdict_log` carries no `arm`
+   * column, so unlike those two this discriminates on `trace_id`: falsifier
+   * arm 2 writes its own `verdict_log` rows under a `trace_id` carrying
+   * `CONTROL_TRACE_SUFFIX` (#753), and `verdict_log` has no `debate_id`
+   * column, so unlike `getRiskCritics` there is only the one discriminator to
+   * apply. The filter is in the `WHERE` clause, ahead of `ORDER BY ... LIMIT`:
+   * a `LIMIT` applied before the arm is decided would let the other arm's rows
+   * displace this arm's out of the page instead of merely appearing beside
+   * them, which is the bug #1318 fixed and parameterizing must not reopen.
    */
-  getVerdictHistory(limit: number, asOf: Date): VerdictAuditEntry[] {
+  getVerdictHistory(limit: number, asOf: Date, arm: TradingArm): VerdictAuditEntry[] {
     const rows = this.db
       .prepare(
         `SELECT * FROM verdict_log
-          WHERE timestamp <= ? AND trace_id NOT LIKE ?
+          WHERE timestamp <= ? AND trace_id ${armLikeOperator(arm)} ?
           ORDER BY timestamp DESC LIMIT ?`,
       )
       .all(toStoredTimestamp(asOf), `%${CONTROL_TRACE_SUFFIX}`, limit) as VerdictLogRow[];
@@ -379,23 +393,28 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * `risk_critic_log` on `debate_id`), so exactly one row comes back per
    * decision.
    *
-   * ## LIVE arm only
+   * ## Scoped by `arm`
    *
-   * Unlike `getOpenPositions` and `getRecentClosedTrades` above, this read
-   * takes no `arm` parameter: it always excludes the falsifier's control-arm
-   * rows, the same way `getVerdictHistory` above does.
+   * Like `getVerdictHistory` above, `arm` picks which of the two decision
+   * streams this window shows — a read names exactly one arm, and no read
+   * returns both.
    *
    * Falsifier arm 2 writes its own `risk_log`/`trader_log` rows under the
    * `control:` `debate_id` namespace (`CONTROL_DEBATE_ID_PREFIX`) and under a
    * `trace_id` carrying `CONTROL_TRACE_SUFFIX`, which is what makes them
-   * separable without a schema change. Both are tested, and the `trace_id` one
-   * is the load-bearing test: it sits on the driving table's own non-nullable
-   * key, so a control decision whose Trader row is missing is still excluded,
-   * where the `debate_id` test alone would let it through on the NULL branch.
-   * They are excluded here:
-   * the control arm calls no model, so its decisions carry no critic verdict
-   * and no conditions, and letting them fill this bounded window would starve
-   * the live arm's decisions of it.
+   * separable without a schema change. Both discriminators flip together on
+   * `arm` (`armLikeOperator`), and the `trace_id` one is the load-bearing
+   * half: it sits on the driving table's own non-nullable key, so a decision
+   * whose Trader row is missing is still correctly scoped, where the
+   * `debate_id` test alone would let it through on the NULL branch regardless
+   * of arm. The NULL branch stays permissive in BOTH directions
+   * (`debate_id IS NULL OR debate_id ${op} 'control:%'`) so neither arm drops
+   * a row whose `trader_log` twin is missing.
+   *
+   * A control-arm read returns the control's own `risk_log` rows, each with
+   * `critic: undefined` below — the control calls no model and so consults no
+   * critic, but it still makes Risk decisions, and this is not "excluded",
+   * it is "not applicable" (ADR-0021's 2026-09-15 amendment).
    *
    * ## The per-row critic read
    *
@@ -408,7 +427,8 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * per malformed row, and this query runs on a 3-second poll, so the
    * orchestrator's own read is where that belongs, not the dashboard's.
    */
-  getRiskCritics(limit: number, asOf: Date): RiskCriticRecord[] {
+  getRiskCritics(limit: number, asOf: Date, arm: TradingArm): RiskCriticRecord[] {
+    const op = armLikeOperator(arm);
     const rows = this.db
       .prepare(
         `SELECT risk_log.trace_id AS trace_id,
@@ -421,8 +441,8 @@ export class SqliteQueryStore implements DashboardQueryStore {
              ON trader_log.trace_id = risk_log.trace_id
             AND trader_log.instrument = risk_log.instrument
           WHERE risk_log.created_at <= ?
-            AND risk_log.trace_id NOT LIKE ?
-            AND (trader_log.debate_id IS NULL OR trader_log.debate_id NOT LIKE ?)
+            AND risk_log.trace_id ${op} ?
+            AND (trader_log.debate_id IS NULL OR trader_log.debate_id ${op} ?)
           ORDER BY risk_log.created_at DESC
           LIMIT ?`,
       )
@@ -471,19 +491,29 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * row (`termination IS NULL`, indeterminate) is kept, exactly as
    * `getContributionsForAttribution` keeps it — only a row this build
    * itself classified as latency-truncated is dropped.
+   *
+   * Scoped by `arm`, like `getOpenPositions` (#1592) — bound rather than a
+   * literal, so a typo here cannot silently pin every caller to one arm.
+   * `getAttribution(asOf,
+   * 'control')` returns `{}`: the `JOIN` is onto `debate_log`, and the control
+   * arm never writes that table (`axis-vote-decision.ts` — its `DebateResult`
+   * is synthesized in-memory, with no debate to log), so no `closed_trades`
+   * row of either arm can match a control `debate_id`. That is the correct
+   * answer, not an accident of an empty join: there is no debate to
+   * attribute a control trade's outcome to.
    */
-  getAttribution(asOf: Date): Record<string, AttributionSummary> {
+  getAttribution(asOf: Date, arm: TradingArm): Record<string, AttributionSummary> {
     const from = new Date(asOf.getTime() - this.attributionWindowDays * 24 * 60 * 60 * 1000);
     const rows = this.db
       .prepare(
         `SELECT closed_trades.*, debate_log.contributions_json AS debate_contributions_json
            FROM closed_trades
            JOIN debate_log ON debate_log.debate_id = closed_trades.debate_id
-          WHERE closed_trades.arm = 'live'
+          WHERE closed_trades.arm = ?
             AND closed_trades.closed_at > ? AND closed_trades.closed_at <= ?
             AND debate_log.termination IS NOT 'latency_truncated'`,
       )
-      .all(toStoredTimestamp(from), toStoredTimestamp(asOf)) as AttributionRow[];
+      .all(arm, toStoredTimestamp(from), toStoredTimestamp(asOf)) as AttributionRow[];
 
     const rollingR = new Map<string, number>();
     for (const row of rows) {
@@ -512,13 +542,12 @@ export class SqliteQueryStore implements DashboardQueryStore {
     return summary;
   }
 
-  getDailyMetrics(asOf: Date): MetricsSuite {
+  /** Scoped by `arm`, like `getAttribution` above. */
+  getDailyMetrics(asOf: Date, arm: TradingArm): MetricsSuite {
     const from = new Date(asOf.getTime() - 24 * 60 * 60 * 1000);
     const rows = this.db
-      .prepare(
-        `SELECT * FROM closed_trades WHERE arm = 'live' AND closed_at > ? AND closed_at <= ?`,
-      )
-      .all(toStoredTimestamp(from), toStoredTimestamp(asOf)) as ClosedTradeRow[];
+      .prepare(`SELECT * FROM closed_trades WHERE arm = ? AND closed_at > ? AND closed_at <= ?`)
+      .all(arm, toStoredTimestamp(from), toStoredTimestamp(asOf)) as ClosedTradeRow[];
     const trades = rows.map(fromClosedTradeRow);
 
     return {
@@ -653,37 +682,45 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * query. Both timestamp ranges ride `idx_audit_log_timestamp` (migration
    * 0025) rather than scanning the table.
    */
-  getPipelineActivity(maxLanes: number, lookbackMs: number, asOf: Date): PipelineActivity {
+  getPipelineActivity(
+    maxLanes: number,
+    lookbackMs: number,
+    asOf: Date,
+    arm: TradingArm,
+  ): PipelineActivity {
     const until = toStoredTimestamp(asOf);
     const from = toStoredTimestamp(new Date(asOf.getTime() - lookbackMs));
+    const op = armLikeOperator(arm);
 
     // Three sources, and the invariant is that ACTIVITY defines the universe
     // while PRICING only extends it (#619):
     //
-    //  - `audit_log` in the window — every instrument the LIVE arm actually
-    //    ran and attributed (#1319: the control arm's own attributed rows are
-    //    excluded below — like `getOpenPositions` and `getRecentClosedTrades`,
-    //    which filter on a bound `arm = ?` parameter (#1592), and like
-    //    `getVerdictHistory` and `getRiskCritics` (#1318), which filter on
-    //    `trace_id NOT LIKE`, since `audit_log` has no `arm` column of its
-    //    own). This is the source the lanes are built from, so a lane can no
-    //    longer be missing for an instrument whose trace is right there.
-    //  - `current_tick` in the window — a tick that has entered a stage but
-    //    not yet recorded one, so it has no audit row for a few seconds.
+    //  - `audit_log` in the window — every instrument the named arm actually
+    //    ran and attributed (#1319, parameterized #1594: the other arm's own
+    //    attributed rows are excluded below — like `getOpenPositions` and
+    //    `getRecentClosedTrades`, which filter on a bound `arm = ?` parameter
+    //    (#1592), and like `getVerdictHistory` and `getRiskCritics` (#1318),
+    //    which filter on `trace_id`, since `audit_log` has no `arm` column of
+    //    its own). This is the source the lanes are built from, so a lane can
+    //    no longer be missing for an instrument whose trace is right there.
+    //  - `current_tick` in the window, LIVE ARM ONLY — see below.
     //  - `latest_mark` — one upserted row per instrument the Market Data
     //    Service has PRICED, on demand rather than per tick. It is not the
     //    tick universe and never was; it is here so a priced instrument with
     //    no recent activity reads as an IDLE lane rather than vanishing (a
-    //    closed market is the common, correct reason to be quiet).
+    //    closed market is the common, correct reason to be quiet). Arm-
+    //    agnostic pricing, present for both arms.
     //
-    // No stage filter on the audit arm: any attributed LIVE-arm audit row
-    // means the bot touched that instrument, so it belongs in the universe.
-    // Whether it gets a TRACE is `pipelineEvents`' stage filter's job.
+    // No stage filter on the audit arm: any attributed audit row for the
+    // named arm means the bot touched that instrument, so it belongs in the
+    // universe. Whether it gets a TRACE is `pipelineEvents`' stage filter's
+    // job.
     //
     // `active` decides who survives `maxLanes`, not who renders first: a
-    // stale priced instrument must never evict a live one at the cap, which is
-    // this ticket's own failure mode arriving by a different door. The outer
-    // ORDER BY restores lane order; wire order is `buildPipelineView`'s call.
+    // stale priced instrument must never evict an active one at the cap,
+    // which is #1319's own failure mode arriving by a different door. The
+    // outer ORDER BY restores lane order; wire order is `buildPipelineView`'s
+    // call.
     //
     // An instrument has exactly one asset class. `GROUP BY instrument` plus
     // `MIN(asset_class)` is what makes a violation of that render the same way
@@ -693,36 +730,57 @@ export class SqliteQueryStore implements DashboardQueryStore {
     // earliest below, so bad data cannot additionally cost it its lane at the
     // cap.
     //
-    // LIVE arm only on the `audit_log` leg (#1319): `audit_log` carries no
-    // `debate_id` column (0001_init.sql, plus 0013's two attribution
-    // columns), so unlike `getRiskCritics` there is only the one discriminator
-    // to apply, the same as `getVerdictHistory` (#1318). Excluded in the
-    // `WHERE` clause, ahead of the `GROUP BY`/`ORDER BY ... LIMIT` cut: the
-    // falsifier arm's tick-runner pass writes its own attributed rows under a
-    // `trace_id` carrying `CONTROL_TRACE_SUFFIX` (`control-arm.ts`), and
-    // without this filter those rows counted toward `active` exactly like a
-    // live row, so a control-only instrument could win the tie-break and evict
-    // a genuinely live one at the cap instead of merely appearing beside it.
-    // `current_tick` and `latest_mark` need no such filter, not merely
-    // untouched: the control arm is wired with its own
-    // `InMemoryCurrentTickStore` (control-arm-wiring.ts), so it can never
-    // write the `current_tick` table this query reads, and `latest_mark` is
-    // arm-agnostic pricing that already enters at `active = 0` above — neither
-    // leg can smuggle a control-only instrument into the tie-break this ticket
-    // closes. This ticket owns only the `audit_log` leg; the sibling
-    // `audit_log` query in `pipelineEvents` below carries the same predicate
-    // for its own newest-trace pick (#1326).
+    // Arm filter on the `audit_log` leg (#1319, parameterized #1594):
+    // `audit_log` carries no `debate_id` column (0001_init.sql, plus 0013's
+    // two attribution columns), so unlike `getRiskCritics` there is only the
+    // one discriminator to apply, the same as `getVerdictHistory` (#1318).
+    // Excluded in the `WHERE` clause, ahead of the `GROUP BY`/`ORDER BY ...
+    // LIMIT` cut: the other arm's tick-runner pass writes its own attributed
+    // rows under a `trace_id` carrying `CONTROL_TRACE_SUFFIX` (`control-
+    // arm.ts`), and without this filter those rows counted toward `active`
+    // exactly like a named-arm row, so a wrong-arm-only instrument could win
+    // the tie-break and evict a genuinely named-arm one at the cap instead of
+    // merely appearing beside it. This ticket owns only the `audit_log` leg;
+    // the sibling `audit_log` query in `pipelineEvents` below carries the same
+    // predicate for its own newest-trace pick (#1326).
+    //
+    // `current_tick` LEG IS LIVE-ONLY, STRUCTURALLY, NOT BY FILTER (#1594):
+    // the control arm is wired with its own `InMemoryCurrentTickStore`
+    // (`control-arm-wiring.ts`) — in-memory, per-process, never persisted —
+    // so `current_tick` can never hold a control row, and there is no
+    // `trace_id`/`debate_id` on this table to filter one out of even if there
+    // were. Reading it unconditionally was safe while every read here was
+    // implicitly live-only; now that `arm` is a caller-chosen parameter,
+    // leaving the leg unconditional for `arm === 'control'` would read the
+    // LIVE arm's in-flight ticks into a control-scoped universe at `active =
+    // 1`, reopening #1319's exact failure mode through the one leg that isn't
+    // a `trace_id` filter away from the other arm's rows, because it
+    // structurally has none of its own. The leg (and its params) are omitted
+    // entirely for `arm === 'control'`, and `PipelineActivity.live` below is
+    // `[]` for the same reason — a table this arm cannot write is not
+    // queried on its behalf, matching ADR-0021's 2026-09-15 amendment
+    // ("Control arm: tick status is not persisted").
+    const auditLegSql = `SELECT DISTINCT instrument, asset_class, 1 AS active FROM audit_log
+               WHERE timestamp > ? AND timestamp <= ?
+                 AND instrument IS NOT NULL AND asset_class IS NOT NULL
+                 AND trace_id ${op} ?`;
+    const currentTickLegSql =
+      arm === 'live'
+        ? `UNION ALL
+             SELECT instrument, asset_class, 1 FROM current_tick
+               WHERE updated_at > ? AND updated_at <= ?`
+        : '';
+    const universeParams =
+      arm === 'live'
+        ? [from, until, `%${CONTROL_TRACE_SUFFIX}`, from, until, maxLanes]
+        : [from, until, `%${CONTROL_TRACE_SUFFIX}`, maxLanes];
+
     const universe = this.db
       .prepare(
         `SELECT instrument, asset_class FROM (
            SELECT instrument, MIN(asset_class) AS asset_class, MAX(active) AS active FROM (
-             SELECT DISTINCT instrument, asset_class, 1 AS active FROM audit_log
-               WHERE timestamp > ? AND timestamp <= ?
-                 AND instrument IS NOT NULL AND asset_class IS NOT NULL
-                 AND trace_id NOT LIKE ?
-             UNION ALL
-             SELECT instrument, asset_class, 1 FROM current_tick
-               WHERE updated_at > ? AND updated_at <= ?
+             ${auditLegSql}
+             ${currentTickLegSql}
              UNION ALL
              SELECT instrument, asset_class, 0 FROM latest_mark
            )
@@ -732,7 +790,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
          )
          ORDER BY asset_class, instrument`,
       )
-      .all(from, until, `%${CONTROL_TRACE_SUFFIX}`, from, until, maxLanes) as UniverseRow[];
+      .all(...universeParams) as UniverseRow[];
     const laneInstruments = new Set(universe.map((row) => row.instrument));
 
     // The window applies to `current_tick` too, unlike `getTickStatus`, which
@@ -740,36 +798,40 @@ export class SqliteQueryStore implements DashboardQueryStore {
     // leaves the row behind (tick-runner.ts: a stale row must be visible, not
     // tidied away), and a lane that showed it forever would report a dead tick
     // as running until that instrument next completed a tick.
-    const live = (
-      this.db
-        .prepare(
-          `SELECT instrument, asset_class, stage, trace_id, updated_at FROM current_tick
-            WHERE updated_at > ? AND updated_at <= ?
-            ORDER BY updated_at DESC`,
-        )
-        .all(from, until) as PipelineTickRow[]
-    )
-      .filter((row) => laneInstruments.has(row.instrument))
-      // #743: a tick-path pass upserts `stage: 'position_check'`, which is not
-      // a decision-chain stage and has no lane column — the lane view renders
-      // the decision chain, and after the split ~29 of 30 passes are tick-path.
-      // Excluded here rather than widened into `PIPELINE_STAGES`, so the lanes
-      // keep meaning "where is the decision", while `getTickStatus` (the
-      // telemetry strip's in-flight indicator) still reports the pass.
-      .filter((row): row is PipelineTickRow & { stage: PipelineStage } => {
-        return row.stage !== 'position_check';
-      })
-      .map<PipelineLiveTick>((row) => ({
-        instrument: row.instrument,
-        asset_class: row.asset_class,
-        stage: row.stage,
-        trace_id: row.trace_id,
-        entered_at: fromStoredTimestamp(row.updated_at),
-      }));
+    const live: PipelineLiveTick[] =
+      arm === 'control'
+        ? []
+        : (
+            this.db
+              .prepare(
+                `SELECT instrument, asset_class, stage, trace_id, updated_at FROM current_tick
+                  WHERE updated_at > ? AND updated_at <= ?
+                  ORDER BY updated_at DESC`,
+              )
+              .all(from, until) as PipelineTickRow[]
+          )
+            .filter((row) => laneInstruments.has(row.instrument))
+            // #743: a tick-path pass upserts `stage: 'position_check'`, which is
+            // not a decision-chain stage and has no lane column — the lane view
+            // renders the decision chain, and after the split ~29 of 30 passes
+            // are tick-path. Excluded here rather than widened into
+            // `PIPELINE_STAGES`, so the lanes keep meaning "where is the
+            // decision", while `getTickStatus` (the telemetry strip's in-flight
+            // indicator) still reports the pass.
+            .filter((row): row is PipelineTickRow & { stage: PipelineStage } => {
+              return row.stage !== 'position_check';
+            })
+            .map<PipelineLiveTick>((row) => ({
+              instrument: row.instrument,
+              asset_class: row.asset_class,
+              stage: row.stage,
+              trace_id: row.trace_id,
+              entered_at: fromStoredTimestamp(row.updated_at),
+            }));
 
     return {
       universe,
-      events: this.pipelineEvents(laneInstruments, from, until),
+      events: this.pipelineEvents(laneInstruments, from, until, arm),
       live,
     };
   }
@@ -793,14 +855,14 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * win `chosenTrace` would blank a lane whose real trace sits in the same
    * window — the identical symptom, one path over.
    *
-   * LIVE arm only (#1326), same discriminator as the universe arm above and as
+   * Scoped by `arm`, same discriminator as the universe leg above and as
    * `getVerdictHistory`/`getRiskCritics` (#1318): `0001_init.sql` declares
-   * `audit_log.trace_id TEXT NOT NULL` and no migration ever adds a
-   * `debate_id` column to this table (unlike `trader_log`/`debate_log`/
-   * `risk_critic_log`, which do), so `trace_id NOT LIKE` is both sufficient —
-   * there is no second discriminator to also filter on — and safe against a
-   * NULL `trace_id` silently dropping a row the old query kept, since no such
-   * row can exist.
+   * `audit_log.trace_id TEXT NOT NULL` and no migration ever adds a `debate_id` column to this
+   * table (unlike `trader_log`/`debate_log`/`risk_critic_log`, which do), so
+   * `trace_id`'s operator (`armLikeOperator`) is both sufficient — there is
+   * no second discriminator to also filter on — and safe against a NULL
+   * `trace_id` silently dropping a row the old query kept, since no such row
+   * can exist.
    *
    * This query's cut is not a `LIMIT` but the newest-wins `chosenTrace` fold
    * below, so the filter has to sit in `WHERE`, ahead of that fold, for the
@@ -853,10 +915,27 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * saying the leak fires on every tick: it fires only when the two arms'
    * exit-due state has diverged for that instrument somewhere in the window.
    *
-   * The filter removes control ROWS, not control-touched INSTRUMENTS: an
-   * instrument the live arm also attributed still renders its own live stage
-   * sequence, from its own live rows, once the control's are gone from the
-   * result set the fold sees.
+   * The filter removes the OTHER arm's ROWS, not the other-arm-touched
+   * INSTRUMENTS: an instrument the named arm also attributed still renders
+   * its own stage sequence, from its own rows, once the other arm's are gone
+   * from the result set the fold sees.
+   *
+   * ## Why parameterizing (#1594) needs no mirror of (a)/(b)/(c) for `arm: 'control'`
+   *
+   * (a)/(b)/(c) above are all shapes of ONE nesting direction: the control
+   * arm's `runInstrument` runs NESTED inside the live pass
+   * (`this.steps.controlArm`, awaited before `runExitCheckPass`) — never the
+   * other way around, per `tick-runner.ts` and `control-arm-wiring.ts`. A
+   * `arm: 'control'` request applies the SAME discriminator with the operator
+   * flipped (`trace_id LIKE '%:control'`), which removes every live row from
+   * the result set the fold sees before `chosenTrace` runs at all — there is
+   * no scenario where a live row, newer or not, reaches the fold to displace
+   * a control one, because live rows never pass the `WHERE` clause for that
+   * request. The asymmetric nesting direction is exactly why no mirrored
+   * (a')/(b')/(c') list is needed: the bug those cases describe is what
+   * happens when the OTHER arm's rows are visible to the fold at all, and
+   * filtering by `WHERE` prevents that symmetrically in both directions,
+   * regardless of which arm nests inside which.
    *
    * The `stage IN (…)` filter is not defensive tidiness: `audit_log.stage` is
    * unconstrained TEXT and the retired HITL Telegram callback wrote
@@ -873,6 +952,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
     laneInstruments: ReadonlySet<string>,
     fromIso: string,
     untilIso: string,
+    arm: TradingArm,
   ): PipelineStageEvent[] {
     if (laneInstruments.size === 0) {
       return [];
@@ -885,7 +965,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
           WHERE timestamp > ? AND timestamp <= ?
             AND instrument IS NOT NULL
             AND asset_class IS NOT NULL
-            AND trace_id NOT LIKE ?
+            AND trace_id ${armLikeOperator(arm)} ?
             AND stage IN (${stagePlaceholders})
           ORDER BY timestamp, rowid`,
       )
