@@ -146,13 +146,13 @@ function RiskCriticBody({ riskCritic }: { riskCritic: RiskCriticRow }) {
         <p
           className="empty-state"
           data-invalidation="no-conditions"
-          title="One state for four causes: none emitted, every one dropped, an unreadable column, or a row written before the fold."
+          title="One state for four causes: none emitted, all dropped, an unreadable column, or a row written before the fold."
         >
           <code>no_conditions</code> — nothing checkable; the prose verdict stands alone.
           <span className="visually-hidden">
             {' '}
-            One state for four causes: none emitted, every one dropped, an unreadable column, or a
-            row written before the fold.
+            One state for four causes: none emitted, all dropped, an unreadable column, or a row
+            written before the fold.
           </span>
         </p>
       ) : (

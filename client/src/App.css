@@ -539,6 +539,12 @@ main {
   font-variant-numeric: normal;
 }
 
+/* text-overflow: ellipsis only paints at the inline-end; a right-aligned
+   nowrap cell overflows and clips silently on the left instead. */
+.kv dd.kv-truncate {
+  text-align: left;
+}
+
 .kv-truncate,
 .stance-name,
 .fill-id {
