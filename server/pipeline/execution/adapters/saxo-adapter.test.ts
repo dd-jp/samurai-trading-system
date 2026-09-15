@@ -1010,6 +1010,23 @@ describe('SaxoBrokerAdapter.getOrder', () => {
     expect(client.cancelOrder).not.toHaveBeenCalled();
   });
 
+  it("keeps an activated leg pair filled when the master's terminal audit row carries a nonzero FillAmount — a terminal status alone must not be read as 'never filled' (#1215/#1426)", async () => {
+    const client = makeClient({
+      listOpenOrders: vi
+        .fn()
+        .mockResolvedValue([dormantLeg({ Status: 'Working' }), targetLeg({ Status: 'Working' })]),
+      listOrderActivities: vi
+        .fn()
+        .mockResolvedValue([activity({ Status: 'Cancelled', FillAmount: 2 })]),
+    });
+    const { adapter } = makeAdapter(client);
+
+    const order = await adapter.getOrder('key-3usl-0930', '3USL');
+
+    expect(order).toMatchObject({ order_state: 'filled', filled_qty: 3 });
+    expect(client.cancelOrder).not.toHaveBeenCalled();
+  });
+
   it('falls back to the audit trail for an order no longer open', async () => {
     const client = makeClient({
       listOrderActivities: vi

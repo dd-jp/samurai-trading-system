@@ -17,23 +17,29 @@
  *   entry can fill out of underneath it (#1216). What Saxo does to a
  *   `DayOrder` master's own related orders when it EXPIRES unfilled at
  *   session end, rather than being cancelled, is UNVERIFIED (#1215, probe
- *   tracked in #1426) — the adapter defends BOTH branches of that unknown
- *   without needing the answer: if Saxo leaves the legs `NotWorking` (parked,
- *   never activated), `findOpen` / `lookup` corroborate that read against the
- *   audit trail before cancelling (#1215 round 1), and so does `cancel` now,
- *   rather than journalling a phantom fill. A corroboration that never
- *   resolves (no terminal audit row ever lands) is paged, repeatedly, rather
- *   than deferred forever or cancelled without evidence (#1215 round 2 —
- *   `escalateIfStale`). If Saxo instead ACTIVATES the legs on expiry the same
- *   way it would on a genuine fill (`Working` on the book, indistinguishable
- *   from a real fill by `Status` alone), `lookup` corroborates that read too
+ *   tracked in #1426) — the adapter is written so that whichever branch Saxo
+ *   takes, recognizing it does not depend on the answer arriving first: if
+ *   Saxo leaves the legs `NotWorking` (parked, never activated), `findOpen` /
+ *   `lookup` corroborate that read against the audit trail before cancelling
+ *   (#1215 round 1), and so does `cancel` now, rather than journalling a
+ *   phantom fill. A corroboration that never resolves (no terminal audit row
+ *   ever lands) is paged, repeatedly, rather than deferred forever or
+ *   cancelled without evidence (#1215 round 2 — `escalateIfStale`). If Saxo
+ *   instead ACTIVATES the legs on expiry the same way it would on a genuine
+ *   fill (`Working` on the book, indistinguishable from a real fill by
+ *   `Status` alone), `lookup` corroborates that read too
  *   (`corroborateActivatedLegs`) — but asymmetrically: only a settled,
- *   terminal non-`Filled` master row downgrades it, since deferring on
- *   inconclusive evidence here would delay recognizing a position that may be
- *   genuinely live, which is worse than the phantom-fill risk being guarded
- *   against. Which of these two branches Saxo actually takes on a real
- *   session-boundary expiry is still unconfirmed — #1426 is the SIM probe
- *   that settles it.
+ *   terminal non-`Filled`, zero-`FillAmount` master row downgrades it, since
+ *   deferring on inconclusive evidence here would delay recognizing a
+ *   position that may be genuinely live, which is worse than the
+ *   phantom-fill risk being guarded against. That defense is itself
+ *   conditional on Saxo emitting such a row for this master at all — whether
+ *   it does is exactly what #1426 has yet to observe. If Saxo instead emits
+ *   nothing (or only a non-terminal row) for an expired-unfilled `Working`
+ *   master, this branch cannot distinguish that from a genuinely live
+ *   position and — by design — will not try to; it stays `filled`. Which of
+ *   these shapes Saxo actually produces on a real session-boundary expiry is
+ *   still unconfirmed — #1426 is the SIM probe that settles it.
  * - `IsOcoOrderSupported` is false on every pool line, so an entry-less
  *   protective pair cannot be expressed; `rearmProtectiveLegs` throws
  *   `ProtectiveRearmUnsupportedError` — a PERMANENT refusal, so the #549
@@ -1316,7 +1322,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
       if (open.ids.entry === undefined) {
         const verdict = await this.corroborateActivatedLegs(externalReference, lookbackMs);
         if (verdict.kind === 'expired') {
-          await this.cancelOrderIds(activatedLegIds(open.ids));
+          await this.cancelOrderIds(orderIdList(open.ids));
           this.clearDormantDefer(externalReference);
           return fromActivity(verdict.latest, externalReference);
         }
@@ -1419,18 +1425,30 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
    * would mean declining to recognize a position that may be live — delaying
    * fill ingestion, Risk's exposure view and flat-by-close — which is worse
    * than the phantom-fill risk this exists to catch. So only a SETTLED,
-   * TERMINAL non-`Filled` master row (the master expired, was cancelled, or
-   * was rejected — never filled) downgrades the read. A `Filled` row, any
-   * non-terminal row, or no row at all inside the lookback leaves today's
-   * `filled` reading — the VERIFIED (doc 43 round 2) genuine-fill path —
-   * unchanged, with no new defer/escalate/page exposure added to it.
+   * TERMINAL non-`Filled` master row that ALSO carries a zero `FillAmount`
+   * (the master expired, was cancelled, or was rejected — never filled, not
+   * even partially) downgrades the read. `activityState`'s terminal branches
+   * (`Cancelled`/`Expired`/`Rejected`) key off `Status`/`SubStatus` alone and
+   * ignore `FillAmount`, so a terminal row by itself cannot tell "never
+   * filled" apart from "filled some or all, then a terminal row landed" (a
+   * partial-fill residual cancelled at close; a `FinalFill` followed by a
+   * later `Cancelled` row for the same reference, since `latestActivityFor`
+   * picks the chronologically-latest row). A `Filled` row, a terminal row
+   * with a nonzero `FillAmount`, any non-terminal row, or no row at all
+   * inside the lookback leaves today's `filled` reading — the VERIFIED (doc
+   * 43 round 2) genuine-fill path — unchanged, with no new
+   * defer/escalate/page exposure added to it.
    */
   private async corroborateActivatedLegs(
     externalReference: string,
     lookbackMs: number,
   ): Promise<{ kind: 'confirmed' } | { kind: 'expired'; latest: SaxoOrderActivity }> {
     const latest = await this.latestActivityFor(externalReference, lookbackMs);
-    if (latest !== undefined && DEAD_STATES.has(activityState(latest))) {
+    if (
+      latest !== undefined &&
+      DEAD_STATES.has(activityState(latest)) &&
+      (latest.FillAmount ?? 0) === 0
+    ) {
       return { kind: 'expired', latest };
     }
     return { kind: 'confirmed' };
@@ -1540,15 +1558,6 @@ function dormantLegsUncorroborated(externalReference: string): SaxoBrokerProvide
     'audit trail answers nothing, so the protective legs cannot be corroborated either way — ' +
     'nothing was cancelled and no state is reported. The operator is paged while it persists.';
   return new SaxoBrokerProviderError(reason, undefined, 'DormantLegsUncorroborated', reason);
-}
-
-/**
- * The order ids of an activated-legs-no-master `LookedUpOrder` (`ids.entry`
- * absent) — what `lookup` cancels when `corroborateActivatedLegs` finds the
- * master's audit row terminal and not `Filled` (#1215/#1426).
- */
-function activatedLegIds(ids: OrderIds): string[] {
-  return [ids.stop, ids.target].filter((id): id is string => id !== undefined);
 }
 
 /** The bracket's protective legs as their own `listOpenOrders` rows, master excluded. */
