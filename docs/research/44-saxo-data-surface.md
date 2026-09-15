@@ -57,7 +57,8 @@ Ranked by what they cost us if we keep believing the current thing.
 ### 2.1 The pence bug has a first-class fix in the API — `PriceToContractFactor`
 
 [#1302](https://github.com/dd-jp/samurai-trading-system/issues/1302) records that Saxo reports
-GBX-quoted LSE lines as `GBP`, a 100× scale collision that reaches 17 of the pool's rows. That
+GBX-quoted LSE lines as `GBP`, a 100× scale collision that reaches 17 of the pool's rows *as of
+2026-09-08* — 18 by 2026-09-15, see §2.1b. That
 is true of `/ref/v1/instruments` (the *search* endpoint the pool was built from) and of
 `DisplayAndFormat.Currency` on `infoprices`. It is **not** true of instrument details.
 
@@ -75,7 +76,8 @@ So the quote unit is knowable, per instrument, from the venue itself. The invari
 LQQ3's quote of 31151 is 31151 GBX = **£311.51**, not £31,151.00 and not £311.51-by-guesswork.
 This turns #1302 from "we must hand-maintain a GBX flag on 17 pool rows" into "read one field at
 resolve time, and never trust `CurrencyCode` or `DisplayAndFormat.Currency` alone." Hand-
-maintained flags would have gone stale the moment a row was added; this does not.
+maintained flags would have gone stale the moment a row was added; this does not. (A row *was*
+added the next day, by unrelated work — §2.1b.)
 
 ### 2.1a The details envelope, the fields around the factor, and the ORDER-price unit
 
@@ -237,6 +239,22 @@ The drift is in a key the adapter does not read — every field `saxoInstrumentR
 and `validateInstrumentDetails` require is in the list above and carries the same value as before.
 It is recorded because a reference endpoint that grows a field silently can shrink one the same
 way, and the resolver fails closed on `PriceToContractFactor` going missing.
+
+#### The pool's GBX row count moved 17 → 18, which is the staleness argument happening
+
+§2.1 above (and #1302's body) says the collision reaches **17** of the pool's rows. Today it is
+**18**. The basis is the same field both times — all 18 hits are `EtpPoolRow.currency` and none is
+the nested `SaxoInstrumentLine.currency` — so this is a real change, not two different counts. It
+is one row, and `git` names it: 17 at `b62c2d9c` (the last pool commit before the ticket) and
+still 17 at `e9fb2529` (the fix itself), then 18 at `13ae9499`, which adds `lse_ticker: '3LUS'`
+with `currency: 'GBX'` as [#1220](https://github.com/dd-jp/samurai-trading-system/issues/1220)'s
+sterling-only fallback slot.
+
+So the number was correct when written and went stale nine days later, from a commit on an
+unrelated ticket that never touched the unit question. That is the concrete instance of the
+argument §2.1 makes for reading `PriceToContractFactor` at resolve time instead of maintaining a
+GBX flag by hand: the flag's population drifts under work that has no reason to think about it.
+Cite the count as "17 as of 2026-09-08" or re-measure — do not carry a bare number forward.
 
 #### The live gateway is still unreachable — 401, and the refresh token is dead too
 
