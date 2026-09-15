@@ -68,6 +68,7 @@ export type {
   ExecutionResult,
   FillIngestInput,
   ReconcileDivergence,
+  ReconcileEscalation,
   ReconcileInput,
   ReconcileReport,
   ResidualProtectionSweepResult,

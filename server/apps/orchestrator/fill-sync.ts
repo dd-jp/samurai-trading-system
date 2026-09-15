@@ -167,15 +167,22 @@ function reconcileDivergenceLevel(divergence: ReconcileDivergence): LogLevel {
 }
 
 /**
- * `lastReconcileAction`'s comparison value (#1577). `action` alone collapses
- * `cancelWedgedFlatten`'s escalated cancel onto the benign flatten adopt that
- * precedes it in the same episode — both are `action: 'adopted'`, differing
- * only in `reason` — so a row that already logged the benign line never logs
- * the escalation. Folding `escalated` in gives the two states distinct
- * dedup values without widening `action` itself.
+ * `lastReconcileAction`'s comparison value (#1577, widened #1585). `action`
+ * alone collapses two different rows onto one dedup state: `cancelWedgedFlatten`'s
+ * escalated cancel shares `action: 'adopted'` with the benign flatten adopt one
+ * pass earlier, and `cancelNeverConfirmedFlatten`'s three blocking outcomes all
+ * share `action: 'undetermined'` with the SAME row's own prior-pass state
+ * (reconcile.ts) — in both cases differing only in `reason`, which this
+ * function does not compare. Folding the named `escalation` in (rather than a
+ * bare boolean, #1585) gives every one of those four events its own dedup
+ * value, distinct from the benign action AND from each other — a row cancelled
+ * and still short of coverage is not the same fact as the same row merely
+ * throttled from an earlier cancel.
  */
 function reconcileDedupState(divergence: ReconcileDivergence): string {
-  return divergence.escalated ? `${divergence.action}:escalated` : divergence.action;
+  return divergence.escalation
+    ? `${divergence.action}:${divergence.escalation}`
+    : divergence.action;
 }
 
 /**

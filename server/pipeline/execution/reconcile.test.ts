@@ -938,10 +938,10 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
 
     expect(broker.cancelCalls).toEqual([{ client_order_id: FLATTEN_KEY, instrument: 'AAPL' }]);
     expect(report.divergences[0]?.reason).toContain('CANCELLED');
-    // #1577: `escalated` is what lets `runPoll`'s dedup (fill-sync.ts) tell
+    // #1577: `escalation` is what lets `runPoll`'s dedup (fill-sync.ts) tell
     // this apart from the benign adopt it shares `action: 'adopted'` with.
     expect(report.divergences[0]?.action).toBe('adopted');
-    expect(report.divergences[0]?.escalated).toBe(true);
+    expect(report.divergences[0]?.escalation).toBe('wedge_cancelled');
     expect(alerts).toHaveLength(1);
     expect(alerts[0]?.idempotency_key).toBe(FLATTEN_KEY);
 
@@ -964,11 +964,11 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     const report = await new ExecutionImpl(makeInput(store, broker)).reconcile();
 
     expect(broker.cancelCalls).toEqual([]);
-    // #1577: the benign adopt this row still produces must NOT carry
-    // `escalated` — that is what lets `runPoll`'s dedup (fill-sync.ts) log a
+    // #1577: the benign adopt this row still produces must NOT carry an
+    // `escalation` — that is what lets `runPoll`'s dedup (fill-sync.ts) log a
     // later escalation on the same row as a distinct episode.
     expect(report.divergences[0]?.action).toBe('adopted');
-    expect(report.divergences[0]?.escalated).toBeUndefined();
+    expect(report.divergences[0]?.escalation).toBeUndefined();
   });
 
   it('does NOT cancel a row the venue already reports terminal — there is nothing working to cancel', async () => {
@@ -1108,7 +1108,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     neverConfirmed(broker, 6);
     const alerts: FlattenReconcileAlert[] = [];
 
-    await new ExecutionImpl(
+    const report = await new ExecutionImpl(
       makeInput(store, broker, {
         postFlattenReconcileAlert: async (alert) => {
           alerts.push(alert);
@@ -1118,6 +1118,13 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
 
     expect(broker.cancelCalls).toHaveLength(1);
     expect(alerts[0]?.reason).toContain('attribute them by hand');
+    // #1585: shares `action: 'undetermined'` with the row's own prior-pass
+    // state — `escalation` is what keeps `runPoll`'s dedup (fill-sync.ts) from
+    // folding this away as a repeat of a state that was never actually seen.
+    expect(
+      report.divergences.find((divergence) => divergence.idempotency_key === FLATTEN_KEY)
+        ?.escalation,
+    ).toBe('never_confirmed_coverage_short');
     expect((await store.getUnresolvedFlattens()).map((row) => row.idempotency_key)).toEqual([
       FLATTEN_KEY,
     ]);
@@ -1262,9 +1269,14 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
 
     const report = await new ExecutionImpl(makeInput(store, broker)).reconcile();
 
-    expect(
-      report.divergences.find((divergence) => divergence.idempotency_key === FLATTEN_KEY)?.reason,
-    ).toContain('cancel FAILED');
+    const divergence = report.divergences.find(
+      (candidate) => candidate.idempotency_key === FLATTEN_KEY,
+    );
+    expect(divergence?.reason).toContain('cancel FAILED');
+    // #1585: distinct from `never_confirmed_coverage_short` — a cancel that
+    // never reached the venue is a different fact than one that did but found
+    // the venue short of coverage, even though both are `action: 'undetermined'`.
+    expect(divergence?.escalation).toBe('never_confirmed_cancel_failed');
     expect((await store.getUnresolvedFlattens()).map((row) => row.idempotency_key)).toEqual([
       FLATTEN_KEY,
     ]);
@@ -1564,6 +1576,37 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     expect((await store.getUnresolvedFlattens()).map((row) => row.idempotency_key)).toEqual([
       FLATTEN_KEY,
     ]);
+  });
+
+  /**
+   * #1585: the never-confirmed row's OWN throttled re-entry — a second pass
+   * inside `FLATTEN_CANCEL_RETRY_EVERY_MS` that does not re-cancel. Still
+   * `action: 'undetermined'`, same as the row's own first pass, so this is the
+   * shape #1585 fixed: without a distinguishing `escalation`, `runPoll`'s
+   * dedup (fill-sync.ts) would fold this away as a repeat of a state nobody
+   * ever escalated.
+   */
+  it('marks a never-confirmed flatten throttled from re-cancelling as its own distinct escalation', async () => {
+    const { store } = openTestExecutionStore();
+    await heldLot(store, 10);
+    await writeAheadFlatten(store, {
+      submitted_at: new Date(NOW.getTime() - (UNRESOLVABLE_FLATTEN_MAX_AGE_MS + 1)),
+    });
+    const broker = makeBroker();
+    // Coverage short (not the full-coverage release case) so the row is still
+    // blocking, with `cancel_attempted_at` set, going into the second pass.
+    neverConfirmed(broker, 6);
+    const input = makeInput(store, broker);
+
+    await new ExecutionImpl(input).reconcile();
+    const second = await new ExecutionImpl(input).reconcile();
+
+    expect(broker.cancelCalls).toHaveLength(1);
+    const divergence = second.divergences.find(
+      (candidate) => candidate.idempotency_key === FLATTEN_KEY,
+    );
+    expect(divergence?.action).toBe('undetermined');
+    expect(divergence?.escalation).toBe('never_confirmed_throttled');
   });
 
   /**

@@ -391,6 +391,23 @@ export interface ExecutionResult {
  * distinguishing convention `unrecorded`'s `idempotency_key: ''` already
  * uses below.
  */
+
+/**
+ * The specific escalation event behind a `ReconcileDivergence.escalation`
+ * (#1577, widened #1585) — see that field's doc for why a named event replaced
+ * a bare boolean. `wedge_cancelled` is the one label `cancelWedgedFlatten`'s
+ * branch sets regardless of which of its own three outcomes (throttled,
+ * cancel-failed, cancel-issued) produced it — those three stay collapsed
+ * under one name, unlike the three below, which each get their own; the
+ * other three are `cancelNeverConfirmedFlatten`'s (reconcile.ts), in the
+ * order that function tries them.
+ */
+export type ReconcileEscalation =
+  | 'wedge_cancelled'
+  | 'never_confirmed_throttled'
+  | 'never_confirmed_cancel_failed'
+  | 'never_confirmed_coverage_short';
+
 export interface ReconcileDivergence {
   idempotency_key: string;
   instrument: string;
@@ -433,16 +450,19 @@ export interface ReconcileDivergence {
   /** Operator-facing detail — the adapter's error on `undetermined`. */
   reason: string;
   /**
-   * Set only by `reconcileFlatten`'s `cancelWedgedFlatten` escalation
-   * (reconcile.ts) — a flatten past `UNRESOLVABLE_FLATTEN_MAX_AGE_MS` whose
-   * cancel has just been issued at the venue. That return shares
-   * `action: 'adopted'` with the benign adopt reached one branch above it
-   * (they differ only in `reason`), so `runPoll`'s dedup (fill-sync.ts) folds
-   * this into the state it compares — otherwise the escalation never gets
-   * its own line once the benign adopt has already logged for the episode
-   * (#1577).
+   * Which escalation produced this row, when one did — #1577 named
+   * `wedge_cancelled` (a `reconcileFlatten` benign adopt shares
+   * `action: 'adopted'` with `cancelWedgedFlatten`'s cancel-issued adopt one
+   * branch below it), #1585 added the other three: `cancelNeverConfirmedFlatten`
+   * shares `action: 'undetermined'` with the row's own prior-pass state on
+   * every one of its blocking outcomes (reconcile.ts). Naming the event rather
+   * than a bare `escalated: true` boolean is what lets `runPoll`'s dedup
+   * (fill-sync.ts) tell these apart from the benign action they share AND from
+   * each other — a row cancelled once, still short of coverage, is a different
+   * fact than the same row still throttled from an earlier cancel, even though
+   * both are `action: 'undetermined'`.
    */
-  escalated?: true;
+  escalation?: ReconcileEscalation;
   /**
    * `'bracket'` for a `reconcileLot` row, keyed to an `OpenPosition`.
    * `'flatten'` for a `reconcileFlatten` row. `'unrecorded'` for
