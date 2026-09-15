@@ -32,7 +32,7 @@ import type { ProductionOrchestrator } from './production.js';
 /**
  * `missingCredentialEnvVars` reads `savedSessionExists(tokenFilePath('sim'))`
  * against the REAL filesystem (#1523) — a developer machine with a live
- * `yarn saxo:login` session on disk (`data/saxo-tokens/sim.json`, gitignored)
+ * `npm run saxo:login` session on disk (`data/saxo-tokens/sim.json`, gitignored)
  * flips the saved-session branch underneath every test below that exercises
  * the `saxo` venue without injecting a broker, independent of what that test
  * sets up. Pinned false here so those tests assert on the no-saved-session

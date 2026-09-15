@@ -593,7 +593,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
     // kept writing to the now-nameless inode, so nothing appeared broken until
     // a restart would have dropped the whole session, and `llm_spend` (the
     // table ADR-0008's $50 cap is measured over) reset to zero with it. Any
-    // `yarn test` — including the one inside `yarn precommit` — was enough.
+    // `npm run test` — including the one inside `npm run precommit` — was enough.
     //
     // Relocating the cwd rather than the assertion is deliberate: what is under
     // test is that the path is derived from SAMURAI_MODE and not NODE_ENV, and

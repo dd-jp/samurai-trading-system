@@ -326,7 +326,7 @@ export function buildSaxoVenueClient(
 /**
  * Where the run's Saxo bearer comes from (#1523), in strict precedence:
  *
- * 1. **A saved `yarn saxo:login` session** (`data/saxo-tokens/<env>.json`) —
+ * 1. **A saved `npm run saxo:login` session** (`data/saxo-tokens/<env>.json`) —
  *    the refresher, which rotates the refresh token before its window closes
  *    and reports the session lost when it cannot. A file that is present but
  *    expired or unreadable still takes this branch and still reports lost: a
@@ -375,7 +375,7 @@ export function buildSaxoTokenSource(
         : { sessionLostAlerts: deps.sessionLostAlerts }),
     });
     // Primed HERE rather than on the first order: an expired or unreadable
-    // saved session is an operator problem (`yarn saxo:login` again), and a
+    // saved session is an operator problem (`npm run saxo:login` again), and a
     // boot that stays silent about it defers the news to the first trade of
     // the session. Not a throw — the precedence above deliberately keeps a
     // lost refresher instead of falling back to an unrenewable bearer, and
@@ -410,7 +410,7 @@ export function buildSaxoTokenSource(
   }
   throw new Error(
     `Orchestrator cannot start: the Saxo ${environment} venue has no bearer. Run ` +
-      `\`yarn saxo:login --env ${environment}\` once to save a refreshable session at ${path}, ` +
+      `\`npm run saxo:login -- --env ${environment}\` once to save a refreshable session at ${path}, ` +
       `or set ${names.token} to a portal token for a single short run.`,
   );
 }
@@ -420,7 +420,7 @@ function assertSaxoVenueBootable(deps: SaxoVenueDeps): void {
     throw new Error(
       `Orchestrator cannot start: ${BROKER_VENUE_ENV_VAR}=saxo was selected with ` +
         'SAMURAI_MODE=live. The Saxo venue is wired against the SIM gateway only: the ' +
-        "live-money gates (yarn check:live-gates) are open, and #949's currency-mismatch " +
+        "live-money gates (npm run check:live-gates) are open, and #949's currency-mismatch " +
         'refusal is lifted only by a same-currency account read (#1509 wires ' +
         'GET /port/v1/balances/me for that) whose currency has never been observed on the live ' +
         'UK GIA. Run it with SAMURAI_MODE=paper, or leave the venue unset to run ' +

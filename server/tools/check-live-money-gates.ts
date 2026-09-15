@@ -23,7 +23,7 @@
  *    this repo and every job fails in ~3s with 0 steps.
  *
  * So this file is deliberately NOT wired into `lint`, `typecheck`, `test` or
- * `smoke`. It is invoked by a human — `yarn check:live-gates` — and the operator
+ * `smoke`. It is invoked by a human — `npm run check:live-gates` — and the operator
  * is told to invoke it by the live-boot warning itself, which names the command.
  * That keeps the suite deterministic while making the staleness cheap to settle
  * instead of invisible.
@@ -32,7 +32,7 @@
  *
  * `checkLiveMoneyGates` takes the state lookup as an argument. The default
  * lookup shells out to `gh`; the tests inject a stub, so nothing under
- * `yarn test` touches the network. The `gh` call happens only under `isMain`.
+ * `npm run test` touches the network. The `gh` call happens only under `isMain`.
  */
 
 import { execFile } from 'node:child_process';

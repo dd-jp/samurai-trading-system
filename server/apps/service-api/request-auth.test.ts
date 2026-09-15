@@ -2,7 +2,7 @@
  * TDD for #1038: `isAuthorizedRequest` must refuse a request lacking a valid
  * bearer token once `SAMURAI_DASHBOARD_TOKEN` is configured, and must NOT
  * refuse any request when no credential is configured — that regression
- * would brick the default `yarn dashboard` path this repo runs today. See
+ * would brick the default `npm run dashboard` path this repo runs today. See
  * `request-auth.ts`'s header for the full design (scope, host-agnosticism,
  * the constant-time approach).
  *

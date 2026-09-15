@@ -41,11 +41,11 @@
  * ## What this is for
  *
  * Before #350 there was no way to run the pipeline **as a process** without
- * live credentials. `yarn orchestrator` needs Alpaca + Anthropic keys, spends
+ * live credentials. `npm run orchestrator` needs Alpaca + Anthropic keys, spends
  * money per debate round, and depends on live market conditions to reach an
  * interesting branch — observed with dummy credentials it reaches
  * `analysts: quorum_skip` on tick 1 and goes no further, so every stage after
- * Analysts is unexercised at process level. `yarn test`'s
+ * Analysts is unexercised at process level. `npm run test`'s
  * `composed tick chain (integration)` case does drive one instrument through
  * all six steps, but inside vitest with hand-built parts: it proves the stage
  * wiring, not the shipped binary's composition root, timers, shutdown path,
@@ -85,9 +85,9 @@
  * omission from the real entrypoint**:
  *
  * - This is a separate module with its own entrypoint guard and its own npm
- *   script (`yarn smoke`). `orchestrator/index.ts` does not import it, and it
+ *   script (`npm run smoke`). `orchestrator/index.ts` does not import it, and it
  *   is not on the package's export surface, so no path from
- *   `yarn orchestrator` can select fixtures or the simulated broker.
+ *   `npm run orchestrator` can select fixtures or the simulated broker.
  * - `mode` is hard-coded to `'paper'`. `SAMURAI_MODE` is never read, so this
  *   process cannot be steered towards `live`.
  * - The Alpaca wire client is injected as `UnreachableAlpacaClient`, which
@@ -561,7 +561,7 @@ function smokePolymarketClient(): PolymarketClient {
 
 /**
  * The instant the whole run is frozen at — clock, bars, mark and quote alike.
- * A fixed literal rather than `new Date()` so two runs of `yarn smoke` produce
+ * A fixed literal rather than `new Date()` so two runs of `npm run smoke` produce
  * identical fixtures and identical decisions.
  *
  * **2026-08-17 (#738) — this instant is NOT inside US equity regular hours**
@@ -2278,7 +2278,7 @@ interface ExitPathScenarioContext {
  * when the restart's own sweep found nothing left to do — see
  * `findSweepDivergence`, above `runExitPathScenarios`, and its own test
  * coverage, #1285) actually discriminate — this type only moves that failure
- * from `yarn smoke` to `yarn typecheck` for these three functions
+ * from `npm run smoke` to `npm run typecheck` for these three functions
  * specifically.
  */
 type PostSweepScenarioContext = Omit<ExitPathScenarioContext, 'execution'>;
@@ -3335,7 +3335,7 @@ export interface EntrypointFaultGuardEvidence {
  * A stdout/stderr stand-in with the same "throw when nothing subscribed"
  * trick as `BreakablePipe.breakPipe` above (#714): a mutation that stops
  * calling `watchStdoutErrors` on either stream inside `watchDashboardStdout` /
- * `watchSupervisorStdout` makes this throw, which aborts `yarn smoke` loudly
+ * `watchSupervisorStdout` makes this throw, which aborts `npm run smoke` loudly
  * rather than passing the gate silently. Also implements `write`, since the
  * same object stands in for stderr (the reporting channel) as well as stdout.
  */
@@ -4489,7 +4489,7 @@ export function runArmComparisonProbe(db: StoreHandle): ArmComparisonEvidence {
  * #971. Runs against the same store the observations are read from, after
  * `orchestrator.stop()`: the tape has to be complete before the comparison is
  * taken over it. The FL timer is 24h, so without this the whole path could be
- * deleted from `production.ts` and every unit test — and `yarn smoke` — would
+ * deleted from `production.ts` and every unit test — and `npm run smoke` — would
  * stay green.
  */
 const armComparisonProbe: Probe<'armComparison'> = {
@@ -4787,7 +4787,7 @@ async function runDataFailoverScenario(logger: Logger): Promise<DataFailoverEvid
  * #562. Its own composition root and cold in-memory store: the main run
  * injects a fixture data source, so the root's `config.dataSource ??` seam
  * short-circuits the failover there, and deleting the entire
- * `buildFailoverDataSource` call site would otherwise leave `yarn smoke` green.
+ * `buildFailoverDataSource` call site would otherwise leave `npm run smoke` green.
  */
 const dataFailoverProbe: Probe<'dataFailover'> = {
   run({ logger }) {
@@ -5075,7 +5075,7 @@ class AnalystDebugRecorder implements Logger {
  * timeout's cause is unrecoverable by construction at the point it is
  * detected (see `withTimeout`'s doc comment in `pipeline/analysts/
  * orchestrator.ts`) — proving THAT path fired for real here would mean
- * waiting out a genuine multi-second deadline inside every `yarn smoke` run
+ * waiting out a genuine multi-second deadline inside every `npm run smoke` run
  * for a probe that cannot assert anything a fake-timer unit test
  * (`orchestrator.test.ts`, "failure cause logging (#1114)") doesn't already
  * mutation-test more cheaply. The non-timeout half is the one this gate CAN
@@ -5259,7 +5259,7 @@ class FilledZeroSizeWarningRecorder implements Logger {
  * shape. Same shape as `filled-zero-size-wiring.test.ts`'s `WedgingBroker`,
  * which proves a DIFFERENT property (the throttle is SHARED across two
  * surfaces built from one `executionDeps`) against the composition root
- * directly; this class exists to drive the same wedge through `yarn
+ * directly; this class exists to drive the same wedge through `npm run
  * smoke`'s own gate instead.
  *
  * `SimulatedBrokerAdapter` cannot produce this post-#1087 — it now stamps
@@ -5873,7 +5873,7 @@ export interface LlmSpendCapEvidence {
  *
  * Found by mutation, not by argument: with the rate-limiter snapshot optional,
  * deleting the one line in `runSmoke` that passed it left its check vacuously
- * true — `yarn smoke` exited 0 and the whole suite stayed green. A backstop
+ * true — `npm run smoke` exited 0 and the whole suite stayed green. A backstop
  * that can be switched off by omitting an argument is the no-caller defect
  * class (#327, #364, #366, #371, #374, #379, #388, #432, #433 — each a
  * complete, tested mechanism with no production caller, invisible to unit
@@ -6768,7 +6768,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
 
     // Every `ALERT_CHANNEL_FIELDS` member (alert-transport.ts), typed as
     // `Required<AlertChannels>` so a future field added to `AlertChannelSlots`
-    // (production/config.ts) and to `ALERT_CHANNEL_FIELDS` fails `yarn
+    // (production/config.ts) and to `ALERT_CHANNEL_FIELDS` fails `npm run
     // typecheck` HERE, at the smoke run's own injection site, if this object
     // is not updated to match — rather than waiting for a developer to
     // notice `SAMURAI_ALERTS` is suddenly demanded of a clean checkout
@@ -6937,7 +6937,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
     } satisfies Required<AlertChannels>;
 
     const orchestrator = await startFromEnvironment({
-      // The same checked-in tuning values `yarn orchestrator` runs on, at the
+      // The same checked-in tuning values `npm run orchestrator` runs on, at the
       // same `mode: 'paper'` — so the HITL gate resolves through
       // `automation_level: 'auto'` exactly as it will during the soak.
       // `mode: 'backtest'` was the alternative and was rejected deliberately:
@@ -7142,7 +7142,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
   }
 }
 
-// Entrypoint guard, matching orchestrator/index.ts's. `yarn smoke` runs this
+// Entrypoint guard, matching orchestrator/index.ts's. `npm run smoke` runs this
 // file directly; importing it (from its own test) must not start a run.
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {

@@ -36,7 +36,7 @@ import type {
   ArmDivergenceVerdict,
 } from './types/arm-comparison.js';
 
-/** Same 30-day default window `yarn report:arms` uses (`DEFAULT_WINDOW_DAYS`). */
+/** Same 30-day default window `npm run report:arms` uses (`DEFAULT_WINDOW_DAYS`). */
 export const DEFAULT_ARM_COMPARISON_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**

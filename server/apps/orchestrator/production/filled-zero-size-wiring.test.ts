@@ -29,7 +29,7 @@
  *
  * **#1125 closed that gap with a second, dedicated broker/harness surface**
  * (`SmokeWedgedLotBroker`/`runFilledZeroSizeWedgeScenario`, smoke-run.ts),
- * so `yarn smoke` itself now fails if the warning path regresses — this file
+ * so `npm run smoke` itself now fails if the warning path regresses — this file
  * is no longer the only thing standing between a deleted mechanism and an
  * all-green suite. It stays, proving a DIFFERENT property #1125's scenario
  * does not: that `production.ts`'s `executionDeps.filledZeroSizeThrottle` is

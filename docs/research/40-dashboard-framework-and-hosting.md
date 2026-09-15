@@ -202,7 +202,7 @@ build. `vite build` *"bundles your code using Rolldown and generates optimized s
 
 *Added* — `vite`, `@vitejs/plugin-react`, `react`, `react-dom` as devDependencies (React and
 ReactDOM end up compiled into `dist/`, so they add **zero runtime `node_modules` dependencies** —
-the built artifact is bytes on disk). One new build step: `yarn build` gains a `vite build`
+the built artifact is bytes on disk). One new build step: `npm run build` gains a `vite build`
 alongside `tsc`. `vitest` is already here and is Vite-native, so the test runner does not change.
 
 *Deleted* —
@@ -441,7 +441,7 @@ Sequenced:
    auth layer.
 2. **Add a static-file route to `server.ts`.** Required by break point (1) under every option,
    including doing nothing else. This alone unblocks persona imagery.
-3. **Introduce Vite + React** as devDependencies; `yarn build` gains `vite build`; `server.ts`
+3. **Introduce Vite + React** as devDependencies; `npm run build` gains `vite build`; `server.ts`
    serves `dist/`. Port `pipeline-view.ts` to components and **delete `PIPELINE_VIEW_CLIENT_SOURCE`,
    its 16 `.toString()` entries, and the `<script>` block of `html.ts`.** Runtime dependencies
    stay at one (`better-sqlite3`).

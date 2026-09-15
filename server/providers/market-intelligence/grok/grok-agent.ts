@@ -271,7 +271,7 @@ export class GrokAgent {
    * agent called the provider" are different claims, and only the second one
    * costs money or produces data.
    *
-   * NOT covered by `yarn smoke`, despite what an earlier version of this
+   * NOT covered by `npm run smoke`, despite what an earlier version of this
    * comment claimed. The smoke run is offline and keyless, so the composition
    * root never builds a `GrokAgent` at all (`production.ts` needs Nous
    * credentials before it constructs one, and `SAMURAI_SENTIMENT=off` skips it

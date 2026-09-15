@@ -218,7 +218,7 @@ describe('bundleDiagnostic', () => {
     const message = bundleDiagnostic(join(parent, 'never-built'));
     expect(message).toContain('Dashboard bundle not found');
     expect(message).toContain(join(parent, 'never-built', 'index.html'));
-    expect(message).toContain('yarn build');
+    expect(message).toContain('npm run build');
   });
 
   it('catches the Vite SOURCE template, which an existence check passes (PR #597)', async () => {
@@ -557,7 +557,7 @@ describe('dashboard server — bundle not built', () => {
     const body = await r.text();
     expect(body).toContain('Dashboard bundle not found');
     expect(body).toContain(join(parent, 'never-built', 'index.html'));
-    expect(body).toContain('yarn build');
+    expect(body).toContain('npm run build');
   });
 
   it('still serves GET /api/snapshot — a missing page must not take the JSON down', async () => {
@@ -571,7 +571,7 @@ describe('dashboard server — bundle not built', () => {
  * #887/ADR-0019: `createDashboardServer` must itself enforce the conjunctive
  * bind guard (`bind-guard.ts`), not merely offer it as a function nothing
  * calls — the composition, not the pure predicate, is what actually protects
- * a real `yarn dashboard`. `bind-guard.test.ts` covers the predicate's own
+ * a real `npm run dashboard`. `bind-guard.test.ts` covers the predicate's own
  * truth table directly; these three cases prove the wiring at the boundary
  * every caller (`index.ts`, `fixture-server.ts`) actually goes through.
  *

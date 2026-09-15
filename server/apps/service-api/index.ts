@@ -53,7 +53,7 @@ watchDashboardStdout();
  *
  * Stdout-only, and deliberately NOT `buildEntrypointLogger`: that opens a
  * `RotatingFileSink` on `SAMURAI_LOG_FILE`, and this process runs ALONGSIDE
- * the orchestrator under `yarn serve`. Two processes rotating the same file
+ * the orchestrator under `npm run serve`. Two processes rotating the same file
  * race each other's renames, which is a way to lose the durable trace the file
  * exists to hold — a worse outcome than the one being fixed. The supervisor
  * captures this process's stdout, so these lines still land on disk; they just
@@ -147,7 +147,7 @@ const bundleRoot = fileURLToPath(new URL('../../../client/', import.meta.url));
  * away the operator's view of an live trading system to punish a missing UI
  * build — and would take the supervisor's whole process group down with it
  * (`server/apps/supervisor/supervisor.ts` stops the orchestrator when the dashboard dies),
- * so a forgotten `yarn build:web` would halt trading. That is the same
+ * so a forgotten `npm run build:web` would halt trading. That is the same
  * priority ordering the Alpaca tile below already follows: a degraded view
  * beats no view. The 503 on the page and this log say the same words.
  */
@@ -197,7 +197,7 @@ const providers = new ProviderStatusPoller({ alpaca: buildAlpacaClient() });
  * `docs/coding-standards.md`, "Environment variables"). Normalized the same
  * way `alert-transport.ts`'s `requireEnv` normalizes it for the orchestrator
  * (trimmed, empty-as-unset) so the two processes — which load the same
- * `.env.local` under `yarn serve`/`yarn dashboard` — agree on what counts as
+ * `.env.local` under `npm run serve`/`npm run dashboard` — agree on what counts as
  * "configured".
  *
  * Absent is a real, common state: it is exactly what `SAMURAI_ALERTS=log-only`

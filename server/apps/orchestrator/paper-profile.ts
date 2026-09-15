@@ -1,7 +1,7 @@
 /**
  * The checked-in **paper starting profile** (ticket #323) — the eight
  * per-stage config objects `REQUIRED_INJECTED_CONFIG` demands, so that
- * `yarn orchestrator` reaches a running tick loop instead of throwing at the
+ * `npm run orchestrator` reaches a running tick loop instead of throwing at the
  * seams guard — plus, since #366, the optional ninth: the Feedback Loop's
  * `FeedbackConfig`.
  *

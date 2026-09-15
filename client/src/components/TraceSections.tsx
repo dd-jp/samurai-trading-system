@@ -35,7 +35,7 @@ export function Timeline({ cells }: { cells: readonly ResolvedCell[] }) {
           return (
             <li key={cell.stage} className="timeline-row" data-stage={cell.stage}>
               <span className="timeline-stage">{stageName(cell.stage)}</span>
-              <span className="muted">no cell for this stage on the wire</span>
+              <span className="muted">no cell on the wire</span>
             </li>
           );
         }
@@ -68,14 +68,14 @@ export function Timeline({ cells }: { cells: readonly ResolvedCell[] }) {
 }
 
 function bindingConstraintText(constraint: string | null): string {
-  if (constraint === null) return 'no binding constraint recorded — no gate named one';
+  if (constraint === null) return 'no binding constraint — no gate named one';
   if (constraint === 'risk_critic:invalidated') {
-    return `bound by ${constraint} — Risk rejected on a MEASURED breach of a condition below, not on the critic's argument`;
+    return `${constraint} — measured breach of a condition below`;
   }
   if (constraint === 'risk_critic:reject') {
-    return `bound by ${constraint} — Risk rejected on the critic's PROSE verdict; no measured breach decided it`;
+    return `${constraint} — critic's prose verdict, no measured breach`;
   }
-  return `bound by ${constraint}`;
+  return constraint;
 }
 
 /**
@@ -90,10 +90,10 @@ function bindingConstraintText(constraint: string | null): string {
 function criticVerdictText(row: RiskCriticRow, isControl: boolean): string {
   if (isControl) return CONTROL_NO_CRITIC;
   if (row.critic_verdict === null) {
-    return 'no critic verdict recorded — the critic was skipped, or this decision links to no debate';
+    return 'no critic verdict — skipped, or no linked debate';
   }
   if (row.critic_verdict === 'unavailable') {
-    return 'critic unavailable — consulted and could not answer, so the mechanical checks alone decided this';
+    return 'critic could not answer — mechanical checks alone decided';
   }
   return row.reasoning === null ? `critic ${row.critic_verdict}` : row.reasoning;
 }
@@ -122,8 +122,8 @@ export function GatesSection({ riskCritic, verdict, keyedBy, isControl }: GatesS
       {riskCritic === undefined ? (
         <p className="empty-state" data-invalidation="no-decision">
           {keyedBy.by === 'trace_id'
-            ? "No Risk decision for this trace in the snapshot's recent-decisions window — a tick that never reached Risk records none, and older ones age out of the list."
-            : "No Risk decision keyed to this trade's debate in the snapshot's recent-decisions window."}
+            ? 'No Risk decision for this trace in the recent-decisions window — never reached Risk, or aged out.'
+            : "No Risk decision keyed to this trade's debate in the recent-decisions window."}
         </p>
       ) : (
         <RiskCriticBody riskCritic={riskCritic} isControl={isControl} />
@@ -161,10 +161,17 @@ function RiskCriticBody({
         <span>{criticVerdictText(riskCritic, isControl)}</span>
       </p>
       {conditions.length === 0 ? (
-        <p className="empty-state" data-invalidation="no-conditions">
-          <code>no_conditions</code> — nothing checkable came out of this pass, so the conditions
-          enforced nothing and the prose verdict stands on its own. One state for all four causes:
-          none emitted, every one dropped, an unreadable column, and a row written before the fold.
+        <p
+          className="empty-state"
+          data-invalidation="no-conditions"
+          title="One state for four causes: none emitted, all dropped, an unreadable column, or a row written before the fold."
+        >
+          <code>no_conditions</code> — nothing checkable; the prose verdict stands alone.
+          <span className="visually-hidden">
+            {' '}
+            One state for four causes: none emitted, all dropped, an unreadable column, or a row
+            written before the fold.
+          </span>
         </p>
       ) : (
         <ul className="condition-list">
@@ -219,7 +226,7 @@ export function DebateSection({ debate, inFlight, linkedBy, isControl }: DebateS
         {isControl
           ? CONTROL_NO_DEBATE
           : inFlight
-            ? 'This tick is in flight — round-by-round state is not persisted (decision #10), so there is nothing to show until the debate completes.'
+            ? 'Tick in flight — rounds are not persisted (decision #10); shown once the debate completes.'
             : 'No completed debate recorded for this instrument in the recent-debates window.'}
       </p>
     );
@@ -232,10 +239,7 @@ export function DebateSection({ debate, inFlight, linkedBy, isControl }: DebateS
         {formatClockUtc(debate.created_at)}
         {gloss === null ? null : <span className="muted"> · {gloss}</span>}
         {linkedBy.exact ? null : (
-          <span className="muted">
-            {' '}
-            · the instrument's latest completed debate, not keyed to this trace
-          </span>
+          <span className="muted"> · latest for instrument, not keyed to this trace</span>
         )}
       </p>
       <ul className="stance-list">
@@ -246,17 +250,14 @@ export function DebateSection({ debate, inFlight, linkedBy, isControl }: DebateS
               stances={contribution.stance_during_debate}
               finalPosition={contribution.final_position}
             />
-            <span className="stance-final">final {contribution.final_position}</span>
+            <span className="stance-final">{contribution.final_position}</span>
             <span className="stance-influence mono">
               influence {formatFixed(contribution.influence_score, 2)}
             </span>
           </li>
         ))}
       </ul>
-      <p className="drawer-caveat">
-        Arguments are not persisted (decision #10) — stances by round and final influence are what
-        the store keeps of a debate.
-      </p>
+      <p className="drawer-caveat">Arguments are not persisted (decision #10).</p>
     </div>
   );
 }
@@ -268,11 +269,18 @@ export function FillsList({ fills }: { fills: readonly FillRow[] }) {
   return (
     <ul className="fill-list mono" aria-label="Fills">
       {fills.map((fill) => (
-        <li key={fill.broker_fill_id}>
-          {formatClockUtc(fill.timestamp)} · {fill.leg} · {formatQty(fill.qty)} @{' '}
-          {formatPrice(fill.price)}
-          {fill.fee !== 0 ? ` · fee ${formatPrice(fill.fee)}` : ''}{' '}
-          <span className="muted">{fill.broker_fill_id}</span>
+        <li key={fill.broker_fill_id} className="fill-row">
+          <span className="muted">{formatClockUtc(fill.timestamp)}</span>
+          <span>{fill.leg}</span>
+          <span className="fill-price">
+            {formatQty(fill.qty)} @ {formatPrice(fill.price)}
+          </span>
+          <span className="fill-fee muted">
+            {fill.fee !== 0 ? `fee ${formatPrice(fill.fee)}` : ''}
+          </span>
+          <span className="fill-id muted" title={fill.broker_fill_id}>
+            {fill.broker_fill_id}
+          </span>
         </li>
       ))}
     </ul>

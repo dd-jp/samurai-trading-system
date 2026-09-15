@@ -1,6 +1,6 @@
 /**
  * #753's two-arm report: the live arm against falsifier arm 2, over one window,
- * with return AND drawdown for each — `yarn report:arms`.
+ * with return AND drawdown for each — `npm run report:arms`.
  *
  * ## Why this exists as a command
  *
@@ -45,7 +45,7 @@
  * ## Testability
  *
  * `formatArmComparison` is pure and takes an `ArmComparison`. The store is
- * opened only under `isMain`, so nothing under `yarn test` touches `data/`.
+ * opened only under `isMain`, so nothing under `npm run test` touches `data/`.
  */
 
 import { isAbsolute, resolve } from 'node:path';

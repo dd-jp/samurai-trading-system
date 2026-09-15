@@ -407,7 +407,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
         throw new Error(
           `SaxoHttpBrokerClient: ${names.token} is not set. Provide it via the environment ` +
             `(.env.local), pass { accessToken } explicitly, or pass a { tokenSource } built ` +
-            'from a `yarn saxo:login` session (#1523). This is the ' +
+            'from a `npm run saxo:login` session (#1523). This is the ' +
             `${environment} gateway's bearer; the SIM and live gateways issue separate tokens.`,
         );
       }

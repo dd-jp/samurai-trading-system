@@ -42,7 +42,7 @@ export class SaxoTokenFileError extends Error {}
  * (the gitignore pattern `data/saxo-tokens/` is root-anchored, so a
  * cwd-relative path stops matching the moment the command runs from a
  * subdirectory). The `dist` strip is what keeps ONE path across the two ways
- * this code runs: `yarn saxo:login` writes it from source under `tsx`, while
+ * this code runs: `npm run saxo:login` writes it from source under `tsx`, while
  * the orchestrator reads and rewrites it from `dist/server/...`. Without the
  * strip the running system would refresh a second token file under `dist/`
  * that no login ever wrote.
@@ -72,7 +72,7 @@ export interface SaxoTokenFileRecord extends SaxoTokenResponse {
   environment: SaxoTradingEnvironment;
   obtainedAt: string;
   /**
-   * When `yarn saxo:login` last ran for this environment (#1524) — set by
+   * When `npm run saxo:login` last ran for this environment (#1524) — set by
    * `runLogin` and then carried forward UNCHANGED through every rotation
    * (`SaxoTokenRefresher.runRefresh` copies it onto the next record rather
    * than restamping it), unlike `obtainedAt`, which a silent rotation does

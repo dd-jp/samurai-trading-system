@@ -1,6 +1,6 @@
 /**
- * One-time operator login for Saxo OpenAPI (#1522) — `yarn saxo:login --env
- * sim|live`. Runs the Authorization Code Grant
+ * One-time operator login for Saxo OpenAPI (#1522) — `npm run saxo:login --
+ * --env sim|live`. Runs the Authorization Code Grant
  * (developer.saxo/openapi/learn/oauth-authorization-code-grant) once per
  * environment and saves the resulting access/refresh tokens to a
  * gitignored, owner-only file. The saved session is what the orchestrator's
@@ -308,7 +308,7 @@ export function parseEnvArg(argv: readonly string[]): SaxoTradingEnvironment {
   const index = argv.indexOf('--env');
   const value = index === -1 ? undefined : argv[index + 1];
   if (value !== 'sim' && value !== 'live') {
-    throw new SaxoLoginError('Usage: yarn saxo:login --env sim|live');
+    throw new SaxoLoginError('Usage: npm run saxo:login -- --env sim|live');
   }
   return value;
 }
