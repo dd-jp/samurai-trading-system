@@ -28,7 +28,7 @@ import type { PersistedArmComparisonSample } from '../../pipeline/feedback-loop/
 import type { OutsideBenchmarkSample } from '../../pipeline/outside-benchmark/index.js';
 import type { RiskCriticVerdict } from '../../pipeline/risk-manager/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
-import type { ClosedTrade, DebateLog, Fill, OpenPosition } from '../../shared/index.js';
+import type { ClosedTrade, DebateLog, Fill, OpenPosition, TradingArm } from '../../shared/index.js';
 import type { ProviderStatusReader } from './provider-status.js';
 
 /**
@@ -195,6 +195,7 @@ export interface DashboardSnapshotBuilder {
     store: DashboardQueryStore,
     asOf: Date,
     mode: StoreMode,
+    arm: TradingArm,
     providers?: ProviderStatusReader,
   ): DashboardSnapshot;
 }
@@ -205,14 +206,43 @@ export interface DashboardSnapshotBuilder {
  * owned elsewhere (execution, debate engine, feedback loop, etc.).
  */
 export interface DashboardQueryStore {
+  /**
+   * Arm-less by scope (#1594): `debate_log` is written only by the live
+   * debate path (`debate-adapter.ts`) — the control arm's `DebateResult` is
+   * synthesized in memory and never written there — so this table cannot
+   * hold a control row for an `arm` parameter to filter.
+   */
   getRecentDebates(limit: number, asOf: Date): DebateLog[];
+  /**
+   * Arm-less by scope (#1594): reflects `current_tick`, persisted only by
+   * the live arm's `SequentialTickRunner`. The control arm's ticks live in
+   * its own in-memory, never-persisted store (`control-arm-wiring.ts`), so
+   * there is no control row this could ever surface.
+   */
   getTickStatus(asOf: Date): TickStatus | null;
-  getOpenPositions(asOf: Date): OpenPosition[];
+  /**
+   * #1592: `arm` is required, not optional — the #753/#1318 "no read returns
+   * both arms" guarantee lives in the type here, not just in a convention a
+   * future caller could forget. The dashboard entry point resolves an absent
+   * request-side arm to `'live'` before it ever reaches this interface.
+   */
+  getOpenPositions(asOf: Date, arm: TradingArm): OpenPosition[];
   /**
    * Recent realized round trips (#940), most-recently-closed first — the
    * `closed_trades` mirror of `getRecentDebates`/`getVerdictHistory` above.
+   * `arm` required for the same reason as `getOpenPositions` (#1592).
    */
-  getRecentClosedTrades(limit: number, asOf: Date): ClosedTrade[];
+  getRecentClosedTrades(limit: number, asOf: Date, arm: TradingArm): ClosedTrade[];
+  /**
+   * EVERY closed trade for one arm, unbounded — the P&L headline's source
+   * (#1595): `cumulativePnl` (control-arm/arm-comparison.ts) needs the whole
+   * realized series to find the all-time peak and trough, and a `LIMIT`
+   * window sized for a recent-history list (`getRecentClosedTrades` above)
+   * would silently truncate the drawdown to whatever fits in it. `arm`
+   * required for the same reason as `getOpenPositions`/`getRecentClosedTrades`
+   * (#1592) — the headline must never blend the two arms' realized series.
+   */
+  getAllClosedTrades(asOf: Date, arm: TradingArm): ClosedTrade[];
   /**
    * Every fill belonging to the named lots, in no particular cross-lot order.
    * Scoped to `idempotencyKeys` rather than a bounded "recent fills" window
@@ -220,9 +250,20 @@ export interface DashboardQueryStore {
    * calls this with the SAME closed trades it is about to render, so the
    * fills returned are guaranteed complete for those trades rather than
    * coincidentally so.
+   *
+   * Arm-less by scope (#1594): scoped by `idempotencyKeys`, not by an arm
+   * predicate — the caller (`buildSnapshot`) passes only the keys of an
+   * already arm-scoped `getRecentClosedTrades` read, so the arm boundary is
+   * enforced by the caller, not by a column here.
    */
   getFillsForTrades(idempotencyKeys: readonly string[], asOf: Date): Fill[];
-  getVerdictHistory(limit: number, asOf: Date): VerdictAuditEntry[];
+  /**
+   * #1594: `arm` required, same guarantee as `getOpenPositions` (#1592) —
+   * `verdict_log` carries no `arm` column, so the store discriminates on
+   * `trace_id` instead, but the type-level contract is identical: a read
+   * names exactly one arm, and no read returns both.
+   */
+  getVerdictHistory(limit: number, asOf: Date, arm: TradingArm): VerdictAuditEntry[];
   /**
    * Recent Risk decisions with their critic verdicts (#1066), most recent
    * first — the drawer's invalidation section.
@@ -230,11 +271,33 @@ export interface DashboardQueryStore {
    * Keyed by `(trace_id, instrument)` like `risk_log` itself, so the drawer
    * looks a decision up by the trace it is showing rather than by the debate,
    * which a retried tick shares across traces (migration 0015).
+   *
+   * `arm` required (#1594), same guarantee as `getOpenPositions` (#1592). A
+   * control-arm read still returns rows — the control arm's own Risk
+   * decisions — each with `critic: undefined`, since the control calls no
+   * model and consults no critic; it does not mean "no risk decisions".
    */
-  getRiskCritics(limit: number, asOf: Date): RiskCriticRecord[];
+  getRiskCritics(limit: number, asOf: Date, arm: TradingArm): RiskCriticRecord[];
+  /**
+   * Arm-less by structure, not by oversight (#1594; listed among the control
+   * arm's structural limits in wayfinder map #1590). `analyst_weights` carries
+   * no `arm` column: the Feedback Loop that writes it takes only the live
+   * arm's closed trades (`SqliteClosedTradeStore`'s `arm: 'live'` default) —
+   * the control arm has no analyst contributions to credit, so there is no
+   * control-arm weight set for a parameter to select between.
+   */
   getAnalystWeights(asOf: Date): Record<string, number>;
-  getAttribution(asOf: Date): Record<string, AttributionSummary>;
-  getDailyMetrics(asOf: Date): MetricsSuite;
+  /**
+   * #1594: `arm` required, same guarantee as `getOpenPositions` (#1592).
+   * `getAttribution(asOf, 'control')` returns `{}`: the join is onto
+   * `debate_log`, which the control arm never writes (`axis-vote-decision.ts`
+   * — the control's `DebateResult` is synthesized in-memory and has no
+   * `debate_log` row), so there is nothing for a control-scoped read to
+   * attribute, not a bug in the join.
+   */
+  getAttribution(asOf: Date, arm: TradingArm): Record<string, AttributionSummary>;
+  /** `arm` required (#1594), same guarantee as `getOpenPositions` (#1592). */
+  getDailyMetrics(asOf: Date, arm: TradingArm): MetricsSuite;
   /**
    * The Feedback Loop's persisted matched-control comparisons (#971),
    * most-recently-computed first — the panel's whole data source.
@@ -270,6 +333,9 @@ export interface DashboardQueryStore {
    * live-money operator surface. Throws for the first such instrument in
    * `instruments` order, so the failure is identical to what the per-position
    * loop produced.
+   *
+   * Arm-less by scope (#1594): market data (`latest_mark`) has no arm
+   * dimension — both arms price against the same observed market.
    */
   getMarks(instruments: readonly string[], asOf: Date): Map<string, Mark>;
   /**
@@ -277,6 +343,9 @@ export interface DashboardQueryStore {
    * Alpaca/Polygon tiles, because `llm_spend` genuinely IS a shared-store
    * table written by another component (the debate engine's LLM client) — the
    * same relationship this store has to `open_positions` or `verdict_log`.
+   *
+   * Arm-less by scope (#1594): the control arm calls no model, so it never
+   * writes a row here — this table cannot hold control-arm spend.
    */
   getLlmSpend(asOf: Date): LlmSpendSummary;
   /**
@@ -289,8 +358,22 @@ export interface DashboardQueryStore {
    * Bounded on purpose: this rides the 3-second poll, so it must never grow
    * with the audit history. At most one settled candidate trace and one live
    * trace per lane are returned.
+   *
+   * `arm` required (#1594), same guarantee as `getOpenPositions` (#1592).
+   * `PipelineActivity.live` is always `[]` for `arm: 'control'`: `current_tick`
+   * is written only by the live arm's `SequentialTickRunner` (the control arm
+   * is wired to its own never-persisted `InMemoryCurrentTickStore`,
+   * `control-arm-wiring.ts`), so a control-arm request excludes that table's
+   * leg from the universe query entirely rather than reading a table that
+   * structurally cannot hold a control row — the same "no read returns both"
+   * guarantee, applied to a table with no `arm` column and no rows to filter.
    */
-  getPipelineActivity(maxLanes: number, lookbackMs: number, asOf: Date): PipelineActivity;
+  getPipelineActivity(
+    maxLanes: number,
+    lookbackMs: number,
+    asOf: Date,
+    arm: TradingArm,
+  ): PipelineActivity;
   /**
    * Count of alert sends to the ESCALATION chat recorded in
    * `alert_delivery_failures` in the TRAILING 24 HOURS as of `asOf` (#1108,

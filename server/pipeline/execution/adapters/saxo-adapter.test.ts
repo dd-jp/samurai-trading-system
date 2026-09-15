@@ -31,6 +31,7 @@ import {
 } from '../protective-rearm-unsupported.js';
 import { openTestExecutionStore, type TestExecutionStore } from '../sqlite-store-harness.js';
 import type { ExecutionInput, NativeBracketRequest } from '../types.js';
+import { UnrecordedVenuePositionThrottle } from '../unrecorded-venue-position-throttle.js';
 import type {
   UnresolvedPriceUnitAlert,
   UnresolvedPriceUnitAlertChannel,
@@ -1861,6 +1862,8 @@ describe('ExecutionImpl.ingestFills through SaxoBrokerAdapter', () => {
       residualExposureAlerts: { postResidualExposureAlert: async () => {} },
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
       flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
+      unrecordedVenuePositionAlerts: { postUnrecordedVenuePositionAlert: async () => {} },
+      unrecordedVenuePositionThrottle: new UnrecordedVenuePositionThrottle(),
       logger: recordingLogger(),
       filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
     };

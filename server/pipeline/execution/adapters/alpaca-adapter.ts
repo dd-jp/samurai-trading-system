@@ -1248,7 +1248,10 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // `settled`'s own fills are still un-ingested (the store reads the grown
     // residual); the sizes of LATER ATTEMPTS catch it once they have ingested
     // — which is exactly when `qty` has shrunk back under the fill and the
-    // `settled.filled_qty >= qty` test alone passes 4 ≥ 2 and is wrong.
+    // `settled.filled_qty >= qty` test alone passes 4 ≥ 2 and is wrong. A
+    // THIRD, below, catches the case neither half of that pair sees at all
+    // (#1581): `qty` has shrunk back under the fill AND no later attempt was
+    // ever allocated to carry the growth's size forward.
     //
     // Neither reads the walk itself, deliberately: whether this pass RETIRED
     // those attempts (`4ea06cba`) and whether anything still sits ABOVE them
@@ -1258,7 +1261,51 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // A fill that will not parse cannot prove flatness, so it declines —
     // placing over a flat lot is bounded (the leg fires into nothing), a lot
     // believed protected on unreadable evidence is not.
-    const observedSize = Math.max(qty, sizedAboveSettled);
+    //
+    // #1581: `qty` and `sizedAboveSettled` are both derived from THIS PROCESS's
+    // walk and the caller's own residual estimate — and the caller's estimate
+    // is the STORE's belief, which can lag the venue on either side of a
+    // two-way fill-ingestion race (issue #1581's reproducer: the store has
+    // ingested `settled`'s exit fill but not yet a later entry fill that grew
+    // the lot past it, so the residual it passes has already been netted down
+    // to exactly the naked amount, and shrinking below `settled.filled_qty`
+    // reads as coverage instead of as the hazard it is). A THIRD, independent
+    // bound closes that hole: `clientOrderId` is this lot's own entry bracket's
+    // client_order_id (`execute.ts` sets it verbatim, `submitBracket` above
+    // sends it unmodified — never a `rearmWireId` derivative), so querying it
+    // directly returns THIS lot's own entry order, not a netted-across-lots
+    // venue position — `getPositions()` cannot serve this role for the reason
+    // `reconcile.ts`'s own comment gives: "a venue reports one netted position
+    // where the store may hold several lots", so a nonzero reading there is
+    // not evidence any ONE lot is naked. `filled_qty` on the entry order this
+    // lot's OWN `client_order_id` names has no such ambiguity: it is the total
+    // this lot has ever been bought for, read fresh from the venue at decision
+    // time — no store, no ingestion race.
+    //
+    // Only fetched when `settled !== null`: the `live` path never reaches this
+    // line, and a lot that never re-armed at all has no `settled` to second-
+    // guess either. One extra lookup on the adopt-by-inference path, same
+    // trade the `live`/`settled` split above already makes.
+    //
+    // A `null` or unparseable entry is treated as NO ADDITIONAL EVIDENCE, not
+    // as proof of anything — it can only ever WIDEN `observedSize` (tighten
+    // the adoption bar), never narrow it, so a venue that cannot answer this
+    // lookup leaves every existing (tested) sequence's outcome unchanged.
+    // Widening unconditionally on a lookup failure would be the same
+    // "unreadable evidence declines" posture the parse-failure comment above
+    // already takes, but this repo's own #842 finding (`alpaca-order-
+    // normalization.ts`) is that Alpaca's docs cannot even settle whether a
+    // partially-filled order's fields are trustworthy mid-fill, so a missing
+    // row is treated as inconclusive rather than as a decline-forcing signal.
+    let entryFilledQty = 0;
+    if (settled !== null) {
+      const entry = await this.call('rearmProtectiveLegs', () =>
+        this.input.client.getOrderByClientOrderId(clientOrderId),
+      );
+      const parsed = entry !== null ? Number(entry.filled_qty) : NaN;
+      if (Number.isFinite(parsed)) entryFilledQty = parsed;
+    }
+    const observedSize = Math.max(qty, sizedAboveSettled, entryFilledQty);
     const adopted =
       live ?? (settled !== null && Number(settled.filled_qty) >= observedSize ? settled : null);
     if (adopted !== null) {

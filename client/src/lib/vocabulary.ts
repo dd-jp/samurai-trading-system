@@ -7,7 +7,7 @@
  * "Accessibility floor"), so every state has a word, and the word lives here so
  * a tab, a drawer and an accessible name cannot disagree about it.
  */
-import type { PipelineOutcome, PipelineStage } from '@contracts';
+import type { PipelineOutcome, PipelineStage, PnlRateSource } from '@contracts';
 import type { SettledOutcome } from './ledger.ts';
 
 export const OUTCOME_WORD: Readonly<Record<PipelineOutcome, string>> = {
@@ -60,3 +60,38 @@ const PROVIDER_STATE_WORD: Readonly<Record<string, string>> = {
 export function providerStateWord(state: string): string | null {
   return PROVIDER_STATE_WORD[state] ?? null;
 }
+
+/**
+ * `PnlHeadlineWire.rate_source`'s word (#1596) — a `Record`, not a string
+ * transform, so a future second source is a compile error here until named.
+ */
+export const PNL_RATE_SOURCE_WORD: Readonly<Record<PnlRateSource, string>> = {
+  static_sizing_rate: 'static sizing rate',
+};
+
+/**
+ * dashboard-spec.md's "Absence is named per arm" sentences (#1597) — one
+ * place so Glance, Live and Review cannot drift on the exact wording for a
+ * figure the control arm structurally cannot have. The first two are quoted
+ * verbatim in the spec's Arm selector section; `CONTROL_NO_CRITIC` and
+ * `CONTROL_NO_ANALYSTS` follow the same "Control arm: … — not applicable"
+ * shape for the two absences the spec names without spelling out the words.
+ */
+export const CONTROL_NO_DEBATE = 'Control arm: no LLM debate — not applicable';
+export const CONTROL_NO_EQUITY = 'Control arm: simulated broker — no equity figure';
+export const CONTROL_NO_TICK = 'Control arm: tick status is not persisted';
+export const CONTROL_NO_CRITIC = 'Control arm: no LLM critic — not applicable';
+export const CONTROL_NO_ANALYSTS = 'Control arm: no debate, no analyst weights — not applicable';
+
+/**
+ * `pnl.overall`'s caveat against the Review tab's arm-comparison panel
+ * (#1623, ADR-0021 point 6 / dashboard-spec.md): different population
+ * (all-time vs `oneSizingRegime`/`modelledCostCharged`-filtered), different
+ * window (all-time vs Feedback Loop's configured window), different
+ * freshness (render time vs FL's last cycle), and realized vs realized-plus-
+ * unrealized (`net_gbp` carries today's open unrealized P&L, the panel's
+ * `realized_pnl_net` does not). Named once here so Glance cannot drift from
+ * the wording the spec documents.
+ */
+export const PNL_OVERALL_CAVEAT =
+  'All-time: net adds open unrealized to every closed trade; drawdown and trade count are closed trades only. The Review arm-comparison panel reports realized only, over a filtered window sampled on its own cadence, and can report a different figure for the same arm.';

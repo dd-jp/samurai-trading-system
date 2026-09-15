@@ -14,6 +14,7 @@ import type { ClosedTrade, TradingArm } from '../../shared/index.js';
 import {
   type ArmPerformance,
   buildArmComparison,
+  cumulativePnl,
   exitClassOf,
   noCostBasisDrops,
 } from './arm-comparison.js';
@@ -349,5 +350,65 @@ describe('exitClassOf', () => {
   it('throws on a close_reason it cannot classify', () => {
     const unclassifiable = 'partial_liquidation' as ClosedTrade['close_reason'];
     expect(() => exitClassOf(unclassifiable)).toThrow(/unhandled close_reason/);
+  });
+});
+
+/**
+ * #1595: `cumulativePnl` is the derivation `performanceFor` (above) and the
+ * dashboard's P&L headline both build on. These tests exercise it directly,
+ * with no `arm` filtering in the input — the function's whole contract is
+ * "sum what you're given", and `buildArmComparison`'s own suite above already
+ * proves the filter-then-delegate wiring produces the same numbers it always
+ * did.
+ */
+describe('cumulativePnl', () => {
+  it('sums realized PnL and finds the deepest peak-to-trough fall, as a fraction of basis', () => {
+    // +40, −10, +20 → ends +50; peak reaches 40, falls to 30 (a 10 drawdown),
+    // never falls below a later peak after that.
+    const result = cumulativePnl(
+      [
+        trade({ closed_at: new Date('2026-09-01T09:00:00Z'), realized_pnl_net: 40 }),
+        trade({ closed_at: new Date('2026-09-01T10:00:00Z'), realized_pnl_net: -10 }),
+        trade({ closed_at: new Date('2026-09-01T11:00:00Z'), realized_pnl_net: 20 }),
+      ],
+      1_000,
+    );
+
+    expect(result.net).toBe(50);
+    expect(result.return_pct).toBeCloseTo(0.05);
+    expect(result.max_drawdown_pct).toBeCloseTo(0.01);
+  });
+
+  it('reports a real drawdown from the very first trade — the high-water mark starts at 0, not at the first trade', () => {
+    const result = cumulativePnl(
+      [trade({ closed_at: new Date('2026-09-01T09:00:00Z'), realized_pnl_net: -25 })],
+      1_000,
+    );
+
+    expect(result.net).toBe(-25);
+    expect(result.max_drawdown_pct).toBeCloseTo(0.025);
+  });
+
+  it('returns a zero drawdown, not an absent one, for an empty series', () => {
+    const result = cumulativePnl([], 1_000);
+
+    expect(result.net).toBe(0);
+    expect(result.return_pct).toBe(0);
+    expect(result.max_drawdown_pct).toBe(0);
+  });
+
+  it('sorts by closed_at before summing, so input order does not change the drawdown', () => {
+    const early = trade({ closed_at: new Date('2026-09-01T09:00:00Z'), realized_pnl_net: 40 });
+    const late = trade({ closed_at: new Date('2026-09-01T11:00:00Z'), realized_pnl_net: -30 });
+
+    const forward = cumulativePnl([early, late], 1_000);
+    const reversed = cumulativePnl([late, early], 1_000);
+
+    expect(reversed).toEqual(forward);
+    // +40 then -30: peak 40, trough 10 → drawdown 30. Given out of order, an
+    // unsorted sum would still total 10 but the WRONG drawdown (0, since -30
+    // would be read as the first, lower-then-rising point) if this function
+    // summed in input order instead of `closed_at` order.
+    expect(forward.max_drawdown_pct).toBeCloseTo(0.03);
   });
 });

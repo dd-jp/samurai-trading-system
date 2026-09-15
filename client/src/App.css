@@ -10,8 +10,33 @@
  * signal — every state has a word beside it.
  */
 
-.app {
+/*
+ * `--control-banner-h` is the ONE place the banner's height is stated
+ * (#1593 round-1 review): `.control-banner` sets its own height from it, and
+ * every element below that used to assume its box started at the true
+ * viewport top (`.app`'s `min-height`, `.rail`/`.live`/`.review`'s `100vh`)
+ * subtracts it instead. Without this, `.app-shell`'s `min-height: 100vh` and
+ * `.app`'s own `min-height: 100vh` stacked BELOW the banner in normal flow —
+ * not "doubled", but each independently forcing at least 100vh starting
+ * below a banner that itself took more room, so the page was a banner-height
+ * taller than the viewport: a permanent scrollbar, and the sticky rail
+ * (height 100vh, `position: sticky; top: 0`) bottomed out below the fold
+ * because its own forced height still assumed no banner existed above it.
+ * Defaults to `0px` so a component rendered without the `.app-shell`
+ * ancestor (e.g. `Rail.test.tsx`) resolves the same `100vh` this had before
+ * arms existed.
+ */
+.app-shell {
+  --control-banner-h: 0px;
   min-height: 100vh;
+}
+
+.app-shell.app-control {
+  --control-banner-h: 36px;
+}
+
+.app {
+  min-height: calc(100vh - var(--control-banner-h, 0px));
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr);
   color: var(--text);
@@ -19,6 +44,34 @@
   font-size: 14px;
   line-height: 1.5;
   background: var(--bg);
+}
+
+/*
+ * The tint is deliberately faint (#1593 — "the banner is the signal, the
+ * tint redundant"): it must never be the only thing telling an operator
+ * which arm they are looking at, so it is a wash over the ground colour, not
+ * a state colour of its own like `.rail-stale`/`.rail-mismatch` are.
+ */
+.app-control .app {
+  background: rgb(var(--amber-rgb) / 0.04);
+}
+
+.control-banner {
+  height: var(--control-banner-h);
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(var(--amber-rgb) / 0.18);
+  border-bottom: 1px solid rgb(var(--amber-rgb) / 0.5);
+  color: var(--amber);
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  text-align: center;
+  padding: 0 var(--space-4);
 }
 
 .mono {
@@ -85,7 +138,7 @@ code {
 .rail {
   position: sticky;
   top: 0;
-  height: 100vh;
+  height: calc(100vh - var(--control-banner-h, 0px));
   box-sizing: border-box;
   border-right: 1px solid var(--border);
   background: var(--panel);
@@ -120,6 +173,48 @@ code {
 .brand i {
   font-style: normal;
   color: var(--cyan);
+}
+
+/* ---------- arm selector (#1593) ---------- */
+
+.arm-toggle {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.arm-btn {
+  flex: 1;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.arm-btn + .arm-btn {
+  border-left: 1px solid var(--border);
+}
+
+.arm-btn:hover {
+  color: var(--text);
+}
+
+.arm-btn-on {
+  color: var(--text);
+  background: rgb(var(--amber-rgb) / 0.16);
+}
+
+/* The visible word pairing `.arm-btn-on`'s colour (#1593 round-1 review) —
+   plays no part in the accessible name, which `aria-label` already owns. */
+.arm-btn-mark {
+  font-weight: 500;
+  opacity: 0.85;
 }
 
 .rail-tabs [role="tablist"] {
@@ -384,7 +479,8 @@ main {
 }
 
 .card h3,
-.drawer h3 {
+.drawer h3,
+.panel h3 {
   font-family: var(--font-display);
   font-weight: 600;
   font-size: 12px;
@@ -607,6 +703,10 @@ main {
   margin: 10px 0 0;
 }
 
+.pnl-block + .pnl-block {
+  margin-top: var(--space-4);
+}
+
 .spark-figure {
   margin: var(--space-4) 0 0;
 }
@@ -709,8 +809,11 @@ main {
 .review {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 460px;
-  /* Pinned to the viewport: the main column and the drawer each scroll on their own; the page does not. */
-  height: 100vh;
+  /* Pinned to the viewport: the main column and the drawer each scroll on
+     their own; the page does not. Subtracts the Control banner's height
+     (`--control-banner-h`, defaults to 0px in Live) for the same reason
+     `.rail` does — see `.app-shell`'s doc comment above. */
+  height: calc(100vh - var(--control-banner-h, 0px));
   min-height: 0;
 }
 

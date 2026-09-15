@@ -83,16 +83,16 @@ describe('buildDefaultAlpacaBrokerClient', () => {
     expect(logger.entries[0]?.level).toBe('info');
   });
 
-  it.each([
-    'paper',
-    'backtest',
-  ] as const)('refuses a live ALPACA_BASE_URL override in %s mode', (mode) => {
-    process.env.ALPACA_BASE_URL = LIVE_HOST;
+  it.each(['paper', 'backtest'] as const)(
+    'refuses a live ALPACA_BASE_URL override in %s mode',
+    (mode) => {
+      process.env.ALPACA_BASE_URL = LIVE_HOST;
 
-    // The accident #293 exists to prevent: an override silently upgrading a
-    // non-live process to real money.
-    expect(() => buildDefaultAlpacaBrokerClient(mode, makeLogger())).toThrow('Refusing to start');
-  });
+      // The accident #293 exists to prevent: an override silently upgrading a
+      // non-live process to real money.
+      expect(() => buildDefaultAlpacaBrokerClient(mode, makeLogger())).toThrow('Refusing to start');
+    },
+  );
 
   it('allows a live override when mode is genuinely live', () => {
     process.env.ALPACA_BASE_URL = LIVE_HOST;
@@ -148,27 +148,27 @@ describe('buildDefaultAlpacaBrokerClient', () => {
   });
 
   describe('live credentials (#511)', () => {
-    it.each([
-      'ALPACA_LIVE_API_KEY',
-      'ALPACA_LIVE_API_SECRET',
-    ])('refuses to build a live client when %s is absent, rather than using the paper pair', (name) => {
-      delete process.env[name];
+    it.each(['ALPACA_LIVE_API_KEY', 'ALPACA_LIVE_API_SECRET'])(
+      'refuses to build a live client when %s is absent, rather than using the paper pair',
+      (name) => {
+        delete process.env[name];
 
-      // The paper pair is still set, so a fallback would silently succeed and
-      // authenticate the wrong account — which is the failure this refuses.
-      expect(() => buildDefaultAlpacaBrokerClient('live', makeLogger())).toThrow(name);
-    });
+        // The paper pair is still set, so a fallback would silently succeed and
+        // authenticate the wrong account — which is the failure this refuses.
+        expect(() => buildDefaultAlpacaBrokerClient('live', makeLogger())).toThrow(name);
+      },
+    );
 
-    it.each([
-      '',
-      '   ',
-    ])('treats a live key set to %j as absent, matching the credential pre-flight', (value) => {
-      process.env.ALPACA_LIVE_API_KEY = value;
+    it.each(['', '   '])(
+      'treats a live key set to %j as absent, matching the credential pre-flight',
+      (value) => {
+        process.env.ALPACA_LIVE_API_KEY = value;
 
-      expect(() => buildDefaultAlpacaBrokerClient('live', makeLogger())).toThrow(
-        'ALPACA_LIVE_API_KEY',
-      );
-    });
+        expect(() => buildDefaultAlpacaBrokerClient('live', makeLogger())).toThrow(
+          'ALPACA_LIVE_API_KEY',
+        );
+      },
+    );
 
     it('never puts a credential value in the refusal', () => {
       process.env.ALPACA_LIVE_API_SECRET = '';
@@ -186,15 +186,15 @@ describe('buildDefaultAlpacaBrokerClient', () => {
       }
     });
 
-    it.each([
-      'paper',
-      'backtest',
-    ] as const)('never reads the live pair in %s mode, so a malformed live key cannot break the boot', (mode) => {
-      delete process.env.ALPACA_LIVE_API_KEY;
-      delete process.env.ALPACA_LIVE_API_SECRET;
+    it.each(['paper', 'backtest'] as const)(
+      'never reads the live pair in %s mode, so a malformed live key cannot break the boot',
+      (mode) => {
+        delete process.env.ALPACA_LIVE_API_KEY;
+        delete process.env.ALPACA_LIVE_API_SECRET;
 
-      expect(() => buildDefaultAlpacaBrokerClient(mode, makeLogger())).not.toThrow();
-    });
+        expect(() => buildDefaultAlpacaBrokerClient(mode, makeLogger())).not.toThrow();
+      },
+    );
 
     it('does not log a credential when it builds the live client', () => {
       const logger = makeLogger();

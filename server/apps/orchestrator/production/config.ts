@@ -18,6 +18,7 @@ import type {
   SaxoSessionLostAlertChannel,
   UnattributedFlattenFillAlertChannel,
   UnpricedFillAlertChannel,
+  UnrecordedVenuePositionAlertChannel,
   UnresolvedPriceUnitAlertChannel,
 } from '../../../pipeline/execution/index.js';
 import type {
@@ -521,12 +522,32 @@ export interface AlertChannelSlots {
    * reason `nonSterlingFeeAlerts` above documents: the `error` line carrying
    * these fields is already written before this port is reached.
    *
-   * The condition means the venue sold quantity the lot's `closed_trade` does
-   * not contain, so the account may hold a REVERSE position no
-   * `getOpenPositions()` row explains — the exposure #429/#1122 left at
-   * `info` from the reconcile side.
+   * The condition means the venue transacted quantity the lot's
+   * `closed_trade` does not contain, so the account may hold a position no
+   * `getOpenPositions()` row explains — the same exposure
+   * `unrecordedVenuePositionAlerts` below reports from the reconcile side.
    */
   unattributedFlattenFillAlerts?: UnattributedFlattenFillAlertChannel;
+  /**
+   * #1550's unrecorded-venue-position page — `findUnrecordedVenuePositions`
+   * (pipeline/execution/reconcile.ts) posts here for a position the venue
+   * holds that no open lot in the store explains. Defaults to
+   * `loggingAlertChannel('unrecordedVenuePositionAlerts', …)` with the same
+   * caveat as `flattenReconcileAlerts`: reachable only by an operator reading
+   * the log stream, and `tradeChannelAlert(…)` under `SAMURAI_ALERTS=telegram`
+   * is what an unattended soak (#238) needs.
+   *
+   * Not in `UNLOGGED_ALERT_IDS`, unlike the two optional ports above:
+   * reconcile.ts writes no `error` line of its own for this condition, so the
+   * log-only form is the record rather than a duplicate of one. The divergence
+   * row does reach the log at `warn`, but from `runPoll` (fill-sync.ts) and
+   * only on the poll path — never on `reconcile()`'s startup pass.
+   *
+   * Live arm only (`page`, #1349): `control-arm-wiring.ts` runs the same scan
+   * against a simulated broker, and its book is not something an operator can
+   * act on.
+   */
+  unrecordedVenuePositionAlerts?: UnrecordedVenuePositionAlertChannel;
   /**
    * #1524's immediate page — `SaxoTokenRefresher.lose()`
    * (pipeline/execution/adapters/saxo-token-source.ts) posts here the moment

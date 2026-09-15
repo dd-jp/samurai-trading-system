@@ -22,6 +22,7 @@ import {
   type MetricsSuiteWire,
   type OutsideBenchmarkRow,
   type PipelineView,
+  type PnlHeadlineWire,
   type PositionRow,
   type RiskCriticRow,
   type VerdictRow,
@@ -305,11 +306,41 @@ export function makeOutsideBenchmark(
   };
 }
 
+/**
+ * The P&L headline (#1595), profitable and drawn-down by default so a test
+ * asserting on either sign has a non-degenerate fixture to override from.
+ */
+export function makePnlHeadline(overrides: Partial<PnlHeadlineWire> = {}): PnlHeadlineWire {
+  return {
+    overall: {
+      net_gbp: 42.5,
+      net_pct_of_book: 0.0425,
+      max_drawdown_pct: 0.018,
+      trade_count: 43,
+    },
+    today: {
+      net_gbp: 3.3,
+      net_pct_of_book: 0.0033,
+      realized_gbp: 1.8,
+      unrealized_gbp: 1.5,
+      costs_gbp: 0.2,
+      trade_count: 2,
+    },
+    rate_usd_per_gbp: 1.27,
+    rate_source: 'static_sizing_rate',
+    book_gbp: 1_000,
+    ...overrides,
+  };
+}
+
 export function makeSnapshot(overrides: Partial<WireSnapshot> = {}): WireSnapshot {
   return {
     generated_at: AS_OF,
     as_of: AS_OF,
     mode: 'paper',
+    // Defaulted to 'live' here purely so this fixture keeps satisfying the
+    // widened `WireSnapshot` type.
+    arm: 'live',
     tick_status: null,
     positions: [makePosition()],
     closed_trades: [makeClosedTrade()],
@@ -320,6 +351,7 @@ export function makeSnapshot(overrides: Partial<WireSnapshot> = {}): WireSnapsho
     analysts: [makeAnalyst()],
     metrics: makeMetrics(),
     arm_comparison: [makeArmComparison()],
+    pnl: makePnlHeadline(),
     outside_benchmarks: [
       makeOutsideBenchmark(),
       makeOutsideBenchmark({

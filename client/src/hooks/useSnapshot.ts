@@ -27,7 +27,9 @@ import {
   type DashboardSnapshot,
   type LlmSpendSummary,
   type MetricsSuiteWire,
+  type PnlHeadlineWire,
   type ProfitFactorWire,
+  type TradingArmWire,
   toProfitFactorWire,
 } from '@contracts';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -61,7 +63,7 @@ export const RECOGNISED_MODES = [
  * server did not tell us", it is unrepresentable as a mode word, and the
  * compiler now forces every reader to handle it.
  */
-export type WireSnapshot = Omit<DashboardSnapshot, 'mode' | 'llm_spend'> & {
+export type WireSnapshot = Omit<DashboardSnapshot, 'mode' | 'llm_spend' | 'pnl'> & {
   mode: ServerMode | null;
   /**
    * Widened to `| null` for the same reason `mode` is, and settled the same
@@ -81,6 +83,28 @@ export type WireSnapshot = Omit<DashboardSnapshot, 'mode' | 'llm_spend'> & {
    * below forbids.
    */
   llm_spend: WireLlmSpendSummary | null;
+  /**
+   * Widened to `| null` for the same reason as `llm_spend` above, but the
+   * skew that reaches it is different (PR #1619 review, finding 1). A
+   * pre-#1595 server (missing `pnl` entirely) is NOT reachable here: `'pnl'`
+   * is one of `DASHBOARD_SNAPSHOT_FIELD_NAMES`, so that server hashes a
+   * different `CONTRACT_VERSION` and the mismatch branch below rejects the
+   * whole payload before this function ever runs.
+   *
+   * What IS reachable is the gap `contracts/snapshot.ts`'s `CONTRACT_VERSION`
+   * doc names directly: "Deliberately shallow: the hash covers only this
+   * interface's OWN top-level field names, not the shapes nested inside" —
+   * `PnlHeadlineWire.overall`/`.today` are exactly such a nested shape. A
+   * future rename inside either does NOT move `CONTRACT_VERSION`, so a server
+   * that made that rename would still pass the version check and land here
+   * with `pnl.overall` or `pnl.today` missing. `GlanceTab.tsx`'s `PnlCard`
+   * destructures both and dereferences straight through
+   * (`overall.net_gbp`, `today.realized_gbp`, …) with no error boundary
+   * (`main.tsx`) — the same white-screen shape `isSpendSummary`'s doc
+   * describes for `llm_spend`'s `all_time`/`per_debate`. `isPnlHeadline`
+   * below is that same structural check, one field over.
+   */
+  pnl: PnlHeadlineWire | null;
 };
 
 /**
@@ -268,6 +292,31 @@ export interface UseSnapshotOptions {
    * identical to before this option existed.
    */
   authToken?: string | null;
+  /**
+   * Which arm's `positions`/`closed_trades` to poll for (#1593). `undefined`
+   * and `'live'` are the same request — see `snapshotUrl` — so a caller that
+   * never heard of arms still sends the pre-#1592 request byte-for-byte.
+   */
+  arm?: TradingArmWire;
+}
+
+/**
+ * The URL a poll actually fetches. `arm=control` is appended ONLY for the
+ * control arm — every other case (`undefined`, `'live'`) leaves `url`
+ * untouched, so the default dashboard's request stays byte-for-byte the same
+ * shape it was before this option existed (the same posture `authToken`'s
+ * header takes above). The server's own default is `'live'` too
+ * (`server.ts`'s `parseArmParam`), so an explicit `?arm=live` would be
+ * redundant, not merely equivalent.
+ *
+ * The separator is chosen from whether `url` already carries a query string
+ * (`SNAPSHOT_URL` never does, but `UseSnapshotOptions.url` is a public,
+ * caller-supplied option) — appending a bare `?arm=control` unconditionally
+ * would produce `?foo=1?arm=control` for any base URL that already has one.
+ */
+export function snapshotUrl(url: string, arm?: TradingArmWire): string {
+  if (arm !== 'control') return url;
+  return `${url}${url.includes('?') ? '&' : '?'}arm=control`;
 }
 
 /**
@@ -362,6 +411,21 @@ function isSpendSummary(value: unknown): boolean {
     if (!isPlainObject(window.per_debate)) return false;
   }
   return true;
+}
+
+/**
+ * Is this shape one `GlanceTab.tsx`'s `PnlCard` can actually render (#1596,
+ * PR #1619 review finding 1)? Structural only, `isSpendSummary`'s reason:
+ * `PnlCard` destructures `overall`/`today` off `pnl` and dereferences
+ * straight through (`overall.net_gbp`, `today.realized_gbp`, …) with no
+ * error boundary, so a missing OBJECT at either key throws — the individual
+ * numeric fields don't need checking here because `formatSignedGbp` /
+ * `formatPercent` / `formatCount` already render a non-finite scalar as the
+ * em dash rather than throwing.
+ */
+function isPnlHeadline(value: unknown): boolean {
+  if (!isPlainObject(value)) return false;
+  return isPlainObject(value.overall) && isPlainObject(value.today);
 }
 
 /**
@@ -525,6 +589,11 @@ function profitFactorOf(value: unknown): ProfitFactorWire {
  * an old server's un-wrapped `profit_factor` reaches here structurally
  * valid but semantically pre-#1270 — `profitFactorOf` is what a whole
  * `metrics` object being "known good" does NOT excuse this one field from.
+ *
+ * `pnl` degrades the same way `llm_spend` does, and for the analogous reason
+ * (PR #1619 review, finding 1): see `WireSnapshot.pnl`'s doc comment for why
+ * `CONTRACT_VERSION` cannot catch a rename nested inside `PnlHeadlineWire`,
+ * and `isPnlHeadline`'s doc for what `PnlCard` needs to not throw.
  */
 export function toWireSnapshot(body: unknown): WireSnapshot | null {
   if (!hasWireShape(body)) return null;
@@ -548,11 +617,15 @@ export function toWireSnapshot(body: unknown): WireSnapshot | null {
     ...(metricsField as unknown as MetricsSuiteWire),
     profit_factor: profitFactorOf(metricsField.profit_factor),
   };
+  const pnl: PnlHeadlineWire | null = isPnlHeadline(candidate.pnl)
+    ? (candidate.pnl as PnlHeadlineWire)
+    : null;
   return {
-    ...(candidate as unknown as Omit<WireSnapshot, 'mode' | 'llm_spend' | 'metrics'>),
+    ...(candidate as unknown as Omit<WireSnapshot, 'mode' | 'llm_spend' | 'metrics' | 'pnl'>),
     mode,
     llm_spend,
     metrics,
+    pnl,
   };
 }
 
@@ -607,15 +680,16 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
     fetchImpl,
     now = Date.now,
     authToken,
+    arm,
   } = options;
 
   const [state, setState] = useState<FeedState>(INITIAL);
 
   // A ref, not state: the interval callback must see the current
-  // url/fetch/now/authToken without the effect being torn down and rebuilt,
-  // which would restart the poll clock on every payload.
-  const optionsRef = useRef({ url, fetchImpl, now, authToken });
-  optionsRef.current = { url, fetchImpl, now, authToken };
+  // url/fetch/now/authToken/arm without the effect being torn down and
+  // rebuilt, which would restart the poll clock on every payload.
+  const optionsRef = useRef({ url, fetchImpl, now, authToken, arm });
+  optionsRef.current = { url, fetchImpl, now, authToken, arm };
 
   useEffect(() => {
     let cancelled = false;
@@ -684,11 +758,14 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
           token !== undefined && token !== null && token !== ''
             ? { Authorization: `Bearer ${token}` }
             : undefined;
-        const response = await doFetch(optionsRef.current.url, {
-          cache: 'no-store',
-          signal: controller.signal,
-          ...(headers !== undefined ? { headers } : {}),
-        });
+        const response = await doFetch(
+          snapshotUrl(optionsRef.current.url, optionsRef.current.arm),
+          {
+            cache: 'no-store',
+            signal: controller.signal,
+            ...(headers !== undefined ? { headers } : {}),
+          },
+        );
         if (!response.ok) throw new Error(`snapshot request failed: HTTP ${response.status}`);
         const body: unknown = await response.json();
         // `timedOut` is checked after BOTH awaits, so a response whose headers

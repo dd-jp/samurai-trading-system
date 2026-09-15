@@ -5,10 +5,12 @@ import {
   formatCount,
   formatDateUtc,
   formatFixed,
+  formatGbpWhole,
   formatHeld,
   formatPercent,
   formatPrice,
   formatQty,
+  formatSignedGbp,
   formatSignedPercent,
   formatSignedR,
   formatSignedUsd,
@@ -93,6 +95,46 @@ describe('formatSignedUsd', () => {
   it('groups thousands', () => {
     expect(formatSignedUsd(1234567.891)).toBe('+$1,234,567.89');
     expect(formatSignedUsd(-9876.5)).toBe('−$9,876.50');
+  });
+});
+
+describe('formatSignedGbp', () => {
+  it('always carries an explicit sign', () => {
+    expect(formatSignedGbp(12.34)).toBe('+£12.34');
+    expect(formatSignedGbp(-0.5)).toBe('−£0.50');
+    expect(formatSignedGbp(0)).toBe('+£0.00');
+  });
+
+  it('treats negative zero as zero', () => {
+    expect(formatSignedGbp(-0)).toBe('+£0.00');
+  });
+
+  it('groups thousands', () => {
+    expect(formatSignedGbp(1234567.891)).toBe('+£1,234,567.89');
+    expect(formatSignedGbp(-9876.5)).toBe('−£9,876.50');
+  });
+
+  it('renders non-finite input as an em dash, never +£NaN (#1596: never £0.00 for an absent figure)', () => {
+    expect(formatSignedGbp(Number.NaN)).toBe('—');
+    expect(formatSignedGbp(Number.POSITIVE_INFINITY)).toBe('—');
+    expect(formatSignedGbp(Number.NEGATIVE_INFINITY)).toBe('—');
+  });
+});
+
+describe('formatGbpWhole', () => {
+  it('groups thousands with no decimal places', () => {
+    expect(formatGbpWhole(1_000)).toBe('£1,000');
+    expect(formatGbpWhole(1_234_567)).toBe('£1,234,567');
+  });
+
+  it('rounds a fractional value rather than truncating', () => {
+    expect(formatGbpWhole(999.6)).toBe('£1,000');
+  });
+
+  it('renders non-finite input as an em dash', () => {
+    expect(formatGbpWhole(Number.NaN)).toBe('—');
+    expect(formatGbpWhole(Number.POSITIVE_INFINITY)).toBe('—');
+    expect(formatGbpWhole(Number.NEGATIVE_INFINITY)).toBe('—');
   });
 });
 

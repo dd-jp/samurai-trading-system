@@ -18,6 +18,8 @@ import type { FlattenReconcileAlertChannel } from '../flatten-reconcile-alert.js
 import type { NonSterlingFeeAlertChannel } from '../non-sterling-fee-alert.js';
 import type { ResidualExposureAlertChannel } from '../residual-exposure-alert.js';
 import type { UnattributedFlattenFillAlertChannel } from '../unattributed-flatten-fill-alert.js';
+import type { UnrecordedVenuePositionAlertChannel } from '../unrecorded-venue-position-alert.js';
+import type { UnrecordedVenuePositionThrottle } from '../unrecorded-venue-position-throttle.js';
 import type { BrokerAdapter } from './broker.js';
 import type {
   FillJournal,
@@ -116,6 +118,28 @@ export interface ExecutionInput {
    * is still held, and an omitted channel would make that invisible again.
    */
   flattenReconcileAlerts: FlattenReconcileAlertChannel;
+  /**
+   * #1550: where a position the VENUE holds and no open lot in the store
+   * explains is escalated — `findUnrecordedVenuePositions` (reconcile.ts).
+   *
+   * Required, for the same "no silent default" reason the three channels above
+   * are, and with a sharper case than any of them: this is the one exposure
+   * the Risk Manager structurally cannot see (it computes exposure from the
+   * store, and the store has no row), and until this field existed the
+   * condition reached a `warn` LOG line in a different module and nothing
+   * else. Absent would mean the same silence again.
+   */
+  unrecordedVenuePositionAlerts: UnrecordedVenuePositionAlertChannel;
+  /**
+   * #1550's per-instrument page throttle
+   * (unrecorded-venue-position-throttle.ts) — required for the same reason
+   * `filledZeroSizeThrottle` below is, and for a condition that needs it more:
+   * the unrecorded shape is a STATE re-derived from a fresh venue read on
+   * every 15s reconcile pass, so an omitted throttle is ~240 pages an hour
+   * until someone acts. One instance per composition root, constructed once
+   * and threaded here, not a module-level singleton — see the class doc.
+   */
+  unrecordedVenuePositionThrottle: UnrecordedVenuePositionThrottle;
   /**
    * #573's recorded decision: the execution port DOES carry a `Logger`, for
    * a LOCAL diagnostic trace — "what actually failed" — that is distinct
@@ -277,7 +301,14 @@ export type FillIngestInput = Pick<
  */
 export type ReconcileInput = Pick<
   ExecutionInput,
-  'trace_id' | 'clock' | 'broker' | 'residualExposureAlerts' | 'flattenReconcileAlerts' | 'logger'
+  | 'trace_id'
+  | 'clock'
+  | 'broker'
+  | 'residualExposureAlerts'
+  | 'flattenReconcileAlerts'
+  | 'unrecordedVenuePositionAlerts'
+  | 'unrecordedVenuePositionThrottle'
+  | 'logger'
 > &
   ResidualReflattenInput & {
     store: PositionReader &
@@ -360,6 +391,55 @@ export interface ExecutionResult {
  * distinguishing convention `unrecorded`'s `idempotency_key: ''` already
  * uses below.
  */
+
+/**
+ * The specific escalation event behind a `ReconcileDivergence.escalation`
+ * (#1577, widened #1585, #1609) — see that field's doc for why a named event
+ * replaced a bare boolean. `wedge_cancelled` is the one label
+ * `cancelWedgedFlatten`'s branch sets regardless of which of its own three
+ * outcomes (throttled, cancel-failed, cancel-issued) produced it — those
+ * three stay collapsed under one name, unlike the three below, which each
+ * get their own; those three are `cancelNeverConfirmedFlatten`'s
+ * (reconcile.ts), in the order that function tries them. The last two are
+ * `sweepWedgedZeroFillLots`'s (wedged-zero-fill-sweep.ts, #1609): both share
+ * `action: 'undetermined'` and `kind: 'sweep'`, which without a distinguishing
+ * `escalation` collided under `reconcileDedupState` (fill-sync.ts) — a lot
+ * that alternates between the two across polls would have logged only the
+ * first. `sweep_shape_mismatch` is `abandonWedgedZeroFillLot`'s SQL guard
+ * having drifted from `isWedgedZeroFillLot` (#1601); `sweep_abandon_failed` is
+ * the pre-existing store-write failure this sweep's `catch` block reports.
+ * #1615 added the `residual_sweep_*` group for `sweepResidualProtection`'s
+ * (residual-protection-sweep.ts) six `action: 'undetermined'` push sites,
+ * every one of which shares `kind: 'sweep'` too — the bare `sweep_` prefix
+ * was already spoken for by `sweepWedgedZeroFillLots` above, so this group
+ * gets its own to stay distinguishable at a glance. `residual_sweep_rearm_unsupported`
+ * and `residual_sweep_rearm_retry_failed` back what is structurally ONE push
+ * site (`sweepOne`'s final `catch`, one `return`) rather than two: its
+ * `reason` already branches on `isProtectiveRearmUnsupported`, and a failing
+ * Alpaca lot's own lifecycle walks retry -> retry -> ... -> unsupported (the
+ * file doc's `MAX_REARM_ATTEMPTS` section) once its wire-id budget is spent —
+ * exactly the false-to-true transition a single shared value would dedup away
+ * as "same state" the pass it happens, which is #1615's bug class inside the
+ * fix for #1615's bug class. `alertResidualExposureOnce` already treats the
+ * two as separate escalation channels (`rearm_unsupported_alerted_at` vs
+ * `alerted_at` on the same `flags.rearmUnsupported`), so this mirrors an
+ * existing distinction rather than inventing one.
+ */
+export type ReconcileEscalation =
+  | 'wedge_cancelled'
+  | 'never_confirmed_throttled'
+  | 'never_confirmed_cancel_failed'
+  | 'never_confirmed_coverage_short'
+  | 'sweep_shape_mismatch'
+  | 'sweep_abandon_failed'
+  | 'residual_sweep_lot_unsettled'
+  | 'residual_sweep_size_read_failed'
+  | 'residual_sweep_garbage_residual'
+  | 'residual_sweep_reflatten_in_flight'
+  | 'residual_sweep_reflatten_submitted'
+  | 'residual_sweep_rearm_unsupported'
+  | 'residual_sweep_rearm_retry_failed';
+
 export interface ReconcileDivergence {
   idempotency_key: string;
   instrument: string;
@@ -393,22 +473,38 @@ export interface ReconcileDivergence {
    *   `reconcileDivergenceLevel()` (fill-sync.ts) logs it at `warn`
    *   alongside `undetermined` rather than at `info` (#1506): having no
    *   backstop detector is the argument for raising the level, not for
-   *   leaving it quiet.
+   *   leaving it quiet. Since #1550 it also PAGES, through
+   *   `unrecordedVenuePositionAlerts` raised by
+   *   `findUnrecordedVenuePositions` itself — a log level escalates to
+   *   nothing, and this is the one exposure Risk structurally cannot see.
    */
   action: 'adopted' | 'rejected' | 'undetermined' | 'unrecorded';
   /** Operator-facing detail — the adapter's error on `undetermined`. */
   reason: string;
   /**
-   * Set only by `reconcileFlatten`'s `cancelWedgedFlatten` escalation
-   * (reconcile.ts) — a flatten past `UNRESOLVABLE_FLATTEN_MAX_AGE_MS` whose
-   * cancel has just been issued at the venue. That return shares
-   * `action: 'adopted'` with the benign adopt reached one branch above it
-   * (they differ only in `reason`), so `runPoll`'s dedup (fill-sync.ts) folds
-   * this into the state it compares — otherwise the escalation never gets
-   * its own line once the benign adopt has already logged for the episode
-   * (#1577).
+   * Which escalation produced this row, when one did — #1577 named
+   * `wedge_cancelled` (a `reconcileFlatten` benign adopt shares
+   * `action: 'adopted'` with `cancelWedgedFlatten`'s cancel-issued adopt one
+   * branch below it), #1585 added the other three: `cancelNeverConfirmedFlatten`
+   * shares `action: 'undetermined'` with the row's own prior-pass state on
+   * every one of its blocking outcomes (reconcile.ts). Naming the event rather
+   * than a bare `escalated: true` boolean is what lets `runPoll`'s dedup
+   * (fill-sync.ts) tell these apart from the benign action they share AND from
+   * each other — a row cancelled once, still short of coverage, is a different
+   * fact than the same row still throttled from an earlier cancel, even though
+   * both are `action: 'undetermined'`. #1609 added the last two:
+   * `sweepWedgedZeroFillLots` (wedged-zero-fill-sweep.ts) has two independent
+   * push sites that share `action: 'undetermined'` AND `kind: 'sweep'` — the
+   * SQL-guard shape mismatch (`sweep_shape_mismatch`) and the store-write
+   * `catch` block (`sweep_abandon_failed`) — which collided under the same
+   * dedup before this field told them apart. #1615 tagged
+   * `sweepResidualProtection`'s (residual-protection-sweep.ts) push sites the
+   * same way, and widened `lastSweepAction` (fill-sync.ts) — a SEPARATE dedup
+   * keyed off this same field — to read it too; see `ReconcileEscalation`'s
+   * doc above for the site count and the `rearm_unsupported`/
+   * `rearm_retry_failed` split.
    */
-  escalated?: true;
+  escalation?: ReconcileEscalation;
   /**
    * `'bracket'` for a `reconcileLot` row, keyed to an `OpenPosition`.
    * `'flatten'` for a `reconcileFlatten` row. `'unrecorded'` for

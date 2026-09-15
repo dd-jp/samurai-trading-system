@@ -17,6 +17,7 @@ describe('GatesSection', () => {
         riskCritic={makeRiskCritic({ binding_constraint: 'risk_critic:reject' })}
         verdict={undefined}
         keyedBy={{ by: 'debate_id', exact: true }}
+        isControl={false}
       />,
     );
     expect(
@@ -30,6 +31,7 @@ describe('GatesSection', () => {
         riskCritic={makeRiskCritic({ critic_verdict: null })}
         verdict={undefined}
         keyedBy={{ by: 'trace_id', exact: true }}
+        isControl={false}
       />,
     );
     expect(screen.getByText('no critic verdict — skipped, or no linked debate')).toBeTruthy();
@@ -41,6 +43,7 @@ describe('GatesSection', () => {
         riskCritic={makeRiskCritic({ critic_verdict: 'unavailable' })}
         verdict={undefined}
         keyedBy={{ by: 'trace_id', exact: true }}
+        isControl={false}
       />,
     );
     expect(

@@ -5,10 +5,11 @@
  * snapshot — those are two different clocks, and a stall in one must not
  * read as freshness in the other.
  */
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import type { TradingArmWire } from '@contracts';
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import type { LiveFeed } from '../hooks/useSnapshot.ts';
-import { makeMetrics, makeSnapshot } from '../test-fixtures.ts';
+import { makeMetrics, makeSnapshot, makeSpend } from '../test-fixtures.ts';
 import { Rail } from './Rail.tsx';
 
 const GENERATED_AT = '2026-08-07T12:00:00.000Z';
@@ -35,7 +36,11 @@ function makeFeed(overrides: Partial<LiveFeed> = {}): LiveFeed {
 }
 
 function renderRail(feed: LiveFeed) {
-  return render(<Rail feed={feed} tab="glance" onTab={() => {}} />);
+  return render(<Rail feed={feed} tab="glance" onTab={() => {}} arm="live" onArm={() => {}} />);
+}
+
+function renderRailArm(arm: TradingArmWire, onArm: (next: TradingArmWire) => void) {
+  return render(<Rail feed={makeFeed()} tab="glance" onTab={() => {}} arm={arm} onArm={onArm} />);
 }
 
 describe('Rail — poll clock', () => {
@@ -59,6 +64,8 @@ describe('Rail — poll clock', () => {
         feed={makeFeed({ lastSuccessAt: '2026-08-07T12:00:35.000Z' })}
         tab="glance"
         onTab={() => {}}
+        arm="live"
+        onArm={() => {}}
       />,
     );
 
@@ -340,5 +347,136 @@ describe('Rail — drawdown meter', () => {
     expect(
       screen.getByText('daily suite drawdown figure could not be read — meter not drawable'),
     ).toBeTruthy();
+  });
+});
+
+/**
+ * #1593: the arm selector's accessible name carries the selection state
+ * itself (AC), not a separate `aria-selected`/`aria-pressed` an operator has
+ * to cross-reference — so these tests read names, the same posture the rest
+ * of this file's `getByRole(..., { name })` assertions already take.
+ */
+describe('Rail — arm selector', () => {
+  it('names Live as selected and Control as not, when arm is live', () => {
+    renderRailArm('live', () => {});
+
+    const liveButton = screen.getByRole('button', { name: 'Live arm, selected' });
+    expect(liveButton).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Control arm' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Control arm, selected' })).toBeNull();
+
+    // Colour alone never carries selection (dashboard-spec.md:310/:560) — the
+    // selected arm also carries a visible word, not just `.arm-btn-on`.
+    expect(within(liveButton).getByText('· selected')).toBeTruthy();
+    expect(
+      within(screen.getByRole('button', { name: 'Control arm' })).queryByText('· selected'),
+    ).toBeNull();
+  });
+
+  it('names Control as selected and Live as not, when arm is control', () => {
+    renderRailArm('control', () => {});
+
+    const controlButton = screen.getByRole('button', { name: 'Control arm, selected' });
+    expect(controlButton).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Live arm' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Live arm, selected' })).toBeNull();
+
+    expect(within(controlButton).getByText('· selected')).toBeTruthy();
+    expect(
+      within(screen.getByRole('button', { name: 'Live arm' })).queryByText('· selected'),
+    ).toBeNull();
+  });
+
+  it('is reachable and operable by keyboard — a native button needs no roving tabindex', () => {
+    const onArm = vi.fn();
+    renderRailArm('live', onArm);
+
+    const control = screen.getByRole('button', { name: 'Control arm' });
+    control.focus();
+    expect(document.activeElement).toBe(control);
+    fireEvent.click(control);
+    expect(onArm).toHaveBeenCalledWith('control');
+  });
+
+  it('calls onArm with the clicked arm, not the current one', () => {
+    const onArm = vi.fn();
+    renderRailArm('control', onArm);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Live arm' }));
+    expect(onArm).toHaveBeenCalledWith('live');
+    expect(onArm).not.toHaveBeenCalledWith('control');
+  });
+});
+
+/**
+ * #1597: the control arm is wired with its own in-memory
+ * `InMemoryCurrentTickStore` and never writes `tick_status` — the Live tick
+ * tile names that structural absence rather than reading it as "idle" (a
+ * quiet moment a control snapshot's `tick_status: null` would otherwise be
+ * indistinguishable from).
+ */
+describe('Rail — control arm', () => {
+  it('names the tick absence as structural rather than reading the control arm as idle', () => {
+    renderRail(makeFeed({ snapshot: makeSnapshot({ arm: 'control' }) }));
+
+    expect(screen.getByText('Control arm: tick status is not persisted')).toBeTruthy();
+    expect(screen.queryByText(/idle — no tick in progress/)).toBeNull();
+  });
+
+  it('still reads a real live tick on the live arm', () => {
+    renderRail(makeFeed({ snapshot: makeSnapshot({ arm: 'live' }) }));
+
+    expect(screen.getByText(/idle — no tick in progress/)).toBeTruthy();
+    expect(screen.queryByText(/tick status is not persisted/)).toBeNull();
+  });
+});
+
+/**
+ * dashboard-spec.md's arm selector rule: "Providers, LLM spend and alert
+ * delivery render identically in both views, labelled as system" (#1597).
+ * The label itself, not the figures beneath it, is what this suite pins —
+ * the figures were already arm-indifferent before this ticket, since the
+ * wire never scoped them; what was missing was the word telling an operator
+ * that a switch will not change them.
+ */
+describe('Rail — system facts', () => {
+  it('labels Providers, LLM cap and a shown alert-channel tile as system, on both arms', () => {
+    for (const arm of ['live', 'control'] as const) {
+      const { unmount } = renderRail(
+        makeFeed({ snapshot: makeSnapshot({ arm, alert_delivery_failures_24h: 2 }) }),
+      );
+      expect(screen.getAllByText('system — identical in both arms').length).toBe(3);
+      unmount();
+    }
+  });
+
+  it('carries no system label on the per-arm Drawdown tile', () => {
+    renderRail(makeFeed({ snapshot: makeSnapshot({ arm: 'live' }) }));
+    const drawdown = screen.getByText('Drawdown').closest('[data-field="drawdown"]');
+    expect(drawdown).toBeTruthy();
+    expect(within(drawdown as HTMLElement).queryByText(/system — identical/)).toBeNull();
+  });
+
+  /**
+   * `SpendBlock`'s `SystemTag` lives inside `CapMeter`'s `footnote` callback,
+   * which `CapMeter` calls unconditionally regardless of `capReasonOf` —  but
+   * that independence is worth pinning directly: a `reason` other than
+   * `'capped'` (the only one the suite above's default fixture exercises)
+   * takes the meter's `emptyState` branch instead of drawing a `Track`, and a
+   * future change to that branch must not walk the tag out with it.
+   */
+  it('still labels the LLM cap tile as system when the cap is uncapped, not drawn as a meter', () => {
+    renderRail(
+      makeFeed({
+        snapshot: makeSnapshot({
+          arm: 'live',
+          llm_spend: makeSpend({ cap_usd: null, cap_armed_at: '2026-08-05T14:00:00.000Z' }),
+        }),
+      }),
+    );
+    const cap = screen.getByText('LLM cap').closest('[data-field="llm-cap"]');
+    expect(cap).toBeTruthy();
+    expect(within(cap as HTMLElement).getByText(/meter not drawable/)).toBeTruthy();
+    expect(within(cap as HTMLElement).getByText('system — identical in both arms')).toBeTruthy();
   });
 });

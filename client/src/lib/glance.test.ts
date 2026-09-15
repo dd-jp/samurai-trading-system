@@ -1,46 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { makeClosedTrade, makePosition } from '../test-fixtures.ts';
-import { deployedNotional, openRiskRow, pnlToday } from './glance.ts';
-
-const AS_OF = '2026-08-07T12:00:00.000Z';
-
-describe('pnlToday', () => {
-  it('counts only the closes on the snapshot’s UTC date, never the browser’s', () => {
-    const today = makeClosedTrade({ idempotency_key: 'a', realized_pnl_net: 10, fees_total: 1 });
-    const lateToday = makeClosedTrade({
-      idempotency_key: 'b',
-      closed_at: '2026-08-07T23:59:59.000Z',
-      realized_pnl_net: -4,
-      fees_total: 0.5,
-    });
-    const yesterday = makeClosedTrade({
-      idempotency_key: 'c',
-      closed_at: '2026-08-06T23:59:59.000Z',
-      realized_pnl_net: 100,
-    });
-    const pnl = pnlToday([], [today, lateToday, yesterday], AS_OF);
-    expect(pnl.realized).toBe(6);
-    expect(pnl.costs).toBe(1.5);
-    expect(pnl.closedCount).toBe(2);
-  });
-
-  it('adds every open position’s unrealized figure to the total', () => {
-    const pnl = pnlToday(
-      [makePosition({ unrealized_pnl: 5 }), makePosition({ unrealized_pnl: -2 })],
-      [makeClosedTrade({ realized_pnl_net: 3 })],
-      AS_OF,
-    );
-    expect(pnl.unrealized).toBe(3);
-    expect(pnl.total).toBe(6);
-    expect(pnl.openCount).toBe(2);
-  });
-
-  it('treats an unparseable as_of as a day with no closes rather than every close', () => {
-    const pnl = pnlToday([], [makeClosedTrade()], 'not a date');
-    expect(pnl.realized).toBe(0);
-    expect(pnl.closedCount).toBe(0);
-  });
-});
+import { makePosition } from '../test-fixtures.ts';
+import { deployedNotional, openRiskRow } from './glance.ts';
 
 describe('openRiskRow', () => {
   it('measures a long’s stop distance downward and its progress toward the target', () => {

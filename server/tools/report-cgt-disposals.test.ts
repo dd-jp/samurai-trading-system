@@ -172,5 +172,19 @@ describe('buildCgtReport — the composed read → match → window chain, again
     expect(report.disposals).toHaveLength(0);
     expect(unconverted).toHaveLength(1);
     expect(unconverted[0].currency).toBe('USD');
+    // #1521 round 1 review: the report must say WHY, not just flag the
+    // currency — this fill predates fx_rate_to_gbp_source entirely.
+    expect(unconverted[0].fxRateToGbpSource).toBe('no_rate_stored');
+
+    const text = formatCgtReport(
+      report,
+      unconverted,
+      'live',
+      '/tmp/samurai-live.db',
+      new Date('2025-07-01T00:00:00Z'),
+    );
+    const uncRow = text.split('\n').find((l) => l.includes('LSE:USD3X'));
+    expect(uncRow).toContain('USD');
+    expect(uncRow).toContain('no_rate_stored');
   });
 });

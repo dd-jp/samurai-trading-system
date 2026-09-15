@@ -30,7 +30,7 @@ import {
 } from '../../pipeline/feedback-loop/index.js';
 import type { OutsideBenchmarkSample } from '../../pipeline/outside-benchmark/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
-import type { ClosedTrade, DebateLog, Fill, OpenPosition } from '../../shared/index.js';
+import type { ClosedTrade, DebateLog, Fill, OpenPosition, TradingArm } from '../../shared/index.js';
 import { toBrokerFillId } from '../../shared/index.js';
 import type { MetricsSuite } from '../../tools/backtest/index.js';
 import type {
@@ -856,12 +856,33 @@ export class InMemoryQueryStore implements DashboardQueryStore {
     return TICK_STATUS;
   }
 
-  getOpenPositions(_asOf: Date): OpenPosition[] {
+  /**
+   * #1592: `arm` accepted (so a subclass can override arm-aware, per-arm
+   * behavior — `server.test.ts`'s `TwoArmQueryStore`) but ignored here — this
+   * fixture's data has never varied by arm, and giving it a second, static
+   * "control" fixture set is out of scope for a dev/test seed store.
+   *
+   * Consequence for `fixture-server.ts` (the Playwright/e2e entry): the real
+   * `server.ts` handler stamps the wire snapshot's `arm` field from the
+   * request's own `?arm=` regardless of what the store returns, so hitting
+   * `?arm=control` against the fixture server yields these same live rows
+   * mislabelled `arm: 'control'`. Arm-scoping IS proven at the HTTP layer —
+   * `server.test.ts`'s `TwoArmQueryStore` covers it against the real server —
+   * but any Playwright/e2e test built against this fixture store (#1595)
+   * cannot use position/closed-trade content to tell the arms apart; it would
+   * pass vacuously against a regression that broke real cross-arm scoping.
+   */
+  getOpenPositions(_asOf: Date, _arm: TradingArm): OpenPosition[] {
     return OPEN_POSITIONS;
   }
 
-  getRecentClosedTrades(limit: number, _asOf: Date): ClosedTrade[] {
+  getRecentClosedTrades(limit: number, _asOf: Date, _arm: TradingArm): ClosedTrade[] {
     return CLOSED_TRADES.slice(0, limit);
+  }
+
+  /** #1595: same arm-insensitive limitation as `getRecentClosedTrades` above — see its doc. */
+  getAllClosedTrades(_asOf: Date, _arm: TradingArm): ClosedTrade[] {
+    return CLOSED_TRADES;
   }
 
   /** Same "scoped to the named lots" contract as `SqliteQueryStore` — see there. */
@@ -870,12 +891,16 @@ export class InMemoryQueryStore implements DashboardQueryStore {
     return FILLS.filter((fill) => keys.has(fill.idempotency_key));
   }
 
-  getVerdictHistory(limit: number, _asOf: Date): VerdictAuditEntry[] {
+  /** `arm` accepted and ignored — see `getOpenPositions`'s doc (#1592/#1594). */
+  getVerdictHistory(limit: number, _asOf: Date, _arm: TradingArm): VerdictAuditEntry[] {
     return VERDICT_HISTORY.slice(0, limit);
   }
 
-  /** #1066. `limit` is honoured for `getPipelineActivity`'s reason. */
-  getRiskCritics(limit: number, _asOf: Date): RiskCriticRecord[] {
+  /**
+   * #1066. `limit` is honoured for `getPipelineActivity`'s reason. `arm`
+   * accepted and ignored — see `getOpenPositions`'s doc (#1592/#1594).
+   */
+  getRiskCritics(limit: number, _asOf: Date, _arm: TradingArm): RiskCriticRecord[] {
     return RISK_CRITICS.slice(0, limit).map((record) => ({ ...record }));
   }
 
@@ -883,11 +908,13 @@ export class InMemoryQueryStore implements DashboardQueryStore {
     return { ...ANALYST_WEIGHTS };
   }
 
-  getAttribution(_asOf: Date): Record<string, AttributionSummary> {
+  /** `arm` accepted and ignored — see `getOpenPositions`'s doc (#1592/#1594). */
+  getAttribution(_asOf: Date, _arm: TradingArm): Record<string, AttributionSummary> {
     return { ...ATTRIBUTION };
   }
 
-  getDailyMetrics(_asOf: Date): MetricsSuite {
+  /** `arm` accepted and ignored — see `getOpenPositions`'s doc (#1592/#1594). */
+  getDailyMetrics(_asOf: Date, _arm: TradingArm): MetricsSuite {
     return { ...DAILY_METRICS };
   }
 
@@ -935,9 +962,17 @@ export class InMemoryQueryStore implements DashboardQueryStore {
    * ignored its own bound would let the dashboard ship never having exercised
    * one); `lookbackMs` and `asOf` are not, for the same reason every method
    * above ignores `asOf` — the fixture data is static, so every trace is
-   * always "recent".
+   * always "recent". `arm` accepted and ignored — see `getOpenPositions`'s doc
+   * (#1592/#1594); unlike `SqliteQueryStore`, there is no `current_tick`
+   * table here for `live` to vary by, so `arm: 'control'` returns the same
+   * `live` array as `arm: 'live'` rather than `[]`.
    */
-  getPipelineActivity(maxLanes: number, _lookbackMs: number, _asOf: Date): PipelineActivity {
+  getPipelineActivity(
+    maxLanes: number,
+    _lookbackMs: number,
+    _asOf: Date,
+    _arm: TradingArm,
+  ): PipelineActivity {
     const universe = Object.entries(MARKS)
       .map(([instrument, mark]) => ({ instrument, asset_class: mark.asset_class }))
       .slice(0, maxLanes);

@@ -20,6 +20,7 @@
  * reports its mode the same way the real one does.
  */
 import { fileURLToPath } from 'node:url';
+import type { TradingArm } from '../../shared/index.js';
 import { resolveStoreMode } from '../../shared/store/index.js';
 import { DASHBOARD_CREDENTIAL_ENV_VAR } from './bind-guard.js';
 import { FIXTURE_NOW, InMemoryQueryStore } from './fixture-store.js';
@@ -118,7 +119,7 @@ const E2E_VERDICTS: VerdictAuditEntry[] = [
 
 /** The fixture store, with its verdict history joined to the pipeline fixtures. */
 class E2eFixtureStore extends InMemoryQueryStore {
-  override getVerdictHistory(limit: number, _asOf: Date): VerdictAuditEntry[] {
+  override getVerdictHistory(limit: number, _asOf: Date, _arm: TradingArm): VerdictAuditEntry[] {
     return E2E_VERDICTS.slice(0, limit);
   }
 }

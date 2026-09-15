@@ -145,9 +145,14 @@ import type { Logger } from './types.js';
  * real anomaly among the benign ones").
  *
  * `warn` is a LOG level, not a page: this feeds `logger.log` and nothing
- * escalates off it. Making the unrecorded shape audible on a phone needs an
- * `AlertChannelSlots` channel raised by `findUnrecordedVenuePositions`
- * itself — named as follow-up work in #1506's PR, not done here.
+ * escalates off it. That is no longer the whole story for the unrecorded
+ * shape — #1550 gave it an `AlertChannelSlots` channel
+ * (`UnrecordedVenuePositionAlertChannel`) raised by
+ * `findUnrecordedVenuePositions` itself, throttled per instrument, so the page
+ * exists independently of what this function returns. The `warn` here is still
+ * the log-side record, and the two are deliberately separate: the page fires
+ * once per instrument per re-page window, this line once per poll per
+ * divergence (collapsed by `lastReconcileAction` below).
  */
 function reconcileDivergenceLevel(divergence: ReconcileDivergence): LogLevel {
   if (divergence.action === 'undetermined' || divergence.action === 'unrecorded') return 'warn';
@@ -162,15 +167,28 @@ function reconcileDivergenceLevel(divergence: ReconcileDivergence): LogLevel {
 }
 
 /**
- * `lastReconcileAction`'s comparison value (#1577). `action` alone collapses
- * `cancelWedgedFlatten`'s escalated cancel onto the benign flatten adopt that
- * precedes it in the same episode — both are `action: 'adopted'`, differing
- * only in `reason` — so a row that already logged the benign line never logs
- * the escalation. Folding `escalated` in gives the two states distinct
- * dedup values without widening `action` itself.
+ * `lastReconcileAction`'s comparison value (#1577, widened #1585). `action`
+ * alone collapses two different rows onto one dedup state: `cancelWedgedFlatten`'s
+ * escalated cancel shares `action: 'adopted'` with the benign flatten adopt one
+ * pass earlier, and `cancelNeverConfirmedFlatten`'s three blocking outcomes all
+ * share `action: 'undetermined'` with the SAME row's own prior-pass state
+ * (reconcile.ts) — in both cases differing only in `reason`, which this
+ * function does not compare. Folding the named `escalation` in (rather than a
+ * bare boolean, #1585) gives every one of those four events its own dedup
+ * value, distinct from the benign action AND from each other — a row cancelled
+ * and still short of coverage is not the same fact as the same row merely
+ * throttled from an earlier cancel.
+ *
+ * Shared with `lastSweepAction`'s loop below (#1615): `sweepResidualProtection`'s
+ * (residual-protection-sweep.ts) push sites are the identical collision for a
+ * different source — see `ReconcileEscalation`'s doc (execution.ts) for the
+ * full site count and why one of them needs two values. One function, so the
+ * two loops cannot drift on what "same dedup state" means.
  */
 function reconcileDedupState(divergence: ReconcileDivergence): string {
-  return divergence.escalated ? `${divergence.action}:escalated` : divergence.action;
+  return divergence.escalation
+    ? `${divergence.action}:${divergence.escalation}`
+    : divergence.action;
 }
 
 /**
@@ -325,12 +343,21 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
    * Per-lot dedup for the sweep-divergence log line (#549 review, #342's
    * repeated-line lesson): a lot stuck `undetermined` is returned by EVERY
    * pass, and a warn re-fired on every poll cadence indefinitely is a line
-   * nobody reads. Logged on first observation and on state TRANSITIONS
-   * (`undetermined` -> `adopted` and vice versa) only; a lot that leaves the
-   * sweep's report is forgotten here, so a LATER episode on the same lot
-   * logs afresh — the same episode scoping the durable alert dedup uses.
-   * In-memory deliberately: this dedups a log line, not the page, and a
-   * restart re-logging current state once is a feature.
+   * nobody reads. Logged on first observation and on state TRANSITIONS only;
+   * a lot that leaves the sweep's report is forgotten here, so a LATER
+   * episode on the same lot logs afresh — the same episode scoping the
+   * durable alert dedup uses. In-memory deliberately: this dedups a log
+   * line, not the page, and a restart re-logging current state once is a
+   * feature.
+   *
+   * Keyed on `reconcileDedupState()` (#1615), not bare `action`, for the
+   * same reason `lastReconcileAction` below is: `sweepResidualProtection`'s
+   * (residual-protection-sweep.ts) push sites all share `action:
+   * 'undetermined'` — see `ReconcileEscalation`'s doc (execution.ts) for the
+   * site count — so a bare-`action` key logs only the first of whichever one
+   * a lot hit first and stays silent through every later, distinct one: the
+   * transition this map exists to report. One dedup-state shape, matching
+   * `lastReconcileAction`'s.
    */
   const lastSweepAction = new Map<string, string>();
   /**
@@ -428,9 +455,10 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
         const reportedThisPass = new Set<string>();
         for (const divergence of sweep.divergences) {
           reportedThisPass.add(divergence.idempotency_key);
+          const dedupState = reconcileDedupState(divergence);
           // Repeat pass, same state: already logged — see `lastSweepAction`.
-          if (lastSweepAction.get(divergence.idempotency_key) === divergence.action) continue;
-          lastSweepAction.set(divergence.idempotency_key, divergence.action);
+          if (lastSweepAction.get(divergence.idempotency_key) === dedupState) continue;
+          lastSweepAction.set(divergence.idempotency_key, dedupState);
           deps.logger.log({
             trace_id: deps.fillSyncTraceId,
             stage: 'execution',

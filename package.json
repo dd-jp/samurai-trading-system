@@ -41,30 +41,30 @@
     "saxo:login": "tsx --env-file=.env.local server/tools/saxo-login.ts"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.3",
-    "@fontsource/chakra-petch": "^5.3.0",
-    "@fontsource/ibm-plex-mono": "^5.3.0",
-    "@fontsource/ibm-plex-sans": "^5.3.0",
-    "@playwright/test": "^1.62.1",
-    "@testing-library/dom": "^10.4.1",
-    "@testing-library/react": "^16.3.2",
-    "@types/better-sqlite3": "^7.6.13",
-    "@types/node": "^26.1.1",
-    "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.4",
-    "@vitejs/plugin-react": "^6.0.5",
+    "@biomejs/biome": "2.5.13",
+    "@fontsource/chakra-petch": "5.3.0",
+    "@fontsource/ibm-plex-mono": "5.3.0",
+    "@fontsource/ibm-plex-sans": "5.3.0",
+    "@playwright/test": "1.62.1",
+    "@testing-library/dom": "10.4.1",
+    "@testing-library/react": "16.3.2",
+    "@types/better-sqlite3": "7.6.13",
+    "@types/node": "26.1.1",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4",
+    "@vitejs/plugin-react": "6.0.5",
     "@vitest/coverage-v8": "4.1.11",
-    "jsdom": "^30.0.1",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8",
-    "tsx": "^4.23.11",
-    "typescript": "^7.0.2",
-    "vite": "^8.2.0",
-    "vitest": "^4.1.11"
+    "jsdom": "30.0.1",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "tsx": "4.23.11",
+    "typescript": "7.0.2",
+    "vite": "8.2.0",
+    "vitest": "4.1.11"
   },
   "dependencies": {
-    "@fontsource/shippori-mincho": "^5.3.0",
-    "better-sqlite3": "^13.0.1"
+    "@fontsource/shippori-mincho": "5.3.0",
+    "better-sqlite3": "13.0.1"
   },
   "allowScripts": {
     "better-sqlite3@13.0.1": true

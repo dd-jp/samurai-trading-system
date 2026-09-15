@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { makeMetrics, makeSnapshot } from '../test-fixtures.ts';
-import { RECOGNISED_MODES, toWireSnapshot } from './useSnapshot.ts';
+import { RECOGNISED_MODES, snapshotUrl, toWireSnapshot } from './useSnapshot.ts';
 
 /** A payload as it comes off `response.json()`: untyped, possibly wrong. */
 function raw(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -30,17 +30,12 @@ describe('toWireSnapshot', () => {
     expect(snapshot?.mode).toBeNull();
   });
 
-  it.each([
-    ['staging'],
-    [''],
-    ['PAPER'],
-    [' live'],
-    [42],
-    [null],
-    [{ mode: 'live' }],
-  ])('narrows the unrecognised mode %o to null', (mode) => {
-    expect(toWireSnapshot(raw({ mode }))?.mode).toBeNull();
-  });
+  it.each([['staging'], [''], ['PAPER'], [' live'], [42], [null], [{ mode: 'live' }]])(
+    'narrows the unrecognised mode %o to null',
+    (mode) => {
+      expect(toWireSnapshot(raw({ mode }))?.mode).toBeNull();
+    },
+  );
 
   it('never coerces an unknown mode toward "paper"', () => {
     // The asymmetric failure this whole field exists to prevent: a page that
@@ -195,6 +190,38 @@ describe('toWireSnapshot', () => {
     expect(toWireSnapshot(body)?.llm_spend).toEqual(body.llm_spend);
   });
 
+  it('passes a real pnl headline through untouched', () => {
+    const body = raw();
+    expect(toWireSnapshot(body)?.pnl).toEqual(body.pnl);
+  });
+
+  it('narrows an absent, null, or non-object pnl to null (PR #1619 review, finding 1)', () => {
+    const absent = raw();
+    delete absent.pnl;
+    expect(toWireSnapshot(absent)?.pnl).toBeNull();
+    expect(toWireSnapshot(raw({ pnl: null }))?.pnl).toBeNull();
+    expect(toWireSnapshot(raw({ pnl: 'unavailable' }))?.pnl).toBeNull();
+    expect(toWireSnapshot(raw({ pnl: [] }))?.pnl).toBeNull();
+  });
+
+  it('narrows a pnl headline missing overall or today to null instead of dereferencing it', () => {
+    // `CONTRACT_VERSION` hashes only `DashboardSnapshot`'s own top-level field
+    // names (`contracts/snapshot.ts`), so a rename nested inside
+    // `PnlHeadlineWire.overall`/`.today` moves nothing there and lands here
+    // structurally "known good" but missing the field `PnlCard` dereferences
+    // straight into with no error boundary — the same shape `llm_spend`'s
+    // `all_time`/`per_debate` check above guards.
+    const headline = makeSnapshot().pnl as unknown as Record<string, unknown>;
+    const withoutOverall = { ...headline };
+    delete withoutOverall.overall;
+    const withoutToday = { ...headline };
+    delete withoutToday.today;
+
+    for (const pnl of [withoutOverall, withoutToday, { ...headline, overall: 'x' }, {}]) {
+      expect(toWireSnapshot(raw({ pnl }))?.pnl).toBeNull();
+    }
+  });
+
   it('rejects a body that is not a snapshot at all', () => {
     expect(toWireSnapshot(null)).toBeNull();
     expect(toWireSnapshot('<html>captive portal</html>')).toBeNull();
@@ -229,14 +256,13 @@ describe('toWireSnapshot', () => {
       expect(toWireSnapshot(body)?.metrics.profit_factor).toEqual({ kind: 'ratio', value: 0 });
     });
 
-    it.each([
-      { kind: 'ratio', value: 2.5 },
-      { kind: 'no_losses' },
-      { kind: 'unreadable' },
-    ])("passes today's server shape %o through untouched", (shape) => {
-      const body = raw({ metrics: { ...makeMetrics(), profit_factor: shape } });
-      expect(toWireSnapshot(body)?.metrics.profit_factor).toEqual(shape);
-    });
+    it.each([{ kind: 'ratio', value: 2.5 }, { kind: 'no_losses' }, { kind: 'unreadable' }])(
+      "passes today's server shape %o through untouched",
+      (shape) => {
+        const body = raw({ metrics: { ...makeMetrics(), profit_factor: shape } });
+        expect(toWireSnapshot(body)?.metrics.profit_factor).toEqual(shape);
+      },
+    );
 
     // Each row is wrapped in its own 1-tuple: `it.each` spreads a row that is
     // itself an array as a MULTI-argument call rather than a single `%o`
@@ -257,5 +283,26 @@ describe('toWireSnapshot', () => {
       const body = raw({ metrics: { ...makeMetrics(), profit_factor: malformed } });
       expect(toWireSnapshot(body)?.metrics.profit_factor).toEqual({ kind: 'unreadable' });
     });
+  });
+});
+
+/**
+ * #1593: the URL a poll actually fetches. `undefined` and `'live'` must be
+ * the SAME request as before this option existed — a byte-for-byte identical
+ * string, not merely an equivalent one the server happens to answer the same
+ * way — because the default, no-arm-selected dashboard must not change its
+ * request shape at all.
+ */
+describe('snapshotUrl', () => {
+  it('leaves the URL untouched when arm is undefined', () => {
+    expect(snapshotUrl('/api/snapshot')).toBe('/api/snapshot');
+  });
+
+  it('leaves the URL untouched when arm is explicitly live', () => {
+    expect(snapshotUrl('/api/snapshot', 'live')).toBe('/api/snapshot');
+  });
+
+  it('appends ?arm=control only for the control arm', () => {
+    expect(snapshotUrl('/api/snapshot', 'control')).toBe('/api/snapshot?arm=control');
   });
 });

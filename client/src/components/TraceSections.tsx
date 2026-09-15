@@ -23,7 +23,7 @@ import {
   presentCriticVerdict,
   presentVerdictStatus,
 } from '../lib/state-presentation.ts';
-import { stageName } from '../lib/vocabulary.ts';
+import { CONTROL_NO_CRITIC, CONTROL_NO_DEBATE, stageName } from '../lib/vocabulary.ts';
 import { StanceStrip } from './StanceStrip.tsx';
 import { StateWord } from './StateWord.tsx';
 
@@ -78,7 +78,17 @@ function bindingConstraintText(constraint: string | null): string {
   return constraint;
 }
 
-function criticVerdictText(row: RiskCriticRow): string {
+/**
+ * `isControl` overrides the whole reading, not just a fallback (#1597): the
+ * control arm calls no model and so consults no critic — `critic_verdict` is
+ * `null` on its own rows for that structural reason, not because a live-only
+ * critic was skipped this one time, and the two must not share a sentence.
+ * The binding constraint and conditions above this line still render
+ * normally — the control's own Risk decision happened and is not absent
+ * (dashboard-spec.md's #1594 amendment) — only the critic verdict is N/A.
+ */
+function criticVerdictText(row: RiskCriticRow, isControl: boolean): string {
+  if (isControl) return CONTROL_NO_CRITIC;
   if (row.critic_verdict === null) {
     return 'no critic verdict — skipped, or no linked debate';
   }
@@ -93,9 +103,11 @@ export interface GatesSectionProps {
   verdict: VerdictRow | undefined;
   /** How the row was found — the empty state names the key that found nothing. */
   keyedBy: RiskCriticJoin;
+  /** The control arm consults no critic — see `criticVerdictText`'s doc comment. */
+  isControl: boolean;
 }
 
-export function GatesSection({ riskCritic, verdict, keyedBy }: GatesSectionProps) {
+export function GatesSection({ riskCritic, verdict, keyedBy, isControl }: GatesSectionProps) {
   return (
     <div data-section="gates">
       {verdict !== undefined && (
@@ -114,13 +126,19 @@ export function GatesSection({ riskCritic, verdict, keyedBy }: GatesSectionProps
             : "No Risk decision keyed to this trade's debate in the recent-decisions window."}
         </p>
       ) : (
-        <RiskCriticBody riskCritic={riskCritic} />
+        <RiskCriticBody riskCritic={riskCritic} isControl={isControl} />
       )}
     </div>
   );
 }
 
-function RiskCriticBody({ riskCritic }: { riskCritic: RiskCriticRow }) {
+function RiskCriticBody({
+  riskCritic,
+  isControl,
+}: {
+  riskCritic: RiskCriticRow;
+  isControl: boolean;
+}) {
   const conditions = riskCritic.conditions ?? [];
   const dropped = riskCritic.dropped_conditions ?? [];
   return (
@@ -140,7 +158,7 @@ function RiskCriticBody({ riskCritic }: { riskCritic: RiskCriticRow }) {
       </p>
       <p className="gate-line" data-critic={riskCritic.critic_verdict ?? 'none'}>
         <StateWord state={presentCriticVerdict(riskCritic.critic_verdict)} />
-        <span>{criticVerdictText(riskCritic)}</span>
+        <span>{criticVerdictText(riskCritic, isControl)}</span>
       </p>
       {conditions.length === 0 ? (
         <p
@@ -197,15 +215,19 @@ export interface DebateSectionProps {
   /** `true` while the selected lane is still running — changes the empty state. */
   inFlight: boolean;
   linkedBy: DebateJoin;
+  /** The control arm trades by indicator alone and never runs a debate (#1597). */
+  isControl: boolean;
 }
 
-export function DebateSection({ debate, inFlight, linkedBy }: DebateSectionProps) {
+export function DebateSection({ debate, inFlight, linkedBy, isControl }: DebateSectionProps) {
   if (debate === undefined) {
     return (
       <p className="empty-state" data-section="debate">
-        {inFlight
-          ? 'Tick in flight — rounds are not persisted (decision #10); shown once the debate completes.'
-          : 'No completed debate recorded for this instrument in the recent-debates window.'}
+        {isControl
+          ? CONTROL_NO_DEBATE
+          : inFlight
+            ? 'Tick in flight — rounds are not persisted (decision #10); shown once the debate completes.'
+            : 'No completed debate recorded for this instrument in the recent-debates window.'}
       </p>
     );
   }

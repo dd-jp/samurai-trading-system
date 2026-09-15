@@ -351,6 +351,60 @@ describe('startFillSync', () => {
 
       await sync.stop();
     });
+
+    // #1615: `sweepResidualProtection`'s six push sites all share
+    // `action: 'undetermined'` and `kind: 'sweep'`; before this fix
+    // `lastSweepAction` compared bare `action` alone, so a lot that moved
+    // between two of them (a garbage-residual pass, then a genuinely
+    // unsupported re-arm) would have deduped the second as "same state" and
+    // never logged it.
+    it('logs two different residual-sweep escalations on the same lot as distinct episodes, not deduped as one', async () => {
+      const logger = makeLogger();
+      const base = {
+        idempotency_key: 'key-nvda-9001',
+        instrument: 'NVDA',
+        store_state: 'partially_filled' as const,
+        broker_state: null,
+        action: 'undetermined' as const,
+        kind: 'sweep' as const,
+      };
+      const garbageResidual = {
+        ...base,
+        reason: 'marked residual recomputes to -1 (non-finite or non-positive)',
+        escalation: 'residual_sweep_garbage_residual' as const,
+      };
+      const rearmUnsupported = {
+        ...base,
+        reason: 'this lot can never be re-armed and the residual could not be closed either',
+        escalation: 'residual_sweep_rearm_unsupported' as const,
+      };
+      const execution = makeExecution({
+        sweepResidualProtection: vi
+          .fn()
+          .mockResolvedValueOnce({ checked: 1, divergences: [garbageResidual] })
+          .mockResolvedValueOnce({ checked: 1, divergences: [rearmUnsupported] })
+          .mockResolvedValue({ checked: 0, divergences: [] }),
+      });
+      const sync = startFillSync({
+        execution,
+        clock: { now: () => new Date() },
+        logger,
+        fillPollIntervalMs: 1_000,
+        reconcileTraceId: 'test-reconcile',
+        fillSyncTraceId: 'test-fill-sync',
+      });
+
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      const divergenceLines = logger.entries.filter(
+        (entry) => entry.message === 'residual-protection sweep divergence',
+      );
+      expect(
+        divergenceLines.map((entry) => (entry.payload as { escalation?: string }).escalation),
+      ).toEqual(['residual_sweep_garbage_residual', 'residual_sweep_rearm_unsupported']);
+
+      await sync.stop();
+    });
   });
 
   // #921: `reconcile()` moves from startup-only to also running on every
@@ -535,7 +589,7 @@ describe('startFillSync', () => {
         reason:
           "flatten journal said 'submitted'; broker reports 'submitted'; the venue still " +
           'reports this flatten after 300s — past the bound, so it is being CANCELLED',
-        escalated: true as const,
+        escalation: 'wedge_cancelled' as const,
       };
       const execution = makeExecution({
         reconcile: vi
@@ -559,10 +613,175 @@ describe('startFillSync', () => {
         (entry) => entry.message === 'reconcile divergence',
       );
       expect(divergenceLines).toHaveLength(2);
-      const firstPayload = divergenceLines[0]?.payload as { action: string; escalated?: true };
+      const firstPayload = divergenceLines[0]?.payload as { action: string; escalation?: string };
       expect(firstPayload).toMatchObject({ action: 'adopted' });
-      expect(firstPayload.escalated).toBeUndefined();
-      expect(divergenceLines[1]?.payload).toMatchObject({ action: 'adopted', escalated: true });
+      expect(firstPayload.escalation).toBeUndefined();
+      expect(divergenceLines[1]?.payload).toMatchObject({
+        action: 'adopted',
+        escalation: 'wedge_cancelled',
+      });
+
+      await sync.stop();
+    });
+
+    // #1585: `cancelNeverConfirmedFlatten`'s three blocking outcomes share
+    // `action: 'undetermined'` with the SAME row's own prior-pass state (a
+    // `resumeFlatten` throw before the age bound is also `undetermined`) — the
+    // exact shape #1577 fixed for `cancelWedgedFlatten`'s `adopted -> adopted`,
+    // just on `undetermined` instead. Without a distinguishing `escalation`
+    // these dedup away and never get their own line.
+    it("logs a never-confirmed-flatten escalation even though it shares action: undetermined with the row's own prior state", async () => {
+      const logger = makeLogger();
+      const priorUndetermined = {
+        idempotency_key: 'key-tsla-flatten',
+        instrument: 'TSLA',
+        store_state: 'submitted' as const,
+        broker_state: null,
+        action: 'undetermined' as const,
+        kind: 'flatten' as const,
+        reason: 'the venue could not describe this flatten (resumeFlatten: venue unreachable)',
+      };
+      const coverageShort = {
+        ...priorUndetermined,
+        reason:
+          `${priorUndetermined.reason}. It was CANCELLED at the venue, but the venue holds ` +
+          'less than the store does, so the row keeps blocking',
+        escalation: 'never_confirmed_coverage_short' as const,
+      };
+      const execution = makeExecution({
+        reconcile: vi
+          .fn()
+          .mockResolvedValueOnce(makeReport({ divergences: [priorUndetermined] }))
+          .mockResolvedValueOnce(makeReport({ divergences: [coverageShort] }))
+          .mockResolvedValue(makeReport()),
+      });
+      const sync = startFillSync({
+        execution,
+        clock: { now: () => new Date() },
+        logger,
+        fillPollIntervalMs: 1_000,
+        reconcileTraceId: 'test-reconcile',
+        fillSyncTraceId: 'test-fill-sync',
+      });
+
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      const divergenceLines = logger.entries.filter(
+        (entry) => entry.message === 'reconcile divergence',
+      );
+      expect(divergenceLines).toHaveLength(2);
+      const firstPayload = divergenceLines[0]?.payload as { action: string; escalation?: string };
+      expect(firstPayload).toMatchObject({ action: 'undetermined' });
+      expect(firstPayload.escalation).toBeUndefined();
+      expect(divergenceLines[1]?.payload).toMatchObject({
+        action: 'undetermined',
+        escalation: 'never_confirmed_coverage_short',
+      });
+
+      await sync.stop();
+    });
+
+    // #1585's round-1-noted separate minor: a boolean can tell "escalated" from
+    // "not", but not WHICH escalation — a cancel that failed and a later cancel
+    // that succeeded but found coverage short are different operator facts,
+    // both `action: 'undetermined'`, and both must log even back-to-back.
+    it('logs two different never-confirmed-flatten escalations on the same row as distinct episodes', async () => {
+      const logger = makeLogger();
+      const base = {
+        idempotency_key: 'key-tsla-flatten',
+        instrument: 'TSLA',
+        store_state: 'submitted' as const,
+        broker_state: null,
+        action: 'undetermined' as const,
+        kind: 'flatten' as const,
+      };
+      const cancelFailed = {
+        ...base,
+        reason: 'the cancel FAILED (venue refused); the row keeps blocking',
+        escalation: 'never_confirmed_cancel_failed' as const,
+      };
+      const coverageShort = {
+        ...base,
+        reason: 'it was CANCELLED at the venue, but the venue holds less than the store does',
+        escalation: 'never_confirmed_coverage_short' as const,
+      };
+      const execution = makeExecution({
+        reconcile: vi
+          .fn()
+          .mockResolvedValueOnce(makeReport({ divergences: [cancelFailed] }))
+          .mockResolvedValueOnce(makeReport({ divergences: [coverageShort] }))
+          .mockResolvedValue(makeReport()),
+      });
+      const sync = startFillSync({
+        execution,
+        clock: { now: () => new Date() },
+        logger,
+        fillPollIntervalMs: 1_000,
+        reconcileTraceId: 'test-reconcile',
+        fillSyncTraceId: 'test-fill-sync',
+      });
+
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      const divergenceLines = logger.entries.filter(
+        (entry) => entry.message === 'reconcile divergence',
+      );
+      expect(
+        divergenceLines.map((entry) => (entry.payload as { escalation?: string }).escalation),
+      ).toEqual(['never_confirmed_cancel_failed', 'never_confirmed_coverage_short']);
+
+      await sync.stop();
+    });
+
+    // #1609: `sweepWedgedZeroFillLots`'s two independent push sites — the
+    // SQL-guard shape mismatch and the store-write `catch` block — share
+    // `action: 'undetermined'` AND `kind: 'sweep'`, the same collision shape
+    // #1585 fixed for the never-confirmed-flatten trio, just on a sweep row
+    // instead of a flatten row.
+    it('logs two different wedged-zero-fill sweep escalations on the same lot as distinct episodes', async () => {
+      const logger = makeLogger();
+      const base = {
+        idempotency_key: 'key-meta-1',
+        instrument: 'META',
+        store_state: 'filled' as const,
+        broker_state: null,
+        action: 'undetermined' as const,
+        kind: 'sweep' as const,
+      };
+      const shapeMismatch = {
+        ...base,
+        reason: 'wedged-zero-fill shape mismatch: isWedgedZeroFillLot still matches',
+        escalation: 'sweep_shape_mismatch' as const,
+      };
+      const abandonFailed = {
+        ...base,
+        reason: 'wedged-zero-fill abandon failed: store write failed',
+        escalation: 'sweep_abandon_failed' as const,
+      };
+      const execution = makeExecution({
+        reconcile: vi
+          .fn()
+          .mockResolvedValueOnce(makeReport({ divergences: [shapeMismatch] }))
+          .mockResolvedValueOnce(makeReport({ divergences: [abandonFailed] }))
+          .mockResolvedValue(makeReport()),
+      });
+      const sync = startFillSync({
+        execution,
+        clock: { now: () => new Date() },
+        logger,
+        fillPollIntervalMs: 1_000,
+        reconcileTraceId: 'test-reconcile',
+        fillSyncTraceId: 'test-fill-sync',
+      });
+
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      const divergenceLines = logger.entries.filter(
+        (entry) => entry.message === 'reconcile divergence',
+      );
+      expect(
+        divergenceLines.map((entry) => (entry.payload as { escalation?: string }).escalation),
+      ).toEqual(['sweep_shape_mismatch', 'sweep_abandon_failed']);
 
       await sync.stop();
     });

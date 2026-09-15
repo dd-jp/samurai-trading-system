@@ -30,6 +30,7 @@
  */
 import type { Database } from 'better-sqlite3';
 import type { OrderState } from '../../../contracts/index.js';
+import type { OpenPosition } from '../types/records.js';
 
 /**
  * `order_state`s that are finished — excluded from `getOpenPositions()`
@@ -64,6 +65,34 @@ export const TERMINAL_ORDER_STATES: readonly OrderState[] = [
  * only safe reservation is one the reconcile pass can release.
  */
 export const IN_FLIGHT_ORDER_STATES: readonly OrderState[] = ['pending', 'submitted'];
+
+/**
+ * A lot adopted `filled`/`partially_filled` from broker truth whose
+ * `filled_size` has not moved off zero — the shape
+ * `wedged-zero-fill-sweep.ts` retires after `WEDGED_ZERO_FILL_ABANDON_AFTER_MS`
+ * (execution/), and the shape `portfolio-view.ts` reserves against the entry
+ * caps until one of that sweep or a real fill resolves it (#1568).
+ *
+ * Lives here for the same reason `IN_FLIGHT_ORDER_STATES` does — no single
+ * module owns this shape. `wedged-zero-fill-sweep.ts`, `portfolio-view.ts`
+ * and `ingest-fills.ts`'s `FILLED_WITH_ZERO_SIZE` warning gate (#1087) all
+ * read this export (#1586, #1601). `abandonWedgedZeroFillLot`'s SQL UPDATE
+ * guard (sqlite-shared-store.ts) restates the same shape and cannot import
+ * this function — a SQL string is structurally independent no matter how
+ * many TS call sites converge here (#1601).
+ * `portfolio-view.ts`'s reservation is only safe because it shares a release
+ * path with the sweep; that argument holds only while both read the SAME
+ * check, so a second, independently written copy is exactly the
+ * silent-disagreement failure mode this file's own doc names (#1586).
+ */
+export function isWedgedZeroFillLot(
+  position: Pick<OpenPosition, 'order_state' | 'filled_size'>,
+): boolean {
+  return (
+    (position.order_state === 'filled' || position.order_state === 'partially_filled') &&
+    position.filled_size === 0
+  );
+}
 
 /** A lot still in flight whose key predates the #686 derivation. */
 export interface StaleKeySchemeLot {

@@ -58,6 +58,25 @@ export interface UnattributedFlattenFillAlert {
   flatten_idempotency_key: string;
   /** The named lot the split was booked against, already terminal in the store. */
   lot_idempotency_key: string;
+  /**
+   * #1550: the instrument the exposure is IN, read off the flatten's
+   * write-ahead row (`FlattenAttribution.instrument`) rather than off an
+   * `OpenPosition` that no longer exists.
+   *
+   * Without it the operator text named two opaque idempotency keys and no
+   * ticker, so the "check the venue" instruction it ends on could not be
+   * acted on without a store query.
+   */
+  instrument: string;
+  /**
+   * #1550: the CLOSING side the venue transacted — `'sell'` closing a long,
+   * `'buy'` closing a short (`FlattenAttribution.side`).
+   *
+   * The text hardcoded "sold" and "REVERSE" before this field existed, which
+   * is right for a sell-to-close and exactly inverted for a buy-to-close: a
+   * buy that over-runs a closed short leaves the account LONG, not short.
+   */
+  side: 'buy' | 'sell';
   /** The venue's own fill identifier for the split — greppable against the booked `fills` row. */
   broker_fill_id: string;
   /** The split's share, in instrument units: the quantity the venue sold with no live lot behind it. */

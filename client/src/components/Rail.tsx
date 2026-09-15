@@ -1,7 +1,11 @@
-import type { AlpacaBalanceWire, MetricsSuiteWire } from '@contracts';
+import type { AlpacaBalanceWire, MetricsSuiteWire, TradingArmWire } from '@contracts';
 import type { FeedStatus, LiveFeed, SnapshotFeed, WireSnapshot } from '../hooks/useSnapshot.ts';
 import { formatClockUtc, formatPercent, formatUsd } from '../lib/format.ts';
-import { providerStateWord, WAITING_FOR_FIRST_SNAPSHOT } from '../lib/vocabulary.ts';
+import {
+  CONTROL_NO_TICK,
+  providerStateWord,
+  WAITING_FOR_FIRST_SNAPSHOT,
+} from '../lib/vocabulary.ts';
 import { CapMeter } from './CapMeter.tsx';
 
 /**
@@ -20,6 +24,12 @@ export const TABS: readonly { id: Tab; label: string }[] = [
   { id: 'review', label: 'Review' },
 ];
 
+/** The two arms the rail's selector can switch between (#1593). */
+export const ARMS: readonly { id: TradingArmWire; label: string }[] = [
+  { id: 'live', label: 'Live' },
+  { id: 'control', label: 'Control' },
+];
+
 export interface RailProps {
   /**
    * A feed that has already produced a snapshot (#1520). The rail reports on
@@ -33,6 +43,33 @@ export interface RailProps {
   feed: LiveFeed;
   tab: Tab;
   onTab: (tab: Tab) => void;
+  /** Which arm's feed the rail — and everything downstream of it — is showing. */
+  arm: TradingArmWire;
+  onArm: (arm: TradingArmWire) => void;
+}
+
+/**
+ * Plain buttons, not a `role="tablist"` (#1593): the arm selector is a
+ * two-way switch, not a set of panels, and a native `<button>` is already
+ * keyboard-reachable and operable with no roving-tabindex machinery to
+ * duplicate `tabForKey`'s for two items. The selection state is carried IN
+ * the accessible name (AC) rather than left to `aria-selected`/`aria-pressed`
+ * alone, because a screen reader user switching arms needs to hear WHICH
+ * arm is current from the name it just activated, not a separate state
+ * announcement that may or may not be read depending on the AT.
+ *
+ * `aria-label` covers assistive tech, but the selected button's colour tint
+ * (`.arm-btn-on`) is otherwise the ONLY thing telling a sighted user which
+ * arm is current — exactly what dashboard-spec.md's "colour is never the
+ * sole carrier of a signal" rule forbids. The " · selected" span rendered
+ * beside the label below is the visible word that rule requires; it plays no
+ * part in the accessible name, which `aria-label` already fully replaces.
+ */
+function armAriaLabel(
+  entry: { id: TradingArmWire; label: string },
+  current: TradingArmWire,
+): string {
+  return entry.id === current ? `${entry.label} arm, selected` : `${entry.label} arm`;
 }
 
 /**
@@ -173,7 +210,23 @@ function ModeBlock({ snapshot }: { snapshot: WireSnapshot }) {
   );
 }
 
+/**
+ * The control arm is wired with its own in-memory `InMemoryCurrentTickStore`
+ * (`control-arm-wiring.ts`), never persisted, so `tick_status` and the
+ * pipeline's `live_*` fields can never hold a control row — the server
+ * comment quoted below is `sqlite-query-store.ts`'s own name for this state.
+ * Reading them as "idle" under the control arm would understate the absence
+ * as a quiet moment rather than a structural one (#1597).
+ */
 function LiveTickBlock({ snapshot }: { snapshot: WireSnapshot }) {
+  if (snapshot.arm === 'control') {
+    return (
+      <div className="rail-block" data-field="live-tick">
+        <span className="label">Live tick</span>
+        <span className="rail-value muted">{CONTROL_NO_TICK}</span>
+      </div>
+    );
+  }
   const tick = snapshot.tick_status ?? null;
   const enteredAt = snapshot.pipeline.live_entered_at ?? null;
   const traceId = tick?.trace_id ?? snapshot.pipeline.live_trace_id ?? null;
@@ -208,6 +261,23 @@ function balanceFigures(balance: AlpacaBalanceWire) {
   ];
 }
 
+/**
+ * dashboard-spec.md's arm selector rule: "Providers, LLM spend and alert
+ * delivery render identically in both views, labelled as system" (#1597).
+ * These three tiles read fields the wire never scopes by arm — there is only
+ * one Alpaca/Polygon probe, one LLM spend ledger and one alert channel per
+ * process — so the label states plainly that switching arms will not change
+ * them, rather than leaving an operator to infer it from the figures staying
+ * put across a switch.
+ */
+function SystemTag() {
+  return (
+    <span className="muted small" data-system-fact="true">
+      system — identical in both arms
+    </span>
+  );
+}
+
 function ProvidersBlock({ snapshot }: { snapshot: WireSnapshot }) {
   const alpaca = snapshot.providers.alpaca;
   const polygon = snapshot.providers.polygon;
@@ -217,6 +287,10 @@ function ProvidersBlock({ snapshot }: { snapshot: WireSnapshot }) {
   ];
   return (
     <div className="rail-block" data-field="providers">
+      <div className="rail-meter-head">
+        <span className="label">Providers</span>
+        <SystemTag />
+      </div>
       {rows.map(({ name, tile }) => {
         const word = tile === undefined ? null : providerStateWord(tile.state);
         return (
@@ -304,7 +378,10 @@ function AlertDeliveryBlock({ snapshot }: { snapshot: WireSnapshot }) {
   if (count === 0) return null;
   return (
     <div className="rail-block rail-alert-degraded" data-field="alert-delivery-failures">
-      <span className="label">Alert channel</span>
+      <div className="rail-meter-head">
+        <span className="label">Alert channel</span>
+        <SystemTag />
+      </div>
       <span className="rail-value" data-alert-degraded="true">
         {count} alert{count === 1 ? '' : 's'} failed to deliver in the last 24h
       </span>
@@ -486,6 +563,7 @@ function SpendBlock({ snapshot }: { snapshot: WireSnapshot }) {
       }
       footnote={(over) => (
         <>
+          <SystemTag />
           {windows != null && (
             <span className="rail-note mono" data-field="llm-windows">
               24h {formatUsd(windows.last_24h.cost_usd)} · 7d {formatUsd(windows.last_7d.cost_usd)}{' '}
@@ -597,7 +675,7 @@ function tabForKey(key: string, current: Tab): Tab | null {
 }
 
 export function Rail(props: RailProps) {
-  const { feed, tab, onTab } = props;
+  const { feed, tab, onTab, arm, onArm } = props;
   const { snapshot, status, lastSuccessAt } = feed;
   const mismatched = status === 'contract-mismatch';
   // Read off `status`, not off a `stale` boolean carried beside it (#1520):
@@ -628,6 +706,22 @@ export function Rail(props: RailProps) {
       <span className="brand">
         <i aria-hidden="true">侍</i> SAMURAI
       </span>
+      <nav aria-label="Trading arm">
+        <div className="arm-toggle">
+          {ARMS.map((entry) => (
+            <button
+              key={entry.id}
+              type="button"
+              aria-label={armAriaLabel(entry, arm)}
+              className={arm === entry.id ? 'arm-btn arm-btn-on' : 'arm-btn'}
+              onClick={() => onArm(entry.id)}
+            >
+              {entry.label}
+              {arm === entry.id && <span className="arm-btn-mark"> · selected</span>}
+            </button>
+          ))}
+        </div>
+      </nav>
       <nav className="rail-tabs" aria-label="Tabs">
         {/* biome-ignore lint/a11y/useKeyWithClickEvents: no click handler here — the key handler implements the tablist arrow-key contract for the tab buttons inside. */}
         <div role="tablist" aria-orientation="vertical" onKeyDown={onTabKey}>

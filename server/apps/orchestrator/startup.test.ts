@@ -913,18 +913,15 @@ describe('startFromEnvironment — the live profile (#511)', () => {
     },
   );
 
-  it.each([
-    '',
-    '  ',
-    '0',
-    '-500',
-    'abc',
-  ])('refuses to boot live with a capital ceiling of %j', (ceiling) => {
-    process.env.SAMURAI_LIVE_MAX_CAPITAL_USD = ceiling;
+  it.each(['', '  ', '0', '-500', 'abc'])(
+    'refuses to boot live with a capital ceiling of %j',
+    (ceiling) => {
+      process.env.SAMURAI_LIVE_MAX_CAPITAL_USD = ceiling;
 
-    // Refused at the profile, before any store is opened or client built.
-    expect(() => startingProfileForMode('live')).toThrow('SAMURAI_LIVE_MAX_CAPITAL_USD');
-  });
+      // Refused at the profile, before any store is opened or client built.
+      expect(() => startingProfileForMode('live')).toThrow('SAMURAI_LIVE_MAX_CAPITAL_USD');
+    },
+  );
 
   it('refuses to boot live with the ceiling unset', () => {
     delete process.env.SAMURAI_LIVE_MAX_CAPITAL_USD;
@@ -932,26 +929,26 @@ describe('startFromEnvironment — the live profile (#511)', () => {
     expect(() => startingProfileForMode('live')).toThrow('SAMURAI_LIVE_MAX_CAPITAL_USD');
   });
 
-  it.each([
-    'ALPACA_LIVE_API_KEY',
-    'ALPACA_LIVE_API_SECRET',
-  ])('refuses to boot live when %s is absent, with no fallback to the paper pair', async (name) => {
-    delete process.env[name];
+  it.each(['ALPACA_LIVE_API_KEY', 'ALPACA_LIVE_API_SECRET'])(
+    'refuses to boot live when %s is absent, with no fallback to the paper pair',
+    async (name) => {
+      delete process.env[name];
 
-    const error = await startFromEnvironment({
-      ...startingProfileForMode('live'),
-      db: openSharedStore(':memory:'),
-      miArchive: new MiArchiveStore(),
-      gdeltClient: offlineGdeltClient,
-      polymarketClient: offlinePolymarketClient,
-      dataSource: offlineBarSource,
-    }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
+      const error = await startFromEnvironment({
+        ...startingProfileForMode('live'),
+        db: openSharedStore(':memory:'),
+        miArchive: new MiArchiveStore(),
+        gdeltClient: offlineGdeltClient,
+        polymarketClient: offlinePolymarketClient,
+        dataSource: offlineBarSource,
+      }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
 
-    // The paper pair is still set, so a fallback would have started a live
-    // process authenticated against the wrong account.
-    expect(error.message).toContain(name);
-    expect(missingCredentialEnvVars({}, 'log-only', 'live', 'alpaca')).toContain(name);
-  });
+      // The paper pair is still set, so a fallback would have started a live
+      // process authenticated against the wrong account.
+      expect(error.message).toContain(name);
+      expect(missingCredentialEnvVars({}, 'log-only', 'live', 'alpaca')).toContain(name);
+    },
+  );
 
   it('keeps live state in its own store file, so a live run cannot inherit paper positions', () => {
     // #168/#330's invariant, re-asserted because #511 is the change that makes

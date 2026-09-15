@@ -428,6 +428,13 @@ export class SqliteExecutionStore implements SharedStore {
         // than trusting the caller's worklist read: see this method's own
         // doc (types/store.ts) for why a race must not overwrite a lot that
         // un-wedged itself between read and write.
+        //
+        // `order_state IN (...) AND filled_size = 0` restates
+        // `isWedgedZeroFillLot` (key-scheme-guard.ts) in SQL — a WHERE clause
+        // cannot import a TS predicate. Widen one without the other and this
+        // guard silently rejects rows the TS predicate still calls wedged;
+        // the caller (wedged-zero-fill-sweep.ts) re-checks after a no-op to
+        // catch exactly that divergence (#1601).
         `UPDATE open_positions
             SET order_state = 'abandoned', abandon_reason = ?
           WHERE arm = ? AND idempotency_key = ?
@@ -866,7 +873,7 @@ export class SqliteExecutionStore implements SharedStore {
     const row = this.db
       .prepare(
         `SELECT lot_idempotency_keys, lot_held_quantities, exit_reason, size,
-                modelled_cost_breakdown_json
+                instrument, side, modelled_cost_breakdown_json
            FROM flatten_submissions WHERE idempotency_key = ?`,
       )
       .get(idempotency_key) as
@@ -875,6 +882,8 @@ export class SqliteExecutionStore implements SharedStore {
           lot_held_quantities: string | null;
           exit_reason: ExitReason | null;
           size: number;
+          instrument: string;
+          side: 'buy' | 'sell';
           modelled_cost_breakdown_json: string | null;
         }
       | undefined;
@@ -919,6 +928,8 @@ export class SqliteExecutionStore implements SharedStore {
         lot_idempotency_keys: keys,
         lot_held_quantities: null,
         exit_reason: row.exit_reason,
+        instrument: row.instrument,
+        side: row.side,
         modelled_cost_breakdown: modelledCostBreakdown,
         size: row.size,
       };
@@ -960,6 +971,8 @@ export class SqliteExecutionStore implements SharedStore {
       lot_idempotency_keys: keys,
       lot_held_quantities: paired,
       exit_reason: row.exit_reason,
+      instrument: row.instrument,
+      side: row.side,
       modelled_cost_breakdown: modelledCostBreakdown,
       size: row.size,
     };

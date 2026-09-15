@@ -95,6 +95,7 @@ import type {
   NormalizedOrder,
   NormalizedPosition,
   ReconcileDivergence,
+  ReconcileEscalation,
   ReconcileInput,
   ReconcileReport,
   UnresolvedFlattenSubmission,
@@ -198,15 +199,18 @@ export const TERMINAL_SWEEP_AGE_MS = 24 * 60 * 60 * 1_000;
  * confirmed, and the second one then fills too: the first fill attributes
  * correctly and closes the lot in the store, and the second fill's
  * `redistributeOneFlatten` resolves to a lot key `getOpenPositions()` no longer
- * returns — so `ingestFills`'s per-position loop never reads it, the quantity
- * is silently DROPPED, and `markFlattenFillsSwept` retires the row regardless.
- * The store then shows flat while the venue holds a REVERSE position, with no
- * `ClosedTrade` and no exit fill recorded; the only surface is
- * `findUnrecordedVenuePositions` at `reconcileDivergenceLevel: 'info'` — not a
- * warning, not a page. That silent-drop gap is #429/#1122 and pre-dates this
- * bound; what the bound adds is REACHABILITY, and closing the gap is tracked as
- * #1506, not here. Weighed against it is an instrument that can never be
- * flattened again — an open position carried indefinitely against ADR-0014,
+ * returns. The store can then show flat while the venue holds a REVERSE
+ * position. That quantity is no longer dropped: `persistUnattributedSplits`
+ * (ingest-fills.ts) books it against the closed lot and pages, provided the
+ * poll reaches redistribution at all — which needs SOME other lot still open,
+ * since `ingestFills` returns at its own `positions.length === 0` guard.
+ * The last-open-lot case is the reconcile side's:
+ * `findUnrecordedVenuePositions` below runs unconditionally on every pass, and
+ * since #1550 raises an `UnrecordedVenuePositionAlertChannel` page rather than
+ * only a log level. Neither path repairs the realized record — the lot's
+ * `ClosedTrade` still understates the sale, which is why both escalate for
+ * hand correction. Weighed against all of that is an instrument that can never
+ * be flattened again — an open position carried indefinitely against ADR-0014,
  * with certainty rather than in a narrow race. The bound accepts the race.
  */
 export const UNRESOLVABLE_FLATTEN_MAX_AGE_MS = 5 * 60 * 1_000;
@@ -331,7 +335,9 @@ export async function reconcile(input: ReconcileInput): Promise<ReconcileReport>
   // the flatten loop is stale by every `resumeFlatten` timeout and every
   // venue cancel that loop spent, and `cancelNeverConfirmedFlatten` takes its
   // own read after its cancel resolves for exactly that reason (#1500).
-  divergences.push(...findUnrecordedVenuePositions(await readVenuePositions(input), positions));
+  divergences.push(
+    ...(await findUnrecordedVenuePositions(input, await readVenuePositions(input), positions, now)),
+  );
 
   // #1088 — see the file doc's "terminal-row sweep" section. Unconditional:
   // every pass ages out whatever has crossed the cutoff since the last one,
@@ -631,7 +637,7 @@ async function reconcileFlatten(
       action: 'adopted',
       kind: 'flatten',
       reason: `${adopted}; ${await cancelWedgedFlatten(input, row, order.order_state, now)}`,
-      escalated: true,
+      escalation: 'wedge_cancelled',
     };
   }
 
@@ -739,9 +745,12 @@ function cancelDue(row: UnresolvedFlattenSubmission, now: Date): boolean {
  * an operator has to attribute it by hand, since the fills cannot be ingested
  * through an adapter that will not describe the order.
  *
- * The residual race is this file's ordinary one: a fill landing between the
- * position read and the replacement is still sized against the older number
- * (#429/#1122, tracked as #1506).
+ * The residual race is this file's ordinary one (#429/#1122): a fill landing
+ * between the position read and the replacement is still sized against the
+ * older number. What that leaves behind is surfaced rather than dropped —
+ * booked and paged by `persistUnattributedSplits` (ingest-fills.ts) where some
+ * lot is still open, and paged by `findUnrecordedVenuePositions` below where
+ * none is.
  */
 async function cancelNeverConfirmedFlatten(
   input: ReconcileInput,
@@ -755,7 +764,7 @@ async function cancelNeverConfirmedFlatten(
     `the venue has never once described flatten '${row.idempotency_key}' (resumeFlatten: ` +
     `${context.resumeError}) and the row is ${age}s old — past the ` +
     `${UNRESOLVABLE_FLATTEN_MAX_AGE_MS / 1_000}s bound`;
-  const blocked = (reason: string): ReconcileDivergence => ({
+  const blocked = (reason: string, escalation: ReconcileEscalation): ReconcileDivergence => ({
     idempotency_key: row.idempotency_key,
     instrument: row.instrument,
     store_state: context.storeState,
@@ -763,6 +772,7 @@ async function cancelNeverConfirmedFlatten(
     action: 'undetermined',
     kind: 'flatten',
     reason,
+    escalation,
   });
 
   if (!cancelDue(row, now)) {
@@ -770,6 +780,7 @@ async function cancelNeverConfirmedFlatten(
       `${provenance}. Already cancelled at the venue at ` +
         `${row.cancel_attempted_at?.toISOString()}; still blocking, and not re-cancelled or ` +
         're-paged this pass (FLATTEN_CANCEL_RETRY_EVERY_MS)',
+      'never_confirmed_throttled',
     );
   }
 
@@ -779,7 +790,7 @@ async function cancelNeverConfirmedFlatten(
   } catch (error) {
     const reason = `${provenance}. The cancel FAILED (${describeThrownSafely(error)}); the row keeps blocking`;
     await postFlattenReconcileAlert(input, row, reason, now);
-    return blocked(reason);
+    return blocked(reason, 'never_confirmed_cancel_failed');
   }
 
   // Read AFTER the cancel resolves, never a snapshot taken before it: a fill
@@ -795,7 +806,7 @@ async function cancelNeverConfirmedFlatten(
       'big. The fills cannot be ingested through an adapter that will not describe this ' +
       'order: attribute them by hand';
     await postFlattenReconcileAlert(input, row, reason, now);
-    return blocked(reason);
+    return blocked(reason, 'never_confirmed_coverage_short');
   }
 
   const reason =
@@ -1091,12 +1102,32 @@ async function readVenuePositions(input: ReconcileInput): Promise<VenuePositions
  * A venue that cannot answer is reported, not fatal: the store-side pass has
  * already done real work by this point, and losing it because a positions
  * endpoint was down would be the worse outcome.
+ *
+ * #1550: it also PAGES. The divergence it returns reaches `logger.log` at
+ * `warn` (`reconcileDivergenceLevel`, fill-sync.ts) and nothing escalated off
+ * that, which left the one exposure the Risk Manager structurally cannot see
+ * audible only to an operator reading the stream. The page is raised from
+ * here, not from the poll loop, because this is where the venue read that
+ * established it lives — and it is throttled per instrument, because the
+ * condition is a standing state this re-derives on every 15s pass, not an
+ * event (see `UnrecordedVenuePositionThrottle`).
+ *
+ * The page covers `action: 'unrecorded'` rows ONLY, never the venue-read
+ * failure above: a positions endpoint that is down says nothing about whether
+ * an exposure exists, and paging on it would page continuously through an
+ * outage while proving nothing. That row still reaches the log at `warn` as
+ * `undetermined`, which is what it is.
  */
-function findUnrecordedVenuePositions(
+async function findUnrecordedVenuePositions(
+  input: ReconcileInput,
   venue: VenuePositions,
   storePositions: readonly OpenPosition[],
-): ReconcileDivergence[] {
+  now: Date,
+): Promise<ReconcileDivergence[]> {
   if ('error' in venue) {
+    // Deliberately no `throttle.dueFor([])`: forgetting every standing episode
+    // on a read that proved nothing would re-page the lot of them the instant
+    // the endpoint recovered. See that method's own doc.
     return [
       {
         idempotency_key: '',
@@ -1118,23 +1149,75 @@ function findUnrecordedVenuePositions(
   // this instrument" is the only comparison the two shapes support.
   const known = new Set(storePositions.map((position) => position.instrument));
 
-  return venuePositions
-    .filter((venuePosition) => !known.has(venuePosition.instrument))
-    .map((venuePosition) => ({
-      // No idempotency key exists — this lot was never written under one, which
-      // is precisely the finding.
-      idempotency_key: '',
-      instrument: venuePosition.instrument,
-      store_state: 'pending' as const,
-      broker_state: null,
-      action: 'unrecorded' as const,
-      kind: 'unrecorded' as const,
-      reason:
-        `venue holds ${venuePosition.qty} ${venuePosition.instrument} (${venuePosition.side}) ` +
-        'with no open lot in the store — this exposure is invisible to the Risk Manager. ' +
-        'Nothing was written: adopting it would mean inventing the bracket, stop and debate_id ' +
-        'it has none of. Reconcile it by hand.',
-    }));
+  const unrecorded = venuePositions.filter((venuePosition) => !known.has(venuePosition.instrument));
+  await pageUnrecordedVenuePositions(input, unrecorded, now);
+
+  return unrecorded.map((venuePosition) => ({
+    // No idempotency key exists — this lot was never written under one, which
+    // is precisely the finding.
+    idempotency_key: '',
+    instrument: venuePosition.instrument,
+    store_state: 'pending' as const,
+    broker_state: null,
+    action: 'unrecorded' as const,
+    kind: 'unrecorded' as const,
+    reason:
+      `venue holds ${venuePosition.qty} ${venuePosition.instrument} (${venuePosition.side}) ` +
+      'with no open lot in the store — this exposure is invisible to the Risk Manager. ' +
+      'Nothing was written: adopting it would mean inventing the bracket, stop and debate_id ' +
+      'it has none of. Reconcile it by hand.',
+  }));
+}
+
+/**
+ * #1550: the page behind `findUnrecordedVenuePositions`' divergence rows.
+ *
+ * Throttled per instrument (`UnrecordedVenuePositionThrottle`), and never
+ * allowed to fail the reconcile pass: the scan's job is to REPORT, the
+ * divergence rows are returned either way, and a transport that cannot deliver
+ * must not cost the sweeps that already ran this pass.
+ */
+async function pageUnrecordedVenuePositions(
+  input: ReconcileInput,
+  unrecorded: readonly NormalizedPosition[],
+  now: Date,
+): Promise<void> {
+  const due = new Set(
+    input.unrecordedVenuePositionThrottle.dueFor(
+      unrecorded.map((venuePosition) => venuePosition.instrument),
+      now,
+    ),
+  );
+
+  for (const venuePosition of unrecorded) {
+    if (!due.has(venuePosition.instrument)) continue;
+    try {
+      await input.unrecordedVenuePositionAlerts.postUnrecordedVenuePositionAlert({
+        // This surface's own id, carrying the `control-arm-` prefix when the
+        // control arm is the one scanning — the same field the catalogue's
+        // `page` predicate reads to keep a simulated broker off the phone.
+        trace_id: input.trace_id,
+        instrument: venuePosition.instrument,
+        qty: venuePosition.qty,
+        side: venuePosition.side,
+        observed_at: now,
+      });
+    } catch {
+      // Fixed, self-authored message, never the channel's own error — the
+      // CREDENTIALS posture `postFlattenReconcileAlert` above documents.
+      safeLog(input.logger, {
+        trace_id: input.trace_id,
+        stage: 'execution',
+        event: 'unrecorded_venue_position_alert_send_failed',
+        level: 'error',
+        message:
+          'postUnrecordedVenuePositionAlert delivery failed — a venue position no open lot ' +
+          'explains stays invisible to the Risk Manager and the operator was not paged; ' +
+          'see the unrecorded divergence line for this instrument',
+        payload: { instrument: venuePosition.instrument },
+      });
+    }
+  }
 }
 
 /** Settle one lot against the venue. Null when store and broker agree. */

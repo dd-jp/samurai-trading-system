@@ -18,6 +18,8 @@ const USD = new Intl.NumberFormat('en-US', {
   maximumFractionDigits: 2,
 });
 
+const GBP_WHOLE = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
+
 /**
  * A stage duration, from `duration_ms`. `null` renders as an em dash — an
  * unknown duration must never read as zero.
@@ -95,6 +97,28 @@ export function formatSignedR(value: number): string {
 export function formatUsd(value: number): string {
   if (!Number.isFinite(value)) return UNKNOWN;
   return `$${USD.format(value)}`;
+}
+
+/**
+ * Signed, grouped GBP: `+£1,234.56` / `−£0.50`. Same grammar as
+ * `formatSignedUsd` — grouping and decimal rules don't differ between the two
+ * locales, so this reuses `USD`'s formatter rather than a second
+ * `Intl.NumberFormat` instance carrying the same options.
+ */
+export function formatSignedGbp(value: number): string {
+  if (!Number.isFinite(value)) return UNKNOWN;
+  const sign = value < 0 ? MINUS : '+';
+  return `${sign}£${USD.format(Math.abs(value))}`;
+}
+
+/**
+ * Unsigned GBP with no decimal places: `£1,000`. For a whole-pound reference
+ * figure (the declared book), not a signed cash movement — `formatSignedGbp`
+ * covers those. Non-finite renders as an em dash.
+ */
+export function formatGbpWhole(value: number): string {
+  if (!Number.isFinite(value)) return UNKNOWN;
+  return `£${GBP_WHOLE.format(value)}`;
 }
 
 /** A fixed-precision figure (Sharpe, profit factor, …). Non-finite is an em dash. */

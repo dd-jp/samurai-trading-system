@@ -35,7 +35,7 @@ const LANES = [
 ];
 
 /** Every named region each tab owes the spec's information inventory. */
-const GLANCE_REGIONS = ['P&L today', 'Open risk', 'Verdicts this session'];
+const GLANCE_REGIONS = ['P&L', 'Open risk', 'Verdicts this session'];
 const LIVE_REGIONS = ['Lanes'];
 const REVIEW_REGIONS = [
   'Metrics suite',

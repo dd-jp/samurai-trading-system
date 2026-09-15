@@ -3,6 +3,7 @@ import {
   type ExecutionConfig,
   FilledZeroSizeThrottle,
   SqliteExecutionStore,
+  UnrecordedVenuePositionThrottle,
 } from '../../../pipeline/execution/index.js';
 import type {
   PersistedBreakerState,
@@ -3217,6 +3218,8 @@ describe('buildExecutionStep', () => {
       residualExposureAlerts: { postResidualExposureAlert: async () => {} },
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
       flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
+      unrecordedVenuePositionAlerts: { postUnrecordedVenuePositionAlert: async () => {} },
+      unrecordedVenuePositionThrottle: new UnrecordedVenuePositionThrottle(),
       logger: { log: vi.fn() },
       filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
     });

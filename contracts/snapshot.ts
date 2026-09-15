@@ -320,6 +320,137 @@ export interface OutsideBenchmarkRow {
 }
 
 /**
+ * Where `PnlHeadlineWire.rate_usd_per_gbp` came from (#1595). A plain union
+ * with one member today rather than a bare `string` — the headline is
+ * required to name its source, and a future second source (a live FX feed,
+ * say) widens this type instead of silently making the existing literal
+ * ambiguous.
+ *
+ * `'static_sizing_rate'` is the SAME conversion `ArmComparisonRow.basis`
+ * already uses (`SIZING_USD_PER_GBP`, #1180) — not a second, independently
+ * chosen rate that could disagree with it.
+ */
+export type PnlRateSource = 'static_sizing_rate';
+
+/**
+ * All-time P&L for one arm (#1595): every closed trade ever recorded for it,
+ * plus the mark-to-market value of what it holds right now.
+ *
+ * **`max_drawdown_pct` is REQUIRED, for `ArmPerformanceWire`'s reason above.**
+ * It is realized-only — computed from the closed-trade series alone
+ * (`cumulativePnl`, control-arm/arm-comparison.ts) — while `net_gbp` is wider
+ * and includes today's open unrealized PnL. The two are not the same
+ * denominator: a headline with a positive `net_gbp` and a nonzero
+ * `max_drawdown_pct` is not a contradiction, it is the ordinary case of an arm
+ * that fell before recovering.
+ *
+ * **This reuses `cumulativePnl` but NOT its usual population (#1616).** The
+ * Feedback Loop's arm-comparison panel (`ArmPerformanceWire` above) feeds
+ * that same function rows that already passed `oneSizingRegime` and
+ * `modelledCostCharged` (`sqlite-arm-comparison-source.ts`); this headline
+ * feeds it every `closed_trades` row for the arm, unfiltered
+ * (`getAllClosedTrades`, sqlite-query-store.ts). The two can therefore report
+ * different `net_gbp`/`max_drawdown_pct` for the same arm and the same
+ * window, and the divergence is not symmetric:
+ *
+ * - `modelledCostCharged` drops rows only on the live arm — a control fill is
+ *   always priced by `SimulatedBrokerAdapter`, so `control` never loses a row
+ *   to it (`countCostBasisDrops`'s doc). This asymmetry is one-directional —
+ *   it only ever affects the live arm, never the control arm — but the SIGN
+ *   of the resulting `net_gbp`/`max_drawdown_pct` difference is NOT
+ *   established: a dropped row can itself be a loss, which would make this
+ *   headline read WORSE than the panel, not better. `modelledCostCharged`
+ *   carries its own "DIRECTION IS NOT ESTABLISHED" note for the same reason
+ *   — do not restate this as "cost-optimistic" without redoing that math.
+ * - `oneSizingRegime` can drop rows from BOTH arms (a pre-#1112-cutover
+ *   `sizing_capital_ceiling = NULL` row), or make the panel throw outright on
+ *   a window straddling two declared ceilings — an all-time population is, if
+ *   anything, MORE likely to span two. This headline never throws only
+ *   because it never calls `oneSizingRegime` at all, not because its
+ *   population is somehow safer.
+ *
+ * Full parity would need this reader to also run `oneSizingRegime`, which
+ * needs `sizing_capital_ceiling` on the row: present in the `closed_trades`
+ * table (migration 0045) and so on what `getAllClosedTrades`'s `SELECT *`
+ * already returns, but not on the `ClosedTrade`/`ClosedTradeRow` TYPE this
+ * reader is typed against — a mapper/type addition, not a schema one.
+ * Filtering on `modelled_cost_charged` alone, without it, would drop real
+ * trades from `trade_count` without reproducing the panel's number, so this
+ * type is deliberately left reading the wider, unfiltered population rather
+ * than a partial, still-wrong one.
+ */
+export interface PnlOverallWire {
+  /** Cumulative realized `realized_pnl_net` plus current open unrealized, in GBP. Signed. */
+  net_gbp: number;
+  /** `net_gbp` as a signed fraction of the declared book (`PnlHeadlineWire.book_gbp`) — 0.05 is 5%. */
+  net_pct_of_book: number;
+  /** Peak-to-trough fall of the REALIZED series only, as a positive fraction of the declared book. Zero when the series never fell below a prior peak. */
+  max_drawdown_pct: number;
+  /**
+   * Every closed trade this arm has ever recorded, not windowed to
+   * `closed_trades` above — AND, on the live arm, not filtered the way the
+   * arm-comparison panel's `trade_count` is (#1616, see this interface's
+   * header). This figure can exceed the panel's live `trade_count` for the
+   * same window; that is not a bug to reconcile silently.
+   */
+  trade_count: number;
+}
+
+/**
+ * One arm's P&L over the Europe/London calendar day (#1595) — BST-aware, so a
+ * close just after midnight UTC during British Summer Time still counts on
+ * the London day it happened on, not the UTC day.
+ *
+ * No `max_drawdown_pct`: a single day's realized-plus-unrealized figure is a
+ * snapshot, not a series with a peak to fall from — the drawdown concept
+ * belongs to `PnlOverallWire`'s all-time series, not to this window.
+ *
+ * `realized_gbp`/`costs_gbp`/`trade_count` are a same-day filter over the
+ * SAME unfiltered `getAllClosedTrades` population as `PnlOverallWire`, not
+ * the arm-comparison panel's — see that interface's header (#1616) for what
+ * that means on the live arm.
+ */
+export interface PnlTodayWire {
+  /** `realized_gbp + unrealized_gbp`, signed. */
+  net_gbp: number;
+  /** `net_gbp` as a signed fraction of the declared book (`PnlHeadlineWire.book_gbp`). */
+  net_pct_of_book: number;
+  /** Sum of `realized_pnl_net` for trades closed today, in GBP. Signed. */
+  realized_gbp: number;
+  /** Current open positions' mark-to-market PnL, in GBP. Signed — this arm's `net_gbp` above already includes it. */
+  unrealized_gbp: number;
+  /** Sum of `fees_total` for trades closed today, in GBP. Always non-negative. */
+  costs_gbp: number;
+  /** Trades closed today, this arm. */
+  trade_count: number;
+}
+
+/**
+ * The dashboard's server-computed P&L headline for one arm (#1595) — all-time
+ * with drawdown, and today over the Europe/London calendar day, both in GBP.
+ *
+ * The conversion rate travels WITH the figures rather than being assumed by
+ * the renderer, the same reason `ArmComparisonRow.basis` is carried rather
+ * than recomputed client-side: a renderer that hard-coded the rate would keep
+ * showing the old one the moment this changes.
+ */
+export interface PnlHeadlineWire {
+  overall: PnlOverallWire;
+  today: PnlTodayWire;
+  /** USD per GBP — `SIZING_USD_PER_GBP` (`paper-profile.ts`), the same static rate `ArmComparisonRow.basis` is converted at. */
+  rate_usd_per_gbp: number;
+  rate_source: PnlRateSource;
+  /**
+   * The declared book both `net_pct_of_book` fields are a fraction of, in GBP
+   * — `LIVE_BOOK_GBP` (`paper-profile.ts`) — carried for the same reason
+   * `rate_usd_per_gbp` is: this figure has already moved once (£1,500 →
+   * £1,000, ADR-0015's 2026-08-18 amendment), and a renderer that hard-coded
+   * it would keep stating the old book the moment it moves again (#1620).
+   */
+  book_gbp: number;
+}
+
+/**
  * Why a lot closed. Structurally identical to the server-side
  * `ExitReason | 'stop' | 'target' | 'exit'` union
  * (`server/shared/types/records.ts`, `ClosedTrade.close_reason`) — duplicated
@@ -662,6 +793,17 @@ export interface DashboardSnapshot {
    * degrades to ignorance rather than to a wrong claim.
    */
   mode: StoreMode;
+  /**
+   * The arm this snapshot's `positions`/`closed_trades` were read for (#1592).
+   * Absent from a request means `'live'` — the server resolves that default,
+   * never the client — and an unrecognised request value is refused with a
+   * 400 before `buildSnapshot` runs, so this field is always one of the two
+   * `TradingArmWire` literals, never a guess. Every other section below
+   * (`debates`, `verdicts`, `risk_critics`, `analysts`, `metrics`,
+   * `pipeline`, …) is unaffected by this field and still reads the live arm
+   * only — #1594 tracks widening those reads to match.
+   */
+  arm: TradingArmWire;
   tick_status: TickStatus | null;
   positions: PositionRow[];
   /** Recent realized round trips (#940) — most-recently-closed first. */
@@ -715,6 +857,13 @@ export interface DashboardSnapshot {
    * panel renders that absence as "not measured", never as 0.00%.
    */
   outside_benchmarks: OutsideBenchmarkRow[];
+  /**
+   * The server-computed P&L headline for `arm` above (#1595) — all-time with
+   * drawdown, and today over the Europe/London calendar day, both converted to
+   * GBP. See `PnlHeadlineWire`'s doc for why the rate travels with the figures
+   * and why only the all-time half carries a drawdown.
+   */
+  pnl: PnlHeadlineWire;
   /**
    * Count of alert sends TO THE ESCALATION CHAT that exhausted retry and
    * were durably recorded in `alert_delivery_failures` in the TRAILING 24
@@ -858,6 +1007,7 @@ export const DASHBOARD_SNAPSHOT_FIELD_NAMES = [
   'generated_at',
   'as_of',
   'mode',
+  'arm',
   'tick_status',
   'positions',
   'closed_trades',
@@ -869,6 +1019,7 @@ export const DASHBOARD_SNAPSHOT_FIELD_NAMES = [
   'metrics',
   'arm_comparison',
   'outside_benchmarks',
+  'pnl',
   'alert_delivery_failures_24h',
   'providers',
   'llm_spend',
@@ -911,7 +1062,7 @@ const _assertDashboardSnapshotFieldNamesCoverAllKeys: {
  * cryptographic and does not need to be: the only property this mechanism
  * needs is "the field list changing changes the output", which a 32-bit
  * non-cryptographic hash already gives with a collision risk irrelevant at
- * this input size (19 short field names).
+ * this input size (21 short field names).
  */
 function fnv1aHex(input: string): string {
   let hash = 0x811c9dc5;
