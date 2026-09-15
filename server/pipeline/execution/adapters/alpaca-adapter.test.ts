@@ -2970,8 +2970,19 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         }
       });
 
+      // `partially_filled` counts as WORKING, not done: an OCO's remainder
+      // (`qty − filled_qty`) is still live protection at the venue. Filtering
+      // on 'accepted' alone made every `resting()` assertion blind to the one
+      // state where a second leg would be a #516 double-arm.
+      const WORKING = [
+        'new',
+        'accepted',
+        'pending_new',
+        'accepted_for_bidding',
+        'partially_filled',
+      ];
       const resting = (): AlpacaOrder[] =>
-        [...rows.values()].filter((row) => row.status === 'accepted');
+        [...rows.values()].filter((row) => WORKING.includes(row.status));
 
       return { submitOcoOrder, getOrderByClientOrderId, cancelOrder, resting, rows };
     }
@@ -3253,6 +3264,35 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
 
       expect(venue.submitOcoOrder).not.toHaveBeenCalled();
       expect(venue.rows.has('key-1:rearm-2')).toBe(false);
+    });
+
+    /**
+     * A PARTIALLY_FILLED prior is not a settled one — its remainder is still
+     * working at the venue, which is why #549 adopts it regardless of size.
+     * Classifying it with the terminal fills let a retire at a HIGHER index
+     * disqualify it, and the walk then placed a second OCO on top of a leg
+     * that can still fire: #516's two-live-legs hazard, arrived at from the
+     * bookkeeping rather than the orders.
+     */
+    it('does not place a second leg over a PARTIALLY_FILLED prior whose remainder still works', async () => {
+      const venue = measuredAlpacaVenue();
+      const adapter = adapterWith(makeClient(venue));
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
+      // The cancel lost the race to a PARTIAL fill — the ordinary outcome for
+      // a stop or target leg, and the remainder keeps working.
+      venue.rows.set('key-1:rearm', {
+        ...venue.rows.get('key-1:rearm')!,
+        status: 'partially_filled',
+        filled_qty: '2',
+      });
+      venue.submitOcoOrder.mockClear();
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 3, 95, 110);
+
+      expect(venue.submitOcoOrder).not.toHaveBeenCalled();
+      expect(venue.resting().map((row) => row.client_order_id)).toEqual(['key-1:rearm']);
     });
   });
 

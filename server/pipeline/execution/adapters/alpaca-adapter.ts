@@ -1184,12 +1184,21 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       }
 
       const priorState = mapOrderState(prior.status);
-      if (priorState === 'filled' || priorState === 'partially_filled') {
+      if (priorState === 'filled') {
         settled = prior;
         settledAttempt = attempt;
         continue;
       }
-      if (RESTING_STATUSES.includes(prior.status) && rearmOrderMatches(prior, qty, stop, target)) {
+      // `partially_filled` belongs with the LIVE priors, not the terminal
+      // ones: its remainder (`qty − filled_qty`) is still working at the
+      // venue and can still fire. It needs no match check — #549 adopts a
+      // partially-consumed prior regardless of size, for the reason spelled
+      // out above — but it must never be treated as stale, or the walk places
+      // a second leg on top of one that is still armed (#516).
+      if (
+        priorState === 'partially_filled' ||
+        (RESTING_STATUSES.includes(prior.status) && rearmOrderMatches(prior, qty, stop, target))
+      ) {
         // Two resting priors on one lot are unreachable through this walk —
         // an index is only allocated once the one below it stopped resting —
         // but the invariant is what the money depends on, so it is ENFORCED
