@@ -5,6 +5,18 @@ Answers [#1035](https://github.com/dd-jp/samurai-trading-system/issues/1035), su
 [#1034](https://github.com/dd-jp/samurai-trading-system/issues/1034) (CLOSED — DMD needs no
 registration, only a click-through Terms & Conditions already accepted).
 
+**What "permissibly collected" rests on, so this doc is self-contained on the point that sank #999
+and doc 58 F6:** #1034's 2026-09-14 finding (browser-verified, David resolved) is that
+`dmd.lseg.com` has **no registration and no login of any kind** — the only gate is a public
+click-through Terms & Conditions identical for every visitor, with no separate registered-user
+tier. Quoting #1034's finding directly: *"Natural or legal persons ('Users') can use the Delayed
+Data, as published by LSEG via this website... licence agreement required only where
+onward-distributed / fee-charged"* — and *"No automated-access clause found beyond that."* This is
+the opposite of #999's LSE Terms §8 (programmatic access barred outright) and doc 58 F6's scrape of
+an unauthenticated endpoint the site owner never sanctioned for this use — DMD's terms were read
+end-to-end by #1034 specifically looking for an automated-access bar, the same gate that killed
+those two, and found none.
+
 **Verdict: yes, with one coverage gap and one correction to the ticket's own premise.** DMD's `LSE
 Pre-Trade Documents` reproduce a permissibly-collected per-instrument round-trip/half-spread and a
 real session profile for 30 of the pool's 31 rows. The one gap (MST3) and the one premise
@@ -30,11 +42,17 @@ column in § Coverage; the low end, 3VT at 73, is the thinnest-traded name, not 
 `XS2901882618`) appears in zero of the 108 sampled `LSE Pre-Trade Documents` files across both
 dates.** It is also absent from the one most-recent file pulled from each of DMD's three `SI`
 (systematic-internaliser) participant feeds (`NMTRIAIR`, `NMOPVOF`, `BARCIE2DSEC` — the parallel
-`si/` document set discovered while reverse-engineering the API). That SI check is a single
-snapshot per participant, not a session-spanning sample, so it narrows but does not close the
-question; the precise, defensible claim is **"absent from every sample pulled in this
-investigation," not "DMD does not cover MST3 anywhere."** A single instrument being unreachable is
-the honest residual, not a blocking negative result — see § Acceptance criteria.
+`si/` document set discovered while reverse-engineering the API), via
+`python3 46-lseg-dmd-pretrade-surface.py si`, which fetches and logs all 3 reproducibly (an earlier
+version of this check was done ad hoc, with no fetch log and no script command — now fixed). That
+SI check is a single snapshot per participant, not a session-spanning sample, so it narrows but
+does not close the question; the precise, defensible claim is **"absent from every sample pulled in
+this investigation," not "DMD does not cover MST3 anywhere."** A single instrument being
+unreachable is the honest residual, not a blocking negative result — see § Acceptance criteria. The
+3 files actually checked and their MST3 result are archived verbatim, not just the "absent from all
+3" summary, in
+[`archive/raw/2026-09-15-46-dmd-analyze-output.txt`](archive/raw/2026-09-15-46-dmd-analyze-output.txt)'s
+"MST3 SI check" section.
 
 Note on the ticket's own framing: "leveraged ETPs may sit in a segment published differently, or
 not at all" is exactly what happened for one row, and the mechanism (SI vs lit order book) is the
@@ -52,7 +70,9 @@ already ended for the day (see next question).
 real basis for cost-floor sizing). `bidMarketSize`/`offerMarketSize` ("EMS" in the ticket's
 term) are the field DMD calls market size, and across every matched pool-ISIN row sampled
 (49,522 rows) they are **non-zero in only 119 (0.24%)**. Those 119 rows are not scattered noise:
-grouping all 119 by their `distributionTime` minute (not just spot-checked) shows every one falls
+grouping all 119 by their `distributionTime` minute (not just spot-checked; the full per-minute
+breakdown is archived in `archive/raw/2026-09-15-46-dmd-analyze-output.txt`, reproduced by
+`analyze`'s "EMS-nonzero rows by distributionTime minute" line) shows every one falls
 in exactly three filename-minutes across the two sampled dates — `07:00` (1 + 24 rows),
 `07:05` (12 rows, immediate aftermath of the opening auction), and `15:30` (51 + 31 rows, the
 closing-auction print) — and several show a crossed/aggressor-looking book (`offerMarketSize`
@@ -72,10 +92,24 @@ values spanning `11:00:04.638...Z` through `11:00:59.851...Z` — i.e. every quo
 instrument pair received during that one-minute window, not one row per instrument. Each row also
 carries a numeric `instrumentId` (`72057594038070487` for 3USL, `72057594038056292` for 3LUS in
 this file) that DMD itself uses to distinguish the two currency lines sharing one ISIN — so the
-ISIN collision the ticket might have worried about is already resolved by the file's own schema;
-this doc disambiguates the same way, corroborated by price scale (3USL trades in the 13,000s = GBX
-pence; 3LUS trades in the 160-190s = USD, no overlap observed across 1,111/1,115 sampled rows
-each). This is *better* than a snapshot for this ticket's purposes — it gives many observations
+ISIN collision the ticket might have worried about is already resolved by the file's own schema.
+**The script now assigns rows by this `instrumentId`, not by a price-scale guess** (an earlier
+version of this doc claimed the instrumentId split "corroborated by price scale" while the script
+actually assigned every row by price scale alone and never read the `instrumentId` back — a false
+method claim caught in review): `_classify_shared_isin_instrument_ids()` classifies each of the two
+`instrumentId` values for `IE00B7Y34M31` **once**, from its own median two-sided price across the
+full sample (72057594038070487 → 3USL, ~13,000s = GBX pence; 72057594038056292 → 3LUS, ~160-190s =
+USD, no overlap across 1,113/1,113 rows carrying a two-sided quote each), then looks that
+`instrumentId` up per row — so a single wide print or an intraday move on either line can no longer
+flip its assignment. A per-row price-scale check still runs afterward as an independent sanity
+check, not the assignment mechanism: on this sample it flags **0 of 2,226 matched rows** as
+disagreeing with their instrumentId-based assignment (`analyze`'s
+`3USL/3LUS instrumentId classification` line; also
+[`archive/raw/2026-09-15-46-dmd-analyze-output.txt`](archive/raw/2026-09-15-46-dmd-analyze-output.txt)).
+2 rows total (one 16:30 post-close print on each sampled date) carry an `instrumentId` this method
+never saw with a two-sided quote and fall back to the price heuristic for coverage-counting only —
+both are zero/zero rows, so no published spread or session-profile figure in this doc depends on
+them. This is *better* than a snapshot for this ticket's purposes — it gives many observations
 per instrument per session (hundreds to low thousands per ticker across the sampled window, see §
 Coverage) rather than one point estimate per file, which is what makes the dispersion and
 session-profile statistics below possible at all. It does mean a *single* file cannot be read as
@@ -116,7 +150,14 @@ these calls):
 - `GET https://dmd.lseg.com/api/web/download?fileName=<fileKey>` — JSON envelope with a 5-minute
   presigned S3 URL for the actual CSV (`X-Amz-Expires=300`; fetched immediately, never batched).
 - `GET https://dmd.lseg.com/api/web/si/files` / `.../si/download?fileName=<fileKey>` — the parallel
-  systematic-internaliser document set, used only for the MST3 residual check above.
+  systematic-internaliser document set, used only for the MST3 residual check above (`si/download`'s
+  envelope shape differs from `download`'s: the presigned URL is at `result.preSignedUrl` directly,
+  not nested — both are handled by the same `fetch()` helper via an `endpoint` parameter).
+
+Every `fetch()` call checks the exit status of both `curl` invocations (the envelope fetch and the
+CSV download) and raises rather than logging success — `curl -sf` fails loudly on an HTTP error
+response instead of writing the error body to disk and returning 0, which an earlier version of
+this script did not check for.
 
 **Sample:** 108 `XLON-pre-<date>T<HH>_<MM>.csv` files, both available trading dates
 (2026-09-11, 2026-09-14), 15-minute cadence 04:00-16:30 UTC (covers pre-market through
@@ -129,7 +170,16 @@ time; the full 108-line log and the `analyze` output it produced are committed v
 — that is the durable evidence this pull happened and its exact sampling basis. **Given DMD's
 observed ~2-3 trading-day retention (§ Q4), re-running `fetch` will not retrieve these same
 fileKeys** once they age out — it reproduces the sampling *method* (same dates relative to the run,
-same minute cadence) against whatever DMD serves at re-run time, not this specific data.
+same minute cadence) against whatever DMD serves at re-run time, not this specific data. Because of
+that, `analyze`'s output now includes the intermediate evidence behind four load-bearing claims —
+the EMS three-minute breakdown, the raw 24-row `distributionTime` list behind the granularity
+finding, the per-file row counts at the session boundary, and the MST3 SI check's per-file
+result — not just the final aggregate each one supports, so a future reader without a live DMD
+window can still verify the reasoning, not only the number it produced. All of it is archived
+verbatim in `archive/raw/2026-09-15-46-dmd-analyze-output.txt`. The three SI fetches themselves are
+now logged the same way the lit fetches are, by the new `si` subcommand, and archived at
+[`archive/raw/2026-09-15-46-dmd-si-fetch-log.jsonl`](archive/raw/2026-09-15-46-dmd-si-fetch-log.jsonl)
+— previously these three pulls happened ad hoc with no logged, reproducible record at all.
 
 **Session buckets**, in filename-time UTC coordinates, measured rather than assumed: total and
 two-sided row counts step from ~0 to 20,000-37,000 rows precisely at `T07:00` (opening) and
@@ -250,6 +300,19 @@ the close — which is exactly when ADR-0014's flat-by-close horizon forces ever
 round-trip bps; add Saxo's measured 16 bps round-trip commission (ADR-0015) to size the total exit
 cost on top.
 
+**The single most decision-relevant number this doc produces, stated plainly rather than left for
+the reader to compute:** the pool's own open-bucket median round-trip, **159.0 bps**, is **~3.1x**
+`59-universe-tradeability-screen.md` §3.1's single-stock total round-trip budget at ADR-0017's
+assumed win rate (**52.1 bps**) and **~11.2x** its index budget (**14.2 bps**, which is already
+negative net of Saxo's 16 bps commission alone). Only **6 of the 30 covered rows** sit under the
+52.1 bps single-stock ceiling at all — 3USL (11.9), 3LUS (11.6), LQQ3 (15.5), NVD3 (30.5), 3KOR
+(39.3), PLT3 (44.0) — three of which (3USL, 3LUS, LQQ3) are also the three of the four rows above
+that narrow into the close. Every other row exceeds the single-stock budget, several (LCO3 487.8,
+3LIP 666.7, 3LSQ 462.0) by an order of magnitude or more. **Spread alone, before commission,
+already disqualifies most of the pool's 31 rows under doc 59's stated cost budgets** — this doc
+supplies the missing per-line spread evidence doc 59 §3.2's criterion (b) row flagged as "**No.**
+... **Not evaluable per line**" (see § What remains).
+
 ## Restating #875's p90-vs-median dispersion on permissible data
 
 #875's retracted pre-open capture (doc 58, `58-lse-quote-snapshot.py`, deleted by #1036 for the
@@ -300,6 +363,11 @@ NVD3 (15.3 bps), LQQ3 (7.8 bps), 3USL (5.9 bps), 3LUS (5.8 bps)** — reproduced
 
 ## What remains
 
+- **This doc now supplies `59-universe-tradeability-screen.md` §3.2's criterion (b)** ("Max quoted round-trip
+  spread" — previously "**No.** ... **Not evaluable per line**") for 30 of 31 pool rows — see doc 59's own
+  updated pointer at that criterion and its §7 "Waiting on a vendor" list. Criteria (a) (tick/price floor) and
+  (c) (print-frequency refresh for 19 unprobed rows) remain open, gated on #1032 and #1035/#895 respectively —
+  this doc does not measure print frequency and makes no claim about criterion (c).
 - **MST3's absence is not closed**, only narrowed to "absent from every sample pulled here." A
   session-spanning SI pull (not just one file per participant) would close it, or an
   affirmative statement from DMD's own documentation (`delayed-market-data-notes.pdf`, referenced
@@ -321,5 +389,6 @@ NVD3 (15.3 bps), LQQ3 (7.8 bps), 3USL (5.9 bps), 3LUS (5.8 bps)** — reproduced
 
 ```
 python3 docs/research/46-lseg-dmd-pretrade-surface.py fetch    # pulls the same 108-file sample
+python3 docs/research/46-lseg-dmd-pretrade-surface.py si       # pulls + checks the 3 SI participant files for MST3
 python3 docs/research/46-lseg-dmd-pretrade-surface.py analyze  # regenerates every table above
 ```

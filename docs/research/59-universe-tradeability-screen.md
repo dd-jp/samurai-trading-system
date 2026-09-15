@@ -250,6 +250,9 @@ Recommendation in §8. Option 1 is stronger than it looks, precisely because the
 - Criterion (a) evaluated per line — needs price and tick increment: **#1032** (Saxo instrument list) or **#1035** (LSEG DMD).
 - Whether RTS 11's ETF tick limb reaches these ETPs at all — **not established**; #1032 settles it operationally by publishing the actual increments.
 - Criterion (b) evaluated per line — needs a permissible bid/ask: **#1035**, or **#895**'s unresolved mark-vendor choice.
+  **#1035 reported 2026-09-15** (`46-lseg-dmd-pretrade-surface.md`) and supplies this for **30 of 31 pool
+  rows** (MST3 confirmed absent from LSEG's SI feed) — a retrospective research aggregate, not the live path
+  #895 still owes; use it to evaluate (b) now, pending #895 for production consumption.
 - Criterion (c) for the 19 unprobed rows, and refreshed for the 11 — needs an in-session print source: **#1035 / #895**.
 - Whether Saxo lists each surviving line at all, and its FX treatment on non-sterling lines: **#1032**.
 - Whether 8 bps per side is the final commission figure for this account tier: **#1032**.

@@ -3,10 +3,63 @@ orderBookType values seen: {'3'}
 sourceVenue values seen: {'1'}
 EMS (bidMarketSize/offerMarketSize) nonzero: 119/49522 (0.24%)
 bidYield/offerYield nonzero: 0/49522
+3USL/3LUS instrumentId classification: 0 rows fell back to the price-scale heuristic (no two-sided quote seen for their instrumentId in pass 1); 0 two-sided rows had a price scale that disagreed with their instrumentId-based assignment (0 expected if the classification is sound)
+
+=== intermediate evidence (not just final aggregates — re-verifiable without a live DMD window) ===
+EMS-nonzero rows by distributionTime minute (119 total, should equal 119 above):
+  2026-09-11T07:00  1
+  2026-09-11T15:30  51
+  2026-09-14T07:00  24
+  2026-09-14T07:05  12
+  2026-09-14T15:30  31
+granularity evidence — XLON-pre-2026-09-14T11_00.csv, ISIN IE00B7Y34M31 (3USL/3LUS pair): 24 rows
+  instrumentId=72057594038070487  distributionTime=2026-09-14T11:00:24.360207754Z
+  instrumentId=72057594038070487  distributionTime=2026-09-14T11:00:59.325285576Z
+  instrumentId=72057594038056292  distributionTime=2026-09-14T11:00:27.487909959Z
+  instrumentId=72057594038056292  distributionTime=2026-09-14T11:00:59.851003376Z
+  instrumentId=72057594038070487  distributionTime=2026-09-14T11:00:29.065740016Z
+  instrumentId=72057594038056292  distributionTime=2026-09-14T11:00:19.617865563Z
+  instrumentId=72057594038070487  distributionTime=2026-09-14T11:00:19.617919589Z
+  instrumentId=72057594038070487  distributionTime=2026-09-14T11:00:09.672442939Z
+  instrumentId=72057594038056292  distributionTime=2026-09-14T11:00:09.971448818Z
+  instrumentId=72057594038070487  distributionTime=2026-09-14T11:00:04.638099171Z
+  instrumentId=72057594038056292  distributionTime=2026-09-14T11:00:04.842276190Z
+  instrumentId=72057594038056292  distributionTime=2026-09-14T11:00:34.788579392Z
+  instrumentId=72057594038070487  distributionTime=2026-09-14T11:00:44.068466740Z
+  instrumentId=72057594038070487  distributionTime=2026-09-14T11:00:34.818001797Z
+  instrumentId=72057594038056292  distributionTime=2026-09-14T11:00:44.143265307Z
+  instrumentId=72057594038070487  distributionTime=2026-09-14T11:00:48.970404695Z
+  instrumentId=72057594038056292  distributionTime=2026-09-14T11:00:49.449184316Z
+  instrumentId=72057594038070487  distributionTime=2026-09-14T11:00:14.568419654Z
+  instrumentId=72057594038056292  distributionTime=2026-09-14T11:00:38.726723300Z
+  instrumentId=72057594038070487  distributionTime=2026-09-14T11:00:38.908337193Z
+  instrumentId=72057594038056292  distributionTime=2026-09-14T11:00:14.755651857Z
+  instrumentId=72057594038056292  distributionTime=2026-09-14T11:00:53.556273558Z
+  instrumentId=72057594038056292  distributionTime=2026-09-14T11:00:23.752777343Z
+  instrumentId=72057594038070487  distributionTime=2026-09-14T11:00:54.839351393Z
+session-boundary row counts (basis for the open=07:00 / close=15:30 bucket edges):
+  XLON-pre-2026-09-11T06_45.csv  rows=2
+  XLON-pre-2026-09-11T07_00.csv  rows=31349
+  XLON-pre-2026-09-11T07_15.csv  rows=23117
+  XLON-pre-2026-09-11T15_15.csv  rows=32100
+  XLON-pre-2026-09-11T15_30.csv  rows=29418
+  XLON-pre-2026-09-11T15_45.csv  rows=100
+  XLON-pre-2026-09-11T16_00.csv  rows=10
+  XLON-pre-2026-09-14T06_45.csv  rows=94
+  XLON-pre-2026-09-14T07_00.csv  rows=33696
+  XLON-pre-2026-09-14T07_15.csv  rows=22705
+  XLON-pre-2026-09-14T15_15.csv  rows=30370
+  XLON-pre-2026-09-14T15_30.csv  rows=30640
+  XLON-pre-2026-09-14T15_45.csv  rows=85
+  XLON-pre-2026-09-14T16_00.csv  rows=6
+MST3 SI check (one file per participant, from `si`):
+  BARCIE2DSEC-SI_QUOTES-BARCIE2DSEC-2026-09-14T15_34.csv  MST3 present=False
+  NMOPVOF-SI_QUOTES-NMOPVOF-2026-09-14T15_59.csv  MST3 present=False
+  NMTRIAIR-SI_QUOTES-NMTRIAIR-2026-09-14T18_14.csv  MST3 present=False
 
 === coverage (union across all sampled files) ===
-3USL   rows= 1111 two-sided= 1111 files_present=94/108
-3LUS   rows= 1115 two-sided= 1110 files_present=98/108
+3USL   rows= 1113 two-sided= 1111 files_present=96/108
+3LUS   rows= 1113 two-sided= 1110 files_present=98/108
 LQQ3   rows= 2249 two-sided= 2243 files_present=98/108
 NVD3   rows= 3032 two-sided= 3031 files_present=98/108
 3LNV   rows= 2560 two-sided= 2556 files_present=96/108
@@ -77,10 +130,10 @@ narrow into close (<1x): ['3USL', '3LUS', 'LQQ3', 'LCO3']
 
 === cross-sectional half-spread dispersion (restates #875, permissibly collected) ===
 --- open bucket only (matches #875's pre-open capture) --- n_instruments=30
-  median-of-medians=79.48bps  max/median=4.19x  min/median: max/min=57.70x  p90/median=2.81x
+  median-of-medians=79.48bps  max/median=4.19x  max/min=57.70x  p90/median=2.81x
   widest 5 (half-spread bps): [('3LIP', 333.3333333333325), ('LCO3', 243.90243902438976), ('3LSQ', 231.0231023102312), ('LPP3', 157.8947368421048), ('3LMO', 141.0934744268079)]
   tightest 5 (half-spread bps): [('3KOR', 19.67118048704106), ('NVD3', 15.26051885764116), ('LQQ3', 7.755190256429267), ('3USL', 5.937801659828871), ('3LUS', 5.77716644178651)]
 --- full session (open+midday+close) --- n_instruments=30
-  median-of-medians=64.42bps  max/median=4.70x  min/median: max/min=49.93x  p90/median=2.62x
+  median-of-medians=64.42bps  max/median=4.70x  max/min=49.93x  p90/median=2.62x
   widest 5 (half-spread bps): [('LCO3', 303.03030303030306), ('3LIP', 177.92379570764203), ('3LSQ', 172.2723543888435), ('3LMO', 136.58147051989334), ('LPP3', 131.9261213720312)]
   tightest 5 (half-spread bps): [('PLT3', 18.248175182481752), ('NVD3', 10.958046336881697), ('LQQ3', 9.435677647415645), ('3USL', 6.319937544146622), ('3LUS', 6.069300375193083)]
