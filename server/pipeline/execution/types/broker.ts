@@ -309,10 +309,10 @@ export interface BrokerAdapter {
    * the only caller (`ingestFills`, ingest-fills.ts) passes it straight
    * through, unchanged, and both implementations depend on that. A fresh id
    * is still needed at the venue (that original id already named the
-   * now-cancelled bracket, and resubmitting under it risks colliding with
-   * whatever identity semantics the venue applies to a reused client order
-   * id) — deriving it is the ADAPTER's job, not the caller's:
-   * `AlpacaBrokerAdapter` suffixes it (`${clientOrderId}:rearm`) before
+   * now-cancelled bracket, and Alpaca refuses a reused client order id
+   * permanently — measured, #1346) — deriving it is the ADAPTER's job, not
+   * the caller's: `AlpacaBrokerAdapter` suffixes it (`rearmWireId`, indexed
+   * per attempt because each suffix it spends is spent for good) before
    * calling the venue, and `SimulatedBrokerAdapter` keys `protectedQty` on
    * the id AS PASSED, with no suffixing at all. A future adapter that
    * generated a fresh id itself, per this comment's old wording, would break

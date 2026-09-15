@@ -687,7 +687,7 @@ describe('ExecutionImpl.ingestFills', () => {
         expect.objectContaining({
           level: 'error',
           event: 'residual_rearm_unsupported',
-          message: expect.stringContaining('cannot arm protective legs at all'),
+          message: expect.stringContaining('permanently refused'),
         }),
       );
       // #1214's decision: the refusal triggers a re-flatten of the residual,

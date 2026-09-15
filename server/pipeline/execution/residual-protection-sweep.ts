@@ -38,8 +38,10 @@
  *
  * A retry must tolerate a re-arm that actually SUCCEEDED venue-side before a
  * crash lost its confirmation. Every `rearmProtectiveLegs` path does:
- * equities adopt-or-place on the deterministic `:rearm` wire id
- * (`AlpacaBrokerAdapter`, the #600/#603 posture); the crypto emulation
+ * equities adopt-or-place over the lot's derived re-arm wire ids
+ * (`AlpacaBrokerAdapter`, the #600/#603 posture — the walk is attempt-indexed
+ * because Alpaca consumes a `client_order_id` permanently, #1346); the crypto
+ * emulation
  * retires its previous episode's legs before arming a fresh journalled
  * episode (`AlpacaCryptoLegEmulation.rearm`); the Simulated adapter re-sets
  * the same protected quantity. So the sweep retries through the SAME broker
@@ -60,7 +62,7 @@
  * `logCaughtFailure` (#608), outcomes via the `ReconcileDivergence`s this
  * returns, which both callers log per entry.
  *
- * ## When the venue can never re-arm at all (#1214)
+ * ## When no pass can ever re-arm the lot (#1214)
  *
  * The Idempotency section above lists three adapters that CAN re-arm. Saxo
  * cannot: every LSE pool line reports `IsOcoOrderSupported: false` (doc 43),
@@ -69,6 +71,12 @@
  * venue (`ProtectiveRearmUnsupportedError`). The attempt is still made on
  * every pass — deliberately: a venue capability is re-read on each attempt
  * rather than cached here, and it costs no venue call.
+ *
+ * The Alpaca adapter raises the SAME error for a per-LOT reason (#1346/#1570):
+ * a `client_order_id` is consumed permanently, so once a lot has spent every
+ * re-arm wire id `MAX_REARM_ATTEMPTS` allows it, no later pass can place one
+ * either. Both are "no retry of this call can protect this residual", which is
+ * all this sweep branches on — see `protective-rearm-unsupported.ts`.
  *
  * What the refusal now triggers is the recorded decision (David, 2026-09-08,
  * option 2): the residual is CLOSED rather than protected —
@@ -311,9 +319,9 @@ async function sweepOne(
             event: 'residual_rearm_unsupported',
             level: 'error',
             message:
-              'sweepResidualProtection: this venue cannot arm protective legs at all, so no ' +
-              'pass of this sweep can protect the lot — the marker stays and only manual ' +
-              'action at the venue clears it',
+              'sweepResidualProtection: arming protective legs for this lot is permanently ' +
+              'refused, so no pass of this sweep can protect it — the marker stays and only ' +
+              'manual action at the venue clears it',
           }
         : {
             trace_id: input.trace_id,
@@ -366,7 +374,7 @@ async function sweepOne(
           action: 'undetermined',
           kind: 'sweep',
           reason:
-            `this venue cannot arm protective legs, so residual ${residual} was CLOSED instead ` +
+            `this lot can never be re-armed, so residual ${residual} was CLOSED instead ` +
             `(#1214): market order '${reflatten.idempotency_key}' is live at the venue and the ` +
             'marker clears when its fill lands',
         };
@@ -382,7 +390,7 @@ async function sweepOne(
       action: 'undetermined',
       kind: 'sweep',
       reason: unsupported
-        ? `this venue cannot arm protective legs at all and the residual ${residual} could not ` +
+        ? `this lot can never be re-armed and the residual ${residual} could not ` +
           `be closed either — see the residual_reflatten_* log line for which gate stood the ` +
           `re-flatten down: ${describeThrownSafely(error)}`
         : `re-arm retry failed for residual ${residual}: ${describeThrownSafely(error)}`,

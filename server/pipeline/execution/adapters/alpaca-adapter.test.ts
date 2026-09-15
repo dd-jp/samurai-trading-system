@@ -13,11 +13,13 @@ import { InMemoryBrokerStateStore } from '../broker-state-store.js';
 import { ExecutionImpl } from '../execute.js';
 import { FilledZeroSizeThrottle } from '../filled-zero-size-throttle.js';
 import type { OcoDoubleFillAlert, OcoDoubleFillAlertChannel } from '../oco-double-fill-alert.js';
+import { isProtectiveRearmUnsupported } from '../protective-rearm-unsupported.js';
 import { openTestExecutionStore } from '../sqlite-store-harness.js';
 import type { ExecutionConfig, ExecutionInput, NativeBracketRequest } from '../types.js';
 import type { UnpricedFillAlert, UnpricedFillAlertChannel } from '../unpriced-fill-alert.js';
 import { AlpacaBrokerAdapter, DEFAULT_UNPRICED_FILL_AGE_OUT_MS } from './alpaca-adapter.js';
-import type { AlpacaBrokerClient, AlpacaOrder } from './alpaca-client.js';
+import { AlpacaBrokerProviderError } from './alpaca-broker-errors.js';
+import type { AlpacaBrokerClient, AlpacaOcoOrderRequest, AlpacaOrder } from './alpaca-client.js';
 import { AlpacaHttpBrokerClient } from './alpaca-http-client.js';
 
 /**
@@ -2452,10 +2454,15 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
    * position unprotected, for no cause but a trailing decimal.
    */
   it("adopts a resting prior whose venue prices are the ROUNDED form of the caller's (#983)", async () => {
-    const getOrderByClientOrderId = vi.fn(async () => ({
+    // Answers for the ONE id the prior was placed under, and `null` for the
+    // rest of this lot's wire-id space — the shape #1346 measured. A fake
+    // answering the same order for EVERY id would read as a lot that had
+    // already spent all four.
+    const prior: AlpacaOrder = {
       ...acceptedOrder(),
       id: 'rearm-venue-id',
-      order_class: 'oco' as const,
+      client_order_id: 'key-1:rearm',
+      order_class: 'oco',
       qty: '6',
       // What the venue holds: rounded, because that is what was sent.
       limit_price: '754.19',
@@ -2470,7 +2477,11 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
           stop_price: '766.40',
         },
       ],
-    }));
+    };
+    const getOrderByClientOrderId = vi.fn(
+      async (clientOrderId: string): Promise<AlpacaOrder | null> =>
+        clientOrderId === 'key-1:rearm' ? prior : null,
+    );
     const cancelOrder = vi.fn();
     const submitOcoOrder = vi.fn();
     const adapter = adapterWith(
@@ -2701,11 +2712,23 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     });
   });
 
-  // #549 adopt-or-place: the wire id is deterministic (`${key}:rearm`), so a
-  // re-arm that succeeded venue-side before a crash lost its confirmation is
-  // ADOPTED by the retry rather than double-submitted (or misread as a fresh
-  // failure when the venue rejects the duplicate client order id).
+  // #549 adopt-or-place: the wire ids are derived (`${key}:rearm`,
+  // `${key}:rearm-1`, ...), so a re-arm that succeeded venue-side before a
+  // crash lost its confirmation is ADOPTED by the retry rather than
+  // double-submitted (or misread as a fresh failure when the venue rejects the
+  // duplicate client order id).
   describe('re-arm adopt-or-place (#549)', () => {
+    /**
+     * A venue that answers per `client_order_id` and has nothing under the ids
+     * the map does not name — the shape #1346 measured. A fake answering the
+     * same order for EVERY id would claim the whole wire-id space is spent.
+     */
+    function venueHolding(rows: Record<string, AlpacaOrder>) {
+      return vi.fn(async (clientOrderId: string): Promise<AlpacaOrder | null> => {
+        return rows[clientOrderId] ?? null;
+      });
+    }
+
     /** A live prior OCO whose qty/levels match the canonical (6, 95, 110) request. */
     function matchingPriorOco() {
       return {
@@ -2732,7 +2755,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     it('adopts a live prior OCO that MATCHES the request instead of submitting again', async () => {
       const submitOcoOrder = vi.fn();
       const cancelOrder = vi.fn();
-      const getOrderByClientOrderId = vi.fn().mockResolvedValue(matchingPriorOco());
+      const getOrderByClientOrderId = venueHolding({ 'key-1:rearm': matchingPriorOco() });
       const adapter = adapterWith(
         makeClient({ submitOcoOrder, cancelOrder, getOrderByClientOrderId }),
       );
@@ -2754,9 +2777,9 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         .mockResolvedValue({ ...acceptedOrder(), id: 'rearm-2', order_class: 'oco', legs: [] });
       const cancelOrder = vi.fn().mockResolvedValue(undefined);
       // Sized for the OLD residual (9), request now wants 6.
-      const getOrderByClientOrderId = vi
-        .fn()
-        .mockResolvedValue({ ...matchingPriorOco(), qty: '9' });
+      const getOrderByClientOrderId = venueHolding({
+        'key-1:rearm': { ...matchingPriorOco(), qty: '9' },
+      });
       const adapter = adapterWith(
         makeClient({ submitOcoOrder, cancelOrder, getOrderByClientOrderId }),
       );
@@ -2773,10 +2796,12 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         .fn()
         .mockResolvedValue({ ...acceptedOrder(), id: 'rearm-2', order_class: 'oco', legs: [] });
       const cancelOrder = vi.fn().mockResolvedValue(undefined);
-      const prior = matchingPriorOco();
-      const getOrderByClientOrderId = vi
-        .fn()
-        .mockResolvedValue({ ...prior, limit_price: undefined });
+      // ABSENT, not `undefined`: `exactOptionalPropertyTypes` makes those
+      // different types, and the wire shape this stands in for is a response
+      // that never carried the field.
+      const prior: AlpacaOrder = matchingPriorOco();
+      delete prior.limit_price;
+      const getOrderByClientOrderId = venueHolding({ 'key-1:rearm': prior });
       const adapter = adapterWith(
         makeClient({ submitOcoOrder, cancelOrder, getOrderByClientOrderId }),
       );
@@ -2796,12 +2821,14 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     it('adopts a PARTIALLY_FILLED prior without cancel-and-replace, even when the store-side residual disagrees', async () => {
       const submitOcoOrder = vi.fn();
       const cancelOrder = vi.fn();
-      const getOrderByClientOrderId = vi.fn().mockResolvedValue({
-        ...matchingPriorOco(),
-        // qty 6 with 2 filled: 4 rest, 4 held from this episode — while the
-        // request (computed off a store missing those fills) still says 6.
-        status: 'partially_filled',
-        filled_qty: '2',
+      const getOrderByClientOrderId = venueHolding({
+        'key-1:rearm': {
+          ...matchingPriorOco(),
+          // qty 6 with 2 filled: 4 rest, 4 held from this episode — while the
+          // request (computed off a store missing those fills) still says 6.
+          status: 'partially_filled',
+          filled_qty: '2',
+        },
       });
       const adapter = adapterWith(
         makeClient({ submitOcoOrder, cancelOrder, getOrderByClientOrderId }),
@@ -2823,9 +2850,9 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         .fn()
         .mockResolvedValue({ ...acceptedOrder(), id: 'rearm-2', order_class: 'oco', legs: [] });
       const cancelOrder = vi.fn().mockResolvedValue(undefined);
-      const getOrderByClientOrderId = vi
-        .fn()
-        .mockResolvedValue({ ...matchingPriorOco(), status: 'done_for_day' });
+      const getOrderByClientOrderId = venueHolding({
+        'key-1:rearm': { ...matchingPriorOco(), status: 'done_for_day' },
+      });
       const adapter = adapterWith(
         makeClient({ submitOcoOrder, cancelOrder, getOrderByClientOrderId }),
       );
@@ -2840,11 +2867,8 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     it('adopts a FILLED prior regardless of size — its fill is already closing the residual', async () => {
       const submitOcoOrder = vi.fn();
       const cancelOrder = vi.fn();
-      const getOrderByClientOrderId = vi.fn().mockResolvedValue({
-        ...matchingPriorOco(),
-        qty: '9',
-        status: 'filled',
-        filled_qty: '9',
+      const getOrderByClientOrderId = venueHolding({
+        'key-1:rearm': { ...matchingPriorOco(), qty: '9', status: 'filled', filled_qty: '9' },
       });
       const adapter = adapterWith(
         makeClient({ submitOcoOrder, cancelOrder, getOrderByClientOrderId }),
@@ -2860,20 +2884,522 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       const submitOcoOrder = vi
         .fn()
         .mockResolvedValue({ ...acceptedOrder(), id: 'rearm-2', order_class: 'oco', legs: [] });
-      const getOrderByClientOrderId = vi.fn().mockResolvedValue({
-        ...acceptedOrder(),
-        id: 'prior-rearm-oco',
-        client_order_id: 'key-1:rearm',
-        order_class: 'oco',
-        status: 'canceled',
-        legs: [],
+      const getOrderByClientOrderId = venueHolding({
+        'key-1:rearm': {
+          ...acceptedOrder(),
+          id: 'prior-rearm-oco',
+          client_order_id: 'key-1:rearm',
+          order_class: 'oco',
+          status: 'canceled',
+          legs: [],
+        },
       });
       const adapter = adapterWith(makeClient({ submitOcoOrder, getOrderByClientOrderId }));
 
       await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
 
-      // A cancelled prior protects nothing — the retry submits.
+      // A cancelled prior protects nothing — the retry submits. Under the NEXT
+      // wire id, not `key-1:rearm`: that one is spent for good (#1346).
       expect(submitOcoOrder).toHaveBeenCalledTimes(1);
+      expect(submitOcoOrder).toHaveBeenCalledWith(
+        expect.objectContaining({ client_order_id: 'key-1:rearm-1' }),
+      );
+    });
+  });
+
+  /**
+   * #1346 — a wire id a re-arm spends is spent FOREVER.
+   *
+   * MEASURED against Alpaca paper 2026-09-15 (docs/research/43, round 3):
+   * reusing a `client_order_id` is refused with
+   * `422 {"code":42210000,"message":"client_order_id must be unique"}` while
+   * the prior rests, `422 {"code":40010001,...}` the instant after it goes
+   * `canceled`, the same 90 s later, and the same against a 13-day-old
+   * canceled row. The venue double below enforces exactly that rule, so a
+   * re-arm scheme that reuses an id fails here the way it fails on the venue
+   * — and a scheme that places while a prior still RESTS trips the
+   * "at most one live OCO" assertion, the #516 hazard from the other side.
+   */
+  describe('re-arm wire ids are consumed permanently (#1346)', () => {
+    function measuredAlpacaVenue() {
+      const rows = new Map<string, AlpacaOrder>();
+      let placed = 0;
+
+      const submitOcoOrder = vi.fn(async (request: AlpacaOcoOrderRequest): Promise<AlpacaOrder> => {
+        if (rows.has(request.client_order_id)) {
+          throw new AlpacaBrokerProviderError(
+            'Alpaca rejected POST /v2/orders: 422 {"code":40010001,"message":"client_order_id must be unique"}',
+            422,
+            '40010001',
+            'client_order_id must be unique',
+            'POST',
+          );
+        }
+        placed += 1;
+        const row: AlpacaOrder = {
+          ...acceptedOrder(),
+          id: `oco-${placed}`,
+          client_order_id: request.client_order_id,
+          order_class: 'oco',
+          qty: request.qty,
+          limit_price: request.take_profit.limit_price,
+          legs: [
+            {
+              id: `oco-${placed}-stop`,
+              type: 'stop',
+              status: 'held',
+              filled_qty: '0',
+              filled_avg_price: null,
+              filled_at: null,
+              stop_price: request.stop_loss.stop_price,
+            },
+          ],
+        };
+        rows.set(row.client_order_id, row);
+        return row;
+      });
+
+      const getOrderByClientOrderId = vi.fn(
+        async (clientOrderId: string): Promise<AlpacaOrder | null> =>
+          rows.get(clientOrderId) ?? null,
+      );
+
+      const cancelOrder = vi.fn(async (alpacaOrderId: string): Promise<void> => {
+        for (const [key, row] of rows) {
+          if (row.id === alpacaOrderId) rows.set(key, { ...row, status: 'canceled' });
+        }
+      });
+
+      // `partially_filled` counts as WORKING, not done: an OCO's remainder
+      // (`qty − filled_qty`) is still live protection at the venue. Filtering
+      // on 'accepted' alone made every `resting()` assertion blind to the one
+      // state where a second leg would be a #516 double-arm.
+      const WORKING = [
+        'new',
+        'accepted',
+        'pending_new',
+        'accepted_for_bidding',
+        'partially_filled',
+      ];
+      const resting = (): AlpacaOrder[] =>
+        [...rows.values()].filter((row) => WORKING.includes(row.status));
+
+      return { submitOcoOrder, getOrderByClientOrderId, cancelOrder, resting, rows };
+    }
+
+    // THE DEFECT. A lot is re-armed, the next `executeExit` cancels that OCO
+    // (#516), the flatten partially fills, and the fresh residual marks the
+    // SAME lot — an ordinary two-partial-flatten sequence. Under a single
+    // `:rearm` id the second re-arm 422s, and every later sweep pass 422s
+    // identically: the marker never clears and the residual is never
+    // protected. A permanent protection gap wearing a transient error's
+    // clothes.
+    it('protects the SAME lot a second time after its first re-arm was cancelled', async () => {
+      const venue = measuredAlpacaVenue();
+      const adapter = adapterWith(makeClient(venue));
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+      expect(venue.resting().map((row) => row.client_order_id)).toEqual(['key-1:rearm']);
+
+      await venue.cancelOrder('oco-1');
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
+
+      expect(venue.resting().map((row) => row.client_order_id)).toEqual(['key-1:rearm-1']);
+      expect(venue.resting().map((row) => row.qty)).toEqual(['4']);
+    });
+
+    // The other direction: advancing must never leave two OCOs able to fire
+    // at one residual. A resting prior is either ADOPTED (nothing submitted)
+    // or CANCELLED before the walk moves past it.
+    it('never leaves two live OCOs on one lot across a cancel-and-replace', async () => {
+      const venue = measuredAlpacaVenue();
+      const adapter = adapterWith(makeClient(venue));
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+      // Re-armed again for a SMALLER residual while the first still rests:
+      // the mismatch forces cancel-and-replace rather than adoption.
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
+
+      expect(venue.resting().map((row) => row.client_order_id)).toEqual(['key-1:rearm-1']);
+      expect(venue.rows.get('key-1:rearm')?.status).toBe('canceled');
+    });
+
+    // Adoption still short-circuits the walk: an unchanged residual whose OCO
+    // already rests must cost no second id, or a lot that is merely re-swept
+    // would burn through `MAX_REARM_ATTEMPTS` for nothing.
+    it('adopts the resting prior instead of advancing when nothing changed', async () => {
+      const venue = measuredAlpacaVenue();
+      const adapter = adapterWith(makeClient(venue));
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+
+      expect(venue.submitOcoOrder).toHaveBeenCalledTimes(1);
+      expect(venue.cancelOrder).not.toHaveBeenCalled();
+    });
+
+    // Bounded, and loud at the bound: the walk refuses rather than submitting
+    // under an id the venue is certain to reject.
+    //
+    // #1570 review, finding 3: the refusal is PERMANENT, so it is raised as
+    // `ProtectiveRearmUnsupportedError` — the existing #1214 discriminant —
+    // rather than a bare `Error`. `residual_rearm_failed`'s own documented
+    // semantics are "the marker stays and the NEXT pass retries", and no later
+    // pass can ever succeed on a lot whose ids are all spent: Alpaca never
+    // releases a `client_order_id`. Routing it here instead makes both callers
+    // re-flatten the residual (David's 2026-09-08 ruling), page against the
+    // permanent-gap dedup column, and stop retrying.
+    it('raises the PERMANENT-gap error once every wire id this lot may use is spent', async () => {
+      const venue = measuredAlpacaVenue();
+      const adapter = adapterWith(makeClient(venue));
+
+      for (let spent = 0; spent < 4; spent += 1) {
+        await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+        await venue.cancelOrder(`oco-${spent + 1}`);
+      }
+
+      const thrown = await adapter
+        .rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110)
+        .then(() => null)
+        .catch((error: unknown) => error);
+
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toMatch(/exhausted all 4 re-arm wire ids/);
+      // Duck-typed, the way the callers ask (`isProtectiveRearmUnsupported`) —
+      // and it must survive the adapter's `sanitizeBrokerError` wrapper, which
+      // is why the throw sits OUTSIDE `this.call`.
+      expect(isProtectiveRearmUnsupported(thrown)).toBe(true);
+      expect(venue.submitOcoOrder).toHaveBeenCalledTimes(4);
+    });
+
+    // `cancel()` must follow the walk. Cancelling `key-1:rearm` — spent and
+    // long terminal — while `key-1:rearm-1` rests would leave a protective
+    // leg live behind a cancelled bracket, free to fire into the position the
+    // flatten is about to close (#516, #867).
+    it('cancel() retires the NEWEST re-arm, not the first id the lot ever used', async () => {
+      const venue = measuredAlpacaVenue();
+      const adapter = adapterWith(
+        makeClient({
+          ...venue,
+          // Forces `resolveCancelTargets` down the venue-lookup path rather
+          // than the in-process `rearmedLegs` shortcut, which is what a
+          // restarted process faces.
+          getOrderByClientOrderId: vi.fn(async (clientOrderId: string) =>
+            clientOrderId === 'key-1' ? null : (venue.rows.get(clientOrderId) ?? null),
+          ),
+        }),
+      );
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+      await venue.cancelOrder('oco-1');
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
+
+      const restarted = adapterWith(
+        makeClient({
+          ...venue,
+          getOrderByClientOrderId: vi.fn(async (clientOrderId: string) =>
+            clientOrderId === 'key-1' ? null : (venue.rows.get(clientOrderId) ?? null),
+          ),
+        }),
+      );
+      await restarted.cancel('key-1', 'AAPL');
+
+      expect(venue.cancelOrder).toHaveBeenCalledWith('oco-2');
+      expect(venue.resting()).toEqual([]);
+    });
+
+    /**
+     * #1570 review, finding 2 — the walk must not ADOPT at an early index
+     * while a later one is allocated and still resting.
+     *
+     * The sequence is reachable through this method's own documented race:
+     * re-arm #2 cancels attempt 0's stale-sized OCO and loses that race to the
+     * order's own fill (`cancelOrder` tolerates it deliberately), so attempt 0
+     * ends `filled` while attempt 1 rests. A walk that returned at the first
+     * adoptable index then pointed `rearmedLegs` at the FILLED no-op, and the
+     * next `cancel()` preferred that in-process id, cancelled nothing, and
+     * left attempt 1's OCO live behind a cancelled bracket — two protective
+     * legs able to fire at one lot (#516), which is the whole hazard this
+     * mechanism exists to prevent.
+     *
+     * Asserted through `cancel()` rather than through `resting()` alone: the
+     * order state is identical either way, and it is the BOOKKEEPING —
+     * `rearmedLegs` / `recordBracketOrderIds` — that the defect corrupted.
+     */
+    it('does not downgrade to a FILLED early attempt while a later one still rests', async () => {
+      const venue = measuredAlpacaVenue();
+      const adapter = adapterWith(makeClient(venue));
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+      // Re-armed for a SMALLER residual while attempt 0 still rests: the
+      // mismatch cancels it and the walk places attempt 1.
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
+      expect(venue.resting().map((row) => row.client_order_id)).toEqual(['key-1:rearm-1']);
+
+      // ...and that cancel LOST the race to attempt 0's own fill. The venue
+      // row ends `filled`, not `canceled` — the outcome `cancelOrder`'s
+      // 404/422 tolerance exists to absorb.
+      venue.rows.set('key-1:rearm', {
+        ...venue.rows.get('key-1:rearm')!,
+        status: 'filled',
+        filled_qty: '6',
+      });
+
+      // The third pass — the sweep re-verifying a lot it has already re-armed
+      // twice. This is where the short-circuit used to overwrite the newest
+      // live id with the filled one.
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
+
+      await adapter.cancel('key-1', 'AAPL');
+
+      // LAST, not merely somewhere in the list: `oco-1` was legitimately
+      // cancelled by the second re-arm's cancel-and-replace. What the defect
+      // produced was `cancel()` reaching for `oco-1` AGAIN — a no-op on a
+      // filled order — and never touching the leg that was actually live.
+      expect(venue.cancelOrder).toHaveBeenLastCalledWith('oco-2');
+      expect(venue.resting()).toEqual([]);
+    });
+
+    /**
+     * A FULLY filled prior is adopted wherever it sits in the walk, and it is
+     * not evidence of a naked lot: its remainder — `qty − filled_qty`, the
+     * quantity #549 says an adopted prior still holds — is zero, so that
+     * episode closed itself and the store's residual follows once the fills
+     * ingest. Placing instead would arm a fresh leg over a flat position,
+     * which fires into nothing and opens a reverse one.
+     */
+    it('still adopts a filled prior when every id above it is already dead', async () => {
+      const venue = measuredAlpacaVenue();
+      const adapter = adapterWith(makeClient(venue));
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
+      venue.rows.set('key-1:rearm', {
+        ...venue.rows.get('key-1:rearm')!,
+        status: 'filled',
+        filled_qty: '6',
+      });
+      // Cancelled AT THE VENUE, not by this walk — the #429 intervention path
+      // (an operator flattening from the Alpaca UI, a day order expiring).
+      venue.rows.set('key-1:rearm-1', {
+        ...venue.rows.get('key-1:rearm-1')!,
+        status: 'canceled',
+      });
+      venue.submitOcoOrder.mockClear();
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
+
+      expect(venue.submitOcoOrder).not.toHaveBeenCalled();
+      expect(venue.rows.has('key-1:rearm-2')).toBe(false);
+    });
+
+    /**
+     * ...including when the walk cancelled something on its way past. A
+     * `pending_cancel` prior is one `mapOrderState` folds into 'submitted', so
+     * the walk cannot prove it dead and retires it defensively. That cancel is
+     * not a reason to re-arm over a fill that has already closed the lot.
+     */
+    it('adopts a filled prior despite a defensive cancel at a LOWER index', async () => {
+      const venue = measuredAlpacaVenue();
+      const adapter = adapterWith(makeClient(venue));
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
+      venue.rows.set('key-1:rearm', {
+        ...venue.rows.get('key-1:rearm')!,
+        status: 'pending_cancel',
+      });
+      venue.rows.set('key-1:rearm-1', {
+        ...venue.rows.get('key-1:rearm-1')!,
+        status: 'filled',
+        filled_qty: '4',
+      });
+      venue.submitOcoOrder.mockClear();
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
+
+      expect(venue.submitOcoOrder).not.toHaveBeenCalled();
+      expect(venue.rows.has('key-1:rearm-2')).toBe(false);
+    });
+
+    /**
+     * A PARTIALLY_FILLED prior is not a settled one — its remainder is still
+     * working at the venue, which is why #549 adopts it regardless of size.
+     * Classifying it with the terminal fills let a retire at a HIGHER index
+     * disqualify it, and the walk then placed a second OCO on top of a leg
+     * that can still fire: #516's two-live-legs hazard, arrived at from the
+     * bookkeeping rather than the orders.
+     */
+    it('does not place a second leg over a PARTIALLY_FILLED prior whose remainder still works', async () => {
+      const venue = measuredAlpacaVenue();
+      const adapter = adapterWith(makeClient(venue));
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
+      // The cancel lost the race to a PARTIAL fill — the ordinary outcome for
+      // a stop or target leg, and the remainder keeps working.
+      venue.rows.set('key-1:rearm', {
+        ...venue.rows.get('key-1:rearm')!,
+        status: 'partially_filled',
+        filled_qty: '2',
+      });
+      venue.submitOcoOrder.mockClear();
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 3, 95, 110);
+
+      expect(venue.submitOcoOrder).not.toHaveBeenCalled();
+      expect(venue.resting().map((row) => row.client_order_id)).toEqual(['key-1:rearm']);
+    });
+
+    /**
+     * WHY A SWEEP AND NOT MORE HAND-BUILT CASES.
+     *
+     * The four tests above were each written for one named sequence, and three
+     * separate defects in this walk survived the tests written for the
+     * sequence before them — every one of them living in a COMBINATION nobody
+     * had thought to build. A per-case mutation run proves the case it was
+     * written for and says nothing about the rest of the space.
+     *
+     * The space is small enough to close by enumeration: a prior is one of six
+     * shapes, an absent id ends the walk, so four indices give 1+6+36+216+1296
+     * reachable sequences. This asserts the MONEY invariants over all of them,
+     * so a future edit cannot open a hole in a corner that has no named test.
+     *
+     * Some sequences are unreachable under the allocation invariant (a resting
+     * prior below an allocated index). The walk ENFORCES that invariant rather
+     * than assuming it, so they are swept too and must hold.
+     */
+    it('holds the money invariants across every reachable prior-status sequence', async () => {
+      const SHAPES = [
+        'resting-match',
+        'resting-mismatch',
+        'partially_filled',
+        'filled',
+        'canceled',
+        'pending_cancel',
+      ] as const;
+      type Shape = (typeof SHAPES)[number];
+
+      const WORKING = [
+        'new',
+        'accepted',
+        'pending_new',
+        'accepted_for_bidding',
+        'partially_filled',
+      ];
+
+      // Prefixes over the non-absent shapes: the walk stops at the first gap,
+      // so a sequence is fully described by what sits below that gap.
+      let sequences: Shape[][] = [[]];
+      let frontier: Shape[][] = [[]];
+      for (let depth = 0; depth < 4; depth += 1) {
+        frontier = frontier.flatMap((prefix) => SHAPES.map((shape) => [...prefix, shape]));
+        sequences = [...sequences, ...frontier];
+      }
+      expect(sequences).toHaveLength(1555);
+
+      function seed(attempt: number, shape: Shape): AlpacaOrder {
+        const row: AlpacaOrder = {
+          ...acceptedOrder(),
+          id: `seed-${attempt}`,
+          client_order_id: attempt === 0 ? 'key-1:rearm' : `key-1:rearm-${attempt}`,
+          order_class: 'oco',
+          qty: '6',
+          limit_price: '110',
+          legs: [
+            {
+              id: `seed-${attempt}-stop`,
+              type: 'stop',
+              status: 'held',
+              filled_qty: '0',
+              filled_avg_price: null,
+              filled_at: null,
+              stop_price: '95',
+            },
+          ],
+        };
+        if (shape === 'resting-match') return row;
+        if (shape === 'resting-mismatch') return { ...row, qty: '5' };
+        if (shape === 'partially_filled')
+          return { ...row, status: 'partially_filled', filled_qty: '2' };
+        if (shape === 'filled') return { ...row, status: 'filled', filled_qty: '6' };
+        return { ...row, status: shape === 'canceled' ? 'canceled' : 'pending_cancel' };
+      }
+
+      const violations: string[] = [];
+      for (const sequence of sequences) {
+        const venue = measuredAlpacaVenue();
+        sequence.forEach((shape, attempt) => {
+          const row = seed(attempt, shape);
+          venue.rows.set(row.client_order_id, row);
+        });
+        const state = new InMemoryBrokerStateStore();
+        const recordIds = vi.spyOn(state, 'recordBracketOrderIds');
+        const adapter = new AlpacaBrokerAdapter({
+          client: makeClient(venue),
+          rateLimiter: permissiveLimiter(),
+          unpricedFillAlerts: recordingAlerts(),
+          ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+          logger: recordingLogger(),
+          state,
+        });
+
+        const workingAtEntry = new Set(venue.resting().map((row) => row.id));
+        const threw = await adapter
+          .rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110)
+          .then(() => false)
+          .catch(() => true);
+
+        const workingAtExit = venue.resting();
+        const where = `[${sequence.join(', ')}]`;
+
+        // 1. #516 DIRECTLY: never two legs that can still fire on one lot.
+        if (workingAtExit.length > 1) violations.push(`${where} two working legs`);
+
+        if (threw) continue;
+
+        // 2. A normal return must never leave the lot NAKED after this walk
+        // destroyed protection that was working when it started. The caller
+        // clears the #549 marker on that return, so a naked residual here is
+        // also an UNWATCHED one.
+        //
+        // Zero working legs is only acceptable when the row the bookkeeping
+        // NAMES is fully filled — that lot is flat, not unprotected. Checking
+        // the named row's status rather than merely tolerating a zero count is
+        // what keeps this from excusing a genuine naked return.
+        //
+        // Scoped to normal returns deliberately: the last-index destructive
+        // cancel throws, which is recorded finding 4, not this clause's
+        // business.
+        const destroyed = [...workingAtEntry].some(
+          (id) => !workingAtExit.some((row) => row.id === id),
+        );
+        const namedId = recordIds.mock.lastCall?.[2]?.target_order_id;
+        const named = [...venue.rows.values()].find((row) => row.id === namedId);
+        if (destroyed && workingAtExit.length === 0 && named?.status !== 'filled') {
+          violations.push(
+            `${where} destroyed working protection and left none; ` +
+              `bookkeeping names ${String(namedId)} (${String(named?.status)})`,
+          );
+        }
+
+        // 3. Finding 2's original signature, asserted structurally: the
+        // bookkeeping `cancel()` later trusts must name the leg that is
+        // actually live, never a terminal one from a lower index.
+        if (workingAtExit.length === 1) {
+          const last = recordIds.mock.lastCall;
+          if (last?.[2]?.target_order_id !== workingAtExit[0]!.id) {
+            violations.push(
+              `${where} bookkeeping names ${String(last?.[2]?.target_order_id)}, ` +
+                `working leg is ${workingAtExit[0]!.id}`,
+            );
+          }
+        }
+      }
+
+      expect(violations).toEqual([]);
     });
   });
 
