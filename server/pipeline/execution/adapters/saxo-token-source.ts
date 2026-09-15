@@ -27,8 +27,14 @@
  * loses the session, so every delay here is derived from the instants the
  * gateway actually returned.
  *
- * The alerting consumer of `sessionState()` is #1524; this module reports the
- * state and does not page anyone.
+ * ## Paging the operator (#1524)
+ *
+ * `lose()` posts to `SaxoTokenRefresherDeps.sessionLostAlerts` when supplied,
+ * in addition to the `saxo_session_lost` log line it always writes — see
+ * `SaxoSessionLostAlertChannel`'s doc for why that call needs no throttle of
+ * its own. The weekly re-login reminder Saxo also recommends is a separate,
+ * self-scheduled concern with no per-request trigger to hang off
+ * (`production/saxo-weekly-reminder-alert.ts`).
  */
 import type { Clock, Logger } from '../../../shared/index.js';
 import { fetchWithTimeout, maskCredentials, SystemClock } from '../../../shared/index.js';
@@ -52,6 +58,39 @@ export type SaxoSessionState =
 
 /** Thrown by `getAccessToken()` once the session can no longer be renewed. */
 export class SaxoSessionLostError extends Error {}
+
+/**
+ * The operator escalation for a session going lost (#1524). Posted from
+ * `lose()` — the one place a `SaxoTokenRefresher` instance can ever make this
+ * transition, and it can make it at most once (every path back into `lose()`
+ * is guarded by `this.lostReason !== undefined`) — so "one alert per lost
+ * episode, not per failed request" falls out of that guard rather than
+ * needing a throttle of its own. A NEW episode is a new instance: this
+ * process only ever gets one by restarting after a fresh `yarn saxo:login`
+ * (`buildSaxoTokenSource`, production/saxo-venue.ts), which is also the only
+ * way `lostReason` is ever cleared.
+ *
+ * `reason` is always safe to page: every string `lose()` is called with is
+ * either hand-composed (naming a path or an instant, never a body) or has
+ * already been through `maskCredentials`/`redactSession` — see the call
+ * sites below.
+ */
+export interface SaxoSessionLostAlert {
+  environment: SaxoTradingEnvironment;
+  reason: string;
+  reported_at: Date;
+}
+
+/**
+ * Declared beside `SaxoSessionLostAlert`, like `TickSkipAlertChannel` beside
+ * `TickSkipAlert` (production/tick-skip-alert.ts). The alert catalogue's
+ * `saxoSessionLostAlerts` entry (alert-catalogue.ts) implements it; `void`,
+ * not `Promise<void>` — `lose()` is called from synchronous code
+ * (`load()`'s guards) and cannot await a page without becoming async itself.
+ */
+export interface SaxoSessionLostAlertChannel {
+  postSaxoSessionLostAlert(alert: SaxoSessionLostAlert): void;
+}
 
 export interface SaxoTokenSource {
   /** The bearer to send on the NEXT request. Never memoised by the caller. */
@@ -123,6 +162,8 @@ export interface SaxoTokenRefresherDeps {
   /** Overridden only to inject a failure at the persistence step; see `runRefresh`. */
   writeRecord?: (path: string, record: SaxoTokenFileRecord) => void;
   backoff?: { baseMs: number; maxMs: number };
+  /** Where a lost session is escalated (#1524); absent means the loss is logged only — see `lose()`. */
+  sessionLostAlerts?: SaxoSessionLostAlertChannel;
 }
 
 export class SaxoTokenRefresher implements SaxoTokenSource {
@@ -296,6 +337,11 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
       ...response,
       environment: this.deps.environment,
       obtainedAt: now.toISOString(),
+      // Carried forward, not restamped (#1524): a silent rotation is not a
+      // manual login, and `loggedInAt` answers "when did an operator last run
+      // `yarn saxo:login`", not "when did this process last renew its bearer"
+      // — see `SaxoTokenFileRecord.loggedInAt`.
+      ...(record.loggedInAt === undefined ? {} : { loggedInAt: record.loggedInAt }),
     };
     try {
       // PERSIST BEFORE USE. `this.record` is swapped only after the write
@@ -401,6 +447,15 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
       level: 'error',
       message: `Saxo ${this.deps.environment} session is lost: ${reason}`,
       payload: { environment: this.deps.environment, reason },
+    });
+    // Every path into `lose()` is guarded by `this.lostReason !== undefined`
+    // (`load()` runs once; `runRefresh()` returns immediately once lost), so
+    // this line runs at most once per instance — the "one alert per lost
+    // episode" property lives in that guard, not here.
+    this.deps.sessionLostAlerts?.postSaxoSessionLostAlert({
+      environment: this.deps.environment,
+      reason,
+      reported_at: this.clock.now(),
     });
   }
 

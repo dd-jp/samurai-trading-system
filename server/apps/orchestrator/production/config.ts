@@ -15,6 +15,7 @@ import type {
   OcoDoubleFillAlertChannel,
   ResidualExposureAlertChannel,
   SaxoOpenApiClient,
+  SaxoSessionLostAlertChannel,
   UnattributedFlattenFillAlertChannel,
   UnpricedFillAlertChannel,
   UnresolvedPriceUnitAlertChannel,
@@ -78,6 +79,7 @@ import type { GateRefusalRateAlertChannel } from './gate-refusal-rate-guard.js';
 import type { LlmFailureRateAlertChannel } from './llm-failure-rate-guard.js';
 import type { LseCalendarCoverageAlertChannel } from './lse-calendar-coverage-alert.js';
 import type { MiCoverageAlertChannel } from './mi-coverage.js';
+import type { SaxoWeeklyReminderAlertChannel } from './saxo-weekly-reminder-alert.js';
 import type { ThresholdClampAlertChannel } from './threshold-clamp-alert.js';
 import type { TickSkipAlertChannel } from './tick-skip-alert.js';
 import type { TraderDiagnosticAlertChannel } from './trader-diagnostic-alert.js';
@@ -525,6 +527,27 @@ export interface AlertChannelSlots {
    * `info` from the reconcile side.
    */
   unattributedFlattenFillAlerts?: UnattributedFlattenFillAlertChannel;
+  /**
+   * #1524's immediate page — `SaxoTokenRefresher.lose()`
+   * (pipeline/execution/adapters/saxo-token-source.ts) posts here the moment
+   * a session can no longer be renewed, naming the environment and the exact
+   * `yarn saxo:login` command. Absent = log-only, with deliberately NO
+   * log-only form behind it (`UNLOGGED_ALERT_IDS`) for the reason
+   * `nonSterlingFeeAlerts` above documents: `lose()` already writes the
+   * `saxo_session_lost` line before this port is reached. At most one post
+   * per lost episode — see `SaxoSessionLostAlert`'s doc for why.
+   */
+  saxoSessionLostAlerts?: SaxoSessionLostAlertChannel;
+  /**
+   * #1524's weekly nudge — `SaxoWeeklyReminder` (production/saxo-weekly-
+   * reminder-alert.ts) posts here every Sunday evening London time, stating
+   * when the saved session was last established by a manual `yarn
+   * saxo:login`. Defaults to `loggingAlertChannel('saxoWeeklyReminderAlerts', …)`,
+   * the same caveat as every other channel here: reachable only by an
+   * operator reading the log stream until `SAMURAI_ALERTS=telegram` supplies
+   * the phone-reaching form.
+   */
+  saxoWeeklyReminderAlerts?: SaxoWeeklyReminderAlertChannel;
 }
 
 /**

@@ -97,6 +97,7 @@ import { UnwiredApprovalChannel } from './console-channels.js';
 import { DebateBarDecisionGate } from './decision-bar-gate.js';
 import { FILL_SYNC_TRACE_ID, RECONCILE_TRACE_ID } from './fill-sync.js';
 import { LIVE_BOOK_GBP, LIVE_BOOK_SIZING_USD, paperStartingProfile } from './paper-profile.js';
+import { FIRST_TICK_BAR_WINDOWS } from './production/bar-prefetch.js';
 import { type CapitalCeilingUsd, toCapitalCeilingUsd } from './production/capital-ceiling.js';
 import {
   CONTROL_FILL_SYNC_TRACE_ID,
@@ -4213,6 +4214,75 @@ describe('buildProductionOrchestrator', () => {
 
     await vi.advanceTimersByTimeAsync(5_000);
     expect(scanSpy).toHaveBeenCalledTimes(1);
+    expect(runSpy).toHaveBeenCalled();
+
+    await orchestrator.stop();
+  });
+
+  /**
+   * #1543, and this is the test that matters for it. `bar-prefetch.test.ts`
+   * proves the mechanism warms a cold store; nothing there proves the
+   * orchestrator CALLS it, which is this repo's dominant defect shape — a
+   * tested mechanism with no production caller. Deleting the `prefetchBars`
+   * call from `start()` leaves every case in that file green and turns this
+   * one red.
+   *
+   * The ordering assertion is half the point: warming AFTER `startTickLoop`
+   * would still warm the store, and would still leave the first tick racing
+   * the sweep it was supposed to avoid.
+   */
+  it('warms the bar store before the tick loop is armed (#1543)', async () => {
+    const fetched: string[] = [];
+    // The first prefetch fetch hangs until released, so "before" is proved by
+    // the tick loop failing to fire across an interval it would otherwise
+    // have fired in — not merely by `start()` having returned.
+    let releaseFetch!: () => void;
+    const held = new Promise<void>((resolve) => {
+      releaseFetch = resolve;
+    });
+    let firstFetch = true;
+    const config = stubConfig(db, {
+      tickIntervalMs: 1_000,
+      heartbeatIntervalMs: 1_000,
+      tradingCalendar: new AlwaysOpenCalendar(),
+      dataSource: {
+        fetchBars: async (_instrument, window) => {
+          fetched.push(`${window.timeframe}/${window.lookback}`);
+          if (firstFetch) {
+            firstFetch = false;
+            await held;
+          }
+          return [];
+        },
+        fetchMark: async () => ({
+          price: 100,
+          observed_at: START,
+          source: 'fixture',
+          asset_class: 'crypto' as const,
+        }),
+      },
+    });
+    const orchestrator = buildProductionOrchestrator(config);
+    const runSpy = vi
+      .spyOn(orchestrator.tickRunner, 'runInstrument')
+      .mockResolvedValue({ trace_id: 't', final_stage: 'analysts' });
+
+    const started = orchestrator.start();
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(fetched).toHaveLength(1);
+    expect(runSpy).not.toHaveBeenCalled();
+
+    releaseFetch();
+    await started;
+
+    expect(fetched).toEqual(
+      orchestrator.universe.flatMap(() =>
+        FIRST_TICK_BAR_WINDOWS.map((window) => `${window.timeframe}/${window.lookback}`),
+      ),
+    );
+
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(runSpy).toHaveBeenCalled();
 
     await orchestrator.stop();

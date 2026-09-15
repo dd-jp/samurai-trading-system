@@ -348,6 +348,17 @@ const FIXTURES: { readonly [K in AlertId]: readonly AlertOf<K>[] } = {
       observed_at: new Date('2026-01-02T10:00:00Z'),
     },
   ],
+  saxoSessionLostAlerts: [
+    {
+      environment: 'sim',
+      reason: 'the refresh token was rejected (HTTP 400)',
+      reported_at: AT,
+    },
+  ],
+  saxoWeeklyReminderAlerts: [
+    { environment: 'live', last_logged_in_at: '2026-09-07T18:00:00.000Z', reported_at: AT },
+    { environment: 'sim', reported_at: AT },
+  ],
 };
 
 /** Each port through its own method name — what makes `asPort`'s cast in the catalogue safe. */
@@ -378,6 +389,8 @@ const INVOKE: { readonly [K in AlertId]: (port: AlertPort<K>, alert: AlertOf<K>)
   gateRefusalRateAlerts: (port, alert) => port.postGateRefusalRateAlert(alert),
   nonSterlingFeeAlerts: (port, alert) => port.postNonSterlingFeeAlert(alert),
   unattributedFlattenFillAlerts: (port, alert) => port.postUnattributedFlattenFillAlert(alert),
+  saxoSessionLostAlerts: (port, alert) => port.postSaxoSessionLostAlert(alert),
+  saxoWeeklyReminderAlerts: (port, alert) => port.postSaxoWeeklyReminderAlert(alert),
 };
 
 interface GoldenCase {

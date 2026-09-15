@@ -283,7 +283,14 @@ export async function runLogin(
   const now = (deps.now ?? (() => new Date()))();
   const token = await exchangeAuthorizationCode(config, callback.code, now, fetchImpl);
   const path = deps.tokenPath ?? tokenFilePath(environment);
-  writeTokenFile(path, { ...token, environment, obtainedAt: now.toISOString() });
+  // `loggedInAt` is this run's own timestamp, never carried over from a prior
+  // file (#1524) — a manual login is exactly the event it records.
+  writeTokenFile(path, {
+    ...token,
+    environment,
+    obtainedAt: now.toISOString(),
+    loggedInAt: now.toISOString(),
+  });
   printSafely(`Token saved to ${path} (mode 0600, gitignored).`);
 
   const verification = await verifyToken(config.gatewayBaseUrl, token.accessToken, fetchImpl);

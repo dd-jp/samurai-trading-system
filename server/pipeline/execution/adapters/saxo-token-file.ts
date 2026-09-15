@@ -71,6 +71,19 @@ export function savedSessionExists(path: string): boolean {
 export interface SaxoTokenFileRecord extends SaxoTokenResponse {
   environment: SaxoTradingEnvironment;
   obtainedAt: string;
+  /**
+   * When `yarn saxo:login` last ran for this environment (#1524) — set by
+   * `runLogin` and then carried forward UNCHANGED through every rotation
+   * (`SaxoTokenRefresher.runRefresh` copies it onto the next record rather
+   * than restamping it), unlike `obtainedAt`, which a silent rotation does
+   * update. The weekly re-login reminder reads this field precisely because
+   * `obtainedAt` would answer "when did this process last renew its bearer",
+   * not "when did an operator last actually log in" — the question Saxo's own
+   * disclaimer-refresh guidance is about. Absent on a session saved before
+   * this field existed, or one still on the pasted-token path (#1522
+   * predates it).
+   */
+  loggedInAt?: string;
 }
 
 /**
@@ -137,6 +150,16 @@ function requireSecret(body: Record<string, unknown>, field: string): string {
   return value;
 }
 
+/** Like `requireIso`, but the field is allowed to be absent — see `loggedInAt`'s doc. */
+function optionalIso(body: Record<string, unknown>, field: string): string | undefined {
+  const value = body[field];
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || Number.isNaN(Date.parse(value))) {
+    throw new SaxoTokenFileError(`Saxo token file: ${field} is present but not an ISO instant.`);
+  }
+  return value;
+}
+
 /**
  * `undefined` when there is no saved session at all; throws when there is one
  * this process cannot use. No error message here ever quotes the file's
@@ -167,6 +190,7 @@ export function readTokenFile(path: string): SaxoTokenFileRecord | undefined {
   if (environment !== 'sim' && environment !== 'live') {
     throw new SaxoTokenFileError(`Saxo token file at ${path} names no known environment.`);
   }
+  const loggedInAt = optionalIso(parsed, 'loggedInAt');
   return {
     environment,
     accessToken: requireSecret(parsed, 'accessToken'),
@@ -174,5 +198,6 @@ export function readTokenFile(path: string): SaxoTokenFileRecord | undefined {
     accessTokenExpiresAt: requireIso(parsed, 'accessTokenExpiresAt'),
     refreshTokenExpiresAt: requireIso(parsed, 'refreshTokenExpiresAt'),
     obtainedAt: requireIso(parsed, 'obtainedAt'),
+    ...(loggedInAt === undefined ? {} : { loggedInAt }),
   };
 }

@@ -121,9 +121,13 @@ export type { SessionNormalizationConfig } from './sources/session-normalized-fe
 export { withSessionNormalization } from './sources/session-normalized-fetcher.js';
 export { SqliteMarketDataStore } from './sqlite-market-data-store.js';
 export { closeTimeOf, isDailyTimeframe, timeframeToMs } from './timeframe.js';
-export type { TradingCalendar } from './trading-calendar.js';
+export type { TradingCalendar, ZonedCivilDate } from './trading-calendar.js';
 export {
   AlwaysOpenCalendar,
+  // #1524 — the Saxo weekly re-login reminder's own DST-safe wall-clock
+  // arithmetic (production/saxo-weekly-reminder-alert.ts) is built on these
+  // three rather than re-deriving the `Intl` fixpoint this file already has.
+  LONDON_ZONE,
   // #1378 — the hand-entered LSE tables' checked coverage cliff (the earlier
   // of the two tables' own checked-through dates); the boot guard in
   // production/lse-calendar-coverage-guard.ts enforces it.
@@ -136,13 +140,16 @@ export {
   // #706 — policy, not venue: narrows WHEN equities may be entered inside a
   // session the calendar has already opened.
   londonEntryWindow,
+  nextCivilDay,
   OVERLAP_WINDOW_LAST_ENTRY_MINUTES,
   OVERLAP_WINDOW_OPEN_MINUTES,
+  toCivilDate,
   // #684 — the hand-entered US table's checked coverage cliff; the calendar
   // fallback alert reports it so an operator knows how far to trust the
   // fallback.
   US_TABLE_COVERAGE_END,
   UsEquityRegularHoursCalendar,
+  wallClockToInstant,
 } from './trading-calendar.js';
 export type {
   Bar,
