@@ -98,16 +98,29 @@ rather than a bespoke check, so the report handles three cases:
   `fee_currency` — but one must not be summed as pounds if it ever appears.
 - **Anything else** (USD on the pool lines the #1220 sterling gate excludes from
   `tradeableUniverse()` in `lse-etp-pool.ts` — occasionally EUR) — converts on
-  `fills.fx_rate_to_gbp` (#1521, migration 0060) when the row carries one:
-  `grossAmount`/`charges` multiplied by the venue's own rate, applied
-  verbatim, never re-derived or blended with an independent spot lookup. A
-  row with neither a book currency nor a stored rate still has **no
-  transaction-date FX rate and this report still does not invent one** —
-  it is excluded from every matched disposal and every total above, and
-  listed separately, in its own native currency, under **UNCONVERTED — FX
-  rate not captured at fill time**. Converting such a row to sterling by
-  hand, from the operator's own contract notes, is required before it can be
-  included in a return.
+  `fills.fx_rate_to_gbp` (#1521, migration 0060) when the row carries a
+  **strictly positive** rate: `grossAmount`/`charges` multiplied by the
+  venue's own rate, applied verbatim, never re-derived or blended with an
+  independent spot lookup. A zero or negative stored value is refused rather
+  than multiplied by (round 1 review) — it would silently zero out or
+  sign-flip a real disposal, and both are worse than treating the row as
+  unconverted. **The multiply direction (`native amount × rate = GBP
+  amount`, i.e. the rate is read as GBP per 1 unit of native currency) is
+  asserted by this doc and by `sqlite-cgt-fill-source.ts`'s own comments —
+  it has never been observed against a real Saxo payload**, because no
+  reachable Saxo surface has ever populated this column for a real fill (see
+  "#1521's field verification" below). If a future Saxo field turns out to
+  use the inverse convention, `toCashFill` must divide, not multiply, when it
+  starts populating this column, and this doc and that test must be
+  corrected in the same change. A row with neither a book currency nor a
+  usable stored rate still has **no transaction-date FX rate and this report
+  still does not invent one** — it is excluded from every matched disposal
+  and every total above, and listed separately, in its own native currency,
+  under **UNCONVERTED — FX rate not captured at fill time**, alongside the
+  specific reason (`fills.fx_rate_to_gbp_source`, or `no_rate_stored` /
+  `invalid_stored_rate:<value>` when this module attaches the reason itself).
+  Converting such a row to sterling by hand, from the operator's own contract
+  notes, is required before it can be included in a return.
 
   **#1521's field verification (SIM, 2026-09-14).** `saxo-adapter.ts`'s
   `toCashFill` is the only place a Saxo fill is built, and its only data
@@ -140,6 +153,26 @@ rather than a bespoke check, so the report handles three cases:
   surface, or a widened universe (#1310) that reintroduces non-sterling
   lines with a rate attached; migration `0060_fills_fx_rate_to_gbp.sql`'s
   header carries the same record.
+
+  **Re-probed 2026-09-15 (this ticket, reopened): same conclusion, one new
+  field noted.** `GET /port/v1/closedpositions` and `GET /port/v1/positions`
+  (both `?ClientKey=...` and `?ClientKey=...&AccountKey=...`) again returned
+  zero rows for the SIM account — a day of further paper trading did not
+  produce a closed position to check `ConversionRateInstrumentToBase{Opening,Closing}Settled`
+  against, so that candidate remains unverified. `GET /port/v1/accounts/me`
+  (200, 1 row) carries a field not previously recorded here:
+  `IsCurrencyConversionAtSettlementTime: true` on this account — a
+  settlement-time-conversion flag, not a rate, and not on any fill/position
+  payload this system reads; noted as a lead for whichever future ticket
+  finally has a closed position to probe, not evidence a rate is reachable
+  today. **Reported, not pasted** — this session's probe summarised the
+  field rather than recording the raw redacted response body; the next
+  probe should paste the payload alongside this claim. `IsTrialAccount: true`
+  is unchanged from the prior probe. **AC3
+  remains unmet**: it needs either a real closed position on this SIM (or
+  live) account to check the candidate field against, or an owner decision
+  to accept a different rate source — no code change in this repo can
+  resolve it.
 
 ## Refusals, not silent mispricing
 

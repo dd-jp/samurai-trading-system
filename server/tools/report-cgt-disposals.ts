@@ -180,15 +180,16 @@ export function formatCgtReport(
     '  UNCONVERTED — FX rate not captured at fill time',
     '  These fills are NOT included in any figure above: their fee_currency is',
     '  neither GBP nor a pence sub-unit (GBX/gbx/GBp/p), and this report has no',
-    '  transaction-date FX rate to convert them with. Convert each by hand from',
-    '  its native-currency amount before including it in a return.',
-    '  instrument       fill date    kind          qty   native amount  native charges  currency',
+    '  usable transaction-date FX rate to convert them with (see the reason',
+    '  column). Convert each by hand from its native-currency amount before',
+    '  including it in a return.',
+    '  instrument       fill date    kind          qty   native amount  native charges  currency  reason',
   );
 
   for (const f of unconverted) {
     lines.push(
       `  ${f.instrument.padEnd(16)} ${f.date.toISOString().slice(0, 10)}   ${f.kind.padEnd(12)}` +
-        `${String(f.quantity).padStart(6)}${gbp(f.grossAmount).padStart(15)}${gbp(f.charges).padStart(16)}  ${f.currency}`,
+        `${String(f.quantity).padStart(6)}${gbp(f.grossAmount).padStart(15)}${gbp(f.charges).padStart(16)}  ${f.currency.padEnd(8)}  ${f.fxRateToGbpSource}`,
     );
   }
   if (unconverted.length === 0) {
