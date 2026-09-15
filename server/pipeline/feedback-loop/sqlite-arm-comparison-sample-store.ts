@@ -109,7 +109,7 @@ const COLUMNS = `computed_at, window_from, window_to, basis,
 /**
  * Reads back exactly what the table holds. `refused_pass_count` (#1099) is a
  * nullable column since migration 0057 (#1483) and `cost_basis_drops` (#1546)
- * since 0065 — NULL on a row computed before its migration, a real value on
+ * since 0066 — NULL on a row computed before its migration, a real value on
  * every row after it. See `PersistedArmPerformance`.
  */
 function fromRow(row: ArmComparisonSampleRow): PersistedArmComparisonSample {

@@ -105,7 +105,7 @@ export interface ArmComparisonSample {
 
 /**
  * What `arm_comparison_samples` can actually give back — every column migration
- * 0034/0035/0057/0065 defines, and nothing else.
+ * 0034/0035/0057/0066 defines, and nothing else.
  *
  * `refused_pass_count` (#1099) has a column since migration 0057 (#1483), but
  * a NULLABLE one: every row written before that migration was computed before
