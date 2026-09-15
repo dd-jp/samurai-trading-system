@@ -346,7 +346,13 @@ export class MarketDataServiceImpl implements MarketDataService {
    * TICK — reached only on a cold store (first tick after startup/restart,
    * or any window whose bar interval never lines up with the cache's
    * recency check, e.g. RVOL's 936-bar lookback, which can stay a "miss"
-   * indefinitely and is exactly what `consecutive_misses` surfaces). Once
+   * indefinitely and is exactly what `consecutive_misses` surfaces). That
+   * eight is a ceiling on the LINES, not a count of distinct cold fetches:
+   * this smoke fixture is too shallow to serve the narrower 5m specs, so
+   * they missed on row count rather than on freshness. #1543 measured the
+   * same cold pass against history deep enough to satisfy every window and
+   * got THREE (`5m/260`, `1h/20`, `5m/936`) — the narrow specs collapse onto
+   * the shared warm-up through route 1 exactly as they do warm. Once
    * the store is warm, most windows hit every tick and this drops to ~0-2
    * lines/instrument/tick — only a bar-interval rollover re-triggers a
    * fetch. Across a 20-name universe that's ~160 lines on a cold start,

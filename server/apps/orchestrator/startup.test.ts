@@ -13,6 +13,7 @@ import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DEFAULT_TRADER_CONFIG } from '../../pipeline/trader/index.js';
+import { FixtureDataSource } from '../../providers/market-data-service/index.js';
 import {
   GdeltGkgClient,
   MiArchiveStore,
@@ -71,6 +72,22 @@ const offlinePolymarketClient = new PolymarketClient({
     throw new Error('offline: the test suite must not reach Polymarket');
   }) as unknown as typeof fetch,
 });
+
+/**
+ * #1543 made `start()` warm the bar store before arming the tick loop, so a
+ * boot now reaches the composed `DataSource` — which, left to the real
+ * Alpaca client, 401s against the fence below, fails over, and posts a
+ * data-failover alert. That post is CORRECT production behaviour (a failover
+ * genuinely happened) and reaches the network on any call site wired to a real
+ * alert transport, which is why the prefetch's source is stubbed here rather
+ * than the alert being silenced. An empty series is enough: the prefetch warms
+ * whatever the source returns and no assertion in this file reads a bar.
+ */
+const offlineBarSource = new FixtureDataSource(
+  [],
+  { price: 100, observed_at: new Date('2026-08-04T10:00:00Z'), source: 'fixture' },
+  'stocks',
+);
 
 /**
  * The backstop for the line above, and it has already earned its keep.
@@ -335,6 +352,7 @@ describe('startFromEnvironment — real construction path', () => {
       miArchive: new MiArchiveStore(),
       gdeltClient: offlineGdeltClient,
       polymarketClient: offlinePolymarketClient,
+      dataSource: offlineBarSource,
     });
 
     try {
@@ -377,6 +395,7 @@ describe('startFromEnvironment — real construction path', () => {
       miArchive: new MiArchiveStore(),
       gdeltClient: offlineGdeltClient,
       polymarketClient: offlinePolymarketClient,
+      dataSource: offlineBarSource,
       logger,
       get universe() {
         reads += 1;
@@ -424,6 +443,7 @@ describe('startFromEnvironment — real construction path', () => {
       miArchive: new MiArchiveStore(),
       gdeltClient: offlineGdeltClient,
       polymarketClient: offlinePolymarketClient,
+      dataSource: offlineBarSource,
     }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
 
     expect(error.message).toContain('Refusing to start');
@@ -440,6 +460,7 @@ describe('startFromEnvironment — real construction path', () => {
       miArchive: new MiArchiveStore(),
       gdeltClient: offlineGdeltClient,
       polymarketClient: offlinePolymarketClient,
+      dataSource: offlineBarSource,
     }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
 
     // Names the variable and how to supply it. The seams guard used to catch
@@ -467,6 +488,7 @@ describe('startFromEnvironment — real construction path', () => {
       miArchive: new MiArchiveStore(),
       gdeltClient: offlineGdeltClient,
       polymarketClient: offlinePolymarketClient,
+      dataSource: offlineBarSource,
     }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
 
     return error.then((e) => {
@@ -512,6 +534,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
       miArchive: new MiArchiveStore(),
       gdeltClient: offlineGdeltClient,
       polymarketClient: offlinePolymarketClient,
+      dataSource: offlineBarSource,
       logger,
     });
 
@@ -623,6 +646,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
       miArchive: new MiArchiveStore(),
       gdeltClient: offlineGdeltClient,
       polymarketClient: offlinePolymarketClient,
+      dataSource: offlineBarSource,
       logger,
     }).then(async (orchestrator) => {
       try {
@@ -646,6 +670,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
       miArchive: new MiArchiveStore(),
       gdeltClient: offlineGdeltClient,
       polymarketClient: offlinePolymarketClient,
+      dataSource: offlineBarSource,
     }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
 
     expect(error.message).toContain('SAMURAI_ALERTS');
@@ -665,6 +690,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
       miArchive: new MiArchiveStore(),
       gdeltClient: offlineGdeltClient,
       polymarketClient: offlinePolymarketClient,
+      dataSource: offlineBarSource,
     }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
 
     expect(error.message).toContain('TELEGRAM_CHAT_ID');
@@ -699,6 +725,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
       miArchive: new MiArchiveStore(),
       gdeltClient: offlineGdeltClient,
       polymarketClient: offlinePolymarketClient,
+      dataSource: offlineBarSource,
       logger,
     });
 
@@ -815,6 +842,7 @@ describe('startFromEnvironment — the live profile (#511)', () => {
       miArchive: new MiArchiveStore(),
       gdeltClient: offlineGdeltClient,
       polymarketClient: offlinePolymarketClient,
+      dataSource: offlineBarSource,
       logger,
     });
 
@@ -916,6 +944,7 @@ describe('startFromEnvironment — the live profile (#511)', () => {
       miArchive: new MiArchiveStore(),
       gdeltClient: offlineGdeltClient,
       polymarketClient: offlinePolymarketClient,
+      dataSource: offlineBarSource,
     }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
 
     // The paper pair is still set, so a fallback would have started a live

@@ -256,6 +256,7 @@ import type { OrphanGoVerdict, OrphanVerdictScanner } from './orphan-verdict-sca
 import { LIVE_BOOK_SIZING_USD } from './paper-profile.js';
 import { alpacaFunding, BrokerAccountStateProvider } from './production/account-state.js';
 import { buildAnalystsStep, composeMarketIntelligence } from './production/analysts-adapter.js';
+import { prefetchBars } from './production/bar-prefetch.js';
 import { toCapitalCeilingUsd } from './production/capital-ceiling.js';
 import { buildCarriedLotReporter } from './production/carried-lot-alert.js';
 // #753: the control arm's own account scalars — see `control-account-state.ts`.
@@ -4095,6 +4096,32 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
             : { alerts: config.traderDiagnosticAlerts }),
         }),
       });
+
+      // #1543, and deliberately HERE — after every other startup step, on the
+      // last line before the tick loop is armed. The analyst deadline
+      // `analystTimeoutMs` above derives is sized against a WARM store
+      // (`DISTINCT_BAR_WINDOWS_PER_INSTRUMENT`, a measured warm count); an
+      // empty store makes the first pass reach the venue for every distinct
+      // window instead, serially, and lose the first tick's analyst outputs to
+      // a timeout with no fault behind it. Warming here costs boot latency
+      // that nothing is waiting on — the first tick fires one `tickIntervalMs`
+      // after this returns — and leaves the deadline where #1542 derived it
+      // rather than widening it past what no downstream check refuses (#1104).
+      // See `bar-prefetch.ts` for the window list and for why a widened
+      // first-tick deadline was refused.
+      //
+      // Skipped in backtest: `cachedBars` disables itself there for
+      // point-in-time determinism, so a prefetch could only double every
+      // replay read.
+      if (config.mode !== 'backtest') {
+        await prefetchBars({
+          marketData: components.marketData,
+          universe: components.universe,
+          asOf: clock.now(),
+          logger,
+          traceId: 'startup',
+        });
+      }
 
       loop = startTickLoop({
         scheduler,

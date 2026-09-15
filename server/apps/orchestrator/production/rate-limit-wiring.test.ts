@@ -953,21 +953,24 @@ describe("Alpaca's burst covers one fill-poll sweep of the configured universe (
    *
    * WARM STORE, and therefore not the worst sweep the system can issue. A
    * first-ever tick against an empty store has no stored history to serve the
-   * wider specs from and asks the eight windows `MarketDataServiceImpl`
-   * documents, which is `(20 * 8 - 20) / 2.0` = 70s of drain against a
-   * 30,000ms deadline: the back of that sweep misses quorum and the tick
-   * records a no-trade it never measured. It self-heals from the sweep's own
-   * fetches as they land, and this deadline serves 80 of the 160 fetches
-   * inside it where the 10,000ms one served 40 — better, not safe.
+   * wider specs from, so it reaches the venue for every distinct window it
+   * asks for and pays SERIAL bounded fetches this deadline budgets one of:
+   * the back of that sweep misses quorum and the tick records a no-trade it
+   * never measured.
    *
    * Raising the deadline is not the fix available: two attempts per persona at
-   * 70,000ms is 140s of analyst wall clock against a 120,000ms tick. Nothing
-   * REFUSES that — `paper-profile.ts`'s pass-duration tripwire is a human one
-   * and no gate downstream measures a walk (#1104) — so the overrun would just
-   * happen, per instrument group, unannounced. The fix is warming the
-   * store OFF the tick path, and no boot-time bar prefetch exists today; it is
-   * recorded as declined-for-now on #1080 (analysts-spec.md, "Module: Failure
-   * Handling"), because the starvation #1080 measured is steady-state.
+   * a cold-covering deadline is well past 120,000ms of analyst wall clock
+   * against a 120,000ms tick. Nothing REFUSES that — `paper-profile.ts`'s
+   * pass-duration tripwire is a human one and no gate downstream measures a
+   * walk (#1104) — so the overrun would just happen, per instrument group,
+   * unannounced. The fix is warming the store OFF the tick path, which #1543
+   * shipped as `bar-prefetch.ts`, awaited in `production.ts`'s `start()` on
+   * the last line before `startTickLoop`. #1080 had declined it for now
+   * because the starvation #1080 measured is steady-state; #1543's is
+   * boot-time. That ticket also corrected the eight-window cold figure this
+   * comment used to quote (measured: three per instrument — see
+   * `bar-prefetch.test.ts`) and the 30,000ms literal it measured against
+   * (derived since #1542 — see the describe block below).
    *
    * If it does not self-heal, `consecutive_misses` plus the quorum-skip alert
    * is the surface. Single-flight coalescing moved that counter from per-caller

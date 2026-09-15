@@ -62,11 +62,11 @@ const ALL_PERSONAS: Analyst[] = [technicalAnalyst, fundamentalAnalyst, sentiment
  * token bucket shared with the order path (`shared/http/venue-pacing.ts`),
  * which holds 20 tokens above the order path's reserve and refills at 2.0/s,
  * while one sweep of the 20-instrument universe reaches the venue for up to
- * four distinct windows per instrument — a WARM-STORE count; a first-ever tick
- * against an empty store asks eight and drains for 70s, which this deadline
- * does not cover (analysts-spec.md, \"Module: Failure Handling\"). A fetch that
-
- * cannot get a token has not
+ * four distinct windows per instrument — a WARM-STORE count. A first-ever tick
+ * against an empty store reaches the venue for more than that and pays them
+ * serially, which this deadline does not cover; #1543 closed that by warming
+ * the store at boot rather than by widening this number (analysts-spec.md,
+ * "Module: Failure Handling"). A fetch that cannot get a token has not
  * started, so a deadline under the drain times the back of every sweep out by
  * construction — the 2026-09-10 19:56 burst measured 91 of 133 fetches past
  * 10,000ms with a median of 21,338ms, which is #1080's instance 2: `technical
