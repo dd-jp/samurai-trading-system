@@ -21,14 +21,14 @@ export function closedTrade(
 ): ClosedTrade {
   const { filledSize, avgEntryPrice, entryFills, exitFills } = lot;
 
-  // The fill that took the lot flat — it names how the trade ended and when.
+  // The fill that took the lot flat — it names how the trade ended and when
   const closing = exitFills.at(-1);
   if (closing === undefined) {
     throw new Error(`closedTrade: ${position.idempotency_key} is flat with no exit fill recorded`);
   }
   const avgExitPrice = weightedAvgPrice(exitFills);
 
-  // Signed against the direction of the lot: a short earns the fall.
+  // Signed against the direction of the lot: a short earns the fall
   const gross =
     position.side === 'buy'
       ? (avgExitPrice - avgEntryPrice) * filledSize
@@ -43,7 +43,7 @@ export function closedTrade(
     side: position.side,
     entry: avgEntryPrice,
     // The lot's INITIAL stop, carried from the bracket — R's denominator is
-    // the risk taken at open.
+    // the risk taken at open
     stop: position.stop,
     filled_size: filledSize,
     realized_pnl_net: gross - feesTotal,
@@ -56,7 +56,7 @@ export function closedTrade(
     // the three in-process reasons it was; that is the more specific answer
     // and wins whenever it is present. Falls back to the bare `'exit'` leg
     // only for a row this system genuinely never recorded a reason for — the
-    // pre-0031 legacy case (see the migration's own doc; not invented here).
+    // pre-0031 legacy case (see the migration's own doc; not invented here)
     close_reason: closing.exit_reason ?? closing.leg,
     modelled_cost_charged: modelledCostCharged(entryFills, exitFills),
   };

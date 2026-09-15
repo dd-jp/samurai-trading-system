@@ -39,7 +39,7 @@ export class SqliteMarketDataStore implements MarketDataStore {
    * `INSERT OR IGNORE` on the `(instrument, timeframe, open_time)` PK: a
    * re-ingested bar is silently a no-op rather than a duplicate row or a
    * thrown constraint error — the append-only history stays append-only
-   * under retries.
+   * under retries
    */
   appendBars(bars: readonly Bar[]): void {
     const insert = this.db.prepare(
@@ -50,7 +50,7 @@ export class SqliteMarketDataStore implements MarketDataStore {
 
     // One transaction per batch: better-sqlite3 otherwise wraps every run()
     // in its own implicit transaction, an fsync per bar — ~100x slower on
-    // bulk backfills (code-review 2026-08-01, H9).
+    // bulk backfills (code-review 2026-08-01, H9)
     this.db.transaction(() => {
       for (const bar of bars) {
         insert.run(
@@ -72,7 +72,7 @@ export class SqliteMarketDataStore implements MarketDataStore {
   /**
    * Point-in-time bulk read: most recent `lookback` bars with
    * `close_time <= asOf`, ascending — matching `completedBars`' ordering so
-   * this is a drop-in Tier-2 tier for the same callers.
+   * this is a drop-in Tier-2 tier for the same callers
    */
   readBars(instrument: string, timeframe: string, asOf: Date, lookback: number): Bar[] {
     const rows = this.db
@@ -103,7 +103,7 @@ export class SqliteMarketDataStore implements MarketDataStore {
       .reverse();
   }
 
-  /** One row per instrument — overwrites, since `latest_mark` holds only the current price. */
+  /** One row per instrument — overwrites, since `latest_mark` holds only the current price */
   upsertLatestMark(instrument: string, mark: Mark): void {
     this.db
       .prepare(

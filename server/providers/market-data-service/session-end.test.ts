@@ -24,7 +24,7 @@ describe('AlwaysOpenCalendar.sessionEnd', () => {
     // `sessionStart` has a real answer; `sessionEnd` deliberately does not. An
     // implementation returning `sessionStart + 1 day` here would silently pick
     // one of #667's four options on David's behalf, turning an accounting
-    // convention into a midnight-UTC flatten of the crypto book.
+    // convention into a midnight-UTC flatten of the crypto book
     expect(calendar.sessionStart(instant)).toBeInstanceOf(Date);
     expect(calendar.sessionEnd(instant)).toBeNull();
   });
@@ -42,21 +42,21 @@ describe('UsEquityRegularHoursCalendar.sessionEnd', () => {
 
   it('returns the NEXT close when asked exactly at a close', () => {
     // Strictly-after, so "when must I be flat by" is answerable at every
-    // instant rather than handing back a boundary already in the past.
+    // instant rather than handing back a boundary already in the past
     expect(calendar.sessionEnd(new Date('2026-07-15T20:00:00Z'))?.toISOString()).toBe(
       '2026-07-16T20:00:00.000Z',
     );
   });
 
   it('skips the weekend', () => {
-    // Friday 2026-07-17 after the close → Monday the 20th.
+    // Friday 2026-07-17 after the close → Monday the 20th
     expect(calendar.sessionEnd(new Date('2026-07-17T21:00:00Z'))?.toISOString()).toBe(
       '2026-07-20T20:00:00.000Z',
     );
   });
 
   it('tracks DST rather than a fixed offset', () => {
-    // January: EST is UTC-5, so 16:00 ET is 21:00 UTC, not July's 20:00.
+    // January: EST is UTC-5, so 16:00 ET is 21:00 UTC, not July's 20:00
     expect(calendar.sessionEnd(new Date('2026-01-14T14:00:00Z'))?.toISOString()).toBe(
       '2026-01-14T21:00:00.000Z',
     );
@@ -67,14 +67,14 @@ describe('LseRegularHoursCalendar', () => {
   const calendar = new LseRegularHoursCalendar();
 
   it('closes at 16:30 London', () => {
-    // 2026-07-15 Wednesday, BST (UTC+1) → 16:30 London = 15:30 UTC.
+    // 2026-07-15 Wednesday, BST (UTC+1) → 16:30 London = 15:30 UTC
     expect(calendar.sessionEnd(new Date('2026-07-15T10:00:00Z'))?.toISOString()).toBe(
       '2026-07-15T15:30:00.000Z',
     );
   });
 
   it('tracks GMT/BST rather than a fixed offset', () => {
-    // January: GMT, so 16:30 London = 16:30 UTC.
+    // January: GMT, so 16:30 London = 16:30 UTC
     expect(calendar.sessionEnd(new Date('2026-01-14T10:00:00Z'))?.toISOString()).toBe(
       '2026-01-14T16:30:00.000Z',
     );
@@ -84,7 +84,7 @@ describe('LseRegularHoursCalendar', () => {
     expect(calendar.isOpen(new Date('2026-07-15T06:59:00Z'))).toBe(false); // 07:59 London
     expect(calendar.isOpen(new Date('2026-07-15T07:00:00Z'))).toBe(true); // 08:00 London
     expect(calendar.isOpen(new Date('2026-07-15T15:29:00Z'))).toBe(true); // 16:29 London
-    // Half-open at the close, matching the port's convention.
+    // Half-open at the close, matching the port's convention
     expect(calendar.isOpen(new Date('2026-07-15T15:30:00Z'))).toBe(false);
   });
 
@@ -95,7 +95,7 @@ describe('LseRegularHoursCalendar', () => {
     expect(calendar.isOpen(boxingDaySubstitute)).toBe(false);
 
     // Christmas Day (Fri 25th) and the Boxing Day substitute (Mon 28th) are
-    // both shut, so the close after the 24th half-day is Tuesday the 29th.
+    // both shut, so the close after the 24th half-day is Tuesday the 29th
     expect(calendar.sessionEnd(new Date('2026-12-24T13:00:00Z'))?.toISOString()).toBe(
       '2026-12-29T16:30:00.000Z',
     );
@@ -109,7 +109,7 @@ describe('LseRegularHoursCalendar', () => {
    * position through the break — exactly the overnight carry ADR-0014 forbids.
    */
   it('closes a half-day at 12:30, not 16:30', () => {
-    // Christmas Eve 2026, GMT → 12:30 London = 12:30 UTC.
+    // Christmas Eve 2026, GMT → 12:30 London = 12:30 UTC
     expect(calendar.sessionEnd(new Date('2026-12-24T09:00:00Z'))?.toISOString()).toBe(
       '2026-12-24T12:30:00.000Z',
     );
@@ -117,12 +117,12 @@ describe('LseRegularHoursCalendar', () => {
     // And the session really is over at 12:30 that day...
     expect(calendar.isOpen(new Date('2026-12-24T12:30:00Z'))).toBe(false);
     expect(calendar.isOpen(new Date('2026-12-24T12:29:00Z'))).toBe(true);
-    // ...while an ordinary day is still open at the same wall-clock time.
+    // ...while an ordinary day is still open at the same wall-clock time
     expect(calendar.isOpen(new Date('2026-07-15T12:29:00Z'))).toBe(true);
   });
 
   it('skips the weekend', () => {
-    // Friday 2026-07-17 after the close → Monday the 20th.
+    // Friday 2026-07-17 after the close → Monday the 20th
     expect(calendar.sessionEnd(new Date('2026-07-17T16:00:00Z'))?.toISOString()).toBe(
       '2026-07-20T15:30:00.000Z',
     );
@@ -138,7 +138,7 @@ describe('LseRegularHoursCalendar', () => {
     // #656 measured LSE 08:00-16:30 London against US 14:30-21:00 UTC, a
     // two-hour overlap. That is why the flatten rule had to be an OFFSET
     // resolved through the instrument's own calendar rather than one shared
-    // wall-clock constant.
+    // wall-clock constant
     const instant = new Date('2026-07-15T10:00:00Z');
 
     expect(calendar.sessionEnd(instant)?.toISOString()).not.toBe(

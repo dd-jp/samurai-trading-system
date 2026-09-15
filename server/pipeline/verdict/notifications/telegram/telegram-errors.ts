@@ -31,7 +31,7 @@ export class TelegramTimeoutError extends Error {
 }
 
 export class TelegramRateLimitError extends Error {
-  /** Provider-supplied hint (`parameters.retry_after`, or a `Retry-After` header), if given. */
+  /** Provider-supplied hint (`parameters.retry_after`, or a `Retry-After` header), if given */
   readonly retryAfterMs: number | undefined;
 
   constructor(message: string, retryAfterMs?: number) {
@@ -41,9 +41,9 @@ export class TelegramRateLimitError extends Error {
   }
 }
 
-/** Any other upstream failure (auth, bad request, 409 conflict, 5xx, network) — not classified further. */
+/** Any other upstream failure (auth, bad request, 409 conflict, 5xx, network) — not classified further */
 export class TelegramProviderError extends Error {
-  /** HTTP status code, when the failure came from a response rather than a network error. */
+  /** HTTP status code, when the failure came from a response rather than a network error */
   readonly status: number | undefined;
 
   constructor(message: string, status?: number) {
@@ -104,7 +104,7 @@ export function isRetryableTelegramError(error: unknown): boolean {
   return false;
 }
 
-/** Telegram's error envelope: `{ ok: false, description, error_code, parameters: { retry_after } }`. */
+/** Telegram's error envelope: `{ ok: false, description, error_code, parameters: { retry_after } }` */
 function retryAfterMsFromBody(bodyText: string): number | undefined {
   try {
     const body = JSON.parse(bodyText) as { parameters?: { retry_after?: unknown } };
@@ -116,7 +116,7 @@ function retryAfterMsFromBody(bodyText: string): number | undefined {
   }
 }
 
-/** Best-effort extraction of Telegram's `description` field, falling back to the raw body. */
+/** Best-effort extraction of Telegram's `description` field, falling back to the raw body */
 function describe(bodyText: string, response: Response): string {
   if (bodyText.length === 0) return response.statusText;
   try {
@@ -125,7 +125,7 @@ function describe(bodyText: string, response: Response): string {
       return body.description;
     }
   } catch {
-    // Not JSON (an intermediary proxy's HTML, say) — fall through to the raw text.
+    // Not JSON (an intermediary proxy's HTML, say) — fall through to the raw text
   }
   return truncateForError(bodyText);
 }
@@ -150,7 +150,7 @@ export async function classifyTelegramResponse(
 
   switch (classifyStatus(response.status)) {
     case 'rate-limit':
-      // Telegram's hint is in the JSON body, not the header — prefer it.
+      // Telegram's hint is in the JSON body, not the header — prefer it
       return new TelegramRateLimitError(
         message,
         retryAfterMsFromBody(bodyText) ?? parseRetryAfterMs(response),
@@ -230,7 +230,7 @@ export function classifyTelegramThrown(error: unknown, context: string): Telegra
   // `isTimeoutAbort`, which requires a real `DOMException`: the poll loop's
   // long-running `getUpdates` can surface a timeout as an undici error object
   // that is not a DOMException, and treating that as a provider fault would
-  // make a routine long-poll expiry look like Telegram breaking.
+  // make a routine long-poll expiry look like Telegram breaking
   const name = (error as { name?: unknown } | null)?.name;
   const detail = error instanceof Error ? error.message : String(error);
   if (name === 'TimeoutError') {

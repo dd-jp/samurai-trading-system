@@ -120,7 +120,7 @@ function stubConfig(
     miArchive: archive,
     clock: new SimulatedClock(NOW),
     mode: 'paper',
-    // Long enough that neither timer fires between `start()` and `stop()`.
+    // Long enough that neither timer fires between `start()` and `stop()`
     tickIntervalMs: 100_000,
     heartbeatIntervalMs: 100_000,
     polymarketPollIntervalMs: 20 * DAY_MS,
@@ -217,7 +217,7 @@ describe('the composition root RUNS its retention sweeps (#1313)', () => {
     archive = new MiArchiveStore();
     // Both resolvers read `process.env` at call time inside both roots, so an
     // operator override present in the ambient environment would change the
-    // cutoffs these cases seed against.
+    // cutoffs these cases seed against
     for (const name of ENV_VARS) {
       previous[name] = process.env[name];
       delete process.env[name];
@@ -234,7 +234,7 @@ describe('the composition root RUNS its retention sweeps (#1313)', () => {
     }
   });
 
-  /** Over-age against the default 30-day retention, by a margin no rounding closes. */
+  /** Over-age against the default 30-day retention, by a margin no rounding closes */
   function seedOverAgeAlertFailure(): void {
     new SqliteAlertDeliveryLog(db).recordFailure({
       chat_id: ALERT_CHAT_ID,
@@ -252,7 +252,7 @@ describe('the composition root RUNS its retention sweeps (#1313)', () => {
       .n;
   }
 
-  /** Over-age against the default 90-day MI window, by the same kind of margin. */
+  /** Over-age against the default 90-day MI window, by the same kind of margin */
   function seedOverAgeArchiveRow(): void {
     const longAgo = new Date(NOW.getTime() - 200 * DAY_MS);
     archive.write(
@@ -281,7 +281,7 @@ describe('the composition root RUNS its retention sweeps (#1313)', () => {
     expect(archiveRows()).toBe(1);
 
     // No `start()`: `buildProductionComponents` is the only thing that runs,
-    // so the deletes below can only be the `'startup'` call sites'.
+    // so the deletes below can only be the `'startup'` call sites'
     buildProductionComponents(stubConfig(db, archive));
 
     expect(alertFailureRows()).toBe(0);
@@ -295,7 +295,7 @@ describe('the composition root RUNS its retention sweeps (#1313)', () => {
     );
 
     // AFTER construction, so the startup sweep has already run against empty
-    // tables and cannot be what deletes these rows.
+    // tables and cannot be what deletes these rows
     seedOverAgeAlertFailure();
     seedOverAgeArchiveRow();
     expect(alertFailureRows()).toBe(1);
@@ -313,7 +313,7 @@ describe('the composition root RUNS its retention sweeps (#1313)', () => {
     // placement rule — the prunes run BEFORE a throwing `runDailyCycle`, which
     // is the hazard the rule exists for. Mutated on this branch: moving the
     // alert prune below `runDailyCycle` inside the try leaves the row alive
-    // and the first assertion above red.
+    // and the first assertion above red
     //
     // It does NOT pin "outside the try". Moving the same prune inside the try
     // but ABOVE `runDailyCycle` was mutated too: this case stays fully green
@@ -321,7 +321,7 @@ describe('the composition root RUNS its retention sweeps (#1313)', () => {
     // `alert-delivery-failure-retention.test.ts` reddens. The two placements
     // are behaviourally identical — the prune swallows its own errors — so the
     // try boundary is pinned by text there and the ordering by execution here,
-    // and neither file holds both halves alone.
+    // and neither file holds both halves alone
     expect(
       entries.some((entry) => entry.trace_id === 'feedback-cycle' && entry.level === 'error'),
     ).toBe(true);

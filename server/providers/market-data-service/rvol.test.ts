@@ -27,7 +27,7 @@ const TIMEFRAME = '5m';
 const BAR_INTERVAL_MS = 5 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** UTC-midnight day boundaries — a real, non-null session per day, unlike `AlwaysOpenCalendar`. */
+/** UTC-midnight day boundaries — a real, non-null session per day, unlike `AlwaysOpenCalendar` */
 const DAILY_SESSION_CALENDAR: TradingCalendar = {
   isOpen: () => true,
   isTradingDay: () => true,
@@ -68,7 +68,7 @@ describe('computeRvol — median, same-clock-time baseline (#747)', () => {
   it('the median binds: one 1000x-volume outlier session does not move the baseline the way a mean would', () => {
     // Ten prior sessions' ordinal-1 (their only) bucket: nine at 100, one at
     // 100,000. Today's ordinal-1 bucket is 150 — a mild, ordinary bump over
-    // the ordinary 100 baseline.
+    // the ordinary 100 baseline
     const priorVolumes = [100, 100, 100, 100, 100000, 100, 100, 100, 100, 100];
     const bars = [
       ...priorVolumes.flatMap((volume, index) => sessionBars(10 - index, [volume])),
@@ -77,7 +77,7 @@ describe('computeRvol — median, same-clock-time baseline (#747)', () => {
 
     const result = computeRvol(bars, DAILY_SESSION_CALENDAR, ASOF);
 
-    // Median of [100,100,100,100,100,100,100,100,100,100000] = 100.
+    // Median of [100,100,100,100,100,100,100,100,100,100000] = 100
     expect(result.degraded_reason).toBeNull();
     expect(result.sessions_used).toBe(RVOL_SESSION_WINDOW);
     expect(result.rvol).toBeCloseTo(1.5, 8);
@@ -85,7 +85,7 @@ describe('computeRvol — median, same-clock-time baseline (#747)', () => {
     // The trap: a MEAN baseline over the same ten sessions is dominated by
     // the outlier and would read today's ordinary bump as suppressed, not
     // elevated — the opposite conclusion. Pinned here so a future edit that
-    // swaps median for mean is caught by a changed expectation, not silence.
+    // swaps median for mean is caught by a changed expectation, not silence
     const mean = priorVolumes.reduce((sum, v) => sum + v, 0) / priorVolumes.length;
     expect(mean).toBeCloseTo(10090, 8);
     const meanBasedRvol = 150 / mean;
@@ -95,9 +95,9 @@ describe('computeRvol — median, same-clock-time baseline (#747)', () => {
 
   it('the same-clock-time bucket binds: a normal open does not read as elevated RVOL', () => {
     // Every session (today and the ten priors) opens at volume 1000, then a
-    // much quieter second bucket at volume 50 — the U-shaped intraday curve.
+    // much quieter second bucket at volume 50 — the U-shaped intraday curve
     // Today's CURRENT bucket is the open itself (ordinal 0), matching every
-    // prior session's own open.
+    // prior session's own open
     const bars = [
       ...Array.from({ length: RVOL_SESSION_WINDOW }, (_, i) =>
         sessionBars(10 - i, [1000, 50]),
@@ -113,7 +113,7 @@ describe('computeRvol — median, same-clock-time baseline (#747)', () => {
     // The trap: a WHOLE-SESSION-AVERAGE baseline (session avg = (1000+50)/2
     // = 525) would read this same, entirely ordinary open as ~1.9x
     // "elevated" — every open on every ordinary day, by construction of the
-    // U-shaped curve, not because anything unusual happened.
+    // U-shaped curve, not because anything unusual happened
     const wholeSessionAverageBaseline = (1000 + 50) / 2;
     const wronglyElevated = 1000 / wholeSessionAverageBaseline;
     expect(wronglyElevated).toBeGreaterThan(1.5);
@@ -129,7 +129,7 @@ describe('computeRvol — median, same-clock-time baseline (#747)', () => {
 
     const result = computeRvol(bars, DAILY_SESSION_CALENDAR, ASOF);
 
-    // Sorted: 80,85,90,95,100,100,105,110,115,120 -> median = (100+100)/2 = 100.
+    // Sorted: 80,85,90,95,100,100,105,110,115,120 -> median = (100+100)/2 = 100
     expect(result.degraded_reason).toBeNull();
     expect(result.sessions_used).toBe(RVOL_SESSION_WINDOW);
     expect(result.sessions_target).toBe(RVOL_SESSION_WINDOW);

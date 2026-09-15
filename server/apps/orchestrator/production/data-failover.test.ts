@@ -33,7 +33,7 @@ import {
   resolveFallbackPacing,
 } from './data-failover.js';
 
-/** Monday 12:00 ET — inside US regular hours, so a bar completed here survives session normalization. */
+/** Monday 12:00 ET — inside US regular hours, so a bar completed here survives session normalization */
 const ASOF = new Date('2026-08-17T16:00:00.000Z');
 const WINDOW: BarWindow = { timeframe: '1h', lookback: 2 };
 
@@ -85,7 +85,7 @@ describe('resolveFallbackPacing — the boot-path pacing decision', () => {
     // would take the whole book offline for a typo — strictly worse than the
     // stall the fallback exists to survive. Contrast `SAMURAI_ALERTS` /
     // `SAMURAI_MODE`, which gate whether the system operates correctly and
-    // are refusals on purpose.
+    // are refusals on purpose
     const logger = recordingLogger();
 
     const pacing = resolveFallbackPacing(logger, {
@@ -125,9 +125,9 @@ describe('buildFailoverDataSource', () => {
     // The invariant #818 found missing: a bar reaching the store carries the
     // same session semantics whichever vendor served it. The primary is a
     // `NormalizingDataSource`; a vendor client is a bare `BarFetcher` that
-    // applies no calendar and serves ~16 `1h` bars a day over 08:00Z-23:00Z.
+    // applies no calendar and serves ~16 `1h` bars a day over 08:00Z-23:00Z
     // Asserted on an INJECTED fetcher on purpose — the wrap must not be
-    // something only the default Polygon path gets.
+    // something only the default Polygon path gets
     const preMarket: Bar = { ...fallbackBar(), open_time: new Date('2026-08-17T09:00:00.000Z') };
     const source = buildFailoverDataSource({
       primary: stallingPrimary(),
@@ -169,7 +169,7 @@ describe('buildFailoverDataSource', () => {
     // A stall is a CONDITION, not an event: every tick that reads bars while
     // it lasts fails over again. Unthrottled, a day-long stall floods the
     // escalation chat until the operator mutes it — and #342's argument is
-    // that muting that chat also mutes the orphan verdict and the kill-line.
+    // that muting that chat also mutes the orphan verdict and the kill-line
     const postDataFailoverAlert = vi.fn(async (_alert: DataFailoverAlert) => undefined);
     let now = ASOF;
     const source = buildFailoverDataSource({
@@ -196,7 +196,7 @@ describe('buildFailoverDataSource', () => {
 
   it('is loud again for a NEW incident after a quiet gap, and throttles each instrument separately', async () => {
     // A counter that never resets would swallow a recovery-then-restall, and
-    // a counter shared across instruments would hide a second name going down.
+    // a counter shared across instruments would hide a second name going down
     const postDataFailoverAlert = vi.fn(async (_alert: DataFailoverAlert) => undefined);
     let now = ASOF;
     const source = buildFailoverDataSource({
@@ -214,11 +214,11 @@ describe('buildFailoverDataSource', () => {
 
     await source.fetchBars('SPY', WINDOW, now);
     await source.fetchBars('QQQ', WINDOW, now);
-    // Second SPY failover a minute later — same incident, suppressed.
+    // Second SPY failover a minute later — same incident, suppressed
     now = new Date(ASOF.getTime() + 60_000);
     await source.fetchBars('SPY', WINDOW, now);
     // And one well past the incident gap, measured from that second failover
-    // rather than from the first — a new incident, loud again.
+    // rather than from the first — a new incident, loud again
     now = new Date(ASOF.getTime() + 60_000 + FAILOVER_INCIDENT_GAP_MS + 1);
     await source.fetchBars('SPY', WINDOW, now);
 
@@ -231,7 +231,7 @@ describe('buildFailoverDataSource', () => {
 
   it('logs, and does not rethrow, an alert POST that fails', async () => {
     // A Telegram outage must not turn "the fallback served these bars" into
-    // "the tick threw" — the same posture `checkMiCoverage` documents.
+    // "the tick threw" — the same posture `checkMiCoverage` documents
     const logger = recordingLogger();
     const source = buildFailoverDataSource({
       primary: stallingPrimary(),
@@ -249,7 +249,7 @@ describe('buildFailoverDataSource', () => {
 
     const bars = await source.fetchBars('SPY', WINDOW, ASOF);
     // The rejection is handled off the fetch's own promise chain, so let the
-    // microtask queue drain before reading the log.
+    // microtask queue drain before reading the log
     await Promise.resolve();
 
     expect(bars).toHaveLength(1);
@@ -286,7 +286,7 @@ describe('buildFailoverDataSource', () => {
     // logging path but deliberately left this catch-line on its constant to
     // keep that diff honest. Without this join, the transport's own log for
     // the same failover carries the tick id while this line carries
-    // 'data-failover' — one event, two taxonomies, nothing linking them.
+    // 'data-failover' — one event, two taxonomies, nothing linking them
     const logger = recordingLogger();
     const source = buildFailoverDataSource({
       primary: stallingPrimary(),
@@ -304,7 +304,7 @@ describe('buildFailoverDataSource', () => {
 
     await runWithTraceId('tick-x', () => source.fetchBars('SPY', WINDOW, ASOF));
     // The alert POST's `.catch` is fire-and-forget, registered inside the
-    // tick's context but settling after `fetchBars` already resolved.
+    // tick's context but settling after `fetchBars` already resolved
     await Promise.resolve();
 
     const errors = logger.entries.filter((entry) => entry.level === 'error');
@@ -318,7 +318,7 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
   // `polygon.getBars(...)` call inside `buildFailoverDataSource`'s default
   // branch were exercised by nothing (#818 only reached the wrapping — the
   // fetcher was always injected). These tests let that branch run for real,
-  // against a stubbed `fetch`, rather than re-implementing it here.
+  // against a stubbed `fetch`, rather than re-implementing it here
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -326,7 +326,7 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
     // Cleanup lives here, not as a trailing statement inside the two #822/#825
     // tests below that set this — if the assertion above it throws, an inline
     // `delete` after the `expect` never runs and the malformed value leaks
-    // into every later test in this file.
+    // into every later test in this file
     delete process.env.SAMURAI_PACING_POLYGON_REFILL_PER_SEC;
   });
 
@@ -335,7 +335,7 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
     // on a day Alpaca never stalls... A missing key then surfaces inside
     // withOhlcvFailover's combined error, scoped to the one pair that failed
     // over." Asserted as two separate facts: building the source never
-    // throws, and only a read that actually needs the fallback does.
+    // throws, and only a read that actually needs the fallback does
     delete process.env.POLYGON_API_KEY;
     const logger = recordingLogger();
 
@@ -363,7 +363,7 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
     expect((thrown as Error).message).toMatch(/alpaca.*failed.*polygon.*failed/s);
     // ...whose cause is the key-unset throw from the lazy PolygonBarsClient
     // construction itself, not a network error — proving it is the
-    // constructor's own guard that surfaced, scoped to this one failover.
+    // constructor's own guard that surfaced, scoped to this one failover
     expect((thrown as Error).cause).toBeInstanceOf(Error);
     expect(((thrown as Error).cause as Error).message).toMatch(/POLYGON_API_KEY is not set/);
   });
@@ -407,7 +407,7 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
     // property, so capturing `this` off the spy lets the test read back the
     // exact `TokenBucketConfig` the client's rate limiter was built with —
     // proving it carries `resolveFallbackPacing`'s result, not just that
-    // SOME limiter is present.
+    // SOME limiter is present
     let capturedBucket: { config: unknown } | undefined;
     const acquireBackgroundSpy = vi
       .spyOn(TokenBucket.prototype, 'acquireBackground')
@@ -426,7 +426,7 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
 
     const bars = await source.fetchBars('SPY', localWindow, localAsOf);
 
-    // The Polygon client actually served bars, stamped as such.
+    // The Polygon client actually served bars, stamped as such
     expect(bars).toHaveLength(2);
     expect(bars.map((bar) => bar.source)).toEqual(['polygon', 'polygon']);
 
@@ -434,14 +434,14 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
     // what reaches the client. `NormalizingDataSource`'s first raw ask is
     // `lookback + FORMING_BAR_FETCH_MARGIN` (1) = 3, and this window is
     // satisfied on the first attempt (no widen-and-retry), so 3 is the exact
-    // value getBars is called with.
+    // value getBars is called with
     expect(getBarsSpy).toHaveBeenCalledTimes(1);
     expect(getBarsSpy).toHaveBeenCalledWith('SPY', '1h', localAsOf, 3);
 
     // The TokenBucket(pacing) rate limiter reaches the client, is actually
     // exercised on the call path, and carries the resolved pacing (the
     // checked-in default here, since no SAMURAI_PACING_POLYGON_* override is
-    // set) rather than some other config.
+    // set) rather than some other config
     expect(acquireBackgroundSpy).toHaveBeenCalledTimes(1);
     expect(capturedBucket?.config).toEqual(DEFAULT_POLYGON_PACING);
   });
@@ -451,11 +451,11 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
     // that under-serves IN-SESSION bars relative to what it returns RAW
     // (extended-hours candles mixed in) makes NormalizingDataSource re-ask
     // with a LARGER raw limit. Point 3 asks for the actual widened value
-    // that reaches the client on a re-attempt, not only the first ask.
+    // that reaches the client on a re-attempt, not only the first ask
     process.env.POLYGON_API_KEY = 'test-key';
 
     // 15:00 ET Monday — after this, session normalization sees a mix of
-    // in-session (09:30-16:00 ET / 13:30-20:00Z) and extended-hours candles.
+    // in-session (09:30-16:00 ET / 13:30-20:00Z) and extended-hours candles
     const localAsOf = new Date('2026-08-18T01:00:00.000Z');
     const localWindow: BarWindow = { timeframe: '1h', lookback: 2 };
 
@@ -464,7 +464,7 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
     }
     // Ascending by open_time. The newest two (23:30Z/22:30Z open) are
     // POST-CLOSE extended-hours candles; only the two around 13:30Z/14:30Z
-    // (09:30/10:30 ET) fall inside the regular session.
+    // (09:30/10:30 ET) fall inside the regular session
     const rawAggregates = [
       aggregate('2026-08-17T12:00:00.000Z'), // 08:00 ET — pre-market
       aggregate('2026-08-17T13:00:00.000Z'), // 09:00 ET — pre-market
@@ -485,7 +485,7 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
     const getBarsSpy = vi.spyOn(PolygonBarsClient.prototype, 'getBars');
     // DEFAULT_POLYGON_PACING is capacity 1 / ~13s refill — real pacing would
     // make a second attempt in this test wait on the real clock. Not what
-    // this test is about (that's the previous test's job), so bypass it.
+    // this test is about (that's the previous test's job), so bypass it
     vi.spyOn(TokenBucket.prototype, 'acquireBackground').mockResolvedValue(undefined);
 
     const source = buildFailoverDataSource({
@@ -499,14 +499,14 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
 
     const bars = await source.fetchBars('SPY', localWindow, localAsOf);
 
-    // The eventual serve is the two IN-SESSION bars, still stamped polygon.
+    // The eventual serve is the two IN-SESSION bars, still stamped polygon
     expect(bars).toHaveLength(2);
     expect(bars.map((bar) => bar.source)).toEqual(['polygon', 'polygon']);
 
     // Exactly two attempts, and the WIDENED raw limit that reaches the
     // client on the second one: attempt 1 asks for lookback (2) +
     // FORMING_BAR_FETCH_MARGIN (1) = 3, nothing survives normalization (the
-    // newest 3 raw candles are all post-close), so a widen is required.
+    // newest 3 raw candles are all post-close), so a widen is required
     //
     // The widened value was 24 until #828 — `widenRawLimit` had no survival
     // rate to estimate from (0 in-session out of 3 raw), so the estimate was
@@ -517,10 +517,10 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
     // nothing: asking the widest permitted question once beats converging on
     // it over four requests. The assertion's substance is unchanged — the raw
     // limit escalates across attempts, and this is the value that actually
-    // reaches the client — only the widened number moved, by design.
+    // reaches the client — only the widened number moved, by design
     expect(getBarsSpy.mock.calls.map((call) => call[3])).toEqual([3, 96]);
     // Every call target is the SAME (symbol, timeframe, asOf); only the
-    // widened raw limit changes between attempts.
+    // widened raw limit changes between attempts
     for (const call of getBarsSpy.mock.calls) {
       expect(call.slice(0, 3)).toEqual(['SPY', '1h', localAsOf]);
     }
@@ -533,7 +533,7 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
     // asserted here by supplying a value that differs from
     // `DEFAULT_POLYGON_PACING` on every field, with no env var touched at
     // all, and confirming the resolved config actually reaches the
-    // `TokenBucket` the default Polygon fetcher is built with.
+    // `TokenBucket` the default Polygon fetcher is built with
     process.env.POLYGON_API_KEY = 'test-key';
     expect(process.env.SAMURAI_PACING_POLYGON_CAPACITY).toBeUndefined();
     expect(process.env.SAMURAI_PACING_POLYGON_REFILL_PER_SEC).toBeUndefined();
@@ -592,12 +592,12 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
   it('emits NO startup warn for a malformed SAMURAI_PACING_POLYGON_* when equitiesFallbackBarFetcher is injected (#825)', () => {
     // Placed in this "(#823) default branch" describe block deliberately —
     // this test is about the NON-default branch, but it shares the block's
-    // afterEach cleanup for SAMURAI_PACING_POLYGON_REFILL_PER_SEC.
+    // afterEach cleanup for SAMURAI_PACING_POLYGON_REFILL_PER_SEC
     //
     // Defect 2: resolving pacing unconditionally computed (and warned about)
     // a variable that a run with an injected fetcher never consults. This is
     // the symptom gone — the malformed var is set, but nothing about Polygon
-    // pacing was ever read, so no warn fires.
+    // pacing was ever read, so no warn fires
     process.env.SAMURAI_PACING_POLYGON_REFILL_PER_SEC = 'not-a-number';
     const logger = recordingLogger();
 
@@ -623,7 +623,7 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
     // Polygon fetcher is the one in play. Asserted by reading the warn
     // immediately after `buildFailoverDataSource` returns, with no
     // `fetchBars` call in between: a lazy implementation would leave this log
-    // empty at this point.
+    // empty at this point
     process.env.SAMURAI_PACING_POLYGON_REFILL_PER_SEC = 'not-a-number';
     const logger = recordingLogger();
 
@@ -631,7 +631,7 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
       primary: stallingPrimary(),
       calendar: new UsEquityRegularHoursCalendar(),
       universe: [{ asset: 'SPY', asset_class: 'stocks' }],
-      // No equitiesFallbackBarFetcher — the default Polygon branch is selected.
+      // No equitiesFallbackBarFetcher — the default Polygon branch is selected
       alertChannel: { postDataFailoverAlert: vi.fn(async () => undefined) },
       logger,
       now: () => ASOF,
@@ -649,7 +649,7 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
     // about caching: with the key removed after the first call, a client
     // re-constructed per fetch would throw on the second call; instead the
     // second call succeeds identically to the first, proving the SAME
-    // already-constructed instance served it.
+    // already-constructed instance served it
     process.env.POLYGON_API_KEY = 'test-key';
 
     const localAsOf = new Date('2026-08-17T17:00:00.000Z');
@@ -674,7 +674,7 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
     vi.stubGlobal('fetch', fetchMock);
     // Two acquireBackground() calls against the real DEFAULT_POLYGON_PACING
     // (capacity 1, ~13s refill) would wait on the real clock — irrelevant to
-    // what this test asserts (client identity, not pacing), so bypass it.
+    // what this test asserts (client identity, not pacing), so bypass it
     vi.spyOn(TokenBucket.prototype, 'acquireBackground').mockResolvedValue(undefined);
 
     const source = buildFailoverDataSource({
@@ -690,7 +690,7 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
     expect(first).toHaveLength(2);
 
     // If the client were reconstructed per call, this would throw
-    // "POLYGON_API_KEY is not set" instead of succeeding.
+    // "POLYGON_API_KEY is not set" instead of succeeding
     delete process.env.POLYGON_API_KEY;
     const second = await source.fetchBars('SPY', localWindow, localAsOf);
     expect(second).toHaveLength(2);
@@ -703,13 +703,13 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
     // `withSessionNormalization` wrapper, `NormalizingDataSource`'s widen —
     // and the count is taken where the HTTP requests actually are:
     // `getBars` issues exactly one request per call, with no pagination, so
-    // calls ARE requests.
+    // calls ARE requests
     //
     // The input is the worst case on purpose: a payload with no in-session
-    // candle at all, so the widen is exhausted rather than satisfied early.
+    // candle at all, so the widen is exhausted rather than satisfied early
     // Before #828 this cost four requests — ~39s of blocking on a bucket
     // that mints one token per 13 seconds, per instrument, every tick for as
-    // long as the primary stall lasts.
+    // long as the primary stall lasts
     process.env.POLYGON_API_KEY = 'test-key';
 
     const localAsOf = new Date('2026-08-18T01:00:00.000Z');
@@ -719,7 +719,7 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
     // ask (the raw ceiling, 3 * 32 = 96) or the vendor would look like it had
     // run out of history, and `NormalizingDataSource` would take its
     // raw-scarcity early return instead of spending the widen this test is
-    // counting.
+    // counting
     const rawAggregates = Array.from({ length: 120 }, (_, i) => {
       const open = new Date(localAsOf.getTime() - (i + 1) * 86_400_000);
       open.setUTCHours(3, 0, 0, 0);
@@ -736,22 +736,22 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
         ),
     );
     const getBarsSpy = vi.spyOn(PolygonBarsClient.prototype, 'getBars');
-    // Real pacing would make the second request wait ~13s on the real clock.
-    // The BUDGET is what this test is about, not the wait.
+    // Real pacing would make the second request wait ~13s on the real clock
+    // The BUDGET is what this test is about, not the wait
     vi.spyOn(TokenBucket.prototype, 'acquireBackground').mockResolvedValue(undefined);
 
     const source = buildFailoverDataSource({
       primary: stallingPrimary(),
       calendar: new UsEquityRegularHoursCalendar(),
       universe: [{ asset: 'SPY', asset_class: 'stocks' }],
-      // No equitiesFallbackBarFetcher — the real default Polygon branch.
+      // No equitiesFallbackBarFetcher — the real default Polygon branch
       alertChannel: { postDataFailoverAlert: vi.fn(async () => undefined) },
       logger: recordingLogger(),
       now: () => localAsOf,
     });
 
     // Loud, not silent: the exhausted widen throws InSessionUnderfetchError,
-    // which withOhlcvFailover reports as both vendors having failed.
+    // which withOhlcvFailover reports as both vendors having failed
     await expect(
       source.fetchBars('SPY', { timeframe: '1h', lookback: 2 }, localAsOf),
     ).rejects.toThrow(/both alpaca .* and polygon .* failed/);
@@ -808,7 +808,7 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
 
     // Warned AT BOOT, before any stall — the same posture the malformed-env
     // override takes, and for the same reason: this paces a degradation
-    // mitigation, so refusing to boot over it would be strictly worse.
+    // mitigation, so refusing to boot over it would be strictly worse
     const warned = logger.entries.filter((entry) => entry.level === 'warn');
     expect(warned).toHaveLength(1);
     expect(warned[0]?.message).toContain('parked forever');
@@ -816,7 +816,7 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
     const bars = await source.fetchBars('SPY', { timeframe: '1h', lookback: 2 }, localAsOf);
 
     expect(bars).toHaveLength(2);
-    // The unusable config never reached the bucket; the checked-in default did.
+    // The unusable config never reached the bucket; the checked-in default did
     expect(capturedBucket?.config).toEqual(DEFAULT_POLYGON_PACING);
   });
 
@@ -846,7 +846,7 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
     // `reserve + 1 > capacity` never admits the background caller at ANY
     // refill rate — the rate here is the checked-in default's, and it still
     // parks forever. `reserveForPriority` is part of `TokenBucketConfig`, so
-    // #822's `fallbackPacing` seam can set it.
+    // #822's `fallbackPacing` seam can set it
     const logger = recordingLogger();
 
     buildFailoverDataSource({
@@ -864,7 +864,7 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
 
   it('leaves a well-formed fallbackPacing untouched and silent', () => {
     // The guard must not warn about, or replace, a legitimate override —
-    // otherwise it would quietly undo #822's config seam.
+    // otherwise it would quietly undo #822's config seam
     const logger = recordingLogger();
 
     buildFailoverDataSource({
@@ -896,7 +896,7 @@ describe('DataFailoverAlertThrottle', () => {
     // that does go out "so the operator still sees the true rate". Without
     // this, every failover between the last bounded-repeat alert and the
     // incident gap is silently unreported: 12 failovers then an hour quiet
-    // alerts at #1 and #9, and #10-#12 vanish.
+    // alerts at #1 and #9, and #10-#12 vanish
     const throttle = new DataFailoverAlertThrottle();
     const decisions = Array.from({ length: 12 }, (_, i) =>
       throttle.decide(event, new Date(ASOF.getTime() + i * 60_000)),

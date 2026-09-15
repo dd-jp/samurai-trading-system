@@ -46,7 +46,7 @@ function recordingLogger(): Logger & { entries: LogEntry[] } {
   return { entries, log: (entry: LogEntry) => entries.push(entry) };
 }
 
-/** A Responses-API body in the shape the live probe returned. */
+/** A Responses-API body in the shape the live probe returned */
 function responsesBody(
   options: { items?: unknown; citations?: string[]; createdAt?: number } = {},
 ) {
@@ -93,7 +93,7 @@ describe('parseStatusUrl', () => {
     // THE OFFLINE PROOF that retrieval is genuine, and the same decode that
     // established it: the live probe's cited posts landed 40-80 seconds before
     // the response's own `created_at`. No training corpus contains a post from
-    // forty seconds ago.
+    // forty seconds ago
     const at = new Date('2026-09-03T11:50:00.000Z');
     expect(parseStatusUrl(`https://x.com/someone/status/${statusIdAt(at)}`)?.postedAt).toEqual(at);
   });
@@ -105,7 +105,7 @@ describe('parseStatusUrl', () => {
 
   it('rejects a URL that is not an X status permalink', () => {
     // A live probe returned annotations pointing at `timestampconvert.net`, so
-    // "the response carried a citation" is not by itself evidence of anything.
+    // "the response carried a citation" is not by itself evidence of anything
     expect(parseStatusUrl('https://timestampconvert.net/?t=123')).toBeNull();
     expect(parseStatusUrl('https://x.com/trader_one')).toBeNull();
     expect(parseStatusUrl('https://notx.com/trader_one/status/1234567890')).toBeNull();
@@ -114,7 +114,7 @@ describe('parseStatusUrl', () => {
   it('does not round a status id through a float', () => {
     // `Number('1962847362817364993')` loses the low digits, which would
     // corrupt both the decoded timestamp and the item id — and the item id is
-    // what ingest-level dedupe matches on.
+    // what ingest-level dedupe matches on
     const id = '1962847362817364993';
     expect(parseStatusUrl(`https://x.com/a/status/${id}`)?.statusId).toBe(id);
   });
@@ -136,7 +136,7 @@ describe('XSearchClient', () => {
     expect(body.tools[0]?.type).toBe('x_search');
     expect(body.tools[0]?.max_search_results).toBe(3);
     // Day-granular on the wire — which is exactly why the real window is
-    // enforced on the results instead.
+    // enforced on the results instead
     expect(body.tools[0]?.to_date).toBe('2026-09-03');
   });
 
@@ -151,7 +151,7 @@ describe('XSearchClient', () => {
     expect(result.items[0]?.url).toBe(FRESH_URL);
     expect(result.items[0]?.entity).toBe('TSLA');
     // The POST's time, not the fetch's — what makes the archive replayable on
-    // the real publication axis.
+    // the real publication axis
     expect(result.items[0]?.timestamp).toEqual(new Date(AS_OF.getTime() - 10 * 60_000));
     expect(result.retrievalEvidence).toBe(true);
   });
@@ -160,7 +160,7 @@ describe('XSearchClient', () => {
     // THE GATE. A call can genuinely run the tool, cite one post, and still
     // list ten items — the other nine being the model padding from recall. A
     // call-level evidence flag would let all ten through on the strength of
-    // the one.
+    // the one
     const invented = `https://x.com/ghost/status/${statusIdAt(new Date(AS_OF.getTime() - 60_000))}`;
     stubFetch(
       responsesBody({
@@ -177,7 +177,7 @@ describe('XSearchClient', () => {
   it('takes the stored url from the citation, not from the model text', async () => {
     // The model cannot mint evidence by typing a URL — only by pointing at one
     // the tool actually returned. Here it points at the cited post using a
-    // tracking suffix; the stored url is the canonical citation.
+    // tracking suffix; the stored url is the canonical citation
     stubFetch(
       responsesBody({ items: [item({ url: `${FRESH_URL}?s=46` })], citations: [FRESH_URL] }),
     );
@@ -191,7 +191,7 @@ describe('XSearchClient', () => {
     // `from_date`/`to_date` are DAY-granular: a probe requesting six hours got
     // posts up to 19.3 hours old. The API cannot express the window, so the
     // client enforces it — otherwise a two-hour bucket silently reports
-    // yesterday's mood as this hour's.
+    // yesterday's mood as this hour's
     stubFetch(
       responsesBody({
         items: [item(), item({ url: STALE_URL, headline: 'yesterday' })],
@@ -220,7 +220,7 @@ describe('XSearchClient', () => {
   it('reports evidence for a call that looked and found nothing', async () => {
     // The distinction #485 exists to preserve. "No chatter about QQQ this
     // hour" is a real observation and must not read as "could not look" —
-    // which is what setting the flag from surviving items would do.
+    // which is what setting the flag from surviving items would do
     stubFetch(responsesBody({ items: [], citations: [FRESH_URL] }));
 
     const result = await new XSearchClient(OPTIONS).fetchSentiment('QQQ', AS_OF);
@@ -235,14 +235,14 @@ describe('XSearchClient', () => {
     const result = await new XSearchClient(OPTIONS).fetchSentiment('TSLA', AS_OF);
 
     // `GrokAgent` discards the items on this flag; the client reports the
-    // absence honestly rather than passing recall off as retrieval.
+    // absence honestly rather than passing recall off as retrieval
     expect(result.retrievalEvidence).toBe(false);
   });
 
   it('counts server tool calls, capped at what the caller authorised', async () => {
     // Nous reports tokens only — there is no search counter on the wire — so
     // this is a deliberate conservative upper bound. Wrong in the
-    // over-charging direction, which is the safe one for a ceiling.
+    // over-charging direction, which is the safe one for a ceiling
     stubFetch(
       responsesBody({ citations: [FRESH_URL, STALE_URL, 'https://x.com/c/status/1234567890'] }),
     );
@@ -260,9 +260,9 @@ describe('XSearchClient', () => {
     // ESTIMATE — one call returns up to `max_search_results` citations, so an
     // unclamped citation count would read N results as N calls. It does not
     // bound what the provider says it did: reported `*_call` items are a fact
-    // about what will be billed, and a ceiling cannot make that untrue.
+    // about what will be billed, and a ceiling cannot make that untrue
     // Clamping them would under-count, and a cap fed an under-count is not a
-    // cap.
+    // cap
     stubFetch({
       ...responsesBody({ citations: [FRESH_URL] }),
       output: [
@@ -306,7 +306,7 @@ describe('XSearchClient', () => {
   it('clamps an operator result count above the ceiling, loudly', async () => {
     // Search results ride in the prompt, so this is the soak's main cost
     // lever. Silently honouring a typed 100 would multiply the LLM bill by an
-    // order of magnitude and be discovered as an exhausted budget days later.
+    // order of magnitude and be discovered as an exhausted budget days later
     const logger = recordingLogger();
     const fetchMock = stubFetch(responsesBody());
 
@@ -325,7 +325,7 @@ describe('XSearchClient', () => {
 
   it('reports zero items rather than throwing on a body it cannot read', async () => {
     // Zero reaches the analysts as NO_DATA — an answer we cannot decode is not
-    // an answer, and must not be distinguishable from an outage by accident.
+    // an answer, and must not be distinguishable from an outage by accident
     const logger = recordingLogger();
     stubFetch({
       ...responsesBody(),
@@ -343,7 +343,7 @@ describe('XSearchClient', () => {
     // came back: the literal `null` parses fine, and reading `.items` off it
     // throws a TypeError that escapes the parser entirely — converting "a
     // shape we cannot read" into an exception, which is exactly what the
-    // parse-to-zero contract promises not to do.
+    // parse-to-zero contract promises not to do
     for (const text of ['null', '5', '"just a string"']) {
       const logger = recordingLogger();
       stubFetch({
@@ -362,7 +362,7 @@ describe('XSearchClient', () => {
     // Review round 1 (#1055). `items: [null]` is a well-formed array whose
     // element throws on the first field read. One bad element must cost that
     // element, not the whole response — nine good items and one null yields
-    // nine, not an exception.
+    // nine, not an exception
     stubFetch(
       responsesBody({
         items: [null, item({ url: FRESH_URL }), 'not an object', 42],
@@ -380,7 +380,7 @@ describe('XSearchClient', () => {
     // under-counts in one specific case: a search that ran and found nothing
     // has zero citations and would bill zero, though the provider charges per
     // call. A cap fed an under-count is not a cap, so a reported tool-call
-    // item is a floor under the citation count.
+    // item is a floor under the citation count
     stubFetch({
       ...responsesBody({ citations: [] }),
       output: [
@@ -393,13 +393,13 @@ describe('XSearchClient', () => {
 
     expect(result.items).toEqual([]);
     expect(result.server_tool_calls).toBe(1);
-    // Still "we looked", which is the distinction #485 exists to preserve.
+    // Still "we looked", which is the distinction #485 exists to preserve
     expect(result.retrievalEvidence).toBe(false);
   });
 
   it('rejects a post that postdates the response citing it', async () => {
     // A citation cannot be to the future. One that appears to be is a decode
-    // or clock fault, not a scoop.
+    // or clock fault, not a scoop
     const future = `https://x.com/a/status/${statusIdAt(new Date(AS_OF.getTime() + 60_000))}`;
     stubFetch(responsesBody({ items: [item({ url: future })], citations: [future] }));
 
@@ -412,7 +412,7 @@ describe('XSearchClient', () => {
     // A retrieved post is untrusted input that reaches the model server-side,
     // before any code here runs — so field validation is one of the few
     // mitigations that actually applies. A sentiment of 5 would otherwise flow
-    // into the analysts' arithmetic on a value the type says cannot exist.
+    // into the analysts' arithmetic on a value the type says cannot exist
     stubFetch(
       responsesBody({
         items: [item({ sentiment: 5 }), item({ confidence: 'high' }), item({ headline: '' })],
@@ -431,7 +431,7 @@ describe('XSearchClient', () => {
     // 60,000` true for any non-zero wait, so a retrieval call would have been
     // refused the moment anything else held the single permit — a mechanism
     // that runs only when the system is idle. Nothing else in this suite sees
-    // that, because every other case here passes `UNGATED_LLM_IN_FLIGHT`.
+    // that, because every other case here passes `UNGATED_LLM_IN_FLIGHT`
     const gate = new NousAccountInFlightGate({ maxInFlight: 1, expectedCallMs: 13_000 });
     const held = await gate.acquire({ budgetMs: 28_000 });
     const fetchMock = stubFetch(responsesBody());
@@ -451,7 +451,7 @@ describe('XSearchClient', () => {
     // of the process — every later call, debate included, refused forever. The
     // release lives in a `finally` in `nous-responses.ts`; moving it onto the
     // success path alone is invisible to every other case here, because they
-    // all run ungated where release is a no-op.
+    // all run ungated where release is a no-op
     const gate = new NousAccountInFlightGate({ maxInFlight: 1, expectedCallMs: 13_000 });
     vi.stubGlobal(
       'fetch',
@@ -469,7 +469,7 @@ describe('XSearchClient', () => {
   });
 
   it('declares its MEASURED duration to the gate, not its timeout (#1080)', async () => {
-    // What a caller queued behind a retrieval call is told it is waiting for.
+    // What a caller queued behind a retrieval call is told it is waiting for
     const entries: LogEntry[] = [];
     const gate = new NousAccountInFlightGate({
       maxInFlight: 1,

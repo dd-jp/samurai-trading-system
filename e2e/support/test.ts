@@ -21,7 +21,7 @@
  */
 import { test as base, expect } from '@playwright/test';
 
-/** Schemes a page may use without touching the network. */
+/** Schemes a page may use without touching the network */
 const LOCAL_SCHEMES = ['data:', 'blob:', 'about:'];
 
 /**
@@ -46,7 +46,7 @@ const LOCAL_SCHEMES = ['data:', 'blob:', 'about:'];
 export function isLocalUrl(url: string, origin: string): boolean {
   // Scheme first, and a prefix check is right HERE: these carry no host, and
   // `new URL('data:…').origin` is the string "null", so an origin comparison
-  // would reject the very URLs that never touch the network.
+  // would reject the very URLs that never touch the network
   if (LOCAL_SCHEMES.some((scheme) => url.startsWith(scheme))) return true;
   try {
     return new URL(url).origin === origin;
@@ -61,7 +61,7 @@ export const test = base.extend<{ offOriginRequests: string[] }>({
     async ({ page, baseURL }, use) => {
       // Named rather than left to `new URL(undefined)`'s bare "Invalid URL":
       // without an origin this guard cannot tell a local request from a remote
-      // one, so it must fail pointing at the setting that is missing.
+      // one, so it must fail pointing at the setting that is missing
       if (baseURL === undefined) {
         throw new Error('the off-origin guard needs `use.baseURL` in playwright.config.ts');
       }

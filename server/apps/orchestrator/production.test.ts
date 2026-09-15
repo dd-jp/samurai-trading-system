@@ -223,7 +223,7 @@ vi.mock('../../providers/market-intelligence/mi-ingest-agent.js', async (importO
   // (tinyspy's `new`-call semantics, so `instanceof` on the mock still works),
   // and arrow functions cannot be constructors — a plain `function` here, not
   // the arrow used for `startFillSyncSpy`/`tryNousCredentialsMock` above,
-  // which are both called plainly, never with `new`.
+  // which are both called plainly, never with `new`
   // biome-ignore lint/complexity/useArrowFunction: must stay a `function` — an arrow here throws "is not a constructor" the moment production.ts calls `new MiIngestAgent(...)`.
   MiIngestAgentMock.mockImplementation(function (deps: unknown) {
     return new actual.MiIngestAgent(deps as ConstructorParameters<typeof actual.MiIngestAgent>[0]);
@@ -339,7 +339,7 @@ function stubConfig(db: StoreHandle, overrides: Partial<ProductionConfig> = {}):
   // `approvals: undefined` and erase a required field. No caller does, and
   // typing `overrides` loosely enough to say so would defeat the point of the
   // parameter. The fields below are still checked — the cast only covers the
-  // spread.
+  // spread
   return {
     db,
     clock: new SimulatedClock(START),
@@ -347,7 +347,7 @@ function stubConfig(db: StoreHandle, overrides: Partial<ProductionConfig> = {}):
     alpacaBrokerClient: {
       submitOrder,
       // #586: a crypto bracket goes to the venue as a PLAIN limit entry —
-      // `submitOrder`'s native bracket is the verified 422 for crypto.
+      // `submitOrder`'s native bracket is the verified 422 for crypto
       submitLimitOrder: vi.fn(async () => ({
         id: 'alpaca-order-1',
         client_order_id: 'k',
@@ -382,7 +382,7 @@ function stubConfig(db: StoreHandle, overrides: Partial<ProductionConfig> = {}):
       requestApproval: vi.fn(
         // `ApprovalOutcome` is the bare union `'approved' | 'rejected' |
         // 'timeout'`, not an object with a `status` — the `as unknown as`
-        // below was masking a stub that returned a shape the port never had.
+        // below was masking a stub that returned a shape the port never had
         async (_request: ApprovalRequest): Promise<ApprovalOutcome> => 'timeout',
       ),
     } as unknown as ProductionConfig['approvals'],
@@ -393,7 +393,7 @@ function stubConfig(db: StoreHandle, overrides: Partial<ProductionConfig> = {}):
         cash: 100_000,
         peak_equity: 100_000,
         // `as const`: `SessionBasis` discriminates on `known: true | false`,
-        // and without it the literal widens to `boolean` and matches neither.
+        // and without it the literal widens to `boolean` and matches neither
         daily_basis: {
           crypto: { known: true, open_equity: 100_000, realized_pnl: 0 },
           stocks: { known: true, open_equity: 100_000, realized_pnl: 0 },
@@ -405,7 +405,7 @@ function stubConfig(db: StoreHandle, overrides: Partial<ProductionConfig> = {}):
     volatility: {
       // `VolatilityReading` is per-asset-class (`{ crypto, stocks }`); the
       // former `{ atr_percentile: 0.5 }` shape has not existed for some time
-      // and only survived because the `as VolatilityReading` cast silenced it.
+      // and only survived because the `as VolatilityReading` cast silenced it
       //
       // That cast was not merely untidy — it made the volatility breaker
       // INERT for every test in this file. With neither `crypto` nor `stocks`
@@ -413,7 +413,7 @@ function stubConfig(db: StoreHandle, overrides: Partial<ProductionConfig> = {}):
       // the trip threshold was false, so the composed-tick chain below has
       // never actually run that breaker. These values sit under
       // `baseline × multiplier` (0.05 × 3 crypto, 0.02 × 3 stocks) so the
-      // breaker now genuinely evaluates and genuinely stays armed.
+      // breaker now genuinely evaluates and genuinely stays armed
       getVolatilityReading: vi.fn(
         async (): Promise<VolatilityReading> => ({ crypto: 0.02, stocks: 0.01 }),
       ),
@@ -421,20 +421,20 @@ function stubConfig(db: StoreHandle, overrides: Partial<ProductionConfig> = {}):
     // Not `{}` either, and for the same reason as `verdictConfig` below:
     // `buildProductionComponents` now refuses a config whose
     // `flatten_before_close_ms` would silently disable flat-by-close (#691), so
-    // an empty cast here is a lie the assertion is the first code to notice.
+    // an empty cast here is a lie the assertion is the first code to notice
     // The real defaults rather than a hand-picked value — every one of these
-    // tests wants "a sound trader config", not a particular window.
+    // tests wants "a sound trader config", not a particular window
     traderConfig: DEFAULT_TRADER_CONFIG,
     riskConfig: {} as ProductionConfig['riskConfig'],
     // Not `{}` like its neighbours: `buildProductionComponents` reads the
     // automation dial to refuse a HITL-engaging config (#434), so an empty cast
     // here is a lie the assertion is the first code to notice. `auto` is what
-    // ADR-0007 mandates and what every other fixture in this file uses.
+    // ADR-0007 mandates and what every other fixture in this file uses
     //
     // `max_mark_age` is here for exactly the same reason since #1389: the boot
     // assertion bounding the post-close flatten grace reads Verdict's copy —
     // gate 2a is the ceiling the grace is spent against — so an omitted field
-    // reaches it as `undefined` and throws before any of these tests run.
+    // reaches it as `undefined` and throws before any of these tests run
     verdictConfig: {
       automation_level: { crypto: 'auto', stocks: 'auto' },
       max_mark_age: { crypto: 3_600_000, stocks: 3_600_000 },
@@ -446,7 +446,7 @@ function stubConfig(db: StoreHandle, overrides: Partial<ProductionConfig> = {}):
     // hysteresis band at construction, so an empty cast here is a config that
     // cannot be built at all. These are `REAL_CONFIGS.breakerConfig`'s values
     // — which also makes the volatility-reading comment above true, since the
-    // baselines it names (0.05 crypto, 0.02 stocks) now actually exist.
+    // baselines it names (0.05 crypto, 0.02 stocks) now actually exist
     breakerConfig: {
       daily_loss_pct: 0.05,
       daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
@@ -461,7 +461,7 @@ function stubConfig(db: StoreHandle, overrides: Partial<ProductionConfig> = {}):
   } as StubConfig;
 }
 
-/** A minimal but structurally complete `go` — enough for Execution to reach the broker. */
+/** A minimal but structurally complete `go` — enough for Execution to reach the broker */
 function goVerdict(): VerdictDecision {
   const order: OrderIntent = {
     idempotency_key: 'idem-exec',
@@ -558,7 +558,7 @@ const REAL_CONFIGS = {
     flatten_before_close_ms: 5 * 60 * 1_000,
     // #1389's other half of the same window, and absent here for the same
     // reason `flatten_before_close_ms` was until #691: this object is cast at
-    // the use site, so only the boot guard notices it missing.
+    // the use site, so only the boot guard notices it missing
     flatten_after_close_ms: 5 * 60 * 1_000,
     max_risk_per_trade: 0.01,
     asset_class_risk_multiplier: { crypto: 0.5, stocks: 1 },
@@ -575,7 +575,7 @@ const REAL_CONFIGS = {
     // type, so an omitted field is not a typecheck failure — it is a `decide`
     // that throws mid-chain, which is exactly what happened when this field was
     // first added. Empty means the per-subclass regime is unarmed, which is the
-    // state of the universe these integration cases drive.
+    // state of the universe these integration cases drive
     subclass_of: {},
   },
   riskConfig: {
@@ -589,7 +589,7 @@ const REAL_CONFIGS = {
     // An hour, matching `max_signal_age` below: this integration test drives
     // the composed chain against fixture marks, and a freshness bound sized
     // for production would make it a clock test. #640's behaviour is covered
-    // in `portfolio-view.test.ts`.
+    // in `portfolio-view.test.ts`
     max_mark_age: { crypto: 3_600_000, stocks: 3_600_000 },
   },
   verdictConfig: {
@@ -608,7 +608,7 @@ const REAL_CONFIGS = {
         params: { period: 14 },
         // Required since #315. Omitting it made `getIndicator` build a window
         // with `timeframe: undefined`, which matches no stored bar, so the
-        // volatility read failed and the breaker halted the whole chain.
+        // volatility read failed and the breaker halted the whole chain
         timeframe: '1h',
         lookback: 15,
       },
@@ -666,7 +666,7 @@ function fixtureBars(instrument: string, timeframe: string, count: number, stepM
     const close_time = new Date(START.getTime() - (count - index) * stepMs);
     // Indexed directly, no `?? 100` fallback: `buildTrendingCloses` returns
     // exactly `count` entries, and silently substituting a flat price would
-    // corrupt the RSI/SMA these fixtures exist to produce.
+    // corrupt the RSI/SMA these fixtures exist to produce
     const price = closes[index];
     if (price === undefined) throw new Error(`fixtureBars: no close at index ${index}`);
     return {
@@ -735,7 +735,7 @@ describe('universe resolution is a single site (#1167)', () => {
   // `server/`, not just this directory: `SMOKE_TEST_UNIVERSE` is re-exported
   // from index.ts, so a consumer outside orchestrator/ could write its own
   // `?? SMOKE_TEST_UNIVERSE` fallback and a scan scoped to orchestrator/
-  // would never see it.
+  // would never see it
   const SERVER_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
   function serverSourceFiles(directory: string): string[] {
@@ -831,7 +831,7 @@ describe('universe resolution is a single site (#1167)', () => {
   }
 
   // Self-check on the stripper above, not on production code — if this goes
-  // red, the guard test below is no longer trustworthy either way.
+  // red, the guard test below is no longer trustworthy either way
   it.each([
     ['real code', 'const universe = config.universe ?? SMOKE_TEST_UNIVERSE;', 1],
     ['a // line comment quoting it', '// config.universe ?? SMOKE_TEST_UNIVERSE\nconst x = 1;', 0],
@@ -862,7 +862,7 @@ describe('universe resolution is a single site (#1167)', () => {
   // import updates, say — would silently rejoin the stripped set instead
   // of failing to compile, and per the balance check's own doc comment
   // that set's net does not reliably catch a new desync. So the set's
-  // membership is asserted directly, not left to be caught downstream.
+  // membership is asserted directly, not left to be caught downstream
   it('every KNOWN_STRIPPER_DESYNCS entry resolves to a server source file the walk finds', () => {
     const found = new Set(serverSourceFiles(SERVER_DIR).map((path) => relative(SERVER_DIR, path)));
     const stale = [...KNOWN_STRIPPER_DESYNCS].filter((entry) => !found.has(entry));
@@ -872,7 +872,7 @@ describe('universe resolution is a single site (#1167)', () => {
   // `{`/`}` must balance in valid, comment/string-stripped TypeScript; a
   // nonzero delta is a lower bound on stripper desync, not a proof of its
   // absence — see `stripCommentsAndStrings`'s doc comment for why the
-  // likely shape of a new desync typically will not unbalance braces.
+  // likely shape of a new desync typically will not unbalance braces
   function braceDelta(code: string): number {
     return (code.match(/\{/g)?.length ?? 0) - (code.match(/\}/g)?.length ?? 0);
   }
@@ -890,7 +890,7 @@ describe('universe resolution is a single site (#1167)', () => {
   it('the SMOKE_TEST_UNIVERSE fallback appears exactly once, in production.ts, across all server sources', () => {
     // KNOWN_STRIPPER_DESYNCS files are scanned raw (no false negative, at
     // the cost of false-positive exposure to a comment/string quoting the
-    // pattern); every other file goes through the stripper.
+    // pattern); every other file goes through the stripper
     const scanned = serverSourceFiles(SERVER_DIR).map((path) => {
       const raw = readFileSync(path, 'utf8');
       const code = KNOWN_STRIPPER_DESYNCS.has(relative(SERVER_DIR, path))
@@ -904,7 +904,7 @@ describe('universe resolution is a single site (#1167)', () => {
     // A duplicate landing in a second file names that file in the failure;
     // a duplicate landing inside production.ts alongside the real one does
     // not (this assertion still passes with two occurrences in one file) —
-    // the occurrence count below is what catches that case, on its own.
+    // the occurrence count below is what catches that case, on its own
     expect(matches.map(({ path }) => basename(path))).toEqual(['production.ts']);
 
     const occurrences = matches.reduce(
@@ -963,7 +963,7 @@ describe('equityCalendarFor', () => {
     const calendar = equityCalendarFor({ mode: 'live' } as unknown as ProductionConfig);
 
     // 2026-07-15 is a Wednesday. 16:25 London (BST) = 15:25 UTC — inside the
-    // LSE session, and already an hour past it under the US calendar's clock.
+    // LSE session, and already an hour past it under the US calendar's clock
     expect(calendar.isOpen(new Date('2026-07-15T15:25:00Z'))).toBe(true);
     // 17:00 London = 16:00 UTC, after the 16:30 LSE close but well inside the
     // US session. This is the assertion that fails if the US calendar is used.
@@ -1071,7 +1071,7 @@ describe('buildProductionComponents', () => {
     });
 
     // The fixture source has no bars for this name, so the mandatory technical
-    // analyst fails on a data gap — a fault, not a deadline.
+    // analyst fails on a data gap — a fault, not a deadline
     expect(views).toEqual([]);
     expect(steps.analystSkipKind?.('trace-skip')).toBe('fault');
   });
@@ -1085,7 +1085,7 @@ describe('buildProductionComponents', () => {
     // #586: the verdict's instrument is crypto (BTC-USD), so the adapter's
     // emulated path submits a PLAIN limit entry — `submitOrder`'s native
     // bracket order class is the verified 422 for crypto (#550) and must
-    // never be reached.
+    // never be reached
     expect(config.alpacaBrokerClient.submitLimitOrder).toHaveBeenCalled();
     expect(config.alpacaBrokerClient.submitOrder).not.toHaveBeenCalled();
   });
@@ -1094,7 +1094,7 @@ describe('buildProductionComponents', () => {
     // The invariant that matters: `AlpacaBrokerAdapter` keeps its bracket-leg
     // map in memory, so the adapter reachable via `components.broker` must be
     // the one the bound step uses — not a second instance over the same
-    // account, which would lose those lookups.
+    // account, which would lose those lookups
     const config = stubConfig(db);
     const components = buildProductionComponents(config);
     const submitSpy = vi.spyOn(components.broker, 'submitBracket');
@@ -1120,7 +1120,7 @@ describe('buildProductionComponents', () => {
       // (production/direct-bind.ts) copy `logger: deps.logger` from,
       // unchanged, into every `ExecutionInput` they construct — the same
       // "assert the composition root, not just the unit" reasoning the
-      // broker-identity test just above takes for `components.broker`.
+      // broker-identity test just above takes for `components.broker`
       const logger = recordingLogger();
       const config = stubConfig(db, { logger });
 
@@ -1149,7 +1149,7 @@ describe('buildProductionComponents', () => {
       // — the loop `fetchNewFills`'s #609 fix logs from directly. Built from
       // scratch rather than spreading `goVerdict().order` (`OrderIntent |
       // null` on `VerdictDecision` — a spread of a nullable type loses the
-      // required-ness TS would otherwise check).
+      // required-ness TS would otherwise check)
       const baseGo = goVerdict();
       const stocksOrder: OrderIntent = {
         ...(baseGo.order as OrderIntent),
@@ -1169,7 +1169,7 @@ describe('buildProductionComponents', () => {
       // `UnpricedFillError` — read through the SAME `alpacaBrokerClient` the
       // composition root gave the broker. Cast the same way `stubConfig`
       // casts its own `alpacaBrokerClient` fixture (line ~165): this double
-      // only needs the fields `fetchNewFills`'s bracket loop actually reads.
+      // only needs the fields `fetchNewFills`'s bracket loop actually reads
       config.alpacaBrokerClient.getOrder = vi.fn(async () => ({
         id: 'alpaca-order-1',
         client_order_id: 'idem-exec-stocks',
@@ -1183,7 +1183,7 @@ describe('buildProductionComponents', () => {
       // Single bracket, all-failed sweep: `fetchNewFills` throws (the
       // pre-existing, unchanged behaviour) — the assertion below is about
       // the log line #609 now emits BEFORE that throw, not about the throw
-      // itself.
+      // itself
       await components.broker.fetchNewFills(new Date(0)).catch(() => undefined);
 
       expect(
@@ -1253,7 +1253,7 @@ describe('buildProductionComponents', () => {
     const profile = paperStartingProfile('paper');
     // Spread conditionally under `exactOptionalPropertyTypes`: a profile that
     // stopped declaring either field leaves it ABSENT here rather than
-    // explicitly `undefined`, and the assertions then fail on the real shape.
+    // explicitly `undefined`, and the assertions then fail on the real shape
     const config = stubConfig(db, {
       logger,
       ...(profile.capitalCeilingUsd === undefined
@@ -1289,9 +1289,9 @@ describe('buildProductionComponents', () => {
     const entry = logger.entries.find((line) => line.event === 'sizing_capital_ceiling_resolved');
     expect(entry).toBeDefined();
     expect(entry?.message).toContain('no FX conversion applied');
-    // `toEqual`, not `toMatchObject`: the absence of a rate is the assertion.
+    // `toEqual`, not `toMatchObject`: the absence of a rate is the assertion
     // A rate reported against a ceiling nobody converted would attribute a
-    // number to arithmetic that never ran.
+    // number to arithmetic that never ran
     expect(entry?.payload).toEqual({
       capital_ceiling_usd: 2_000,
       derived_by_conversion: false,
@@ -1376,7 +1376,7 @@ describe('buildProductionComponents', () => {
         // (`production.ts:1595`), so only cases that leave sentiment on reach it;
         // e.g. the `SAMURAI_SENTIMENT = 'off'` describe block above never does.
         // Clear its call count regardless, so the assertion below measures only
-        // this test's call, not whatever the file accumulated before it.
+        // this test's call, not whatever the file accumulated before it
         tryNousCredentialsMock.mockClear();
         tryNousCredentialsMock.mockImplementationOnce(() => FAKE_SENTIMENT_CREDENTIALS);
         const logger = recordingLogger();
@@ -1393,11 +1393,11 @@ describe('buildProductionComponents', () => {
         // is ever 0, the fake credential was never consumed (e.g. a future edit
         // makes `buildProductionComponents` throw before it's read) and would
         // otherwise silently leak onto whichever later test in this file next
-        // calls `tryNousCredentials('sentiment')`.
+        // calls `tryNousCredentials('sentiment')`
         expect(tryNousCredentialsMock).toHaveBeenCalledTimes(1);
 
         // Proof this run took the real branch, not the absent-agent one #1161's
-        // tests all take — the constructor call below is otherwise vacuous.
+        // tests all take — the constructor call below is otherwise vacuous
         expect(logger.entries.some((entry) => entry.event === 'mi_agent_absent')).toBe(false);
         expect(XSearchClientMock).toHaveBeenCalledTimes(1);
         expect(XSearchClientMock).toHaveBeenCalledWith(
@@ -1464,7 +1464,7 @@ describe('buildProductionComponents', () => {
    * green: none of them build `MiIngestAgent` at all (`config.miArchive` is
    * `undefined` everywhere else), and `npm run smoke` never reaches this
    * constructor either, since the offline/keyless smoke run has neither Nous
-   * sentiment credentials nor `ALPACA_API_KEY`/`ALPACA_API_SECRET`.
+   * sentiment credentials nor `ALPACA_API_KEY`/`ALPACA_API_SECRET`
    */
   describe('MiIngestAgent spend-cap wiring (#1106)', () => {
     const FAKE_SCORING_CREDENTIALS: NousCredentials = {
@@ -1498,7 +1498,7 @@ describe('buildProductionComponents', () => {
       const passedSpendCap = MiIngestAgentMock.mock.calls[0]?.[0]?.spendCap;
       expect(passedSpendCap).toBeInstanceOf(SqliteSpendCap);
       expect(passedSpendCap).not.toBe(UNCAPPED_SPEND);
-      // Not just "a real cap, some budget" — THIS config's budget.
+      // Not just "a real cap, some budget" — THIS config's budget
       expect(passedSpendCap.check().budget_usd).toBe(50);
     });
   });
@@ -1506,7 +1506,7 @@ describe('buildProductionComponents', () => {
   // `[...BENCHMARK_INSTRUMENTS]`, not a hardcoded `['SPY', 'AGG']` literal
   // (#989 review) — a second, independent enumeration of the same set the
   // guard itself derives from `BENCHMARK_COMPOSITION` would silently stop
-  // covering a future third benchmark leg.
+  // covering a future third benchmark leg
   it.each([...BENCHMARK_INSTRUMENTS])(
     'refuses to build with mode "live" and %s still directly in the universe (#989) — ' +
       "PRE-#751, `marketData`'s own `AlpacaDataSource` can write a matching bar normalized " +
@@ -1525,7 +1525,7 @@ describe('buildProductionComponents', () => {
       // Not `new RegExp(instrument)` (#989 review): that would pass on ANY
       // unrelated error that happens to contain "SPY"/"AGG" as a substring,
       // not necessarily this guard. Match the guard's distinctive phrase
-      // instead.
+      // instead
       expect(() => buildProductionComponents(config)).toThrow(
         /collides with the outside-benchmark path/,
       );
@@ -1688,7 +1688,7 @@ describe('buildProductionComponents', () => {
   describe('the LSE table coverage guard at boot (#1378)', () => {
     // One civil day past LSE_TABLE_COVERAGE_END — deliberately not a
     // half-day-shaped date, so this exercises the coverage cliff itself
-    // rather than any half-day-specific behaviour.
+    // rather than any half-day-specific behaviour
     const oneDayPastCoverage = new Date(`${LSE_TABLE_COVERAGE_END}T12:00:00Z`);
     oneDayPastCoverage.setUTCDate(oneDayPastCoverage.getUTCDate() + 1);
 
@@ -1710,14 +1710,14 @@ describe('buildProductionComponents', () => {
         expect(() => buildProductionComponents(config)).toThrow(/LSE_HOLIDAYS_CHECKED_THROUGH/);
         expect(() => buildProductionComponents(config)).toThrow(/LSE_HALF_DAYS_CHECKED_THROUGH/);
         // The dangerous read this guard exists to prevent, named explicitly
-        // rather than left implicit — matches LSE_HALF_DAYS's own doc.
+        // rather than left implicit — matches LSE_HALF_DAYS's own doc
         expect(() => buildProductionComponents(config)).toThrow(/16:30/);
         expect(() => buildProductionComponents(config)).toThrow(/#1387/);
         // Never cites #1378 (this ticket) as the place to extend the
-        // tables — citing it would be circular the moment it closes.
+        // tables — citing it would be circular the moment it closes
         expect(() => buildProductionComponents(config)).not.toThrow(/#1378/);
         // Nor #1379 — an operator-facing refusal must never cite a closed
-        // ticket as where to extend the tables.
+        // ticket as where to extend the tables
         expect(() => buildProductionComponents(config)).not.toThrow(/#1379/);
       },
     );
@@ -1856,17 +1856,17 @@ describe('buildProductionComponents', () => {
       // Christmas Eve, two years past LSE_TABLE_COVERAGE_END — half-day-shaped
       // but never checked against the source, so LSE_HALF_DAYS was never
       // extended to cover it. Derived from the constant rather than a bare
-      // literal so extending the table doesn't strand this inside coverage.
+      // literal so extending the table doesn't strand this inside coverage
       // The guard must refuse before a live leg can ever reach
       // LseRegularHoursCalendar's un-verified 16:30 guess for this date
       // (trading-calendar.test.ts pins the calendar-level half of this:
-      // coversCloseFor is false and the resolver stays total).
+      // coversCloseFor is false and the resolver stays total)
       const unmodelledHalfDay = new Date(
         `${Number(LSE_TABLE_COVERAGE_END.slice(0, 4)) + 2}-12-24T12:00:00Z`,
       );
       // The half-day-shaped premise only holds if this lands on a weekday;
       // asserted explicitly so a future coverage-end shift that puts it on
-      // a weekend reds this test instead of silently testing something else.
+      // a weekend reds this test instead of silently testing something else
       expect(unmodelledHalfDay.getUTCDay()).toBeGreaterThanOrEqual(1);
       expect(unmodelledHalfDay.getUTCDay()).toBeLessThanOrEqual(5);
       const config = stubConfig(db, {
@@ -1887,7 +1887,7 @@ describe('buildProductionComponents', () => {
       // eventually reaches `components.executionStore.writeClosedTrade`
       // (today nothing in-repo does — `ingestFills()` scheduling is a later
       // ticket's job), the Feedback Loop setup-store labelling fires as a
-      // side effect, with no `TickSteps` involved.
+      // side effect, with no `TickSteps` involved
       const components = buildProductionComponents(stubConfig(db));
       const setupStore = new SqliteSetupStore(db);
       const vector = { debate_features: [0.7, 1, 1, 0.1], market_features: [0.3, 0.5] };
@@ -1952,7 +1952,7 @@ describe('buildProductionComponents (default llmClient fallback)', () => {
     }
     // The default configured state for these tests: a base URL and a shared
     // key, so the debate client builds. Individual tests delete what they are
-    // about.
+    // about
     process.env.NOUS_BASE_URL = 'https://nous.test/v1';
     process.env.NOUS_API_KEY = 'test-fake-nous-key';
     // The sentiment agent shares these variables and would otherwise build a
@@ -2005,7 +2005,7 @@ describe('buildProductionComponents (default llmClient fallback)', () => {
 
     // Found by CONTENT, not by being the first warn: the root emits several
     // startup warnings (the spend cap adds one), and position is not a
-    // property this test is about.
+    // property this test is about
     const warning = logger.entries.find((entry) => entry.message.includes('NousMessagesClient'));
     expect(warning?.level).toBe('warn');
     expect(warning?.payload).toMatchObject({ model: DEFAULT_NOUS_MODELS.debate });
@@ -2035,14 +2035,14 @@ describe('buildProductionComponents (default llmClient fallback)', () => {
     const client = buildDefaultLlmClient(logger, UNGATED_LLM_IN_FLIGHT);
 
     // Instance type + retry/timeout budget, not only the model threaded
-    // through the startup warn log's payload (kimi-3-review on #284).
+    // through the startup warn log's payload (kimi-3-review on #284)
     expect(client).toBeInstanceOf(AnthropicLlmClient);
     expect(DEFAULT_LLM_CLIENT_CONFIG).toEqual({
       max_tokens: 1024,
       // 28,000ms, DERIVED from the budget invariant asserted below (#1080)
       // rather than chosen. Written as the literal it must resolve to, so a
       // change to the derivation has to be re-read here instead of being
-      // silently absorbed.
+      // silently absorbed
       timeoutMs: 28_000,
       retry: { maxAttempts: 2, baseDelayMs: 500, maxDelayMs: 2_000 },
     });
@@ -2106,7 +2106,7 @@ describe('buildProductionComponents (default llmClient fallback)', () => {
     const logger = recordingLogger();
     // Every attempt gets a well-formed HTTP response; what makes the call
     // retryable is the caller's own parse rejecting it, which is the cheapest
-    // retryable error to provoke without a timer.
+    // retryable error to provoke without a timer
     vi.stubGlobal(
       'fetch',
       vi.fn(
@@ -2139,7 +2139,7 @@ describe('buildProductionComponents (default llmClient fallback)', () => {
     ).rejects.toThrow();
 
     // Two attempts made, and the FIRST one — the attempt no other record keeps
-    // — is on the log.
+    // — is on the log
     expect(parses).toBe(2);
     const retryLine = logger.entries.find((entry) => entry.message.startsWith('llm retry:'));
     expect(retryLine?.level).toBe('warn');
@@ -2151,16 +2151,16 @@ describe('buildProductionComponents (default llmClient fallback)', () => {
       model: DEFAULT_NOUS_MODELS.debate,
     });
 
-    // #1394: the SAME line now names what it is retrying.
+    // #1394: the SAME line now names what it is retrying
     // `RetryAttemptReport.error` is `unknown`, so a rate limit and a bad draw
-    // used to produce identical lines, and only the first is worth waiting out.
+    // used to produce identical lines, and only the first is worth waiting out
     expect(retryLine?.payload).toMatchObject({ failure_cause: 'unparseable' });
 
     // #1394's terminal line, and the one a session-wide count of LLM failures
     // by cause is read off. Asserted here rather than only on
     // `AnthropicLlmClient` because a classifier the composition root never
     // wires is this repo's dominant defect class: delete `onCallFailed` from
-    // `buildDefaultLlmClient` and every seam below still fails open in silence.
+    // `buildDefaultLlmClient` and every seam below still fails open in silence
     const failedLine = logger.entries.find((entry) => entry.event === 'llm_call_failed');
     expect(failedLine?.level).toBe('warn');
     expect(failedLine?.trace_id).toBe('trace-1');
@@ -2170,7 +2170,7 @@ describe('buildProductionComponents (default llmClient fallback)', () => {
       llm_stage: 'debate',
       model: DEFAULT_NOUS_MODELS.debate,
     });
-    // Once per CALL, not once per attempt — the retry line owns those.
+    // Once per CALL, not once per attempt — the retry line owns those
     expect(logger.entries.filter((entry) => entry.event === 'llm_call_failed')).toHaveLength(1);
     vi.unstubAllGlobals();
   });
@@ -2210,7 +2210,7 @@ describe('technical_indicator_unavailable is wired by the composition root (#745
     const clock = new SimulatedClock(START);
     // 19 5m bars: enough for the core (SMA 14, RSI 15, ATR% 15), short of
     // every enrichment kind. Before #745 this instrument produced no view at
-    // all — the technical analyst is `mandatory`, so it was a `quorum_skip`.
+    // all — the technical analyst is `mandatory`, so it was a `quorum_skip`
     const bars = [
       ...fixtureBars('BTC-USD', '5m', 19, 5 * 60_000),
       ...fixtureBars('BTC-USD', '1h', 20, 60 * 60_000),
@@ -2236,11 +2236,11 @@ describe('technical_indicator_unavailable is wired by the composition root (#745
       bar: START,
     });
 
-    // The whole point of the split: a view, not a quorum skip.
+    // The whole point of the split: a view, not a quorum skip
     expect(views.some((view) => view.analyst_type === 'technical')).toBe(true);
 
     // `LogEntry.payload` is `{}`-typed at the port, so the counter fields are
-    // read through a narrow local view rather than by widening the port.
+    // read through a narrow local view rather than by widening the port
     const counters = logger.entries
       .map((entry) => ({
         ...entry,
@@ -2255,7 +2255,7 @@ describe('technical_indicator_unavailable is wired by the composition root (#745
       'volume_participation',
     ]);
     // The counter's own name reaches the log line, so a scrape can find it
-    // without knowing the payload schema.
+    // without knowing the payload schema
     expect(counters[0]?.message).toContain(INDICATOR_UNAVAILABLE_COUNTER);
     expect(counters[0]?.trace_id).toBe('trace-745-root');
   });
@@ -2308,7 +2308,7 @@ describe('market-intelligence coverage is wired by the composition root (#752)',
     const components = buildProductionComponents(config);
 
     // Not degraded before any tick has run — the flag is a live read, not a
-    // default-on latch.
+    // default-on latch
     expect(components.marketIntelligenceCoverage.degraded).toBe(false);
 
     const views = await components.steps.analysts({
@@ -2319,10 +2319,10 @@ describe('market-intelligence coverage is wired by the composition root (#752)',
     });
 
     // Criterion 3: the run still starts — the tick produced its views rather
-    // than throwing or blocking.
+    // than throwing or blocking
     expect(views.length).toBeGreaterThan(0);
 
-    // Criterion 1: the counter is recorded and reaches the log stream.
+    // Criterion 1: the counter is recorded and reaches the log stream
     const counterEntries = logger.entries
       .map((entry) => ({
         ...entry,
@@ -2337,11 +2337,11 @@ describe('market-intelligence coverage is wired by the composition root (#752)',
 
     // Criterion 2: the alert names the instrument and reaches the injected
     // channel — proving `production.ts` actually wires `config.miCoverageAlerts`
-    // rather than leaving the log-only default in place.
+    // rather than leaving the log-only default in place
     expect(alertsPosted).toHaveLength(1);
     expect(alertsPosted[0]).toMatchObject({ instrument: 'BTC-USD' });
 
-    // Criterion 2: the degraded-coverage flag is set on the run.
+    // Criterion 2: the degraded-coverage flag is set on the run
     expect(components.marketIntelligenceCoverage.degraded).toBe(true);
     expect(components.marketIntelligenceCoverage.missingInstruments).toContain('BTC-USD');
   });
@@ -2417,7 +2417,7 @@ describe('llm-failure-rate guard is wired by the composition root (#1396)', () =
     // the floor comparison would pass unnoticed). The tick below writes an
     // EIGHTH row at `clock.now()` that CONVERGES (`llmForOneDebate` always
     // returns `converged: true`), so it is excluded from `total` — the rate
-    // stays 2/7 (~0.286), still over `LLM_FAILURE_RATE_THRESHOLD` (0.25).
+    // stays 2/7 (~0.286), still over `LLM_FAILURE_RATE_THRESHOLD` (0.25)
     for (let i = 0; i < 7; i += 1) {
       components.debateLog.writeLog({
         debate_id: `debate-1396-history-${i}`,
@@ -2451,12 +2451,12 @@ describe('llm-failure-rate guard is wired by the composition root (#1396)', () =
 
     // `checkLlmFailureRate` is fire-and-forget (the debate resolved above);
     // flush the microtask queue so its one `await` (the alert POST) settles
-    // before asserting on it.
+    // before asserting on it
     await new Promise((resolve) => setImmediate(resolve));
 
     // Proves `production.ts` actually wires `config.llmFailureRateAlerts`
     // and `components.debateLog` into the SAME guard the debate step calls,
-    // rather than leaving the log-only default in place.
+    // rather than leaving the log-only default in place
     expect(alertsPosted).toHaveLength(1);
     expect(alertsPosted[0]).toMatchObject({ llm_failure_count: 2, total_count: 7 });
     expect((alertsPosted[0] as { rate: number }).rate).toBeCloseTo(2 / 7);
@@ -2506,7 +2506,7 @@ describe('llm-failure-rate guard is wired by the composition root (#1396)', () =
 
     // 400 refusals against the single converged debate the tick below writes:
     // 400/401 ~= 0.9975, over GATE_REFUSAL_RATE_THRESHOLD and well clear of
-    // MIN_DECISIONS_FOR_GATE_REFUSAL_RATE.
+    // MIN_DECISIONS_FOR_GATE_REFUSAL_RATE
     for (let i = 0; i < 400; i += 1) {
       components.debateLog.recordGateRefusal(new Date(START.getTime() - (i + 1) * 60_000));
     }
@@ -2534,7 +2534,7 @@ describe('llm-failure-rate guard is wired by the composition root (#1396)', () =
 
     // The other half of review round 1's F1, at the composition root: 400
     // refusals must leave the truncation-rate guard silent. Its window holds
-    // one converged debate and zero truncations.
+    // one converged debate and zero truncations
     expect(truncationAlerts).toEqual([]);
   });
 });
@@ -2575,8 +2575,10 @@ describe('tickSkipAlerts is wired by the composition root (#1084)', () => {
     { asset: 'D', asset_class: 'crypto' },
   ];
 
-  /** Same shape as `blockingRunner` (the `startTickLoop` suite, above): every claimed
-   *  instrument stays "busy" until the test explicitly releases it. */
+  /**
+   * Same shape as `blockingRunner` (the `startTickLoop` suite, above): every claimed
+   * instrument stays "busy" until the test explicitly releases it
+   */
   function blockingTickRunner() {
     const releases: Array<() => void> = [];
     const runInstrument = vi.fn(
@@ -2705,7 +2707,7 @@ describe("the spend cap's breach payload is wired by the composition root (#1280
   it("files the breach it posts under the spend cap's own stage, not the daily cycle's", () => {
     // One priced call, straight into the table the cap sums — $2.00 against a
     // $1.00 ceiling, so `startingTotal()` refuses on the budget arm during
-    // `buildProductionComponents` itself.
+    // `buildProductionComponents` itself
     db.prepare(
       `INSERT INTO llm_spend (
          trace_id, stage, debate_id, model,
@@ -2718,7 +2720,7 @@ describe("the spend cap's breach payload is wired by the composition root (#1280
 
     const logger = recordingLogger();
     // The REAL channel, not a `vi.fn()`: a stub would capture the payload but
-    // not the derivation, and the defect is only visible where the two meet.
+    // not the derivation, and the defect is only visible where the two meet
     const config = stubConfig(db, {
       logger,
       llmBudgetUsd: 1,
@@ -2759,7 +2761,7 @@ describe('sessionCalendars is wired by the composition root (#746)', () => {
     const clock = new SimulatedClock(START);
     // 19 5m bars: enough for the technical analyst's CORE reads (mandatory),
     // same shape as the #745 test above — the session VWAP line renders
-    // regardless of the enrichment axes, which is not this test's concern.
+    // regardless of the enrichment axes, which is not this test's concern
     const bars = [
       ...fixtureBars('AAPL', '5m', 19, 5 * 60_000),
       ...fixtureBars('AAPL', '1h', 20, 60 * 60_000),
@@ -2776,7 +2778,7 @@ describe('sessionCalendars is wired by the composition root (#746)', () => {
       // Default (`mode: 'paper'` from `stubConfig`) resolves through
       // `equityCalendarFor` to `UsEquityRegularHoursCalendar` — a calendar
       // with a real session, unlike the orchestrator's `AlwaysOpenCalendar`
-      // default.
+      // default
     });
 
     const { steps } = buildProductionComponents(config);
@@ -2794,7 +2796,7 @@ describe('sessionCalendars is wired by the composition root (#746)', () => {
     // If the orchestrator's own `AlwaysOpenCalendar` default were reached
     // instead of `production.ts`'s real `sessionCalendars.stocks`, this would
     // read exactly "Session VWAP (5m): no session to anchor to" regardless of
-    // asset class — the wiring gap this test exists to catch.
+    // asset class — the wiring gap this test exists to catch
     expect(sessionLine).not.toBe('Session VWAP (5m): no session to anchor to');
   });
 
@@ -2852,7 +2854,7 @@ describe('composed tick chain (integration)', () => {
       bars,
       { price: 160, observed_at: START, source: 'fixture' },
       'crypto',
-      // `Quote` carries no `source` — that field belongs to `Mark`.
+      // `Quote` carries no `source` — that field belongs to `Mark`
       { bid: 159.5, ask: 160.5, observed_at: START },
     );
 
@@ -2896,7 +2898,7 @@ describe('composed tick chain (integration)', () => {
         logger,
         auditLog: persistence.auditLog,
         currentTickStore: persistence.currentTickStore,
-        // #743: this is the composed DECISION chain — the pass needs a claim.
+        // #743: this is the composed DECISION chain — the pass needs a claim
         decision_bar: {
           id: `${START.toISOString()}@3600000`,
           open_time: START,
@@ -2908,18 +2910,18 @@ describe('composed tick chain (integration)', () => {
     const stages = persistence.auditLog.getByTraceId('trace-composed').map((row) => row.stage);
 
     // All six stages, in order, one audit row each, under one trace_id — and
-    // the bracket actually reached the broker.
+    // the bracket actually reached the broker
     expect(stages).toEqual(['analysts', 'debate', 'trader', 'risk', 'verdict', 'execution']);
     expect(outcome.final_stage).toBe('execution');
     expect(outcome.verdict_status).toBe('go');
     expect(outcome.execution_result?.status).toBe('submitted');
     expect(outcome.execution_result?.broker_order_ids).toHaveLength(3);
 
-    // The progress row is upserted per stage and deleted on completion.
+    // The progress row is upserted per stage and deleted on completion
     expect(persistence.currentTickStore.get('BTC-USD')).toBeUndefined();
     // #753: the log now carries BOTH arms, so it is filtered to the live trace
     // rather than compared whole. The control arm's own stages are asserted
-    // just below — this line is about the LIVE pass being untouched by it.
+    // just below — this line is about the LIVE pass being untouched by it
     expect(
       logger.entries
         .filter((entry) => entry.trace_id === 'trace-composed')
@@ -2947,7 +2949,7 @@ describe('composed tick chain (integration)', () => {
     // Same six stages, same instrument, same bar — and a DIFFERENT lot, because
     // `arm` is a hash input to the idempotency key. Without that the control's
     // order would have been deduped away against the live arm's, silently, on
-    // exactly the bars the two arms agree.
+    // exactly the bars the two arms agree
     const armRows = db
       .prepare('SELECT arm, idempotency_key FROM open_positions ORDER BY arm')
       .all() as { arm: string; idempotency_key: string }[];
@@ -2961,7 +2963,7 @@ describe('composed tick chain (integration)', () => {
     // existing — with no writer wired, the query always returns zero
     // orphans regardless of the truth. Reverting `direct-bind.ts`'s
     // `buildVerdictStep` to a bare `new VerdictImpl()` must fail this
-    // assertion.
+    // assertion
     const verdictLogRow = db
       .prepare('SELECT trace_id, status, instrument FROM verdict_log WHERE trace_id = ?')
       .get('trace-composed') as
@@ -3019,7 +3021,7 @@ describe('composed tick chain (integration)', () => {
       clock,
       dataSource,
       llmClient,
-      // 0.5 against a `{ crypto: 0.05 } x 3` ceiling — far over the line.
+      // 0.5 against a `{ crypto: 0.05 } x 3` ceiling — far over the line
       volatility: {
         getVolatilityReading: vi.fn(
           async (): Promise<VolatilityReading> => ({ crypto: 0.5, stocks: 0.5 }),
@@ -3038,7 +3040,7 @@ describe('composed tick chain (integration)', () => {
         logger: recordingLogger(),
         auditLog: persistence.auditLog,
         currentTickStore: persistence.currentTickStore,
-        // #743: this is the composed DECISION chain — the pass needs a claim.
+        // #743: this is the composed DECISION chain — the pass needs a claim
         decision_bar: {
           id: `${START.toISOString()}@3600000`,
           open_time: START,
@@ -3049,7 +3051,7 @@ describe('composed tick chain (integration)', () => {
 
     const stages = persistence.auditLog.getByTraceId('trace-vol-trip').map((row) => row.stage);
 
-    // Risk is reached and is where it ends: no verdict, no execution.
+    // Risk is reached and is where it ends: no verdict, no execution
     expect(stages).toEqual(['analysts', 'debate', 'trader', 'risk']);
     expect(outcome.final_stage).toBe('risk');
     expect(outcome.execution_result).toBeUndefined();
@@ -3094,7 +3096,7 @@ describe('composed tick chain (integration)', () => {
     const components = buildProductionComponents(config);
 
     // A lot of 10 with 4 already flattened, written through the very store
-    // the composition root hands `getOpenPositions`.
+    // the composition root hands `getOpenPositions`
     await components.executionStore.writeAheadPosition({
       idempotency_key: 'lot-partially-flattened',
       debate_id: 'debate-earlier',
@@ -3134,7 +3136,7 @@ describe('composed tick chain (integration)', () => {
     const intent = await components.steps.trader({
       trace_id: 'trace-568-wiring',
       instrument: 'BTC-USD',
-      // Opposite the held long, so the Trader flattens.
+      // Opposite the held long, so the Trader flattens
       debate: {
         synthesis: 'bearish',
         position: 'short',
@@ -3148,7 +3150,7 @@ describe('composed tick chain (integration)', () => {
         direction: 'bearish',
         debate_id: 'debate-568-wiring',
         // #687: the Trader keys the exit on the DEBATE's bar. START is
-        // bar-aligned, so this is the bar the old clock-flooring produced.
+        // bar-aligned, so this is the bar the old clock-flooring produced
         bar_timestamp: START,
         read: true,
       },
@@ -3235,7 +3237,7 @@ describe('startTickLoop', () => {
     expect(runInstrument).toHaveBeenCalledTimes(1);
 
     // Several interval periods elapse while the first tick is still in
-    // flight: no second pass may start.
+    // flight: no second pass may start
     await vi.advanceTimersByTimeAsync(5_000);
     expect(runInstrument).toHaveBeenCalledTimes(1);
 
@@ -3244,7 +3246,7 @@ describe('startTickLoop', () => {
     expect(runInstrument).toHaveBeenCalledTimes(2);
 
     // The second pass is now the in-flight one; `stop()` drains it, so it has
-    // to be released too or the shutdown legitimately waits forever.
+    // to be released too or the shutdown legitimately waits forever
     release();
     await loop.stop();
   });
@@ -3253,7 +3255,7 @@ describe('startTickLoop', () => {
     const logger = recordingLogger();
     // Circular (defeats `JSON.stringify`) with a throwing `Symbol.toPrimitive`
     // (defeats the `String()` fallback too) — the value `describeThrown`'s own
-    // doc says it cannot render alone.
+    // doc says it cannot render alone
     const hostile: Record<string, unknown> = {
       [Symbol.toPrimitive]: () => {
         throw new Error('render boom');
@@ -3289,11 +3291,11 @@ describe('startTickLoop', () => {
     // run'. Rendering the thrown value unguarded inverted that: the throw
     // escaped `runOnce` into `void runOnce()`, becoming an unhandled rejection
     // that `installFaultHandlers` treats as fatal — and it ran BEFORE the log
-    // call, so nothing recorded why.
+    // call, so nothing recorded why
     const failure = logger.entries.find((entry) => entry.message === 'tick failed');
     expect(failure?.payload).toEqual({ error: '[unrenderable error]' });
 
-    // One tick, not the run: the next interval still ticks.
+    // One tick, not the run: the next interval still ticks
     await vi.advanceTimersByTimeAsync(1_000);
     expect(runInstrument).toHaveBeenCalledTimes(1);
 
@@ -3326,7 +3328,7 @@ describe('startTickLoop', () => {
     );
     // ...and 'tick failed' — which used to be the ONLY record of a throw
     // anywhere in this path — does not, because `runTickPlan` no longer
-    // rejects the whole tick over one instrument's failure.
+    // rejects the whole tick over one instrument's failure
     expect(logger.entries.some((entry) => entry.message === 'tick failed')).toBe(false);
 
     await vi.advanceTimersByTimeAsync(1_000);
@@ -3336,14 +3338,14 @@ describe('startTickLoop', () => {
   });
 
   it('never re-enters an instrument still in flight, even when a sibling already threw (#507, #669)', async () => {
-    // #507's invariant, re-expressed for the per-instrument guard (#669).
+    // #507's invariant, re-expressed for the per-instrument guard (#669)
     //
     // The original defect: FAST's throw alone rejected `runTickPlan`'s
     // `Promise.all`, which resolved `runOnce` and cleared the global
     // `inFlight` flag while SLOW was still mid-pipeline, so the next tick
     // started a second SLOW pass alongside the first. That is the invariant
     // that still matters, and it is asserted directly below — per instrument,
-    // rather than through the global flag that used to stand in for it.
+    // rather than through the global flag that used to stand in for it
     //
     // What deliberately CHANGED with #669: FAST is no longer held hostage. The
     // old global guard dropped the whole tick while SLOW ran, and because
@@ -3382,31 +3384,31 @@ describe('startTickLoop', () => {
     });
 
     await vi.advanceTimersByTimeAsync(1_000);
-    // FAST already threw and was caught; SLOW is still blocked on its gate.
+    // FAST already threw and was caught; SLOW is still blocked on its gate
     expect(callsFor('FAST')).toBe(1);
     expect(callsFor('SLOW')).toBe(1);
 
-    // Five more interval periods with SLOW still in flight.
+    // Five more interval periods with SLOW still in flight
     await vi.advanceTimersByTimeAsync(5_000);
 
-    // THE INVARIANT (#507): SLOW is never re-entered while its pass is live.
+    // THE INVARIANT (#507): SLOW is never re-entered while its pass is live
     expect(callsFor('SLOW')).toBe(1);
-    // THE FIX (#669): FAST kept ticking instead of being starved by SLOW.
+    // THE FIX (#669): FAST kept ticking instead of being starved by SLOW
     expect(callsFor('FAST')).toBeGreaterThan(1);
 
     releaseSlow();
     await vi.advanceTimersByTimeAsync(1_000);
-    // Released, SLOW is eligible again.
+    // Released, SLOW is eligible again
     expect(callsFor('SLOW')).toBeGreaterThan(1);
 
-    // The later SLOW pass's own gate, so `stop()` doesn't wait forever.
+    // The later SLOW pass's own gate, so `stop()` doesn't wait forever
     releaseSlow();
     await loop.stop();
   });
 
   it('a slow pass settling does not release an instrument a newer pass re-claimed', async () => {
     // The fast-reclaim-then-slow-settle ordering, which the guard's own
-    // backstop used to break.
+    // backstop used to break
     //
     // Pass 1 claims FAST and SLOW. FAST settles almost immediately and is
     // released, so tick 2 legitimately re-claims FAST into pass 2 — which then
@@ -3414,9 +3416,9 @@ describe('startTickLoop', () => {
     // backstop ran `delete` over EVERY asset pass 1 had claimed, FAST included
     // — clearing a guard pass 2 owned. The next tick then started a second
     // concurrent pass on FAST: the exact reentrancy #669 exists to prevent,
-    // reintroduced by the backstop meant to protect it.
+    // reintroduced by the backstop meant to protect it
     //
-    // Ownership tokens make the stale release a no-op.
+    // Ownership tokens make the stale release a no-op
     const gates: Record<string, (() => void) | undefined> = {};
     let fastCallCount = 0;
     const twoInstrumentPlan: TickPlan = {
@@ -3437,7 +3439,7 @@ describe('startTickLoop', () => {
       fastCallCount += 1;
       // The FIRST FAST pass settles at once (so it can be re-claimed); every
       // later one blocks, so a second concurrent FAST pass would be visible as
-      // a call count that keeps climbing while one is still gated.
+      // a call count that keeps climbing while one is still gated
       if (fastCallCount === 1) {
         return { trace_id: 't', final_stage: 'execution' };
       }
@@ -3458,13 +3460,13 @@ describe('startTickLoop', () => {
       maxConcurrentInstruments: 2,
     });
 
-    // Tick 1: FAST settles immediately, SLOW blocks.
+    // Tick 1: FAST settles immediately, SLOW blocks
     await vi.advanceTimersByTimeAsync(1_000);
-    // Tick 2: FAST is free, so it is re-claimed into a new pass — and blocks.
+    // Tick 2: FAST is free, so it is re-claimed into a new pass — and blocks
     await vi.advanceTimersByTimeAsync(1_000);
     expect(fastCallCount).toBe(2);
 
-    // SLOW settles, completing pass 1 and firing its backstop over FAST too.
+    // SLOW settles, completing pass 1 and firing its backstop over FAST too
     gates.SLOW?.();
     await vi.advanceTimersByTimeAsync(0);
 
@@ -3486,7 +3488,7 @@ describe('startTickLoop', () => {
     // Check-and-claim used to be `filter` then a separate `add` loop, which is
     // not atomic per asset: both copies passed the filter before either was
     // claimed. `nextTick` returning a duplicate is not expected — but "not
-    // expected" is what the guard is for, and the failure is silent.
+    // expected" is what the guard is for, and the failure is silent
     const duplicatePlan: TickPlan = {
       instruments: [
         { asset: 'BTC-USD', asset_class: 'crypto' },
@@ -3607,7 +3609,7 @@ describe('startTickLoop', () => {
     // The two skips share a code path and mean opposite things: a still-running
     // instrument is the steady state #669 exists to tolerate, while the same
     // asset twice in one plan is a malformed plan. Reporting the second as
-    // "still running from a previous pass" hid it precisely when caught.
+    // "still running from a previous pass" hid it precisely when caught
     const logger = recordingLogger();
     const duplicatePlan = {
       instruments: [
@@ -3634,7 +3636,7 @@ describe('startTickLoop', () => {
     await vi.advanceTimersByTimeAsync(1_000);
     await loop.stop();
 
-    // The guard still holds: the duplicate lost to itself, one run only.
+    // The guard still holds: the duplicate lost to itself, one run only
     expect(runInstrument).toHaveBeenCalledTimes(1);
     expect(logger.entries.some((entry) => entry.message.includes('duplicate instrument'))).toBe(
       true,
@@ -3673,7 +3675,7 @@ describe('startTickLoop', () => {
         plans += 1;
         // First tick claims BTC and blocks. Second tick returns it TWICE while
         // the first pass still holds it: one occurrence is legitimately busy,
-        // the other is the scheduler fault.
+        // the other is the scheduler fault
         return { instruments: plans === 1 ? [btc] : [btc, btc], tick_time: START };
       },
     };
@@ -3782,7 +3784,7 @@ describe('startTickLoop', () => {
       await loop.stop();
 
       // The tick still ran, in the scheduler's own order — a failed lookup
-      // costs priority, not the tick.
+      // costs priority, not the tick
       expect(started).toEqual(['FLAT_A', 'HELD', 'FLAT_B']);
       expect(
         logger.entries.some((entry) => entry.message.includes('held-position lookup failed')),
@@ -3826,15 +3828,15 @@ describe('startTickLoop', () => {
 
       // Fires the tick; `runOnce` reaches `await deps.heldAssets()` and parks
       // there — `heldAssetsGate` is still unresolved, so nothing past that
-      // point (the claim loop, `passes.add`) has run yet.
+      // point (the claim loop, `passes.add`) has run yet
       await vi.advanceTimersByTimeAsync(1_000);
 
       // Races in while the pass is parked. Nothing is in `passes` yet, so
-      // this resolves immediately rather than waiting for the parked pass.
+      // this resolves immediately rather than waiting for the parked pass
       await loop.stop();
 
       // The parked pass resumes; the `stopped` re-check must abort it before
-      // it claims or dispatches anything.
+      // it claims or dispatches anything
       resolveHeldAssets(new Set(['HELD']));
       await Promise.resolve();
       await Promise.resolve();
@@ -3855,7 +3857,7 @@ describe('startTickLoop', () => {
       tick_time: START,
     };
 
-    /** Never resolves until the test releases it — every claimed instrument stays "busy". */
+    /** Never resolves until the test releases it — every claimed instrument stays "busy" */
     const blockingRunner = () => {
       const releases: Array<() => void> = [];
       const runInstrument = vi.fn(async (): Promise<TickOutcome> => {
@@ -3888,13 +3890,13 @@ describe('startTickLoop', () => {
       });
 
       // Tick 1: all four instruments claimed and dispatched — nothing is
-      // skipped yet, so no escalation.
+      // skipped yet, so no escalation
       await vi.advanceTimersByTimeAsync(1_000);
       expect(runInstrument).toHaveBeenCalledTimes(4);
       expect(tickSkipAlerts.postTickSkipAlert).not.toHaveBeenCalled();
 
       // Tick 2: all four are still busy from tick 1 (4 of 4 planned) — a
-      // materially degraded pass, escalated on its first occurrence.
+      // materially degraded pass, escalated on its first occurrence
       await vi.advanceTimersByTimeAsync(1_000);
       expect(tickSkipAlerts.postTickSkipAlert).toHaveBeenCalledTimes(1);
       expect(tickSkipAlerts.postTickSkipAlert).toHaveBeenCalledWith(
@@ -3908,7 +3910,7 @@ describe('startTickLoop', () => {
 
       // Skip behaviour itself is UNCHANGED (#692): no new dispatch happened
       // on tick 2 for any of the four busy instruments, and the existing
-      // `info` skip log still fires exactly as before.
+      // `info` skip log still fires exactly as before
       expect(runInstrument).toHaveBeenCalledTimes(4);
       expect(
         logger.entries.some((entry) =>
@@ -3946,11 +3948,11 @@ describe('startTickLoop', () => {
       await vi.advanceTimersByTimeAsync(1_000); // tick 1: dispatches, blocks
       // Several further ticks all see the one instrument still busy (1 of 1
       // planned) — below TICK_SKIP_ALERT_MIN_INSTRUMENTS, so this is the
-      // ordinary "one slow debate" case and must stay quiet.
+      // ordinary "one slow debate" case and must stay quiet
       await vi.advanceTimersByTimeAsync(5_000);
 
       expect(tickSkipAlerts.postTickSkipAlert).not.toHaveBeenCalled();
-      // The existing quiet `info` log is untouched.
+      // The existing quiet `info` log is untouched
       expect(
         logger.entries.some((entry) =>
           entry.message.includes('still running from a previous pass'),
@@ -3979,7 +3981,7 @@ describe('startTickLoop', () => {
 
       // Tick 1 is clean (nothing busy yet). Ticks 2-10 are all degraded
       // (4 of 4 busy each time): alert on the 1st degraded tick (tick 2)
-      // and again on the 9th (tick 10) — never in between.
+      // and again on the 9th (tick 10) — never in between
       for (let i = 0; i < 10; i += 1) {
         await vi.advanceTimersByTimeAsync(1_000);
       }
@@ -4019,7 +4021,7 @@ describe('startTickLoop', () => {
  * Shared by every #1390 test below that needs a real filled lot in a real
  * `SqliteExecutionStore` — the composition-root tests need it before
  * `buildProductionOrchestrator` even runs, so this can't stay nested inside
- * one describe block.
+ * one describe block
  */
 function openLot(instrument: string, idempotencyKey: string) {
   return {
@@ -4060,7 +4062,7 @@ describe('heldAssets covers both arms, through the composition root (#1390)', ()
     // A live-arm lot and a DIFFERENT control-arm lot — through the same two
     // stores `buildHeldAssetsReader` reads, `components.executionStore` (live)
     // and `components.controlArmWiring.store` (control), so this only proves
-    // something if the reader genuinely reaches both.
+    // something if the reader genuinely reaches both
     await components.executionStore.writeAheadPosition(openLot('AAPL', 'live-lot'));
     await components.controlArmWiring.store.writeAheadPosition(openLot('QQQ', 'control-lot'));
 
@@ -4072,7 +4074,7 @@ describe('heldAssets covers both arms, through the composition root (#1390)', ()
     // (#1390's first version) sees only the live lot and misses the control
     // one — reproduced here directly against the same two stores, so a
     // future change that narrows `buildHeldAssetsReader` back to one store
-    // fails this assertion, not just the union one above.
+    // fails this assertion, not just the union one above
     const liveOnly = new Set(
       (await components.executionStore.getOpenPositions()).map((p) => p.instrument),
     );
@@ -4182,7 +4184,7 @@ describe('buildProductionOrchestrator', () => {
     // itself (the virgin-store catch-up fires immediately, at t=0) with
     // every later one landing on a clean +1_000ms mark — making every fire
     // count asserted in this file reproducible regardless of wall-clock time
-    // at test-run.
+    // at test-run
     vi.setSystemTime(START);
   });
 
@@ -4199,7 +4201,7 @@ describe('buildProductionOrchestrator', () => {
       // (BTC-USD) from the calendar gate, and `START` (12:00 UTC) is outside
       // `UsEquityRegularHoursCalendar` — this test is about the orphan-scan
       // ordering, not the calendar, so it forces the plan open the same way
-      // `smoke-run.ts` does.
+      // `smoke-run.ts` does
       tradingCalendar: new AlwaysOpenCalendar(),
     });
     const orchestrator = buildProductionOrchestrator(config);
@@ -4235,7 +4237,7 @@ describe('buildProductionOrchestrator', () => {
     const fetched: string[] = [];
     // The first prefetch fetch hangs until released, so "before" is proved by
     // the tick loop failing to fire across an interval it would otherwise
-    // have fired in — not merely by `start()` having returned.
+    // have fired in — not merely by `start()` having returned
     let releaseFetch!: () => void;
     const held = new Promise<void>((resolve) => {
       releaseFetch = resolve;
@@ -4393,7 +4395,7 @@ describe('buildProductionOrchestrator', () => {
         // which resolves the US calendar and puts the close at 16:00 ET — five
         // hours from these London instants and untestable against the LSE
         // window. Left unpinned for the venue case below, which is about
-        // exactly that resolution.
+        // exactly that resolution
         ...(pinLse ? { tradingCalendar: new LseRegularHoursCalendar() } : {}),
         stocksTradingWindow: londonEntryWindow(),
         universe: [{ asset: 'LQQ3', asset_class: 'stocks', subclass: 'index_etp_3x' }],
@@ -4404,7 +4406,7 @@ describe('buildProductionOrchestrator', () => {
         // instrument and is declared in GBX. The composition root also refuses
         // to build a source for an LSE ticker without a vendor client rather
         // than routing it to Alpaca, which does not list it; nothing here reads
-        // a price, so a stub satisfies that seam.
+        // a price, so a stub satisfies that seam
         lseMarkClient: {
           vendor: 'stub-lse-vendor',
           getBars: vi.fn(async () => ({ currency: 'GBP', candles: [] })),
@@ -4422,7 +4424,7 @@ describe('buildProductionOrchestrator', () => {
       const config = windowedConfig(now, pinLse);
       // The tail is `flatten_before_close_ms` wide, so 16:26 is only inside it
       // while that is 5 minutes. Asserted, not assumed — a stub drifting to a
-      // narrower window would make the positive case below silently vacuous.
+      // narrower window would make the positive case below silently vacuous
       expect(config.traderConfig.flatten_before_close_ms).toBe(5 * 60_000);
 
       const orchestrator = buildProductionOrchestrator(config);
@@ -4442,14 +4444,14 @@ describe('buildProductionOrchestrator', () => {
       // Trader is the only thing that flattens and it runs on a tick, so with
       // the bare entry window this is `false` and flat-by-close silently stops
       // running — `trader_log` reading exactly like a session with nothing to
-      // flatten, the same signature #691 found on a non-positive window.
+      // flatten, the same signature #691 found on a non-positive window
       expect(await ranAt(WEDNESDAY_16_26)).toBe(true);
     });
 
     it('still does not tick equities at 16:00, outside both spans', async () => {
       // The narrowing must survive the fix. If the tail had been implemented by
       // widening the entry window instead of unioning a separate span, this is
-      // the test that would catch it.
+      // the test that would catch it
       expect(await ranAt(WEDNESDAY_16_00)).toBe(false);
     });
 
@@ -4462,11 +4464,11 @@ describe('buildProductionOrchestrator', () => {
       // them agree is that the function is pure and the calendars hold no
       // state. Both halves are load-bearing, and neither is visible from the
       // London cases above, which pin the calendar and so would pass against a
-      // hard-coded LSE tail.
+      // hard-coded LSE tail
       //
       // 15:56 ET is 20:56 London: past the LSE close, inside the US session,
       // and five minutes from the US close. It ticks only if the tail resolved
-      // through the calendar `mode: 'paper'` selects.
+      // through the calendar `mode: 'paper'` selects
       expect(await ranAt(new Date('2026-08-19T15:56:00-04:00'), false)).toBe(true);
     });
   });
@@ -4493,11 +4495,11 @@ describe('buildProductionOrchestrator', () => {
     // #342: at 60s the dead-man's-switch posts ~20k messages over the 14-day
     // soak (#238) and the operator mutes the chat. The default is the external
     // watchdog's staleness threshold — 15 minutes — and `heartbeatIntervalMs`
-    // stays the knob for anything that wants it tighter.
+    // stays the knob for anything that wants it tighter
     expect(DEFAULT_HEARTBEAT_INTERVAL_MS).toBe(15 * 60_000);
 
     const config = stubConfig(db, { tickIntervalMs: 100_000 });
-    // No `heartbeatIntervalMs` — the default is what is under test.
+    // No `heartbeatIntervalMs` — the default is what is under test
     expect(config.heartbeatIntervalMs).toBeUndefined();
     const orchestrator = buildProductionOrchestrator(config);
     vi.spyOn(orchestrator.tickRunner, 'runInstrument').mockResolvedValue({
@@ -4506,7 +4508,7 @@ describe('buildProductionOrchestrator', () => {
     });
 
     await orchestrator.start();
-    // A minute in — where the old default had already posted once.
+    // A minute in — where the old default had already posted once
     await vi.advanceTimersByTimeAsync(60_000);
     expect(config.heartbeatChannel.postHeartbeat).not.toHaveBeenCalled();
 
@@ -4546,7 +4548,7 @@ describe('buildProductionOrchestrator', () => {
     // smoke gate cannot reach it either — its 15-minute default against a run
     // that finishes in seconds means only the startup refresh is observed
     // there. Deleting the `setInterval` in `production.ts` would otherwise
-    // leave the whole suite green, which is this repo's signature defect.
+    // leave the whole suite green, which is this repo's signature defect
     let fetches = 0;
     const countingClient = new PolymarketClient({
       rateLimiter: new TokenBucket({ capacity: 1_000, refillPerSecond: 1_000 }),
@@ -4607,19 +4609,19 @@ describe('buildProductionOrchestrator', () => {
     const orchestrator = buildProductionOrchestrator(config);
 
     await orchestrator.start();
-    // Well past the 24h default cycle: with no `feedback` block, no cycle runs.
+    // Well past the 24h default cycle: with no `feedback` block, no cycle runs
     await vi.advanceTimersByTimeAsync(47 * 60 * 60 * 1_000);
     expect(logger.entries.filter((entry) => entry.trace_id === 'feedback-cycle')).toHaveLength(0);
 
     // ...but it is no longer SILENT about it (#327). Unstarted-by-omission is
-    // the failure mode: the run looks healthy and learns nothing.
+    // the failure mode: the run looks healthy and learns nothing
     const startupWarns = logger.entries.filter(
       (entry) => entry.stage === 'feedback-loop' && entry.trace_id === 'startup',
     );
     expect(startupWarns).toHaveLength(1);
     expect(startupWarns[0]?.level).toBe('warn');
     expect(startupWarns[0]?.message).toContain('ProductionConfig.feedback');
-    // Names the kill-lines that consequently never run.
+    // Names the kill-lines that consequently never run
     expect(startupWarns[0]?.message).toContain('pbo_over_max');
     await orchestrator.stop();
   });
@@ -4629,14 +4631,14 @@ describe('buildProductionOrchestrator', () => {
     // edit was the entire distance between the running system and an arbitrary
     // risk limit. Refusing the process is the correct answer — a silent clamp
     // would read as accepted and leave the operator believing a limit is in
-    // force that is not.
+    // force that is not
     const config = stubConfig(db, {
       feedback: {
         intervalMs: 1_000,
         config: {
           weights: { max_step: 0.05, floor: 0.5, ceiling: 1.5, tighten_is: 'decrease' },
           kill_thresholds: {
-            // The one hard kill criterion in the whole record, softened tenfold.
+            // The one hard kill criterion in the whole record, softened tenfold
             max_pbo: 0.5,
             min_oos_sharpe: 0.5,
             min_deflated_sharpe: 0.95,
@@ -4664,7 +4666,7 @@ describe('buildProductionOrchestrator', () => {
         // was a cast past a required field, not a valid config. Everything
         // else stays empty on purpose: this case is about the TIMER firing,
         // and `runDailyCycle`'s own throw on the rest is caught and logged as
-        // one of the two `feedback-cycle` entries asserted below.
+        // one of the two `feedback-cycle` entries asserted below
         config: {
           weights: { max_step: 0.05, floor: 0.5, ceiling: 1.5, tighten_is: 'decrease' },
         } as unknown as FeedbackConfig,
@@ -4680,14 +4682,14 @@ describe('buildProductionOrchestrator', () => {
     // 3, not 2: #1110 makes a virgin schedule fire on `start()` itself (the
     // bug it fixes is exactly "a restarted process never accumulates a full
     // interval of uptime"), then two more at the 1s-interval boundaries
-    // `advanceTimersByTimeAsync(2_000)` crosses.
+    // `advanceTimersByTimeAsync(2_000)` crosses
     expect(cycleEntries).toHaveLength(3);
 
     // No `metrics` block, so the kill-line detector is still inert — and says
-    // so at startup rather than leaving it to be discovered (#327).
+    // so at startup rather than leaving it to be discovered (#327)
     // Narrowed to the WARNS since #371: startup also emits an `info` naming
     // the analyst-weight rows the seeder wrote. The property this case is
-    // about is that the metrics warn is the only degraded-mode warning left.
+    // about is that the metrics warn is the only degraded-mode warning left
     const metricsWarn = logger.entries.filter(
       (entry) =>
         entry.trace_id === 'startup' && entry.stage === 'feedback-loop' && entry.level === 'warn',
@@ -4700,7 +4702,7 @@ describe('buildProductionOrchestrator', () => {
     await vi.advanceTimersByTimeAsync(10_000);
     // Still 3 — `stop()`'s `clearTimeout` actually cancels the pending
     // re-arm, matching the count asserted above rather than the pre-#1110
-    // count of 2.
+    // count of 2
     expect(logger.entries.filter((entry) => entry.trace_id === 'feedback-cycle')).toHaveLength(3);
   });
 
@@ -4765,10 +4767,10 @@ describe('buildProductionOrchestrator', () => {
       // 2 log lines, not 1: #1110's virgin-store catch-up fires once on
       // `start()`, then the 1s boundary fires again inside the 1_000ms
       // advance below. Both log — logging happens on every cycle regardless
-      // of whether the DB row changes.
+      // of whether the DB row changes
       expect(computed).toHaveLength(2);
       // Both arms, both columns — a log line carrying a return without its
-      // drawdown would re-open doc 12 D4 at the surface.
+      // drawdown would re-open doc 12 D4 at the surface
       const payload = computed[0]?.payload as {
         live: { return_pct: number; max_drawdown_pct: number };
         control: { return_pct: number; max_drawdown_pct: number };
@@ -4781,7 +4783,7 @@ describe('buildProductionOrchestrator', () => {
       // compute the identical `computed_at` and `INSERT OR REPLACE`
       // (migration 0034) collapses them — this collapsing was already the
       // suite's behavior pre-#1110, not something the restart-durable
-      // schedule changes.
+      // schedule changes
       const rows = db.prepare('SELECT diverged FROM arm_comparison_samples').all() as {
         diverged: number;
       }[];
@@ -4804,7 +4806,7 @@ describe('buildProductionOrchestrator', () => {
       await orchestrator.stop();
 
       // 2, not 1 — see the boot-catch-up comment above; the alert channel is
-      // called per cycle, unaffected by the store's `INSERT OR REPLACE`.
+      // called per cycle, unaffected by the store's `INSERT OR REPLACE`
       expect(postArmDivergenceAlert).toHaveBeenCalledTimes(2);
       const alert = postArmDivergenceAlert.mock.calls[0]?.[0] as {
         comparison: {
@@ -4849,7 +4851,7 @@ describe('buildProductionOrchestrator', () => {
       // `paper-profile.ts`'s own idiom: a profile that stopped declaring a
       // ceiling leaves it ABSENT here, and the final assertion then compares
       // the persisted `basis` against `undefined` and fails, which is the
-      // point.
+      // point
       const ceiling = paperStartingProfile('paper').capitalCeilingUsd;
       const config = feedbackOnlyConfig(
         ceiling === undefined ? {} : { capitalCeilingUsd: ceiling },
@@ -4913,7 +4915,7 @@ describe('buildProductionOrchestrator', () => {
           // A dip partway through, deliberately: a monotonic series has a
           // drawdown of exactly 0, which `Number.isFinite` would accept from a
           // hardcoded zero column just as happily. This makes the persisted
-          // drawdown a measurement the assertion can actually distinguish.
+          // drawdown a measurement the assertion can actually distinguish
           close *= day === 4 ? 0.97 : 1.001;
           day += 1;
           observations.push({ close_time: new Date(t), close });
@@ -4948,7 +4950,7 @@ describe('buildProductionOrchestrator', () => {
       await orchestrator.stop();
 
       // Both legs of both benchmarks were asked for — SPY twice (it is the
-      // 60/40's equity leg too), AGG once.
+      // 60/40's equity leg too), AGG once
       expect(series.instruments).toContain('SPY');
       expect(series.instruments).toContain('AGG');
 
@@ -4965,12 +4967,12 @@ describe('buildProductionOrchestrator', () => {
       expect(rows.map((row) => row.benchmark).sort()).toEqual(['sixty_forty', 'spy']);
       // Return AND drawdown together, persisted (doc 12 D4). The series dips,
       // so a real measurement is strictly positive — a zero here would mean the
-      // column was defaulted rather than computed.
+      // column was defaulted rather than computed
       expect(rows.every((row) => Number.isFinite(row.max_drawdown_pct))).toBe(true);
       expect(rows.every((row) => row.max_drawdown_pct > 0)).toBe(true);
 
       // The window is the arm comparison's own, to the millisecond — inherited,
-      // never recomputed (#636).
+      // never recomputed (#636)
       const armWindows = db
         .prepare('SELECT window_from, window_to FROM arm_comparison_samples')
         .all() as { window_from: string; window_to: string }[];
@@ -4981,7 +4983,7 @@ describe('buildProductionOrchestrator', () => {
       }
 
       // 2, not 1 — #1110's boot catch-up fires once immediately, then the 1s
-      // boundary fires again inside the advance above; each cycle logs.
+      // boundary fires again inside the advance above; each cycle logs
       expect(
         logger.entries.filter((entry) => entry.message === 'outside benchmarks computed'),
       ).toHaveLength(2);
@@ -5065,7 +5067,7 @@ describe('buildProductionOrchestrator', () => {
         // series. Index off `end` instead: `DIP_DAYS_BEFORE_END` days before
         // `end` survives the slice (well inside the last `limit` rows) AND
         // lands inside the comparison window, not the anchor pad before it
-        // (`ANCHOR_PAD_BARS` days older than the window start).
+        // (`ANCHOR_PAD_BARS` days older than the window start)
         const DIP_DAYS_BEFORE_END = 10;
         for (let t = start.getTime(); t <= end.getTime(); t += DAY_MS) {
           const daysBeforeEnd = Math.round((end.getTime() - t) / DAY_MS);
@@ -5123,11 +5125,11 @@ describe('buildProductionOrchestrator', () => {
       expect(rows.every((row) => Number.isFinite(row.max_drawdown_pct))).toBe(true);
       // The fixture dips `DIP_DAYS_BEFORE_END` days before `end` so drawdown !=
       // 0 — assert that for the `spy` row so this can't pass on a defaulted 0
-      // column.
+      // column
       expect(rows.find((row) => row.benchmark === 'spy')?.max_drawdown_pct).toBeGreaterThan(0);
 
       // 2, not 1 — #1110's boot catch-up fires once immediately, then the 1s
-      // boundary fires again inside the advance above; each cycle logs.
+      // boundary fires again inside the advance above; each cycle logs
       expect(
         logger.entries.filter((entry) => entry.message === 'outside benchmarks computed'),
       ).toHaveLength(2);
@@ -5187,7 +5189,7 @@ describe('buildProductionOrchestrator', () => {
      * Scoped to `key = 'default'` (the COMPLETED boundary) — not a bare
      * `SELECT`, because pass-2's `key = 'attempt'` row (finding 1) can now
      * share this table, and an unscoped query would return whichever of the
-     * two rows SQLite happens to return first.
+     * two rows SQLite happens to return first
      */
     function feedbackScheduleLastBoundary(): string | null {
       const row = db
@@ -5196,7 +5198,7 @@ describe('buildProductionOrchestrator', () => {
       return row?.last_boundary ?? null;
     }
 
-    /** Scoped to `key = 'attempt'` — see `feedbackScheduleLastBoundary` above. */
+    /** Scoped to `key = 'attempt'` — see `feedbackScheduleLastBoundary` above */
     function feedbackScheduleAttemptedBoundary(): string | null {
       const row = db
         .prepare("SELECT last_boundary FROM feedback_cycle_schedule WHERE key = 'attempt'")
@@ -5253,7 +5255,7 @@ describe('buildProductionOrchestrator', () => {
       const intervalMs = 1_000;
 
       // Boot: a virgin schedule/store catches up immediately — #1110's bug
-      // was precisely that this never happened on its own.
+      // was precisely that this never happened on its own
       const first = buildProductionOrchestrator(restartDurableConfig(clock, intervalMs));
       await first.start();
       expect(sampleRows()).toHaveLength(1);
@@ -5279,7 +5281,7 @@ describe('buildProductionOrchestrator', () => {
       // Over-interval restart: down for 10 whole intervals (10_000ms against
       // a 1_000ms interval). A burst-fire bug would produce 10 catch-up rows
       // for the boundaries missed; DESIGN DECISION 2 caps catch-up at
-      // exactly one.
+      // exactly one
       await advanceBoth(clock, 10_000);
       const fourth = buildProductionOrchestrator(restartDurableConfig(clock, intervalMs));
       await fourth.start();
@@ -5291,7 +5293,7 @@ describe('buildProductionOrchestrator', () => {
       const DAY_MS = 24 * 60 * 60 * 1_000;
       // A UTC-midnight-aligned start, so `currentBoundary` lands exactly on
       // calendar days — the same alignment DESIGN DECISION 1 gets for free
-      // in production from epoch-anchoring.
+      // in production from epoch-anchoring
       const DAY0 = new Date('2026-08-01T00:00:00.000Z');
       vi.setSystemTime(DAY0);
       const clock = new SimulatedClock(DAY0);
@@ -5299,11 +5301,11 @@ describe('buildProductionOrchestrator', () => {
       // 5h, not a divisor of the 24h interval: every restart lands at a
       // different phase of the day, so no restart boundary can coincide with
       // a day boundary and leave the "did the boundary check happen just
-      // before or just after the restart" case unexercised.
+      // before or just after the restart" case unexercised
       const RESTART_GAP_MS = 5 * 60 * 60 * 1_000;
       // 15 restarts * 5h = 75h — enough to cross all three of the next
       // calendar days (at the 24h/48h/72h marks) while still restarting
-      // between every crossing, not just once per day.
+      // between every crossing, not just once per day
       const RESTARTS = 15;
 
       for (let i = 0; i < RESTARTS; i += 1) {
@@ -5315,7 +5317,7 @@ describe('buildProductionOrchestrator', () => {
         // Checked once, well before the first day boundary (20h elapsed,
         // 4h short of the 24h mark): four restarts in, still exactly the
         // one boot-catch-up row — proving the frequent restarts alone,
-        // absent an actual day boundary, produce nothing extra.
+        // absent an actual day boundary, produce nothing extra
         if (i === 3) {
           expect(sampleRows()).toHaveLength(1);
         }
@@ -5326,7 +5328,7 @@ describe('buildProductionOrchestrator', () => {
 
       const rows = sampleRows();
       // One row for the initial boot (day 0) plus one for each of the three
-      // day boundaries the 75h run crossed — despite 15 separate restarts.
+      // day boundaries the 75h run crossed — despite 15 separate restarts
       expect(rows).toHaveLength(4);
 
       // Each row's own window: consecutive `window_to` values exactly one
@@ -5339,7 +5341,7 @@ describe('buildProductionOrchestrator', () => {
       // `window_to` advances. A regression that pinned `window_from` to the
       // run's start (cumulative windows instead of rolling ones) would still
       // pass a `window_to`-only check, and cumulative windows would corrupt
-      // the #753 comparison silently, but a GROWING span here catches it.
+      // the #753 comparison silently, but a GROWING span here catches it
       for (let i = 1; i < rows.length; i += 1) {
         const prevTo = new Date(rows[i - 1]?.window_to as string).getTime();
         const currTo = new Date(rows[i]?.window_to as string).getTime();
@@ -5360,7 +5362,7 @@ describe('buildProductionOrchestrator', () => {
       // The boot catch-up runs with the table intact, so it is `start()`'s
       // OWN startup-log read of `lastBoundary()` (a separate call site, not
       // `runIfDue`) that this test must not disturb — sabotage happens only
-      // after `start()` returns.
+      // after `start()` returns
       await orchestrator.start();
       expect(sampleRows()).toHaveLength(1);
 
@@ -5368,13 +5370,13 @@ describe('buildProductionOrchestrator', () => {
       // boot catch-up's own `finally` — throws reading `lastBoundary()`
       // instead of getting `null`/a real boundary, simulating a transient
       // `SQLITE_BUSY` from the shared WAL file the service-api process also
-      // reads.
+      // reads
       db.exec('DROP TABLE feedback_cycle_schedule');
       await advanceBoth(clock, intervalMs);
 
       // Before this fix, an uncaught throw here left the re-arm — the
       // function's last statement — never reached, and the cycle never fired
-      // again for the rest of the process's life, silently.
+      // again for the rest of the process's life, silently
       expect(
         logger.entries.filter(
           (entry) =>
@@ -5386,7 +5388,7 @@ describe('buildProductionOrchestrator', () => {
       expect(sampleRows()).toHaveLength(1);
 
       // The store recovers (a transient failure clearing on its own) and the
-      // timer — which DID re-arm despite the throw — fires the next boundary.
+      // timer — which DID re-arm despite the throw — fires the next boundary
       db.exec(
         'CREATE TABLE feedback_cycle_schedule (key TEXT PRIMARY KEY, last_boundary TEXT NOT NULL, updated_at TEXT NOT NULL)',
       );
@@ -5413,13 +5415,13 @@ describe('buildProductionOrchestrator', () => {
       // guarded one. Before the fix this line threw an uncaught
       // `SqliteError` straight out of `start()` — dropping the table after
       // `start()` returns (as "finding 1" above does) never exercises it,
-      // because by then the startup log has already read successfully.
+      // because by then the startup log has already read successfully
       db.exec('DROP TABLE feedback_cycle_schedule');
 
       await expect(orchestrator.start()).resolves.toBeDefined();
 
       // The startup-log read failure is reported on its own, distinct from
-      // `runIfDue`'s "feedback cycle pass failed" message.
+      // `runIfDue`'s "feedback cycle pass failed" message
       expect(
         logger.entries.filter(
           (entry) =>
@@ -5431,7 +5433,7 @@ describe('buildProductionOrchestrator', () => {
 
       // `runIfDue` runs synchronously inside `start()` too (same table, same
       // failure) — it must be guarded the same way, not left to throw just
-      // because the startup log already swallowed its own copy of the error.
+      // because the startup log already swallowed its own copy of the error
       expect(
         logger.entries.filter(
           (entry) =>
@@ -5443,7 +5445,7 @@ describe('buildProductionOrchestrator', () => {
 
       // Neither call site could read the store, so no cycle ran yet — the
       // operator-facing `info` line must not claim a catch-up that did not
-      // happen (the read failed, so `feedbackDueNow` cannot be trusted).
+      // happen (the read failed, so `feedbackDueNow` cannot be trusted)
       expect(sampleRows()).toHaveLength(0);
       const feedbackScheduleInfoLines = logger.entries.filter(
         (entry) =>
@@ -5462,7 +5464,7 @@ describe('buildProductionOrchestrator', () => {
       });
 
       // The store recovers and the timer — which still re-armed despite both
-      // failures — catches up on its next fire.
+      // failures — catches up on its next fire
       db.exec(
         'CREATE TABLE feedback_cycle_schedule (key TEXT PRIMARY KEY, last_boundary TEXT NOT NULL, updated_at TEXT NOT NULL)',
       );
@@ -5481,7 +5483,7 @@ describe('buildProductionOrchestrator', () => {
 
       // Same hostile shape as the #1262 tick-loop test above: circular
       // (defeats `JSON.stringify`) with a throwing `Symbol.toPrimitive`
-      // (defeats the `String()` fallback too).
+      // (defeats the `String()` fallback too)
       const hostile: Record<string, unknown> = {
         [Symbol.toPrimitive]: () => {
           throw new Error('render boom');
@@ -5492,7 +5494,7 @@ describe('buildProductionOrchestrator', () => {
       // Sabotages ONLY `recordAttempt` (production.ts:3648, the "BEFORE
       // `runFeedbackCycle`" write), not `recordBoundary` or `lastBoundary` —
       // isolates the `attemptError` catch (production.ts:3665) from the
-      // schedule-store failures the two tests above already cover.
+      // schedule-store failures the two tests above already cover
       const recordAttemptSpy = vi
         .spyOn(SqliteFeedbackCycleScheduleStore.prototype, 'recordAttempt')
         .mockImplementationOnce(() => {
@@ -5509,13 +5511,13 @@ describe('buildProductionOrchestrator', () => {
       // `runFeedbackCycle(feedback)` (production.ts:3669) and
       // `recordBoundary` (production.ts:3672) below it, so the boot
       // catch-up's cycle would be silently lost rather than merely
-      // unmarked-as-attempted.
+      // unmarked-as-attempted
       expect(sampleRows()).toHaveLength(1);
       expect(feedbackScheduleLastBoundary()).not.toBeNull();
 
       // The catch's own diagnostic line must land, and with the guard's
       // fixed placeholder — proof the render itself did not throw, not just
-      // proof that something downstream recovered.
+      // proof that something downstream recovered
       const attemptFailure = logger.entries.find(
         (entry) =>
           entry.trace_id === 'feedback-cycle' && entry.event === 'feedback_attempt_marker_failed',
@@ -5526,7 +5528,7 @@ describe('buildProductionOrchestrator', () => {
       await orchestrator.stop();
     });
 
-    /** The dial `dialAdjustmentValues` and the finding-1/5 test below tune. */
+    /** The dial `dialAdjustmentValues` and the finding-1/5 test below tune */
     const RISK_DIAL_NAME = 'max_position_size_fraction_of_equity';
     const RISK_DIAL_SHIPPED = 0.05;
 
@@ -5570,7 +5572,7 @@ describe('buildProductionOrchestrator', () => {
           // `capDial` in paper-profile.ts) — far enough below the ceiling
           // that two consecutive `max_step` moves both land short of it, so
           // a double-apply is visible as two distinct `to_value`s rather than
-          // both moves being swallowed by the same floor clamp.
+          // both moves being swallowed by the same floor clamp
           proposals: [
             { kind: 'risk_threshold', name: RISK_DIAL_NAME, target: RISK_DIAL_SHIPPED * 0.25 },
           ],
@@ -5591,7 +5593,7 @@ describe('buildProductionOrchestrator', () => {
         // attempt row (`key = 'attempt'`) still writes
         // successfully, so `runIfDue` reaches `runFeedbackCycle` and only the
         // trailing `recordBoundary` fails. Isolates the store call the
-        // ordering note above is about from the cycle's own (unrelated) work.
+        // ordering note above is about from the cycle's own (unrelated) work
         db.exec(`
         CREATE TRIGGER block_schedule_write
         BEFORE INSERT ON feedback_cycle_schedule
@@ -5609,7 +5611,7 @@ describe('buildProductionOrchestrator', () => {
         // The cycle's own substantive work ran and persisted despite the
         // trailing schedule write failing — proof `runFeedbackCycle` is called
         // BEFORE `recordBoundary`, not gated behind a successful write. One
-        // guardrail-capped step applied: 0.05 - 0.005 = 0.045.
+        // guardrail-capped step applied: 0.05 - 0.005 = 0.045
         expect(sampleRows()).toHaveLength(1);
         expect(dialAdjustmentValues(RISK_DIAL_NAME)).toEqual([0.045]);
         expect(feedbackScheduleLastBoundary()).toBeNull();
@@ -5630,7 +5632,7 @@ describe('buildProductionOrchestrator', () => {
         // so would apply the risk-threshold guardrail step a second time,
         // 0.045 -> 0.04, silently doubling the per-cycle move the guardrail
         // exists to cap. `clock` (not the wall-clock boundary check) advances
-        // a little, the way a restart's own elapsed time naturally would.
+        // a little, the way a restart's own elapsed time naturally would
         db.exec('DROP TRIGGER block_schedule_write');
         clock.advanceTo(new Date(clock.now().getTime() + 500));
         const secondLogger = recordingLogger();
@@ -5641,7 +5643,7 @@ describe('buildProductionOrchestrator', () => {
 
         // Still exactly one sample and one dial step — the retry recorded
         // completion for the already-attempted boundary without re-running
-        // the cycle.
+        // the cycle
         expect(sampleRows()).toHaveLength(1);
         expect(dialAdjustmentValues(RISK_DIAL_NAME)).toEqual([0.045]);
         expect(
@@ -5674,7 +5676,7 @@ describe('buildProductionOrchestrator', () => {
       // its boot catch-up cycle once (unconditional on the flag) and then
       // have the `finally` refuse to re-arm for anything after it — #1110's
       // exact symptom through a third door, on a second `start()` rather
-      // than a fresh process.
+      // than a fresh process
       await advanceBoth(clock, 10_000);
       const beforeSecondStart = sampleRows().length;
       await orchestrator.start();
@@ -5685,12 +5687,12 @@ describe('buildProductionOrchestrator', () => {
       // regression. What actually discriminates that regression is the
       // re-arm assertion below: without the reset, `stop()`'s stale `true`
       // survives into this `finally` and blocks the timer from ever being
-      // armed again.
+      // armed again
       expect(sampleRows().length).toBeGreaterThan(beforeSecondStart);
 
       // The re-arm, not just the boot catch-up: a normal fire past the
       // second `start()` must still happen too — proven the same way, by an
-      // increase, not by an exact count that also depends on boundary phase.
+      // increase, not by an exact count that also depends on boundary phase
       const beforeNextTick = sampleRows().length;
       await advanceBoth(clock, intervalMs);
       expect(sampleRows().length).toBeGreaterThan(beforeNextTick);
@@ -5703,7 +5705,7 @@ describe('buildProductionOrchestrator', () => {
       // `NaN <= 0` and `Infinity <= 0` are both `false`,
       // so the bare `<= 0` guard let both through — `currentBoundary` then
       // produced an Invalid Date and boot died at `.toISOString()` with a
-      // bare, unattributed `RangeError` instead of this named message.
+      // bare, unattributed `RangeError` instead of this named message
       [Number.NaN, /FeedbackCycleConfig\.intervalMs must be positive, got NaN/],
       [Number.POSITIVE_INFINITY, /FeedbackCycleConfig\.intervalMs must be positive, got Infinity/],
     ])(
@@ -5718,7 +5720,7 @@ describe('buildProductionOrchestrator', () => {
         // failing loudly at boot is strictly better. The fix is naming the
         // cause instead of letting `cycle-schedule.ts`'s generic
         // "intervalMs must be positive" surface with no mention of which
-        // config field produced it.
+        // config field produced it
         await expect(orchestrator.start()).rejects.toThrow(expectedMessage);
       },
     );
@@ -5735,7 +5737,7 @@ describe('buildProductionOrchestrator', () => {
    * lacked a field, which a hand-built test config can never reproduce.
    */
   describe('feedback cycle wiring for a paper soak (#366)', () => {
-    /** Long enough that the tick/heartbeat timers stay out of the way. */
+    /** Long enough that the tick/heartbeat timers stay out of the way */
     const QUIET = 48 * 60 * 60 * 1_000;
 
     /**
@@ -5756,7 +5758,7 @@ describe('buildProductionOrchestrator', () => {
     /**
      * Returns the logger alongside the config rather than making each caller
      * dig it back out of `config.logger` behind a cast — the recording type is
-     * the thing every case here asserts on.
+     * the thing every case here asserts on
      */
     function paperProfileConfig(overrides: Partial<ProductionConfig> = {}): {
       config: ProductionConfig;
@@ -5769,11 +5771,11 @@ describe('buildProductionOrchestrator', () => {
         // #738's later narrowing of `DEFAULT_UNIVERSE` itself to
         // equities-only): `stubConfig` injects a single `alpacaDataClient`,
         // which `buildAlpacaDataSource` correctly REFUSES for a mixed
-        // universe (one wire client cannot serve both Alpaca path roots).
+        // universe (one wire client cannot serve both Alpaca path roots)
         // These cases are about the feedback cycle, so they hold the
         // market-data wiring at the shape they were written against; a
         // MIXED universe and its routing source are asserted directly,
-        // elsewhere in this file (`MIXED_UNIVERSE`).
+        // elsewhere in this file (`MIXED_UNIVERSE`)
         universe: SMOKE_TEST_UNIVERSE,
         logger,
         tickIntervalMs: QUIET,
@@ -5782,7 +5784,7 @@ describe('buildProductionOrchestrator', () => {
           ...paperStartingProfile('paper').traderConfig,
           flatten_before_close_ms: QUIET_FLATTEN_WINDOW,
           // #1389's grace is the same argument one bell later, and one tick is
-          // all `assertFlattenWindowCoversTickInterval` requires of it.
+          // all `assertFlattenWindowCoversTickInterval` requires of it
           flatten_after_close_ms: QUIET,
         },
         // ...but the grace is ALSO bounded above by gate 2a's mark-age ceiling
@@ -5790,12 +5792,12 @@ describe('buildProductionOrchestrator', () => {
         // ceiling too or no config exists at all. Spread the profile's own
         // `verdictConfig` rather than casting a fresh one: the two fields these
         // cases do not care about (`max_signal_age`, `drift_tolerance_pct`) are
-        // the profile's real values and there is no reason to lose them.
+        // the profile's real values and there is no reason to lose them
         verdictConfig: {
           ...paperStartingProfile('paper').verdictConfig,
           max_mark_age: { crypto: QUIET, stocks: QUIET },
         },
-        // #528: none of these cases exercise fill-sync — see NO_FILL_POLL_MS.
+        // #528: none of these cases exercise fill-sync — see NO_FILL_POLL_MS
         fillPollIntervalMs: NO_FILL_POLL_MS,
         ...overrides,
       });
@@ -5808,10 +5810,10 @@ describe('buildProductionOrchestrator', () => {
 
       await orchestrator.start();
       // Past the 24h default cadence the profile deliberately does not
-      // override.
+      // override
       await vi.advanceTimersByTimeAsync(25 * 60 * 60 * 1_000);
 
-      // The two things a paper start must no longer emit.
+      // The two things a paper start must no longer emit
       expect(
         logger.entries.filter(
           (entry) => (entry.payload as { feedback_cycle?: string } | undefined)?.feedback_cycle,
@@ -5825,7 +5827,7 @@ describe('buildProductionOrchestrator', () => {
       // 1: #1110's boot catch-up fires immediately on a virgin store (START
       // is midday, so the FIRST UTC-midnight boundary after boot falls ~12h
       // in, well inside the 25h advance), then the wall-clock boundary fires
-      // once more.
+      // once more
       expect(
         logger.entries.filter((entry) => entry.message === 'daily feedback cycle complete'),
       ).toHaveLength(2);
@@ -5842,7 +5844,7 @@ describe('buildProductionOrchestrator', () => {
       // The inversion #379 decided. #345 left `metrics` unset and this warn
       // fired for the whole soak; the profile now supplies the real
       // series-backed source, so a paper start must NOT report the detector as
-      // unwired.
+      // unwired
       expect(
         logger.entries.filter((entry) =>
           entry.message.includes('FeedbackCycleConfig.metrics is not set'),
@@ -5857,7 +5859,7 @@ describe('buildProductionOrchestrator', () => {
 
       // ...and the wiring is announced rather than left silent: the first
       // cycle is 24h away and the first SUITE is a quarter away, so an
-      // operator reading startup gets the state from the log, not by inference.
+      // operator reading startup gets the state from the log, not by inference
       const wired = logger.entries.find(
         (entry) =>
           (entry.payload as { metrics_source?: string } | undefined)?.metrics_source === 'wired',
@@ -5879,7 +5881,7 @@ describe('buildProductionOrchestrator', () => {
       // cover — CONDITIONAL since #579: with no usable frozen Stage 2
       // selection in the store, the three snapshot-gated lines are un-run on
       // every cycle, and wiring `metrics` must not turn that from stated into
-      // merely true.
+      // merely true
       const gated = logger.entries.filter((entry) =>
         entry.message.includes('evaluated ONLY from a revalidation snapshot'),
       );
@@ -5902,7 +5904,7 @@ describe('buildProductionOrchestrator', () => {
       // The startup line claimed "no component in this repo produces" a
       // revalidation snapshot long after #384 shipped one, and that stale text
       // is what #579 was filed from. The statement must be read off the same
-      // store the metrics source reads, not asserted unconditionally.
+      // store the metrics source reads, not asserted unconditionally
       new SqliteStage2SelectionStore(db).record({
         config_hash: 'cfg-1',
         asset_class: 'crypto',
@@ -5945,13 +5947,13 @@ describe('buildProductionOrchestrator', () => {
 
       await orchestrator.start();
       // Three cadences. The announcement is a property of the frozen config,
-      // not of the day, so repeating it daily for 14 days would be noise.
+      // not of the day, so repeating it daily for 14 days would be noise
       await vi.advanceTimersByTimeAsync(3 * 25 * 60 * 60 * 1_000);
 
       // This is the warn that would have been SWALLOWED by wiring `metrics`:
       // it used to be emitted on the first computed suite, and the gate puts
       // that ~60 sessions out, while the blanket "all four kill-lines stay
-      // unevaluated" warn that covered it is now correctly gone.
+      // unevaluated" warn that covered it is now correctly gone
       const inert = logger.entries.filter((entry) =>
         entry.message.includes('live_backtest_divergence_over_max is INERT'),
       );
@@ -5986,7 +5988,7 @@ describe('buildProductionOrchestrator', () => {
       const profileFeedback = paperStartingProfile('paper').feedback;
       if (profileFeedback === undefined) {
         // Narrowed rather than cast: an absent block is the bug #366 fixes, so
-        // it must fail here loudly instead of being asserted away.
+        // it must fail here loudly instead of being asserted away
         throw new Error('paperStartingProfile supplied no feedback block');
       }
 
@@ -6007,7 +6009,7 @@ describe('buildProductionOrchestrator', () => {
           },
         },
         // Raising a loss-bounding cap — the move that used to be queued for a
-        // human and therefore never made at all.
+        // human and therefore never made at all
         proposals: [{ kind: 'risk_threshold', name: 'max_position_size', target: 6_000 }],
       };
 
@@ -6026,14 +6028,14 @@ describe('buildProductionOrchestrator', () => {
       // is done before any advance. Held under the 1_000ms `intervalMs` so a
       // second boundary — and a second, compounding loosening step — does
       // not also fire; that scenario belongs to the restart/cadence tests,
-      // not to this one.
+      // not to this one
       await vi.advanceTimersByTimeAsync(500);
 
       // THE assertion of #736, and the exact line this test used to assert the
       // negation of. Bounded to one `max_step`, not the 6,000 proposed.
       expect(tuning.getRiskThresholds().max_position_size).toBe(5_500);
       // ...and it IS written to the audit log: ADR-0013 requires every applied
-      // change logged and reversible, and `from` is what reverses it.
+      // change logged and reversible, and `from` is what reverses it
       expect(
         db
           .prepare(
@@ -6050,7 +6052,7 @@ describe('buildProductionOrchestrator', () => {
         param_updates: { max_position_size: { from: 5_000, to: 5_500, direction: 'loosen' } },
         applied: true,
       });
-      // The field that named the queue is gone with it.
+      // The field that named the queue is gone with it
       expect(cycle?.payload).not.toHaveProperty('loosen_pending_approval');
 
       await orchestrator.stop();
@@ -6065,7 +6067,7 @@ describe('buildProductionOrchestrator', () => {
 
       // Nothing supplied `loosenNotices`, so the composition root's own
       // stand-in is what the cycle reached — the same default shape
-      // `breachAlerts` has.
+      // `breachAlerts` has
       const entry = logger.entries.find((e) => e.message.includes('LOOSENING applied'));
       expect(entry?.level).toBe('warn');
       expect(entry?.payload).toMatchObject({ name: 'max_position_size', applied: true });
@@ -6080,7 +6082,7 @@ describe('buildProductionOrchestrator', () => {
 
       await orchestrator.start();
       // #1110: the boot cycle already ran inside `start()`; stay under the
-      // 1_000ms interval so a second cycle does not also fire.
+      // 1_000ms interval so a second cycle does not also fire
       await vi.advanceTimersByTimeAsync(500);
 
       expect(notifyLoosenApplied).toHaveBeenCalledTimes(1);
@@ -6088,10 +6090,10 @@ describe('buildProductionOrchestrator', () => {
         name: 'max_position_size',
         from: 5_000,
         // The BOUNDED value actually written, not the raw target — one
-        // `max_step`, not the 6,000 the proposal asked for.
+        // `max_step`, not the 6,000 the proposal asked for
         to: 5_500,
       });
-      // The notice reports the store, whichever channel carries it.
+      // The notice reports the store, whichever channel carries it
       expect(tuning.getRiskThresholds().max_position_size).toBe(5_500);
 
       await orchestrator.stop();
@@ -6110,7 +6112,7 @@ describe('buildProductionOrchestrator', () => {
 
       await orchestrator.start();
       // #1110: the boot cycle already ran inside `start()`; stay under the
-      // 1_000ms interval so a second cycle does not also fire.
+      // 1_000ms interval so a second cycle does not also fire
       await vi.advanceTimersByTimeAsync(500);
 
       expect(perCycle).toHaveBeenCalledTimes(1);
@@ -6133,7 +6135,7 @@ describe('buildProductionOrchestrator', () => {
      */
     describe('analyst weight seeding (#371)', () => {
       const DEBATE_ID = 'debate-371';
-      /** One `max_step` of the profile's band: (1.5 − 0.5) / 20. */
+      /** One `max_step` of the profile's band: (1.5 − 0.5) / 20 */
       const ONE_STEP = 0.05;
 
       /**
@@ -6182,7 +6184,7 @@ describe('buildProductionOrchestrator', () => {
             realized_pnl_net: 200,
             fees_total: 1,
             opened_at: new Date(START.getTime() - 3 * 60 * 60 * 1_000),
-            // Inside the profile's 48h attribution window, at or before `now`.
+            // Inside the profile's 48h attribution window, at or before `now`
             closed_at: new Date(START.getTime() - 1 * 60 * 60 * 1_000),
             close_reason: 'target',
             modelled_cost_charged: true,
@@ -6216,7 +6218,7 @@ describe('buildProductionOrchestrator', () => {
         // waiting for it. That the seed-then-tune ordering held (rather than
         // the seed being skipped, or the cycle reading a not-yet-seeded row)
         // is exactly what `technical` already having moved off its neutral
-        // seed demonstrates.
+        // seed demonstrates
         expect(tuning.getAnalystWeights()).toEqual({
           technical: 1 + ONE_STEP,
           fundamental: 1,
@@ -6229,19 +6231,19 @@ describe('buildProductionOrchestrator', () => {
         // `(clock.now() − attribution_window_ms, clock.now()]` and this
         // suite's `clock` never advances) but is a distinct property from the
         // one this case tests, and is exercised by
-        // `does not reset a tuned weight when the process restarts` instead.
+        // `does not reset a tuned weight when the process restarts` instead
         await vi.advanceTimersByTimeAsync(500);
 
         // THE assertion #371 exists for: a weight actually moved, off real
-        // closed trades joined to a real debate log row.
+        // closed trades joined to a real debate log row
         const weights = tuning.getAnalystWeights();
         expect(weights.technical).toBeCloseTo(1 + ONE_STEP, 10);
         // No debate record, no evidence, no move — the analysts that did not
-        // trade stay exactly where they were seeded.
+        // trade stay exactly where they were seeded
         expect(weights.fundamental).toBe(1);
         expect(weights.sentiment).toBe(1);
 
-        // ...and it is in the audit trail, not just in the dial.
+        // ...and it is in the audit trail, not just in the dial
         const adjustment = db
           .prepare(
             `SELECT dial_type, dial_name, from_value, to_value, reason
@@ -6288,7 +6290,7 @@ describe('buildProductionOrchestrator', () => {
           heartbeatIntervalMs: 100,
         });
         // A store that answers every other startup read but cannot be written
-        // — the shape a broken/partially-migrated database actually has.
+        // — the shape a broken/partially-migrated database actually has
         db.prepare('DROP TABLE analyst_weights').run();
 
         const orchestrator = buildProductionOrchestrator(config);
@@ -6297,7 +6299,7 @@ describe('buildProductionOrchestrator', () => {
 
         // Nothing was started before it failed: past several heartbeat
         // intervals, the heartbeat has never fired, so neither the fill poll
-        // nor the tick loop (both registered after it) can be running either.
+        // nor the tick loop (both registered after it) can be running either
         await vi.advanceTimersByTimeAsync(1_000);
         expect(config.heartbeatChannel?.postHeartbeat).not.toHaveBeenCalled();
 
@@ -6318,7 +6320,7 @@ describe('buildProductionOrchestrator', () => {
         // #1110: `start()` already ran the boot catch-up cycle (step 1). Held
         // under the 1_000ms `intervalMs` so a second boundary does not also
         // fire here — the second step below is deliberately the SECOND
-        // process's own boundary crossing, not a second one from the first.
+        // process's own boundary crossing, not a second one from the first
         await vi.advanceTimersByTimeAsync(500);
         await first.stop();
 
@@ -6326,13 +6328,13 @@ describe('buildProductionOrchestrator', () => {
         const tuned = tuning.getAnalystWeights().technical;
         expect(tuned).toBeCloseTo(1 + ONE_STEP, 10);
 
-        // Second process, same database.
+        // Second process, same database
         const { config, logger } = paperConfigWithFastCycle();
         const second = buildProductionOrchestrator(config);
         await second.start();
 
         // Immediately after startup and before the new process's first cycle:
-        // the tuned value survived, and the seeder says it wrote nothing.
+        // the tuned value survived, and the seeder says it wrote nothing
         expect(tuning.getAnalystWeights().technical).toBe(tuned);
         expect(
           logger.entries.find(
@@ -6348,7 +6350,7 @@ describe('buildProductionOrchestrator', () => {
         // boot check (above) found the current boundary already stamped by
         // `first`, so it waited for the NEXT boundary rather than firing
         // immediately — this advance is exactly the remaining half of that
-        // 1_000ms interval.
+        // 1_000ms interval
         await vi.advanceTimersByTimeAsync(500);
         expect(tuning.getAnalystWeights().technical).toBeCloseTo(1 + 2 * ONE_STEP, 10);
 
@@ -6412,7 +6414,7 @@ describe('buildProductionOrchestrator', () => {
       const logger = recordingLogger();
       const postBreachAlert = vi.fn();
       // Seeded so `autoTighten` has a row to step — an absent threshold is a
-      // documented no-op, which would make the test vacuous.
+      // documented no-op, which would make the test vacuous
       const tuning = new SqliteTuningStore(db, new SimulatedClock(START));
       tuning.setRiskThreshold('max_position_size', 0.8);
 
@@ -6432,7 +6434,7 @@ describe('buildProductionOrchestrator', () => {
                   ? overrides.sample
                   : // `revalidation` omitted rather than set to `undefined`:
                     // it is optional on `DailyMetricsSample` and nothing here
-                    // supplies a default to override.
+                    // supplies a default to override
                     { daily: SUITE },
             },
             backtest_reference_sharpe: overrides.backtest_reference_sharpe ?? 1.5,
@@ -6444,23 +6446,23 @@ describe('buildProductionOrchestrator', () => {
     }
 
     it('calls computeMetrics from the daily timer: a breaching suite alerts AND auto-tightens', async () => {
-      // live sharpe 0.2 vs reference 1.5 = 87% divergence, over the 0.5 line.
+      // live sharpe 0.2 vs reference 1.5 = 87% divergence, over the 0.5 line
       const { config, logger, postBreachAlert, tuning } = metricsConfig(db);
       const orchestrator = buildProductionOrchestrator(config);
 
       await orchestrator.start();
       // #1110: `start()` already ran the boot catch-up cycle. Held under the
       // 1_000ms `intervalMs` so a second boundary — and a second breach alert
-      // — does not also fire.
+      // — does not also fire
       await vi.advanceTimersByTimeAsync(500);
 
-      // The operator alert actually fired, through the real channel seam.
+      // The operator alert actually fired, through the real channel seam
       expect(postBreachAlert).toHaveBeenCalledTimes(1);
       expect(postBreachAlert.mock.calls[0]?.[0]).toMatchObject({
         breaches: ['live_backtest_divergence_over_max'],
       });
       // ...and the defensive auto-tighten actually WROTE. This is the
-      // assertion that goes red if the computeMetrics call is removed.
+      // assertion that goes red if the computeMetrics call is removed
       expect(tuning.getRiskThresholds().max_position_size).toBeCloseTo(0.75);
 
       const breachLog = logger.entries.find((e) => e.message.includes('KILL-THRESHOLD BREACH'));
@@ -6471,7 +6473,7 @@ describe('buildProductionOrchestrator', () => {
 
     it('records revalidation-skipped lines rather than reporting a clean bill of health', async () => {
       // Healthy divergence, no revalidation snapshot — the shape of an
-      // ordinary non-revalidation day.
+      // ordinary non-revalidation day
       const { config, logger, postBreachAlert } = metricsConfig(db, {
         backtest_reference_sharpe: 0.2,
       });
@@ -6483,7 +6485,7 @@ describe('buildProductionOrchestrator', () => {
       expect(postBreachAlert).not.toHaveBeenCalled();
       const metricsLog = logger.entries.find((e) => e.message === 'daily metrics computed');
       expect(metricsLog).toBeDefined();
-      // Not an empty array: three lines were skipped, not passed.
+      // Not an empty array: three lines were skipped, not passed
       expect(metricsLog?.payload).toMatchObject({
         breaches: [],
         not_evaluated: ['pbo_over_max', 'oos_sharpe_under_min', 'dsr_insignificant'],
@@ -6497,7 +6499,7 @@ describe('buildProductionOrchestrator', () => {
       const orchestrator = buildProductionOrchestrator(config);
 
       await orchestrator.start();
-      // Three cycles.
+      // Three cycles
       await vi.advanceTimersByTimeAsync(3_500);
 
       const inertWarns = logger.entries.filter((e) =>
@@ -6506,7 +6508,7 @@ describe('buildProductionOrchestrator', () => {
       expect(inertWarns).toHaveLength(1);
       expect(inertWarns[0]?.level).toBe('warn');
 
-      // The line is recorded as un-evaluated on every cycle even so.
+      // The line is recorded as un-evaluated on every cycle even so
       const metricsLog = logger.entries.find((e) => e.message === 'daily metrics computed');
       expect(metricsLog?.payload).toMatchObject({
         not_evaluated: [
@@ -6533,7 +6535,7 @@ describe('buildProductionOrchestrator', () => {
       expect(skipped.length).toBeGreaterThanOrEqual(2);
       expect(skipped[0]?.level).toBe('warn');
       expect(postBreachAlert).not.toHaveBeenCalled();
-      // Untouched: nothing was computed, so nothing was tightened.
+      // Untouched: nothing was computed, so nothing was tightened
       expect(tuning.getRiskThresholds().max_position_size).toBeCloseTo(0.8);
 
       await orchestrator.stop();
@@ -6552,7 +6554,7 @@ describe('buildProductionOrchestrator', () => {
       await orchestrator.start();
       await vi.advanceTimersByTimeAsync(2_500);
 
-      // Caught and logged, and the timer kept running.
+      // Caught and logged, and the timer kept running
       expect(
         logger.entries.filter((e) => e.message === 'daily feedback cycle failed').length,
       ).toBeGreaterThanOrEqual(2);
@@ -6572,7 +6574,7 @@ describe('buildProductionOrchestrator', () => {
       // to construct at all if this were done before `start()`. Mutated in
       // place AFTER boot, so what fails is specifically the PER-CYCLE check
       // (metrics.ts's `assertKillThresholdsWithinBounds` inside
-      // `computeMetrics`), not the boot-time one #638 already covers.
+      // `computeMetrics`), not the boot-time one #638 already covers
       await orchestrator.start();
       feedback.config.kill_thresholds.max_pbo = 0.5; // bound: max 0.05
 
@@ -6586,7 +6588,7 @@ describe('buildProductionOrchestrator', () => {
         where: 'daily-kill-line-check',
         // #1280: this seam runs outside any tick, so it threads the same
         // `'feedback-cycle'` its surrounding lines log under — the in-tick
-        // half of the pair is direct-bind.test.ts's `TRACE_ID` assertion.
+        // half of the pair is direct-bind.test.ts's `TRACE_ID` assertion
         trace_id: 'feedback-cycle',
       });
 
@@ -6625,13 +6627,13 @@ describe('buildProductionOrchestrator', () => {
   describe('kill-line detector armed from the paper profile (#379)', () => {
     const MS_PER_DAY = 24 * 60 * 60 * 1_000;
     const SERIES_START = Date.UTC(2026, 0, 1);
-    /** One cadence for the daily timer, short enough to advance fake timers over. */
+    /** One cadence for the daily timer, short enough to advance fake timers over */
     const CYCLE_MS = 1_000;
 
     /**
      * `count` observations on consecutive UTC midnights — the spacing
      * `usableRun` requires — wobbling around 100k so the series has non-zero
-     * variance (a flat account has no Sharpe and the library rightly throws).
+     * variance (a flat account has no Sharpe and the library rightly throws)
      */
     function seedDailyEquity(count: number): void {
       const store = new SqliteDailyEquityStore(db);
@@ -6696,7 +6698,7 @@ describe('buildProductionOrchestrator', () => {
       return { config, logger, tuning, postBreachAlert };
     }
 
-    /** Rows the defensive auto-tighten wrote — the only ones `computeMetrics` appends. */
+    /** Rows the defensive auto-tighten wrote — the only ones `computeMetrics` appends */
     function autoTightenRows(): number {
       const row = db
         .prepare('SELECT COUNT(*) AS n FROM dial_adjustments WHERE reason = ?')
@@ -6705,7 +6707,7 @@ describe('buildProductionOrchestrator', () => {
     }
 
     it('below the gate: no suite, no autoTighten, no AdjustmentLog row', async () => {
-      // MIN observations yield MIN−1 returns — exactly one short of the gate.
+      // MIN observations yield MIN−1 returns — exactly one short of the gate
       seedDailyEquity(MIN_RETURN_OBSERVATIONS);
       const { config, logger, tuning, postBreachAlert } = armedConfig();
       const orchestrator = buildProductionOrchestrator(config);
@@ -6714,12 +6716,12 @@ describe('buildProductionOrchestrator', () => {
       // #1110: `start()` already ran the boot catch-up cycle. Held under
       // `CYCLE_MS` so a second boundary — and a second refusal — does not
       // also fire; this case is about ONE gate check, not the cadence
-      // ('logs the refusal once per CYCLE' below covers repeats).
+      // ('logs the refusal once per CYCLE' below covers repeats)
       await vi.advanceTimersByTimeAsync(500);
 
       // The gate refused, and said why — with the count, so an operator can
       // see the run approaching the threshold rather than merely being under
-      // it.
+      // it
       const refusal = logger.entries.filter((e) => e.message.includes('insufficient observations'));
       expect(refusal).toHaveLength(1);
       expect(refusal[0]?.level).toBe('warn');
@@ -6727,11 +6729,11 @@ describe('buildProductionOrchestrator', () => {
         usable_returns: MIN_RETURN_OBSERVATIONS - 1,
         required: MIN_RETURN_OBSERVATIONS,
       });
-      // Nothing was computed, so nothing may look computed.
+      // Nothing was computed, so nothing may look computed
       expect(logger.entries.filter((e) => e.message === 'daily metrics computed')).toHaveLength(0);
       expect(postBreachAlert).not.toHaveBeenCalled();
       // THE two store assertions: the threshold is where it was seeded, and
-      // the audit log has no defensive-tighten row.
+      // the audit log has no defensive-tighten row
       expect(tuning.getRiskThresholds().max_position_size).toBe(5_000);
       expect(autoTightenRows()).toBe(0);
 
@@ -6739,13 +6741,13 @@ describe('buildProductionOrchestrator', () => {
     });
 
     it('at the gate: computeMetrics runs, and a breach reaches the real stores', async () => {
-      // One more observation than returns required — n observations give n−1.
+      // One more observation than returns required — n observations give n−1
       seedDailyEquity(MIN_RETURN_OBSERVATIONS + 1);
       // A real closed trade inside the derived window, so the suite's
       // trade-derived fields have something to be derived FROM. Found by
       // mutation: handing the source an empty trade reader passed every other
       // assertion here while silently zeroing turnover, exposure, profit
-      // factor and expectancy — the half of the suite an operator reads back.
+      // factor and expectancy — the half of the suite an operator reads back
       await new SqliteExecutionStore(db).applyLotAdvance({
         idempotency_key: 'closed-in-window',
         fills: [],
@@ -6772,16 +6774,16 @@ describe('buildProductionOrchestrator', () => {
       await orchestrator.start();
       // #1110: `start()` already ran the boot catch-up cycle. Held under
       // `CYCLE_MS` so a second boundary — and a second breach/tighten — does
-      // not also fire.
+      // not also fire
       await vi.advanceTimersByTimeAsync(500);
 
-      // It ran: a real suite, derived from the real series.
+      // It ran: a real suite, derived from the real series
       const computed = logger.entries.find((e) => e.message.includes('daily metrics computed'));
       if (computed === undefined) throw new Error('computeMetrics did not run');
       const daily = (computed.payload as { daily: MetricsSuite }).daily;
       expect(Number.isFinite(daily.sharpe)).toBe(true);
       // The closed trade above reached the suite: turnover is trade-derived,
-      // so a zero here means the source was handed no trade reader at all.
+      // so a zero here means the source was handed no trade reader at all
       expect(daily.turnover).toBeGreaterThan(0);
       expect(logger.entries.filter((e) => e.message.includes('insufficient observations'))).toEqual(
         [],
@@ -6789,7 +6791,7 @@ describe('buildProductionOrchestrator', () => {
 
       // ...and the effects landed, which is what distinguishes a wired
       // detector from a called one: the live Sharpe is far under the 100
-      // reference, so divergence breaches, alerts, and tightens by one step.
+      // reference, so divergence breaches, alerts, and tightens by one step
       expect(postBreachAlert).toHaveBeenCalledTimes(1);
       expect(postBreachAlert.mock.calls[0]?.[0]).toMatchObject({
         breaches: ['live_backtest_divergence_over_max'],
@@ -6807,7 +6809,7 @@ describe('buildProductionOrchestrator', () => {
       // (ADR-0006 §5), and a config error of that kind must stop the process
       // it belongs to — resolved per cycle it would instead surface up to 24h
       // later, inside the timer's catch, as one more "daily feedback cycle
-      // failed" line in an unattended soak.
+      // failed" line in an unattended soak
       const { config } = armedConfig();
       const feedback = config.feedback as NonNullable<ProductionConfig['feedback']>;
       const construct = vi.fn(() => {
@@ -6830,7 +6832,7 @@ describe('buildProductionOrchestrator', () => {
       const { config, logger } = armedConfig();
       // Ticks an order of magnitude faster than the cycle: a per-tick log
       // would put ~20,000 identical lines into an unattended 14-day soak
-      // (#238), which is how the heartbeat's own cadence bug (#342) presented.
+      // (#238), which is how the heartbeat's own cadence bug (#342) presented
       const orchestrator = buildProductionOrchestrator({ ...config, tickIntervalMs: 100 });
 
       await orchestrator.start();
@@ -6840,12 +6842,12 @@ describe('buildProductionOrchestrator', () => {
       // virgin schedule, then the three `CYCLE_MS` boundaries this advance
       // crosses. The property under test — once per CYCLE, never per tick —
       // is unaffected by which count is correct, only by whether every
-      // firing logs exactly once.
+      // firing logs exactly once
       expect(
         logger.entries.filter((e) => e.message.includes('insufficient observations')),
       ).toHaveLength(4);
       // The orchestrator's own "nothing to check this cycle" line keeps the
-      // same cadence — one per cycle, never per tick.
+      // same cadence — one per cycle, never per tick
       expect(
         logger.entries.filter((e) => e.message.includes('no daily MetricsSuite this cycle')),
       ).toHaveLength(4);
@@ -6866,7 +6868,7 @@ describe('buildProductionOrchestrator', () => {
         tickIntervalMs: 100_000,
         heartbeatIntervalMs: 100_000,
         breachAlerts: { postBreachAlert },
-        // Unmodified this time: the profile's `backtest_reference_sharpe: 0`.
+        // Unmodified this time: the profile's `backtest_reference_sharpe: 0`
         feedback: { ...profileFeedback, intervalMs: CYCLE_MS },
       });
       const orchestrator = buildProductionOrchestrator(config);
@@ -6876,7 +6878,7 @@ describe('buildProductionOrchestrator', () => {
 
       // A computed suite that reports the divergence line as UN-RUN rather
       // than passed — the distinction #327 exists for, and the one #379 must
-      // not swallow now that the "metrics is not set" warn is gone.
+      // not swallow now that the "metrics is not set" warn is gone
       const computed = logger.entries.find((e) => e.message === 'daily metrics computed');
       expect(computed?.payload).toMatchObject({
         breaches: [],
@@ -6897,7 +6899,7 @@ describe('buildProductionOrchestrator', () => {
     // #738: the scheduler gates `SMOKE_TEST_UNIVERSE`'s BTC-USD on the
     // calendar like any other instrument now — no crypto bypass — so this
     // test forces the gate open the same way `smoke-run.ts` does, to isolate
-    // what it actually asserts (the DEFAULT universe, not the calendar).
+    // what it actually asserts (the DEFAULT universe, not the calendar)
     const orchestrator = buildProductionOrchestrator(
       stubConfig(db, { tradingCalendar: new AlwaysOpenCalendar() }),
     );
@@ -6916,11 +6918,11 @@ describe('buildProductionOrchestrator', () => {
   describe('buildAlpacaDataSource — mixed-universe market data', () => {
     const calendar = new UsEquityRegularHoursCalendar();
     // #738: `DEFAULT_UNIVERSE` no longer spans both asset classes — crypto is
-    // out of Samurai's scope, so the production default is equities-only.
+    // out of Samurai's scope, so the production default is equities-only
     // These cases are about `buildAlpacaDataSource`'s ROUTING given a mixed
     // universe, which can still be constructed and configured explicitly
     // (`AssetClass`/`UniverseInstrument` still accept a `'crypto'` row) —
-    // just no longer the shape the default resolves to.
+    // just no longer the shape the default resolves to
     const MIXED_UNIVERSE = [
       ...DEFAULT_UNIVERSE,
       { asset: 'BTC-USD', asset_class: 'crypto' as const },
@@ -6929,7 +6931,7 @@ describe('buildProductionOrchestrator', () => {
     // `AlpacaHttpDataClient` refuses to be constructed without credentials, and
     // these cases build the real default clients on purpose — building them is
     // the thing under test. Placeholders only; nothing here makes a request,
-    // and no real credential is read or written.
+    // and no real credential is read or written
     const savedKey = process.env.ALPACA_API_KEY;
     const savedSecret = process.env.ALPACA_API_SECRET;
     beforeEach(() => {
@@ -6951,7 +6953,7 @@ describe('buildProductionOrchestrator', () => {
 
     it('stays a single plain source when the universe holds one asset class', () => {
       // No routing indirection where there is nothing to route — the smoke
-      // path keeps exactly the shape it had.
+      // path keeps exactly the shape it had
       const source = buildAlpacaDataSource({}, SMOKE_TEST_UNIVERSE, calendar);
 
       expect(source).toBeInstanceOf(AlpacaDataSource);
@@ -6962,11 +6964,11 @@ describe('buildProductionOrchestrator', () => {
       // isolation left `buildAlpacaDataSource` free to keep the old
       // `?? 'crypto'` hardcode for the single-class branch, and the whole
       // suite stayed green while an all-equity universe was served from the
-      // crypto path root — #358 exactly.
+      // crypto path root — #358 exactly
       //
       // Observed through the normalized `Mark`, because that is the only place
       // a source's asset class is visible from outside: `NormalizingDataSource`
-      // stamps `asset_class` from the config it was constructed with.
+      // stamps `asset_class` from the config it was constructed with
       const source = buildAlpacaDataSource(
         {
           alpacaDataClient: {
@@ -6991,7 +6993,7 @@ describe('buildProductionOrchestrator', () => {
       // The old default was `'crypto'` regardless of what was being traded, so
       // an all-equity universe would have been served entirely from the crypto
       // path root. `universeAssetClasses` is what makes the wiring follow the
-      // tick plan.
+      // tick plan
       expect(universeAssetClasses([{ asset: 'SPY', asset_class: 'stocks' }])).toEqual(['stocks']);
       expect(universeAssetClasses(MIXED_UNIVERSE)).toEqual(['crypto', 'stocks']);
       expect(universeAssetClasses([])).toEqual([]);
@@ -7000,7 +7002,7 @@ describe('buildProductionOrchestrator', () => {
     it('refuses a single alpacaDataClient for a mixed universe instead of misrouting half of it', () => {
       // One wire client is built against one path root. Silently applying it to
       // both halves is exactly the #358 outage, so this fails loudly at
-      // construction — before any order or any tick.
+      // construction — before any order or any tick
       expect(() =>
         buildAlpacaDataSource(
           { alpacaDataClient: { getBars: vi.fn(), getLatestQuote: vi.fn() } },
@@ -7034,14 +7036,14 @@ describe('buildProductionOrchestrator', () => {
     it('still honours the override for an EMPTY universe, which contradicts nothing', () => {
       // The case the field was added for and the only one left where it
       // decides anything: no instrument asserts an asset class, so there is
-      // nothing for the override to disagree with.
+      // nothing for the override to disagree with
       expect(() =>
         buildAlpacaDataSource({ dataSourceAssetClass: 'stocks' }, [], calendar),
       ).not.toThrow();
     });
 
     it('still honours an injected client for a single-asset-class universe', () => {
-      // The narrow case every existing test and the smoke run rely on.
+      // The narrow case every existing test and the smoke run rely on
       expect(() =>
         buildAlpacaDataSource(
           { alpacaDataClient: { getBars: vi.fn(), getLatestQuote: vi.fn() } },
@@ -7064,14 +7066,14 @@ describe('buildProductionOrchestrator', () => {
   describe('buildAlpacaDataSource — the LSE equity leg (#734)', () => {
     const calendar = new UsEquityRegularHoursCalendar();
     // Both declared GBX in the pool. The USD-declared majority gets its own
-    // case below — it is the finding, not the happy path.
+    // case below — it is the finding, not the happy path
     const LSE_UNIVERSE = [
       { asset: 'LQQ3', asset_class: 'stocks' as const },
       { asset: '3SPY', asset_class: 'stocks' as const },
     ];
     // The no-LSE regression case below builds the real default Alpaca clients,
     // which refuse to construct without credentials. Placeholders only; nothing
-    // here makes a request, and no real credential is read or written.
+    // here makes a request, and no real credential is read or written
     const savedKey = process.env.ALPACA_API_KEY;
     const savedSecret = process.env.ALPACA_API_SECRET;
     beforeEach(() => {
@@ -7109,7 +7111,7 @@ describe('buildProductionOrchestrator', () => {
 
     it('refuses a universe that mixes LSE ETPs with Alpaca-served instruments', () => {
       // Both are asset_class 'stocks', so AssetClassRoutingDataSource cannot
-      // split them and every LSE symbol would go to Alpaca.
+      // split them and every LSE symbol would go to Alpaca
       expect(() =>
         buildAlpacaDataSource(
           { lseMarkClient: lseClient() },
@@ -7123,7 +7125,7 @@ describe('buildProductionOrchestrator', () => {
       // Eight of the eleven checked-in rows declare USD (doc 34 §3.2), so this
       // is the pool's majority case, not an edge. The failure has to land here,
       // at construction: a `MarkCurrencyError` on the first live read would
-      // arrive after the orchestrator was up and possibly holding a position.
+      // arrive after the orchestrator was up and possibly holding a position
       expect(() =>
         buildAlpacaDataSource(
           { lseMarkClient: lseClient() },
@@ -7135,7 +7137,7 @@ describe('buildProductionOrchestrator', () => {
 
     it('leaves every universe without an lse_ticker on exactly the path it had', () => {
       // The regression that matters most: shipped profiles hold no LSE ticker,
-      // so this branch must be invisible to them.
+      // so this branch must be invisible to them
       expect(buildAlpacaDataSource({}, DEFAULT_UNIVERSE, calendar)).toBeInstanceOf(
         AlpacaDataSource,
       );
@@ -7146,7 +7148,7 @@ describe('buildProductionOrchestrator', () => {
 
     it('will not mark an lse_ticker off its screening_instrument, through the built source', async () => {
       // The substitution the issue names as "the failure mode worth a test",
-      // asserted on the object the composition root actually returns.
+      // asserted on the object the composition root actually returns
       const source = buildAlpacaDataSource({ lseMarkClient: lseClient() }, LSE_UNIVERSE, calendar);
 
       await expect(source.fetchMark('SPY', START, 'live')).rejects.toThrow(/SCREENING INSTRUMENT/);
@@ -7154,7 +7156,7 @@ describe('buildProductionOrchestrator', () => {
 
     it('serves a GBP mark stamped at the vendor observation time', async () => {
       // #641/#640 gate on `Mark.observed_at`; a request-time stamp is the one
-      // way this whole ticket could land and still not make them pass.
+      // way this whole ticket could land and still not make them pass
       const observed = new Date(START.getTime() - 30_000);
       const source = buildAlpacaDataSource(
         {
@@ -7208,7 +7210,7 @@ describe('buildProductionOrchestrator', () => {
     const WINDOW_TO = START;
     const WINDOW_FROM = new Date(START.getTime() - 30 * DAY_MS);
     // Pool `lse_ticker`s, both GBp-declared — the same pair the #734 cases
-    // above use, so this stays a fact about the pool and not a literal.
+    // above use, so this stays a fact about the pool and not a literal
     const LSE_UNIVERSE = [
       { asset: 'LQQ3', asset_class: 'stocks' as const },
       { asset: '3SPY', asset_class: 'stocks' as const },
@@ -7220,7 +7222,7 @@ describe('buildProductionOrchestrator', () => {
       getLatestQuote: vi.fn(async () => ({ price: 31_240, currency: 'GBp', observed_at: START })),
     });
 
-    /** A stocks-rooted wire client, so no credential and no network is needed. */
+    /** A stocks-rooted wire client, so no credential and no network is needed */
     const benchmarkClient = (): NonNullable<ProductionConfig['alpacaDataClient']> => ({
       getBars: vi.fn(async (_symbol: string, _timeframe: string, asOf: Date, limit: number) =>
         Array.from({ length: limit }, (_unused, index): AlpacaBar => {
@@ -7245,7 +7247,7 @@ describe('buildProductionOrchestrator', () => {
 
     it('is refused for SPY and AGG through the LIVE universe-derived source', async () => {
       // The defect's mechanism, asserted so the second case cannot pass for a
-      // reason unrelated to the routing.
+      // reason unrelated to the routing
       const live = seriesOver(
         buildAlpacaDataSource({ lseMarkClient: lseClient() }, LSE_UNIVERSE, calendar),
       );
@@ -7254,7 +7256,7 @@ describe('buildProductionOrchestrator', () => {
         /SCREENING INSTRUMENT/,
       );
       // AGG takes the other branch — not a screening instrument, simply not in
-      // the pool — so the 60/40 leg fails for its own reason, not SPY's.
+      // the pool — so the 60/40 leg fails for its own reason, not SPY's
       await expect(live.getDailyCloses('AGG', WINDOW_FROM, WINDOW_TO)).rejects.toThrow(
         /not an lse_ticker/,
       );
@@ -7262,7 +7264,7 @@ describe('buildProductionOrchestrator', () => {
 
     it('serves SPY and AGG closes with an LSE-only universe configured', async () => {
       // The builder takes no `universe` and no `ProductionConfig` at all, which
-      // is why this holds: there is nothing for an LSE cutover to change.
+      // is why this holds: there is nothing for an LSE cutover to change
       const series = seriesOver(buildBenchmarkDataSource({ dataClient: benchmarkClient() }));
 
       for (const instrument of ['SPY', 'AGG']) {
@@ -7270,7 +7272,7 @@ describe('buildProductionOrchestrator', () => {
 
         expect(closes.length).toBeGreaterThan(0);
         expect(closes.every((observation) => Number.isFinite(observation.close))).toBe(true);
-        // The anchor `buildOutsideBenchmark` refuses to measure without.
+        // The anchor `buildOutsideBenchmark` refuses to measure without
         expect(closes[0]?.close_time.getTime()).toBeLessThanOrEqual(WINDOW_FROM.getTime());
       }
     });
@@ -7285,11 +7287,11 @@ describe('buildProductionOrchestrator', () => {
       // daily `isTradingDay` call would answer differently under the two
       // calendars. Closed structurally rather than by any empirical
       // agreement — the option does not exist, so it cannot come back by
-      // accident.
+      // accident
       expect(() =>
         buildBenchmarkDataSource({
           // @ts-expect-error — no `calendar` option: the US equities session is
-          // fixed inside the builder, where no configuration can reach it.
+          // fixed inside the builder, where no configuration can reach it
           calendar: new LseRegularHoursCalendar(),
           dataClient: benchmarkClient(),
         }),
@@ -7301,7 +7303,7 @@ describe('buildProductionOrchestrator', () => {
       // cutover the live path builds NO Alpaca client at all, and a secondary
       // context-only measurement must not be able to take the trading loop
       // down over a credential it alone needs. The absence surfaces as one
-      // `unmeasured` benchmark instead.
+      // `unmeasured` benchmark instead
       const savedKey = process.env.ALPACA_API_KEY;
       const savedSecret = process.env.ALPACA_API_SECRET;
       delete process.env.ALPACA_API_KEY;
@@ -7371,7 +7373,7 @@ describe('buildProductionOrchestrator', () => {
     ];
     const FALLBACK_BAR = FALLBACK_BARS[1] as Bar;
 
-    /** An Alpaca market-data client that cannot answer — the stall being survived. */
+    /** An Alpaca market-data client that cannot answer — the stall being survived */
     function stallingAlpacaClient(): NonNullable<ProductionConfig['alpacaDataClient']> {
       return {
         getBars: vi.fn(async (): Promise<AlpacaBar[]> => {
@@ -7430,7 +7432,7 @@ describe('buildProductionOrchestrator', () => {
 
       // And the durable effect, not just the return value: nothing
       // out-of-session reached the `bars` table, which is what an ATR read on
-      // a later tick would have been computed over.
+      // a later tick would have been computed over
       const stored = db
         .prepare('SELECT open_time, source FROM bars WHERE instrument = ? ORDER BY open_time')
         .all('SPY') as { open_time: string; source: string }[];
@@ -7460,7 +7462,7 @@ describe('buildProductionOrchestrator', () => {
       // The channel, not stderr — `SAMURAI_ALERTS=telegram` binds
       // `tradeChannelAlert('dataFailoverAlerts', …)` into this exact slot
       // (alert-transport.ts), so reaching the port is what makes the alert
-      // reachable from a phone during an unattended soak.
+      // reachable from a phone during an unattended soak
       expect(posted).toHaveLength(1);
       expect(posted[0]).toMatchObject({
         leg: 'equities',
@@ -7482,7 +7484,7 @@ describe('buildProductionOrchestrator', () => {
       // accepted by `ProductionConfig` but not threaded through
       // `production.ts`'s call site, `resolveFallbackPacing` would still run
       // against the malformed var and this test would catch that with a
-      // warn.
+      // warn
       process.env.SAMURAI_PACING_POLYGON_REFILL_PER_SEC = 'not-a-number';
       const logger = recordingLogger();
 
@@ -7494,7 +7496,7 @@ describe('buildProductionOrchestrator', () => {
             fallbackPacing: { capacity: 9, refillPerSecond: 9, reserveForPriority: 0 },
             // No equitiesFallbackBarFetcher and no dataSource override — the
             // default Polygon branch is the one selected, which is exactly
-            // where the eager resolution (or its absence) happens.
+            // where the eager resolution (or its absence) happens
           }),
         );
       } finally {
@@ -7527,7 +7529,7 @@ describe('buildProductionOrchestrator', () => {
       { asset: 'TSLA', asset_class: 'stocks' as const },
     ];
 
-    /** The fallback bars, stamped with whichever symbol was asked for. */
+    /** The fallback bars, stamped with whichever symbol was asked for */
     function fallbackFetcherFor() {
       return vi.fn(async (symbol: string) =>
         FALLBACK_BARS.map((bar) => ({ ...bar, instrument: symbol })),
@@ -7552,7 +7554,7 @@ describe('buildProductionOrchestrator', () => {
       }
 
       // Every one of the four names was served, but only the first
-      // FAILOVER_CIRCUIT_FAILURE_THRESHOLD of them paid Alpaca's timeout.
+      // FAILOVER_CIRCUIT_FAILURE_THRESHOLD of them paid Alpaca's timeout
       expect(fallback).toHaveBeenCalledTimes(BREAKER_UNIVERSE.length);
       expect(alpaca.getBars).toHaveBeenCalledTimes(FAILOVER_CIRCUIT_FAILURE_THRESHOLD);
     });
@@ -7560,7 +7562,7 @@ describe('buildProductionOrchestrator', () => {
     it('re-probes the primary after the cooldown, on the orchestrator clock (#824)', async () => {
       // The unattended-soak property: no operator, no restart. The breaker
       // ages on the root's own `Clock` — which is why this drives a
-      // `SimulatedClock` forward rather than waiting on wall time.
+      // `SimulatedClock` forward rather than waiting on wall time
       const clock = new SimulatedClock(START);
       const alpaca = stallingAlpacaClient();
       const orchestrator = buildProductionOrchestrator(
@@ -7582,7 +7584,7 @@ describe('buildProductionOrchestrator', () => {
       // `1h` so the Tier-2 cache cannot satisfy the read from the rows the
       // first pass stored and make the assertion vacuous — a cache hit never
       // reaches the source at all, and would look exactly like a breaker that
-      // stayed open.
+      // stayed open
       expect(60 * 60 * 1000).toBeGreaterThan(FAILOVER_CIRCUIT_COOLDOWN_MS);
       clock.advanceTo(new Date(START.getTime() + 60 * 60 * 1000));
       await orchestrator.marketData.getBars('SPY', WINDOW, clock.now());
@@ -7592,7 +7594,7 @@ describe('buildProductionOrchestrator', () => {
     it('leaves an injected config.dataSource unwrapped', async () => {
       // The seam's own contract: a caller that brought its own source has
       // already decided where bars come from, and the root must not silently
-      // put a second vendor behind it.
+      // put a second vendor behind it
       const fallback = vi.fn(async () => [FALLBACK_BAR]);
       const injected = {
         fetchBars: vi.fn(async (): Promise<Bar[]> => [FALLBACK_BAR]),
@@ -7623,12 +7625,12 @@ describe('buildProductionOrchestrator', () => {
     const orchestrator = buildProductionOrchestrator(config);
 
     // Drive the real SequentialTickRunner over stubbed steps so the audit /
-    // current_tick side effects are the production SQLite ones, not fakes.
+    // current_tick side effects are the production SQLite ones, not fakes
     const runner = new SequentialTickRunner({
       // #785: a quorum-skipped decision pass now runs the exit check itself
       // (no Trader entry point of its own to carry the flatten), so this is
       // reachable here — unlike debate/risk/verdict/execution, which stay
-      // unreachable behind the quorum skip.
+      // unreachable behind the quorum skip
       exitCheck: async () => null,
       analysts: async () => [],
       debate: async () => {
@@ -7655,7 +7657,7 @@ describe('buildProductionOrchestrator', () => {
         auditLog: orchestrator.persistence.auditLog,
         currentTickStore: orchestrator.persistence.currentTickStore,
         // #743: a decision pass — this test exercises the quorum-skip audit
-        // row, which only the decision chain writes.
+        // row, which only the decision chain writes
         decision_bar: {
           id: `${START.toISOString()}@3600000`,
           open_time: START,
@@ -7665,7 +7667,7 @@ describe('buildProductionOrchestrator', () => {
     );
 
     // Two rows (#785): 'analysts' for the quorum skip, then 'position_check'
-    // for the flatten evaluation the quorum-skip pass now also performs.
+    // for the flatten evaluation the quorum-skip pass now also performs
     const rows = orchestrator.persistence.auditLog.getByTraceId('trace-audit');
     expect(rows.map((row) => row.stage)).toEqual(['analysts', 'position_check']);
     expect(orchestrator.persistence.currentTickStore.get('BTC-USD')).toBeUndefined();
@@ -7707,7 +7709,7 @@ describe('risk critic in backtest mode is replay-only at the composition root (#
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
 
     const intent = goVerdict().order as OrderIntent;
-    // History the critic has already seen, keyed the way replay keys it.
+    // History the critic has already seen, keyed the way replay keys it
     new SqliteRiskCriticStore(db).writeVerdict({
       debate_id: intent.metadata.debate_id,
       verdict: {
@@ -7728,12 +7730,12 @@ describe('risk critic in backtest mode is replay-only at the composition root (#
 
     const decision = await steps.risk({ trace_id: 'trace-957-backtest', intent, clock });
 
-    // The logged verdict reached `evaluate()`, so step 7 genuinely ran.
+    // The logged verdict reached `evaluate()`, so step 7 genuinely ran
     expect(decision.status).toBe('rejected');
     expect(decision.binding_constraint).toBe('risk_critic:reject');
     expect(decision.reasons.join(' ')).toContain('logged by the live run');
     // And it ran without dialling anything: no client call, no socket, and no
-    // billed row a replayed path has no business producing.
+    // billed row a replayed path has no business producing
     expect(complete).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(db.prepare('SELECT COUNT(*) AS n FROM llm_spend').get()).toEqual({ n: 0 });
@@ -7747,7 +7749,7 @@ describe('risk critic in backtest mode is replay-only at the composition root (#
     // says `pass`, the measured predicate says the thesis was already falsified,
     // and `evaluate()` — not the producer — turns that into a reject. A
     // construction check would pass for a conditions half nothing acts on,
-    // which is precisely this repo's dominant defect shape.
+    // which is precisely this repo's dominant defect shape
     const clock = new SimulatedClock(START);
     const intent = goVerdict().order as OrderIntent;
     new SqliteRiskCriticStore(db).writeVerdict({
@@ -7799,7 +7801,7 @@ describe('risk critic in backtest mode is replay-only at the composition root (#
       // The threat is the storage layer, not the model: a TEXT column read
       // with a cast would hand `evaluate()` an object with no `observable`
       // (a TypeError inside the risk stage, i.e. a dead tick) or an
-      // unmeasured `breached` (a hard reject with nothing behind it).
+      // unmeasured `breached` (a hard reject with nothing behind it)
       const clock = new SimulatedClock(START);
       const intent = goVerdict().order as OrderIntent;
       db.prepare(
@@ -7829,7 +7831,7 @@ describe('risk critic in backtest mode is replay-only at the composition root (#
     // an operator notices it by querying `risk_log`, not by holding the returned
     // `RiskDecision`. The rejecting case above would carry its reasons into the
     // row too — so this one deliberately APPROVES: the quiet path, where an
-    // unsurfaced drop would otherwise leave no trace anywhere.
+    // unsurfaced drop would otherwise leave no trace anywhere
     const clock = new SimulatedClock(START);
     const intent = goVerdict().order as OrderIntent;
     new SqliteRiskCriticStore(db).writeVerdict({
@@ -7869,7 +7871,7 @@ describe('risk critic in backtest mode is replay-only at the composition root (#
     // hard-coded `'paper'`: the live producer reuses a logged verdict for the
     // same `debate_id` before it dials, so it would make no call either. This
     // one has NO row, which is every bar of a fresh backtest — the live
-    // producer would call the model here, and the replay producer must not.
+    // producer would call the model here, and the replay producer must not
     const clock = new SimulatedClock(START);
     const complete = vi.fn();
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
@@ -7892,7 +7894,7 @@ describe('risk critic in backtest mode is replay-only at the composition root (#
     expect(complete).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(db.prepare('SELECT COUNT(*) AS n FROM llm_spend').get()).toEqual({ n: 0 });
-    // Nothing was invented for the log either — a replay writes no row.
+    // Nothing was invented for the log either — a replay writes no row
     expect(db.prepare('SELECT COUNT(*) AS n FROM risk_critic_log').get()).toEqual({ n: 0 });
 
     fetchSpy.mockRestore();
@@ -7978,7 +7980,7 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
     handle: StoreHandle;
     llmClient: NonNullable<ProductionConfig['llmClient']>;
     traderConfig?: ProductionConfig['traderConfig'];
-    /** Defaults to BTC-USD; the D3-bracket case drives a real LSE ETP instead. */
+    /** Defaults to BTC-USD; the D3-bracket case drives a real LSE ETP instead */
     signal?: { asset: string; asset_class: 'crypto' | 'stocks' };
     /**
      * #1112: additional `ProductionConfig` fields (e.g. `capitalCeilingUsd`,
@@ -8126,7 +8128,7 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
     const before = calls.length;
 
     // The hook is optional on `TickSteps` (see its doc), so an unbound one is
-    // not a compile error — it is the #753 wiring defect, named here.
+    // not a compile error — it is the #753 wiring defect, named here
     expect(components.steps.controlArm).toBeDefined();
 
     await components.steps.controlArm?.({
@@ -8207,7 +8209,7 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
     expect(live?.equity).toBeDefined();
     expect(control?.equity).toBeDefined();
     // Matched scale: a control anchored at the declared £1,000 against this
-    // 100,000 live account is the exact inertness the smoke gate caught.
+    // 100,000 live account is the exact inertness the smoke gate caught
     expect(live?.equity).toBeGreaterThan(50_000);
     expect(control?.equity).toBeGreaterThan(50_000);
     // Its own book all the same. The two figures agree on this FIRST tick and
@@ -8218,14 +8220,14 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
     // `ControlArmAccountStateProvider`'s resolver ran, and nothing on the live
     // path ever writes that key. Independence from there is
     // `control-account-state.test.ts`'s, which moves a live row and a control
-    // row and watches which figures follow.
+    // row and watches which figures follow
     const anchor = db
       .prepare('SELECT peak_equity FROM account_state WHERE key = ?')
       .get(CONTROL_BOOK_ANCHOR_KEY) as { peak_equity: number } | undefined;
     expect(anchor?.peak_equity).toBe(100_000);
     // And it actually traded — the condition the smoke gate exists to catch,
     // asserted here too so a control that silently stops sizing fails a unit
-    // test first.
+    // test first
     expect(lotsByArm(db).map((lot) => lot.arm)).toEqual(['control', 'live']);
   });
 
@@ -8273,11 +8275,11 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
     const control = db
       .prepare('SELECT equity FROM risk_log WHERE trace_id = ?')
       .get('trace-753:control') as { equity: number } | undefined;
-    // Flat at Risk time, so the control's equity IS the resolved book.
+    // Flat at Risk time, so the control's equity IS the resolved book
     expect(control?.equity).toBe(LIVE_BOOK_SIZING_USD);
     // #972 fix 2: the fallback is this tick's answer and never the persisted
     // anchor. Its absence also proves the read really did fail — a successful
-    // read writes this row.
+    // read writes this row
     const anchor = db
       .prepare('SELECT peak_equity FROM account_state WHERE key = ?')
       .get(CONTROL_BOOK_ANCHOR_KEY) as { peak_equity: number } | undefined;
@@ -8299,14 +8301,14 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
     expect(lots.map((lot) => lot.arm)).toEqual(['control', 'live']);
     const [control, live] = lots;
 
-    // Same name, same bar, same side — the matched control's premise.
+    // Same name, same bar, same side — the matched control's premise
     expect(control?.instrument).toBe(live?.instrument);
     expect(control?.decision_timestamp).toBe(live?.decision_timestamp);
     expect(control?.side).toBe(live?.side);
     // Same exit rule and same stop, to the last bit. Nothing is configured twice.
     expect(control?.stop).toBe(live?.stop);
     expect(control?.target).toBe(live?.target);
-    // AC6: a real, queryable property — not inferred from a key prefix.
+    // AC6: a real, queryable property — not inferred from a key prefix
     const queried = db
       .prepare('SELECT idempotency_key FROM open_positions WHERE arm = ?')
       .all('control') as { idempotency_key: string }[];
@@ -8336,7 +8338,7 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
         subclass_of: { [LSE_ETP.asset]: subclass },
       }) as unknown as ProductionConfig['traderConfig'];
 
-    /** D3's neutral pairs, read off the frozen table rather than restated here. */
+    /** D3's neutral pairs, read off the frozen table rather than restated here */
     const indexBracket = ADR_0018_SUBCLASS_BRACKETS.index_etp_3x;
     const singleStockBracket = ADR_0018_SUBCLASS_BRACKETS.single_stock_etp_3x;
     if (indexBracket === null || singleStockBracket === null) {
@@ -8358,7 +8360,7 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
         handle: moved,
         llmClient: llmForOneDebate(),
         signal: LSE_ETP,
-        // The one field, changed once: the subclass this name is priced under.
+        // The one field, changed once: the subclass this name is priced under
         traderConfig: configFor('single_stock_etp_3x'),
       });
       const asSingleStock = lotsByArm(moved);
@@ -8381,7 +8383,7 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
         expect(lot.target / lot.stop).toBeCloseTo(shape(singleStockBracket), 6);
       }
 
-      // Both arms moved, and they still agree with each other — the invariant.
+      // Both arms moved, and they still agree with each other — the invariant
       expect(asSingleStock[0]?.stop).not.toBe(asIndex[0]?.stop);
       expect(asSingleStock[1]?.stop).not.toBe(asIndex[1]?.stop);
       expect(asSingleStock[0]?.stop).toBe(asSingleStock[1]?.stop);
@@ -8469,13 +8471,13 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
       expect(lot.side).toBe('buy');
       // Both arms debate independently but off the same fixture tape and the
       // same scripted LLM responses, so this is a real per-arm read, not an
-      // assumed shared value.
+      // assumed shared value
       expect(lot.conviction).toBeGreaterThan(convictionFloor);
       const convictionMultiplier = (lot.conviction - convictionFloor) / (1 - convictionFloor);
       const expectedNotional =
         convictionMultiplier * NO_PRECEDENT_MULTIPLIER * riskFraction * LIVE_BOOK_GBP;
 
-      // Long: stop = entry x (1 - stop_pct), so entry = stop / (1 - stop_pct).
+      // Long: stop = entry x (1 - stop_pct), so entry = stop / (1 - stop_pct)
       const entry = lot.stop / (1 - singleStockBracket.stop_pct);
       const notional = lot.requested_size * entry;
       expect(notional).toBeCloseTo(expectedNotional, 6);
@@ -8485,7 +8487,7 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
   /**
    * The same mutation on the PRE-D3 fallback geometry, kept because
    * `subclass_of` is `{}` on every shipped profile until the pool file lands —
-   * so `atr_k` is the width the two arms actually run on today.
+   * so `atr_k` is the width the two arms actually run on today
    */
   it('moves both arms together when the shared stop config is perturbed', async () => {
     await runOneDecisionPass({ handle: db, llmClient: llmForOneDebate() });
@@ -8497,7 +8499,7 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
       await runOneDecisionPass({
         handle: widened,
         llmClient: llmForOneDebate(),
-        // `atr_k` is the stop's width in ATRs — the one field, changed once.
+        // `atr_k` is the stop's width in ATRs — the one field, changed once
         traderConfig: {
           ...REAL_CONFIGS.traderConfig,
           atr_k: REAL_CONFIGS.traderConfig.atr_k * 2,
@@ -8509,7 +8511,7 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
       // Both arms moved…
       expect(perturbed[0]?.stop).not.toBe(baseline[0]?.stop);
       expect(perturbed[1]?.stop).not.toBe(baseline[1]?.stop);
-      // …and they still agree with each other, which is the invariant.
+      // …and they still agree with each other, which is the invariant
       expect(perturbed[0]?.stop).toBe(perturbed[1]?.stop);
       expect(perturbed[0]?.target).toBe(perturbed[1]?.target);
     } finally {
@@ -8561,7 +8563,7 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
         // Matches `stubConfig`'s default account equity exactly (100,000) —
         // a ceiling that never binds, which is what `capitalCeilingUsd ===
         // undefined` behaved like before this fix (`sizingEquity` is a
-        // passthrough once the ceiling is >= equity).
+        // passthrough once the ceiling is >= equity)
         configOverrides: { capitalCeilingUsd: toCapitalCeilingUsd(LIVE_BOOK_GBP * 100, 'test') },
       });
       const raw = lotsByArm(unclamped);
@@ -8604,7 +8606,7 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
   it("buildArmComparison's return_pct falls ~100x when the same trade is sized against the corrected book instead of broker equity (#1112 AC7)", () => {
     const CLOSED_AT = new Date(START.getTime() - 60_000);
     const window = { from: new Date(CLOSED_AT.getTime() - 3_600_000), to: START };
-    const SIZING_INFLATION = 99_876 / LIVE_BOOK_GBP; // the issue's own ~100x figure.
+    const SIZING_INFLATION = 99_876 / LIVE_BOOK_GBP; // the issue's own ~100x figure
 
     const tradeWith = (realized_pnl_net: number): ClosedTrade & { arm: TradingArm } => ({
       idempotency_key: 'ac7-fixture',
@@ -8627,7 +8629,7 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
     // Today's reported reading: +13.5%, produced by a position sized off
     // broker equity — the pre-fix behaviour, held fixed at the CORRECT basis
     // (`production.ts` never divided by the wrong thing; only the numerator
-    // was wrong).
+    // was wrong)
     const preFixPnl = 0.135 * LIVE_BOOK_GBP;
     const preFix = buildArmComparison({
       refused_passes: { live: 0, control: 0 },
@@ -8637,7 +8639,7 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
       basis: LIVE_BOOK_GBP,
     });
     // Same trade, sized against the declared book instead: the pnl this fix
-    // produces is smaller by the same ratio the notional is.
+    // produces is smaller by the same ratio the notional is
     const postFixPnl = preFixPnl / SIZING_INFLATION;
     const postFix = buildArmComparison({
       refused_passes: { live: 0, control: 0 },
@@ -8655,12 +8657,12 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
     // calls share, correct or not, so it cannot fail on the basis-swap bug
     // this ticket fixes. This instead re-derives the expectation from
     // `postFixPnl` and `LIVE_BOOK_GBP` directly, the same way the assertion
-    // above does for `preFix`.
+    // above does for `preFix`
     expect(postFix.control.return_pct).toBeCloseTo(postFixPnl / LIVE_BOOK_GBP, 10);
     // Pre-fix: ~27x the 0.5pp divergence threshold — "two orders above" as
-    // the acceptance criterion states.
+    // the acceptance criterion states
     expect(Math.abs(preFix.control.return_pct)).toBeGreaterThan(ARM_DIVERGENCE_RETURN_GAP_PCT * 10);
-    // Post-fix: same order as the threshold, not two above it.
+    // Post-fix: same order as the threshold, not two above it
     expect(Math.abs(postFix.control.return_pct)).toBeLessThan(ARM_DIVERGENCE_RETURN_GAP_PCT * 10);
     expect(Math.abs(postFix.control.return_pct)).toBeGreaterThan(
       ARM_DIVERGENCE_RETURN_GAP_PCT / 10,

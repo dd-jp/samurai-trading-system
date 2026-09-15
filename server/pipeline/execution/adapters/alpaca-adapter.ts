@@ -62,7 +62,7 @@ import type { AlpacaBrokerClient, AlpacaOrder, AlpacaOrderLeg } from './alpaca-c
 import { AlpacaCryptoLegEmulation } from './alpaca-crypto-emulation.js';
 // The shared normalization layer (PR #600 review): both this adapter and the
 // crypto emulation consume it, and neither imports the other's runtime code
-// back — the module split is what keeps that an acyclic graph.
+// back — the module split is what keeps that an acyclic graph
 import {
   collectFill,
   fromAlpacaSymbol,
@@ -158,7 +158,7 @@ export interface AlpacaBrokerAdapterInput {
   /**
    * Optional so existing wiring (server/apps/orchestrator/production.ts) keeps
    * working; when absent the adapter still paces itself rather than running
-   * unlimited — see the default below.
+   * unlimited — see the default below
    */
   rateLimiter?: TokenBucket;
   /**
@@ -250,11 +250,11 @@ export interface AlpacaBrokerAdapterInput {
   logger: Logger;
 }
 
-/** One by-client-order-id lookup's outcome: the venue's answer, or why there is none. */
+/** One by-client-order-id lookup's outcome: the venue's answer, or why there is none */
 type LookedUpOrderId = { id: string | null } | { error: unknown };
 
 export class AlpacaBrokerAdapter implements BrokerAdapter {
-  /** client_order_id -> the bracket parent's Alpaca order id. */
+  /** client_order_id -> the bracket parent's Alpaca order id */
   private readonly brackets = new Map<string, string>();
   /**
    * client_order_id -> a local clock read taken before `submitBracket`'s POST.
@@ -409,7 +409,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * equities-only.
    */
   private readonly emulation: AlpacaCryptoLegEmulation;
-  /** #609 — see `AlpacaBrokerAdapterInput.logger`'s doc for why this has no default. */
+  /** #609 — see `AlpacaBrokerAdapterInput.logger`'s doc for why this has no default */
   private readonly logger: Logger;
 
   constructor(private readonly input: AlpacaBrokerAdapterInput) {
@@ -418,7 +418,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // way), so this default is a fallback for a caller that constructs the
     // adapter standalone — a tool or a test with no injected bucket. Telemetry
     // is wired here too so that path is not silently worse-observed than the
-    // production one.
+    // production one
     this.rateLimiter =
       input.rateLimiter ??
       new TokenBucket(DEFAULT_VENUE_PACING.alpaca, undefined, {
@@ -440,11 +440,11 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
 
     // Synchronous, in the constructor: the first `fetchNewFills` sweep after a
     // restart iterates this map, and an empty one reports "no new fills" —
-    // indistinguishable, above the adapter, from a quiet market.
+    // indistinguishable, above the adapter, from a quiet market
     for (const record of this.state.loadBrackets('alpaca')) {
       // Emulated crypto rows belong to the emulation, which rehydrated them
       // in its own constructor above — polling them here too would sweep the
-      // same orders twice and drive no state machine.
+      // same orders twice and drive no state machine
       if (record.request?.asset_class === 'crypto') continue;
       if (record.entry_order_id === null) continue;
       this.brackets.set(record.client_order_id, record.entry_order_id);
@@ -496,7 +496,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     size: number,
     clientOrderId: string,
   ): Promise<BrokerAck> {
-    // Read before the POST, not after — see `flattenSubmittedAt`'s doc comment.
+    // Read before the POST, not after — see `flattenSubmittedAt`'s doc comment
     const submittedAt = this.clock.now();
     const response = await this.call('submitFlatten', () =>
       this.input.client.submitMarketOrder({
@@ -509,7 +509,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     );
 
     this.flattens.set(clientOrderId, response.id);
-    // First-write-wins — see `flattenSubmittedAt`'s doc comment.
+    // First-write-wins — see `flattenSubmittedAt`'s doc comment
     if (!this.flattenSubmittedAt.has(clientOrderId)) {
       this.flattenSubmittedAt.set(clientOrderId, submittedAt);
     }
@@ -595,24 +595,24 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // legs with it — the legs are independent plain orders only the
     // emulation's journal knows the ids of (#586). Delegated wholesale; the
     // re-arm lookup below is the EQUITY OCO's naming scheme and does not
-    // apply (emulated re-arm legs are cancelled by the same journal walk).
+    // apply (emulated re-arm legs are cancelled by the same journal walk)
     if (this.emulation.owns(clientOrderId)) {
       await this.emulation.cancelAll(clientOrderId);
       return;
     }
 
     // --- LOOKUPS (non-destructive). #867: everything that can throw while
-    // the lot is still protected happens HERE, above the first cancel.
+    // the lot is still protected happens HERE, above the first cancel
     const { order, rearmedOrder } = await this.resolveCancelTargets(clientOrderId);
 
     // --- CANCELS (destructive). Re-arm first, original bracket last — see
-    // the doc comment for why that ordering is both safe and required.
+    // the doc comment for why that ordering is both safe and required
     if (rearmedOrder !== null) {
       await this.call('cancel', () => this.input.client.cancelOrder(rearmedOrder));
       // Deleted only now, after the cancel is confirmed — not before, and
       // not merely on finding it: a `cancelOrder` throw above must leave
       // the map (and the venue) exactly as they were, so a retried cancel
-      // finds the same order again rather than believing it already gone.
+      // finds the same order again rather than believing it already gone
       this.rearmedLegs.delete(clientOrderId);
     }
 
@@ -660,7 +660,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // leg is still live is the outcome this whole path exists to avoid. Only
     // when nothing is known in-process does a failed direct lookup carry over
     // — the same endpoint would fail the same way, and the list below answers
-    // for both ids from one snapshot.
+    // for both ids from one snapshot
     const rearmed: LookedUpOrderId =
       inProcessRearm !== null
         ? { id: inProcessRearm }
@@ -675,7 +675,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // from the list: a re-arm lookup that failed on its own says nothing
     // about the original's id, and discarding that id would turn a partial
     // outage into a full re-derivation, with a `null` for anything the list
-    // cannot see (a filled order is not open).
+    // cannot see (a filled order is not open)
     const lookupError = 'error' in order ? order.error : (rearmed as { error: unknown }).error;
     let open: readonly AlpacaOrder[];
     try {
@@ -683,7 +683,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     } catch {
       // The FIRST failure is the one rethrown: it is the cause the caller
       // and the alert should name, and a fallback that also failed says
-      // nothing more than "the venue is unreachable" already did.
+      // nothing more than "the venue is unreachable" already did
       throw lookupError;
     }
     const idOf = (key: string): string | null =>
@@ -693,7 +693,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // one holds live protection. `find` would return whichever the venue
     // happened to page first and cancel the wrong order — #867's failure class
     // in a new costume. Spent ids are terminal, so they are not on this page at
-    // all; picking the highest is belt-and-braces for the window where one is.
+    // all; picking the highest is belt-and-braces for the window where one is
     const latestRearmId = (): string | null => {
       let best: { attempt: number; id: string } | null = null;
       for (const candidate of open) {
@@ -801,16 +801,16 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       return this.emulation.submitEntry(order);
     }
 
-    // #983: onto the venue's price grid BEFORE anything else reads the prices.
+    // #983: onto the venue's price grid BEFORE anything else reads the prices
     // The stop and target are bracket multiples of the entry, so they carry
     // full float precision (766.40805334) and Alpaca refuses the whole order:
     // `422 {"code":42210000,"message":"invalid limit_price 762.335. sub-penny
-    // increment does not fulfill minimum pricing criteria"}`, measured live.
+    // increment does not fulfill minimum pricing criteria"}`, measured live
     //
     // Rounded into `submitted` rather than at the three call sites, because
     // the journal below MUST record what was actually sent: a restart that
     // rehydrates unrounded prices would re-place the leg off-grid, and the
-    // re-arm comparison would never match the venue's own rounded copy.
+    // re-arm comparison would never match the venue's own rounded copy
     const { entry, stop, target } = roundBracketToTick(
       order.side,
       order.entry,
@@ -819,7 +819,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     );
     const submitted: NativeBracketRequest = { ...order, entry, stop, target };
 
-    // Read before the POST, not after — see `bracketSubmittedAt`'s doc comment.
+    // Read before the POST, not after — see `bracketSubmittedAt`'s doc comment
     const submittedAt = this.clock.now();
     const response = await this.call('submitBracket', () =>
       this.input.client.submitOrder({
@@ -839,7 +839,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // First-write-wins: a retried/idempotent resubmission under the same
     // client_order_id (`this.call`'s retry, or a venue no-op on an id it
     // already knows) reads the clock again later, which would move this
-    // bound PAST fills the first, true submission already covers.
+    // bound PAST fills the first, true submission already covers
     if (!this.bracketSubmittedAt.has(order.client_order_id)) {
       this.bracketSubmittedAt.set(order.client_order_id, submittedAt);
     }
@@ -847,7 +847,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     const legIds = (response.legs ?? []).map((leg) => leg.id);
 
     // `phase: 'armed'` — on a native-bracket venue there is no local state
-    // machine to be partway through; the bracket is live from this call.
+    // machine to be partway through; the bracket is live from this call
     this.state.saveBracket({
       venue: 'alpaca',
       client_order_id: order.client_order_id,
@@ -884,7 +884,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   // `_instrument` is unused here but declared to match `BrokerAdapter.getOrder`
   // — Alpaca looks an order up by client id alone, while a symbol-keyed venue
   // (ccxt) cannot. Omitting it left callers unable to pass the argument the
-  // port says to pass.
+  // port says to pass
   async getOrder(clientOrderId: string, _instrument: string): Promise<NormalizedOrder | null> {
     const order = await this.call('getOrder', () =>
       this.input.client.getOrderByClientOrderId(clientOrderId),
@@ -895,7 +895,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // the emulation — re-populating the native map here would double-poll it
     // and stamp native-shaped ids over emulation state. The venue's answer
     // about the ENTRY still stands; the leg ids come from the journal, since
-    // a plain crypto entry carries no `legs` for `legOrderIds` to read.
+    // a plain crypto entry carries no `legs` for `legOrderIds` to read
     if (this.emulation.owns(clientOrderId)) {
       return {
         client_order_id: clientOrderId,
@@ -909,7 +909,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // bracket again — the reconciliation sweep is the only thing that knows
     // these orders still exist. Journalled too, via the partial-upsert path:
     // this call knows the venue's order ids but NOT the request that produced
-    // them, and writing invented request values would be worse than none.
+    // them, and writing invented request values would be worse than none
     this.brackets.set(clientOrderId, order.id);
     this.state.recordBracketOrderIds('alpaca', clientOrderId, {
       entry_order_id: order.id,
@@ -970,7 +970,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * (ccxt's resize path), which is #549-adjacent work, not this seam's.
    */
   async resizeProtectiveLegs(): Promise<void> {
-    // Intentionally empty — see above.
+    // Intentionally empty — see above
   }
 
   /**
@@ -1050,7 +1050,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // bracket, durably); the syntactic `-USD` fallback catches the crypto
     // residual whose journal row is missing, which must REFUSE loudly
     // rather than fall through to an order class the venue is verified to
-    // reject — a thrown 422 here would read as a transient venue error.
+    // reject — a thrown 422 here would read as a transient venue error
     if (this.emulation.owns(clientOrderId)) {
       return this.emulation.rearm(clientOrderId, instrument, side, qty, rawStop, rawTarget);
     }
@@ -1062,18 +1062,18 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       );
     }
 
-    // #983, and BEFORE the adoption comparison below, not at the submit.
+    // #983, and BEFORE the adoption comparison below, not at the submit
     // `rearmOrderMatches` compares the caller's levels against what the venue
     // holds — which is the ROUNDED copy this method sent last time. Rounding
     // only at the submit would leave that comparison permanently unequal, so
     // every re-arm would take the cancel-and-replace branch: a round-trip of
     // real cost that briefly drops protection on a live position, for no
-    // reason but a trailing decimal.
+    // reason but a trailing decimal
     const { stop, target } = roundProtectiveLegsToTick(side, rawStop, rawTarget);
 
     // The CLOSING side, mirroring `submitFlatten`'s own convention — `side`
     // here is the lot's HELD side (the `BrokerAdapter.rearmProtectiveLegs`
-    // contract), so the order that reduces it takes the opposite one.
+    // contract), so the order that reduces it takes the opposite one
     const closingSide = side === 'buy' ? 'sell' : 'buy';
 
     // ADOPT-OR-PLACE (#549, the #600/#603 posture) over a WALK of this lot's
@@ -1081,7 +1081,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // whether a prior attempt's OCO already lives under an id this lot has
     // used — a re-arm that succeeded venue-side and then crashed (or lost its
     // journaling) before the caller could confirm it must be adopted, not
-    // re-submitted by the residual-protection sweep's retry.
+    // re-submitted by the residual-protection sweep's retry
     //
     // The walk exists because a spent id STAYS spent: reuse is refused with a
     // 422 forever, not just while the prior rests (measured — see
@@ -1093,7 +1093,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // sweep pass would 422 identically, so the marker never cleared and the
     // residual was never protected: a permanent protection gap dressed as a
     // transient venue error. Advancing to an id this lot has not spent is what
-    // makes the second re-arm possible at all.
+    // makes the second re-arm possible at all
     //
     // ADVANCING PAST AN INDEX MEANS ITS ORDER IS NOT RESTING — that is the
     // invariant a future edit must not break, in BOTH directions. A dead prior
@@ -1103,7 +1103,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // one). And because an index is only ever allocated once every lower index
     // is taken, the first `null` ends the walk — `cancel()` relies on that to
     // find the newest OCO without probing all `MAX_REARM_ATTEMPTS` ids on
-    // every exit.
+    // every exit
     //
     // THE WALK READS THE WHOLE ALLOCATED SEQUENCE BEFORE IT ADOPTS ANYTHING
     // (#1570 review). Returning at the first adoptable index instead was a
@@ -1116,16 +1116,16 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // preferred that in-process id, retired nothing, and left attempt 1's OCO
     // live and unmanaged behind a cancelled bracket — the two-live-legs hazard
     // (#516) this whole mechanism exists to prevent, reintroduced by the
-    // bookkeeping rather than by the orders.
+    // bookkeeping rather than by the orders
     //
     // Hence the two slots below: `live` (the highest RESTING prior that
     // matches this request) and `settled` (the highest whose own fills are
     // already closing the residual), with `live` preferred outright. A resting
     // OCO is protection that can still fire and must be what every downstream
-    // id points at; a filled one only records that the episode closed itself.
+    // id points at; a filled one only records that the episode closed itself
     // The cost is one extra lookup on the common adopt path — this runs on the
     // residual sweep's cadence, not on `cancel()`'s every-exit path, so it is
-    // paid where there is room for it.
+    // paid where there is room for it
     //
     // Adoption is CONDITIONAL on the prior matching THIS request (#549
     // review): a still-resting prior sized for a DIFFERENT residual (further
@@ -1136,12 +1136,12 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // contract fixes `stop`/`target` to the lot's own unchanged levels), but
     // all three are compared, and a prior whose price fields are missing fails
     // the match — replacing real protection costs a round-trip, adopting stale
-    // protection costs money.
+    // protection costs money
     //
     // A `filled` OR `partially_filled` prior is adopted regardless of the
     // match (#549 review): an OCO's fills are EXIT fills — every share it
     // filled has already closed that much of the position — so what remains
-    // resting (`qty − filled_qty`) is exactly what that episode still holds.
+    // resting (`qty − filled_qty`) is exactly what that episode still holds
     // The caller's `residual` is computed off the STORE, which has not
     // necessarily ingested those very fills yet (the re-arm sweep in
     // `fetchNewFills` below is what offers them), so a partially-consumed
@@ -1150,29 +1150,29 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // over-protection, whose leg fires into a smaller position and opens a
     // reverse one (#516's hazard, from the other direction). Once the fills
     // DO ingest, the recomputed residual and the prior's resting remainder
-    // agree by construction.
+    // agree by construction
     //
     // ADOPTION IS ALLOWLISTED on the RAW venue status (#549 review, round 3):
     // `mapOrderState` folds every unrecognized status — `done_for_day`,
     // `replaced`, `stopped`, `pending_cancel`... — into 'submitted', so a
     // blocklist of dead states would let a matching-but-not-resting prior be
     // adopted as protection while nothing rests at the venue: exactly the
-    // naked-residual-believed-protected hazard this method exists to close.
+    // naked-residual-believed-protected hazard this method exists to close
     // Only statuses that mean RESTING may satisfy the match branch; anything
     // unrecognized is cancelled before the walk advances, where `cancelOrder`'s
-    // tolerance of already-terminal orders makes the defensive cancel free.
+    // tolerance of already-terminal orders makes the defensive cancel free
     //
     // The ambiguous-lookup question #1346 also asked — what
     // `GET /v2/orders:by_client_order_id` answers when two orders share an id —
     // has no answer to handle: the venue durably refuses the second order, so
-    // two rows can never carry one `client_order_id` (measured, doc 43 round 3).
-    // The lookup below returns at most one row by construction.
+    // two rows can never carry one `client_order_id` (measured, doc 43 round 3)
+    // The lookup below returns at most one row by construction
     const RESTING_STATUSES = ['new', 'accepted', 'pending_new', 'accepted_for_bidding'];
     let live: AlpacaOrder | null = null;
     let settled: AlpacaOrder | null = null;
     let freeAttempt: number | null = null;
     // The largest size this lot was observed to hold at an index ABOVE
-    // `settled` — the #1573 discriminator, reset whenever `settled` moves up.
+    // `settled` — the #1573 discriminator, reset whenever `settled` moves up
     let sizedAboveSettled = 0;
 
     for (let attempt = 0; attempt < MAX_REARM_ATTEMPTS; attempt += 1) {
@@ -1196,7 +1196,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       // venue and can still fire. It needs no match check — #549 adopts a
       // partially-consumed prior regardless of size, for the reason spelled
       // out above — but it must never be treated as stale, or the walk places
-      // a second leg on top of one that is still armed (#516).
+      // a second leg on top of one that is still armed (#516)
       if (
         priorState === 'partially_filled' ||
         (RESTING_STATUSES.includes(prior.status) && rearmOrderMatches(prior, qty, stop, target))
@@ -1204,7 +1204,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         // Two resting priors on one lot are unreachable through this walk —
         // an index is only allocated once the one below it stopped resting —
         // but the invariant is what the money depends on, so it is ENFORCED
-        // here rather than assumed: whichever is older is retired.
+        // here rather than assumed: whichever is older is retired
         const superseded = live;
         if (superseded !== null) {
           await this.call('rearmProtectiveLegs', () =>
@@ -1219,13 +1219,13 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         // retire it before the walk steps over it. `cancelOrder` resolves on
         // 404/422 (already-terminal), so losing the race to the prior's own
         // fill is not a failure here — the submit below is what would
-        // surface a real problem.
+        // surface a real problem
         await this.call('rearmProtectiveLegs', () => this.input.client.cancelOrder(prior.id));
       }
     }
 
     // `live` over `settled`: see the two-slot note above. Only one of these is
-    // ever protection that can still fire.
+    // ever protection that can still fire
     //
     // `live` first because it is the only one that can still FIRE. `settled`
     // is now strictly a FULL fill (`partially_filled` routes to `live` above),
@@ -1234,14 +1234,14 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // residual follows once the fills ingest. Adopting it while nothing rests
     // is the lot being FLAT, not the lot being naked. Declining it and placing
     // would arm a fresh leg over a closed position, which fires into nothing
-    // and opens a reverse one — #516 from the other direction.
+    // and opens a reverse one — #516 from the other direction
     //
     // That reasoning holds only while the fill COVERS every size this lot has
     // been observed to hold since (#1573). A post-re-arm ENTRY fill grows the
     // residual, so a `settled` of 4 can sit under an attempt sized 6: those
     // 6 shares existed after the 4 closed, and adopting returns success with
     // nothing resting — which clears the #549 marker over the 2 that are
-    // naked.
+    // naked
     //
     // Two independent observations bound the size, and the hazard needs both
     // because they see different halves of it. `qty` catches it while
@@ -1251,16 +1251,16 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // `settled.filled_qty >= qty` test alone passes 4 ≥ 2 and is wrong. A
     // THIRD, below, catches the case neither half of that pair sees at all
     // (#1581): `qty` has shrunk back under the fill AND no later attempt was
-    // ever allocated to carry the growth's size forward.
+    // ever allocated to carry the growth's size forward
     //
     // Neither reads the walk itself, deliberately: whether this pass RETIRED
     // those attempts (`4ea06cba`) and whether anything still sits ABOVE them
     // (`df222403`) were both tried and reverted, each answering a question
-    // about the walk rather than about the position.
+    // about the walk rather than about the position
     //
     // A fill that will not parse cannot prove flatness, so it declines —
     // placing over a flat lot is bounded (the leg fires into nothing), a lot
-    // believed protected on unreadable evidence is not.
+    // believed protected on unreadable evidence is not
     //
     // #1581: `qty` and `sizedAboveSettled` are both derived from THIS PROCESS's
     // walk and the caller's own residual estimate — and the caller's estimate
@@ -1280,23 +1280,23 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // not evidence any ONE lot is naked. `filled_qty` on the entry order this
     // lot's OWN `client_order_id` names has no such ambiguity: it is the total
     // this lot has ever been bought for, read fresh from the venue at decision
-    // time — no store, no ingestion race.
+    // time — no store, no ingestion race
     //
     // Only fetched when `settled !== null`: the `live` path never reaches this
     // line, and a lot that never re-armed at all has no `settled` to second-
     // guess either. One extra lookup on the adopt-by-inference path, same
-    // trade the `live`/`settled` split above already makes.
+    // trade the `live`/`settled` split above already makes
     //
     // A `null` or unparseable entry is treated as NO ADDITIONAL EVIDENCE, not
     // as proof of anything — it can only ever WIDEN `observedSize` (tighten
     // the adoption bar), never narrow it, so a venue that cannot answer this
-    // lookup leaves every existing (tested) sequence's outcome unchanged.
+    // lookup leaves every existing (tested) sequence's outcome unchanged
     // Widening unconditionally on a lookup failure would be the same
     // "unreadable evidence declines" posture the parse-failure comment above
     // already takes, but this repo's own #842 finding (`alpaca-order-
     // normalization.ts`) is that Alpaca's docs cannot even settle whether a
     // partially-filled order's fields are trustworthy mid-fill, so a missing
-    // row is treated as inconclusive rather than as a decline-forcing signal.
+    // row is treated as inconclusive rather than as a decline-forcing signal
     let entryFilledQty = 0;
     if (settled !== null) {
       const entry = await this.call('rearmProtectiveLegs', () =>
@@ -1311,7 +1311,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     if (adopted !== null) {
       this.rearmedLegs.set(clientOrderId, adopted.id);
       // Same column semantics as the fresh-place path below — the OCO's
-      // parent id IS the take-profit (see that path's `.legs` note).
+      // parent id IS the take-profit (see that path's `.legs` note)
       this.state.recordBracketOrderIds('alpaca', clientOrderId, {
         entry_order_id: null,
         stop_order_id: legOrderIds(adopted.legs).stop_order_id,
@@ -1331,7 +1331,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       // `sanitizeBrokerError` would erase the discriminant (see the class's own
       // INVARIANT note). The alternative — placing under a spent id — is a
       // guaranteed 422, and inventing an unbounded id space would replace a
-      // loud refusal with a quiet one.
+      // loud refusal with a quiet one
       throw new ProtectiveRearmUnsupportedError(
         'alpaca',
         `Alpaca adapter exhausted all ${MAX_REARM_ATTEMPTS} re-arm wire ids for lot ` +
@@ -1363,7 +1363,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // BRACKET's take-profit child lives. An OCO's take-profit is the TOP
     // LEVEL order itself (`response.id`) — `.legs` here holds only the ONE
     // stop-loss child — so `target_order_id` is set directly rather than
-    // reusing that scan and silently recording `null`.
+    // reusing that scan and silently recording `null`
     this.state.recordBracketOrderIds('alpaca', clientOrderId, {
       entry_order_id: null,
       stop_order_id: legOrderIds(response.legs).stop_order_id,
@@ -1424,7 +1424,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // and the re-arm loop share one `clientOrderId` per lot, so a lot-only
     // key let the entry leg's first warn permanently suppress a DIFFERENT,
     // genuine violation on the re-armed target leg of the SAME lot — masking
-    // exactly the exit-leg violations #1087's wedge failure mode is about.
+    // exactly the exit-leg violations #1087's wedge failure mode is about
     const warnedKey = `${clientOrderId}:${leg}`;
     if (this.warnedSinceFloorViolations.has(warnedKey)) return;
     this.warnedSinceFloorViolations.add(warnedKey);
@@ -1500,7 +1500,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // visit entries inserted mid-iteration — so a bracket submitted during the
     // sweep would be drained by a pass whose `since` window predates it, and
     // its fills silently dropped. The snapshot fixes each pass's worklist at
-    // entry (PR #290 review, deepseek).
+    // entry (PR #290 review, deepseek)
     for (const [clientOrderId, entryOrderId] of [...this.brackets]) {
       try {
         const entry = await this.call('fetchNewFills', () =>
@@ -1533,16 +1533,16 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         // Skipped, not swallowed: this bracket contributes nothing to THIS
         // sweep and is retried on the next one. That is the same shape as an
         // order the venue has not reported yet, and `ingestFills()` dedups on
-        // `broker_fill_id`, so re-polling costs nothing.
+        // `broker_fill_id`, so re-polling costs nothing
         if (error instanceof UnpricedFillError) {
           // Durable, and stamped with the FIRST sighting: this is the clock the
           // age-out runs on, and it has to survive the restart that a 14-day
-          // unattended soak will contain several of.
+          // unattended soak will contain several of
           //
           // Guarded, because this runs INSIDE the per-bracket catch: a throw
           // from the journal here would escape the isolation entirely and abort
           // the account's whole sweep — turning one venue anomaly into the
-          // stop-outs-for-everyone starvation this loop exists to prevent.
+          // stop-outs-for-everyone starvation this loop exists to prevent
           //
           // NEITHER `failures.push(error)` NOR `bracketFailures += 1` runs for
           // an UnpricedFillError itself (#524 review, deepseek) — it is a
@@ -1558,7 +1558,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
           // abort this isolation exists to prevent, for EVERY bracket in the
           // sweep, not just the unpriced one. A journal-write failure
           // (`stateError`, below) is a genuinely different, new failure and
-          // still counts.
+          // still counts
           try {
             this.state.recordUnpricedFill('alpaca', error.observation, this.clock.now());
           } catch (stateError) {
@@ -1578,7 +1578,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // `flattens` map, rather than folded into the one above: a flatten is
     // never a bracket (`submitFlatten`'s own docstring), and merging the
     // maps would make the loop above fetch `entry.legs` for an order that
-    // has none.
+    // has none
     //
     // `flattens` IS IN-MEMORY ONLY, unlike `brackets` (which the constructor
     // warms from `this.state.loadBrackets('alpaca')`, because a bracket can
@@ -1587,7 +1587,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // process could poll it again, the venue has already resolved it one way
     // or another, so the ONLY window not surviving a restart costs is the
     // narrow one between `submitFlatten` returning and this sweep next
-    // running.
+    // running
     //
     // THAT WINDOW IS NOW CLOSED, not by this map becoming durable, but by
     // `reconcile()` learning about `flatten_submissions` rows (#519/#526):
@@ -1596,7 +1596,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // re-populates THIS map from the venue's own record of the order —
     // see `resumeFlatten`'s doc above. A crash inside the window still
     // empties this map exactly as before; what changed is that the map is no
-    // longer the only place that memory lived.
+    // longer the only place that memory lived
     //
     // Entries ARE removed once their order reaches a terminal state (#524
     // review, deepseek: "the flatten poll set grows monotonically for the
@@ -1615,7 +1615,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // no-lookahead-preserving reason `advanceLot`'s own filter lives where
     // it does in ingest-fills.ts applies here too: pruning first and
     // collecting second would silently drop the terminal fill this exact
-    // ticket exists to stop dropping.
+    // ticket exists to stop dropping
     //
     // What this does NOT wait for: confirmation that `ingestFills()`
     // actually PERSISTED the fill this call handed it. This adapter has no
@@ -1625,7 +1625,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // reason unrelated to this flatten, AFTER this fill was handed off but
     // BEFORE its target lot's own advance is durably written — where the
     // fill is not re-offered on the next poll, because this entry is
-    // already gone.
+    // already gone
     //
     // #519/#526 close this ACROSS A RESTART: `flatten_submissions`'s
     // `fills_swept_at` (migration 0023) is deliberately NOT set by
@@ -1638,7 +1638,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // startup only — see orchestrator/fill-sync.ts's file doc), so a fill
     // lost this way is not re-offered until the next restart, not the next
     // poll. Adding a cadence is a scheduling decision out of scope for
-    // either ticket; the mechanism here is ready for one whenever it exists.
+    // either ticket; the mechanism here is ready for one whenever it exists
     let flattenFailures = 0;
     for (const [clientOrderId, orderId] of [...this.flattens]) {
       try {
@@ -1646,7 +1646,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         const instrument = fromAlpacaSymbol(symbolOf(order));
         // #1415: `flattens` is keyed by the EXIT's own idempotency_key, a
         // different key space from `bracketSubmittedAt` — see
-        // `flattenSubmittedAt`'s doc for why this needs its own map.
+        // `flattenSubmittedAt`'s doc for why this needs its own map
         this.auditSinceFloorInvariant(
           order,
           'exit',
@@ -1672,7 +1672,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         // catch reaches for is, by construction, one `collectFill` never
         // finished normalizing, so the `mapOrderState`/`delete` line is never
         // reached for it — an unpriced flatten is retried next poll, same as
-        // an unpriced bracket, never pruned mid-unpriced.
+        // an unpriced bracket, never pruned mid-unpriced
         if (error instanceof UnpricedFillError) {
           try {
             this.state.recordUnpricedFill('alpaca', error.observation, this.clock.now());
@@ -1697,12 +1697,12 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // with nothing attached. Its one child leg (the stop-loss) is tagged via
     // `legName`, same as a bracket's legs above. Both satisfy
     // `isExitFill`/`Fill.leg !== 'entry'` in ingest-fills.ts, so a rearmed
-    // leg firing correctly reduces the lot and can close it.
+    // leg firing correctly reduces the lot and can close it
     //
     // Pruned once terminal, same asymmetry with `brackets` as `flattens`
     // documents and for the same reason: an OCO here protects a residual
     // that is either still open (worth polling again) or done (a single
-    // fire-or-cancel event, never resting again after that).
+    // fire-or-cancel event, never resting again after that)
     let rearmFailures = 0;
     for (const [lotKey, orderId] of [...this.rearmedLegs]) {
       try {
@@ -1711,7 +1711,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         // #1123: `rearmedLegs` is keyed by the LOT's own `idempotency_key`
         // (see its doc above) — the same key space `bracketSubmittedAt` uses,
         // so the original bracket's submission-time bound still applies here
-        // with no new map.
+        // with no new map
         const submittedAt = this.bracketSubmittedAt.get(lotKey);
         this.auditSinceFloorInvariant(order, 'target', lotKey, instrument, observedAt, submittedAt);
         collectFill(order, 'target', lotKey, instrument, since, observedAt, fills);
@@ -1731,7 +1731,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         }
       } catch (error) {
         // Same isolation and UnpricedFillError bookkeeping as the bracket
-        // and flatten loops above.
+        // and flatten loops above
         if (error instanceof UnpricedFillError) {
           try {
             this.state.recordUnpricedFill('alpaca', error.observation, this.clock.now());
@@ -1753,24 +1753,24 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // the journalled phase machine: arm the legs on the entry fill, cancel
     // the sibling when one leg fires, resume any episode a dead process left
     // mid-transition. Isolation and UnpricedFillError bookkeeping are the
-    // same as the three loops above — see the emulation module.
+    // same as the three loops above — see the emulation module
     const emulationFailures = await this.emulation.sweep(since, fills, failures);
 
     // The venue caught up: this fill priced, was collected above, and is about
     // to be booked, so its anomaly row is resolved. Done here rather than in
-    // `collectFill` so the normalizer stays a pure function of one order.
+    // `collectFill` so the normalizer stays a pure function of one order
     try {
       for (const fill of fills) {
         this.state.clearUnpricedFill('alpaca', fill.client_order_id, fill.broker_fill_id);
       }
     } catch (stateError) {
       // Same reasoning as above, and cheaper still to survive: a stale row only
-      // risks one redundant alert, whereas losing the sweep loses real fills.
+      // risks one redundant alert, whereas losing the sweep loses real fills
       failures.push(stateError);
     }
 
     // Before the throw below, and unconditionally: escalation must not depend
-    // on whether some OTHER bracket happened to produce a fill this sweep.
+    // on whether some OTHER bracket happened to produce a fill this sweep
     await this.escalateAgedUnpricedFills(failures);
 
     // #609: make every accumulated failure locally diagnosable BEFORE the
@@ -1787,7 +1787,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // sweep goes on to throw below. Diagnosis-only: this does not change what
     // `fetchNewFills` returns or whether it throws, only whether a failure
     // that already happened leaves a local trace. `logCaughtFailure` is the
-    // same safe-inside-a-catch helper #573 wired onto `ExecutionInput`.
+    // same safe-inside-a-catch helper #573 wired onto `ExecutionInput`
     for (const failure of failures) {
       logCaughtFailure(
         this.logger,
@@ -1805,7 +1805,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
           // four funnel through the same `this.call('fetchNewFills', ...)`
           // operation name. These counts restore that, and `fills_read` is the
           // one that names the #609 case specifically: >0 here is exactly the
-          // "fills.length > 0 discarded failures silently" bug this fixes.
+          // "fills.length > 0 discarded failures silently" bug this fixes
           bracket_failures: bracketFailures,
           flatten_failures: flattenFailures,
           rearm_failures: rearmFailures,
@@ -1816,9 +1816,9 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     }
 
     // Progress wins when there is any: dropping good fills to report a bad
-    // bracket would re-create the account-wide stall this isolation removes.
+    // bracket would re-create the account-wide stall this isolation removes
     // A wholly-failed sweep is the one case where throwing costs nothing — and
-    // it must not be reported as the "no new fills" that an empty array means.
+    // it must not be reported as the "no new fills" that an empty array means
     if (fills.length === 0 && failures.length > 0) {
       throw new AggregateError(
         failures,
@@ -1859,7 +1859,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       recorded = this.state.loadUnpricedFills('alpaca');
     } catch (stateError) {
       // The sweep's fills are still good; only the escalation is blind this
-      // pass, and the rows outlive the failure, so the next sweep escalates.
+      // pass, and the rows outlive the failure, so the next sweep escalates
       failures.push(stateError);
       return;
     }
@@ -1888,7 +1888,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         // just as hard here: a Telegram transport failure quotes the
         // request it failed on, and that URL carries the bot token. What is
         // replaced cannot leak. The row stays unalerted, so the next sweep
-        // retries delivery.
+        // retries delivery
         failures.push(
           new Error(
             `Alpaca unpriced-fill alert delivery failed for order ${record.broker_fill_id} ` +
@@ -1896,7 +1896,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
           ),
         );
         // Unrecorded, so the next sweep tries again — the alert this fill is
-        // owed has not been spent.
+        // owed has not been spent
         continue;
       }
 
@@ -1909,7 +1909,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         );
       } catch (stateError) {
         // Delivered but not recorded: the next sweep will alert again. Noisy,
-        // never silent — the direction to fail in.
+        // never silent — the direction to fail in
         failures.push(stateError);
       }
     }
@@ -1970,7 +1970,7 @@ function legOrderIds(legs: AlpacaOrderLeg[] | undefined): {
  * The shared normalization `getOrder`/`resumeFlatten` both apply to a raw
  * Alpaca order — factored out because the two methods diverge only in WHICH
  * in-process map they warm on the way out (`brackets` vs `flattens`), never
- * in the shape returned to the caller.
+ * in the shape returned to the caller
  */
 function normalizeOrder(clientOrderId: string, order: AlpacaOrder): NormalizedOrder {
   return {
@@ -1982,6 +1982,6 @@ function normalizeOrder(clientOrderId: string, order: AlpacaOrder): NormalizedOr
 }
 
 function legName(leg: AlpacaOrderLeg): 'target' | 'stop' {
-  // The take-profit leg is a limit order; the stop-loss leg is a stop order.
+  // The take-profit leg is a limit order; the stop-loss leg is a stop order
   return leg.type === 'limit' ? 'target' : 'stop';
 }

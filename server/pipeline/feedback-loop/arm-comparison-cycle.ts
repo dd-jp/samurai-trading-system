@@ -36,7 +36,7 @@ import type {
   ArmDivergenceVerdict,
 } from './types/arm-comparison.js';
 
-/** Same 30-day default window `npm run report:arms` uses (`DEFAULT_WINDOW_DAYS`). */
+/** Same 30-day default window `npm run report:arms` uses (`DEFAULT_WINDOW_DAYS`) */
 export const DEFAULT_ARM_COMPARISON_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
@@ -121,7 +121,7 @@ export function evaluateArmDivergence(
   // Under the floor the comparison is not asked the question at all — an
   // absent answer, not a passing one. `min_trades_per_arm` travels with the
   // verdict either way (#982) so a later reader can tell THIS state apart from
-  // "tested, control did not dominate" below.
+  // "tested, control did not dominate" below
   if (
     live.trade_count < thresholds.min_trades_per_arm ||
     control.trade_count < thresholds.min_trades_per_arm
@@ -170,14 +170,14 @@ export function runArmComparisonCycle(input: ArmComparisonCycleInput): ArmCompar
   // ONE call, both arms — see `ArmComparisonSource`. It also carries the #1546
   // per-exit-class exclusion counts, from the same rows, so the composition of
   // the population below cannot be measured over a different window than the
-  // population itself.
+  // population itself
   const window = input.trades.getClosedTradeWindowBetween(from, now);
 
   const comparison = buildArmComparison({
     trades: window.trades,
     cost_basis_drops: window.cost_basis_drops,
     // #1099. The same `from`/`now` pair, so the refusal count and the trade
-    // count are the same window by construction rather than by review.
+    // count are the same window by construction rather than by review
     refused_passes: input.trades.getRefusedPassCountsBetween(from, now),
     from,
     to: now,

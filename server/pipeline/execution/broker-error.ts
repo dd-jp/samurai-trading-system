@@ -42,13 +42,13 @@
 import { MAX_ERROR_BODY_CHARS } from '../../shared/index.js';
 
 export class BrokerError extends Error {
-  /** Which adapter failed — 'alpaca' | 'saxo'. */
+  /** Which adapter failed — 'alpaca' | 'saxo' */
   readonly venue: string;
   /** Which adapter operation failed, e.g. 'submitBracket', 'fetchNewFills'. */
   readonly operation: string;
-  /** HTTP status, when the client exposed one on a recognized shape. */
+  /** HTTP status, when the client exposed one on a recognized shape */
   readonly statusCode: number | undefined;
-  /** The venue's own error code, when the client exposed one. */
+  /** The venue's own error code, when the client exposed one */
   readonly venueCode: string | undefined;
   /**
    * The venue's own diagnostic message text (#1003), when the client exposed
@@ -70,7 +70,7 @@ export class BrokerError extends Error {
   ) {
     // The message is composed from the curated fields alone. Interpolating any
     // part of the original — even a "safe-looking" prefix — is what reopens
-    // the leak, since the client chooses that text, not us.
+    // the leak, since the client chooses that text, not us
     super(
       `${venue} ${operation} failed (status ${statusCode ?? 'unknown'}` +
         `${venueCode === undefined ? '' : `, code ${venueCode}`})` +
@@ -107,7 +107,7 @@ export function sanitizeBrokerError(venue: string, operation: string, cause: unk
   );
 }
 
-/** Any object; `unknown` prop reads are type-guarded at each use site. */
+/** Any object; `unknown` prop reads are type-guarded at each use site */
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null
     ? (value as Record<string, unknown>)
@@ -120,7 +120,7 @@ function readStatusCode(cause: unknown): number | undefined {
 
   for (const candidate of [record.status, record.statusCode, asRecord(record.response)?.status]) {
     // Finite-number guard, not just `typeof`: a client that reports `NaN` for
-    // a transport failure must read as "unknown", not as a status.
+    // a transport failure must read as "unknown", not as a status
     if (typeof candidate === 'number' && Number.isFinite(candidate)) return candidate;
   }
   return undefined;
@@ -129,7 +129,7 @@ function readStatusCode(cause: unknown): number | undefined {
 /**
  * `code` is stringified because clients disagree on its type (ccxt throws
  * string codes, Node's fetch layer surfaces numeric `errno`-style ones), and
- * the field is only ever displayed.
+ * the field is only ever displayed
  */
 function readVenueCode(cause: unknown): string | undefined {
   const code = asRecord(cause)?.code;

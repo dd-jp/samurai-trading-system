@@ -45,7 +45,7 @@ export function Timeline({ cells }: { cells: readonly ResolvedCell[] }) {
             className="timeline-row"
             data-stage={cell.stage}
             // Set only when it applies, so a test (and a stylesheet) can select
-            // the degraded rows without matching every healthy one (#1080).
+            // the degraded rows without matching every healthy one (#1080)
             data-degraded={cell.degraded ? 'true' : undefined}
           >
             <span className="timeline-stage">
@@ -101,9 +101,9 @@ function criticVerdictText(row: RiskCriticRow, isControl: boolean): string {
 export interface GatesSectionProps {
   riskCritic: RiskCriticRow | undefined;
   verdict: VerdictRow | undefined;
-  /** How the row was found — the empty state names the key that found nothing. */
+  /** How the row was found — the empty state names the key that found nothing */
   keyedBy: RiskCriticJoin;
-  /** The control arm consults no critic — see `criticVerdictText`'s doc comment. */
+  /** The control arm consults no critic — see `criticVerdictText`'s doc comment */
   isControl: boolean;
 }
 
@@ -212,10 +212,10 @@ function RiskCriticBody({
 
 export interface DebateSectionProps {
   debate: DebateRow | undefined;
-  /** `true` while the selected lane is still running — changes the empty state. */
+  /** `true` while the selected lane is still running — changes the empty state */
   inFlight: boolean;
   linkedBy: DebateJoin;
-  /** The control arm trades by indicator alone and never runs a debate (#1597). */
+  /** The control arm trades by indicator alone and never runs a debate (#1597) */
   isControl: boolean;
 }
 

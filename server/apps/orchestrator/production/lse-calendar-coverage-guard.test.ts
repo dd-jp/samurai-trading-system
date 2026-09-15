@@ -54,7 +54,7 @@ describe('assertLseCalendarCoverage delegates the boundary decision to coversClo
     const calendar = new LseRegularHoursCalendar();
     const posted: LseCalendarCoverageAlert[] = [];
     // 30 civil days before LSE_TABLE_COVERAGE_END, derived rather than a bare
-    // literal so extending the table doesn't strand this test at a stale gap.
+    // literal so extending the table doesn't strand this test at a stale gap
     const now = new Date(
       new Date(`${LSE_TABLE_COVERAGE_END}T12:00:00Z`).getTime() - 30 * 86_400_000,
     );
@@ -84,7 +84,7 @@ describe('assertLseCalendarCoverage delegates the boundary decision to coversClo
     // exactly the shape a future subclass or a test double could produce)
     // must not be able to post a negative days_remaining — that would
     // violate LseCalendarCoverageAlert's documented invariant. Removing the
-    // `daysRemaining >= 0` check in assertLseCalendarCoverage turns this red.
+    // `daysRemaining >= 0` check in assertLseCalendarCoverage turns this red
     const calendar = new LseRegularHoursCalendar();
     calendar.coversCloseFor = () => true;
     const posted: LseCalendarCoverageAlert[] = [];

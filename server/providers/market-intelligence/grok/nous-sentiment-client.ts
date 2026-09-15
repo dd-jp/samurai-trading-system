@@ -150,7 +150,7 @@ export class NousSentimentClient implements GrokSentimentClient {
     const started = Date.now();
 
     // Hoisted so the capture path (#1035) persists the messages that actually
-    // went on the wire, rather than a re-render of them.
+    // went on the wire, rather than a re-render of them
     const messages = [
       {
         role: 'system' as const,
@@ -179,7 +179,7 @@ export class NousSentimentClient implements GrokSentimentClient {
           // The gate budget bounds wait + call: `clampCallToBudget` shrinks the
           // network timeout by however long the wait already took (#1533),
           // closing the gap #1080 review round 1 finding 6 left open (worst
-          // case used to be wait + full `timeoutMs`, their sum).
+          // case used to be wait + full `timeoutMs`, their sum)
           gateBudgetMs: this.#timeoutMs,
           clampCallToBudget: true,
           // No `expectedCallMs`, deliberately, unlike `x-search-client.ts`: a
@@ -188,7 +188,7 @@ export class NousSentimentClient implements GrokSentimentClient {
           // default IS the estimate for it. Retrieval differs because it runs
           // the provider's search loop and was measured doing so; nothing has
           // measured a sentiment call apart, and inventing a figure would look
-          // like evidence.
+          // like evidence
           llmStage: 'market_intelligence_sentiment',
         },
         {
@@ -205,7 +205,7 @@ export class NousSentimentClient implements GrokSentimentClient {
       // identical prompt would be re-issued on every tick until the bucket
       // rolled — the same unbounded re-billing the debate path's carve-out
       // exists to stop. The refusal is deterministic in the prompt: re-asking
-      // buys the same answer at the same price.
+      // buys the same answer at the same price
       this.#logger?.log({
         trace_id: 'grok',
         stage: 'market_intelligence',
@@ -226,7 +226,7 @@ export class NousSentimentClient implements GrokSentimentClient {
         raw_text: '',
         model: this.#model,
         // The only surface carrying what the refused call billed: a throw at
-        // the wire boundary never reached a meter.
+        // the wire boundary never reached a meter
         usage: error.usage,
         retrievalEvidence: false,
         latency_ms: Date.now() - started,
@@ -242,7 +242,7 @@ export class NousSentimentClient implements GrokSentimentClient {
       // faithfully — a capture holding only the user turn would omit the
       // instruction that actually shapes the answer — but it is not
       // byte-identical to the request body, and nothing should compare it as
-      // though it were.
+      // though it were
       prompt: messages.map((message) => `[${message.role}] ${message.content}`).join('\n\n'),
       raw_text: result.text,
       model: result.model,
@@ -270,7 +270,7 @@ export class NousSentimentClient implements GrokSentimentClient {
       parsed = JSON.parse(content) as { items?: unknown };
     } catch {
       // Recover a fenced or prose-wrapped object before giving up: a model asked
-      // for JSON often returns it fenced or with a sentence around it.
+      // for JSON often returns it fenced or with a sentence around it
       const match = content.match(/\{[\s\S]*\}/);
       if (match === null) return this.#unreadable(instrument);
       try {
@@ -298,7 +298,7 @@ export class NousSentimentClient implements GrokSentimentClient {
   ): IntelligenceItem | null {
     // Every field validated. A `sentiment` of 2, or a confidence of 1.4, would
     // otherwise flow straight into the analysts' arithmetic and skew a
-    // direction on a value the type system says cannot exist.
+    // direction on a value the type system says cannot exist
     if (typeof raw.headline !== 'string' || raw.headline.trim() === '') return null;
     if (raw.sentiment !== 1 && raw.sentiment !== 0 && raw.sentiment !== -1) return null;
     if (typeof raw.confidence !== 'number' || !Number.isFinite(raw.confidence)) return null;

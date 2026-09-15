@@ -105,7 +105,7 @@ function classify(error: unknown): FailureCause {
   // Above `LlmCancelledError` and `LlmTimeoutError` because it is neither: the
   // MI path reports the gate's own error class, the debate path the adapter's
   // translation of it, and both must land here rather than in the two buckets
-  // whose signal value #1080 depends on.
+  // whose signal value #1080 depends on
   if (error instanceof LlmAdmissionRefusedError || error instanceof LlmInFlightRefusedError) {
     return 'gate_refused';
   }
@@ -114,7 +114,7 @@ function classify(error: unknown): FailureCause {
   if (error instanceof LlmRateLimitError) return 'rate_limited';
 
   // `NousApiError` carries the wire status and falls through to the duck-type
-  // below, which is what maps its 429/408/504 rather than a second branch.
+  // below, which is what maps its 429/408/504 rather than a second branch
   const status = statusOf(error);
   if (status === 429) return 'rate_limited';
   if (status === 408 || status === 504) return 'timeout';
@@ -124,7 +124,7 @@ function classify(error: unknown): FailureCause {
 
   // `AbortSignal.timeout` and `fetch`'s own abort surface as a `DOMException`
   // with these names and no status, so an aborted socket reaching an outer
-  // catch is attributable without importing anything.
+  // catch is attributable without importing anything
   const name = error instanceof Error ? error.name : undefined;
   if (name === 'AbortError') return 'cancelled';
   if (name === 'TimeoutError') return 'timeout';

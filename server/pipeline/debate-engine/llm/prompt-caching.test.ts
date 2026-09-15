@@ -57,7 +57,7 @@ import type { AnalystView } from '../types.js';
 import { renderMessageContent } from './anthropic-client.js';
 import { MockLlmClient } from './mock-client.js';
 
-/** Anthropic's minimum cacheable prompt length for the pinned debate model. */
+/** Anthropic's minimum cacheable prompt length for the pinned debate model */
 const HAIKU_4_5_CACHE_MINIMUM_TOKENS = 4096;
 
 /**
@@ -69,7 +69,7 @@ const HAIKU_4_5_CACHE_MINIMUM_TOKENS = 4096;
  */
 const PRODUCTION_MAX_OBSERVED_TOKENS = 2360;
 
-/** chars/4, per #745's documented convention (see file header). */
+/** chars/4, per #745's documented convention (see file header) */
 function estimatedTokens(text: string): number {
   return Math.round(text.length / 4);
 }
@@ -159,7 +159,7 @@ describe('prompt-caching stable-prefix measurement (#1010)', () => {
 
     // This is the part identical across EVERY debate, not just every round of
     // one debate — and it alone is nowhere close to any Anthropic model's
-    // minimum (the lowest published minimum, Opus 5, is 512 tokens).
+    // minimum (the lowest published minimum, Opus 5, is 512 tokens)
     expect(tokens).toBeLessThan(512);
   });
 
@@ -170,7 +170,7 @@ describe('prompt-caching stable-prefix measurement (#1010)', () => {
     // Production (paper-soak store, llm_spend, stage='debate', n=383 rows
     // across 49 debates, 2026-09-02 sample) measures bull/bear input at
     // ~1,623 tokens average, 1,721 max — this fixture is intentionally
-    // heavier than that and still falls well short of the minimum.
+    // heavier than that and still falls well short of the minimum
     expect(tokens).toBeLessThan(HAIKU_4_5_CACHE_MINIMUM_TOKENS);
   });
 
@@ -189,7 +189,7 @@ describe('prompt-caching stable-prefix measurement (#1010)', () => {
     // (real provider-reported tokens, not a character-count estimate)
     // remains the authoritative one regardless — see the module doc
     // comment. Both this fixture and the production max still stay under
-    // the 4,096-token minimum.
+    // the 4,096-token minimum
     expect(tokens).toBeGreaterThan(PRODUCTION_MAX_OBSERVED_TOKENS);
     expect(tokens).toBeLessThan(HAIKU_4_5_CACHE_MINIMUM_TOKENS);
   });

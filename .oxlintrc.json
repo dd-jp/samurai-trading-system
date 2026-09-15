@@ -1,0 +1,20 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "ignorePatterns": [
+    "dist",
+    "node_modules",
+    "coverage",
+    "docs/prototypes",
+    "server/tools/__fixtures__",
+    "server/providers/market-data-service/__fixtures__"
+  ],
+  "jsPlugins": ["eslint-plugin-no-comment-slop"],
+  "rules": {
+    "no-comment-slop/no-banner-comment": "error",
+    "no-comment-slop/no-foreign-syntax": "error",
+    "no-comment-slop/no-jargon": "warn",
+    "no-comment-slop/no-trailing-comment": "warn",
+    "no-comment-slop/multiline-jsdoc-format": "error",
+    "no-comment-slop/no-trailing-period": "error"
+  }
+}

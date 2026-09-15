@@ -18,8 +18,10 @@ class ManualClock implements Clock {
   }
 }
 
-/** Wraps a DataSource to count fetchBars calls — proves the bulk tier reads
- * the window once per getIndicator call, not once per bar. */
+/**
+ * Wraps a DataSource to count fetchBars calls — proves the bulk tier reads
+ * the window once per getIndicator call, not once per bar
+ */
 class CountingDataSource implements DataSource {
   fetchBarsCallCount = 0;
 
@@ -54,7 +56,7 @@ function bar(closeTime: Date, close: number): Bar {
   };
 }
 
-/** Deterministic, non-monotonic-looking closes so RSI/EMA aren't degenerate. */
+/** Deterministic, non-monotonic-looking closes so RSI/EMA aren't degenerate */
 function buildBars(count: number, startTime: Date): Bar[] {
   const bars: Bar[] = [];
   let price = 100;
@@ -129,11 +131,11 @@ describe('MarketDataServiceImpl.getIndicator', () => {
   it("serves a NON-1h spec off that timeframe's bars (#315)", async () => {
     // `getIndicator` used to build its window from a module constant, so it
     // could only ever serve 1h. A 4h caller either bypassed the serving layer
-    // or — worse — came through and got a 1h answer with no error.
+    // or — worse — came through and got a 1h answer with no error
     //
     // The two bar series carry deliberately different prices, so a spec that
     // was still pinned to 1h would return the 1h value and fail here rather
-    // than merely returning something plausible.
+    // than merely returning something plausible
     const fourHour = bars.map((source, i) => ({
       ...source,
       timeframe: '4h',
@@ -155,7 +157,7 @@ describe('MarketDataServiceImpl.getIndicator', () => {
       asOf,
     );
 
-    // The 4h series sits ~1000 above the 1h one, so this is not a near-miss.
+    // The 4h series sits ~1000 above the 1h one, so this is not a near-miss
     expect(fourHourly.value).toBeGreaterThan(hourly.value + 900);
   });
 
@@ -165,7 +167,7 @@ describe('MarketDataServiceImpl.getIndicator', () => {
     // second caller silently receiving the first one's timeframe. That is the
     // failure this test exists to make impossible, and asserting on the values
     // rather than on the key means a key built from the wrong fields still
-    // fails it.
+    // fails it
     const fourHour = bars.map((source, i) => ({
       ...source,
       timeframe: '4h',
@@ -180,7 +182,7 @@ describe('MarketDataServiceImpl.getIndicator', () => {
     const first = await service.getIndicator(INSTRUMENT, { ...spec, timeframe: '1h' }, asOf);
     const second = await service.getIndicator(INSTRUMENT, { ...spec, timeframe: '4h' }, asOf);
     // ...and back again, so a cache that had been poisoned by the second call
-    // would return the 4h value under the 1h spec here.
+    // would return the 4h value under the 1h spec here
     const firstAgain = await service.getIndicator(INSTRUMENT, { ...spec, timeframe: '1h' }, asOf);
 
     expect(second.value).not.toBe(first.value);
@@ -233,7 +235,7 @@ describe('MarketDataServiceImpl.getIndicator', () => {
     // hit the same `avgLoss === 0` branch a strictly rising window does and
     // answered 100 — maximum overbought strength on a tape that did not
     // move. This is the case F3 (`docs/reviews/indicator-characterisation-
-    // 2026-08-16.md`) pinned and deliberately did not fix.
+    // 2026-08-16.md`) pinned and deliberately did not fix
     const flatBars = buildBars(20, start).map((flatBar) => ({ ...flatBar, close: 100 }));
     const { service } = buildService(flatBars, flatBars[19]?.close_time as Date);
 
@@ -250,10 +252,10 @@ describe('MarketDataServiceImpl.getIndicator', () => {
     // The service-level half of #319, and the reason the client-level fix
     // (#292's `AlpacaDataUnderfetchError`) does not close the class:
     // `getBars` serves from `store.readBars`, so the bar count a source
-    // returned and the bar count an indicator actually sees are decoupled.
+    // returned and the bar count an indicator actually sees are decoupled
     // Here the instrument genuinely only has 8 bars of history at `asOf`, so
     // no source call was ever short — yet an ATR(14) would still have been
-    // computed over 7 true ranges and cached under an ATR(14) key.
+    // computed over 7 true ranges and cached under an ATR(14) key
     const shortHistory = buildBars(8, start);
     const coldAsOf = shortHistory[7]?.close_time as Date;
     const { service } = buildService(shortHistory, coldAsOf);
@@ -285,11 +287,11 @@ describe('computeIndicator — a period-N indicator is never computed over fewer
   const start = new Date('2026-07-01T00:00:00Z');
   const PERIOD = 14;
 
-  /** (spec, minimum window) for each supported indicator, from the module's own arity. */
+  /** (spec, minimum window) for each supported indicator, from the module's own arity */
   const CASES = [
     { indicator: 'sma', required: PERIOD },
     { indicator: 'ema', required: PERIOD },
-    // `+ 1`: the first bar is consumed only to seed a predecessor.
+    // `+ 1`: the first bar is consumed only to seed a predecessor
     { indicator: 'rsi', required: PERIOD + 1 },
     { indicator: 'atr', required: PERIOD + 1 },
   ] as const;
@@ -317,9 +319,9 @@ describe('computeIndicator — a period-N indicator is never computed over fewer
   it('refuses the exact case #319 names: 3 bars presented as an ATR(14)', () => {
     // `atr` divides by `seedRanges.length`, so this used to answer a mean of
     // TWO true ranges and hand it to `trader/decide.ts` as ATR(14) — a stop
-    // priced off a number that does not describe 14 periods of anything.
+    // priced off a number that does not describe 14 periods of anything
     // The old value is asserted here so the regression is legible: the guard
-    // is not rejecting a NaN, it is rejecting a plausible-looking number.
+    // is not rejecting a NaN, it is rejecting a plausible-looking number
     const threeBars = buildBars(3, start);
     const spec: IndicatorSpec = {
       indicator: 'atr',
@@ -380,7 +382,7 @@ describe('computeIndicator — a period-N indicator is never computed over fewer
   it('falls back to the lookback as the period when params.period is absent', () => {
     // `params.period ?? spec.lookback` — the technical analyst's SMA_SPEC
     // shape. The guard has to follow the same fallback or it would measure
-    // against a period the computation never used.
+    // against a period the computation never used
     const spec: IndicatorSpec = { indicator: 'sma', params: {}, timeframe: '1h', lookback: 20 };
 
     expect(minimumBarsFor(spec)).toBe(20);
@@ -390,7 +392,7 @@ describe('computeIndicator — a period-N indicator is never computed over fewer
   it('reports the ORDERING fault, not the length, when a window is both', () => {
     // Order is checked first on purpose: a misordered window means a broken
     // feed, which is the more actionable diagnosis. A length complaint would
-    // send an operator looking for missing history instead.
+    // send an operator looking for missing history instead
     const bothWrong = [...buildBars(3, start)].reverse();
 
     expect(() =>
@@ -406,7 +408,7 @@ describe('computeIndicator — a period-N indicator is never computed over fewer
   it('rejects a zero or negative period instead of silently meaning the whole window', () => {
     // `slice(-0)` is `slice(0)` — the WHOLE array. A `period: 0` sma would
     // have answered a full-window mean labelled a 0-period one, which is the
-    // same fabrication by a different route.
+    // same fabrication by a different route
     const twenty = buildBars(20, start);
 
     expect(() =>
@@ -453,7 +455,7 @@ describe('computeIndicator — bar ordering is enforced, not assumed', () => {
   it('throws on a single bar out of sequence, not just a fully reversed window', () => {
     // The realistic feed fault: one straggler stamped in the past. A
     // fully-reversed array is the easy case; this is the one that would slip
-    // through a cheaper "is the first bar before the last bar" check.
+    // through a cheaper "is the first bar before the last bar" check
     const interleaved = [...ascending];
     const straggler = interleaved[3] as Bar;
     interleaved[3] = interleaved[11] as Bar;

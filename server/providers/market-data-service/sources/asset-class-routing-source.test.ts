@@ -68,7 +68,7 @@ describe('AssetClassRoutingDataSource', () => {
     // A missing source is the same class of wiring error as a misrouted one:
     // it reaches an operator as an opaque `TypeError` from inside a stage,
     // mid-tick, rather than as a startup failure. #358 is the precedent for
-    // why that distinction matters.
+    // why that distinction matters
     const assetClassOf = new Map<string, AssetClass>([['AAPL', 'stocks']]);
 
     it('refuses construction when the stocks source is missing', () => {
@@ -110,7 +110,7 @@ describe('AssetClassRoutingDataSource', () => {
     it('fails at construction, not on the first fetch', async () => {
       // The point of the guard: without it the object constructs happily and
       // the defect surfaces later, from inside a stage, on whichever
-      // instrument routed there first.
+      // instrument routed there first
       let constructed: AssetClassRoutingDataSource | undefined;
       expect(() => {
         constructed = new AssetClassRoutingDataSource({
@@ -160,7 +160,7 @@ describe('AssetClassRoutingDataSource', () => {
     // `fetchQuote` is optional on the port, and `getSpreadEstimate` already
     // treats "no quote" as `null` (MDS never fabricates a spread it cannot
     // observe). Throwing here would turn a documented absence into a tick
-    // failure.
+    // failure
     const router = makeRouter({ crypto: makeSource('crypto'), stocks: makeSource('stocks') });
 
     expect(await router.fetchQuote('AAPL', ASOF)).toBeNull();

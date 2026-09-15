@@ -96,28 +96,28 @@
 import type { TradingCalendar } from './trading-calendar.js';
 import type { Bar } from './types.js';
 
-/** RVOL's baseline window: the prior N sessions, per the ticket's definition. */
+/** RVOL's baseline window: the prior N sessions, per the ticket's definition */
 export const RVOL_SESSION_WINDOW = 10;
 
-/** Why `computeRvol` returned `null` instead of a ratio. */
+/** Why `computeRvol` returned `null` instead of a ratio */
 export type RvolDegradedReason =
-  /** `calendar.sessionEnd(asOf) === null` — the venue has no session to anchor to (crypto). */
+  /** `calendar.sessionEnd(asOf) === null` — the venue has no session to anchor to (crypto) */
   | 'no_session_anchor'
-  /** No bar in `bars` falls inside the current session yet. */
+  /** No bar in `bars` falls inside the current session yet */
   | 'no_current_bucket'
   /**
    * Fewer than `RVOL_SESSION_WINDOW` prior sessions supplied a bar at the
    * same clock-time bucket as the current one — either because fewer than
    * `RVOL_SESSION_WINDOW` prior sessions are present in `bars` at all, or
    * because one or more of those sessions lacks that specific bucket (a
-   * half-day that ended before it, a gap in the feed).
+   * half-day that ended before it, a gap in the feed)
    */
   | 'insufficient_sessions'
-  /** The median baseline volume is 0 — there is no meaningful ratio to a zero denominator. */
+  /** The median baseline volume is 0 — there is no meaningful ratio to a zero denominator */
   | 'zero_baseline';
 
 export interface RvolReading {
-  /** current-bucket volume / median same-clock-time baseline volume, or `null` if degraded. */
+  /** current-bucket volume / median same-clock-time baseline volume, or `null` if degraded */
   rvol: number | null;
   /**
    * How many of the (up to) `RVOL_SESSION_WINDOW` most recent prior sessions
@@ -126,9 +126,9 @@ export interface RvolReading {
    * shortfall rather than just "unavailable".
    */
   sessions_used: number;
-  /** Always `RVOL_SESSION_WINDOW` — carried for display convenience. */
+  /** Always `RVOL_SESSION_WINDOW` — carried for display convenience */
   sessions_target: number;
-  /** `null` when `rvol` is a real number; otherwise names why it is not. */
+  /** `null` when `rvol` is a real number; otherwise names why it is not */
   degraded_reason: RvolDegradedReason | null;
 }
 
@@ -210,9 +210,9 @@ export function computeRvol(bars: Bar[], calendar: TradingCalendar, asOf: Date):
     return NO_CURRENT_BUCKET;
   }
 
-  // Partition into sessions, keyed by each bar's accounting session start.
+  // Partition into sessions, keyed by each bar's accounting session start
   // `bars` is ascending, so each group's bars are ascending too, and group
-  // insertion order is the sessions' chronological order.
+  // insertion order is the sessions' chronological order
   const sessions = new Map<number, Bar[]>();
   for (const b of bars) {
     const key = calendar.sessionStart(b.close_time).getTime();
@@ -228,13 +228,13 @@ export function computeRvol(bars: Bar[], calendar: TradingCalendar, asOf: Date):
   const currentSession = sessions.get(currentSessionKey);
   if (!currentSession || currentSession.length === 0) {
     // Cannot happen given currentBar came from `bars` itself, but keeps this
-    // function total rather than trusting the Map lookup implicitly.
+    // function total rather than trusting the Map lookup implicitly
     return NO_CURRENT_BUCKET;
   }
   const currentIndex = currentSession.length - 1;
   const currentVolume = currentBar.volume;
 
-  // Prior sessions, most-recent-first, excluding the current one.
+  // Prior sessions, most-recent-first, excluding the current one
   const priorSessionKeys = [...sessions.keys()]
     .filter((key) => key < currentSessionKey)
     .sort((a, b) => b - a)

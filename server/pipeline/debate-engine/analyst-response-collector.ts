@@ -20,7 +20,7 @@ import type { AnalystView, Direction } from './types.js';
 
 const DIRECTIONS: Direction[] = ['bullish', 'bearish', 'neutral'];
 
-/** One analyst's in-flight response, keyed for failure reporting if it never settles. */
+/** One analyst's in-flight response, keyed for failure reporting if it never settles */
 export interface ExpectedAnalyst {
   analyst_id: string;
   analyst_type: string;
@@ -28,13 +28,13 @@ export interface ExpectedAnalyst {
 }
 
 export interface AnalystCollectionResult {
-  /** True if >=50% of `expected` produced a valid view before the timeout. */
+  /** True if >=50% of `expected` produced a valid view before the timeout */
   quorum_met: boolean;
   /** Valid views, sourced from responders. Empty if quorum was not met (abort signal). */
   views: AnalystView[];
-  /** Every non-view outcome: timeout, malformed output, or error — reason-tagged. */
+  /** Every non-view outcome: timeout, malformed output, or error — reason-tagged */
   failures: DebateAnalystFailure[];
-  /** Size of `expected` — the quorum denominator. */
+  /** Size of `expected` — the quorum denominator */
   expected_count: number;
 }
 
@@ -120,7 +120,7 @@ function raceWithTimeout(expected: ExpectedAnalyst, timeoutMs: number): Promise<
       // `collectAnalystViews` below. A value whose `message` or `toString`
       // throws would replace the recorded outcome with a fresh rejection and
       // take every other analyst's settled view down with it — the structural
-      // twin of the hole #1199 fixed in the analysts orchestrator.
+      // twin of the hole #1199 fixed in the analysts orchestrator
       reason: describeThrownSafely(error),
     }),
   );

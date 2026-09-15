@@ -15,7 +15,7 @@ import { BARE_JSON_INSTRUCTION, unwrapFencedJson } from './llm/json-response.js'
 import type { LlmClient } from './llm/types.js';
 import type { AnalystView, Direction } from './types.js';
 
-/** One detected conflict: which analysts disagree and why, in free text. */
+/** One detected conflict: which analysts disagree and why, in free text */
 export interface DisagreementConflict {
   analysts: string[];
   nature: string;
@@ -25,7 +25,7 @@ export interface DisagreementConflict {
  * `method` records which path produced the result — semantic (LLM succeeded)
  * or directional_fallback (LLM unavailable/malformed, or too few views to
  * bother calling it) — so callers/logs can distinguish a "no disagreement"
- * finding from "we couldn't check properly".
+ * finding from "we couldn't check properly"
  */
 export interface DisagreementAnalysis {
   summary: string;
@@ -50,13 +50,13 @@ const PROMPT = [
   // #361: the pinned model fenced this payload on every call, so the parse
   // below always threw and this detector silently degraded to
   // `directional_fallback` — reporting "we only compared directions" when a
-  // real semantic assessment had in fact been produced.
+  // real semantic assessment had in fact been produced
   BARE_JSON_INSTRUCTION,
   '',
   'If there are no conflicts, respond with an empty "conflicts" array and a',
   'summary noting agreement.',
 ].join('\n');
-/** sha256 of `PROMPT` above (#1514) — this detector's whole prompt is static, so it hashes the constant directly rather than splitting a template out. */
+/** sha256 of `PROMPT` above (#1514) — this detector's whole prompt is static, so it hashes the constant directly rather than splitting a template out */
 const PROMPT_TEMPLATE_HASH = hashPromptTemplate(PROMPT);
 
 function isConflict(value: unknown): value is { analysts: string[]; nature: string } {
@@ -209,7 +209,7 @@ export async function detectDisagreements(
     // and the fallback is still returned. `warn`, not `debug`: this is a
     // billed call the debate paid for and did not get, and the result it
     // degrades to is the "simple directional comparison" semantic detection
-    // exists to improve on.
+    // exists to improve on
     if (logger !== undefined) {
       safeLog(logger, {
         trace_id: attribution?.trace_id ?? 'unattributed',

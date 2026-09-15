@@ -52,13 +52,13 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
       from: WINDOW_FROM,
       to: WINDOW_TO,
       trades: [
-        // Live: +40, −10, +20 → ends +50, deepest fall from peak 40 is 10.
+        // Live: +40, −10, +20 → ends +50, deepest fall from peak 40 is 10
         trade({ arm: 'live', closed_at: new Date('2026-09-01T09:00:00Z'), realized_pnl_net: 40 }),
         trade({ arm: 'live', closed_at: new Date('2026-09-01T10:00:00Z'), realized_pnl_net: -10 }),
         trade({ arm: 'live', closed_at: new Date('2026-09-01T11:00:00Z'), realized_pnl_net: 20 }),
         // Control: −30, +90 → ends +60 (BEATS live on return) with a 30 hole
         // first. This is doc 12 D4's exact scenario: the return-only reading
-        // says the indicator arm won.
+        // says the indicator arm won
         trade({
           arm: 'control',
           closed_at: new Date('2026-09-01T09:30:00Z'),
@@ -92,7 +92,7 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
     });
 
     // The same window and the same denominator for both — which is what makes
-    // the two `return_pct` numbers comparable at all.
+    // the two `return_pct` numbers comparable at all
     expect(comparison.from).toEqual(WINDOW_FROM);
     expect(comparison.to).toEqual(WINDOW_TO);
     expect(comparison.basis).toBe(1_000);
@@ -126,7 +126,7 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
     }
 
     // If `max_drawdown_pct` were ever loosened to optional, this stops erroring
-    // and the file fails to type-check — the compiler is the enforcement.
+    // and the file fails to type-check — the compiler is the enforcement
     // @ts-expect-error — a return-only ArmPerformance must not type-check.
     const returnOnly: ArmPerformance = {
       arm: 'control',
@@ -145,11 +145,11 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
       from: WINDOW_FROM,
       to: WINDOW_TO,
       trades: [
-        // Exactly at `from`: excluded (half-open at the start).
+        // Exactly at `from`: excluded (half-open at the start)
         trade({ arm: 'live', closed_at: WINDOW_FROM, realized_pnl_net: 999 }),
-        // Exactly at `to`: included.
+        // Exactly at `to`: included
         trade({ arm: 'control', closed_at: WINDOW_TO, realized_pnl_net: 25 }),
-        // After the window: excluded.
+        // After the window: excluded
         trade({
           arm: 'live',
           closed_at: new Date('2026-09-01T16:00:00.001Z'),
@@ -223,7 +223,7 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
 
   /**
    * The high-water mark is the capital the arm started with, not its best
-   * trade: an arm that is down from its first close has a real drawdown.
+   * trade: an arm that is down from its first close has a real drawdown
    */
   it('measures drawdown from the starting capital, not from the first peak', () => {
     const comparison = buildArmComparison({
@@ -280,7 +280,7 @@ describe('buildArmComparison (#753 — the two-arm report)', () => {
     });
 
     expect(reversed.live).toEqual(forward.live);
-    // 'a' (−10) sorts first, so the series dips before it peaks.
+    // 'a' (−10) sorts first, so the series dips before it peaks
     expect(forward.live.max_drawdown_pct).toBeCloseTo(0.01, 12);
   });
 
@@ -364,7 +364,7 @@ describe('exitClassOf', () => {
 describe('cumulativePnl', () => {
   it('sums realized PnL and finds the deepest peak-to-trough fall, as a fraction of basis', () => {
     // +40, −10, +20 → ends +50; peak reaches 40, falls to 30 (a 10 drawdown),
-    // never falls below a later peak after that.
+    // never falls below a later peak after that
     const result = cumulativePnl(
       [
         trade({ closed_at: new Date('2026-09-01T09:00:00Z'), realized_pnl_net: 40 }),
@@ -408,7 +408,7 @@ describe('cumulativePnl', () => {
     // +40 then -30: peak 40, trough 10 → drawdown 30. Given out of order, an
     // unsorted sum would still total 10 but the WRONG drawdown (0, since -30
     // would be read as the first, lower-then-rising point) if this function
-    // summed in input order instead of `closed_at` order.
+    // summed in input order instead of `closed_at` order
     expect(forward.max_drawdown_pct).toBeCloseTo(0.03);
   });
 });

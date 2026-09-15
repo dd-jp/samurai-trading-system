@@ -65,7 +65,7 @@ import { LSE_TABLE_COVERAGE_END } from '../../../providers/market-data-service/i
 // Reached directly rather than through the barrel: these are the internal
 // London-civil-date helpers `trading-calendar.ts` exports for exactly this
 // caller (see `LONDON_ZONE`'s own doc comment) — not part of the package's
-// public surface, so they stay off `providers/market-data-service/index.ts`.
+// public surface, so they stay off `providers/market-data-service/index.ts`
 import {
   civilDateKey,
   LONDON_ZONE,
@@ -85,7 +85,7 @@ export const LSE_COVERAGE_ALERT_HORIZON_DAYS = 60;
 
 const CIVIL_DATE_KEY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 
-/** Parses a `civilDateKey`-shaped `YYYY-MM-DD` string to UTC epoch milliseconds at midnight. */
+/** Parses a `civilDateKey`-shaped `YYYY-MM-DD` string to UTC epoch milliseconds at midnight */
 function civilDateKeyToUtcMs(key: string): number {
   const match = CIVIL_DATE_KEY_PATTERN.exec(key);
   if (match === null) {
@@ -95,18 +95,18 @@ function civilDateKeyToUtcMs(key: string): number {
   return Date.UTC(Number(year), Number(month) - 1, Number(day));
 }
 
-/** Whole civil days from `fromKey` to `toKey` — both `YYYY-MM-DD`, `toKey >= fromKey`. */
+/** Whole civil days from `fromKey` to `toKey` — both `YYYY-MM-DD`, `toKey >= fromKey` */
 function civilDaysBetween(fromKey: string, toKey: string): number {
   return Math.round((civilDateKeyToUtcMs(toKey) - civilDateKeyToUtcMs(fromKey)) / 86_400_000);
 }
 
 export interface AssertLseCalendarCoverageOptions {
-  /** Boot time, read through the injected clock — never `Date.now()` directly. */
+  /** Boot time, read through the injected clock — never `Date.now()` directly */
   now: Date;
-  /** The resolved live calendar — the guard defers the boundary decision to its `coversCloseFor`, rather than re-deriving it from `LSE_TABLE_COVERAGE_END` itself. */
+  /** The resolved live calendar — the guard defers the boundary decision to its `coversCloseFor`, rather than re-deriving it from `LSE_TABLE_COVERAGE_END` itself */
   calendar: LseRegularHoursCalendar;
   logger: Logger;
-  /** Defaults to `loggingAlertChannel('lseCalendarCoverageAlerts', logger)`, same posture as `calendarFallbackAlerts`. */
+  /** Defaults to `loggingAlertChannel('lseCalendarCoverageAlerts', logger)`, same posture as `calendarFallbackAlerts` */
   alertChannel?: LseCalendarCoverageAlertChannel | undefined;
 }
 
@@ -139,7 +139,7 @@ export function assertLseCalendarCoverage(options: AssertLseCalendarCoverageOpti
   // with the raw LSE_TABLE_COVERAGE_END comparison — without this, a
   // calendar that says "covered" past the constant would post a negative
   // `days_remaining`, violating the documented invariant on
-  // `LseCalendarCoverageAlert` (lse-calendar-coverage-alert.ts).
+  // `LseCalendarCoverageAlert` (lse-calendar-coverage-alert.ts)
   if (daysRemaining >= 0 && daysRemaining <= LSE_COVERAGE_ALERT_HORIZON_DAYS) {
     const alertChannel =
       options.alertChannel ?? loggingAlertChannel('lseCalendarCoverageAlerts', logger);

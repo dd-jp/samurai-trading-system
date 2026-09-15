@@ -11,7 +11,7 @@ import type {
   MarketDataService,
   TradingCalendar,
 } from '../../providers/market-data-service/index.js';
-/** Asset classes the risk multiplier is keyed on, matching `Mark.asset_class`. */
+/** Asset classes the risk multiplier is keyed on, matching `Mark.asset_class` */
 import type {
   AssetClass,
   Clock,
@@ -34,7 +34,7 @@ export type { AssetClass };
  * rather than module-global so tests can pin thresholds explicitly.
  */
 export interface TraderConfig {
-  /** Below this conviction there is no edge to act on — no entry. */
+  /** Below this conviction there is no edge to act on — no entry */
   conviction_floor: number;
   /**
    * How long before the session close the book must be flat (#668).
@@ -120,9 +120,9 @@ export interface TraderConfig {
    * one pool file arms both stages or neither.
    */
   subclass_of: Readonly<Record<string, InstrumentSubclass>>;
-  /** Timeframe of the bars ATR is computed from. */
+  /** Timeframe of the bars ATR is computed from */
   atr_timeframe: string;
-  /** Number of true-range periods averaged into ATR. */
+  /** Number of true-range periods averaged into ATR */
   atr_lookback: number;
   /**
    * Stop distance = atr_k x max(ATR, vol floor) — the PRE-ADR-0018 geometry.
@@ -150,7 +150,7 @@ export interface TraderConfig {
    * Inert under a frozen bracket, exactly as `atr_k` is.
    */
   vol_floor_fraction: number;
-  /** Applied when the debate did not converge (`converged: false`). */
+  /** Applied when the debate did not converge (`converged: false`) */
   non_converged_haircut: number;
   /**
    * Target distance as a multiple of the stop distance. trader-spec.md
@@ -245,7 +245,7 @@ export const DEFAULT_TRADER_CONFIG: TraderConfig = {
   // Empty by default: the brackets are declared, the regime is not armed until
   // a universe classifies its instruments. `paperTradingProfile` fills this
   // from the universe it schedules, so arming is a pool-file edit rather than
-  // a code change.
+  // a code change
   subclass_of: {},
   asset_class_risk_multiplier: {
     crypto: 0.5,
@@ -300,7 +300,7 @@ export function assertTraderConfigSound(config: TraderConfig): void {
   // the forward-only window this ticket removed — the bell shuts the flatten
   // off mid-tick and a lot the pre-close window missed gets no second chance,
   // with nothing in `trader_log` distinguishing that from a session that had
-  // nothing left to flatten.
+  // nothing left to flatten
   if (!(config.flatten_after_close_ms > 0)) {
     throw new Error(
       `traderConfig.flatten_after_close_ms must be > 0 (got ${config.flatten_after_close_ms}); ` +
@@ -309,9 +309,9 @@ export function assertTraderConfigSound(config: TraderConfig): void {
   }
 }
 
-/** Fully deterministic given its inputs + the clock-scoped market data. */
+/** Fully deterministic given its inputs + the clock-scoped market data */
 export interface TraderInput {
-  /** Cross-cutting correlation ID, threaded from the Orchestrator's tick — not business data. */
+  /** Cross-cutting correlation ID, threaded from the Orchestrator's tick — not business data */
   trace_id: string;
   /**
    * Which arm of #753's measurement this decision belongs to. Absent means
@@ -344,7 +344,7 @@ export interface TraderInput {
    */
   instrument: string;
   debate: DebateResult;
-  /** Wall-clock live, simulated T in replay. */
+  /** Wall-clock live, simulated T in replay */
   clock: Clock;
   marketData: MarketDataService;
   /**
@@ -478,10 +478,10 @@ export interface UnresolvedFlatten {
   readonly instrument: string;
 }
 
-/** One mandatory flatten built without a mark (#826). */
+/** One mandatory flatten built without a mark (#826) */
 export interface UnpricedFlattenReport {
   instrument: string;
-  /** The mark read's own failure, rendered — the only form a thrown value survives in. */
+  /** The mark read's own failure, rendered — the only form a thrown value survives in */
   reason: string;
 }
 
@@ -513,7 +513,7 @@ export type TraderSkipReason =
   // #668: inside the flat-by-close window, so no new exposure is opened. A
   // distinct reason rather than a silent skip because "nothing traded after
   // 16:25" and "nothing traded because the market was quiet" are the same row
-  // otherwise, and only one of them is the system working as designed.
+  // otherwise, and only one of them is the system working as designed
   | 'session_closing'
   | 'below_min_notional'
   | 'holding_neutral_or_non_converged'
@@ -525,7 +525,7 @@ export type TraderSkipReason =
   // disagrees with itself", and the exit it suppresses may be one a sibling
   // lot genuinely needs. If this ever appears in a soak log, the fill record
   // is the thing to look at, and an instrument is stuck un-exitable until it
-  // is.
+  // is
   | 'exit_held_quantity_diverged'
   // #1389: this arm has already SENT a flatten for this instrument and it is
   // not resolved yet (`submitting`, or `submitted` with fills unswept), so no
@@ -535,16 +535,16 @@ export type TraderSkipReason =
   // stale until the sweep lands. A soak in which this appears more than
   // briefly is a soak whose fill poll is wedged, and the instrument is
   // un-flattenable until it is — which is what the carried-lot alert exists to
-  // make audible.
+  // make audible
   | 'flatten_in_flight'
   // #743, tick path only: no lot is open for this instrument, so the exit
   // check has nothing to evaluate. By far the commonest tick-path outcome and
-  // entirely healthy — it is the exit-cadence sibling of a quiet decision.
+  // entirely healthy — it is the exit-cadence sibling of a quiet decision
   | 'no_open_position'
   // #748, tick path only: a lot is held, the flat-by-close window has not
   // opened, and the momentum axis still supports the held side. The healthy
   // holding outcome and by far the commonest one on an instrument that holds
-  // something — holding through the session is what a position is for.
+  // something — holding through the session is what a position is for
   //
   // **This REPLACES #743's `flatten_not_due`**, which is deliberately gone
   // rather than kept alongside. Once the early exit runs on every non-flatten
@@ -552,17 +552,17 @@ export type TraderSkipReason =
   // it is a branch it passes THROUGH on the way to the decay read. Keeping the
   // old member would have left a value nothing can emit — the no-caller shape
   // this codebase keeps shipping — and, worse, would have made a working hold
-  // and a decay read that never ran the same row.
+  // and a decay read that never ran the same row
   | 'signal_still_supports_position'
   // #748, tick path only: a lot is held, the flatten is not due, and the
   // momentum read could not be taken at all — an instrument too cold for the
-  // MACD warm-up, typically in the first session after it enters the universe.
+  // MACD warm-up, typically in the first session after it enters the universe
   //
   // Its OWN reason, not folded into `signal_still_supports_position`, and the
   // distinction is the point: one says the signal was read and still supports
   // the position, the other says nothing was read. A soak in which this appears
   // steadily is a soak whose early exit is not running, and under one shared
-  // reason that is indistinguishable from a healthy hold.
+  // reason that is indistinguishable from a healthy hold
   | 'early_exit_signal_unavailable'
   | 'no_position_side'
   | 'atr_insufficient_bars'
@@ -572,12 +572,12 @@ export type TraderSkipReason =
   | 'size_not_finite'
   // #941: the entry sized to less than one whole share on a venue that only
   // accepts whole shares (`whole_share_sizing`). Not a data-quality failure
-  // and not dust — see the guard's own comment in `sizeBracket`.
+  // and not dust — see the guard's own comment in `sizeBracket`
   | 'rounds_to_zero_shares'
   // #1089, `arm === 'control'` ONLY: a whole-book valuation refusal
   // (`BookValuationError`/`AggregateError`) from `equity()` that the live arm
   // would instead let propagate into `#507`'s retry. See `buildBracket`'s
-  // read of `input.equity()` for the full reasoning.
+  // read of `input.equity()` for the full reasoning
   | 'control_arm_valuation_refused';
 
 /**

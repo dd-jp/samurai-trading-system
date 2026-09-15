@@ -113,7 +113,7 @@ import {
 } from '../../../shared/index.js';
 import type { TickSteps } from '../types.js';
 
-/** The one method the debate step needs from the tuning store (#435). */
+/** The one method the debate step needs from the tuning store (#435) */
 export interface AnalystWeightSource {
   getAnalystWeights(): Record<string, number>;
 }
@@ -139,7 +139,7 @@ import { RateLimitedLlmClient } from './rate-limited-llm-client.js';
  * existing tests/backtest/smoke callers construct this step with no window
  * source at all, and `checkLlmFailureRate` is skipped entirely when this is
  * absent (same "optional means untested paths keep their old behaviour"
- * reasoning `analystWeights` already documents on this function).
+ * reasoning `analystWeights` already documents on this function)
  */
 export interface LlmFailureRateGuardDeps {
   windowSource: LlmFailureRateWindowSource;
@@ -169,7 +169,7 @@ export interface GateRefusalRateGuardDeps {
   gateRefusalSink: LlmGateRefusalSink;
 }
 
-/** Fire-and-forget window check, invoked on both the completed-debate and the gate-refused path (#1533). */
+/** Fire-and-forget window check, invoked on both the completed-debate and the gate-refused path (#1533) */
 function checkGateRefusalRateIfConfigured(
   guard: GateRefusalRateGuardDeps | undefined,
   logger: Logger | undefined,
@@ -334,14 +334,14 @@ export function buildDebatePersonas(
         : { summary: '', conflicts: [], method: 'directional_fallback' as const };
 
       // `response.stance` — the mediator's actual verdict — is passed as a
-      // participant so the debate can move conviction at all (#625 defect 2).
+      // participant so the debate can move conviction at all (#625 defect 2)
       // Before this, conviction was a pure function of the analyst views: the
       // `stances` built above echo `view.direction`, and `finalPositionFor`
       // falls back to `view.direction` anyway, so every round contributed
       // exactly zero to a score we were paying four LLM calls per run to
       // produce. The mediator is the only debate output carrying information —
       // bull and bear argue the side they were assigned, so their stance says
-      // nothing about conviction (see `computeDirectionalConsensus`).
+      // nothing about conviction (see `computeDirectionalConsensus`)
       const confidence = computeConvictionScore(context.views, accumulatedStances, response.stance);
       roundVerdicts.push({ round: context.round, direction: response.stance, confidence });
 
@@ -350,7 +350,7 @@ export function buildDebatePersonas(
       // `PartialDebateState` and is what the timeout path stamps on its
       // result, so a persona set built without one (the pre-#326 test
       // callers) reports no state rather than inventing an id that would not
-      // match the `debate_log` row.
+      // match the `debate_log` row
       if (debate_id !== undefined) {
         currentState = {
           synthesis: response.rationale,
@@ -360,7 +360,7 @@ export function buildDebatePersonas(
           disagreement_summary: disagreement.summary,
           // A partial state is non-converged by construction, and
           // `runDebate` holds the invariant that a non-converged result
-          // carries non-empty `open_items` so Trader/Risk can apply caution.
+          // carries non-empty `open_items` so Trader/Risk can apply caution
           // Its own fallback — the disagreement summary — is empty on every
           // non-final round (`detectDisagreements` runs once per debate), so
           // falling back to it here would satisfy the invariant with an empty
@@ -375,7 +375,7 @@ export function buildDebatePersonas(
           // above (`buildAnalystContributions` over a fresh copy of
           // `accumulatedStances`) — a caller holding an old `currentState`
           // reads what had completed AT THAT SNAPSHOT, not whatever
-          // `roundVerdicts` grows to later.
+          // `roundVerdicts` grows to later
           round_verdicts: [...roundVerdicts],
           debate_id,
         };
@@ -387,8 +387,8 @@ export function buildDebatePersonas(
         synthesis: {
           synthesis: response.rationale,
           // Not derivable from any existing persona/analysis output — the
-          // one genuine invention in this adapter (see file doc comment).
-          // Not load-bearing: Trader reads only direction/confidence.
+          // one genuine invention in this adapter (see file doc comment)
+          // Not load-bearing: Trader reads only direction/confidence
           position: `${response.stance}: ${response.rationale}`,
           confidence,
           direction: response.stance,
@@ -508,7 +508,7 @@ export function persistDebateLog(params: {
     // returning its own discarded sample. First-write-wins on the table but
     // last-write-wins in the Trader is the attribution mismatch #617 exists to
     // remove: the Feedback Loop would later attribute the trade to the winner's
-    // row while the position was sized on the loser's confidence.
+    // row while the position was sized on the loser's confidence
     return winner;
   }
 
@@ -517,14 +517,14 @@ export function persistDebateLog(params: {
   // and that is exactly the semantics the column needs, since a retried tick
   // within the same bar carries a FRESH trace against the same content-hashed
   // `debate_id` and must not overwrite the attribution of the debate it did
-  // not run.
+  // not run
   const written_at = clock.now();
   // One transaction (`writeLogWithRounds`): the FK on debate_round_log
   // (migration 0064) always resolves since debate_log commits first inside
   // it, and a throw from either write leaves neither row — this function's
   // own first-write-wins guard above (`getByDebateId`) would otherwise block
   // every retry from ever gaining the round rows for a debate_log row that
-  // made it in alone.
+  // made it in alone
   store.writeLogWithRounds(
     buildDebateLog(result, instrument, written_at, trace_id),
     buildDebateRoundLogRows(result, written_at),
@@ -621,10 +621,10 @@ export function rateLimitedDebateResult(
     // The bar this tick belongs to, even though no debate ran (#687). The
     // Trader short-circuits on `confidence: 0` and never keys an order off it,
     // but the field is required by the contract precisely so that no producer
-    // gets to leave the coordinate unstated for a later consumer to re-derive.
+    // gets to leave the coordinate unstated for a later consumer to re-derive
     bar_timestamp: bar,
     // `rate_limited` already makes `debateWasDegraded` true; see
-    // DebateResult.read's docblock for why this still sets `read: true`.
+    // DebateResult.read's docblock for why this still sets `read: true`
     read: true,
     rate_limited: { reason },
   };
@@ -746,19 +746,19 @@ export function replayedDebateResult(persisted: ReplayableDebateLog): DebateResu
     // (#687). This is the case a re-derivation gets wrong most cheaply: the row
     // was written in bar N, this replay may be serving a tick minutes later —
     // including a tick after a process restart — and the intent must be keyed
-    // to the bar the row records, not to whenever the replay happened to run.
+    // to the bar the row records, not to whenever the replay happened to run
     bar_timestamp: persisted.bar_timestamp,
     // A persisted row is a debate that actually ran. Hardcoded rather than
     // read off `persisted` because `debate_log` has no `read` column to read
     // it back from (#1418) — harmless today since no producer ever persists
     // `read: false`, but a future one that did would resurrect here as
     // `true`, reversing exactly the classification #1393 built `read` to
-    // protect.
+    // protect
     read: true,
   };
 }
 
-/** A `DebateLog` carrying every replay field the Trader consumes. */
+/** A `DebateLog` carrying every replay field the Trader consumes */
 export type ReplayableDebateLog = DebateLog & Required<Pick<DebateLog, ReplayField>>;
 
 type ReplayField =
@@ -910,7 +910,7 @@ export function buildDebateStep(
   return async ({ trace_id, instrument, asset_class, views, clock, bar }) => {
     // The SAME `Date` must go into `debate_id`'s hash and into the row's
     // `bar_timestamp`, or the row claims a bar coordinate its own primary key
-    // does not encode.
+    // does not encode
     //
     // INHERITED as of #743, not floored here. This step used to floor its own
     // `clock.now()` (#393), which was a SECOND derivation of the bar: the
@@ -920,13 +920,13 @@ export function buildDebateStep(
     // single source — `TickContext.decision_bar.open_time`, threaded through
     // `TickSteps.debate`'s `bar` — so a debate straddling a bar boundary
     // stays keyed to the bar the gate opened. See `floorToBar` for why the
-    // grid is an hour and not the tick cadence.
+    // grid is an hour and not the tick cadence
     // Computed here, ahead of the debate, rather than read off the eventual
     // `DebateResult` (#326): the personas need it to attribute their spend
     // rows while the debate is still running, and a debate that THROWS partway
     // still billed for the calls it made. `computeDebateId` is the same pure
     // hash `runDebate` applies to the same three inputs, so this cannot drift
-    // from the id on the resulting row — asserted in debate-adapter.test.ts.
+    // from the id on the resulting row — asserted in debate-adapter.test.ts
     const debate_id = computeDebateId(instrument, bar, views);
 
     // SAME-BAR MEMO (#743) — see `resolvedBarByInstrument`. Checked before the
@@ -934,7 +934,7 @@ export function buildDebateStep(
     // introduced: if THIS bar already resolved to a debate, that debate's
     // persisted row is the answer regardless of what freshly-computed views
     // would hash to. Falls through when the remembered row is not replayable
-    // (pre-0026 rows), exactly as the content gate does.
+    // (pre-0026 rows), exactly as the content gate does
     const resolved = resolvedBarByInstrument.get(instrument);
     if (resolved !== undefined && resolved.barMs === bar.getTime()) {
       const remembered = debateLog.getByDebateId(resolved.debate_id);
@@ -955,7 +955,7 @@ export function buildDebateStep(
     }
 
     // SAME-BAR SHORT-CIRCUIT (#617), before the spend cap, the rate limiter and
-    // every LLM call.
+    // every LLM call
     //
     // The orchestrator ticks every 2 minutes (`paperStartingProfile
     // .tickIntervalMs`, ADR-0008 §2 as amended — this comment said 15 minutes
@@ -970,7 +970,7 @@ export function buildDebateStep(
     // recomputed the same id, re-ran a full debate, and discarded it at the
     // write: 29 of 40 debates in the soak's first five hours warned on the
     // duplicate. NOTE #742 weakened the determinism premise WITHIN a bar (the
-    // technical read is 5m now), which is what the memo above exists for.
+    // technical read is 5m now), which is what the memo above exists for
     //
     // Two things were wrong with that, and cost was the smaller one. `debate_log`
     // kept tick 1's row while the Trader sized on tick N's confidence, so the
@@ -978,7 +978,7 @@ export function buildDebateStep(
     // — corrupted measurement in a soak whose whole purpose is measurement. And
     // because each re-run is a fresh non-deterministic sample, its confidence
     // could drift up by `scale_in_conviction_delta` and open an extra lot on the
-    // same bar.
+    // same bar
     //
     // Returning the persisted debate makes the Trader's input stable within a
     // bar. #617 flagged that as a deliberate decision because it means "intra-bar
@@ -986,19 +986,19 @@ export function buildDebateStep(
     // price is an input to the debate at all, only the closed bars the analysts
     // read. A re-run could only produce a different SAMPLE of an identical
     // question, never a different answer to a new one. Intra-bar price still
-    // reaches the Trader through `mark`, which is a separate input and unchanged.
+    // reaches the Trader through `mark`, which is a separate input and unchanged
     //
     // A row written before migration 0026 carries none of the six replay fields,
     // and confidence is what position sizing is a function of. Such a row is not
     // replayable, so this falls through and re-runs the debate rather than
     // trading on a reconstructed blank. `isReplayable` demands all six rather
     // than confidence alone, because they are independently optional and a
-    // partial row would otherwise replay as a fabricated empty debate.
+    // partial row would otherwise replay as a fabricated empty debate
     const persisted = debateLog.getByDebateId(debate_id);
     if (isReplayable(persisted)) {
       // The bar resolved to this id (a restart's first tick landing on a row a
       // previous process wrote) — remember it, so subsequent same-bar entries
-      // stop depending on the views hashing identically (#743).
+      // stop depending on the views hashing identically (#743)
       resolvedBarByInstrument.set(instrument, { barMs: bar.getTime(), debate_id });
       logger?.log({
         trace_id,
@@ -1019,7 +1019,7 @@ export function buildDebateStep(
     // speed or refuses it outright. It books the debate against the window AND
     // checks that the worst case still fits the remaining call budget, which
     // is what stops a debate starting only to be cut off mid-round with three
-    // rounds already billed.
+    // rounds already billed
     //
     // DELIBERATELY OUTSIDE the try/catch below, which is safe because `reserve`
     // is TOTAL over `AssetClass`: it returns a `ReserveResult` for every value
@@ -1027,7 +1027,7 @@ export function buildDebateStep(
     // `perAssetClass` entry falls back to `default` rather than erroring —
     // pinned by "RateLimiter.reserve is total over AssetClass" in
     // rate-limiter.test.ts, which exists for this call site specifically
-    // (PR #390 review).
+    // (PR #390 review)
     //
     // The only inputs that CAN make it throw are a null config, a config with
     // no `default`, or a `Clock` that does not return a `Date` — each of which
@@ -1036,12 +1036,12 @@ export function buildDebateStep(
     // here would be actively worse than not: it would convert "this process is
     // misconfigured" into "this instrument silently never trades", which for a
     // 14-day unattended soak is indistinguishable from a quiet market. That
-    // failure must stay loud.
+    // failure must stay loud
     // BUDGET, before the rate-limit window is booked (ADR-0008). Ordered first
     // deliberately: `reserve` mutates the limiter's counters, and booking a
     // window for a debate the budget will refuse anyway would consume rate
     // allowance that a later, admissible debate needs. This check is a pure
-    // read and mutates nothing, so refusing here costs the system nothing.
+    // read and mutates nothing, so refusing here costs the system nothing
     //
     // Being a pure read with no reservation is also its overshoot exposure
     // (#1013 fix-up M2): concurrent instruments can all read the SAME
@@ -1065,7 +1065,7 @@ export function buildDebateStep(
     // ceiling, `SpendCap` has no analogous reservation; nothing in this
     // repo's history says that was a deliberate trade against building one,
     // so read this as "the exposure this design has", not as a decision
-    // someone weighed and accepted at the time.
+    // someone weighed and accepted at the time
     const spend = spendCap.check();
     if (!spend.admitted) {
       logger?.log({
@@ -1114,12 +1114,12 @@ export function buildDebateStep(
     // METERING, per call, for the debate just admitted. Wrapped here rather
     // than once at the composition root because the limiter's counters are
     // per-asset-class and `LlmRequest` carries no instrument — this is the
-    // innermost layer that still knows which class to bill.
+    // innermost layer that still knows which class to bill
     // ROUND CAP, per asset class (#581). Crypto runs ONE round so the debate
     // genuinely fits its latency budget instead of truncating on every tick;
     // stocks keep the 3-round hybrid termination. Given to the personas once
     // and read back off them for `runDebate`, so the final-round check that
-    // gates `detectDisagreements` cannot disagree with the loop bound.
+    // gates `detectDisagreements` cannot disagree with the loop bound
     const personas = buildDebatePersonas(
       new RateLimitedLlmClient(llmClient, rateLimiter, asset_class),
       trace_id,
@@ -1133,23 +1133,23 @@ export function buildDebateStep(
     // exported — and called by nothing, so a pathological debate held the
     // tick, its LLM connections and its rate-limit budget for as long as the
     // provider took. Over an unattended 14-day soak (#238) that has no
-    // ceiling at all.
+    // ceiling at all
     //
     // The budget is per asset class (`LATENCY_BUDGET_MS`: crypto 30s, stocks
     // 60s) and `asset_class` is already on the step's input, so the lookup
     // needs nothing new. The crypto value moved 15s -> 30s alongside the
     // 1-round cap above (#581): 15s was below one measured round, so every
-    // crypto debate truncated; #346's arithmetic predicted exactly this.
+    // crypto debate truncated; #346's arithmetic predicted exactly this
     //
     // `signal` is threaded into `runDebate`, which `throwIfAborted`s before
     // every persona call, so a timed-out debate stops spending instead of
     // running to completion with its answers discarded (#347 built that
-    // contract for this call site).
+    // contract for this call site)
     //
     // A timed-out debate still RESOLVES — partial synthesis when a round
     // completed, low-confidence fallback when none did — so it flows into
     // `persistDebateLog` like any other resolved debate, which is exactly
-    // what that function's doc comment already anticipated.
+    // what that function's doc comment already anticipated
     let result: DebateResult;
     try {
       result = await enforceLatencyBudget({
@@ -1157,7 +1157,7 @@ export function buildDebateStep(
         trace_id,
         debate_id,
         // The same floored read that produced `debate_id`, so a timed-out
-        // debate's fallback result names the bar it was taken in (#687).
+        // debate's fallback result names the bar it was taken in (#687)
         bar,
         produceResult: (signal) =>
           runDebate({ views, instrument, bar }, personas, {
@@ -1169,7 +1169,7 @@ export function buildDebateStep(
         // lands in the same stream as every other debate line. A step built
         // without a logger (tests) gets a no-op sink rather than an optional
         // logger on `enforceLatencyBudget`, whose contract is that a fired
-        // budget is always recorded somewhere.
+        // budget is always recorded somewhere
         logger: new JsonDebateLogger(logger ?? { log: () => {} }),
       });
     } catch (cause) {
@@ -1177,7 +1177,7 @@ export function buildDebateStep(
       // see `gateRefusedDebateResult`. Returning here also skips
       // `resolvedBarByInstrument.set` below, exactly as the rate-limiter
       // refusal above does: no debate ran, so the bar stays unresolved and a
-      // later pass may still run a real one.
+      // later pass may still run a real one
       if (cause instanceof LlmAdmissionRefusedError) {
         logger?.log({
           trace_id,
@@ -1206,7 +1206,7 @@ export function buildDebateStep(
         // not turn a degrade-not-fault gate refusal into an unhandled tick
         // failure. `checkLlmFailureRate` is deliberately NOT called here: that
         // guard's rate is over truncated `debate_log` rows and a refusal wrote
-        // none, so a refusal moves neither its numerator nor its denominator.
+        // none, so a refusal moves neither its numerator nor its denominator
         if (gateRefusalRateGuard !== undefined) {
           try {
             gateRefusalRateGuard.gateRefusalSink.recordGateRefusal(clock.now());
@@ -1231,10 +1231,10 @@ export function buildDebateStep(
     }
 
     // #435 part 2 — the Debate Engine reads `analyst_weights`, David's
-    // resolution on #377.
+    // resolution on #377
     //
     // AFTER `runDebate`, so `debate_id` keeps meaning what the frozen
-    // cross-spec contract says it means: the identity of the debate's INPUTS.
+    // cross-spec contract says it means: the identity of the debate's INPUTS
     // The spec recorded a collision worry here — same id, different weights,
     // different result — and it is unreachable: weights move only in
     // `runDailyCycle`, the bar is an hour, so a weight step cannot happen
@@ -1242,7 +1242,7 @@ export function buildDebateStep(
     // identical weights. See `weighted-conviction.ts` for the full argument.
     //
     // The WEIGHTED result is what gets logged, so replay-from-log restores the
-    // conviction the Trader actually sized on rather than the pre-weight one.
+    // conviction the Trader actually sized on rather than the pre-weight one
     const weighted =
       analystWeights === undefined
         ? result
@@ -1260,7 +1260,7 @@ export function buildDebateStep(
     // The bar has RESOLVED — to this run's row, or to the racer's row it lost
     // to (same `debate_id` either way, since a race is by definition the same
     // id). Recorded after the write so a debate that THREW never marks its bar
-    // resolved, leaving the crash-retry path open (#743).
+    // resolved, leaving the crash-retry path open (#743)
     resolvedBarByInstrument.set(instrument, { barMs: bar.getTime(), debate_id });
 
     // #1396. Fire-and-forget: `checkLlmFailureRate` never throws (it catches
@@ -1268,7 +1268,7 @@ export function buildDebateStep(
     // and the bar is already resolved above. Its synchronous SQLite window
     // read (a small, indexed range scan) still runs inline here, before its
     // first `await`; `void` only keeps the alert POST — the part that could
-    // actually be slow — off this tick's critical path.
+    // actually be slow — off this tick's critical path
     if (llmFailureRateGuard !== undefined) {
       void checkLlmFailureRate(
         {
@@ -1284,18 +1284,18 @@ export function buildDebateStep(
     // #1533. Same fire-and-forget posture, on the success path too so the
     // ratio can FALL — a window read only when a refusal happens can never
     // observe the refusals ageing out, and the monitor's latch would never
-    // re-arm.
+    // re-arm
     checkGateRefusalRateIfConfigured(gateRefusalRateGuard, logger, clock.now());
 
-    // Lost the write race: another writer already owns this `debate_id`'s row.
+    // Lost the write race: another writer already owns this `debate_id`'s row
     // Return THEIR row, so the Trader sizes on the same bytes the Feedback Loop
     // will later attribute the trade to. Without this the backstop reproduced
     // #617's defect in miniature — the duplicate write was skipped, but the
-    // loser still handed its own discarded sample to the Trader.
+    // loser still handed its own discarded sample to the Trader
     //
     // A raced row that is not fully replayable falls back to the fresh result:
     // an incomplete row is not a better answer than a complete one, and the
-    // mismatch it would leave is the lesser of the two problems.
+    // mismatch it would leave is the lesser of the two problems
     if (isReplayable(raced)) {
       return replayedDebateResult(raced);
     }

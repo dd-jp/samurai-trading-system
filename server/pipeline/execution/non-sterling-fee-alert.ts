@@ -38,30 +38,30 @@
  * no raw fill object reaches an implementation of this port.
  */
 
-/** One fill whose reported fee currency is not the book currency. */
+/** One fill whose reported fee currency is not the book currency */
 export interface NonSterlingFeeAlert {
   /**
    * The `ExecutionInput.trace_id` of the Execution SURFACE this alert was
    * raised on — the same control-arm-distinguishing role
    * `ResidualExposureAlert.trace_id` documents (#1348): a constant here would
-   * log a control-arm (simulated-broker) fee identically to a live one.
+   * log a control-arm (simulated-broker) fee identically to a live one
    */
   trace_id: string;
-  /** The lot's own `idempotency_key`. */
+  /** The lot's own `idempotency_key` */
   idempotency_key: string;
   instrument: string;
-  /** The venue's own fill identifier — greppable against the booked `fills` row. */
+  /** The venue's own fill identifier — greppable against the booked `fills` row */
   broker_fill_id: string;
   /**
    * The venue-reported fee, verbatim in `fee_currency` (#1220 does not
    * convert it) — the raw fill's own `fee`, not necessarily what gets
    * booked: on the `cumulativeTopUp` call site this is the venue's
    * cumulative total for the whole order, not the incremental delta
-   * `chargeTopUpTo` charges this lot.
+   * `chargeTopUpTo` charges this lot
    */
   fee: number;
   fee_currency: string;
-  /** `BOOK_CURRENCY` at the time of the alert — named explicitly rather than assumed by the reader. */
+  /** `BOOK_CURRENCY` at the time of the alert — named explicitly rather than assumed by the reader */
   book_currency: string;
 }
 

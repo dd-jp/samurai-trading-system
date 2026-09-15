@@ -111,7 +111,7 @@ export function unwrapFencedJson(rawText: string): string {
   const closingFence = findClosingFence(body);
   if (closingFence === -1) {
     // Unterminated fence — a truncated response. Hand back the original so it
-    // fails loudly rather than parsing a half-emitted object.
+    // fails loudly rather than parsing a half-emitted object
     return rawText;
   }
 

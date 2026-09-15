@@ -91,7 +91,7 @@ export type RiskThresholdKey = (typeof RISK_THRESHOLD_KEYS)[number];
  * Reads each tunable value out of a static `RiskConfig` — the seeder's source,
  * so the table starts holding exactly what the process would otherwise have
  * used, and `autoTighten` has a current value to step from instead of skipping
- * every dial as `current === undefined`.
+ * every dial as `current === undefined`
  */
 export function riskThresholdsFrom(config: RiskConfig): Partial<Record<RiskThresholdKey, number>> {
   const candidates: Record<RiskThresholdKey, number | undefined> = {
@@ -108,7 +108,7 @@ export function riskThresholdsFrom(config: RiskConfig): Partial<Record<RiskThres
   // Only what the config actually carries. `RiskConfig` requires every field,
   // so a gap here means a partial object cast past the compiler — which is
   // what a test fixture is. Seeding what exists and skipping what does not
-  // beats throwing at startup over a field the run may never consult.
+  // beats throwing at startup over a field the run may never consult
   return Object.fromEntries(
     Object.entries(candidates).filter(
       ([, value]) => value !== undefined && Number.isFinite(value) && value > 0,
@@ -153,20 +153,20 @@ export function resolveRiskConfig(
   live: Record<string, number>,
 ): { config: RiskConfig; applied: Partial<Record<RiskThresholdKey, number>> } {
   // #638: the clamp on the LIVE path, and the reason it checks the whole `live`
-  // record rather than only the six keys this function applies.
+  // record rather than only the six keys this function applies
   //
   // A boot-time-only clamp constrains nothing the Feedback Loop does: these
   // rows are re-read on every `evaluate()`, so a value written between two
   // ticks binds on the second one without passing through startup again. And
   // since #736 removed ADR-0013's loosen gate, the loop moves a dial — in
-  // either direction — with nobody in the path at all.
+  // either direction — with nobody in the path at all
   //
   // Checking every row means the guard travels with the ALLOW-LIST rather than
   // with today's contents: a guarded threshold added to `RISK_THRESHOLD_KEYS`
   // later is bounded here the moment it is added, and a guarded row that is
   // present but NOT applied still stops the process — a stored value that
   // crosses a bright line means something in the system tried to cross it, and
-  // ignoring the row would leave that silent.
+  // ignoring the row would leave that silent
   assertThresholdsWithinBounds(live, 'RiskManager live threshold read (risk_thresholds table)');
 
   const applied: Partial<Record<RiskThresholdKey, number>> = {};

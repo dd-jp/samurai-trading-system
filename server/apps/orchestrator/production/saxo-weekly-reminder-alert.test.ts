@@ -66,7 +66,7 @@ function recordingChannel(): SaxoWeeklyReminderAlertChannel & {
 
 describe('nextWeeklySaxoReminderInstant', () => {
   it('from a midweek instant, returns the upcoming Sunday at 18:00 London', () => {
-    // Wednesday 2026-09-16, well clear of any DST edge.
+    // Wednesday 2026-09-16, well clear of any DST edge
     const after = new Date('2026-09-16T12:00:00.000Z');
     expect(nextWeeklySaxoReminderInstant(after).toISOString()).toBe('2026-09-20T17:00:00.000Z');
   });
@@ -87,18 +87,18 @@ describe('nextWeeklySaxoReminderInstant', () => {
   });
 
   it('crosses the GMT->BST spring-forward transition (2026-03-29) landing on the new offset', () => {
-    // The Sunday before the transition, well after that week's own reminder fired.
+    // The Sunday before the transition, well after that week's own reminder fired
     const after = new Date('2026-03-22T20:00:00.000Z');
     // 18:00 London on 2026-03-29 is already BST (clocks spring forward at
     // 01:00 UTC that day) — 17:00 UTC, not 18:00. A fixed-offset scheduler
-    // would land an hour early.
+    // would land an hour early
     expect(nextWeeklySaxoReminderInstant(after).toISOString()).toBe('2026-03-29T17:00:00.000Z');
   });
 
   it('crosses the BST->GMT fall-back transition (2026-10-25) landing on the new offset', () => {
     const after = new Date('2026-10-18T20:00:00.000Z');
     // 18:00 London on 2026-10-25 is already GMT (clocks fall back at 01:00 UTC
-    // that day) — 18:00 UTC, not 17:00.
+    // that day) — 18:00 UTC, not 17:00
     expect(nextWeeklySaxoReminderInstant(after).toISOString()).toBe('2026-10-25T18:00:00.000Z');
   });
 });
@@ -165,7 +165,7 @@ describe('SaxoWeeklyReminder', () => {
         last_logged_in_at: '2026-09-14T09:00:00.000Z',
         // The fake timer fires the callback immediately, without advancing
         // the clock — `reported_at` is `clock.now()` at fire time, not the
-        // instant the delay was computed for.
+        // instant the delay was computed for
         reported_at: new Date('2026-09-16T12:00:00.000Z'),
       },
     ]);
@@ -194,7 +194,7 @@ describe('SaxoWeeklyReminder', () => {
 
     expect(scheduled).toHaveLength(2);
     expect(scheduled[0]?.cleared).toBe(false); // fired timers are not cleared, only stop() clears
-    // The second arm is a full week out from the first fire, not a repeat of the first delay.
+    // The second arm is a full week out from the first fire, not a repeat of the first delay
     expect(scheduled[1]?.delayMs).toBe(7 * 24 * 60 * 60 * 1000);
   });
 
@@ -235,7 +235,7 @@ describe('SaxoWeeklyReminder', () => {
 
     expect(scheduled[0]?.cleared).toBe(true);
     // A late-firing callback (already in flight when stop() ran) must not
-    // schedule a new timer behind stop()'s back.
+    // schedule a new timer behind stop()'s back
     scheduled[0]?.callback();
     expect(scheduled).toHaveLength(1);
   });

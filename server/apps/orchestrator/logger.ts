@@ -118,7 +118,7 @@ import type { Logger } from './types.js';
  */
 export interface LogLineSink {
   write(line: string): void;
-  /** True once this sink has retired and its `write` is a silent no-op. */
+  /** True once this sink has retired and its `write` is a silent no-op */
   readonly degraded?: boolean;
 }
 
@@ -251,7 +251,7 @@ function degradationLine(
   })}\n`;
 }
 
-/** Reports a file-sink failure on the one stream that may still work. */
+/** Reports a file-sink failure on the one stream that may still work */
 function warnOnStdout(message: string, stdout: StdoutStream = process.stdout): void {
   stdout.write(degradationLine('log_file_sink_degraded', message, { log_file_sink: 'degraded' }));
 }
@@ -322,7 +322,7 @@ export class JsonLogger implements Logger {
     // reach `if (reachedStdout || reachedFile)` with neither true and throw
     // the no-sink error — turning a verbosity SETTING into a fabricated #714
     // fault on a perfectly healthy run. A dropped debug line is not a logging
-    // failure, so it must never be able to reach that branch.
+    // failure, so it must never be able to reach that branch
     if (entry.level === 'debug' && !this.debugEnabled) return;
 
     const line = formatLogLine(entry);
@@ -331,7 +331,7 @@ export class JsonLogger implements Logger {
     if (reachedStdout || reachedFile) return;
 
     // Nowhere left. Not swallowed — see the module doc: a run that cannot
-    // record what it did with real money must not carry on unremarked.
+    // record what it did with real money must not carry on unremarked
     this.reportNoSink();
     this.lastResort(line);
     throw new Error(
@@ -363,7 +363,7 @@ export class JsonLogger implements Logger {
       // otherwise return having written nowhere and said nothing. Same
       // last-resort trace as `log`'s own escalation, for the same reason — a
       // caller that swallows this throw must still leave the operator
-      // something.
+      // something
       if (!this.degradeStdout(error)) {
         this.reportNoSink();
         this.lastResort(line);
@@ -436,11 +436,11 @@ export class JsonLogger implements Logger {
     try {
       this.stderr.write(line);
     } catch {
-      // Nothing left to try, and nothing to report it on.
+      // Nothing left to try, and nothing to report it on
     }
   }
 
-  /** Whether stdout has been retired — the enforcement surface for #714. */
+  /** Whether stdout has been retired — the enforcement surface for #714 */
   get stdoutRetired(): boolean {
     return this.stdoutDegraded;
   }
@@ -459,7 +459,7 @@ export class JsonLogger implements Logger {
       } catch {
         // Reporting the file failure on stdout failed too — both destinations
         // are broken. Nothing is silently continued on that account: `log`
-        // sees `false` from both writes and throws.
+        // sees `false` from both writes and throws
       }
     });
   }
@@ -519,7 +519,7 @@ export function watchStdoutErrors(logger: JsonLogger, stdout: StdoutStream = pro
     // so throwing is the only remaining way to say so: it reaches
     // `uncaughtException`, whose handler writes to stderr and exits 1. That is
     // the same escalation the synchronous path takes, and the only case in
-    // which a logging fault is allowed to end the run.
+    // which a logging fault is allowed to end the run
     if (!logger.degradeStdout(error)) {
       throw new Error(
         `structured log stdout sink failed (${describe(error)}) and the failure could not be ` +

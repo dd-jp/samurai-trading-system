@@ -87,7 +87,7 @@ describe('SqliteLlmSpendStore', () => {
     const [row] = rows(db);
     expect(row?.cost_usd).toBeNull();
     // Tokens are always exact — they come straight off the wire — so an
-    // unpriceable model must not cost us the usage data too.
+    // unpriceable model must not cost us the usage data too
     expect(row?.input_tokens).toBe(4_242);
     expect(row?.output_tokens).toBe(99);
   });
@@ -144,7 +144,7 @@ describe('SqliteLlmSpendStore', () => {
     ).not.toThrow();
 
     // Logged rather than silent — a persistently broken meter should be
-    // visible, not just render as a flat spend line.
+    // visible, not just render as a flat spend line
     expect(logged).toHaveLength(1);
     expect(logged[0]?.level).toBe('warn');
     expect(logged[0]?.trace_id).toBe('trace-1');
@@ -163,7 +163,7 @@ describe('SqliteLlmSpendStore', () => {
     });
 
     const [row] = rows(db);
-    // The whole point of the ticket: latency reaches a column, not stdout.
+    // The whole point of the ticket: latency reaches a column, not stdout
     expect(row?.latency_ms).toBe(4_321);
     expect(row?.debate_id).toBe('debate-abc');
   });
@@ -172,7 +172,7 @@ describe('SqliteLlmSpendStore', () => {
     // `MockLlmClient` returns `latency_ms: 0` by design, and a local double can
     // genuinely round to 0. NULL is reserved for "never measured" (rows
     // predating migration 0012); conflating the two would let real
-    // sub-millisecond calls vanish from the percentile sample.
+    // sub-millisecond calls vanish from the percentile sample
     const db = openSharedStore(':memory:');
     new SqliteLlmSpendStore(db).record({
       trace_id: 'trace-1',
@@ -209,7 +209,7 @@ describe('SqliteLlmSpendStore', () => {
   it('stores NULL ttfb_ms — not 0 — for a wire client that does not report it', () => {
     // `AnthropicMessageResponse.ttfb_ms` is optional (any structural
     // `AnthropicMessagesClient` may omit it) — an absent measurement must
-    // read as "never measured", not as an impossibly fast zero.
+    // read as "never measured", not as an impossibly fast zero
     const db = openSharedStore(':memory:');
     new SqliteLlmSpendStore(db).record({
       trace_id: 'trace-1',
@@ -228,7 +228,7 @@ describe('SqliteLlmSpendStore', () => {
     // Regression guard with teeth: better-sqlite3 REFUSES to bind `undefined`,
     // so passing `entry.debate_id` straight through would throw into `record`'s
     // own swallowing catch — the row would silently never exist, and the meter
-    // would under-report every call made outside a debate.
+    // would under-report every call made outside a debate
     const db = openSharedStore(':memory:');
     new SqliteLlmSpendStore(db).record({
       trace_id: 'trace-1',
@@ -250,7 +250,7 @@ describe('SqliteLlmSpendStore', () => {
     // invocations." This stopped being a hand-exercised hypothetical in #969:
     // `nous-responses.ts` reports a real count from the `x_search` path, and
     // the rate is now Nous's published $4.00/1,000 rather than the
-    // unconfirmable third-party $5.00 figure it read against before.
+    // unconfirmable third-party $5.00 figure it read against before
     const db = openSharedStore(':memory:');
     new SqliteLlmSpendStore(db).record({
       trace_id: 'trace-1',
@@ -265,20 +265,20 @@ describe('SqliteLlmSpendStore', () => {
     const [row] = rows(db);
     // 1M input tokens is PAST the 200k large-prompt threshold, so the whole
     // request prices at the tier's $4.00/M, not the base $1.60/M: $4.00 plus
-    // 4 invocations at $0.004 = $0.016.
+    // 4 invocations at $0.004 = $0.016
     //
-    // This assertion read $1.62 before #969, and the difference is the point.
+    // This assertion read $1.62 before #969, and the difference is the point
     // A retrieval call's prompt carries its search results, so crossing that
     // threshold is a routine event on this path rather than an exotic one —
     // and pricing a crossed request at the base rate under-counts it by 2.5x
-    // against a cap whose whole job is to stop an unattended run.
+    // against a cap whose whole job is to stop an unattended run
     expect(row?.cost_usd).toBeCloseTo(4.016, 10);
     expect(row?.server_tool_calls).toBe(4);
   });
 
   it('prices below the tier at the base rate', () => {
     // The other side of the same threshold, so the tier cannot silently
-    // become unconditional: 100k input at $1.60/M = $0.16, plus 4 invocations.
+    // become unconditional: 100k input at $1.60/M = $0.16, plus 4 invocations
     const db = openSharedStore(':memory:');
     new SqliteLlmSpendStore(db).record({
       trace_id: 'trace-1',
@@ -297,7 +297,7 @@ describe('SqliteLlmSpendStore', () => {
     // THE case #476 was filed for. Discarding a charge we know exactly, because
     // a different charge is missing from the rate table, would under-count the
     // cap — and a NULL is not diagnosable, whereas a small cost beside a
-    // non-zero invocation count is.
+    // non-zero invocation count is
     const db = openSharedStore(':memory:');
     const entries: LogEntry[] = [];
     new SqliteLlmSpendStore(db, { log: (entry) => void entries.push(entry) }).record({
@@ -312,7 +312,7 @@ describe('SqliteLlmSpendStore', () => {
 
     const [row] = rows(db);
     // 2 invocations at the published $4.00/1,000. The token half is unknown
-    // and stays unknown; the tool half is knowable and is recorded.
+    // and stays unknown; the tool half is knowable and is recorded
     expect(row?.cost_usd).toBeCloseTo(0.008, 10);
     expect(row?.server_tool_calls).toBe(2);
 
@@ -323,7 +323,7 @@ describe('SqliteLlmSpendStore', () => {
 
   it('leaves cost null for an unpriced model that used no tool', () => {
     // The pre-existing semantic is preserved: unpriced stays NULL rather than
-    // becoming a 0 indistinguishable from a genuinely free call.
+    // becoming a 0 indistinguishable from a genuinely free call
     const db = openSharedStore(':memory:');
     new SqliteLlmSpendStore(db).record({
       trace_id: 'trace-1',
@@ -338,8 +338,8 @@ describe('SqliteLlmSpendStore', () => {
   });
 
   it('defaults a plain completion to zero tool invocations', () => {
-    // A completion invokes no server-side tool, so it incurs no such charge.
-    // Zero is the honest value, not a placeholder.
+    // A completion invokes no server-side tool, so it incurs no such charge
+    // Zero is the honest value, not a placeholder
     const db = openSharedStore(':memory:');
     new SqliteLlmSpendStore(db).record({
       trace_id: 'trace-1',
@@ -385,7 +385,7 @@ describe('SqliteLlmSpendStore — prompt-tier crossing warning (#1155)', () => {
 
   // Crosses x-ai/grok-4.5's published 200,000-token large-prompt tier
   // (pricing.ts) by one token — the same fixture pricing.test.ts uses to pin
-  // `crossesPromptTier`'s own answer.
+  // `crossesPromptTier`'s own answer
   const CROSSING_USAGE = { input_tokens: 200_001, output_tokens: 1_000 };
   const UNDER_TIER_USAGE = { input_tokens: 200_000, output_tokens: 1_000 };
 
@@ -446,7 +446,7 @@ describe('SqliteLlmSpendStore — prompt-tier crossing warning (#1155)', () => {
 
   it('suppresses a repeat crossing on the very next call for the same model', () => {
     // Otherwise a run of retrieval-heavy calls on the same model — the
-    // realistic case a tiered call recurs — pages on every single one.
+    // realistic case a tiered call recurs — pages on every single one
     const db = openSharedStore(':memory:');
     const channel = recordingChannel();
     const store = new SqliteLlmSpendStore(db, undefined, false, channel);
@@ -559,10 +559,10 @@ describe('SqliteLlmSpendStore — prompt-tier crossing warning (#1155)', () => {
     // db (the debate stage's default llmClient, and the sentiment
     // GrokAgent's spendSink) and hoists ONE PromptTierCrossingThrottle,
     // passed to both — because NOUS_MODEL alone can route both roles
-    // through the same tiered model (nous-config.ts), with no code change.
+    // through the same tiered model (nous-config.ts), with no code change
     // Two independent throttles would then count that model's consecutive
     // crossings twice: up to two "first crossing" alerts and roughly double
-    // the repeat cadence against the one-then-every-8 contract.
+    // the repeat cadence against the one-then-every-8 contract
     const db = openSharedStore(':memory:');
     const channel = recordingChannel();
     const sharedThrottle = new PromptTierCrossingThrottle();

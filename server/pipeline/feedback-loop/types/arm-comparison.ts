@@ -43,7 +43,7 @@ export interface ArmComparisonSource {
    * The window's trades AND what the shared-cost-basis exclusion removed from
    * it (#1546), together — one read, because they are two readings of the same
    * rows and a source that could answer them separately could answer them over
-   * different windows.
+   * different windows
    */
   getClosedTradeWindowBetween(from: Date, to: Date): ClosedTradeWindow;
   /**
@@ -80,7 +80,7 @@ export interface ArmDivergenceThresholds {
   min_trades_per_arm: number;
 }
 
-/** Whether this cycle's comparison crossed the divergence line, and why. */
+/** Whether this cycle's comparison crossed the divergence line, and why */
 export interface ArmDivergenceVerdict {
   diverged: boolean;
   /** Operator-facing sentence naming both columns. `null` exactly when `diverged` is false. */
@@ -90,14 +90,14 @@ export interface ArmDivergenceVerdict {
    * against (#982) — carried on every branch of `evaluateArmDivergence`, so a
    * `diverged: false` verdict can be read against the floor that produced it
    * rather than against whatever `MIN_TRADES_PER_ARM_FOR_DIVERGENCE` happens to
-   * be when the row is later read back.
+   * be when the row is later read back
    */
   min_trades_per_arm: number;
 }
 
-/** One cycle's comparison, as computed, evaluated and persisted. */
+/** One cycle's comparison, as computed, evaluated and persisted */
 export interface ArmComparisonSample {
-  /** The FL cycle instant, read through the injected `Clock`. */
+  /** The FL cycle instant, read through the injected `Clock` */
   computed_at: Date;
   comparison: ArmComparison;
   divergence: ArmDivergenceVerdict;
@@ -172,7 +172,7 @@ export interface ArmComparisonSampleStore {
  */
 export interface ArmDivergenceAlert {
   comparison: ArmComparison;
-  /** `ArmDivergenceVerdict.reason`, non-null by construction at the post site. */
+  /** `ArmDivergenceVerdict.reason`, non-null by construction at the post site */
   reason: string;
   reported_at: Date;
 }
@@ -194,9 +194,9 @@ export interface ArmDivergenceAlertChannel {
   postArmDivergenceAlert(alert: ArmDivergenceAlert): void;
 }
 
-/** Everything `runArmComparisonCycle` consumes. */
+/** Everything `runArmComparisonCycle` consumes */
 export interface ArmComparisonCycleInput {
-  /** Wall-clock live, simulated T in replay — read only through this. */
+  /** Wall-clock live, simulated T in replay — read only through this */
   clock: Clock;
   trades: ArmComparisonSource;
   samples: ArmComparisonSampleStore;
@@ -205,10 +205,10 @@ export interface ArmComparisonCycleInput {
    * The denominator BOTH arms are divided by — the declared book in the
    * account's currency (`LIVE_BOOK_SIZING_USD` since #1180, matching the
    * broker-reported `realized_pnl_net` above it), never live equity, which is a
-   * per-arm quantity and would make the two `return_pct` figures incomparable.
+   * per-arm quantity and would make the two `return_pct` figures incomparable
    */
   basis: number;
-  /** How far back the comparison window reaches from `clock.now()`. */
+  /** How far back the comparison window reaches from `clock.now()` */
   window_ms: number;
   thresholds: ArmDivergenceThresholds;
 }

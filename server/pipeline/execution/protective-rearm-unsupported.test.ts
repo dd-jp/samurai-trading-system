@@ -1,6 +1,6 @@
 /**
  * The permanent-gap discriminator (#1214) and the ONE boundary that can
- * silently erase it.
+ * silently erase it
  */
 import { sanitizeBrokerError } from './broker-error.js';
 import {
@@ -32,7 +32,7 @@ describe('isProtectiveRearmUnsupported (#1214)', () => {
     // "permanent gap reads as transient" behaviour (#1214). Pinned here so
     // the erasure is a visible property of the boundary rather than a
     // surprise found in production; `saxo-adapter.test.ts` pins the other
-    // half — that the live adapter throws it outside that wrapper.
+    // half — that the live adapter throws it outside that wrapper
     const wrapped = sanitizeBrokerError(
       'saxo',
       'rearmProtectiveLegs',

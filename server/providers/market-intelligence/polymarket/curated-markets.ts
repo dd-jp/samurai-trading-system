@@ -176,17 +176,17 @@
  * put the "which markets do we trust" judgment back in the API's hands.
  */
 
-/** The two outcome names every binary Polymarket market carries. */
+/** The two outcome names every binary Polymarket market carries */
 export type PolymarketOutcome = 'Yes' | 'No';
 
-/** One tracked macro series: a market, and the human annotation the API cannot give. */
+/** One tracked macro series: a market, and the human annotation the API cannot give */
 export interface CuratedMacroMarket {
   /**
    * Stable, table-local id. Used in the `IntelligenceItem.id` so a row that is
    * re-pointed at a new slug (the same series, next month) keeps its identity.
    */
   id: string;
-  /** Gamma event slug — `/events?slug=`. */
+  /** Gamma event slug — `/events?slug=` */
   eventSlug: string;
   /**
    * The ONE market within that event this row reads. #504 scope item 4: one
@@ -208,7 +208,7 @@ export interface CuratedMacroMarket {
    * game the metric, which is worse than the gap it hides.
    */
   entity: string;
-  /** Human label for the headline text. */
+  /** Human label for the headline text */
   label: string;
   /** Why `bullishOutcome` is the bullish side. Reviewed prose, not a comment. */
   rationale: string;
@@ -267,7 +267,7 @@ export const CURATED_MACRO_MARKETS: readonly CuratedMacroMarket[] = [
     // #1120 replaced `us-recession-2026` (pinned at 0.935, 0.065 of headroom —
     // below MIN_PROBABILITY_HEADROOM) with this row. See "#1120: the two
     // recession rows replaced" above for the live evidence and why a
-    // different macro driver was chosen over another recession horizon.
+    // different macro driver was chosen over another recession horizon
     id: 'ru-ua-ceasefire-2026',
     eventSlug: 'russia-x-ukraine-ceasefire-agreement-by',
     marketSlug: 'russia-x-ukraine-ceasefire-agreement-by-december-31-2026',
@@ -285,7 +285,7 @@ export const CURATED_MACRO_MARKETS: readonly CuratedMacroMarket[] = [
   {
     // #1120 replaced `us-recession-2027` (24h volume swinging from $278 to
     // $3.23 to $258.58 across three probes — never durably above the $100
-    // floor) with this row.
+    // floor) with this row
     id: 'hormuz-traffic-2026',
     eventSlug: 'strait-of-hormuz-traffic-returns-to-normal-by-december-31',
     marketSlug: 'strait-of-hormuz-traffic-returns-to-normal-by-december-31',

@@ -7,7 +7,7 @@
  */
 // Type-only and therefore safe both ways: `metrics.ts` imports the dial shapes
 // back from here. A kill threshold is a bound ON a dial, so the two genuinely
-// reference each other.
+// reference each other
 import type { KillThresholds } from './metrics.js';
 
 /**
@@ -18,9 +18,9 @@ import type { KillThresholds } from './metrics.js';
 export interface TunableDial {
   /** Max absolute change one cycle may apply. The cap in acceptance criterion #4. */
   max_step: number;
-  /** Hard floor — a weight never reaches 0 permanently, a threshold never vanishes. */
+  /** Hard floor — a weight never reaches 0 permanently, a threshold never vanishes */
   floor: number;
-  /** Hard ceiling — no dial runs away or dominates. */
+  /** Hard ceiling — no dial runs away or dominates */
   ceiling: number;
   /**
    * Which direction of change makes this dial SAFER. FL cannot infer it:
@@ -44,7 +44,7 @@ export interface FeedbackConfig {
    * point-in-time: only outcomes known before T are ever read.
    */
   attribution_window_ms: number;
-  /** Step cap + hard band applied to EVERY analyst weight. */
+  /** Step cap + hard band applied to EVERY analyst weight */
   weights: TunableDial;
   /*
    * `shadow_credit` / `shadow_influence_ceiling` were removed by #370. Both
@@ -63,7 +63,7 @@ export interface FeedbackConfig {
    * cross a guarded threshold's research-mandated line.
    */
   risk_thresholds: Record<string, TunableDial>;
-  /** Kill-line config for `computeMetrics`'s breach detection (#93). */
+  /** Kill-line config for `computeMetrics`'s breach detection (#93) */
   kill_thresholds: KillThresholds;
 }
 
@@ -82,7 +82,7 @@ export interface FeedbackConfig {
 export interface TuningProposal {
   kind: 'strategy_param' | 'risk_threshold';
   name: string;
-  /** Where the proposer wants the dial; the cycle moves at most `max_step` toward it. */
+  /** Where the proposer wants the dial; the cycle moves at most `max_step` toward it */
   target: number;
 }
 
@@ -120,10 +120,10 @@ export interface LoosenNotificationChannel {
 }
 
 export interface LoosenAppliedNotice {
-  /** Risk-threshold name, as keyed in `FeedbackConfig.risk_thresholds`. */
+  /** Risk-threshold name, as keyed in `FeedbackConfig.risk_thresholds` */
   name: string;
   from: number;
-  /** The bounded value actually written — not the raw target. */
+  /** The bounded value actually written — not the raw target */
   to: number;
   applied_at: Date;
 }
@@ -136,12 +136,12 @@ export interface LoosenAppliedNotice {
  */
 export interface Adjustment {
   dial: 'analyst_weight' | 'strategy_param' | 'risk_threshold';
-  /** `analyst_id` for a weight, otherwise the param/threshold name. */
+  /** `analyst_id` for a weight, otherwise the param/threshold name */
   name: string;
   from: number;
   to: number;
   direction: 'tighten' | 'loosen';
-  /** `clock.now()` of the cycle that applied it. */
+  /** `clock.now()` of the cycle that applied it */
   applied_at: Date;
   /** Machine-readable cause, e.g. 'attribution', 'proposal', 'breach_auto_tighten'. */
   reason: string;

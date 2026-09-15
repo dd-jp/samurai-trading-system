@@ -46,7 +46,7 @@ export function makeWiringExecutionConfig(
       // `atr` arity floor (`minimumBars`, indicators.ts) — NOT
       // `DEFAULT_VOLATILITY_INDICATOR`'s (production/defaults.ts), which
       // sizes to the converged warm-up (`recommendedWarmupFor` = 4*period+1
-      // = 57), a different dial for a different purpose (#757).
+      // = 57), a different dial for a different purpose (#757)
       volatility_indicator: {
         indicator: 'atr',
         params: { period: 14 },
@@ -93,7 +93,7 @@ export function makeWiringCiiConsumerConfig(
   return {
     // Matches `REAL_CONFIGS.ciiConsumerConfig` (production.test.ts) and the
     // shipped `paperStartingProfile` value (paper-profile.ts) — 10 min,
-    // within WorldMonitor's own decoupled poll cadence (ADR-0002 §2, 5-15 min).
+    // within WorldMonitor's own decoupled poll cadence (ADR-0002 §2, 5-15 min)
     pollIntervalMs: 600_000,
     ...overrides,
   };

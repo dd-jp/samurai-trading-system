@@ -35,7 +35,7 @@ export interface SaxoQuoteUnit {
   readonly price_to_contract_factor: number;
 }
 
-/** Venue quote -> cash per share, in the instrument's `CurrencyCode`. */
+/** Venue quote -> cash per share, in the instrument's `CurrencyCode` */
 export function saxoCashPerShare(unit: SaxoQuoteUnit, quotedPrice: number): number {
   return quotedPrice * unit.price_to_contract_factor;
 }

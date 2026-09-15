@@ -3,7 +3,7 @@
  * verbatim-triplicated copies in the execution/trader/debate-engine stores —
  * code-review 2026-08-01, H4) and the timestamp round-trip (#837 M7, from
  * #289's finding that the `sqlite-*-store.ts` classes each re-spell the same
- * `Date.toISOString()` / `new Date(row.x)` convention).
+ * `Date.toISOString()` / `new Date(row.x)` convention)
  */
 
 /**
@@ -69,7 +69,7 @@ export function toStoredTimestamp(value: Date): StoredTimestamp {
   return text as StoredTimestamp;
 }
 
-/** `toStoredTimestamp` for a nullable column. */
+/** `toStoredTimestamp` for a nullable column */
 export function toStoredTimestampOrNull(value: Date | null): StoredTimestamp | null {
   return value === null ? null : toStoredTimestamp(value);
 }
@@ -86,7 +86,7 @@ export function fromStoredTimestamp(text: string): Date {
   return new Date(text);
 }
 
-/** `fromStoredTimestamp` for a nullable column. */
+/** `fromStoredTimestamp` for a nullable column */
 export function fromStoredTimestampOrNull(text: string | null): Date | null {
   return text === null ? null : new Date(text);
 }

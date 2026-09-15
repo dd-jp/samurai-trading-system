@@ -38,7 +38,7 @@ export type DataSourceConfig =
   // (choose and provision the real-time L1 vendor), Refs #1034 (register for
   // LSEG Delayed Market Data). `buildAlpacaDataSource` reaches it only when a caller
   // supplies `ProductionConfig.lseMarkClient`, and refuses to boot an LSE
-  // universe without one rather than substituting another venue's price.
+  // universe without one rather than substituting another venue's price
   | ({ kind: 'lse'; client: LseMarkClient } & LseMarkSourceOptions);
 
 export function createDataSource(config: DataSourceConfig): DataSource {

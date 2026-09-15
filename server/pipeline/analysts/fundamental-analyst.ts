@@ -17,7 +17,7 @@ import type { AnalystView, Direction } from '../debate-engine/index.js';
 import type { Analyst, AnalystInput, AssetClass } from './types.js';
 import { NO_DATA_MARKER } from './types.js';
 
-/** 24h news context window, matching technical-analyst's always-on context frame. */
+/** 24h news context window, matching technical-analyst's always-on context frame */
 const MI_CONTEXT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 function directionFrom(items: IntelligenceItem[]): Direction {
@@ -34,7 +34,7 @@ function directionFrom(items: IntelligenceItem[]): Direction {
   return 'neutral';
 }
 
-/** Average item confidence, clamped to [0.05, 0.95]; no news this window reads as low confidence. */
+/** Average item confidence, clamped to [0.05, 0.95]; no news this window reads as low confidence */
 function confidenceFrom(items: IntelligenceItem[]): number {
   if (items.length === 0) {
     return 0.05;
@@ -60,7 +60,7 @@ export const fundamentalAnalyst: Analyst = {
     // resolves an LSE-listed wrapper to the US underlying MI is keyed on
     // (`lse-etp-pool.ts`) and is the identity for every non-pool instrument,
     // so today's SPY/QQQ/AAPL/TSLA universe is unaffected by the resolution
-    // step itself.
+    // step itself
     const miSubject = resolveMiSubject(signal.asset);
 
     const [marketContext, mark] = await Promise.all([
@@ -83,7 +83,7 @@ export const fundamentalAnalyst: Analyst = {
     // confidence fold both arrays together, unweighted, exactly as `news`
     // alone was folded before. `key_points` reports the two counts distinctly
     // per AC4: an analyst reading the transcript must be able to tell "1
-    // filing" from "1 macro aggregate" even though both moved the same vote.
+    // filing" from "1 macro aggregate" even though both moved the same vote
     const evidence = [...marketContext.news, ...marketContext.intel];
     const direction = directionFrom(evidence);
     const confidence = confidenceFrom(evidence);
@@ -100,7 +100,7 @@ export const fundamentalAnalyst: Analyst = {
         // analyst of 3 while this returns a constant. ADR-0007 removed the
         // human approval gate, so nobody downstream catches it either. The
         // marker at least makes the debate — and the audit trail — state that
-        // the input was absent rather than unremarkable.
+        // the input was absent rather than unremarkable
         evidence.length === 0
           ? `${NO_DATA_MARKER}: no news, filing or intel items available for this window — the market-intelligence store returned nothing, so this is an ABSENCE OF INPUT, not a neutral read of the fundamentals. Weight it accordingly.`
           : `${marketContext.news.length} news/filing items, ${marketContext.intel.length} intel items in window, net sentiment driving ${direction}`,

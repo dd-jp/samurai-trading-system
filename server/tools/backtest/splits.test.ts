@@ -3,7 +3,7 @@ import type { DateRange } from './universe.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** A 600-day window: divides evenly by both scheme's fold counts. */
+/** A 600-day window: divides evenly by both scheme's fold counts */
 const WINDOW: DateRange = {
   start: new Date('2024-01-01T00:00:00Z'),
   end: new Date('2025-08-23T00:00:00Z'),
@@ -20,7 +20,7 @@ describe('generateSplits', () => {
     it('produces a distribution of folds, not a single train/test path', () => {
       const splits = generateSplits(WINDOW, 'walk_forward', NO_EMBARGO);
 
-      // User story 14: the whole point is a distribution of OOS results.
+      // User story 14: the whole point is a distribution of OOS results
       expect(splits.length).toBeGreaterThan(1);
     });
 
@@ -57,7 +57,7 @@ describe('generateSplits', () => {
 
   describe('cpcv', () => {
     it('produces every symmetric combination of held-out groups', () => {
-      // 6 groups choose 2 = 15 paths.
+      // 6 groups choose 2 = 15 paths
       expect(generateSplits(WINDOW, 'cpcv', NO_EMBARGO)).toHaveLength(15);
     });
 
@@ -87,7 +87,7 @@ describe('generateSplits', () => {
           for (const train of split.train) {
             // Train must sit wholly outside [test.start - embargo, test.end + embargo]:
             // adjacent bars share label information with the test set, so
-            // leaving them in leaks it into training.
+            // leaving them in leaks it into training
             const clearBefore = train.end.getTime() <= test.start.getTime() - embargoMs;
             const clearAfter = train.start.getTime() >= test.end.getTime() + embargoMs;
             expect(clearBefore || clearAfter).toBe(true);
@@ -99,7 +99,7 @@ describe('generateSplits', () => {
     it('splits a train group into two ranges when a test group sits inside it', () => {
       // Groups 0 and 5 held out leaves 1-4 contiguous; groups 1 and 4 held out
       // leaves 0, 2-3, 5 — a discontiguous train set. Some split must therefore
-      // carry more ranges than a single contiguous block.
+      // carry more ranges than a single contiguous block
       const splits = generateSplits(WINDOW, 'cpcv', NO_EMBARGO);
 
       expect(splits.some((split) => split.train.length > 1)).toBe(true);
@@ -113,13 +113,13 @@ describe('generateSplits', () => {
       expect(splits).toHaveLength(6);
       expect(splits.length % 2).toBe(0);
       expect(splits.length).toBeGreaterThanOrEqual(4);
-      // The contrast that motivates the scheme (#406).
+      // The contrast that motivates the scheme (#406)
       expect(generateSplits(WINDOW, 'walk_forward', NO_EMBARGO).length % 2).toBe(1);
     });
 
     it('gives every fold a single contiguous test range, so the exposure denominator stays honest', () => {
       // This is what separates it from `cpcv`, whose k-group test side
-      // `eval-executor.ts` refuses to score.
+      // `eval-executor.ts` refuses to score
       for (const split of generateSplits(WINDOW, 'cscv', NO_EMBARGO)) {
         expect(split.test).toHaveLength(1);
       }
@@ -134,7 +134,7 @@ describe('generateSplits', () => {
 
       // Walk-forward never tests the first group — it is train-only in every
       // fold. CSCV does, which is both why it adds a sixth observation per
-      // config and why that fold carries the indicator warm-up.
+      // config and why that fold carries the indicator warm-up
       expect(tested[0]?.start.getTime()).toBe(WINDOW.start.getTime());
       expect(tested.at(-1)?.end.getTime()).toBe(WINDOW.end.getTime());
 
@@ -154,7 +154,7 @@ describe('generateSplits', () => {
     it('purges and embargoes on both sides of the held-out group', () => {
       const embargo = 10;
       const splits = generateSplits(WINDOW, 'cscv', { embargo, barMs: DAY_MS });
-      // Fold 2 has train groups on both sides of it, so both edges are testable.
+      // Fold 2 has train groups on both sides of it, so both edges are testable
       const split = splits[2];
       const test = split?.test[0];
 

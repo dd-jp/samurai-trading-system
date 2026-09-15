@@ -126,7 +126,7 @@ function gatedAssessment(): AxisAssessment {
 /**
  * The same tape with the ADX above `ADX_TREND_FLOOR` and nothing else changed:
  * the discriminator every cap assertion here is stated against, so that a cap
- * that stopped binding collapses the difference rather than moving both sides.
+ * that stopped binding collapses the difference rather than moving both sides
  */
 function ungatedAssessment(): AxisAssessment {
   return assessAxes(
@@ -165,7 +165,7 @@ function filler(count: number, prefix: string): string[] {
   return Array.from({ length: count }, (_, index) => `${prefix} key point ${index + 1}`);
 }
 
-/** The #436 empty-store branch: an analyst that never looked. */
+/** The #436 empty-store branch: an analyst that never looked */
 function absent(analyst_id: string): AnalystView {
   return view(analyst_id, 'neutral', 0.05, [
     `${NO_DATA_MARKER}: the market-intelligence store returned nothing for this window.`,
@@ -173,7 +173,7 @@ function absent(analyst_id: string): AnalystView {
   ]);
 }
 
-/** The desk every debate in the recorded soak ran on: technical only, MI mute. */
+/** The desk every debate in the recorded soak ran on: technical only, MI mute */
 function absentDesk(assessment: AxisAssessment): AnalystView[] {
   return [
     view(
@@ -187,7 +187,7 @@ function absentDesk(assessment: AxisAssessment): AnalystView[] {
   ];
 }
 
-/** Both MI analysts hydrated and reading the technical direction at 0.95. */
+/** Both MI analysts hydrated and reading the technical direction at 0.95 */
 function alignedDesk(assessment: AxisAssessment): AnalystView[] {
   const [technical] = absentDesk(assessment);
   if (technical === undefined) throw new Error('absentDesk must yield a technical view');
@@ -201,7 +201,7 @@ function alignedDesk(assessment: AxisAssessment): AnalystView[] {
 function convictionOf(views: AnalystView[], mediator: Direction): number {
   // `roundStances` empty is what the production adapter supplies: it echoes
   // each view's own direction, and `finalPositionFor` falls back to
-  // `view.direction`, so the two inputs are the same score.
+  // `view.direction`, so the two inputs are the same score
   return computeConvictionScore(views, [], mediator);
 }
 
@@ -211,7 +211,7 @@ describe('#870 — the gated tape is DAMPED, not barred, and the damping is shap
     // that identity is the code's output against the code's own constant, it
     // survives any change to the cap's value, and `technical-axes.test.ts`
     // (:253, :269) already pins it. The only difference between these two
-    // reads is the ADX, so if the cap stops binding they become equal.
+    // reads is the ADX, so if the cap stops binding they become equal
     const gated = gatedAssessment();
     const ungated = ungatedAssessment();
 
@@ -224,7 +224,7 @@ describe('#870 — the gated tape is DAMPED, not barred, and the damping is shap
 
   it('but the CONVICTION it feeds clears the floor once the mediator agrees', () => {
     // The defect #870 reports, re-derived from the analyst rather than from the
-    // literal 0.4: `0.6(0.5) + 0.4((1 + 0.4)/2) = 0.58`.
+    // literal 0.4: `0.6(0.5) + 0.4((1 + 0.4)/2) = 0.58`
     const conviction = convictionOf(absentDesk(gatedAssessment()), 'bullish');
 
     expect(conviction).toBeCloseTo(0.58, 10);
@@ -245,7 +245,7 @@ describe('#870 — the gated tape is DAMPED, not barred, and the damping is shap
     // wrong. "Nothing clears from the capped state without an agreeing
     // mediator" is true on the absent desk and FALSE here: two agreeing MI
     // analysts at 0.95 carry the evidence average on their own, so an opposing
-    // mediator still lands at 0.6533.
+    // mediator still lands at 0.6533
     const desk = alignedDesk(gatedAssessment());
 
     expect(convictionOf(desk, 'bullish')).toBeCloseTo(0.9533, 4);
@@ -257,7 +257,7 @@ describe('#870 — the gated tape is DAMPED, not barred, and the damping is shap
   });
 });
 
-/** Flat closes, so ATR is exactly `trueRange` and any ATR leak into sizing shows. */
+/** Flat closes, so ATR is exactly `trueRange` and any ATR leak into sizing shows */
 function bars(instrument: string, count: number, trueRange: number): Bar[] {
   return Array.from({ length: count }, (_, i) => {
     const close_time = new Date(DECISION_BAR.getTime() - (count - 1 - i) * 60 * 60 * 1000);
@@ -397,7 +397,7 @@ function gatedAssessmentAt(raw: 0.3333 | 0.25): AxisAssessment {
       donchian: 0.9,
       macd: undefined,
       // The participation axis: absent leaves 3 voting axes (net 1 → 1/3),
-      // present-and-neutral makes it 4 (net 1 → 0.25).
+      // present-and-neutral makes it 4 (net 1 → 0.25)
       participation: raw === 0.25 ? 0.5 : undefined,
       squeeze: undefined,
     },
@@ -409,7 +409,7 @@ describe('#870 — what the damping is worth at the composition root', () => {
     // The half of the corrected claim that had no test anywhere. `decide.ts`
     // reads `conviction_floor` TWICE — once as the gate and once through
     // `convictionMultiplier`, which is a SIZING input — so the cap's real
-    // effect is on notional, not on the trade/skip boundary.
+    // effect is on notional, not on the trade/skip boundary
     const conviction = convictionOf(absentDesk(gatedAssessment()), 'bullish');
     const expectedMultiplier = (conviction - FLOOR) / (1 - FLOOR);
 
@@ -419,7 +419,7 @@ describe('#870 — what the damping is worth at the composition root', () => {
     // `(1 - D5_SCALE_IN_HEADROOM_RESERVE_FRACTION)` is #897's headroom reserve:
     // the first tranche is sized at 90% of the envelope so a scale-in remains
     // admissible. It scales the whole span this test measures; the ~6.7%
-    // multiplier the test is actually about is untouched by it.
+    // multiplier the test is actually about is untouched by it
     expect(deployed).toBeCloseTo(
       D5_INDEX_ETP_DEPLOYMENT_FRACTION *
         (1 - D5_SCALE_IN_HEADROOM_RESERVE_FRACTION) *
@@ -430,13 +430,13 @@ describe('#870 — what the damping is worth at the composition root', () => {
     // Stated absolutely as well, because the line above is derived from the
     // same `conviction` the deployment is: if the cap stopped binding, both
     // sides would move together and only this number would notice. £2,333.33
-    // until #897 reserved the headroom.
+    // until #897 reserved the headroom
     expect(deployed).toBeCloseTo(2_100.0, 2);
   });
 
   it('and 6.7% really is a CEILING — a weaker gated read deploys less, and the weakest deploys nothing', async () => {
     // The span the ceiling implies, executed rather than asserted in prose:
-    // the cap binds only from raw 0.40 up, so gated deployment runs 0 → 6.7%.
+    // the cap binds only from raw 0.40 up, so gated deployment runs 0 → 6.7%
     const middling = gatedAssessmentAt(0.3333);
     const weakest = gatedAssessmentAt(0.25);
 
@@ -447,13 +447,13 @@ describe('#870 — what the damping is worth at the composition root', () => {
 
     const middlingConviction = convictionOf(absentDesk(middling), 'bullish');
     expect(middlingConviction).toBeCloseTo(0.5667, 4);
-    // £12.96 until #897 reserved 10% of the envelope as scale-in headroom.
+    // £12.96 until #897 reserved 10% of the envelope as scale-in headroom
     expect(await deploymentAt(middlingConviction, LIVE_BOOK)).toBeCloseTo(11.66, 2);
 
     // The bottom of the span, taken from the Trader's OWN skip reason rather
     // than derived from `decide.ts:426`'s `<`: this read lands exactly ON the
     // floor, which is the boundary #683 has open, so which of the two skips
-    // fires is a fact to read off rather than to reason about.
+    // fires is a fact to read off rather than to reason about
     const weakestConviction = convictionOf(absentDesk(weakest), 'bullish');
     expect(weakestConviction).toBeCloseTo(FLOOR, 10);
 
@@ -465,7 +465,7 @@ describe('#870 — what the damping is worth at the composition root', () => {
   it('sizes an ungated unanimous tape 5x larger from the same axis votes', async () => {
     // The discriminator against a test that would pass whether or not the cap
     // is wired: the ONLY difference between the two runs is the ADX read, and
-    // it moves the deployed notional by a factor of 5.
+    // it moves the deployed notional by a factor of 5
     const gated = convictionOf(absentDesk(gatedAssessment()), 'bullish');
     const ungated = convictionOf(absentDesk(ungatedAssessment()), 'bullish');
 
@@ -480,19 +480,19 @@ describe('#870 — what the damping is worth at the composition root', () => {
     // Reported as a NEGATIVE result rather than relied on, and run through
     // `decide` at the real book size rather than recomputed here: a test that
     // restated the sizing formula would survive `convictionMultiplier` being
-    // deleted from `decide.ts` entirely.
+    // deleted from `decide.ts` entirely
     //
     // Both frozen ADR-0018 D5 brackets are checked, because the conclusion has
     // to hold on the whole live universe, not just the index row. Deployment is
     // `deployment_fraction x (1 - headroom_reserve_fraction) x equity x
     // multiplier` on both — the stop cancels out of `risk_fraction =
     // deployment_fraction x stop_pct x (1 - reserve)` — so the single-stock row
-    // lands lower and still clears the minimum.
+    // lands lower and still clears the minimum
     //
     // #897 shrank both figures by the 10% headroom reserve (23.33 -> 21.00,
     // 16.67 -> 15.00). The NEGATIVE result this test reports is unchanged by
     // that: neither row is anywhere near the £10 floor, so the floor still does
-    // not enforce #745.
+    // not enforce #745
     const conviction = convictionOf(absentDesk(gatedAssessment()), 'bullish');
     const multiplier = (conviction - FLOOR) / (1 - FLOOR);
     const reserved = 1 - D5_SCALE_IN_HEADROOM_RESERVE_FRACTION;

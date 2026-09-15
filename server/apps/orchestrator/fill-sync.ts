@@ -202,7 +202,7 @@ export const FILL_SYNC_RECONCILE_FAILED = 'periodic reconcile failed' as const;
 export const FILL_SYNC_SWEEP_FAILED = 'residual-protection sweep failed' as const;
 export const FILL_SYNC_POLL_FAILED = 'fill poll failed' as const;
 
-/** Execution's polled surfaces — the subset of `Execution` this loop drives. */
+/** Execution's polled surfaces — the subset of `Execution` this loop drives */
 export interface FillSyncSurface {
   reconcile(): Promise<ReconcileReport>;
   ingestFills(): Promise<void>;
@@ -224,7 +224,7 @@ export interface FillSyncDeps {
   execution: FillSyncSurface;
   clock: Clock;
   logger: Logger;
-  /** Gap between the END of one poll and the start of the next. */
+  /** Gap between the END of one poll and the start of the next */
   fillPollIntervalMs: number;
   /**
    * `trace_id` for this loop's periodic `reconcile()` log lines (divergence,
@@ -315,7 +315,7 @@ export async function runStartupReconcile(deps: {
   // though it isn't a divergence — otherwise a DELETE against
   // `open_positions` happens on every startup with no line anywhere to show
   // it. Only when it actually deleted something, matching every other
-  // dedup/no-spam convention in this file.
+  // dedup/no-spam convention in this file
   if (report.swept > 0) {
     deps.logger.log({
       trace_id: deps.traceId,
@@ -336,7 +336,7 @@ export async function runStartupReconcile(deps: {
  */
 export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> } {
   let stopped = false;
-  /** The current pass, so `stop()` awaits it rather than cutting it off. */
+  /** The current pass, so `stop()` awaits it rather than cutting it off */
   let inFlight: Promise<void> | undefined;
   let handle: NodeJS.Timeout | undefined;
   /**
@@ -407,7 +407,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
         const dedupKey = divergence.idempotency_key || divergence.instrument;
         reportedThisPass.add(dedupKey);
         const dedupState = reconcileDedupState(divergence);
-        // Repeat pass, same state: already logged — see `lastReconcileAction`.
+        // Repeat pass, same state: already logged — see `lastReconcileAction`
         if (lastReconcileAction.get(dedupKey) === dedupState) continue;
         lastReconcileAction.set(dedupKey, dedupState);
         deps.logger.log({
@@ -424,7 +424,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
       }
       // #1088: same trace `runStartupReconcile` logs above — the sweep is
       // not a divergence and runs on every pass, so it needs its own
-      // operator-visible line, logged only when it deleted something.
+      // operator-visible line, logged only when it deleted something
       if (report.swept > 0) {
         deps.logger.log({
           trace_id: deps.reconcileTraceId,
@@ -456,7 +456,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
         for (const divergence of sweep.divergences) {
           reportedThisPass.add(divergence.idempotency_key);
           const dedupState = reconcileDedupState(divergence);
-          // Repeat pass, same state: already logged — see `lastSweepAction`.
+          // Repeat pass, same state: already logged — see `lastSweepAction`
           if (lastSweepAction.get(divergence.idempotency_key) === dedupState) continue;
           lastSweepAction.set(divergence.idempotency_key, dedupState);
           deps.logger.log({
@@ -472,7 +472,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
             // not introduced here. `reconcileDivergenceLevel()` never
             // demotes a sweep row either way (`kind !== 'bracket'`), so
             // this inline split and that function agree on every case; it
-            // just doesn't call it a second time to reach the same answer.
+            // just doesn't call it a second time to reach the same answer
             level: divergence.action === 'undetermined' ? 'warn' : 'info',
             message: 'residual-protection sweep divergence',
             payload: { ...divergence },
@@ -498,7 +498,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
       // when the poll failed. The lots it reports are exactly the ones a failed
       // poll did not retire, and its own failure is contained to a log line for
       // the reason the sweep's is: this loop's posture is log-and-poll-again,
-      // and a detector must not add a second way to end the run.
+      // and a detector must not add a second way to end the run
       try {
         await deps.reportCarriedLots?.();
       } catch (carriedLotError) {
@@ -517,7 +517,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
   const runOnce = async (): Promise<void> => {
     // Belt-and-braces against re-entry: `schedule()` already re-arms only
     // after the previous pass settles, but the guard keeps that invariant
-    // local to the thing it protects rather than resting on the caller.
+    // local to the thing it protects rather than resting on the caller
     if (inFlight !== undefined) {
       deps.logger.log({
         trace_id: deps.fillSyncTraceId,
@@ -536,7 +536,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
       // unreachable is expected, and `ingestFills` is idempotent, so the next
       // poll re-offers whatever this one missed. Same posture as the tick
       // loop: log, survive, let the heartbeat's silence be the external
-      // failure signal.
+      // failure signal
       deps.logger.log({
         trace_id: deps.fillSyncTraceId,
         stage: 'execution',
@@ -566,7 +566,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
         clearTimeout(handle);
         handle = undefined;
       }
-      // `runOnce` swallows its own errors, so this only ever waits.
+      // `runOnce` swallows its own errors, so this only ever waits
       await inFlight;
     },
   };

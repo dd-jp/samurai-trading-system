@@ -17,7 +17,7 @@ class FakeStdout {
     return this;
   }
 
-  /** Fires the async `'error'` event a real destroyed pipe delivers. */
+  /** Fires the async `'error'` event a real destroyed pipe delivers */
   emitError(error: Error): void {
     if (this.listener === undefined) {
       throw new Error('nothing subscribed to stdout errors');
@@ -35,7 +35,7 @@ describe('watchStdoutErrors', () => {
 
     // The mechanism under test: firing the ASYNC event, not calling write()
     // and catching a throw. This is the distinction #714 measured — a
-    // try/catch around a write catches nothing on a real pipe.
+    // try/catch around a write catches nothing on a real pipe
     expect(() => stdout.emitError(new Error('EPIPE'))).not.toThrow();
     expect(faults).toHaveLength(1);
     expect(faults[0]?.message).toBe('EPIPE');
@@ -96,7 +96,7 @@ describe('installContinueOnFault', () => {
     // There is no `exit` in ContinueOnFaultEffects at all: the type itself is
     // the proof this handler cannot terminate the process, unlike
     // `installFaultHandlers` in orchestrator/index.ts (#714), whose effects
-    // require one.
+    // require one
     const handlers = new Map<string, (error: unknown) => void>();
     installContinueOnFault(() => 'fault', {
       stderr: { write: () => {} },

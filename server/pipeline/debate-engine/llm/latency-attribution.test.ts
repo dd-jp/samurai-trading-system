@@ -290,7 +290,7 @@ const SAME_DEBATE_ADJACENT_CALLS = {
   later: { id: 146, latency_ms: 28_340, output_tokens: 253, timestamp: '2026-08-27T14:04:34.129Z' },
 } as const;
 
-/** `latency_ms - output_tokens * BEST_OBSERVED_MS_PER_OUTPUT_TOKEN` — the part of a call's wall time no observed generation speed can account for. */
+/** `latency_ms - output_tokens * BEST_OBSERVED_MS_PER_OUTPUT_TOKEN` — the part of a call's wall time no observed generation speed can account for */
 function excessMs(latencyMs: number, outputTokens: number): number {
   return latencyMs - outputTokens * BEST_OBSERVED_MS_PER_OUTPUT_TOKEN;
 }
@@ -325,7 +325,7 @@ describe('debate LLM latency attribution (#1012)', () => {
 
     // Even crediting this call the fastest per-token rate seen anywhere in
     // the sample, over 20 of its 28.3 seconds are unaccounted for by
-    // decoding its 253 output tokens.
+    // decoding its 253 output tokens
     expect(excessMs(later.latency_ms, later.output_tokens)).toBeGreaterThan(20_000);
   });
 
@@ -333,7 +333,7 @@ describe('debate LLM latency attribution (#1012)', () => {
     const { earlier, later } = SAME_DEBATE_ADJACENT_CALLS;
 
     // If the tail were generation-bound, the call with less output to
-    // generate should never be the slower one.
+    // generate should never be the slower one
     expect(later.output_tokens).toBeLessThan(earlier.output_tokens);
     expect(later.latency_ms).toBeGreaterThan(earlier.latency_ms);
   });
@@ -354,7 +354,7 @@ describe('debate LLM latency attribution (#1012)', () => {
     // ~28s apart: close enough in time that ADR-0009's "portal latency
     // drifts over minutes" caveat does not explain the swing either — this
     // is two calls back-to-back in one debate, not two samples taken
-    // minutes apart.
+    // minutes apart
     expect(gapMs).toBeLessThan(60_000);
   });
 
@@ -364,7 +364,7 @@ describe('debate LLM latency attribution (#1012)', () => {
     // A cold-connection theory predicts the OPPOSITE shape — idle-gap calls
     // slower, from re-establishing a connection. Instead the idle-gap
     // bucket's own worst case sits below the back-to-back bucket's tail, and
-    // contributes zero of the 16 calls over 15s.
+    // contributes zero of the 16 calls over 15s
     expect(afterLongIdle.callsOver15s).toBe(0);
     expect(backToBack.callsOver15s).toBeGreaterThan(0);
     expect(afterLongIdle.maxLatencyMs).toBeLessThan(backToBack.maxLatencyMs);
@@ -376,7 +376,7 @@ describe('debate LLM latency attribution (#1012)', () => {
     // real cross-check, not a tautology: a boundary bug in the gap-bucket
     // CASE (an off-by-one on the 60s/300s cutoffs, or a bucket that silently
     // dropped the first row of a debate) would show up here as a mismatch,
-    // even though both sides are frozen literals rather than a live query.
+    // even though both sides are frozen literals rather than a live query
     const { afterLongIdle, oneToFiveMin, backToBack } = CALLS_BY_IDLE_GAP;
     const bucketedTotal = afterLongIdle.n + oneToFiveMin.n + backToBack.n;
 

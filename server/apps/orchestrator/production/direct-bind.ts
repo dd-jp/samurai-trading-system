@@ -311,7 +311,7 @@ export function buildTraderStep(deps: TraderStepDeps): TickSteps['trader'] {
  * attribution is recomputed here from the same `positions` snapshot
  * `checkExitsWithReason` was given, via the exported `mostRecentOpenLot`
  * (decide.ts, #1128 review round 1) rather than a second copy of its
- * most-recently-OPENED-lot selection that could silently drift from it.
+ * most-recently-OPENED-lot selection that could silently drift from it
  */
 function mostRecentDebateId(positions: readonly OpenPosition[], instrument: string): string | null {
   const held = positions.filter((lot) => lot.instrument === instrument);
@@ -336,7 +336,7 @@ export function buildTraderSteps(deps: TraderStepDeps): {
   // #698. Per-step-set rather than per-tick: the counter's entire job is to
   // relate THIS tick to the ones before it, so it has to outlive the closure
   // body. Held here for the same reason `buildAnalystsStep` holds
-  // `consecutiveSkips` — one running orchestrator, in memory, restart-clean.
+  // `consecutiveSkips` — one running orchestrator, in memory, restart-clean
   const diagnosticThrottle = new TraderDiagnosticThrottle();
 
   // #1128 (review round 1): the exit-check skip write gate — see
@@ -344,14 +344,14 @@ export function buildTraderSteps(deps: TraderStepDeps): {
   // reason" alone cannot bound volume (a persistent fault, or a flapping
   // indicator read, both look "changed" on every tick under a naive
   // comparison). Restart-clean and in-memory, matching `diagnosticThrottle`
-  // above; cleared at this instrument's episode boundaries below.
+  // above; cleared at this instrument's episode boundaries below
   const exitSkipThrottle = new ExitSkipWriteThrottle();
 
   const trader: TickSteps['trader'] = async ({ trace_id, instrument, debate, clock }) => {
     // TraderInput.equity is current portfolio equity (cash + mark-to-market
     // exposure) — the same OBSERVATION Risk gates against this tick, not
     // merely the same derivation: the snapshot is memoized per trace so the
-    // two stages cannot see two different portfolios (B4).
+    // two stages cannot see two different portfolios (B4)
     //
     // #847 — CAPTURE-AND-RETHROW, not laziness. The read stays EAGER and
     // unconditional: `computeCurrentPortfolioAndBreakers` is not a pure
@@ -360,7 +360,7 @@ export function buildTraderSteps(deps: TraderStepDeps): {
     // (the tick path deliberately performs no portfolio read at all). Making
     // the read lazy would have skipped breaker evaluation on every no-trade
     // bar — 92 of 94 debates in the soak — which is a silent live-money
-    // regression that ships green.
+    // regression that ships green
     //
     // What IS deferred is the FAILURE. When the strict whole-book valuation
     // refuses (one held instrument's mark dark or stale), the throw is held
@@ -368,11 +368,11 @@ export function buildTraderSteps(deps: TraderStepDeps): {
     // or scale-in still aborts the tick into #507's catch exactly as before,
     // while `routeDecision`'s flat-by-close branch, which never reads equity,
     // now gets to run. Before this, one dark name aborted the whole decision
-    // pass and delayed a newly decided flatten by a tick (ADR-0014).
+    // pass and delayed a newly decided flatten by a tick (ADR-0014)
     //
     // Re-raised UNWRAPPED on purpose: `snapshotForExit` downstream
     // discriminates on the original `StaleMarkError`/`AggregateError` to
-    // decide whether a degraded valuation explains the refusal.
+    // decide whether a degraded valuation explains the refusal
     let snapshot: PortfolioSnapshot | null = null;
     let snapshotError: unknown = null;
     try {
@@ -388,17 +388,17 @@ export function buildTraderSteps(deps: TraderStepDeps): {
         clock,
         // #753. Conditional spread under `exactOptionalPropertyTypes`: omitted
         // rather than passed as `undefined` on the live bind, which is the
-        // pre-#753 behaviour and the value `TraderInput.arm` defaults to.
+        // pre-#753 behaviour and the value `TraderInput.arm` defaults to
         ...(deps.arm === undefined ? {} : { arm: deps.arm }),
         marketData: deps.marketData,
         // #511: bounded by the declared capital ceiling whenever one is
         // declared (live always; paper since #1112), verbatim portfolio
-        // equity only on backtest and undeclared tests.
+        // equity only on backtest and undeclared tests
         //
         // #847: either the STRICT whole-book equity or the strict read's own
         // throw — never a partial figure. A degraded view omits a held
         // instrument, and every exposure cap reads an absent instrument as ZERO
-        // exposure, so sizing against one would silently over-size.
+        // exposure, so sizing against one would silently over-size
         equity: async () => {
           if (snapshot === null) throw snapshotError;
           return sizingEquity(snapshot.portfolio.equity, deps.capitalCeilingUsd);
@@ -406,22 +406,22 @@ export function buildTraderSteps(deps: TraderStepDeps): {
         config: deps.config,
         positionState: deps.getOpenPositions,
         // #568: the same store the lots came from, so the exit the Trader sizes
-        // and the exit `executeExit` validates are computed off ONE fill record.
+        // and the exit `executeExit` validates are computed off ONE fill record
         exitFillSizes: deps.getExitFillSizes,
         // #1389. Bound on BOTH trader binds for the reason `onUnpricedFlatten`
         // is: `routeDecision`'s holding branch reaches the flatten too, so a
         // guard on only the tick path would leave every debate-bar flatten
-        // unguarded.
+        // unguarded
         unresolvedFlattens: deps.getUnresolvedFlattens,
         setupStore: deps.setupStore,
         // #668: the same pair every other session-boundary consumer reads (the
         // daily-PnL boundary #331/#332, the volatility reading #386), threaded
         // through rather than rebuilt — two literals would be two calendars and
-        // two places for an override to be applied to only one.
+        // two places for an override to be applied to only one
         sessionCalendars: deps.sessionCalendars,
         // #826. Wired on BOTH trader binds — the decision path can reach the
         // flatten too (`routeDecision`'s holding branch), so a hook on only the
-        // tick path would go quiet for exactly the exits a debate bar decides.
+        // tick path would go quiet for exactly the exits a debate bar decides
         onUnpricedFlatten: (report) =>
           reportExitValuationDegraded(
             deps,
@@ -442,7 +442,7 @@ export function buildTraderSteps(deps: TraderStepDeps): {
       // #748. Null on an entry, a scale-in and every skip — the field is set
       // exactly when there is an exit, and on THIS path it is the flatten or
       // the direction flip rather than a decay (the decay runs on the tick
-      // path, which is the other writer below).
+      // path, which is the other writer below)
       exit_reason: intent?.metadata.exit_reason ?? null,
       // The actual reason, since #475. This used to be the constant
       // `'decide() returned no intent'` for all thirteen distinct skip paths,
@@ -450,12 +450,12 @@ export function buildTraderSteps(deps: TraderStepDeps): {
       // too high" and "the market data feed is returning NaN marks" wrote the
       // same row. The sizing/precedent columns still say how far it got, which
       // remains what distinguishes "sized then rejected" from "never reached
-      // sizing".
+      // sizing"
       skip_reason,
       // #1109. Distinguishes "the debate said no" from "the debate produced
       // nothing usable" for the same `skip_reason` string — see
       // `TraderDecisionClass`'s docblock for the full three-way split and
-      // migration 0042 for why it lands as two typed columns rather than one.
+      // migration 0042 for why it lands as two typed columns rather than one
       decision_class,
       reason_detail,
       sizing: intent?.metadata.sizing ?? null,
@@ -463,7 +463,7 @@ export function buildTraderSteps(deps: TraderStepDeps): {
       // Real since #475. The column has existed since migration 0016 and was
       // written as a hardcoded null — the value was computed inside
       // `buildBracket` and never left it. It is what explains a stop distance,
-      // so without it a soak cannot tell a wide stop from a volatile instrument.
+      // so without it a soak cannot tell a wide stop from a volatile instrument
       atr,
       entry: intent?.entry ?? null,
       stop: intent?.stop ?? null,
@@ -485,10 +485,10 @@ export function buildTraderSteps(deps: TraderStepDeps): {
     // reason and stay wrongly suppressed. `intent_type === 'exit'` is the one
     // value shared by both the flatten and the direction-flip branches (see
     // `exit_reason` above); a null intent or an entry/scale-in leaves nothing
-    // to clear.
+    // to clear
     if (intent?.intent_type === 'exit') exitSkipThrottle.clearEpisode(instrument);
 
-    // #698: escalate anything the decision noticed but did not treat as fatal.
+    // #698: escalate anything the decision noticed but did not treat as fatal
     // #1089's control-arm valuation refusal is one of these now (`decide.ts`
     // pushes a `TraderDiagnostic` with `asset_class: undefined` from inside
     // `buildBracket`, right where it decides to skip) — a durable row (written
@@ -496,7 +496,7 @@ export function buildTraderSteps(deps: TraderStepDeps): {
     // log line with no consumer. See `TraderDiagnostic.asset_class` for why
     // that field is optional and `buildControlArmStep`'s catch in
     // `control-arm.ts` (now also `error`-level) for the pass this is paired
-    // with.
+    // with
     //
     // AFTER the `trader_log` write on purpose — the durable record is the thing
     // that must not be lost, and it lands whether or not a transport is
@@ -514,13 +514,13 @@ export function buildTraderSteps(deps: TraderStepDeps): {
   const exitCheck: TickSteps['exitCheck'] = async ({ trace_id, instrument, bar, clock }) => {
     // No `snapshotForTick` here, deliberately: an exit sizes to the held
     // quantity, never to equity, so the tick path skips the account/portfolio
-    // read entirely — the cheapness of the cheap path is the point of #743.
+    // read entirely — the cheapness of the cheap path is the point of #743
     //
     // Read once and memoized into `positionState` below (#1128) rather than
     // passed through as `deps.getOpenPositions` directly: `mostRecentDebateId`
     // needs the same snapshot `routeExitCheck` filters internally, and a
     // second real call here would double the store read `checkExitsWithReason`
-    // already makes exactly once.
+    // already makes exactly once
     const positions = await deps.getOpenPositions();
     const { intent, skip_reason, decision_class, reason_detail, atr, diagnostics } =
       await checkExitsWithReason({
@@ -530,7 +530,7 @@ export function buildTraderSteps(deps: TraderStepDeps): {
         bar,
         // #753 — see the decision bind above. The exit intent's idempotency key
         // needs the arm for the same reason the entry's does: both arms flatten
-        // the same instrument on the same bar.
+        // the same instrument on the same bar
         ...(deps.arm === undefined ? {} : { arm: deps.arm }),
         marketData: deps.marketData,
         config: deps.config,
@@ -538,13 +538,13 @@ export function buildTraderSteps(deps: TraderStepDeps): {
         exitFillSizes: deps.getExitFillSizes,
         // #1389, and THIS is the binding that matters most, for the same
         // reason `onUnpricedFlatten`'s note below gives: the mandatory flatten
-        // is decided here on nearly every occurrence.
+        // is decided here on nearly every occurrence
         unresolvedFlattens: deps.getUnresolvedFlattens,
         sessionCalendars: deps.sessionCalendars,
         // #826, and THIS is the binding that matters most: the mandatory
         // flat-by-close flatten is decided on the tick path (`routeExitCheck`'s
         // first branch), so an unpriced flatten during an Alpaca stall is
-        // overwhelmingly raised here rather than on the decision path above.
+        // overwhelmingly raised here rather than on the decision path above
         onUnpricedFlatten: (report) =>
           reportExitValuationDegraded(
             deps,
@@ -556,7 +556,7 @@ export function buildTraderSteps(deps: TraderStepDeps): {
 
     // A fired flatten IS a decision and is recorded like one, attributed to
     // the debate that opened the lot, on every occurrence — an exit is never
-    // volume noise.
+    // volume noise
     if (intent !== null) {
       deps.traderLog?.write({
         trace_id,
@@ -579,7 +579,7 @@ export function buildTraderSteps(deps: TraderStepDeps): {
       // skip-episode is over. Cleared HERE rather than left for the next
       // `no_open_position` observation, because a position can close and
       // reopen inside one tick gap with no exit-check ever observing the
-      // instrument flat in between.
+      // instrument flat in between
       exitSkipThrottle.clearEpisode(instrument);
     } else if (skip_reason === 'no_open_position') {
       // #1128: no lot is open, so there is no lot — and no debate — to
@@ -588,7 +588,7 @@ export function buildTraderSteps(deps: TraderStepDeps): {
       // exactly like a fired exit above: a position that goes flat by
       // reconciliation rather than through this exitCheck's own intent still
       // clears here, so a lot reopened with the same first skip reason as
-      // before is a new episode, not a suppressed repeat.
+      // before is a new episode, not a suppressed repeat
       exitSkipThrottle.clearEpisode(instrument);
     } else if (skip_reason !== null) {
       // #1128: `classifyExitCheckSkip`'s `decision_class` used to be computed
@@ -597,12 +597,12 @@ export function buildTraderSteps(deps: TraderStepDeps): {
       // tick, 1h bar; tick-runner.ts's own count is "~29 of 30 passes" idle),
       // and a row per call would bury the decision records the table exists
       // to hold under a flat/held instrument repeating its last tick's
-      // answer.
+      // answer
       let wrote = false;
       if (exitSkipThrottle.shouldWrite(instrument, skip_reason)) {
         // Every other exit-path skip fires with at least one lot open, so its
         // debate_id is always derivable here (see `no_open_position` above
-        // for the one reason that is not).
+        // for the one reason that is not)
         const debate_id = mostRecentDebateId(positions, instrument);
         if (debate_id !== null) {
           deps.traderLog?.write({
@@ -693,10 +693,10 @@ function escalateTraderDiagnostics(
     // 0.5s/1s backoff, so a black-holed send holds the intent for ~31s of a
     // 15-minute tick before the broker has seen it — and that client's own
     // comment ("a send is not on the tick's critical path") is only true
-    // because of this line.
+    // because of this line
     //
     // This is #669's defect shape, in a different place: a slow call inside a
-    // per-instrument step delaying work that is not its own.
+    // per-instrument step delaying work that is not its own
     void postTraderDiagnosticAlert(deps, trace_id, {
       instrument,
       diagnostic,
@@ -707,7 +707,7 @@ function escalateTraderDiagnostics(
       // only way through here is `logger.log` itself throwing, and a floating
       // rejection would take the orchestrator down on an unattended soak —
       // the exact degraded-to-stopped inversion #698 exists to prevent. There
-      // is nowhere to report it: the thing that would report it is what broke.
+      // is nowhere to report it: the thing that would report it is what broke
     });
   }
 }
@@ -759,7 +759,7 @@ async function postTraderDiagnosticAlert(
   }
 }
 
-/** Shared by risk and verdict: both need the portfolio-derived breaker state, fetched fresh at their own call time. */
+/** Shared by risk and verdict: both need the portfolio-derived breaker state, fetched fresh at their own call time */
 interface BreakerStateDeps {
   marketData: MarketDataService;
   circuitBreakers: CircuitBreakers;
@@ -814,7 +814,7 @@ interface BreakerStateDeps {
   logger?: Logger;
 }
 
-/** One tick's portfolio + breaker observation — see `BreakerStateDeps.portfolioSnapshots`. */
+/** One tick's portfolio + breaker observation — see `BreakerStateDeps.portfolioSnapshots` */
 export interface PortfolioSnapshot {
   portfolio: Awaited<ReturnType<typeof computePortfolioView>>;
   breakers: ReturnType<CircuitBreakers['evaluate']>;
@@ -881,22 +881,22 @@ async function computeCurrentPortfolioAndBreakers(deps: BreakerStateDeps, clock:
   const breakers = deps.circuitBreakers.evaluate(breakerInput);
   // Persist the sticky tiers immediately: `evaluate` is where a trip becomes
   // real, and a restart between this call and any later persist point would
-  // silently re-arm the one mechanism ADR-0007 left standing.
+  // silently re-arm the one mechanism ADR-0007 left standing
   //
   // Read ONCE and both persisted and carried on the snapshot (#1019 gap 2) —
   // see `PortfolioSnapshot.next_breaker_state`. Two reads either side of this
   // `save` would be two chances for a sibling instrument's `evaluate()` to
-  // land in between.
+  // land in between
   const next_breaker_state = deps.circuitBreakers.getPersistedState();
   deps.breakerState.save(next_breaker_state);
   return { portfolio, breakers, next_breaker_state };
 }
 
-/** One tick's exit valuation, and what it had to leave out to produce one (#841). */
+/** One tick's exit valuation, and what it had to leave out to produce one (#841) */
 export interface ExitValuationDegradation {
-  /** The held instruments left unvalued — never empty when this object exists. */
+  /** The held instruments left unvalued — never empty when this object exists */
   unvalued_instruments: readonly string[];
-  /** The strict refusal's own message, naming each dark instrument and why. */
+  /** The strict refusal's own message, naming each dark instrument and why */
   reason: string;
 }
 
@@ -968,7 +968,7 @@ async function degradedPortfolioForExit(
     consecutive_losses: account.consecutive_losses,
     max_mark_age: deps.maxMarkAge,
     // The one call site in the tree that opts in. See
-    // `PortfolioAccountingInput.unvaluable_marks`.
+    // `PortfolioAccountingInput.unvaluable_marks`
     unvaluable_marks: 'exclude',
   });
   const next_breaker_state = deps.circuitBreakers.getPersistedState();
@@ -1051,7 +1051,7 @@ function reportExitValuationDegraded(
         seam === 'trader'
           ? // #826: a different condition, so a different line — this one is
             // not about the rest of the book, it is about the exited name
-            // having no price of its own.
+            // having no price of its own
             `mandatory flatten sent with NO mark: ${instrument} — the flat-by-close exit went ` +
             'out unpriced rather than being missed (ADR-0014)'
           : `exit valued on a partly-valued book: ${instrument} — ` +
@@ -1198,12 +1198,12 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
   // fix is always "correct the one offending row", which does not change
   // between instruments or ticks. Reset is a process restart, which is also
   // when an operator who acted on the first page would expect the state to
-  // be re-announced.
+  // be re-announced
   let clampAlertSent = false;
 
   return async ({ trace_id, intent, clock }) => {
     // Reuses the Trader's snapshot for this trace (B4) and consumes it — Risk
-    // is the memo's last reader; Verdict re-derives fresh by spec.
+    // is the memo's last reader; Verdict re-derives fresh by spec
     //
     // #841: an EXIT falls back to a PARTIAL valuation when the whole book
     // cannot be priced, instead of aborting the tick. `computePortfolioView`
@@ -1213,11 +1213,11 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
     // ADR-0014's flat-by-close invariant. Sizing an entry needs the whole
     // book priced; flattening a position already held does not, and
     // `evaluate()` below returns at `intent_type === 'exit'` before any gate
-    // reads `portfolio` at all.
+    // reads `portfolio` at all
     //
     // The ENTRY path is untouched: `snapshotForTick` still refuses outright,
     // and `RiskManagerImpl.evaluate` refuses any entry whose view carries a
-    // non-empty `unvalued_instruments` besides.
+    // non-empty `unvalued_instruments` besides
     const { snapshot, degradation } =
       intent.intent_type === 'exit'
         ? await snapshotForExit(deps, clock, () => snapshotForTick(deps, clock, trace_id))
@@ -1234,7 +1234,7 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
     }
     // Taken off the snapshot, not re-read here (#1019 gap 2) — see
     // `PortfolioSnapshot.next_breaker_state` for what a second read after the
-    // `await` above could attribute to this instrument.
+    // `await` above could attribute to this instrument
     const next_breaker_state: PersistedBreakerState[] = snapshot.next_breaker_state;
 
     const otherInstruments = Object.keys(portfolio.exposure_by_instrument).filter(
@@ -1254,12 +1254,12 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
     const cii = deps.ciiConsumer.getScores(heldCountries);
 
     // Red-team critic (#204), check-pipeline step 7: the producer is
-    // `risk-manager/critic.ts`, built by #957 and supplied on `deps.critic`.
-    // It runs BELOW, between two `evaluate()` calls — see `criticVerdictFor`.
+    // `risk-manager/critic.ts`, built by #957 and supplied on `deps.critic`
+    // It runs BELOW, between two `evaluate()` calls — see `criticVerdictFor`
     // Without a producer (a test, a programmatic root) the verdict stays
     // absent and every decision keeps its explicit `risk_critic: skipped`
     // reason, with the mechanical steps as the safety net, exactly as before
-    // (docs/reviews/triage-2026-08-06.md F-5).
+    // (docs/reviews/triage-2026-08-06.md F-5)
     const daily = portfolio.daily_pnl;
     const riskLogBase = {
       trace_id,
@@ -1277,7 +1277,7 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
         consecutive_losses: portfolio.consecutive_losses,
         // Null pct rather than 0 when unknown (#333). Recording an absent
         // figure as flat here would reintroduce, in the audit trail, the exact
-        // confusion the breaker's tagged union exists to prevent.
+        // confusion the breaker's tagged union exists to prevent
         daily_pnl_portfolio_pct: daily.portfolio.known ? daily.portfolio.pct : null,
         daily_pnl_crypto_pct: daily.crypto.known ? daily.crypto.pct : null,
         daily_pnl_stocks_pct: daily.stocks.known ? daily.stocks.pct : null,
@@ -1302,7 +1302,7 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
           ...(critic === undefined ? {} : { critic }),
         });
 
-      // TWO PASSES, and the first one is what fixes the cadence.
+      // TWO PASSES, and the first one is what fixes the cadence
       //
       // #955 specifies the critic firing on every intent that REACHES step 7 —
       // every viable entry that survived the exit bypass, the unvalued-book
@@ -1316,7 +1316,7 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
       // exported constant the pipeline pushes.
       //
       // Only the SECOND decision is logged and returned; the dry run is
-      // discarded, so one intent still produces exactly one `risk_log` row.
+      // discarded, so one intent still produces exactly one `risk_log` row
       const dryRun = evaluateWith();
       const reachedCritic = dryRun.reasons.includes(RISK_CRITIC_SKIPPED_REASON);
       const verdict =
@@ -1331,11 +1331,11 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
       // look like a quiet market with no setups. But a throw skips the
       // `riskLog.write` below entirely, so the refused instrument left NO
       // `risk_log` row at all, only the durable-but-separate `audit_log` row
-      // and log line #507's catch in `tick-loop.ts` produces one level up.
+      // and log line #507's catch in `tick-loop.ts` produces one level up
       // This is the fix: write the row HERE, from the catch, naming the
       // unresolved subclass when the error is the one this gate throws — then
       // RE-THROW UNCHANGED. The throw itself must still reach #507's catch;
-      // this only adds a durable record beside it, it does not replace it.
+      // this only adds a durable record beside it, it does not replace it
       const binding_constraint =
         error instanceof PerSubclassCapUnresolvableError
           ? error.bindingConstraint
@@ -1350,7 +1350,7 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
       // (threshold-bounds.ts), which an `instanceof` check would miss on
       // exactly the more alarming case. Latched — see `clampAlertSent` above
       // — and never blocks the re-throw below: a failed post costs the page,
-      // not the refusal.
+      // not the refusal
       if (!clampAlertSent && isThresholdBoundViolation(error)) {
         clampAlertSent = true;
         deps.thresholdClampAlerts?.postThresholdClampAlert({
@@ -1367,7 +1367,7 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
       // would trade "3USL has no subclass" for an opaque SQLite failure and
       // destroy the exact diagnostic this fix exists to preserve. A failure
       // here is logged, not silently dropped, then the ORIGINAL error still
-      // propagates unconditionally via the outer `throw error;` below.
+      // propagates unconditionally via the outer `throw error;` below
       try {
         deps.riskLog?.write({
           ...riskLogBase,
@@ -1399,7 +1399,7 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
     }
 
     // Written on rejection too — the case that has no downstream record at all
-    // today, since a rejected intent never reaches Verdict.
+    // today, since a rejected intent never reaches Verdict
     deps.riskLog?.write({
       ...riskLogBase,
       status: decision.status,
@@ -1447,10 +1447,10 @@ export interface VerdictStepDeps extends BreakerStateDeps {
 export function buildVerdictStep(deps: VerdictStepDeps): TickSteps['verdict'] {
   // #465: `NotifyingVerdict` OUTSIDE `LoggingVerdict`, so the row is written
   // before anyone is told. A notification about a verdict that failed to
-  // persist would point an operator at a `verdict_log` entry that is not there.
+  // persist would point an operator at a `verdict_log` entry that is not there
   const logging = new LoggingVerdict(
     new VerdictImpl(),
-    // #837 M9: the Verdict stage owns `verdict_log` and nothing else.
+    // #837 M9: the Verdict stage owns `verdict_log` and nothing else
     new SqliteVerdictLogStore(guardedStore(deps.store, 'verdict')),
   );
   const verdict =
@@ -1460,7 +1460,7 @@ export function buildVerdictStep(deps: VerdictStepDeps): TickSteps['verdict'] {
     // The `breaker` gate (5)'s fire-time re-check needs current breaker state, not the
     // snapshot risk_decision.risk_snapshot carries from Risk's earlier call
     // in this same tick — Verdict may fire enough later for a breaker to
-    // have tripped or cleared in between (verdict-spec.md's `breaker` gate, 5).
+    // have tripped or cleared in between (verdict-spec.md's `breaker` gate, 5)
     //
     // #841: the SECOND seam that refused an exit over a book it could not
     // fully value. Fixing only `buildRiskStep` would have left the flatten
@@ -1468,11 +1468,11 @@ export function buildVerdictStep(deps: VerdictStepDeps): TickSteps['verdict'] {
     // same silence. An exit therefore degrades here too; the fallback reports
     // the sticky breaker tiers rather than evaluating new ones off a partial
     // view (`breakersFromStickyState`), which is what keeps a late mark from
-    // tripping — and persisting — the hard drawdown breaker.
+    // tripping — and persisting — the hard drawdown breaker
     //
     // Keyed off the intent Risk approved. `order_intent` is null only on a
     // rejection, which never reaches Verdict; the `?.` is for the type, and
-    // an absent one takes the strict path.
+    // an absent one takes the strict path
     const isExit = risk_decision.order_intent?.intent_type === 'exit';
     const { snapshot, degradation } = isExit
       ? await snapshotForExit(deps, clock, () => computeCurrentPortfolioAndBreakers(deps, clock))
@@ -1509,19 +1509,19 @@ export interface ExecutionStepDeps {
   costModel: CostModel;
   marketData: MarketDataService;
   config: ExecutionConfig;
-  /** The #525 fallback alert — see `ExecutionInput.residualExposureAlerts`. */
+  /** The #525 fallback alert — see `ExecutionInput.residualExposureAlerts` */
   residualExposureAlerts: ResidualExposureAlertChannel;
-  /** The #527 over-fill warning — see `ExecutionInput.flattenOverfillAlerts`. */
+  /** The #527 over-fill warning — see `ExecutionInput.flattenOverfillAlerts` */
   flattenOverfillAlerts: FlattenOverfillAlertChannel;
-  /** The #519 unresolved-flatten escalation — see `ExecutionInput.flattenReconcileAlerts`. */
+  /** The #519 unresolved-flatten escalation — see `ExecutionInput.flattenReconcileAlerts` */
   flattenReconcileAlerts: FlattenReconcileAlertChannel;
-  /** #1550's unrecorded-venue-position page — see `ExecutionInput.unrecordedVenuePositionAlerts`. */
+  /** #1550's unrecorded-venue-position page — see `ExecutionInput.unrecordedVenuePositionAlerts` */
   unrecordedVenuePositionAlerts: UnrecordedVenuePositionAlertChannel;
-  /** #1550's per-instrument page throttle — see `ExecutionInput.unrecordedVenuePositionThrottle`. */
+  /** #1550's per-instrument page throttle — see `ExecutionInput.unrecordedVenuePositionThrottle` */
   unrecordedVenuePositionThrottle: UnrecordedVenuePositionThrottle;
-  /** #573's local diagnostic trace — see `ExecutionInput.logger`'s decision doc. */
+  /** #573's local diagnostic trace — see `ExecutionInput.logger`'s decision doc */
   logger: Logger;
-  /** #1087's per-lot throttle — see `ExecutionInput.filledZeroSizeThrottle`. */
+  /** #1087's per-lot throttle — see `ExecutionInput.filledZeroSizeThrottle` */
   filledZeroSizeThrottle: FilledZeroSizeThrottle;
   /**
    * #1214's session gate on the residual re-flatten — see
@@ -1622,7 +1622,7 @@ export function buildExecutionSurface(deps: ExecutionStepDeps, traceId: string):
 export interface PersistenceInstances {
   auditLog: SqliteAuditLog;
   currentTickStore: SqliteCurrentTickStore;
-  /** `scan(store, alertChannel, logger)` is a startup-time call, not part of construction (ADR-0004 §3). */
+  /** `scan(store, alertChannel, logger)` is a startup-time call, not part of construction (ADR-0004 §3) */
   orphanScanner: OrphanVerdictScanner;
 }
 
@@ -1631,7 +1631,7 @@ export function buildPersistence(
 ): PersistenceInstances {
   return {
     // #837 M9: both are the Orchestrator's own tables (`audit_log`,
-    // `current_tick`), declared on the handle rather than on the caller.
+    // `current_tick`), declared on the handle rather than on the caller
     auditLog: new SqliteAuditLog(guardedStore(store, 'orchestrator')),
     currentTickStore: new SqliteCurrentTickStore(guardedStore(store, 'orchestrator')),
     orphanScanner: new OrphanVerdictScanner(),

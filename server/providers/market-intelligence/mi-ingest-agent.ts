@@ -147,14 +147,14 @@ export interface MiIngestAgentDeps {
   assetClasses: AssetClass[];
 }
 
-/** Maps an Alpaca article + one of its symbols into the analyst-facing shape. */
+/** Maps an Alpaca article + one of its symbols into the analyst-facing shape */
 function toItem(
   article: AlpacaNewsArticle,
   entity: string,
   score: { sentiment: 1 | 0 | -1; confidence: number },
 ): IntelligenceItem {
   return {
-    // Stable and content-derived, so a re-ingest cannot produce a second item.
+    // Stable and content-derived, so a re-ingest cannot produce a second item
     id: `${SOURCE_ALPACA}:${article.id}:${entity}`,
     source: article.source,
     type: 'news',
@@ -217,11 +217,11 @@ export class MiIngestAgent {
   hydrate(): void {
     const asOf = this.deps.clock.now();
     for (const asset_class of this.deps.assetClasses) {
-      // Only the sources whose archived items are dated OBSERVATIONS (#835).
+      // Only the sources whose archived items are dated OBSERVATIONS (#835)
       // Polymarket's item is a trailing 24h delta and GDELT's, when its scoring
       // half lands, is a 1h-vs-24h window statistic; replaying either at boot
       // would re-serve a stale measurement as current. `mi-sources.ts` states
-      // which is which, and typing forces a new source to answer the question.
+      // which is which, and typing forces a new source to answer the question
       const items = this.deps.archive.itemsKnownAt(asset_class, asOf, HYDRATING_MI_SOURCES);
       if (items.length > 0) {
         this.deps.store.ingest({ agent_id: SOURCE_ALPACA, timestamp: asOf, asset_class, items });
@@ -251,7 +251,7 @@ export class MiIngestAgent {
     // resulting items under that same resolved subject (see `entity` below)
     // so the entity-scoped read `fundamental-analyst.ts`/`sentiment-analyst.ts`
     // now perform actually finds them. `resolveMiSubject` is the identity for
-    // every non-pool instrument, so today's universe is unaffected.
+    // every non-pool instrument, so today's universe is unaffected
     const miSubject = resolveMiSubject(instrument);
     const symbols = [wireSymbol(miSubject)];
 
@@ -264,7 +264,7 @@ export class MiIngestAgent {
     } catch (error) {
       // `trace_id` is a required `string` param, never null/undefined — the
       // `?? fallback` this line and `mi_ingest_refused_spend_cap` below used
-      // to carry was dead code (#1392 review round 1, F6).
+      // to carry was dead code (#1392 review round 1, F6)
       this.deps.logger?.log({
         trace_id,
         stage: 'market_intelligence',
@@ -285,7 +285,7 @@ export class MiIngestAgent {
     // whatever happens to scoring: a fetch that succeeded must not lose its
     // bytes to a scoring failure, a spend-cap refusal, or the streak bound
     // below (#1392 review round 1, F2) — map #552's "archive the bytes" step
-    // never depended on scoring succeeding.
+    // never depended on scoring succeeding
     const newRaws: RawArchiveRow[] = articles
       .filter(
         (article) => !this.deps.archive.hasItem(SOURCE_ALPACA, article.id, article.updated_at),
@@ -298,7 +298,7 @@ export class MiIngestAgent {
         ingested_at: now,
         // 'live' because we fetched it now. A backfill run stamps 'backfill',
         // because Alpaca's `created_at` is publisher time and a backfilled row
-        // would otherwise assert we saw it the instant it published (#558).
+        // would otherwise assert we saw it the instant it published (#558)
         fidelity: 'live',
       }));
     if (newRaws.length > 0) {
@@ -307,19 +307,19 @@ export class MiIngestAgent {
 
     // One article carries a symbols[] array, so an article about three tickers
     // is three items — each scored against ITS OWN entity, because a headline
-    // can be bullish for one ticker and bearish for another.
+    // can be bullish for one ticker and bearish for another
     // The wire symbol decides WHETHER this article is about the resolved MI
     // subject; the pipeline's own id (`miSubject`, #914/#960) is what the
     // item is filed under, so downstream joins see `BTC-USD` rather than the
     // vendor's `BTCUSD`, and an LSE ETP's items see the US underlying rather
-    // than the traded wrapper ticker.
+    // than the traded wrapper ticker
     //
     // Keyed on `hasScoredItem` (`mi_items`), NOT `hasItem` (`mi_archive_raw`,
     // used for `newRaws` above): a raw row with no scored item means an
     // earlier refresh's batch degraded and never scored it, and that article
     // must stay a scoring candidate for as long as it is inside the lookback
     // window — independent of whether its bytes are already on disk (#1392
-    // review round 1, F2).
+    // review round 1, F2)
     const unscored = articles
       .filter((article) => article.symbols.some((symbol) => symbols.includes(symbol)))
       .filter(
@@ -341,7 +341,7 @@ export class MiIngestAgent {
       // and resetting `streak` here would restart backoff from scratch on
       // the next failure, collapsing the whole escalation back to the old
       // flat-rule cost. Only an actual successful scoring attempt earns that
-      // reset (see the `degraded` branch below).
+      // reset (see the `degraded` branch below)
       const existing = this.#degraded.get(instrument);
       if (existing && existing.skipRemaining > 0) {
         this.#degraded.set(instrument, {
@@ -360,7 +360,7 @@ export class MiIngestAgent {
     // 1) — the quiet-refresh branch above needs no equivalent decay: its
     // guard only fires while `skipRemaining > 0`, which always reaches 0
     // (at most `MAX_DEGRADED_SKIP` refreshes, well under `LOOKBACK_MS`) long
-    // before a streak would be old enough to decay.
+    // before a streak would be old enough to decay
     const state = readDegraded(this.#degraded, instrument, now);
     if (state.skipRemaining > 0) {
       const next: DegradedState = {
@@ -372,7 +372,7 @@ export class MiIngestAgent {
       // #1392 review round 2, finding 4: this used to be the only `return
       // false` in `refresh` with no log line — an operator watching
       // `mi_ingest_scoring_degraded` would see an outage start, then silence,
-      // with no record of the further refreshes this bound kept suppressing.
+      // with no record of the further refreshes this bound kept suppressing
       this.deps.logger?.log({
         trace_id,
         stage: 'market_intelligence',
@@ -395,7 +395,7 @@ export class MiIngestAgent {
 
     const pairs = unscored.map((article) => ({ article, entity: miSubject }));
 
-    // Checked BEFORE the call — see `spendCap`'s doc on `MiIngestAgentDeps` for why.
+    // Checked BEFORE the call — see `spendCap`'s doc on `MiIngestAgentDeps` for why
     const verdict = this.deps.spendCap.check();
     if (!verdict.admitted) {
       this.deps.logger?.log({
@@ -431,7 +431,7 @@ export class MiIngestAgent {
         // scoring failure, so a missing logger here falls back to a no-op
         // rather than silently reopening that gap. Matches the same
         // `logger ?? { log: () => {} }` idiom `debate-adapter.ts` already
-        // uses for the same reason.
+        // uses for the same reason
         logger: this.deps.logger ?? { log: () => {} },
         trace_id,
       },
@@ -441,7 +441,7 @@ export class MiIngestAgent {
       // Extends the streak, not a reset: this attempt failed, so it counts
       // toward the bound above and widens the next gap (`degradedSkip`). Raw
       // bytes for these articles are already archived (`newRaws`, above) —
-      // only the score is missing.
+      // only the score is missing
       const nextStreak = state.streak + 1;
       this.#degraded.set(instrument, {
         streak: nextStreak,
@@ -466,7 +466,7 @@ export class MiIngestAgent {
     // `scoreItems` always returns exactly one score per supplied item, so
     // `scores[index]` should never be undefined here; treated the same as an
     // explicit `omitted: true` if it ever is — withheld below, not archived
-    // with a fabricated score.
+    // with a fabricated score
     //
     // An item the model's response omitted an index for is NOT archived
     // (#1420 review round 1): its raw bytes are already on disk (`newRaws`,
@@ -478,7 +478,7 @@ export class MiIngestAgent {
     // stay a scoring candidate for as long as it is inside the lookback
     // window". Leaving no `mi_items` row keeps it a candidate for a later
     // refresh, exactly like #1392's batch-wide degrade — retried until the
-    // article ages out of the window, never served as a live item this tick.
+    // article ages out of the window, never served as a live item this tick
     const scoredPairs = pairs
       .map(({ article, entity }, index) => ({ article, entity, score: scores[index] }))
       .filter(
@@ -500,7 +500,7 @@ export class MiIngestAgent {
 
     // Raws for these articles were already written above (or in an earlier
     // refresh, if this attempt is a retry after a prior batch degraded) —
-    // only the items are new here.
+    // only the items are new here
     this.deps.archive.write([], archivedItems);
     this.deps.store.ingest({
       agent_id: SOURCE_ALPACA,
@@ -519,7 +519,7 @@ export class MiIngestAgent {
         instrument,
         // Distinct from `instrument` exactly when this refresh was for an LSE
         // ETP row — the operator-visible evidence that the resolution step
-        // ran (#914/#960).
+        // ran (#914/#960)
         mi_subject: miSubject,
         // NEW raw rows written THIS refresh, pre-symbol-filter — matches this
         // field's pre-#1392 semantics (was `fresh.length`, filtered the same
@@ -527,7 +527,7 @@ export class MiIngestAgent {
         // (both are 1:1 maps of `pairs`), collapsing this into a degenerate
         // duplicate of `items` below. Can read 0 with `items` > 0: a batch
         // that degraded on an earlier refresh already wrote its raws then, so
-        // a later refresh that finally scores it writes no NEW raw rows here.
+        // a later refresh that finally scores it writes no NEW raw rows here
         articles: newRaws.length,
         items: archivedItems.length,
       },

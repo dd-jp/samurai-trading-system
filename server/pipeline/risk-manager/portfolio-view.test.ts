@@ -35,7 +35,7 @@ function makeMarketData(prices: Record<string, number>): MarketDataService {
     getMark,
     // Routed through `service.getMark` rather than the `getMark` const, so a
     // test that REPLACES the property after construction (several below do)
-    // still sees its own double through the batch path.
+    // still sees its own double through the batch path
     getMarks: vi.fn(
       async (instruments: readonly string[], at: Date): Promise<Map<string, MarkRead>> =>
         collectMarks((instrument, a) => service.getMark(instrument, a), instruments, at),
@@ -78,7 +78,7 @@ function makeInput(overrides: Partial<PortfolioAccountingInput> = {}): Portfolio
     // The default pass is instantaneous: marks come back at the same instant
     // the tick asked for them, so `readAt` and `asOf` coincide and every case
     // written before #1111 keeps its original arithmetic. The pass-latency
-    // cases below set their own clock.
+    // cases below set their own clock
     clock: { now: () => asOf },
     cash: 100_000,
     peak_equity: 100_000,
@@ -105,7 +105,7 @@ describe('computePortfolioView — exposure from filled_size', () => {
 
     const view = await computePortfolioView(input);
 
-    // 40 filled * 100 mark = 4,000 — not 100 * 100 = 10,000.
+    // 40 filled * 100 mark = 4,000 — not 100 * 100 = 10,000
     expect(view.exposure_by_instrument.AAPL).toBe(4_000);
     expect(view.gross_exposure).toBe(4_000);
   });
@@ -180,7 +180,7 @@ describe('computePortfolioView — in-flight reservation (#1019)', () => {
 
     // `reconcile()`'s bracket pass revisits `pending`/`submitted` only, so a
     // remainder reserved here would never be released — see
-    // `RESERVABLE_ORDER_STATES`.
+    // `RESERVABLE_ORDER_STATES`
     expect(view.reserved_exposure_by_instrument.AAPL).toBeUndefined();
     expect(view.reserved_gross_exposure).toBe(0);
   });
@@ -305,7 +305,7 @@ describe('computePortfolioView — in-flight reservation (#1019)', () => {
       const view = await computePortfolioView(input);
 
       // filled_size > 0 on both lots — the general #1019 exclusion still
-      // applies, this fix only widens the filled_size === 0 subcase.
+      // applies, this fix only widens the filled_size === 0 subcase
       expect(view.reserved_gross_exposure).toBe(0);
     });
 
@@ -382,7 +382,7 @@ describe('computePortfolioView — mark sourcing', () => {
     const view = await computePortfolioView(input);
 
     expect(marketData.getMark).toHaveBeenCalledTimes(1);
-    // 10 + 20 filled, aggregated onto the one instrument.
+    // 10 + 20 filled, aggregated onto the one instrument
     expect(view.exposure_by_instrument.AAPL).toBe(3_000);
   });
 
@@ -391,7 +391,7 @@ describe('computePortfolioView — mark sourcing', () => {
     // resolves to a priced Mark or rejects) — this simulates the only way
     // the internal marks map can hold an unusable entry: a malformed/NaN
     // price slipping through the service boundary. The guard exists so that
-    // case fails loudly instead of understating exposure to Risk.
+    // case fails loudly instead of understating exposure to Risk
     const marketData = makeMarketData({ AAPL: 150 });
     marketData.getMark = vi
       .fn()
@@ -485,7 +485,7 @@ describe('computePortfolioView — equity and drawdown', () => {
     // risk-manager/index.ts can bind on it because there is nothing to read:
     // this is what makes #1572's "a cap that happens to bind on available
     // cash rather than exposure" premise false against this tree, not merely
-    // unexercised by today's config.
+    // unexercised by today's config
     expect(view).not.toHaveProperty('cash');
   });
 });
@@ -504,7 +504,7 @@ describe('computePortfolioView — pass-through fields', () => {
     const view = await computePortfolioView(input);
 
     // No open positions in this fixture, so the unrealized term is 0 and each
-    // figure is realized/open_equity against its OWN class's denominator.
+    // figure is realized/open_equity against its OWN class's denominator
     expect(view.daily_pnl.crypto).toEqual({ known: true, pct: -0.02 });
     expect(view.daily_pnl.stocks).toEqual({ known: true, pct: 0.01 });
     expect(view.daily_pnl.portfolio).toEqual({ known: true, pct: -0.015 });
@@ -516,9 +516,9 @@ describe('computePortfolioView — pass-through fields', () => {
     const input = makeInput({
       marketData,
       positions: [
-        // +10/share on 100 shares = +1,000 unrealized.
+        // +10/share on 100 shares = +1,000 unrealized
         makePosition({ instrument: 'AAPL', asset_class: 'stocks', avg_entry_price: 100 }),
-        // A second lot in the same instrument, to prove the dedupe holds.
+        // A second lot in the same instrument, to prove the dedupe holds
         makePosition({
           idempotency_key: 'AAPL-2',
           instrument: 'AAPL',
@@ -526,7 +526,7 @@ describe('computePortfolioView — pass-through fields', () => {
           filled_size: 50,
           avg_entry_price: 90,
         }),
-        // Short 2 BTC entered at 50k, now 40k = +20,000 unrealized.
+        // Short 2 BTC entered at 50k, now 40k = +20,000 unrealized
         makePosition({
           idempotency_key: 'BTC-1',
           instrument: 'BTC-USD',
@@ -554,7 +554,7 @@ describe('computePortfolioView — pass-through fields', () => {
     expect(view.daily_pnl.portfolio).toEqual({ known: true, pct: 0.215 });
 
     // #332's explicit constraint: the daily-PnL math reuses the marks the
-    // exposure math already fetched — one call per unique instrument, no more.
+    // exposure math already fetched — one call per unique instrument, no more
     expect(marketData.getMark).toHaveBeenCalledTimes(2);
   });
 
@@ -570,7 +570,7 @@ describe('computePortfolioView — pass-through fields', () => {
     const view = await computePortfolioView(input);
 
     // The whole point of the union: an absent denominator must not surface as
-    // `pct: 0`, which the daily-loss breaker would read as a flat day.
+    // `pct: 0`, which the daily-loss breaker would read as a flat day
     expect(view.daily_pnl.crypto.known).toBe(false);
     expect(view.daily_pnl.portfolio.known).toBe(false);
     expect(view.daily_pnl.stocks).toEqual({ known: true, pct: 0 });
@@ -580,7 +580,7 @@ describe('computePortfolioView — pass-through fields', () => {
 describe('computePortfolioView — feed staleness (#640)', () => {
   /**
    * A market-data double whose marks carry an explicit observation time, which
-   * `makeMarketData` above cannot express (it stamps every mark at `asOf`).
+   * `makeMarketData` above cannot express (it stamps every mark at `asOf`)
    */
   function makeMarketDataObservedAt(
     marks: Record<string, { price: number; observed_at: Date; asset_class?: 'crypto' | 'stocks' }>,
@@ -601,7 +601,7 @@ describe('computePortfolioView — feed staleness (#640)', () => {
       // Overridden alongside `getMark`, not inherited from the spread: the
       // base double's `getMarks` closes over the base's OWN `getMark`, so
       // leaving it would serve this describe's staleness cases a fresh
-      // fixture mark and pass vacuously.
+      // fixture mark and pass vacuously
       getMarks: vi.fn(
         async (instruments: readonly string[], at: Date): Promise<Map<string, MarkRead>> =>
           collectMarks(getMark, instruments, at),
@@ -620,7 +620,7 @@ describe('computePortfolioView — feed staleness (#640)', () => {
     // Rejects rather than valuing at the last known price. Exposure, drawdown
     // and daily PnL all derive from this number, so a frozen mark freezes
     // every limit that reads it — including the drawdown breaker, during
-    // exactly the conditions that trip it.
+    // exactly the conditions that trip it
     await expect(computePortfolioView(input)).rejects.toThrow(/past the 900000ms bound/);
   });
 
@@ -646,7 +646,7 @@ describe('computePortfolioView — feed staleness (#640)', () => {
 
     // A future observation is a clock disagreement, not a fresh mark, and the
     // operator reading the log needs to be pointed at the clock rather than at
-    // the feed.
+    // the feed
     await expect(computePortfolioView(input)).rejects.toThrow(/AHEAD of/);
   });
 
@@ -655,7 +655,7 @@ describe('computePortfolioView — feed staleness (#640)', () => {
   // legitimately lands after `asOf` on a busy tick. That is pipeline
   // latency, not a clock disagreement — it must value the book, not abort
   // it. Reproduces the soak failure: 149ms/1083ms-ahead AAPL marks aborted
-  // SPY's whole tick under the pre-#939 bare `age < 0` rule.
+  // SPY's whole tick under the pre-#939 bare `age < 0` rule
   it('values the book when a held instrument’s mark is observed slightly AFTER asOf (pass latency, #939)', async () => {
     const input = makeInput({
       positions: [makePosition()],
@@ -683,10 +683,10 @@ describe('computePortfolioView — feed staleness (#640)', () => {
   // between `asOf` and the read, so it scales with the pass — the 2026-09-04
   // paper session produced 67 refusals between 5020ms and ~145s ahead, not one
   // of them a mark past its own age bound. Freshness now measures from the
-  // READ instant, at which no such offset exists at any pass duration.
+  // READ instant, at which no such offset exists at any pass duration
   //
   // The offsets below are that session's real ones, from `orchestrator.log`
-  // (AC7), each with its own instrument.
+  // (AC7), each with its own instrument
   describe('pass latency does not refuse the book (#1111)', () => {
     it.each([
       ['GOOGL', 5_022],
@@ -704,7 +704,7 @@ describe('computePortfolioView — feed staleness (#640)', () => {
           marketData: makeMarketDataObservedAt({
             // Stamped a beat before the read returned, which is where a live
             // quote clock puts it — and far ahead of `asOf`, which is what the
-            // pre-#1111 coordinate refused on.
+            // pre-#1111 coordinate refused on
             [instrument]: { price: 100, observed_at: new Date(readAt.getTime() - 200) },
           }),
         });
@@ -715,7 +715,7 @@ describe('computePortfolioView — feed staleness (#640)', () => {
 
     it('still refuses a mark genuinely past its bound, however long the pass took', async () => {
       // #640 is not weakened by the coordinate change: same 145s pass, but the
-      // mark has not printed for 20 minutes.
+      // mark has not printed for 20 minutes
       const input = makeInput({
         positions: [makePosition()],
         clock: { now: () => new Date(asOf.getTime() + 144_576) },
@@ -729,7 +729,7 @@ describe('computePortfolioView — feed staleness (#640)', () => {
 
     it('never blames the clocks for a slow pass, at any magnitude', async () => {
       // AC4. The old message asserted "the two disagree" for what was only our
-      // own elapsed time; that reading must be unreachable from pass latency.
+      // own elapsed time; that reading must be unreachable from pass latency
       const input = makeInput({
         positions: [makePosition()],
         clock: { now: () => new Date(asOf.getTime() + 144_576) },
@@ -756,7 +756,7 @@ describe('computePortfolioView — feed staleness (#640)', () => {
 
     it('still reports a mark stamped ahead of the READ instant as a clock disagreement', async () => {
       // AC2's other half: the distinction survives. A mark the venue stamped
-      // after we already had it in hand cannot be pass latency at all.
+      // after we already had it in hand cannot be pass latency at all
       const readAt = new Date(asOf.getTime() + 55_815);
       const input = makeInput({
         positions: [makePosition()],
@@ -773,7 +773,7 @@ describe('computePortfolioView — feed staleness (#640)', () => {
 
   it('applies the bound for each position’s OWN asset class', async () => {
     // One mark age, 5 minutes, held under both classes: past the 2-minute
-    // crypto bound, inside the 15-minute stocks one.
+    // crypto bound, inside the 15-minute stocks one
     const observed_at = new Date(asOf.getTime() - 5 * 60_000);
 
     const asStocks = makeInput({
@@ -803,7 +803,7 @@ describe('computePortfolioView — feed staleness (#640)', () => {
     // which this 5-minute mark passes); reading the class off the source's own
     // answer would let a mis-labelled mark pick the tighter bound and reject a
     // perfectly good valuation, or in the mirror case pick the looser one and
-    // wave a stale mark through.
+    // wave a stale mark through
     const input = makeInput({
       positions: [makePosition({ instrument: 'AAPL', asset_class: 'stocks' })],
       marketData: makeMarketDataObservedAt({
@@ -821,7 +821,7 @@ describe('computePortfolioView — feed staleness (#640)', () => {
   it('values the book normally when every mark is inside its bound', async () => {
     // Non-vacuity for the whole describe: the same shape with a fresh mark
     // produces a real view, so the rejections above are the gate firing rather
-    // than the fixture being broken.
+    // than the fixture being broken
     const input = makeInput({
       positions: [makePosition()],
       marketData: makeMarketDataObservedAt({
@@ -839,7 +839,7 @@ describe('computePortfolioView — batch mark read (#289 H8)', () => {
   /**
    * A market-data double whose batch read answers for some instruments and
    * fails for others, which is the shape `MarketDataService.getMarks` exists to
-   * express and `getMark` cannot.
+   * express and `getMark` cannot
    */
   function makeBatchMarketData(
     marks: Record<string, { price: number; observed_at?: Date } | { error: string }>,
@@ -921,7 +921,7 @@ describe('computePortfolioView — batch mark read (#289 H8)', () => {
 
     // A rejecting `Promise.all` reported whichever lookup lost the race and
     // discarded the rest, so an operator saw one instrument and had to re-run
-    // to learn the second was also dark.
+    // to learn the second was also dark
     const error = await computePortfolioView(input).catch((caught: unknown) => caught);
     expect(String((error as Error).message)).toMatch(/AAPL/);
     expect(String((error as Error).message)).toMatch(/MSFT/);
@@ -938,7 +938,7 @@ describe('computePortfolioView — batch mark read (#289 H8)', () => {
     });
 
     // Both are "this book cannot be valued right now"; splitting them across
-    // two passes would make the operator fix one and rediscover the other.
+    // two passes would make the operator fix one and rediscover the other
     const error = await computePortfolioView(input).catch((caught: unknown) => caught);
     expect(String((error as Error).message)).toMatch(/AAPL/);
     expect(String((error as Error).message)).toMatch(/MSFT/);
@@ -954,7 +954,7 @@ describe('computePortfolioView — batch mark read (#289 H8)', () => {
 
     // The named type survives the batching: a caller distinguishing "the feed
     // is alive and lying" from a transport failure still can, without matching
-    // on message text through an AggregateError wrapper.
+    // on message text through an AggregateError wrapper
     await expect(computePortfolioView(input)).rejects.toThrow(StaleMarkError);
   });
 
@@ -976,7 +976,7 @@ describe('computePortfolioView — batch mark read (#289 H8)', () => {
 
   it('refuses when the batch answers but omits an instrument it was asked for', async () => {
     // A service that returns a Map missing a requested key. Guarded rather than
-    // left to crash on `undefined.ok`, so the report names the dark position.
+    // left to crash on `undefined.ok`, so the report names the dark position
     const marketData: MarketDataService = {
       ...makeMarketData({}),
       getMarks: vi.fn(async (): Promise<Map<string, MarkRead>> => new Map()),
@@ -991,7 +991,7 @@ describe('computePortfolioView — batch mark read (#289 H8)', () => {
   it('carries the source reason in the thrown message, not only in cause', async () => {
     // `describeThrown` prints `error.message` alone — never `cause`, never
     // `AggregateError.errors` — so a reason absent from the message text is one
-    // the operator never sees.
+    // the operator never sees
     const input = makeInput({
       positions: [makePosition({ instrument: 'AAPL' })],
       marketData: makeBatchMarketData({ AAPL: { error: '429 rate limited' } }),
@@ -1030,7 +1030,7 @@ describe('computePortfolioView — batch mark read (#289 H8)', () => {
       const view = await computePortfolioView(input);
 
       // The fresh name is still fully valued — the point of the ticket is
-      // that one dark name stops blocking every OTHER position.
+      // that one dark name stops blocking every OTHER position
       expect(view.exposure_by_instrument).toEqual({ AAPL: 10_000 });
       expect(view.gross_exposure).toBe(10_000);
       expect(view.unvalued_instruments).toEqual(['MSFT']);

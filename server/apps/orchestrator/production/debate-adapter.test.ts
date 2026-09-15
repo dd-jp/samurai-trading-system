@@ -73,7 +73,7 @@ function unlimited(): RateLimiter {
   });
 }
 
-/** A clock that can be advanced mid-test, for the same-bar cases (#782). */
+/** A clock that can be advanced mid-test, for the same-bar cases (#782) */
 class MutableClock implements Clock {
   constructor(private at: Date) {}
   now(): Date {
@@ -84,10 +84,10 @@ class MutableClock implements Clock {
   }
 }
 
-/** The asset class every fixture instrument in this file is treated as. */
+/** The asset class every fixture instrument in this file is treated as */
 const ASSET_CLASS: AssetClass = 'stocks';
 
-/** Retries are orthogonal to attribution; one attempt keeps the spend row count exact. */
+/** Retries are orthogonal to attribution; one attempt keeps the spend row count exact */
 const NO_RETRY = { maxAttempts: 1, baseDelayMs: 10, maxDelayMs: 10 };
 
 function makeView(overrides: Partial<AnalystView> = {}): AnalystView {
@@ -104,15 +104,15 @@ function makeView(overrides: Partial<AnalystView> = {}): AnalystView {
 }
 
 interface FakeLlmOptions {
-  /** false → the mediator never converges, so the debate runs to the 3-round hard cap. */
+  /** false → the mediator never converges, so the debate runs to the 3-round hard cap */
   converged?: boolean;
-  /** Throws from the mediator call, standing in for a debate that fails partway. */
+  /** Throws from the mediator call, standing in for a debate that fails partway */
   failOnMediator?: boolean;
-  /** When set alongside `failOnMediator`, thrown instead of the default Error — #1351's hostile-value case. */
+  /** When set alongside `failOnMediator`, thrown instead of the default Error — #1351's hostile-value case */
   mediatorFailureValue?: unknown;
 }
 
-/** Routes by prompt content — mirrors what personas.ts's four prompt shapes actually say. */
+/** Routes by prompt content — mirrors what personas.ts's four prompt shapes actually say */
 function fakeLlmClient(options: FakeLlmOptions = {}): LlmClient {
   const { converged = true, failOnMediator = false, mediatorFailureValue } = options;
   return {
@@ -169,7 +169,7 @@ describe('buildDebateStep', () => {
     expect(result.contributions).toHaveLength(1);
     // position is the one field this adapter derives rather than sources
     // from an existing computation (see debate-adapter.ts doc comment) —
-    // assert it's populated, not a specific fabricated value.
+    // assert it's populated, not a specific fabricated value
     expect(result.position.length).toBeGreaterThan(0);
   });
 
@@ -202,18 +202,18 @@ describe('buildDebateStep', () => {
     // The id is hashed over the gate's bar, not the tick time. This is the
     // half that makes replay-from-log (ADR-0003 §2) reachable: a replay
     // stepping bar closes computes 14:00:00 and must land on the row a live
-    // pass that finished at 15:05:09 wrote.
+    // pass that finished at 15:05:09 wrote
     expect(result.debate_id).toBe(computeDebateId('AAPL', bar, views));
 
     const row = store.getByDebateId(result.debate_id);
     expect(row?.bar_timestamp.toISOString()).toBe(bar.toISOString());
     // ...and `created_at` still records the wall-clock write instant, which is
-    // the distinction #393 was about: the two columns mean different things.
+    // the distinction #393 was about: the two columns mean different things
     expect(row?.created_at.toISOString()).toBe(straddled.toISOString());
     expect(row?.trace_id).toBe('trace-mid-bar');
     // #687: and the SAME bar is carried forward to the Trader on the result,
     // so the intent's idempotency key lands on the coordinate `debate_id` was
-    // hashed over even though the Trader runs after 15:00.
+    // hashed over even though the Trader runs after 15:00
     expect(result.bar_timestamp.toISOString()).toBe(bar.toISOString());
   });
 
@@ -221,7 +221,7 @@ describe('buildDebateStep', () => {
    * #687 on the replay path, which is the case a re-derivation gets wrong most
    * quietly: the row was written in bar N, and this tick — a later tick in bar
    * N, or the first tick after a process restart within it — must be keyed to
-   * the row's bar, not to whenever the replay ran.
+   * the row's bar, not to whenever the replay ran
    */
   it('replays a persisted row with the ROWs bar_timestamp, not a fresh clock read (#687)', async () => {
     const store = new InMemoryDebateLogStore();
@@ -254,13 +254,13 @@ describe('buildDebateStep', () => {
 
   it('applies analyst weights to the resolved debate, and logs the WEIGHTED result (#435)', async () => {
     // The DoD on #435 is explicit that reading the store is not enough: move a
-    // weight, then assert the debate actually CHANGES.
+    // weight, then assert the debate actually CHANGES
     //
     // A two-analyst panel is required for this to mean anything. With one
     // analyst, agreeing and total are the same set, the weighted and
     // unweighted agreement ratios are equal by construction, and the factor is
     // 1 whatever the weight — a test built on one view would pass while the
-    // mechanism did nothing.
+    // mechanism did nothing
     const views = [
       makeView({ analyst_id: 'bull-1', direction: 'bullish' }),
       makeView({ analyst_id: 'bear-1', direction: 'bearish' }),
@@ -283,19 +283,19 @@ describe('buildDebateStep', () => {
     const movedStore = new InMemoryDebateLogStore();
     // The mediator resolves bullish in this fixture, so `bull-1` is the
     // analyst that AGREES. Weighting it above the panel average must raise
-    // conviction.
+    // conviction
     const moved = await run({ 'bull-1': 2, 'bear-1': 0.5 }, movedStore);
 
     expect(moved.confidence).toBeGreaterThan(seeded.confidence);
 
     // Same inputs and same bar, so the SAME debate_id — the point of weighting
     // the output rather than the inputs. The frozen cross-spec contract still
-    // identifies the debate's inputs, undisturbed.
+    // identifies the debate's inputs, undisturbed
     expect(moved.debate_id).toBe(seeded.debate_id);
 
     // And the LOGGED row carries the weighted conviction, so replay-from-log
     // restores what the Trader actually sized on rather than the pre-weight
-    // figure.
+    // figure
     expect(movedStore.getByDebateId(moved.debate_id)).toBeDefined();
   });
 
@@ -319,7 +319,7 @@ describe('buildDebateStep', () => {
     expect(count.n).toBe(1);
 
     // #1517 — the per-round verdicts persistDebateLog now writes alongside
-    // the debate_log row, one per round the fake mediator actually ran.
+    // the debate_log row, one per round the fake mediator actually ran
     const roundRows = db
       .prepare('SELECT round, direction FROM debate_round_log WHERE debate_id = ? ORDER BY round')
       .all(result.debate_id) as { round: number; direction: string }[];
@@ -331,7 +331,7 @@ describe('buildDebateStep', () => {
     expect(row?.instrument).toBe('AAPL');
     // The row's bar_timestamp must be the SAME bar that went into
     // debate_id's hash — otherwise the row claims a coordinate the id
-    // does not encode.
+    // does not encode
     expect(row?.bar_timestamp.toISOString()).toBe(NOW.toISOString());
     expect(row?.direction).toBe('bullish');
     expect(row?.rounds).toBe(result.rounds_completed);
@@ -359,7 +359,7 @@ describe('buildDebateStep', () => {
     expect(result.converged).toBe(false);
     expect(result.rounds_completed).toBe(MAX_ROUNDS_BY_ASSET_CLASS[ASSET_CLASS]);
     // A halted debate is at least as interesting as a converged one: the row
-    // is written on the same path, no convergence branch.
+    // is written on the same path, no convergence branch
     expect(store.getByDebateId(result.debate_id)?.rounds).toBe(
       MAX_ROUNDS_BY_ASSET_CLASS[ASSET_CLASS],
     );
@@ -390,7 +390,7 @@ describe('buildDebateStep', () => {
 
     // debate_id is recomputable from (instrument, bar, views) even though the
     // debate produced no result — assert nothing was written under it, so the
-    // eventual successful re-run can still claim the write-once key.
+    // eventual successful re-run can still claim the write-once key
     expect(store.getByDebateId(computeDebateId('AAPL', NOW, views))).toBeUndefined();
 
     const missed = entries.find((entry) => entry.stage === 'debate' && entry.level === 'error');
@@ -403,13 +403,13 @@ describe('buildDebateStep', () => {
   // `debate_unresolved` diagnostic line (the one thing this function exists
   // to produce, per its own doc comment) never lands, and the render failure
   // — not the original `cause` — becomes what the caller's `throw cause;`
-  // actually throws.
+  // actually throws
   it('an unrenderable debate failure still logs debate_unresolved and still throws the ORIGINAL cause', async () => {
     const store = new InMemoryDebateLogStore();
     const { logger, entries } = recordingLogger();
     // Circular (defeats `JSON.stringify`) with a throwing `Symbol.toPrimitive`
     // (defeats the `String()` fallback too) — same shape as the #1262
-    // tick-loop hostile value.
+    // tick-loop hostile value
     const hostile: Record<string, unknown> = {
       [Symbol.toPrimitive]: () => {
         throw new Error('render boom');
@@ -440,7 +440,7 @@ describe('buildDebateStep', () => {
     }
 
     // The durable artifact: the ORIGINAL cause's identity survives, not a
-    // substitute render-failure error.
+    // substitute render-failure error
     expect(thrown).toBe(hostile);
 
     const missed = entries.find(
@@ -480,19 +480,19 @@ describe('buildDebateStep', () => {
 
     // Same clock, same views, same instrument → the same content-hash
     // debate_id. At a 15-minute cadence on a 1h bar this is not a retry, it is
-    // three of every four scheduled ticks.
+    // three of every four scheduled ticks
     const second = await step({ ...input, trace_id: 'trace-1-retry' });
 
     expect(second.debate_id).toBe(first.debate_id);
 
     // The point of #617: the duplicate debate is not run at all. Before this,
-    // the LLM calls were made and the result discarded at the write.
+    // the LLM calls were made and the result discarded at the write
     expect(llmCalls).toBe(callsAfterFirst);
 
     // And the Trader gets the SAME conviction the row holds — the defect was
     // that debate_log kept tick 1 while the Trader sized on tick N's fresh
     // sample, so the Feedback Loop attributed trades to a different sampling
-    // of the same debate.
+    // of the same debate
     expect(second.confidence).toBe(first.confidence);
     expect(second.direction).toBe(first.direction);
     expect(second.confidence).toBe(store.getByDebateId(first.debate_id)?.confidence);
@@ -501,7 +501,7 @@ describe('buildDebateStep', () => {
     expect(count.n).toBe(1);
 
     // Replay is expected traffic on a shared bar, so it is info — not the
-    // `warn` the old duplicate-write path emitted after already paying.
+    // `warn` the old duplicate-write path emitted after already paying
     const replayed = entries.find((entry) => entry.message.includes('replayed from debate_log'));
     expect(replayed).toBeDefined();
     expect(replayed?.level).toBe('info');
@@ -516,7 +516,7 @@ describe('buildDebateStep', () => {
     // carries different views — a different content hash — and must STILL not
     // run a second debate. Its two callers are a forced-open decision gate
     // (mutation) and a rescinded claim retried after a crash whose first
-    // attempt had already persisted its row.
+    // attempt had already persisted its row
     const db = openSharedStore(':memory:');
     const store = new SqliteDebateLogStore(db);
     const { logger, entries } = recordingLogger();
@@ -545,7 +545,7 @@ describe('buildDebateStep', () => {
 
     // Same instrument, same bar — but the 5m technical read moved on, so the
     // views (and their content hash) differ. Pre-#743 this ran a full second
-    // debate and handed the Trader a second confidence sample for the bar.
+    // debate and handed the Trader a second confidence sample for the bar
     const second = await step({
       trace_id: 'trace-1-reentry',
       instrument: 'AAPL',
@@ -558,7 +558,7 @@ describe('buildDebateStep', () => {
     expect(llmCalls).toBe(callsAfterFirst);
     // The bar resolved to the FIRST debate's identity and content — the memo
     // dedupes on the debate_id key through the same getByDebateId replay path
-    // as #617, never on a second bar-keyed store lookup.
+    // as #617, never on a second bar-keyed store lookup
     expect(second.debate_id).toBe(first.debate_id);
     expect(second.confidence).toBe(first.confidence);
     const count = db.prepare('SELECT COUNT(*) AS n FROM debate_log').get() as { n: number };
@@ -567,7 +567,7 @@ describe('buildDebateStep', () => {
       true,
     );
 
-    // A NEW bar is a genuinely new decision: the memo must not leak across.
+    // A NEW bar is a genuinely new decision: the memo must not leak across
     const nextBar = new Date(NOW.getTime() + 3_600_000);
     const third = await step({
       trace_id: 'trace-2',
@@ -619,7 +619,7 @@ describe('buildDebateStep', () => {
       ],
     });
 
-    /** The one MarketDataService member `fundamental-analyst.ts` reaches for. */
+    /** The one MarketDataService member `fundamental-analyst.ts` reaches for */
     const marketData = {
       getMark: async () => ({
         price: 100,
@@ -629,7 +629,7 @@ describe('buildDebateStep', () => {
       }),
     } as unknown as Parameters<typeof fundamentalAnalyst.run>[0]['market_data'];
 
-    /** The views as the analysts would recompute them at the current clock. */
+    /** The views as the analysts would recompute them at the current clock */
     const viewsNow = async (trace_id: string): Promise<AnalystView[]> => [
       await fundamentalAnalyst.run({
         trace_id,
@@ -670,7 +670,7 @@ describe('buildDebateStep', () => {
 
     // Fresh closure = fresh (empty) per-bar memo, exactly what a restart
     // inside the bar leaves behind. Same `bar`, because the decision gate
-    // floors the tick time and 14:40 is still the 14:00 bar.
+    // floors the tick time and 14:40 is still the 14:00 bar
     const afterRestart = buildDebateStep(countingClient, store, unlimited(), UNCAPPED_SPEND);
     const second = await afterRestart({
       trace_id: 'trace-2',
@@ -697,7 +697,7 @@ describe('buildDebateStep', () => {
 
     // A row as migration 0025 would have left it: no confidence, so nothing to
     // size a position on. Degrading to a re-run is the safe direction; replaying
-    // it would trade on a reconstructed blank.
+    // it would trade on a reconstructed blank
     db.prepare(
       `INSERT INTO debate_log (debate_id, instrument, bar_timestamp, contributions_json,
          direction, rounds, created_at)
@@ -715,7 +715,7 @@ describe('buildDebateStep', () => {
 
     expect(result.debate_id).toBe(debate_id);
     // The live debate ran and produced a real conviction, rather than the 0 a
-    // blank reconstruction would have handed the Trader.
+    // blank reconstruction would have handed the Trader
     expect(result.confidence).toBeGreaterThan(0);
   });
 
@@ -730,7 +730,7 @@ describe('buildDebateStep', () => {
     // independently optional and `writeLog` persists whatever subset it is
     // given, so "has a confidence" does not imply "is replayable". Checking
     // confidence alone replayed this as synthesis '', position '',
-    // converged false — a fabricated debate handed to the Trader as a real one.
+    // converged false — a fabricated debate handed to the Trader as a real one
     db.prepare(
       `INSERT INTO debate_log (debate_id, instrument, bar_timestamp, contributions_json,
          direction, rounds, created_at, confidence)
@@ -760,7 +760,7 @@ describe('buildDebateStep', () => {
 
     // The winner's row, as written by "another process". Its values are ones
     // the fake LLM never produces, so passing here cannot be an artefact of
-    // both sides running the same deterministic fake.
+    // both sides running the same deterministic fake
     const winner: DebateLog = {
       debate_id,
       instrument: 'AAPL',
@@ -780,7 +780,7 @@ describe('buildDebateStep', () => {
 
     // Visible only AFTER the pre-debate replay check has run — the concurrent
     // writer the backstop exists for. Read 1 (replay check) reports nothing, so
-    // the debate runs; read 2 (the write guard) finds the winner already there.
+    // the debate runs; read 2 (the write guard) finds the winner already there
     let reads = 0;
     const racing: DebateLogStore = {
       writeLog: (log) => {
@@ -816,7 +816,7 @@ describe('buildDebateStep', () => {
     expect(loser.debate_id).toBe(debate_id);
     // The Trader must size on the bytes the Feedback Loop will attribute the
     // trade to. Skipping the duplicate write but returning the loser's own
-    // discarded sample reproduces #617's mismatch inside the backstop.
+    // discarded sample reproduces #617's mismatch inside the backstop
     expect(loser.confidence).toBe(0.4242);
     expect(loser.synthesis).toBe('the winner synthesis');
     expect(entries.some((entry) => entry.message.includes('already has a debate_log'))).toBe(true);
@@ -862,7 +862,7 @@ describe('buildDebateStep', () => {
 
     // Before #364 this map was empty for every trade in the soak: no row, so
     // `getContributionsForAttribution` returned undefined and the trade was
-    // skipped outright.
+    // skipped outright
     const credit = credits.get('technical-1');
     expect(credit).toBeDefined();
     expect(credit?.trade_count).toBe(1);
@@ -883,7 +883,7 @@ describe('buildDebateStep latency budget (#374)', () => {
   /**
    * Answers normally for the first `stallAfterCalls` calls, then hangs until
    * the debate's `AbortSignal` fires — a provider that accepted the request
-   * and stopped answering, which is the shape the budget exists for.
+   * and stopped answering, which is the shape the budget exists for
    */
   function stallingLlmClient(options: { stallAfterCalls: number; converged?: boolean }): {
     client: LlmClient;
@@ -934,7 +934,7 @@ describe('buildDebateStep latency budget (#374)', () => {
 
     // Nothing completed a round, so this is the low-confidence fallback —
     // deliberately unactionable: confidence 0 is under any conviction floor,
-    // so the tick short-circuits at Trader with no_trade.
+    // so the tick short-circuits at Trader with no_trade
     await vi.advanceTimersByTimeAsync(LATENCY_BUDGET_MS.stocks);
     const result = await pending;
 
@@ -988,11 +988,11 @@ describe('buildDebateStep latency budget (#374)', () => {
     expect(result.rounds_completed).toBe(0);
     expect(result.confidence).toBe(0);
 
-    // The timed-out debate is still a resolved debate, so it gets its row.
+    // The timed-out debate is still a resolved debate, so it gets its row
     expect(store.getByDebateId(result.debate_id)).toBeDefined();
 
     // Cancellation, not just abandonment (#347): no further persona call is
-    // issued after the budget fires.
+    // issued after the budget fires
     const atTimeout = callCount();
     await vi.advanceTimersByTimeAsync(LATENCY_BUDGET_MS.stocks);
     expect(callCount()).toBe(atTimeout);
@@ -1012,7 +1012,7 @@ describe('buildDebateStep latency budget (#374)', () => {
     });
 
     // 30s, not 60s — the per-asset-class lookup #374 called out as the
-    // reason this could not be a one-line wire.
+    // reason this could not be a one-line wire
     await vi.advanceTimersByTimeAsync(30_000);
     const result = await pending;
 
@@ -1142,7 +1142,7 @@ describe('buildDebateStep LLM spend attribution (#326)', () => {
     cost_usd: number | null;
   }
 
-  /** Wire-level double: same prompt routing as `fakeLlmClient`, plus a usage block. */
+  /** Wire-level double: same prompt routing as `fakeLlmClient`, plus a usage block */
   function fakeWire(latencyMs: number): AnthropicMessagesClient {
     return {
       async createMessage(request: AnthropicMessageRequest) {
@@ -1157,7 +1157,7 @@ describe('buildDebateStep LLM spend attribution (#326)', () => {
         } else {
           raw = JSON.stringify({ summary: 'no material disagreement', conflicts: [] });
         }
-        // Fake timers make the measured latency exact instead of flaky.
+        // Fake timers make the measured latency exact instead of flaky
         vi.advanceTimersByTime(latencyMs);
         return {
           content: [{ type: 'text', text: raw }],
@@ -1194,7 +1194,7 @@ describe('buildDebateStep LLM spend attribution (#326)', () => {
     const db = openSharedStore(':memory:');
     // Two views, so `detectDisagreements` actually issues its LLM call — below
     // two it short-circuits to the directional fallback and this test would
-    // silently stop covering the call most likely to be left unattributed.
+    // silently stop covering the call most likely to be left unattributed
     const views = [makeView(), makeView({ analyst_id: 'sentiment-1', direction: 'bearish' })];
 
     const result = await meteredStep(db)({
@@ -1207,7 +1207,7 @@ describe('buildDebateStep LLM spend attribution (#326)', () => {
     });
 
     const rows = spendRows(db);
-    // bull + bear + mediator + disagreement.
+    // bull + bear + mediator + disagreement
     expect(rows).toHaveLength(4);
     expect(rows.every((row) => row.debate_id === result.debate_id)).toBe(true);
     expect(rows.every((row) => row.latency_ms === 1_500)).toBe(true);
@@ -1228,7 +1228,7 @@ describe('buildDebateStep LLM spend attribution (#326)', () => {
     });
 
     // The acceptance criterion, expressed as the SQL an operator would write:
-    // per-decision cost and LLM time, joined to the decision itself.
+    // per-decision cost and LLM time, joined to the decision itself
     const joined = db
       .prepare(
         `SELECT debate_log.instrument      AS instrument,
@@ -1247,10 +1247,10 @@ describe('buildDebateStep LLM spend attribution (#326)', () => {
   });
 
   it('completes the debate and writes its log row even when EVERY metering write fails', async () => {
-    // The ticket's hard constraint: instrumentation must never fail a debate.
+    // The ticket's hard constraint: instrumentation must never fail a debate
     // Dropping the table stands in for a locked database or schema drift — the
     // sink's own catch is what has to hold, and this proves the debate that
-    // resolved correctly is still recorded and still returned.
+    // resolved correctly is still recorded and still returned
     const db = openSharedStore(':memory:');
     const step = meteredStep(db);
     db.prepare('DROP TABLE llm_spend').run();
@@ -1273,7 +1273,7 @@ describe('buildDebateStep LLM spend attribution (#326)', () => {
   it('does not fail a debate when the sink itself throws, not just the SQL underneath it', async () => {
     // `LlmSpendSink` is a public interface; a caller's own implementation may
     // throw where `SqliteLlmSpendStore` would not. The guarantee has to hold at
-    // the client boundary, not rest on one implementation's good manners.
+    // the client boundary, not rest on one implementation's good manners
     const db = openSharedStore(':memory:');
     const llm = new AnthropicLlmClient(
       fakeWire(10),
@@ -1304,7 +1304,7 @@ describe('buildDebateStep LLM spend attribution (#326)', () => {
     // `persistDebateLog`) — but the calls it made were still billed. Keyed on
     // the deterministic `debate_id`, that spend stays attributable, and the
     // eventual successful re-run's spend lands on the same key rather than
-    // looking like a second, cheaper debate.
+    // looking like a second, cheaper debate
     const db = openSharedStore(':memory:');
     const failing: AnthropicMessagesClient = {
       async createMessage(request: AnthropicMessageRequest) {
@@ -1465,7 +1465,7 @@ describe('buildDebateStep spend-cap refusal wording (#1372)', () => {
 });
 
 describe('buildDebateStep gate refusal feeds its OWN refusal-rate guard (#1533)', () => {
-  /** Stands in for the in-flight gate refusing every call this debate would make. */
+  /** Stands in for the in-flight gate refusing every call this debate would make */
   function gateRefusingLlmClient(): LlmClient {
     return {
       async complete() {
@@ -1601,7 +1601,7 @@ describe('buildDebateStep gate refusal feeds its OWN refusal-rate guard (#1533)'
       undefined,
       undefined,
       // ~384 refusals against ~192 debates over 24h at a 15-min cadence: the
-      // steady state defaults.ts describes, ratio 0.667.
+      // steady state defaults.ts describes, ratio 0.667
       refusalGuard({ gate_refused: 384, debates_logged: 192 }, channel, sink),
     );
 
@@ -1611,7 +1611,7 @@ describe('buildDebateStep gate refusal feeds its OWN refusal-rate guard (#1533)'
   });
 
   // Review round 1 F1, at the call site: a refusal must not reach the
-  // truncation-rate guard in any way — not its window read, not its alert.
+  // truncation-rate guard in any way — not its window read, not its alert
   it('never touches the llm-failure-rate guard on the refusal path', async () => {
     const { logger } = recordingLogger();
     const { sink } = spySink();
@@ -1619,7 +1619,7 @@ describe('buildDebateStep gate refusal feeds its OWN refusal-rate guard (#1533)'
     const truncationSource: LlmFailureRateWindowSource = {
       getTerminationCauseWindowCounts: (from, to) => {
         truncationWindowReads.push({ from, to });
-        // Would cross LLM_FAILURE_RATE_THRESHOLD outright if it were ever read.
+        // Would cross LLM_FAILURE_RATE_THRESHOLD outright if it were ever read
         return { llm_failure: 9, total: 10 };
       },
     };

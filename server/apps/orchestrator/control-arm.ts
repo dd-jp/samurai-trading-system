@@ -90,7 +90,7 @@ import type { CurrentTick, CurrentTickStore, TickContext, TickRunner, TickSteps 
 
 // Re-exported from its definition in `pipeline/control-arm`, where it sits
 // beside the debate-id prefix: this module applies it, but the readers that
-// exclude the control arm must not import the orchestrator to get it.
+// exclude the control arm must not import the orchestrator to get it
 export { CONTROL_TRACE_SUFFIX };
 
 /**
@@ -167,7 +167,7 @@ export function buildControlDebateStep(relay: AnalystViewRelay): TickSteps['deba
       debate_id: `${CONTROL_DEBATE_ID_PREFIX}no-axis-vote:${instrument}:${bar.toISOString()}`,
       // `true` here for the same reason `controlArmDecision` gives, and it costs
       // the control nothing on this branch: a neutral direction is declined by
-      // the Trader before `converged` is read at all.
+      // the Trader before `converged` is read at all
       converged: true,
       rounds_completed: 0,
       latency_ms: 0,
@@ -180,9 +180,9 @@ export function buildControlDebateStep(relay: AnalystViewRelay): TickSteps['deba
       disagreement_summary: 'No debate was held; the control arm holds no debate.',
       // Genuine falsifier decline despite the synthesis text above ("had
       // nothing to read"): no LLM ran, but this is already the CURRENT
-      // `declined_on_signal` baseline via `neutral_direction_while_flat`.
+      // `declined_on_signal` baseline via `neutral_direction_while_flat`
       // `read: false` would flip that classification to `could_not_decide`
-      // — see DebateResult.read's docblock for why this path sets `true`.
+      // — see DebateResult.read's docblock for why this path sets `true`
       read: true,
     };
   };
@@ -222,12 +222,12 @@ export interface ControlArmDeps {
   /**
    * A `SequentialTickRunner` over the CONTROL step set — the same class the
    * live arm runs, so the sequencing, the short-circuits and the Risk →
-   * Verdict → Execution tail are literally shared rather than re-implemented.
+   * Verdict → Execution tail are literally shared rather than re-implemented
    */
   runner: TickRunner;
-  /** The relay the control `analysts` step reads this pass's views from. */
+  /** The relay the control `analysts` step reads this pass's views from */
   relay: AnalystViewRelay;
-  /** The control arm's own `current_tick` writer — never the live one. */
+  /** The control arm's own `current_tick` writer — never the live one */
   currentTickStore: CurrentTickStore;
   /** Where a control-arm failure is reported. The live tick continues regardless. */
   logger: Logger;
@@ -250,7 +250,7 @@ export interface ControlArmDeps {
  */
 export type ControlArmStep = (input: {
   signal: Signal;
-  /** The live pass's context — the source of the trace, the clock and the bar. */
+  /** The live pass's context — the source of the trace, the clock and the bar */
   ctx: TickContext;
   /**
    * The live pass's analyst views. Present on a decision pass that ran the
@@ -272,7 +272,7 @@ export function buildControlArmStep(deps: ControlArmDeps): ControlArmStep {
         // shadows must be joinable in `audit_log` and the decision records, and
         // a wholly separate id would make the pairing unrecoverable. The suffix
         // is also what keeps the two arms' rows separable in tables that have no
-        // `arm` column of their own.
+        // `arm` column of their own
         trace_id,
         logger: ctx.logger,
         auditLog: ctx.auditLog,
@@ -280,19 +280,19 @@ export function buildControlArmStep(deps: ControlArmDeps): ControlArmStep {
         // Present exactly when the live pass is a decision pass, so the control
         // arm takes the decision path on the same bars the live arm does and the
         // tick path on the same ticks. Conditional spread under
-        // `exactOptionalPropertyTypes`.
+        // `exactOptionalPropertyTypes`
         ...(ctx.decision_bar === undefined ? {} : { decision_bar: ctx.decision_bar }),
         // `beginPortfolioTail` is DELIBERATELY not forwarded (#1040). The
         // turnstile orders passes that mutate the LIVE book; the control arm
         // writes to its own shadow book and mutates nothing the live arm reads,
         // so it needs no turn — and taking one would make the live pass hold
         // the serial section open across the control pass's whole chain, which
-        // is measurement latency charged to the arm that trades.
+        // is measurement latency charged to the arm that trades
       });
     } catch (error) {
       // The measurement must never take down the arm that trades the book. See
       // the module header: this catch is here and not in the runner because the
-      // runner's lack of one is a deliberate, documented invariant.
+      // runner's lack of one is a deliberate, documented invariant
       deps.logger.log({
         trace_id,
         stage: 'control_arm',
@@ -300,7 +300,7 @@ export function buildControlArmStep(deps: ControlArmDeps): ControlArmStep {
         // #1089: 'error', not 'warn' — a contained crash from ANY cause (not
         // only the whole-book valuation refusal that Trader now converts to a
         // named skip before it ever reaches here) must surface above the
-        // level an unattended soak's operator actually reads.
+        // level an unattended soak's operator actually reads
         level: 'error',
         message:
           `control arm: ${signal.asset} — the control pass failed and was contained. The live ` +

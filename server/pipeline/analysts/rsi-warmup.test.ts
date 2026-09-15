@@ -113,7 +113,7 @@ function plainMeanRsi(closes: number[], period: number): number {
   return 100 - 100 / (1 + avgGain / avgLoss);
 }
 
-/** RSI(14) computed over the `lookback` bars ENDING at `endIndex` (exclusive). */
+/** RSI(14) computed over the `lookback` bars ENDING at `endIndex` (exclusive) */
 function rsiAt(endIndex: number, lookback: number): number {
   const start = Math.max(0, endIndex - lookback);
   const window = BARS.slice(start, endIndex);
@@ -181,7 +181,7 @@ describe('the live RSI spec sits on a converged warm-up (#722)', () => {
 
   it('so the debate reads Wilder, within 0.5 points of a converged 200-bar warm-up', () => {
     // The claim the adoption makes, checked on the same bars the "before"
-    // measurement below uses.
+    // measurement below uses
     for (const end of [60, 120, 200, 340, BARS.length]) {
       expect(Math.abs(rsiAt(end, RSI_SPEC.lookback) - rsiAt(end, WARM))).toBeLessThan(0.5);
     }
@@ -190,7 +190,7 @@ describe('the live RSI spec sits on a converged warm-up (#722)', () => {
   it('and no longer the plain-mean seed, which is what the floor returned', () => {
     // `FLOOR` bars yield exactly `period` changes, so `changes.slice(period)`
     // is empty and `rsi` returns its seed unchanged — Cutler's RSI. That is
-    // still true of the floor, and is no longer what the live spec asks for.
+    // still true of the floor, and is no longer what the live spec asks for
     for (const end of [60, 120, 200, 340, BARS.length]) {
       expect(rsiAt(end, FLOOR)).toBeCloseTo(plainMeanRsi(closesEnding(end, FLOOR), PERIOD), 8);
       expect(Math.abs(rsiAt(end, RSI_SPEC.lookback) - rsiAt(end, FLOOR))).toBeGreaterThan(0.01);
@@ -200,19 +200,19 @@ describe('the live RSI spec sits on a converged warm-up (#722)', () => {
   it('and diverges from that seed as soon as one more bar is given', () => {
     // The mirror of atr-equivalence's point 2: the equality above is a
     // property of the WIDTH, not of the algorithm. One extra bar switches
-    // Wilder's smoothing on for exactly one step.
+    // Wilder's smoothing on for exactly one step
     //
     // The comparison has to be against the seed `rsi` ACTUALLY takes, which is
     // the LEADING `period + 1` closes of the wider window — not `plainMeanRsi`
     // over the whole window, whose trailing-`period` slice is a different set
-    // of changes and would differ even between two identical algorithms.
+    // of changes and would differ even between two identical algorithms
     for (const end of [120, 200, 340]) {
       const window = closesEnding(end, FLOOR + 1);
       const seed = plainMeanRsi(window.slice(0, PERIOD + 1), PERIOD);
 
       // That seed is by construction the value the FLOOR returns one bar
       // earlier, which is what makes the divergence below a smoothing step
-      // rather than a window shift.
+      // rather than a window shift
       expect(seed).toBeCloseTo(rsiAt(end - 1, FLOOR), 8);
       expect(Math.abs(rsiAt(end, FLOOR + 1) - seed)).toBeGreaterThan(0.01);
     }
@@ -224,11 +224,11 @@ describe('the live RSI spec sits on a converged warm-up (#722)', () => {
     // back to `spec.lookback` and `minimumBarsFor` returns it unchanged. The
     // fact worth pinning is the one that makes that fallback safe — the period
     // IS the lookback for `sma`, so there is no `+ 1` to get wrong and no
-    // seed-then-smooth split for a warm-up to change.
+    // seed-then-smooth split for a warm-up to change
     expect(SMA_SPEC.params.period).toBeUndefined();
     expect(minimumBarsFor(SMA_SPEC)).toBe(SMA_SPEC.lookback);
     // Same trailing 14 bars, two wildly different history lengths, identical
-    // answer — the property RSI does NOT have.
+    // answer — the property RSI does NOT have
     expect(computeIndicator(BARS.slice(386, 400), SMA_SPEC)).toBeCloseTo(
       computeIndicator(BARS.slice(0, 400), { ...SMA_SPEC, lookback: 400, params: { period: 14 } }),
       8,
@@ -236,11 +236,11 @@ describe('the live RSI spec sits on a converged warm-up (#722)', () => {
   });
 });
 
-/** Absolute RSI gap against the converged 200-bar warm-up, per bar in REGION. */
+/** Absolute RSI gap against the converged 200-bar warm-up, per bar in REGION */
 const gapsAgainstWarm = (lookback: number): number[] =>
   REGION.map((end) => Math.abs(rsiAt(end, lookback) - rsiAt(end, WARM))).sort((a, b) => a - b);
 
-/** Bars in REGION whose 70/30 classification differs from the converged one. */
+/** Bars in REGION whose 70/30 classification differs from the converged one */
 const flipsAgainstWarm = (lookback: number): number[] =>
   REGION.filter((end) => {
     const live = rsiAt(end, lookback);
@@ -304,7 +304,7 @@ describe('what the missing warm-up cost — the floor, measured', () => {
     // a flipped momentum vote moves `net` by 1 or 2 out of a denominator of at
     // most 4 — i.e. it moves the confidence the debate weights the analyst by,
     // and can move `direction` outright. Same period, same bar, different
-    // history length.
+    // history length
     const flipped = momentumFlipsAgainstWarm(FLOOR);
 
     expect(flipped.length).toBeGreaterThan(10);
@@ -329,7 +329,7 @@ describe('what the adopted warm-up costs instead — the live spec, measured (#7
     // on that bar" is NOT true and was asserted here first — the floor's own
     // best bar is 0.056 off, closer than the converged spec's worst at 0.94,
     // because a seed can land on the converged value by luck. Convergence is a
-    // claim about the distribution, not about every draw.
+    // claim about the distribution, not about every draw
     const floorGaps = gapsAgainstWarm(FLOOR);
     expect(gaps.at(-1) as number).toBeLessThan(
       floorGaps[Math.floor(floorGaps.length / 2)] as number,
@@ -340,7 +340,7 @@ describe('what the adopted warm-up costs instead — the live spec, measured (#7
     // ~0.7% against 18%. NOT asserted as exactly zero: a bar sitting within a
     // fraction of a point of 70 or 30 can still land on the other side of the
     // line at 57 bars versus 200, and pinning zero would make this test a
-    // hostage to the fixture rather than a statement about convergence.
+    // hostage to the fixture rather than a statement about convergence
     expect(flipsAgainstWarm(RSI_SPEC.lookback).length).toBeLessThanOrEqual(1);
     expect(flipsAgainstWarm(FLOOR).length).toBeGreaterThan(20);
   });
@@ -348,12 +348,12 @@ describe('what the adopted warm-up costs instead — the live spec, measured (#7
   it('flips the momentum vote on at most 2 bars, where the floor flipped 1 in 8', () => {
     // The successor to the old confidence-ratio assertion (#745): the same
     // "and the adopted warm-up costs almost none of it" claim, stated against
-    // the quantity RSI now actually moves.
+    // the quantity RSI now actually moves
     //
     // 2 rather than the 70/30 test's 1, and measured rather than assumed: the
     // momentum vote has THREE boundaries (30, 50, 70) where that test has two,
     // so there is more line for a near-converged bar to straddle. 2 of 141 is
-    // 1.4% against the floor's 12%+.
+    // 1.4% against the floor's 12%+
     expect(momentumFlipsAgainstWarm(RSI_SPEC.lookback).length).toBeLessThanOrEqual(2);
     expect(momentumFlipsAgainstWarm(FLOOR).length).toBeGreaterThan(10);
   });

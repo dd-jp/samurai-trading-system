@@ -19,7 +19,7 @@ import type {
 } from '../../pipeline/execution/adapters/alpaca-client.js';
 import { NULL_PROVIDER_STATUS, ProviderStatusPoller } from './provider-status.js';
 
-/** Only `getAccount` is exercised; the order methods throw if the poller ever reaches for them. */
+/** Only `getAccount` is exercised; the order methods throw if the poller ever reaches for them */
 function alpacaStub(getAccount: () => Promise<AlpacaAccount>): AlpacaBrokerClient {
   const unreachable = () => {
     throw new Error('the status poller must never place or read orders');
@@ -39,7 +39,7 @@ function stubFetch(impl: (url: string) => Promise<Response> | Response): void {
   });
 }
 
-/** A minimal ok/failing Response; `fetchWithTimeout` only reads `.ok` and `.status`. */
+/** A minimal ok/failing Response; `fetchWithTimeout` only reads `.ok` and `.status` */
 function response(status: number): Response {
   return new Response(status === 200 ? '{}' : '', { status });
 }
@@ -51,7 +51,7 @@ afterEach(() => {
 describe('NULL_PROVIDER_STATUS', () => {
   it('reports both tiles as not_configured rather than omitting them', () => {
     // Keeps `buildSnapshot`'s output total: the UI renders a state, it never
-    // has to guard a missing key.
+    // has to guard a missing key
     const panel = NULL_PROVIDER_STATUS.readProviderStatus();
     expect(panel.alpaca.state).toBe('not_configured');
     expect(panel.polygon.state).toBe('not_configured');
@@ -97,7 +97,7 @@ describe('ProviderStatusPoller — Alpaca', () => {
     const poller = new ProviderStatusPoller({
       alpaca: alpacaStub(async () => {
         // Mirrors how the real client surfaces HTTP failures: a thrown error
-        // carrying `.status`, duck-typed the same way elsewhere in this repo.
+        // carrying `.status`, duck-typed the same way elsewhere in this repo
         throw Object.assign(new Error('unauthorized'), { status: 401 });
       }),
       polygonApiKey: 'test-key',
@@ -117,7 +117,7 @@ describe('ProviderStatusPoller — Alpaca', () => {
 
     const { alpaca } = await poller.pollOnce();
     // Reporting `ok` with a blank balance would render as "$0.00", which on a
-    // money tile is worse than a visible failure.
+    // money tile is worse than a visible failure
     expect(alpaca.state).toBe('error');
     expect(alpaca.balance).toBeNull();
   });
@@ -134,12 +134,12 @@ describe('ProviderStatusPoller — Alpaca', () => {
     // The `AlpacaBrokerClient` interface promises nothing about timeouts. Without a
     // bound here, one hung `getAccount()` leaves `pollOnce` pending forever —
     // and since both probes share a `Promise.all`, it takes the Polygon tile
-    // down with it and freezes the whole panel silently.
+    // down with it and freezes the whole panel silently
     vi.useFakeTimers();
     try {
       stubFetch(() => response(200));
       const poller = new ProviderStatusPoller({
-        // Never settles.
+        // Never settles
         alpaca: alpacaStub(() => new Promise<never>(() => {})),
         polygonApiKey: 'test-key',
       });
@@ -151,7 +151,7 @@ describe('ProviderStatusPoller — Alpaca', () => {
       expect(alpaca.state).toBe('error');
       expect(alpaca.detail).toContain('timed out');
       expect(alpaca.balance).toBeNull();
-      // The point of the fix: the other tile still updates.
+      // The point of the fix: the other tile still updates
       expect(polygon.state).toBe('ok');
     } finally {
       vi.useRealTimers();
@@ -174,7 +174,7 @@ describe('ProviderStatusPoller — Alpaca', () => {
 describe('ProviderStatusPoller — Polygon', () => {
   it('probes the authenticated market-status path with a bearer header, not a URL key', async () => {
     // A key in the query string leaks into any error message, proxy log or
-    // stack trace that quotes the request URL.
+    // stack trace that quotes the request URL
     let seenUrl = '';
     let seenAuth: string | undefined;
     vi.stubGlobal('fetch', (input: string | URL, init?: RequestInit) => {
@@ -233,7 +233,7 @@ describe('ProviderStatusPoller — reader seam', () => {
       polygonApiKey: 'test-key',
     });
 
-    // Before any poll: the not-yet-polled panel, not a throw or a pending promise.
+    // Before any poll: the not-yet-polled panel, not a throw or a pending promise
     expect(poller.readProviderStatus().alpaca.observed_at).toBeNull();
 
     await poller.pollOnce();

@@ -96,11 +96,11 @@ import type { Analyst, AnalystInput, AnalystTelemetry, AssetClass } from './type
  * either, for the same reason.
  */
 const INDICATOR_TIMEFRAME = '5m';
-/** 1h read retained as context only — never feeds direction/confidence. */
+/** 1h read retained as context only — never feeds direction/confidence */
 const CONTEXT_TIMEFRAME = '1h';
 const INDICATOR_LOOKBACK = 14;
 const CONTEXT_CANDLE_LOOKBACK = 20;
-/** 24h news/sentiment context window, matching the always-on context frame. */
+/** 24h news/sentiment context window, matching the always-on context frame */
 const MI_CONTEXT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /**
@@ -124,7 +124,7 @@ const MI_CONTEXT_WINDOW_MS = 24 * 60 * 60 * 1000;
  */
 export const WARMUP_5M = 260;
 
-/** 5m bars in one regular US equity session: 6.5 hours / 5 minutes. */
+/** 5m bars in one regular US equity session: 6.5 hours / 5 minutes */
 const BARS_PER_SESSION_5M = 78;
 
 /**
@@ -258,7 +258,7 @@ export const ATR_PCT_SPEC: IndicatorSpec = onRecommendedWarmup({
   lookback: INDICATOR_LOOKBACK + 1,
 });
 
-/** MACD's conventional 12/26/9, unfitted — see `AXIS_WEIGHTS` on why nothing here is searched. */
+/** MACD's conventional 12/26/9, unfitted — see `AXIS_WEIGHTS` on why nothing here is searched */
 const MACD_FAST = 12;
 const MACD_SLOW = 26;
 const MACD_SIGNAL = 9;
@@ -278,7 +278,7 @@ export const MACD_SPEC: IndicatorSpec = onRecommendedWarmup({
   // fast/slow/signal ALONE (`indicators.ts` `requiredIntParam` — this kind
   // never falls back to `spec.lookback`), so `onRecommendedWarmup` replaces
   // this before any consumer sees it. Stated rather than left at 0, which
-  // would read as a meaningful zero-length window.
+  // would read as a meaningful zero-length window
   lookback: MACD_SLOW,
 });
 
@@ -295,10 +295,10 @@ export const ADX_SPEC: IndicatorSpec = onRecommendedWarmup({
   lookback: 2 * INDICATOR_LOOKBACK,
 });
 
-/** The Donchian window, in 5m bars — 20 bars is ~100 minutes, an intraday range. */
+/** The Donchian window, in 5m bars — 20 bars is ~100 minutes, an intraday range */
 const DONCHIAN_PERIOD = 20;
 
-/** Donchian position — ENRICHMENT, and the STRUCTURE axis's only input. */
+/** Donchian position — ENRICHMENT, and the STRUCTURE axis's only input */
 export const DONCHIAN_SPEC: IndicatorSpec = {
   indicator: 'donchian_pos',
   params: { period: DONCHIAN_PERIOD },
@@ -306,24 +306,24 @@ export const DONCHIAN_SPEC: IndicatorSpec = {
   lookback: DONCHIAN_PERIOD,
 };
 
-/** Bollinger/Keltner conventional parameters, unfitted. */
+/** Bollinger/Keltner conventional parameters, unfitted */
 const BB_PERIOD = 20;
 const BB_MULT = 2;
 const KC_PERIOD = 20;
 const KC_MULT = 1.5;
 
-/** BB/KC squeeze ratio — ENRICHMENT, and the gate's second cap input. */
+/** BB/KC squeeze ratio — ENRICHMENT, and the gate's second cap input */
 export const SQUEEZE_SPEC: IndicatorSpec = onRecommendedWarmup({
   indicator: 'bb_kc_squeeze',
   params: { bb_period: BB_PERIOD, bb_mult: BB_MULT, kc_period: KC_PERIOD, kc_mult: KC_MULT },
   timeframe: INDICATOR_TIMEFRAME,
-  // Placeholder, replaced below — same reason as `MACD_SPEC`'s.
+  // Placeholder, replaced below — same reason as `MACD_SPEC`'s
   lookback: BB_PERIOD,
 });
 
-/** RSI above this alongside a rising close is treated as overbought, not confirming bullish. */
+/** RSI above this alongside a rising close is treated as overbought, not confirming bullish */
 export const RSI_OVERBOUGHT = 70;
-/** RSI below this alongside a falling close is treated as oversold, not confirming bearish. */
+/** RSI below this alongside a falling close is treated as oversold, not confirming bearish */
 export const RSI_OVERSOLD = 30;
 
 /**
@@ -430,7 +430,7 @@ export const PARTICIPATION_LOOKBACK = 20;
  */
 const PARTICIPATION_BULL_SHARE = 0.55;
 
-/** Donchian position above this is the top of the range; below its mirror, the bottom. */
+/** Donchian position above this is the top of the range; below its mirror, the bottom */
 const STRUCTURE_UPPER = 0.7;
 const STRUCTURE_LOWER = 0.3;
 
@@ -485,40 +485,40 @@ export const AXIS_WEIGHTS: Readonly<Record<TechnicalAxis, number>> = {
 /** A single axis's vote. One per axis, never one per indicator. */
 export type AxisVote = -1 | 0 | 1;
 
-/** An axis that produced a vote, with the already-interpreted band behind it. */
+/** An axis that produced a vote, with the already-interpreted band behind it */
 export interface AxisReading {
   axis: TechnicalAxis;
   vote: AxisVote;
-  /** The interpretation, computed HERE — never a legend shipped to the prompt. */
+  /** The interpretation, computed HERE — never a legend shipped to the prompt */
   band: string;
-  /** The rendered `key_points` line. */
+  /** The rendered `key_points` line */
   line: string;
 }
 
-/** An axis that could not be read, with the arithmetic behind the refusal. */
+/** An axis that could not be read, with the arithmetic behind the refusal */
 export interface AxisUnavailable {
   axis: TechnicalAxis;
-  /** `IndicatorKind`, or the derived feature name for the participation read. */
+  /** `IndicatorKind`, or the derived feature name for the participation read */
   kind: string;
   required: number;
   received: number;
   line: string;
 }
 
-/** What `readAxes` produces — the structured points the prompt renders verbatim. */
+/** What `readAxes` produces — the structured points the prompt renders verbatim */
 export interface AxisAssessment {
   readings: AxisReading[];
-  /** Sum of `weight x vote` over the available voting axes. */
+  /** Sum of `weight x vote` over the available voting axes */
   net: number;
-  /** Sum of the weights of the available voting axes — the denominator. */
+  /** Sum of the weights of the available voting axes — the denominator */
   availableAxes: number;
   direction: Direction;
   confidence: number;
-  /** Why the cap fired, empty when it did not. */
+  /** Why the cap fired, empty when it did not */
   capReasons: string[];
 }
 
-/** Rounded so a rendered confidence is short and byte-identical across runs. */
+/** Rounded so a rendered confidence is short and byte-identical across runs */
 function round4(value: number): number {
   return Number(value.toFixed(4));
 }
@@ -549,7 +549,7 @@ export function rsiVote(rsi: number): AxisVote {
   return 0;
 }
 
-/** MOMENTUM's MACD half: the histogram's sign is the whole reading. */
+/** MOMENTUM's MACD half: the histogram's sign is the whole reading */
 export function macdVote(histogram: number): AxisVote {
   if (histogram > 0) return 1;
   if (histogram < 0) return -1;
@@ -578,7 +578,7 @@ export function momentumVote(rsi: number, macd: number | undefined): AxisVote {
   return Math.sign(fromRsi + macdVote(macd)) as AxisVote;
 }
 
-/** STRUCTURE: where the close sits in the Donchian range. */
+/** STRUCTURE: where the close sits in the Donchian range */
 export function structureVote(donchianPos: number): AxisVote {
   if (donchianPos > STRUCTURE_UPPER) return 1;
   if (donchianPos < STRUCTURE_LOWER) return -1;
@@ -754,7 +754,7 @@ interface CoreReads {
   atrPct: number;
 }
 
-/** The enrichment reads, each either a number or the arity that defeated it. */
+/** The enrichment reads, each either a number or the arity that defeated it */
 interface EnrichmentReads {
   macd: number | undefined;
   adx: number | undefined;
@@ -872,7 +872,7 @@ export function assessAxes(core: CoreReads, enrichment: EnrichmentReads): AxisAs
 
   // `availableAxes` is never 0: trend and momentum are core, so both are always
   // present by the time this runs. Guarded anyway rather than divided blindly —
-  // a NaN confidence would reach a live sizing multiplier.
+  // a NaN confidence would reach a live sizing multiplier
   const raw = availableAxes === 0 ? 0 : Math.abs(net) / availableAxes;
   const confidence = round4(capReasons.length > 0 ? Math.min(raw, LOW_CONVICTION_CAP) : raw);
 
@@ -886,7 +886,7 @@ export function assessAxes(core: CoreReads, enrichment: EnrichmentReads): AxisAs
   };
 }
 
-/** The gate's rendered line — magnitude (core) plus whichever cap inputs are readable. */
+/** The gate's rendered line — magnitude (core) plus whichever cap inputs are readable */
 function gateLine(
   atrPct: number,
   adx: number | undefined,
@@ -1011,7 +1011,7 @@ export const technicalAnalyst: Analyst = {
     // warm-up fetch. Every 5m spec's own getIndicator call is then served from
     // the store instead of triggering its own DataSource.fetchBars — and, as of
     // #745, it is ALSO the window the enrichment pre-checks count against, so
-    // the availability decision and the data are the same read.
+    // the availability decision and the data are the same read
     const technicalBars = await input.market_data.getBars(signal.asset, technicalWindow, asOf);
 
     const lastCandle = technicalBars.at(-1);
@@ -1022,7 +1022,7 @@ export const technicalAnalyst: Analyst = {
     }
 
     // CORE. No pre-check, no catch: a short window here forfeits the instrument
-    // for the tick, exactly as it did before #745.
+    // for the tick, exactly as it did before #745
     const [candles, sma, rsi, atrPct, marketContext] = await Promise.all([
       input.market_data.getBars(signal.asset, contextWindow, asOf),
       input.market_data.getIndicator(signal.asset, SMA_SPEC, asOf),
@@ -1059,7 +1059,7 @@ export const technicalAnalyst: Analyst = {
     };
 
     // Order matters only for the rendered line order, which follows the axis
-    // order the summary reports.
+    // order the summary reports
     const macd = readValue(macdRead, 'momentum', 'macd_histogram');
     const participationBars = technicalBars.slice(-PARTICIPATION_LOOKBACK);
     let participation: number | null | undefined;
@@ -1095,7 +1095,7 @@ export const technicalAnalyst: Analyst = {
     // purpose — a calendar that cannot answer at all (`TradingCalendar`'s
     // documented throw) is exactly as fatal to this mandatory analyst as a
     // misordered bar feed, and containment is the same tick-loop backstop
-    // `computeIndicator`'s own doc comment traces.
+    // `computeIndicator`'s own doc comment traces
     //
     // Computed on `signal.asset` — the traded instrument, which on the live
     // equity leg is the leveraged ETP, not its liquid US underlying. #744's
@@ -1104,7 +1104,7 @@ export const technicalAnalyst: Analyst = {
     // informed flow. Routing this at the underlying instead would need a
     // screening/underlying-instrument identity this codebase does not have —
     // see `session-features.ts`'s doc comment for why that gap is recorded
-    // rather than papered over.
+    // rather than papered over
     const session = computeSessionVwap(technicalBars, input.calendar, asOf);
     const sessionLine =
       session.vwap === null
@@ -1115,13 +1115,13 @@ export const technicalAnalyst: Analyst = {
     // #797 — RVOL, informational only: no vote, no cap, no change to
     // `assessAxes`'s arithmetic. See `rvolLine`'s doc comment for the recorded
     // decision (option 1 of three), the one-vote-per-axis reasoning, and the
-    // recorded volume-caveat deviation.
+    // recorded volume-caveat deviation
     //
     // A SEPARATE, WIDER window than `technicalBars` — see `RVOL_5M_LOOKBACK`
     // for why 260 bars cannot serve it and for the per-tick fetch cost. Awaited
     // on its own rather than joined into either `Promise.all` above: both of
     // those already read this instrument+timeframe, and two concurrent source
-    // fetches for one (instrument, timeframe) race on the store write.
+    // fetches for one (instrument, timeframe) race on the store write
     const rvolBars = await input.market_data.getBars(
       signal.asset,
       { timeframe: INDICATOR_TIMEFRAME, lookback: RVOL_5M_LOOKBACK },
@@ -1133,9 +1133,9 @@ export const technicalAnalyst: Analyst = {
     // No fallback numeric here on purpose: an empty context read has no
     // volume to average, and reporting "avg volume 0" would be a fabricated
     // claim about the tape, not an approximation (the same fabrication class
-    // #319 made computeIndicator throw on rather than silently answer).
+    // #319 made computeIndicator throw on rather than silently answer)
     // `direction`/`confidence` never depend on this string, so an absent 1h
-    // context degrades the prose only, never the decision.
+    // context degrades the prose only, never the decision
     const contextLine =
       candles.length === 0
         ? `Context (${CONTEXT_TIMEFRAME}): unavailable`

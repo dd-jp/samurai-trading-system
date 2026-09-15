@@ -54,15 +54,15 @@ import type { ClosedTrade, Fill } from '../../shared/index.js';
 import type { ReplayTradeSource } from './eval-types.js';
 import type { DateRange } from './universe.js';
 
-/** What one round-trip paid, split by the cost model's four components. */
+/** What one round-trip paid, split by the cost model's four components */
 export interface TradeCostAttribution {
-  /** Half-spread, in currency: `Σ legs qty × spread_cost`. */
+  /** Half-spread, in currency: `Σ legs qty × spread_cost` */
   spread: number;
-  /** Already absolute in `CostBreakdown` — summed, never multiplied by qty. */
+  /** Already absolute in `CostBreakdown` — summed, never multiplied by qty */
   commission: number;
   slippage: number;
   market_impact: number;
-  /** The full add-back: `spread + commission + slippage + market_impact`. */
+  /** The full add-back: `spread + commission + slippage + market_impact` */
   total: number;
 }
 
@@ -117,12 +117,12 @@ export function attributeTradeCost(
   };
 }
 
-/** Per-run cost totals, alongside the notional they were charged against. */
+/** Per-run cost totals, alongside the notional they were charged against */
 export interface RunCostAttribution extends TradeCostAttribution {
   trades: number;
-  /** Round-trip traded notional, `Σ entry × filled_size × 2` — matches `toTradeSeries`. */
+  /** Round-trip traded notional, `Σ entry × filled_size × 2` — matches `toTradeSeries` */
   notional: number;
-  /** `total / notional`, in basis points: the all-in round-trip cost rate. */
+  /** `total / notional`, in basis points: the all-in round-trip cost rate */
   bps_of_notional: number;
   /**
    * Mean per-fill adverse price move as a multiple of the volatility input the
@@ -173,7 +173,7 @@ export async function attributeRunCosts(
     // here. This only feeds `bps_of_notional`, a denominator for presenting
     // cost magnitude, and the error is second-order: it is the trade's own
     // return on one of two legs. Trades that moved far enough for that to
-    // matter are exactly the ones whose cost-in-bps is least load-bearing.
+    // matter are exactly the ones whose cost-in-bps is least load-bearing
     notional += trade.entry * trade.filled_size * 2;
 
     if (slippageCoefficient !== undefined && slippageCoefficient > 0) {
@@ -230,7 +230,7 @@ export class GrossOfCostsTradeSource implements ReplayTradeSource {
           realized_pnl_net: trade.realized_pnl_net + cost.total,
           // Gross of costs means gross of fees too — leaving `fees_total`
           // populated would describe a trade whose PnL ignores fees while its
-          // own record still reports them.
+          // own record still reports them
           fees_total: 0,
         };
       }),

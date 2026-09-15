@@ -21,7 +21,7 @@ const GBP_FUNDED: SaxoAccountBalance = {
   TotalValue: LIVE_BOOK_GBP,
 };
 
-/** Measured on the SIM trial account, doc 44 §6.3 — the negative case is real. */
+/** Measured on the SIM trial account, doc 44 §6.3 — the negative case is real */
 const SIM_TRIAL: SaxoAccountBalance = {
   Currency: 'EUR',
   CashBalance: 100_000,
@@ -32,7 +32,7 @@ function clientReturning(balance: SaxoAccountBalance) {
   return { getBalances: async () => balance };
 }
 
-/** The ceilings `liveStartingProfile` ships, before anything arms them. */
+/** The ceilings `liveStartingProfile` ships, before anything arms them */
 function liveShapedConfig(): RiskConfig {
   return {
     live_book_ceiling: { book: LIVE_BOOK_GBP, refuse_above_tolerance: 0.05 },

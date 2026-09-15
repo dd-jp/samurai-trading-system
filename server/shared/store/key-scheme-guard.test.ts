@@ -79,7 +79,7 @@ describe('key-scheme guard (#686)', () => {
     insertLot(db, { key: 'stale-1', instrument: '3LDE', order_state: 'submitted', key_scheme: 1 });
 
     // The message is the whole remedy — nothing downstream repairs this — so
-    // the instrument, the state and the drain instruction all have to be in it.
+    // the instrument, the state and the drain instruction all have to be in it
     expect(() => assertNoStaleKeyScheme(db)).toThrow(/3LDE \(submitted\) stale-1/);
     expect(() => assertNoStaleKeyScheme(db)).toThrow(/flatten the book/);
   });
@@ -89,7 +89,7 @@ describe('key-scheme guard (#686)', () => {
     insertLot(db, { key: `stale-${state}`, order_state: state, key_scheme: 1 });
 
     // A terminal lot is harmless: nothing will replay a decision for it. This
-    // is what makes the guard a one-time drain rather than a permanent block.
+    // is what makes the guard a one-time drain rather than a permanent block
     expect(findStaleKeySchemeLots(db)).toEqual([]);
     expect(() => assertNoStaleKeyScheme(db)).not.toThrow();
   });
@@ -102,7 +102,7 @@ describe('key-scheme guard (#686)', () => {
         order_state: 'filled',
         key_scheme: 1,
         // Descending inserts, so a store that returned insertion order rather
-        // than `opened_at` order would fail the first-key assertion below.
+        // than `opened_at` order would fail the first-key assertion below
         opened_at: `2026-08-${String(28 - i).padStart(2, '0')}T09:00:00.000Z`,
       });
     }

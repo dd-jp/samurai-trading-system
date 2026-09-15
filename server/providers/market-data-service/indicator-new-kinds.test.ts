@@ -24,7 +24,7 @@ import type { Bar, IndicatorSpec } from './types.js';
  * A written-out LCG, matching `generate-indicator-golden.py`'s own reasoning
  * for not using a language-provided RNG (`Math.random()` here): a property
  * test that can pick a different seed on every run is a flaky test with
- * extra steps, not a stronger one.
+ * extra steps, not a stronger one
  */
 function lcg(seed: number): () => number {
   let x = seed;
@@ -53,7 +53,7 @@ function buildBar(index: number, open: number, high: number, low: number, close:
   };
 }
 
-/** A random-walk series, ordinary bars with real (non-degenerate) ranges. */
+/** A random-walk series, ordinary bars with real (non-degenerate) ranges */
 function randomWalkBars(count: number, seed: number): Bar[] {
   const rand = lcg(seed);
   const bars: Bar[] = [];
@@ -70,7 +70,7 @@ function randomWalkBars(count: number, seed: number): Bar[] {
   return bars;
 }
 
-/** Every bar a doji at the same price: `high === low`, `upper === lower` for any channel/band built on it. */
+/** Every bar a doji at the same price: `high === low`, `upper === lower` for any channel/band built on it */
 function flatBars(count: number, price: number): Bar[] {
   return Array.from({ length: count }, (_, i) => buildBar(i, price, price, price, price));
 }
@@ -83,7 +83,7 @@ const specFor = (
 
 describe('multi-parameter kinds throw on a missing parameter, naming it', () => {
   // The trap named twice in the issue: `periodOf`'s `params.period ??
-  // spec.lookback` fallback must never be reachable for these two kinds.
+  // spec.lookback` fallback must never be reachable for these two kinds
   const macdParams = { fast: 12, slow: 26, signal: 9 };
   for (const missing of ['fast', 'slow', 'signal'] as const) {
     it(`macd_histogram without params.${missing} throws naming it, not a fabricated value`, () => {
@@ -115,7 +115,7 @@ describe('multi-parameter kinds throw on a missing parameter, naming it', () => 
     // become the missing `signal` parameter's value and let the call
     // through as some derived number — it must still throw naming `signal`,
     // not answer InsufficientBarsError (a bars-too-short complaint) or a
-    // fabricated result.
+    // fabricated result
     const spec = specFor('macd_histogram', { fast: 12, slow: 26 }, 999);
     expect(() => computeIndicator(randomWalkBars(999, 3), spec)).not.toThrow(InsufficientBarsError);
   });
@@ -191,7 +191,7 @@ describe('bounded kinds over a random walk', () => {
 describe('degenerate denominators do not produce NaN or Infinity', () => {
   // `high === low` for every bar in the window forces every channel/band
   // built on it to have `upper === lower` too — the shape the acceptance
-  // criteria name explicitly.
+  // criteria name explicitly
   const flat = flatBars(60, 100);
 
   it('donchian_pos: upper === lower answers the neutral 0.5, not NaN', () => {
@@ -228,7 +228,7 @@ describe('degenerate denominators do not produce NaN or Infinity', () => {
     // Every EMA on a constant series equals that constant, so the line and
     // its signal are both flat at the same value — the histogram is exactly
     // 0, a genuine answer rather than a degenerate one, but pinned here
-    // because a division mistake in the signal seed would show up as NaN.
+    // because a division mistake in the signal seed would show up as NaN
     const value = computeIndicator(
       flat,
       specFor('macd_histogram', { fast: 12, slow: 26, signal: 9 }, flat.length),

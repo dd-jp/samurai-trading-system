@@ -35,7 +35,7 @@ export interface IngestHistoryDeps {
 export async function ingestTiingoHistory(deps: IngestHistoryDeps): Promise<void> {
   const print = deps.print ?? console.log;
   // DAILY, stated explicitly (#664): this script backfills crypto daily
-  // history, which is the only resolution `HttpTiingoClient` serves.
+  // history, which is the only resolution `HttpTiingoClient` serves
   const store = new Stage2HistoricalStore(deps.client, {
     timeframe: DEFAULT_STAGE2_TIMEFRAME,
     dbPath: deps.dbPath,

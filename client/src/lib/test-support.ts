@@ -16,7 +16,7 @@ import type {
   PipelineView,
 } from '@contracts';
 
-/** Stage order per `PIPELINE_STAGES` (pipeline-types.ts) — redeclared here so fixtures stay value-import-free. */
+/** Stage order per `PIPELINE_STAGES` (pipeline-types.ts) — redeclared here so fixtures stay value-import-free */
 const STAGES: readonly PipelineStage[] = [
   'analysts',
   'debate',
@@ -26,10 +26,10 @@ const STAGES: readonly PipelineStage[] = [
   'execution',
 ];
 
-/** Fixed test epoch — no wall clock anywhere in these tests. */
+/** Fixed test epoch — no wall clock anywhere in these tests */
 export const T0 = Date.parse('2026-08-07T12:00:00.000Z');
 
-/** ISO timestamp `ms` after the fixed test epoch. */
+/** ISO timestamp `ms` after the fixed test epoch */
 export function at(ms: number): string {
   return new Date(T0 + ms).toISOString();
 }
@@ -90,7 +90,7 @@ export function makeView(
 
 /**
  * A lane whose trace ran `analysts → … → upTo` as `done` cells, each stage
- * recorded `stepMs` apart starting at `startMs` past the epoch.
+ * recorded `stepMs` apart starting at `startMs` past the epoch
  */
 export function doneThrough(
   instrument: string,

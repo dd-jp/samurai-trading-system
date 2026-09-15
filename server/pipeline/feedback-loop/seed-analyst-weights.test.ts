@@ -19,7 +19,7 @@ import type { TunableDial } from './types.js';
 
 const START = new Date('2026-08-05T09:00:00.000Z');
 
-/** The paper profile's band (paper-profile.ts): floor 0.5, ceiling 1.5 — midpoint 1.0. */
+/** The paper profile's band (paper-profile.ts): floor 0.5, ceiling 1.5 — midpoint 1.0 */
 const BAND: TunableDial = {
   max_step: 0.05,
   floor: 0.5,
@@ -80,10 +80,10 @@ describe('seedAnalystWeights', () => {
       dial: BAND,
     });
 
-    // A daily cycle steps one of them, exactly as `runDailyCycle` would.
+    // A daily cycle steps one of them, exactly as `runDailyCycle` would
     openStore(db).setAnalystWeight('technical', 1.25);
 
-    // Restart: a brand-new store object over the same database.
+    // Restart: a brand-new store object over the same database
     const result = seedAnalystWeights({
       tuning: openStore(db),
       analyst_ids: ['technical', 'sentiment'],
@@ -145,7 +145,7 @@ describe('seedAnalystWeights', () => {
    * tuned weight here is the write itself refusing.
    */
   it('cannot clobber a tuned weight through a stale read of the table', () => {
-    /** Reads from a pre-tune snapshot; every write goes to the live store. */
+    /** Reads from a pre-tune snapshot; every write goes to the live store */
     class StaleReadTuningStore implements TuningStore {
       constructor(
         private readonly live: SqliteTuningStore,
@@ -178,15 +178,15 @@ describe('seedAnalystWeights', () => {
     }
 
     const live = openStore(db);
-    // What the second process saw when it looked: an empty table.
+    // What the second process saw when it looked: an empty table
     const staleSnapshot = live.getAnalystWeights();
     expect(staleSnapshot).toEqual({});
 
-    // Meanwhile the first process seeds and its cycle tunes.
+    // Meanwhile the first process seeds and its cycle tunes
     seedAnalystWeights({ tuning: live, analyst_ids: ['technical'], dial: BAND });
     live.setAnalystWeight('technical', 1.25);
 
-    // The second process now writes, still believing the table is empty.
+    // The second process now writes, still believing the table is empty
     const result = seedAnalystWeights({
       tuning: new StaleReadTuningStore(live, staleSnapshot),
       analyst_ids: ['technical'],

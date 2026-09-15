@@ -21,7 +21,7 @@ import type { BreakerState, RiskDecision } from '../risk-manager/index.js';
  * `PortfolioView`/`BreakerState` as pre-built inputs.
  */
 export interface PositionStore {
-  /** True if an order or fill already exists under this idempotency key. */
+  /** True if an order or fill already exists under this idempotency key */
   findByKey(idempotency_key: string): Promise<boolean>;
 }
 
@@ -29,7 +29,7 @@ export interface ApprovalRequest {
   order_intent: OrderIntent;
   risk_decision: RiskDecision;
   trace_id: string;
-  /** Elapsed time after which a non-response resolves as 'timeout'. */
+  /** Elapsed time after which a non-response resolves as 'timeout' */
   timeout_ms: number;
 }
 
@@ -59,7 +59,7 @@ export interface VerdictConfig {
    * never engages it, `semi_auto` engages it only for flagged trades.
    */
   automation_level: Record<'crypto' | 'stocks', 'manual' | 'semi_auto' | 'auto'>;
-  /** Staleness bound: max signal age before no-go, per asset class. */
+  /** Staleness bound: max signal age before no-go, per asset class */
   max_signal_age: Record<'crypto' | 'stocks', number>;
   /**
    * FEED staleness bound (#641): max `now - Mark.observed_at`, per asset
@@ -116,9 +116,9 @@ export interface VerdictConfig {
    * together.
    */
   drift_tolerance_pct: Record<'crypto' | 'stocks', number>;
-  /** HITL response window; a non-response past this defaults to no-go. */
+  /** HITL response window; a non-response past this defaults to no-go */
   human_timeout: number;
-  /** Stocks-only: closed session still passes the market-open gate. */
+  /** Stocks-only: closed session still passes the market-open gate */
   allow_extended_hours: boolean;
   /**
    * What "flagged" means under `semi_auto` (verdict-spec.md "Module:
@@ -132,9 +132,9 @@ export interface VerdictConfig {
 }
 
 export interface VerdictInput {
-  /** Cross-cutting correlation ID threaded from the Orchestrator's tick — not business data. */
+  /** Cross-cutting correlation ID threaded from the Orchestrator's tick — not business data */
   trace_id: string;
-  /** Approved only — Verdict trusts Risk's approval and only adds final gates. */
+  /** Approved only — Verdict trusts Risk's approval and only adds final gates */
   risk_decision: RiskDecision;
   clock: Clock;
   marketData: MarketDataService;
@@ -146,7 +146,7 @@ export interface VerdictInput {
    * backtest overrides gate 6's outcome to `go` once `approvals` answers
    * (recording `would_require_approval`), rather than skipping the call — a
    * channel that throws instead of answering still refuses; paper behaves
-   * like live.
+   * like live
    */
   mode: 'live' | 'paper' | 'backtest';
   approvals: ApprovalChannel;
@@ -154,11 +154,11 @@ export interface VerdictInput {
 
 export interface VerdictDecision {
   status: 'go' | 'no_go';
-  /** Present iff go. */
+  /** Present iff go */
   order: OrderIntent | null;
   no_go_reason:
     | 'staleness'
-    /** #641: the FEED is stale — `Mark.observed_at` older than the bound, or ahead of our clock. */
+    /** #641: the FEED is stale — `Mark.observed_at` older than the bound, or ahead of our clock */
     | 'stale_feed'
     | 'drift'
     | 'dedup'
@@ -195,7 +195,7 @@ export interface VerdictDecision {
    */
   no_go_detail: { measured_ms: number; bound_ms: number } | null;
   approval_path: 'automated' | 'human' | 'human_timeout';
-  /** Recorded even when the gate is bypassed (backtest) or never reached (earlier no-go). */
+  /** Recorded even when the gate is bypassed (backtest) or never reached (earlier no-go) */
   would_require_approval: boolean;
   idempotency_key: string;
   timestamp: Date;

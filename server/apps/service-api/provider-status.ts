@@ -63,7 +63,7 @@ export type {
 } from '../../../contracts/index.js';
 
 // Imported as well as re-exported above: `export … from` publishes a name
-// without binding it locally, and the poller below annotates with all four.
+// without binding it locally, and the poller below annotates with all four
 import type {
   AlpacaTile,
   PolygonTile,
@@ -71,7 +71,7 @@ import type {
   ProviderStatusPanel,
 } from '../../../contracts/index.js';
 
-/** The synchronous seam `buildSnapshot` reads. */
+/** The synchronous seam `buildSnapshot` reads */
 export interface ProviderStatusReader {
   readProviderStatus(): ProviderStatusPanel;
 }
@@ -126,7 +126,7 @@ const DEFAULT_POLYGON_BASE_URL = 'https://api.polygon.io';
  */
 const POLYGON_PROBE_PATH = '/v1/marketstatus/now';
 
-/** Alpaca returns money as decimal strings; anything unparseable becomes `null`, never `NaN`. */
+/** Alpaca returns money as decimal strings; anything unparseable becomes `null`, never `NaN` */
 function parseMoney(value: string | undefined): number | null {
   if (value === undefined) return null;
   const parsed = Number(value);
@@ -168,7 +168,7 @@ function withTimeout<T>(work: Promise<T>, ms: number, label: string): Promise<T>
   });
 }
 
-/** Maps an HTTP status onto the operator-facing cause. */
+/** Maps an HTTP status onto the operator-facing cause */
 function stateForStatus(status: number): ProviderState {
   if (status === 401) return 'unauthorized';
   if (status === 403) return 'forbidden';
@@ -185,9 +185,9 @@ export interface ProviderStatusPollerOptions {
   // Explicit `| undefined` rather than a bare `?`: under
   // `exactOptionalPropertyTypes` the two differ, and the caller
   // (dashboard/index.ts) passes the result of a build that returns `undefined`
-  // when credentials are missing — which is the normal case here, not an edge.
+  // when credentials are missing — which is the normal case here, not an edge
   alpaca?: AlpacaBrokerClient | undefined;
-  /** Defaults to `process.env.POLYGON_API_KEY`; absent renders Polygon as `not_configured`. */
+  /** Defaults to `process.env.POLYGON_API_KEY`; absent renders Polygon as `not_configured` */
   polygonApiKey?: string;
   polygonBaseUrl?: string;
   intervalMs?: number;
@@ -246,7 +246,7 @@ export class ProviderStatusPoller implements ProviderStatusReader {
     }
   }
 
-  /** Exported behaviour for tests: one probe of each provider, concurrently. */
+  /** Exported behaviour for tests: one probe of each provider, concurrently */
   async pollOnce(): Promise<ProviderStatusPanel> {
     const [alpaca, polygon] = await Promise.all([this.probeAlpaca(), this.probePolygon()]);
     this.panel = { alpaca, polygon };
@@ -263,7 +263,7 @@ export class ProviderStatusPoller implements ProviderStatusReader {
         // `SAMURAI_MODE` (#511): the dashboard builds its client for the same
         // environment the orchestrator trades in, and Alpaca issues a separate
         // key pair per account. Naming only the paper pair sent a live operator
-        // to check a variable that was already set.
+        // to check a variable that was already set
         detail:
           'no Alpaca client wired (ALPACA_API_KEY / ALPACA_API_SECRET unset — or, under ' +
           'SAMURAI_MODE=live, ALPACA_LIVE_API_KEY / ALPACA_LIVE_API_SECRET?)',
@@ -283,7 +283,7 @@ export class ProviderStatusPoller implements ProviderStatusReader {
       if (cash === null || equity === null) {
         // A 200 whose numbers do not parse is not a healthy account — surfacing
         // it as `ok` with a blank balance would read as "zero", which on a
-        // money tile is the one wrong answer that looks like a right one.
+        // money tile is the one wrong answer that looks like a right one
         return {
           provider: 'alpaca',
           state: 'error',
@@ -326,7 +326,7 @@ export class ProviderStatusPoller implements ProviderStatusReader {
         `${this.polygonBaseUrl}${POLYGON_PROBE_PATH}`,
         // Bearer header rather than the `apiKey` query parameter Polygon also
         // accepts: a URL-embedded key ends up in any error message, proxy log
-        // or stack trace that quotes the request URL.
+        // or stack trace that quotes the request URL
         { headers: { Authorization: `Bearer ${this.polygonApiKey}` } },
         PROBE_TIMEOUT_MS,
       );
@@ -354,7 +354,7 @@ export class ProviderStatusPoller implements ProviderStatusReader {
     }
   }
 
-  /** Duck-types `.status` the same way `AnthropicLlmClient.classifyProviderError` does. */
+  /** Duck-types `.status` the same way `AnthropicLlmClient.classifyProviderError` does */
   private stateForError(error: unknown): ProviderState {
     const status = (error as { status?: unknown } | null)?.status;
     return typeof status === 'number' ? stateForStatus(status) : 'error';
@@ -363,7 +363,7 @@ export class ProviderStatusPoller implements ProviderStatusReader {
   /**
    * Truncated, and never interpolating anything credential-shaped: this string
    * is rendered verbatim into a web page, so it is treated as untrusted output
-   * rather than a log line.
+   * rather than a log line
    */
   private describeError(error: unknown): string {
     const message = error instanceof Error ? error.message : String(error);

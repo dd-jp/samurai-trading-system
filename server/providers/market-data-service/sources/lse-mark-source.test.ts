@@ -24,7 +24,7 @@ import {
 const TRADEABLE = new Set(buildRoutingMap().keys());
 const SCREENING = new Set(LSE_ETP_POOL.map((row) => row.screening_instrument));
 
-/** A minute inside an LSE session: 2026-08-18 is a Tuesday; 10:00 London = 09:00Z. */
+/** A minute inside an LSE session: 2026-08-18 is a Tuesday; 10:00 London = 09:00Z */
 const IN_SESSION = new Date('2026-08-18T09:00:00.000Z');
 
 interface FakeClientOptions {
@@ -78,7 +78,7 @@ describe('toBookCurrency', () => {
 
   it("does not mistake 'GBp' for 'GBP' — the 100x trap", () => {
     // The whole reason pence are tested before pounds: these two codes differ
-    // by one character's case and by a factor of 100.
+    // by one character's case and by a factor of 100
     expect(toBookCurrency(100, 'GBp', 'LQQ3', 'v')).toBe(1);
     expect(toBookCurrency(100, 'GBP', 'LQQ3', 'v')).toBe(100);
   });
@@ -109,7 +109,7 @@ describe('LseMarkDataSource — the no-substitution invariant (#734 DoD)', () =>
       await expect(source.fetchMark(screening, IN_SESSION, 'live')).rejects.toThrow(
         NonTradeableInstrumentError,
       );
-      // The refusal happens BEFORE any vendor call — nothing was even asked.
+      // The refusal happens BEFORE any vendor call — nothing was even asked
       expect(client.calls).toEqual([]);
     },
   );
@@ -182,7 +182,7 @@ describe('LseMarkDataSource — the no-substitution invariant (#734 DoD)', () =>
     // The check that a uniform fake cannot make: each row's own declared
     // currency, straight off the checked-in pool. Eight of the eleven declare
     // USD (doc 34 §3.2), so a source built over the whole pool must refuse —
-    // and must refuse HERE, not on the first live read.
+    // and must refuse HERE, not on the first live read
     const declared = new Map(LSE_ETP_POOL.map((row) => [row.lse_ticker, row.currency]));
     expect(
       () =>
@@ -198,7 +198,7 @@ describe('LseMarkDataSource — the no-substitution invariant (#734 DoD)', () =>
       ]),
     );
     // If this is ever empty the pool has no markable line at all, which is a
-    // louder finding than a failing assertion.
+    // louder finding than a failing assertion
     expect(markable.size).toBeGreaterThan(0);
     expect(
       () =>
@@ -227,7 +227,7 @@ describe('LseMarkDataSource — marks', () => {
 
     expect(mark.price).toBeCloseTo(312.4, 10);
     // observed_at is the VENDOR's stamp, not the request time — this is the
-    // field #641 and #640 gate on.
+    // field #641 and #640 gate on
     expect(mark.observed_at).toEqual(observed);
     expect(mark.asset_class).toBe('stocks');
     expect(mark.source).toBe('fake-lse-vendor');
@@ -335,7 +335,7 @@ describe('LseMarkDataSource — bars', () => {
     // 13:00 London (12:00Z) is inside the LSE session; a 07:00Z candle is
     // BEFORE the 08:00 London open and must be dropped by normalization. The
     // US calendar would keep neither/both differently — that is the bug this
-    // guards.
+    // guards
     const source = sourceWith(
       fakeClient({
         bars: {

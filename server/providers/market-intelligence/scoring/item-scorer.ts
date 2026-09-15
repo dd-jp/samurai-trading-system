@@ -48,9 +48,9 @@ import {
 } from '../../../pipeline/debate-engine/index.js';
 import { type Logger, logCaughtFailure } from '../../../shared/index.js';
 
-/** What the model returns for one item. */
+/** What the model returns for one item */
 export interface ItemScore {
-  /** Index into the batch as supplied — the join back to the item. */
+  /** Index into the batch as supplied — the join back to the item */
   index: number;
   sentiment: 1 | 0 | -1;
   confidence: number;
@@ -114,7 +114,7 @@ function isScore(value: unknown): value is ItemScore {
   );
 }
 
-/** Clamped to the same [0.05, 0.95] band the analysts use for their own reads. */
+/** Clamped to the same [0.05, 0.95] band the analysts use for their own reads */
 function clampConfidence(value: number): number {
   return Math.min(0.95, Math.max(0.05, value));
 }
@@ -191,7 +191,7 @@ export async function scoreItems(
         // it names this call on the in-flight gate's own log lines only,
         // matching the sibling convention `market_intelligence_sentiment` /
         // `market_intelligence_retrieval` already use, and never reaches
-        // `llm_spend`.
+        // `llm_spend`
         stage: 'market_intelligence',
         gate_stage: 'market_intelligence_scoring',
       },
@@ -214,7 +214,7 @@ export async function scoreItems(
       // Items were sent (the `items.length === 0` case returned above), so a
       // response that survives validation with nothing left is a scoring
       // failure — the model answered with the wrong shape for every item —
-      // not a legitimate "nothing to score" read.
+      // not a legitimate "nothing to score" read
       if (valid.length === 0) {
         return {
           valid: false as const,
@@ -241,7 +241,7 @@ export async function scoreItems(
     // but reaches a refusal and a truncation too, and the field is what
     // separates them (#1394). It replaces `error_kind`, whose only two values
     // — `malformed_response` and `transport` — called every refusal a
-    // transport fault.
+    // transport fault
     const failure_cause = classifyFailureCause(error);
     if (error instanceof LlmMalformedResponseError) {
       logCaughtFailure(

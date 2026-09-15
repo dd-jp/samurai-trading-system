@@ -20,10 +20,10 @@
 import type { DateRange } from './universe.js';
 import type { MinBtlVerdict, PboVerdict } from './validation-types.js';
 
-/** Euler–Mascheroni constant, from the expected-maximum-of-N-Gaussians term. */
+/** Euler–Mascheroni constant, from the expected-maximum-of-N-Gaussians term */
 const EULER_MASCHERONI = 0.5772156649015329;
 
-/** The spec's kill line: "reject if PBO > 0.05". */
+/** The spec's kill line: "reject if PBO > 0.05" */
 const PBO_REJECT_THRESHOLD = 0.05;
 
 const MS_PER_YEAR = 365.25 * 24 * 60 * 60 * 1000;
@@ -133,7 +133,7 @@ export function deflatedSharpe(
  * offline research were given.
  */
 function expectedMaxOfNSharpes(nTrials: number, sampleLen: number): number {
-  // One trial is no search: nothing to deflate, and Z⁻¹(0) would diverge.
+  // One trial is no search: nothing to deflate, and Z⁻¹(0) would diverge
   if (nTrials === 1) {
     return 0;
   }
@@ -282,7 +282,7 @@ function minimumBacktestLengthYears(nTrials: number, expectedAnnualSharpe: numbe
   return term ** 2 / expectedAnnualSharpe ** 2;
 }
 
-/** Φ(z), via the Abramowitz & Stegun 7.1.26 error-function approximation. */
+/** Φ(z), via the Abramowitz & Stegun 7.1.26 error-function approximation */
 function normalCdf(z: number): number {
   return 0.5 * (1 + erf(z / Math.SQRT2));
 }
@@ -304,14 +304,14 @@ function erf(x: number): number {
   return sign * y;
 }
 
-/** Φ⁻¹(p), via Acklam's rational approximation (|error| < 1.15e-9). */
+/** Φ⁻¹(p), via Acklam's rational approximation (|error| < 1.15e-9) */
 function inverseNormalCdf(p: number): number {
   if (p <= 0 || p >= 1) {
     throw new Error(`inverseNormalCdf: p must be in (0, 1) (got ${p}).`);
   }
 
   // `as const` fixes these as tuples, so the coefficient reads below are
-  // statically known to exist rather than `number | undefined`.
+  // statically known to exist rather than `number | undefined`
   const a = [
     -3.969683028665376e1, 2.209460984245205e2, -2.759285104469687e2, 1.38357751867269e2,
     -3.066479806614716e1, 2.506628277459239,
@@ -377,7 +377,7 @@ function argMax(values: readonly number[]): number {
   return best;
 }
 
-/** One config's scores on the given folds. */
+/** One config's scores on the given folds */
 function scores(row: readonly number[], folds: readonly number[]): number[] {
   return folds.map((fold) => at(row, fold));
 }
@@ -398,7 +398,7 @@ function at(values: readonly number[], index: number): number {
   return value;
 }
 
-/** All ascending index combinations of `choose` out of `n`. */
+/** All ascending index combinations of `choose` out of `n` */
 function combinations(n: number, choose: number): number[][] {
   const result: number[][] = [];
 
@@ -416,7 +416,7 @@ function combinations(n: number, choose: number): number[][] {
   return result;
 }
 
-/** @returns the fold count. */
+/** @returns the fold count */
 function assertUsableMatrix(performance: readonly (readonly number[])[]): number {
   const [first] = performance;
 

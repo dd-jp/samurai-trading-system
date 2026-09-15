@@ -61,7 +61,7 @@ describe('SqliteFeedbackCycleScheduleStore', () => {
   /**
    * Pass-2 #1110 fix (finding 1): the attempt marker is independent of the
    * completion one — a different row (`key = 'attempt'`), not a second read
-   * of the same column.
+   * of the same column
    */
   describe('attemptedBoundary / recordAttempt', () => {
     it('reports no attempt yet for a virgin store', () => {
@@ -81,7 +81,7 @@ describe('SqliteFeedbackCycleScheduleStore', () => {
       expect(store.attemptedBoundary()).toEqual(boundary);
       // The completion row is untouched by an attempt-only write — this is
       // what lets `runIfDue` tell "attempted but not completed" apart from
-      // "completed".
+      // "completed"
       expect(store.lastBoundary()).toBeNull();
     });
 

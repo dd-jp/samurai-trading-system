@@ -24,11 +24,11 @@
  * text or response body reaches it.
  */
 export interface UnresolvedPriceUnitAlert {
-  /** The lot's own `idempotency_key` (the bracket's `client_order_id`). */
+  /** The lot's own `idempotency_key` (the bracket's `client_order_id`) */
   client_order_id: string;
-  /** The activity row's `LogId` — the venue-side handle for the refused fill. */
+  /** The activity row's `LogId` — the venue-side handle for the refused fill */
   broker_fill_id: string;
-  /** The Uic no pool line resolves; the operator's starting point. */
+  /** The Uic no pool line resolves; the operator's starting point */
   uic: number;
   observed_at: Date;
 }

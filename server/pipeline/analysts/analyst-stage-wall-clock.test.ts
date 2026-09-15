@@ -30,7 +30,7 @@ const ASOF = new Date('2026-09-14T14:00:00Z');
 const CLOCK: Clock = { now: () => ASOF };
 const SIGNAL = { asset: 'QQQ', asset_class: 'stocks' } as const;
 
-/** Never settles, so every attempt can only end at the deadline. */
+/** Never settles, so every attempt can only end at the deadline */
 function stallingAnalyst(analyst_type: string): Analyst {
   return {
     analyst_type,

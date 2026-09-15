@@ -29,15 +29,15 @@ import { delay } from './delay.js';
  * recoverable by summing, and the per-attempt one is not recoverable from it.
  */
 export interface RetryAttemptReport {
-  /** 1-based index of the attempt that just failed. */
+  /** 1-based index of the attempt that just failed */
   attempt: number;
-  /** `RetryConfig.maxAttempts`, so a reader need not look up the config to see how many are left. */
+  /** `RetryConfig.maxAttempts`, so a reader need not look up the config to see how many are left */
   maxAttempts: number;
-  /** How long the failed attempt itself ran, in milliseconds. */
+  /** How long the failed attempt itself ran, in milliseconds */
   elapsed_ms: number;
-  /** The backoff about to be slept before the next attempt. */
+  /** The backoff about to be slept before the next attempt */
   delay_ms: number;
-  /** The error that made the attempt retryable. */
+  /** The error that made the attempt retryable */
   error: unknown;
 }
 
@@ -48,7 +48,7 @@ export interface RetryConfig {
   /** Total attempts including the first, e.g. 3 = up to 2 retries. */
   maxAttempts: number;
   baseDelayMs: number;
-  /** Backoff is capped here so a long-running provider outage doesn't blow the caller's latency budget. */
+  /** Backoff is capped here so a long-running provider outage doesn't blow the caller's latency budget */
   maxDelayMs: number;
 }
 
@@ -145,7 +145,7 @@ export async function withRetry<T>(
   for (let attempt = 1; attempt <= config.maxAttempts; attempt++) {
     // Real elapsed time, not the injected `Clock`: the backtest harness steps
     // that clock by hand and would report every attempt as instantaneous,
-    // which is the exact figure this observer exists to produce.
+    // which is the exact figure this observer exists to produce
     const startedAt = Date.now();
     try {
       return await fn();
@@ -165,13 +165,13 @@ export async function withRetry<T>(
             error,
           });
         } catch {
-          // See the doc comment: telemetry must not mask the provider error.
+          // See the doc comment: telemetry must not mask the provider error
         }
       }
       await delay(delay_ms);
     }
   }
 
-  // Unreachable: the loop always either returns or throws.
+  // Unreachable: the loop always either returns or throws
   throw lastError;
 }

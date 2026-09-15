@@ -68,9 +68,9 @@
  * per seam — the risk/verdict seams understate exposure in `risk_log`, while
  * the trader seam leaves the intent's price fields meaningless.
  */
-/** One exit priced against a book that could not be fully valued. */
+/** One exit priced against a book that could not be fully valued */
 export interface ExitValuationDegradedAlert {
-  /** The instrument being EXITED — not the one that could not be valued. */
+  /** The instrument being EXITED — not the one that could not be valued */
   instrument: string;
   /**
    * Which seam degraded. `risk` and `verdict` both re-derive the portfolio for

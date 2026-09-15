@@ -51,7 +51,7 @@ import {
 
 const NOW = new Date('2026-07-20T16:00:00Z');
 // Comfortably past `TERMINAL_SWEEP_AGE_MS` (24h) — old enough for the sweep
-// to act on, the same margin `smoke-run.ts`'s scenario 6 seeds.
+// to act on, the same margin `smoke-run.ts`'s scenario 6 seeds
 const OLD_DECISION_TIMESTAMP = new Date(NOW.getTime() - TERMINAL_SWEEP_AGE_MS - 60 * 60 * 1_000);
 
 /**
@@ -91,7 +91,7 @@ class NoOpBroker implements BrokerAdapter {
   }
 }
 
-/** A terminal, size-0 `rejected` lot, old enough for `sweepTerminalPositions` to delete. */
+/** A terminal, size-0 `rejected` lot, old enough for `sweepTerminalPositions` to delete */
 async function seedOldRejectedPosition(store: ExecutionSharedStore): Promise<void> {
   const position: OpenPosition = {
     idempotency_key: 'key-old-rejected',
@@ -115,7 +115,7 @@ async function seedOldRejectedPosition(store: ExecutionSharedStore): Promise<voi
   await store.writeAheadPosition(position);
 }
 
-/** Same device as `filled-zero-size-wiring.test.ts`'s `stubConfig` — see its own doc for why. */
+/** Same device as `filled-zero-size-wiring.test.ts`'s `stubConfig` — see its own doc for why */
 type StubConfig = ProductionConfig & Required<Pick<ProductionConfig, 'alpacaBrokerClient'>>;
 
 function stubConfig(db: StoreHandle, logger: Logger): StubConfig {
@@ -214,14 +214,14 @@ describe('the #1088 terminal-row sweep is wired through the real composition roo
     await seedOldRejectedPosition(components.executionStore);
 
     // What `reconcileExecution` actually is in production —
-    // `buildExecutionSurface(components.executionDeps, ...)`.
+    // `buildExecutionSurface(components.executionDeps, ...)`
     const surface = buildExecutionSurface(components.executionDeps, 'trace-terminal-sweep-wiring');
     const report = await surface.reconcile();
 
     expect(report.swept).toBe(1);
 
     // Raw read — `getOpenPositions()` would never have shown a terminal row
-    // either way, so it cannot distinguish "swept" from "was never open".
+    // either way, so it cannot distinguish "swept" from "was never open"
     const row = db
       .prepare('SELECT 1 FROM open_positions WHERE idempotency_key = ?')
       .get('key-old-rejected');

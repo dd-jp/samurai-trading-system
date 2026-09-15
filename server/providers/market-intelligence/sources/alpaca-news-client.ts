@@ -29,7 +29,7 @@ import { TokenBucket } from '../../../shared/index.js';
 
 const DEFAULT_BASE_URL = 'https://data.alpaca.markets';
 
-/** Alpaca's documented per-request ceiling for news. */
+/** Alpaca's documented per-request ceiling for news */
 const PAGE_LIMIT = 50;
 
 /**
@@ -39,24 +39,24 @@ const PAGE_LIMIT = 50;
  */
 const MAX_PAGES = 40;
 
-/** Alpaca free allows 200 req/min; this stays well inside it. */
+/** Alpaca free allows 200 req/min; this stays well inside it */
 const DEFAULT_PACING = { capacity: 5, refillPerSecond: 2 } as const;
 
-/** One news article as the wire delivers it, after validation. */
+/** One news article as the wire delivers it, after validation */
 export interface AlpacaNewsArticle {
-  /** int64 on the wire; carried as string because `native_id` is TEXT (#554). */
+  /** int64 on the wire; carried as string because `native_id` is TEXT (#554) */
   id: string;
   headline: string;
   summary: string;
-  /** The tickers this article is about — one article becomes one item PER symbol. */
+  /** The tickers this article is about — one article becomes one item PER symbol */
   symbols: string[];
   source: string;
   url: string;
   /** Publisher time. NOT our knowledge time; see `ingested_at` in the archive. */
   created_at: Date;
-  /** Vendor revision stamp — orders revisions, never gates visibility (#558). */
+  /** Vendor revision stamp — orders revisions, never gates visibility (#558) */
   updated_at: Date;
-  /** The exact bytes, for the archive's raw table (#554 re-normalizability). */
+  /** The exact bytes, for the archive's raw table (#554 re-normalizability) */
   payload: string;
 }
 
@@ -107,7 +107,7 @@ function validateArticle(raw: unknown): AlpacaNewsArticle {
   if (Number.isNaN(created)) return bad();
   // Alpaca always sends `updated_at`, but an article that has never been
   // revised is legitimately equal to its creation — so absence falls back to
-  // `created_at` rather than failing the whole batch.
+  // `created_at` rather than failing the whole batch
   const updatedRaw =
     typeof article.updated_at === 'string' ? Date.parse(article.updated_at) : Number.NaN;
   const updated = Number.isNaN(updatedRaw) ? created : updatedRaw;
@@ -141,7 +141,7 @@ export class AlpacaNewsClient {
     const secret = options.apiSecret ?? process.env.ALPACA_API_SECRET;
     // Checked in the constructor rather than at first use: a refresh loop that
     // discovers missing credentials on its first poll fails inside the tick,
-    // where it reads as "no news today" rather than as a misconfiguration.
+    // where it reads as "no news today" rather than as a misconfiguration
     if (key === undefined || key.length === 0) {
       throw new Error(
         'AlpacaNewsClient: ALPACA_API_KEY is not set. Provide it via the environment ' +

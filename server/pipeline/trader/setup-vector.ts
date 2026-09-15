@@ -19,15 +19,15 @@ import type { Bar } from '../../providers/market-data-service/index.js';
 import type { SetupVector } from '../../shared/index.js';
 import type { DebateResult } from '../debate-engine/index.js';
 
-/** The priced context `decide()` has already computed by embedding time. */
+/** The priced context `decide()` has already computed by embedding time */
 export interface SetupMarketContext {
   /** Mark price at the decision bar. Must be finite and non-zero. */
   entry: number;
-  /** ATR over `config.atr_lookback`, in price units. */
+  /** ATR over `config.atr_lookback`, in price units */
   atr: number;
-  /** `atr_k x max(ATR, vol_floor)` — carries whether the floor was engaged. */
+  /** `atr_k x max(ATR, vol_floor)` — carries whether the floor was engaged */
   stopDistance: number;
-  /** The same window ATR was computed from, ascending by close_time. */
+  /** The same window ATR was computed from, ascending by close_time */
   bars: Bar[];
 }
 
@@ -86,12 +86,12 @@ export function buildSetupVector(debate: DebateResult, market: SetupMarketContex
     market_features: [
       // Volatility as a fraction of price — the "volatility bucket", left
       // continuous rather than bucketed so near-identical regimes stay near
-      // each other in cosine space instead of snapping to bucket edges.
+      // each other in cosine space instead of snapping to bucket edges
       atr / entry,
       trendOver(bars),
       // Stop width as a fraction of price. Equals `atr_k x (atr/entry)` unless
       // the vol floor was engaged, so it is exactly the feature that tells a
-      // floored (ultra-low-vol) setup apart from a genuinely quiet one.
+      // floored (ultra-low-vol) setup apart from a genuinely quiet one
       stopDistance / entry,
     ],
   };

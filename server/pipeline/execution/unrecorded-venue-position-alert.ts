@@ -45,19 +45,19 @@
  * account identifier, no store row reaches an implementation of this port.
  */
 
-/** One instrument the venue holds a position in that no open lot explains. */
+/** One instrument the venue holds a position in that no open lot explains */
 export interface UnrecordedVenuePositionAlert {
   /**
    * The `ExecutionInput.trace_id` of the Execution SURFACE this alert was
    * raised on — the control-arm-distinguishing role
    * `ResidualExposureAlert.trace_id` documents (#1348), and the field the
-   * catalogue's `page` predicate reads to keep the control arm off the phone.
+   * catalogue's `page` predicate reads to keep the control arm off the phone
    */
   trace_id: string;
   instrument: string;
-  /** The venue's netted quantity, signed by direction exactly as `NormalizedPosition.qty` is. */
+  /** The venue's netted quantity, signed by direction exactly as `NormalizedPosition.qty` is */
   qty: number;
-  /** The venue's netted direction, verbatim from `NormalizedPosition.side`. */
+  /** The venue's netted direction, verbatim from `NormalizedPosition.side` */
   side: 'buy' | 'sell';
   observed_at: Date;
 }

@@ -47,13 +47,13 @@ import { resolveMiSubject } from '../../../providers/universe-pool/index.js';
 import type { AssetClass, InstrumentSubclass, Logger } from '../../../shared/index.js';
 import { describeThrownSafely, escalatesAt } from '../../../shared/index.js';
 
-/** The bucket a per-subclass counter uses when the universe declares no subclass for a name. */
+/** The bucket a per-subclass counter uses when the universe declares no subclass for a name */
 export const UNCLASSIFIED_SUBCLASS = 'unclassified' as const;
 
-/** Every bucket a per-subclass counter can report — the pool-file subclasses, plus the sentinel above. */
+/** Every bucket a per-subclass counter can report — the pool-file subclasses, plus the sentinel above */
 export type CoverageSubclass = InstrumentSubclass | typeof UNCLASSIFIED_SUBCLASS;
 
-/** `instrument -> subclass`, or `UNCLASSIFIED_SUBCLASS` when the universe declares none. */
+/** `instrument -> subclass`, or `UNCLASSIFIED_SUBCLASS` when the universe declares none */
 export function subclassFor(
   instrument: string,
   subclassOf: Readonly<Record<string, InstrumentSubclass>>,
@@ -67,16 +67,16 @@ export function subclassFor(
  * (`MI_CONTEXT_WINDOW_MS` in each analyst), so "no scored item inside the
  * staleness window" means the same window the debate itself sees, not a
  * separately-tunable number a coverage check and the analysts could disagree
- * about.
+ * about
  */
 export const COVERAGE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-/** The counter name behind every `MiCoverageTelemetry.noDataObserved` call, keyed by instrument. */
+/** The counter name behind every `MiCoverageTelemetry.noDataObserved` call, keyed by instrument */
 export const MI_NO_DATA_BY_NAME_COUNTER = 'mi_no_data_by_name';
-/** The counter name behind every `MiCoverageTelemetry.noDataObserved` call, keyed by subclass. */
+/** The counter name behind every `MiCoverageTelemetry.noDataObserved` call, keyed by subclass */
 export const MI_NO_DATA_BY_SUBCLASS_COUNTER = 'mi_no_data_by_subclass';
 
-/** One instrument's coverage check, at one tick, that came back empty. */
+/** One instrument's coverage check, at one tick, that came back empty */
 export interface MiCoverageEvent {
   trace_id: string;
   instrument: string;
@@ -121,7 +121,7 @@ export interface MiCoverageAlertChannel {
   postCoverageAlert(alert: MiCoverageAlert): Promise<void>;
 }
 
-/** The one method the coverage check calls on `MarketIntelligenceStore`. */
+/** The one method the coverage check calls on `MarketIntelligenceStore` */
 export interface MiCoverageContextSource {
   getContext(assetClass: AssetClass, timeWindowMs: number, trace_id: string): MarketContext;
 }
@@ -138,14 +138,14 @@ export function hasCoverageFor(context: MarketContext, instrument: string): bool
   );
 }
 
-/** Alert on the first miss, like `TraderDiagnosticThrottle` (#698) — every kind here is a gap that should not persist. */
+/** Alert on the first miss, like `TraderDiagnosticThrottle` (#698) — every kind here is a gap that should not persist */
 export const ALERT_AFTER_CONSECUTIVE_NO_DATA = 1;
 
 /**
  * How often the alert repeats while the gap persists, counted in further
  * consecutive misses after the first alert — same bounded-repeat convention
  * as `ALERT_REPEAT_EVERY_SKIPS`/`ALERT_REPEAT_EVERY_DIAGNOSTICS`: loud once,
- * not flooding the escalation chat every tick.
+ * not flooding the escalation chat every tick
  */
 export const ALERT_REPEAT_EVERY_NO_DATA = 8;
 
@@ -186,7 +186,7 @@ export class MiCoverageMonitor {
   readonly #currentlyMissing = new Set<string>();
   #everDegraded = false;
 
-  /** True while at least one observed instrument currently has no coverage. */
+  /** True while at least one observed instrument currently has no coverage */
   get degraded(): boolean {
     return this.#currentlyMissing.size > 0;
   }
@@ -196,7 +196,7 @@ export class MiCoverageMonitor {
     return this.#everDegraded;
   }
 
-  /** The instruments currently missing coverage, for a diagnostic read (not used to gate anything). */
+  /** The instruments currently missing coverage, for a diagnostic read (not used to gate anything) */
   get missingInstruments(): readonly string[] {
     return Array.from(this.#currentlyMissing);
   }
@@ -294,13 +294,13 @@ export async function checkMiCoverage(
   // identity for every non-pool instrument), so coverage must ask the same
   // question the analysts now ask, or an LSE row would read as permanently
   // uncovered even when its underlying has fresh items — the wrong instrument
-  // compared to the right entity.
+  // compared to the right entity
   const covered = hasCoverageFor(context, resolveMiSubject(params.instrument));
   const subclass = subclassFor(params.instrument, deps.subclassOf);
 
   // ALWAYS, whatever the refresh timing is (#1085): the counter is the
   // measurement, and a rate whose denominator silently dropped the ticks
-  // before MI's first sweep would be the wrong number, not a quieter one.
+  // before MI's first sweep would be the wrong number, not a quieter one
   if (!covered) {
     deps.telemetry.noDataObserved({
       trace_id: params.trace_id,
@@ -318,7 +318,7 @@ export async function checkMiCoverage(
   // the next 8 misses before speaking: a gap meant to hold one tick would
   // silence the first real one. Not observing at all leaves the run's
   // `degraded`/`everDegraded` flags saying what they should — "MI has not
-  // looked yet" is not "this name has no coverage".
+  // looked yet" is not "this name has no coverage"
   if (deps.refreshAttempted?.(params.instrument) === false) return;
 
   const { alert } = deps.monitor.observe(params.instrument, covered);

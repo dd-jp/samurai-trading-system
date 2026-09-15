@@ -121,7 +121,7 @@ export function assertFlattenWindowCoversTickInterval(
   // substitutes only for null/undefined, so a configured `0` survives the
   // nullish coalesce, `required` becomes 0, and every window on earth clears
   // it — including one that disables flat-by-close outright. An assertion whose
-  // failure mode is silent approval is worse than no assertion.
+  // failure mode is silent approval is worse than no assertion
   if (!Number.isFinite(tickIntervalMs) || tickIntervalMs <= 0) {
     throw new Error(
       `tickIntervalMs must be a positive, finite number of milliseconds, got ${tickIntervalMs}. ` +
@@ -146,7 +146,7 @@ export function assertFlattenWindowCoversTickInterval(
 
   // #1389's grace, checked here because it is the same invariant one bell
   // later: the grace is also a set of instants at which flattening becomes
-  // POSSIBLE, and a tick still has to land in it.
+  // POSSIBLE, and a tick still has to land in it
   //
   // ONE tick, not `MIN_TICKS_INSIDE_FLATTEN_WINDOW`. The pre-close window's
   // second tick buys tolerance for one arbitrary lost tick on the path that
@@ -154,9 +154,9 @@ export function assertFlattenWindowCoversTickInterval(
   // SECOND chance, reached only when the pre-close window's own guaranteed
   // ticks were already missed — so requiring the same margin twice would price
   // a backstop as if it were the primary, and every extra minute of grace is
-  // spent against gate 2a's 15-minute ceiling (see `flatten_after_close_ms`).
+  // spent against gate 2a's 15-minute ceiling (see `flatten_after_close_ms`)
   // What this refuses is the degenerate case: a grace no tick can land in at
-  // all, which is a grace that silently does not exist.
+  // all, which is a grace that silently does not exist
   const grace = traderConfig.flatten_after_close_ms;
   if (grace < tickIntervalMs) {
     throw new Error(

@@ -33,15 +33,15 @@
  * every alert port in this repo draws.
  */
 
-/** Both protective legs of one emulated OCO reported filled. */
+/** Both protective legs of one emulated OCO reported filled */
 export interface OcoDoubleFillAlert {
-  /** The lot's own `idempotency_key` (the bracket's `client_order_id`). */
+  /** The lot's own `idempotency_key` (the bracket's `client_order_id`) */
   client_order_id: string;
-  /** Repo-form instrument (`BTC-USD`), never the venue's slash form. */
+  /** Repo-form instrument (`BTC-USD`), never the venue's slash form */
   instrument: string;
-  /** The venue order id of the filled stop leg. */
+  /** The venue order id of the filled stop leg */
   stop_order_id: string;
-  /** The venue order id of the filled take-profit leg. */
+  /** The venue order id of the filled take-profit leg */
   target_order_id: string;
   observed_at: Date;
 }

@@ -113,7 +113,7 @@ function makeGo(orderOverrides: Partial<OrderIntent> = {}): VerdictDecision {
   };
 }
 
-/** The lot as `execute()`'s write-ahead leaves it, before any broker ack. */
+/** The lot as `execute()`'s write-ahead leaves it, before any broker ack */
 function pendingPosition(overrides: Partial<OpenPosition> = {}): OpenPosition {
   return {
     idempotency_key: KEY,
@@ -147,7 +147,7 @@ function makeBroker(): BrokerAdapter & {
   failLookup: string | null;
   venuePositions: NormalizedPosition[];
   failPositions: string | null;
-  /** #519/#526: what `resumeFlatten` answers, keyed the same way `book` is for `getOrder`. */
+  /** #519/#526: what `resumeFlatten` answers, keyed the same way `book` is for `getOrder` */
   flattenBook: Map<string, NormalizedOrder>;
   /**
    * Ignorance, not absence, for `resumeFlatten` — mirrors `failLookup`. It
@@ -159,15 +159,15 @@ function makeBroker(): BrokerAdapter & {
    * failing`).
    */
   failFlattenLookup: string | null;
-  /** Every `resumeFlatten` call, in order — so a test can assert it ran (or didn't). */
+  /** Every `resumeFlatten` call, in order — so a test can assert it ran (or didn't) */
   resumeFlattenCalls: string[];
-  /** Every `cancel` call, in order, with the args it was given. */
+  /** Every `cancel` call, in order, with the args it was given */
   cancelCalls: Array<{ client_order_id: string; instrument: string }>;
-  /** A venue that refuses the cancel — the case that must leave the row blocking. */
+  /** A venue that refuses the cancel — the case that must leave the row blocking */
   failCancel: string | null;
-  /** Fires inside `cancel`, so a test can move the venue's book while it is in flight. */
+  /** Fires inside `cancel`, so a test can move the venue's book while it is in flight */
   onCancel: (() => void) | null;
-  /** How many times the venue's position book was read — what the #1500 throttles bound. */
+  /** How many times the venue's position book was read — what the #1500 throttles bound */
   venueReads: number;
 } {
   return {
@@ -196,7 +196,7 @@ function makeBroker(): BrokerAdapter & {
     },
 
     async getOrder(clientOrderId: string): Promise<NormalizedOrder | null> {
-      // Ignorance, not absence — the contract says throw rather than null.
+      // Ignorance, not absence — the contract says throw rather than null
       if (this.failLookup !== null) throw new Error(this.failLookup);
       return this.book.get(clientOrderId) ?? null;
     },
@@ -205,7 +205,7 @@ function makeBroker(): BrokerAdapter & {
     // — a flatten's client_order_id never collides with a bracket's, but
     // keeping the maps separate mirrors the production adapters' own
     // `brackets`/`flattens` split (alpaca-adapter.ts) rather than assuming
-    // it away.
+    // it away
     async resumeFlatten(clientOrderId: string): Promise<NormalizedOrder | null> {
       this.resumeFlattenCalls.push(clientOrderId);
       if (this.failFlattenLookup !== null) throw new Error(this.failFlattenLookup);
@@ -223,7 +223,7 @@ function makeBroker(): BrokerAdapter & {
 
     // #429. `venuePositions` is what the venue holds; `failPositions` makes the
     // positions endpoint unreachable, the case that must degrade to a report
-    // rather than lose the store-side pass that already ran.
+    // rather than lose the store-side pass that already ran
     venuePositions: [] as NormalizedPosition[],
     failPositions: null as string | null,
     async getOpenPositions(): Promise<NormalizedPosition[]> {
@@ -242,7 +242,7 @@ function makeBroker(): BrokerAdapter & {
       this.onCancel?.();
       if (this.failCancel !== null) throw new Error(this.failCancel);
     },
-    /** A venue whose book moves while the cancel is in flight. */
+    /** A venue whose book moves while the cancel is in flight */
     onCancel: null as (() => void) | null,
   };
 }
@@ -277,7 +277,7 @@ function makeInput(
     broker,
     store,
     // Reconciliation touches neither: it reads the venue's order book, not
-    // modelled fills or market context.
+    // modelled fills or market context
     costModel: {} as CostModel,
     marketData: {} as MarketDataService,
     config,
@@ -294,12 +294,12 @@ function makeInput(
 
 describe('reconcile — crash between write-ahead and broker ack', () => {
   it('marks the lot rejected when the venue never received the order, and the replay does not double-submit', async () => {
-    // The crash: write-ahead is durable, the broker call never landed.
+    // The crash: write-ahead is durable, the broker call never landed
     const { store } = openTestExecutionStore();
     await store.writeAheadPosition(pendingPosition());
     const broker = makeBroker();
 
-    // Restart: a brand-new Execution over the surviving store + live venue.
+    // Restart: a brand-new Execution over the surviving store + live venue
     const restarted = new ExecutionImpl(makeInput(store, broker));
     const report = await restarted.reconcile();
 
@@ -315,14 +315,14 @@ describe('reconcile — crash between write-ahead and broker ack', () => {
     });
     expect((await store.getPosition(KEY))?.order_state).toBe('rejected');
 
-    // Nothing was resubmitted by reconcile itself.
+    // Nothing was resubmitted by reconcile itself
     expect(broker.submits).toHaveLength(0);
 
-    // AC: exactly one order exists — the write-ahead record, now settled.
+    // AC: exactly one order exists — the write-ahead record, now settled
     expect(await store.countAllPositions()).toBe(1);
 
     // And the decision replaying (the same bar re-processed after restart)
-    // still cannot reach the venue: the surviving record dedupes it.
+    // still cannot reach the venue: the surviving record dedupes it
     const replay = await restarted.execute(makeGo());
     expect(replay.status).toBe('deduped');
     expect(broker.submits).toHaveLength(0);
@@ -331,7 +331,7 @@ describe('reconcile — crash between write-ahead and broker ack', () => {
 
   it('adopts the broker state when the order did land, and the replay still does not double-submit', async () => {
     // The other side of the same crash: the bracket reached the venue, the
-    // ack never reached us.
+    // ack never reached us
     const { store } = openTestExecutionStore();
     await store.writeAheadPosition(pendingPosition());
     const broker = makeBroker();
@@ -356,7 +356,7 @@ describe('reconcile — crash between write-ahead and broker ack', () => {
     const settled = await store.getPosition(KEY);
     expect(settled?.order_state).toBe('submitted');
     // The venue's leg ids are adopted too — without them there is nothing to
-    // cancel the bracket by.
+    // cancel the bracket by
     expect(settled?.broker_order_ids).toEqual([`${KEY}:entry`, `${KEY}:stop`]);
 
     expect(await store.countAllPositions()).toBe(1);
@@ -370,14 +370,14 @@ describe('reconcile — crash between write-ahead and broker ack', () => {
   it('recovers a real crash mid-submit: the same decision, executed twice across a restart, reaches the venue once', async () => {
     // End-to-end version of the AC, driving execute() rather than seeding the
     // store by hand. The broker accepts the bracket, then the process "dies"
-    // before the ack is persisted.
+    // before the ack is persisted
     const { store } = openTestExecutionStore();
     const broker = makeBroker();
     const crashing = {
       ...broker,
       async submitBracket(order: NativeBracketRequest): Promise<BrokerAck> {
         await broker.submitBracket(order);
-        // The venue has it; we never learn so.
+        // The venue has it; we never learn so
         throw new Error('connection lost before ack');
       },
     };
@@ -386,11 +386,11 @@ describe('reconcile — crash between write-ahead and broker ack', () => {
     const crashed = await before.execute(makeGo());
     expect(crashed.status).toBe('error');
     // The write-ahead survives the failed submit — that is what makes this
-    // recoverable rather than an invisible order.
+    // recoverable rather than an invisible order
     expect((await store.getPosition(KEY))?.order_state).toBe('pending');
     expect(broker.submits).toHaveLength(1);
 
-    // Restart, reconcile, then replay the decision.
+    // Restart, reconcile, then replay the decision
     const after = new ExecutionImpl(makeInput(store, broker));
     await after.reconcile();
     expect((await store.getPosition(KEY))?.order_state).toBe('submitted');
@@ -398,7 +398,7 @@ describe('reconcile — crash between write-ahead and broker ack', () => {
     const replay = await after.execute(makeGo());
     expect(replay.status).toBe('deduped');
 
-    // Exactly one order at the venue, exactly one record in the store.
+    // Exactly one order at the venue, exactly one record in the store
     expect(broker.submits).toHaveLength(1);
     expect(await store.countAllPositions()).toBe(1);
   });
@@ -411,7 +411,7 @@ describe('reconcile — store-vs-broker divergence', () => {
       pendingPosition({ order_state: 'submitted', broker_order_ids: [`${KEY}:entry`] }),
     );
     const broker = makeBroker();
-    // The venue filled it while we were down.
+    // The venue filled it while we were down
     broker.book.set(KEY, {
       client_order_id: KEY,
       broker_order_ids: [`${KEY}:entry`],
@@ -446,9 +446,9 @@ describe('reconcile — store-vs-broker divergence', () => {
 
     // Adopting the state must not invent a quantity: ingestFills() rebuilds
     // filled_size from the persisted Fill rows, and reconcile writing it here
-    // would fight that reconstruction.
+    // would fight that reconstruction
     expect((await store.getPosition(KEY))?.filled_size).toBe(0);
-    // Still non-terminal, so it stays visible to ingestFills().
+    // Still non-terminal, so it stays visible to ingestFills()
     expect((await store.getOpenPositions()).map((p) => p.idempotency_key)).toEqual([KEY]);
   });
 
@@ -505,7 +505,7 @@ describe('reconcile — scope and safety', () => {
     const report = await new ExecutionImpl(makeInput(store, broker)).reconcile();
 
     // Ignorance is not evidence: marking this rejected would bury a position
-    // that may well be live and filled.
+    // that may well be live and filled
     expect((await store.getPosition(KEY))?.order_state).toBe('pending');
     expect(store.writeLog).toEqual([]);
     expect(report.corrected).toBe(0);
@@ -541,7 +541,7 @@ describe('reconcile — scope and safety', () => {
       'key-submitted',
     ]);
     // The fill-driven states are untouched — their filled_size/avg price are
-    // reconstructed from Fill rows, not from a venue order summary.
+    // reconstructed from Fill rows, not from a venue order summary
     expect((await store.getPosition('key-partial'))?.order_state).toBe('partially_filled');
     expect((await store.getPosition('key-filled'))?.order_state).toBe('filled');
   });
@@ -667,7 +667,7 @@ describe('reconcile — the terminal-row sweep (#1088)', () => {
     const broker = makeBroker();
     // Matches the store row exactly (`agrees()`), so reconcileLot writes
     // nothing and the row stays `pending` — never terminal, so the sweep
-    // was never going to touch it either way; this asserts that directly.
+    // was never going to touch it either way; this asserts that directly
     broker.book.set('key-live', {
       client_order_id: 'key-live',
       broker_order_ids: [],
@@ -686,7 +686,7 @@ describe('reconcile — the terminal-row sweep (#1088)', () => {
       'seeded live rows plus old and recent terminal rows',
     async () => {
       const { store } = openTestExecutionStore();
-      // Two live lots the recovery path must still see afterward.
+      // Two live lots the recovery path must still see afterward
       await store.writeAheadPosition(
         pendingPosition({
           idempotency_key: 'key-live-1',
@@ -705,7 +705,7 @@ describe('reconcile — the terminal-row sweep (#1088)', () => {
           decision_timestamp: OLD_ENOUGH,
         }),
       );
-      // Terminal rows: some sweepable, some not (per the rules above).
+      // Terminal rows: some sweepable, some not (per the rules above)
       await store.writeAheadPosition(
         pendingPosition({
           idempotency_key: 'key-term-old-rejected',
@@ -734,7 +734,7 @@ describe('reconcile — the terminal-row sweep (#1088)', () => {
       const broker = makeBroker();
       // Matches the store row exactly, so this lot agrees and is untouched
       // by the in-flight reconciliation — it must stay live through the
-      // SAME pass that runs the sweep, not just survive a later one.
+      // SAME pass that runs the sweep, not just survive a later one
       broker.book.set('key-live-1', {
         client_order_id: 'key-live-1',
         broker_order_ids: [],
@@ -742,23 +742,23 @@ describe('reconcile — the terminal-row sweep (#1088)', () => {
         filled_qty: 0,
       });
 
-      // Recovery BEFORE the sweep-bearing reconcile pass runs.
+      // Recovery BEFORE the sweep-bearing reconcile pass runs
       const before = await store.getOpenPositions();
 
       const report = await new ExecutionImpl(makeInput(store, broker)).reconcile();
       expect(report.swept).toBe(1); // only key-term-old-rejected
 
-      // Recovery AFTER — same live set, by key and by order_state.
+      // Recovery AFTER — same live set, by key and by order_state
       const after = await store.getOpenPositions();
       expect(after.map((p) => p.idempotency_key).sort()).toEqual(
         before.map((p) => p.idempotency_key).sort(),
       );
       expect(after.map((p) => p.idempotency_key).sort()).toEqual(['key-live-1', 'key-live-2']);
 
-      // The non-swept terminal rows are still present (just not "open").
+      // The non-swept terminal rows are still present (just not "open")
       expect(await store.getPosition('key-term-recent-cancelled')).not.toBeNull();
       expect(await store.getPosition('key-term-old-closed')).not.toBeNull();
-      // The swept one is gone.
+      // The swept one is gone
       expect(await store.getPosition('key-term-old-rejected')).toBeNull();
     },
   );
@@ -788,7 +788,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
       lot_held_quantities: [{ idempotency_key: 'key-aapl-entry', held: 10 }],
       exit_reason: 'flatten',
       // #1001 — every write-ahead call site provides a value (possibly null,
-      // never omitted; see `FlattenSubmissionWriteAhead`'s own doc).
+      // never omitted; see `FlattenSubmissionWriteAhead`'s own doc)
       decision_price: null,
       quote_bid: null,
       quote_ask: null,
@@ -835,7 +835,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     const { store } = openTestExecutionStore();
     await writeAheadFlatten(store);
     const broker = makeBroker();
-    // `flattenBook` left empty: `resumeFlatten` answers null, same as `getOrder`.
+    // `flattenBook` left empty: `resumeFlatten` answers null, same as `getOrder`
 
     const report = await new ExecutionImpl(makeInput(store, broker)).reconcile();
 
@@ -857,7 +857,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     const { store } = openTestExecutionStore();
     await writeAheadFlatten(store);
     // Acked once already — mirrors what `executeExit` itself does on a clean
-    // submit, so this row starts at 'submitted' with real broker_order_ids.
+    // submit, so this row starts at 'submitted' with real broker_order_ids
     await store.resolveFlattenSubmitted(
       FLATTEN_KEY,
       { order_state: 'submitted', broker_order_ids: [`${FLATTEN_KEY}:order`] },
@@ -865,7 +865,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     );
     const broker = makeBroker();
     // `flattenBook` left empty: the venue now answers null for an order it
-    // definitely acked before — ignorance, not proof it never landed.
+    // definitely acked before — ignorance, not proof it never landed
     const alerts: FlattenReconcileAlert[] = [];
     const flattenReconcileAlerts: FlattenReconcileAlertChannel = {
       postFlattenReconcileAlert: async (alert) => {
@@ -884,7 +884,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
       action: 'undetermined',
       kind: 'flatten',
     });
-    // Not a correction — the record was left exactly as it was.
+    // Not a correction — the record was left exactly as it was
     expect(report.corrected).toBe(0);
 
     const row = await store.getFlattenSubmission(FLATTEN_KEY);
@@ -938,14 +938,14 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     expect(broker.cancelCalls).toEqual([{ client_order_id: FLATTEN_KEY, instrument: 'AAPL' }]);
     expect(report.divergences[0]?.reason).toContain('CANCELLED');
     // #1577: `escalation` is what lets `runPoll`'s dedup (fill-sync.ts) tell
-    // this apart from the benign adopt it shares `action: 'adopted'` with.
+    // this apart from the benign adopt it shares `action: 'adopted'` with
     expect(report.divergences[0]?.action).toBe('adopted');
     expect(report.divergences[0]?.escalation).toBe('wedge_cancelled');
     expect(alerts).toHaveLength(1);
     expect(alerts[0]?.idempotency_key).toBe(FLATTEN_KEY);
 
     // The row itself is NOT released here — only the venue turning the order
-    // terminal AND its fills being swept may do that.
+    // terminal AND its fills being swept may do that
     const row = await store.getFlattenSubmission(FLATTEN_KEY);
     expect(row?.status).toBe('submitted');
     expect(row?.fills_swept_at).toBeNull();
@@ -965,7 +965,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     expect(broker.cancelCalls).toEqual([]);
     // #1577: the benign adopt this row still produces must NOT carry an
     // `escalation` — that is what lets `runPoll`'s dedup (fill-sync.ts) log a
-    // later escalation on the same row as a distinct episode.
+    // later escalation on the same row as a distinct episode
     expect(report.divergences[0]?.action).toBe('adopted');
     expect(report.divergences[0]?.escalation).toBeUndefined();
   });
@@ -976,7 +976,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     const broker = makeBroker();
     // Cancelled with a PARTIAL fill: terminal, so no cancel is owed, and
     // `filled_qty > 0` keeps `reconcileFlatten` from resolving the row —
-    // it stays blocking until `ingestFills()` sweeps the partial.
+    // it stays blocking until `ingestFills()` sweeps the partial
     broker.flattenBook.set(FLATTEN_KEY, {
       client_order_id: FLATTEN_KEY,
       broker_order_ids: [`${FLATTEN_KEY}:order`],
@@ -1119,7 +1119,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     expect(alerts[0]?.reason).toContain('attribute them by hand');
     // #1585: shares `action: 'undetermined'` with the row's own prior-pass
     // state — `escalation` is what keeps `runPoll`'s dedup (fill-sync.ts) from
-    // folding this away as a repeat of a state that was never actually seen.
+    // folding this away as a repeat of a state that was never actually seen
     expect(
       report.divergences.find((divergence) => divergence.idempotency_key === FLATTEN_KEY)
         ?.escalation,
@@ -1131,7 +1131,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
 
   /**
    * A surplus is not coverage either: an unbooked exit fill hides inside it, so
-   * both release paths share the refusal, not just the terminal-unswept one.
+   * both release paths share the refusal, not just the terminal-unswept one
    */
   it('keeps a never-confirmed flatten blocking when the venue holds MORE than the store does', async () => {
     const { store } = openTestExecutionStore();
@@ -1158,7 +1158,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     ]);
   });
 
-  /** A venue book on the OTHER side of the store's is the #516/#1389 over-sell, not coverage. */
+  /** A venue book on the OTHER side of the store's is the #516/#1389 over-sell, not coverage */
   it('keeps a never-confirmed flatten blocking when the venue holds the same size SHORT against a long lot', async () => {
     const { store } = openTestExecutionStore();
     await heldLot(store, 10);
@@ -1238,7 +1238,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     const broker = makeBroker();
     broker.failFlattenLookup = 'order-details endpoint 503';
     // The two lots net to nothing at the venue, which is exactly the book a
-    // venue holding NEITHER of them would report.
+    // venue holding NEITHER of them would report
     broker.venuePositions = [];
     const alerts: FlattenReconcileAlert[] = [];
 
@@ -1274,7 +1274,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     expect(divergence?.reason).toContain('cancel FAILED');
     // #1585: distinct from `never_confirmed_coverage_short` — a cancel that
     // never reached the venue is a different fact than one that did but found
-    // the venue short of coverage, even though both are `action: 'undetermined'`.
+    // the venue short of coverage, even though both are `action: 'undetermined'`
     expect(divergence?.escalation).toBe('never_confirmed_cancel_failed');
     expect((await store.getUnresolvedFlattens()).map((row) => row.idempotency_key)).toEqual([
       FLATTEN_KEY,
@@ -1338,7 +1338,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     });
   }
 
-  /** Entry 10 then a booked exit of 4: what a partially-filled flatten leaves once ingestFills HAS applied it. */
+  /** Entry 10 then a booked exit of 4: what a partially-filled flatten leaves once ingestFills HAS applied it */
   async function bookedPartialExit(store: TestExecutionStore): Promise<void> {
     await heldLot(store, 10);
     const exit: Fill = {
@@ -1379,14 +1379,14 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     // `resolveExitRetryKey` walk to a fresh key. Retiring it any other way
     // (e.g. `markFlattenFillsSwept`) leaves `execute()` on `deduped` and the
     // remainder never exits. Safe here precisely because the release is gated
-    // on the venue covering everything the store still holds.
+    // on the venue covering everything the store still holds
     expect(await store.isRetryableFlattenError(FLATTEN_KEY)).toBe(true);
   });
 
   it('keeps a terminal unswept flatten blocking when the venue holds LESS than the store has booked', async () => {
     const { store } = openTestExecutionStore();
     // Nothing booked: the attribution-side wedge, where the fills are real,
-    // unbooked, and no venue number can say which lot each belongs to.
+    // unbooked, and no venue number can say which lot each belongs to
     await heldLot(store, 10);
     const broker = makeBroker();
     await terminalUnsweptFlatten(store, broker, UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS + 1);
@@ -1449,7 +1449,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     const broker = makeBroker();
     // Submitted six hours ago and terminal only now: measured from
     // `submitted_at` this row would be judged on the very poll that observed
-    // the fill, against a venue book that may not have caught up with it yet.
+    // the fill, against a venue book that may not have caught up with it yet
     await terminalUnsweptFlatten(store, broker, null);
     broker.venuePositions = [{ instrument: 'AAPL', qty: 6, side: 'buy', avg_entry_price: 100 }];
     const alerts: FlattenReconcileAlert[] = [];
@@ -1465,7 +1465,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
 
     // Nothing looked at, nothing paged — and the row still blocks. The venue
     // read this pass made is `findUnrecordedVenuePositions`', not the
-    // coverage check's.
+    // coverage check's
     expect(alerts).toEqual([]);
     expect(broker.venueReads - readsBefore).toBe(1);
     expect((await store.getUnresolvedFlattens()).map((row) => row.idempotency_key)).toEqual([
@@ -1492,7 +1492,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
 
     // Two passes, ONE verdict: the second is inside the window the first
     // re-armed. Three reads, not four — one per pass for
-    // `findUnrecordedVenuePositions`, plus the one coverage check.
+    // `findUnrecordedVenuePositions`, plus the one coverage check
     expect(alerts).toHaveLength(1);
     expect(broker.venueReads).toBe(3);
     expect((await store.getUnresolvedFlattens()).map((row) => row.idempotency_key)).toEqual([
@@ -1508,7 +1508,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     // A surplus the store has no lot for. It covers the 6 the store holds, but
     // an unbooked exit fill up to its size hides inside that sum, so this book
     // cannot corroborate the store — no over-sell either way, but a release
-    // here would leave real fills out of the journal.
+    // here would leave real fills out of the journal
     broker.venuePositions = [{ instrument: 'AAPL', qty: 9, side: 'buy', avg_entry_price: 100 }];
     const alerts: FlattenReconcileAlert[] = [];
 
@@ -1523,7 +1523,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     expect(alerts[0]?.reason).toContain('attribute them by hand');
     // The row was submitted 6h ago but LAST examined a window ago, and the
     // alert must say the second — the column is re-armed, so it cannot speak
-    // for the age of the wedge.
+    // for the age of the wedge
     expect(alerts[0]?.reason).toContain('1800s after this sweep last examined it');
     expect((await store.getUnresolvedFlattens()).map((row) => row.idempotency_key)).toEqual([
       FLATTEN_KEY,
@@ -1535,7 +1535,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     await bookedPartialExit(store);
     const broker = makeBroker();
     // Never acked in-process: `resolveFlattenSubmitted` has never run, so
-    // `broker_order_ids` and `resolved_at` are still unwritten on this row.
+    // `broker_order_ids` and `resolved_at` are still unwritten on this row
     await writeAheadFlatten(store, {
       submitted_at: new Date(NOW.getTime() - 6 * 60 * 60 * 1_000),
     });
@@ -1593,7 +1593,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     });
     const broker = makeBroker();
     // Coverage short (not the full-coverage release case) so the row is still
-    // blocking, with `cancel_attempted_at` set, going into the second pass.
+    // blocking, with `cancel_attempted_at` set, going into the second pass
     neverConfirmed(broker, 6);
     const input = makeInput(store, broker);
 
@@ -1610,7 +1610,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
 
   /**
    * The cancel and its page are throttled against the DURABLE
-   * `cancel_attempted_at`, not re-issued on every fill-sync poll.
+   * `cancel_attempted_at`, not re-issued on every fill-sync poll
    */
   it('does not re-cancel or re-page a wedged row inside FLATTEN_CANCEL_RETRY_EVERY_MS', async () => {
     const { store } = openTestExecutionStore();
@@ -1668,7 +1668,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
   it('resolves a row whose lookup kept throwing as soon as the adapter can answer again — ignorance is not age-bounded', async () => {
     const { store } = openTestExecutionStore();
     // Far older than `UNRESOLVABLE_FLATTEN_MAX_AGE_MS`: age alone must not
-    // settle a row nothing has observed.
+    // settle a row nothing has observed
     await writeAheadFlatten(store, {
       submitted_at: new Date(NOW.getTime() - 10 * UNRESOLVABLE_FLATTEN_MAX_AGE_MS),
     });
@@ -1686,7 +1686,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     expect((await store.getFlattenSubmission(FLATTEN_KEY))?.status).toBe('submitted');
 
     // The venue comes back and names the order, terminally and with no fill —
-    // the same answer the terminal-non-fill path already resolves on.
+    // the same answer the terminal-non-fill path already resolves on
     broker.failFlattenLookup = null;
     broker.flattenBook.set(FLATTEN_KEY, {
       client_order_id: FLATTEN_KEY,
@@ -1705,14 +1705,14 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
   // #573: before this ticket, a failure of the fallback alert ITSELF (as
   // opposed to the flatten it reports on) vanished with no trace at all —
   // the store row is correctly left untouched either way, but nothing said
-  // the alert never reached anyone.
+  // the alert never reached anyone
   it('logs a fixed, self-authored message (never the channel error) when the fallback alert itself fails to deliver', async () => {
     const { store } = openTestExecutionStore();
     await writeAheadFlatten(store);
     const broker = makeBroker();
     broker.failFlattenLookup = 'venue unreachable';
     // A Telegram transport failure quotes the request it failed on,
-    // which can carry a bot token — this text must never reach the log.
+    // which can carry a bot token — this text must never reach the log
     const failingFlattenReconcileAlerts: FlattenReconcileAlertChannel = {
       postFlattenReconcileAlert: async () => {
         throw new Error('Bearer super-secret-transport-token rejected the request');
@@ -1725,7 +1725,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     ).reconcile();
 
     // The row-level outcome is unaffected by the alert's own delivery
-    // failure — same as the adapter-unreachable case above.
+    // failure — same as the adapter-unreachable case above
     expect(report.divergences[0]).toMatchObject({
       idempotency_key: FLATTEN_KEY,
       action: 'undetermined',
@@ -1814,7 +1814,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     // Both passes see it: `fills_swept_at` is only set by `ingestFills()`
     // (ingest-fills.ts), which this test never calls — reconcile() alone
     // cannot close its own worklist entry, by design (see
-    // `SharedStore.markFlattenFillsSwept`'s doc for why).
+    // `SharedStore.markFlattenFillsSwept`'s doc for why)
     expect(broker.resumeFlattenCalls).toEqual([FLATTEN_KEY, FLATTEN_KEY]);
     expect(first.divergences[0]?.action).toBe('adopted');
     expect(second.divergences[0]?.action).toBe('adopted');
@@ -1828,7 +1828,7 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
 
     const report = await new ExecutionImpl(makeInput(store, broker)).reconcile();
 
-    // 1 in-flight lot + 1 unresolved flatten.
+    // 1 in-flight lot + 1 unresolved flatten
     expect(report.checked).toBe(2);
   });
 });
@@ -1860,7 +1860,7 @@ describe('reconcile — a position the venue holds and the store does not (#429)
     });
     expect(report.divergences[0]?.reason).toContain('invisible to the Risk Manager');
     // Not a correction: nothing was written. Adopting would mean inventing the
-    // bracket, stop and debate_id the venue position has none of.
+    // bracket, stop and debate_id the venue position has none of
     expect(report.corrected).toBe(0);
     expect(await store.countAllPositions()).toBe(0);
   });
@@ -1888,7 +1888,7 @@ describe('reconcile — a position the venue holds and the store does not (#429)
     const report = await new ExecutionImpl(makeInput(store, broker)).reconcile();
 
     // The store-side lot was still settled — losing real work because a
-    // positions endpoint was down would be the worse outcome.
+    // positions endpoint was down would be the worse outcome
     expect(report.corrected).toBe(1);
     const undetermined = report.divergences.filter((d) => d.action === 'undetermined');
     expect(undetermined).toHaveLength(1);
@@ -1917,7 +1917,7 @@ describe('reconcile — a position the venue holds and the store does not (#429)
  * makes it survivable at a 15s reconcile cadence.
  */
 describe('reconcile — the unrecorded venue position PAGES (#1550)', () => {
-  /** A clock the test moves, unlike the module-level `fixedClock`. */
+  /** A clock the test moves, unlike the module-level `fixedClock` */
   function movableClock(at: Date): Clock & { advanceBy: (ms: number) => void } {
     let now = at;
     return { now: () => now, advanceBy: (ms) => (now = new Date(now.getTime() + ms)) };
@@ -1941,7 +1941,7 @@ describe('reconcile — the unrecorded venue position PAGES (#1550)', () => {
   // The throttle is not a nicety: reconcile runs on the fill-sync poll (#921,
   // 15s), the scan re-derives this condition from a fresh venue read every
   // pass, and nothing the system does resolves it — so an unthrottled page is
-  // ~240 an hour for as long as the position stands.
+  // ~240 an hour for as long as the position stands
   it('does not page again on the next pass inside the re-page window', async () => {
     const { store } = openTestExecutionStore();
     const broker = makeBroker();
@@ -1989,14 +1989,14 @@ describe('reconcile — the unrecorded venue position PAGES (#1550)', () => {
     await new ExecutionImpl(input).reconcile();
 
     // The second instrument is new, so it pages immediately; the first is
-    // still inside its own window and stays quiet.
+    // still inside its own window and stays quiet
     expect(alerts.posted.map((alert) => alert.instrument)).toEqual(['ETH-USD', 'SOL-USD']);
   });
 
   // Ignorance is not resolution. A venue read that failed says nothing about
   // whether the exposure is still there, so the pass must neither page on it
   // nor treat it as the episode ending — forgetting here would re-page
-  // everything standing the instant the endpoint recovered.
+  // everything standing the instant the endpoint recovered
   it('never pages the venue-read failure, and does not end a standing episode on it', async () => {
     const { store } = openTestExecutionStore();
     const broker = makeBroker();
@@ -2033,13 +2033,13 @@ describe('reconcile — the unrecorded venue position PAGES (#1550)', () => {
     await new ExecutionImpl(input).reconcile();
 
     // A second, separate incident — not a repeat of the first, so it is not
-    // held back by the window the first one opened.
+    // held back by the window the first one opened
     expect(alerts.posted).toHaveLength(2);
   });
 
   // The scan's job is to REPORT. A transport that cannot deliver must not cost
   // the sweeps that already ran this pass, and the channel's own error text
-  // never reaches the log (it can quote a URL carrying a bot token).
+  // never reaches the log (it can quote a URL carrying a bot token)
   it('survives a channel that throws, still reports the divergence, and logs a fixed line', async () => {
     const { store } = openTestExecutionStore();
     const broker = makeBroker();
@@ -2085,7 +2085,7 @@ describe('reconcile — the last open lot, closed by a flatten (#1550)', () => {
     const broker = makeBroker();
     // The feed itself is the assertion: a poll that reached it would throw,
     // and the only way to reach it is to have computed a `since` from a set of
-    // open lots that does not exist.
+    // open lots that does not exist
     broker.fetchNewFills = async () => {
       throw new Error('fetchNewFills must not be called with no open lots');
     };
@@ -2101,7 +2101,7 @@ describe('reconcile — the last open lot, closed by a flatten (#1550)', () => {
     const { store } = openTestExecutionStore();
     const broker = makeBroker();
     // The end state the shape produces: the store is flat (its last lot
-    // closed), the venue is not.
+    // closed), the venue is not
     broker.venuePositions = [{ instrument: 'AAPL', qty: -4, side: 'sell', avg_entry_price: 100 }];
     const alerts = recordingUnrecordedAlertsFor();
 
@@ -2110,7 +2110,7 @@ describe('reconcile — the last open lot, closed by a flatten (#1550)', () => {
     ).reconcile();
 
     // ONE pass, not a later one: the scan is unconditional on every reconcile,
-    // and never gated on there being an open lot to walk.
+    // and never gated on there being an open lot to walk
     expect(report.divergences).toMatchObject([
       { instrument: 'AAPL', action: 'unrecorded', kind: 'unrecorded' },
     ]);
@@ -2121,7 +2121,7 @@ describe('reconcile — the last open lot, closed by a flatten (#1550)', () => {
   // prose: the scan compares instrument PRESENCE, so it covers "no store lot
   // on this instrument at all" — which the last-open-lot shape is — and NOT
   // "the store holds fewer than the venue does", the surplus case
-  // `venueCoversStoreHeld` documents from its own side.
+  // `venueCoversStoreHeld` documents from its own side
   it('says nothing when the store still holds SOME lot on the instrument, however short', async () => {
     const { store } = openTestExecutionStore();
     await store.writeAheadPosition(pendingPosition());
@@ -2158,7 +2158,7 @@ describe('reconcile — the wedged-zero-fill sweep (#1186)', () => {
     // The exact position a restart leaves the system in (#1186's AC): the
     // row is durable, but nothing in a fresh process remembers this lot —
     // `makeBroker()`'s `book` starts empty, same as a process that never
-    // submitted anything this run.
+    // submitted anything this run
     const { store } = openTestExecutionStore();
     await store.writeAheadPosition(
       pendingPosition({
@@ -2176,7 +2176,7 @@ describe('reconcile — the wedged-zero-fill sweep (#1186)', () => {
     expect(settled?.abandon_reason).toBeDefined();
 
     // Terminal: gone from the live read every caller (Trader, Risk, the
-    // dashboard) trusts.
+    // dashboard) trusts
     expect(await store.getOpenPositions()).toEqual([]);
 
     const divergence = report.divergences.find((entry) => entry.idempotency_key === KEY);
@@ -2191,7 +2191,7 @@ describe('reconcile — the wedged-zero-fill sweep (#1186)', () => {
 
     // #1215's rule: no venue order is cancelled or re-placed. This lot's
     // bracket-pass never even reached the broker — `filled` is not
-    // `IN_FLIGHT_ORDER_STATES` — so nothing was submitted or looked up for it.
+    // `IN_FLIGHT_ORDER_STATES` — so nothing was submitted or looked up for it
     expect(broker.submits).toHaveLength(0);
   });
 
@@ -2222,7 +2222,7 @@ describe('reconcile — the wedged-zero-fill sweep (#1186)', () => {
     // `'abandoned'` were ever re-added to `SWEEPABLE_TERMINAL_STATES`
     // (sqlite-shared-store.ts), this row — `abandon_reason` and all — would
     // be hard-deleted here instead of surviving as the durable record #1186
-    // exists to keep.
+    // exists to keep
     const { store } = openTestExecutionStore();
     const oldTimestamp = new Date(NOW.getTime() - WEDGED_ZERO_FILL_ABANDON_AFTER_MS - 1);
     await store.writeAheadPosition(

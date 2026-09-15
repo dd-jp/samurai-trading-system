@@ -21,13 +21,13 @@ import type {
   VerdictRow,
 } from '../../contracts/index.ts';
 
-/** Recorded gap between the settled stages below — arbitrary but deterministic. */
+/** Recorded gap between the settled stages below — arbitrary but deterministic */
 export const STAGE_GAP_MS = 20_000;
 
 /**
  * The settled trace this suite replays: recorded rows for five of the six
  * stages, and NONE for `SKIPPED_STAGE`, so the drawer's timeline has a
- * `skipped` row to render alongside the done ones.
+ * `skipped` row to render alongside the done ones
  */
 const SETTLED_STAGES: readonly { stage: PipelineStage; decision: string | null }[] = [
   { stage: 'analysts', decision: 'quorum_met' },
@@ -38,7 +38,7 @@ const SETTLED_STAGES: readonly { stage: PipelineStage; decision: string | null }
   { stage: 'execution', decision: 'filled' },
 ];
 
-/** The stage left without a recorded row. */
+/** The stage left without a recorded row */
 const SKIPPED_STAGE: PipelineStage = 'verdict';
 
 export function laneOf(snapshot: DashboardSnapshot, instrument: string): PipelineLane {
@@ -65,7 +65,7 @@ export function settleAtExecution(
       // Synthetic: the real tick-runner records sequentially and Verdict
       // gates Execution, so the runtime can never reach Execution without a
       // Verdict row. The gap is fabricated purely so the timeline renders a
-      // `skipped` row — the same shape a genuine mid-pipeline skip produces.
+      // `skipped` row — the same shape a genuine mid-pipeline skip produces
       return {
         stage,
         state: 'skipped',
@@ -92,7 +92,7 @@ export function settleAtExecution(
   return {
     ...snapshot,
     // The tick that was in flight is over: both readouts of it have to agree,
-    // or the strip claims a live trace the theater no longer shows.
+    // or the strip claims a live trace the theater no longer shows
     tick_status: null,
     pipeline: {
       lanes: snapshot.pipeline.lanes.map((candidate) =>
@@ -104,7 +104,7 @@ export function settleAtExecution(
   };
 }
 
-/** The same snapshot with one more row in `verdicts[]` — the ledger's join target. */
+/** The same snapshot with one more row in `verdicts[]` — the ledger's join target */
 export function withVerdict(snapshot: DashboardSnapshot, verdict: VerdictRow): DashboardSnapshot {
   return { ...snapshot, verdicts: [verdict, ...snapshot.verdicts] };
 }

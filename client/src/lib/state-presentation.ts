@@ -91,7 +91,7 @@ const CRITIC_TONE: Readonly<Record<NonNullable<RiskCriticRow['critic_verdict']>,
   unavailable: 'wait',
 };
 
-/** `null` is "no verdict recorded", which waits like an unevaluable condition. */
+/** `null` is "no verdict recorded", which waits like an unevaluable condition */
 export function presentCriticVerdict(verdict: RiskCriticRow['critic_verdict']): Presented {
   if (verdict === null) return { word: 'no verdict', tone: 'wait' };
   return { word: CRITIC_VERDICT_WORD[verdict], tone: CRITIC_TONE[verdict] };
@@ -118,7 +118,7 @@ const CLOSE_REASON_WORD: Readonly<Record<CloseReason, string>> = {
 /**
  * A stop is the trade's own failure; a target its success; everything else is
  * the system closing a position for a reason that is neither — the
- * flat-by-close rule most often.
+ * flat-by-close rule most often
  */
 const CLOSE_REASON_TONE: Readonly<Record<CloseReason, StateTone>> = {
   stop: 'stop',

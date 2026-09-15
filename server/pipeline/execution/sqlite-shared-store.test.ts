@@ -53,7 +53,7 @@ function makeFlattenWriteAhead(
     size: 25,
     submitted_at: OPENED_AT,
     // The lots and what each HELD at write-ahead, summing to `size` — the
-    // store splits this one array across both journal columns.
+    // store splits this one array across both journal columns
     lot_held_quantities: [
       { idempotency_key: 'key-lot-1', held: 10 },
       { idempotency_key: 'key-lot-2', held: 15 },
@@ -62,7 +62,7 @@ function makeFlattenWriteAhead(
     // #1001 — every write-ahead call site provides a value (possibly null,
     // never omitted; see `FlattenSubmissionWriteAhead`'s own doc). Defaulted
     // to null here so existing callers of this factory, written before this
-    // ticket, keep compiling without naming every new field.
+    // ticket, keep compiling without naming every new field
     decision_price: null,
     quote_bid: null,
     quote_ask: null,
@@ -76,7 +76,7 @@ function makeFlattenWriteAhead(
 /**
  * Rewrites one journal column to a value `writeAheadFlatten` could never have
  * produced — corruption, or a hand edit — so the read's validation is what is
- * under test rather than the round trip.
+ * under test rather than the round trip
  */
 function overwriteJournalColumn(
   db: StoreHandle,
@@ -85,7 +85,7 @@ function overwriteJournalColumn(
   raw: string | null,
 ): void {
   // Chosen by name from a closed union rather than interpolated from a caller's
-  // string, so the SQL text stays fixed at the three forms written here.
+  // string, so the SQL text stays fixed at the three forms written here
   const sql =
     column === 'lot_idempotency_keys'
       ? 'UPDATE flatten_submissions SET lot_idempotency_keys = ? WHERE idempotency_key = ?'
@@ -95,7 +95,7 @@ function overwriteJournalColumn(
   db.prepare(sql).run(raw, idempotency_key);
 }
 
-/** The `open_positions` counterpart of `overwriteJournalColumn` — #1014 review, finding 4. */
+/** The `open_positions` counterpart of `overwriteJournalColumn` — #1014 review, finding 4 */
 function overwritePositionCostBreakdown(
   db: StoreHandle,
   idempotency_key: string,
@@ -106,7 +106,7 @@ function overwritePositionCostBreakdown(
   ).run(raw, idempotency_key);
 }
 
-/** Raw journal columns `SqliteExecutionStore`'s own port never reads back — test-only, like `overwriteJournalColumn` above. */
+/** Raw journal columns `SqliteExecutionStore`'s own port never reads back — test-only, like `overwriteJournalColumn` above */
 function readFlattenRow(
   db: StoreHandle,
   idempotency_key: string,
@@ -172,7 +172,7 @@ describe('SqliteExecutionStore', () => {
 
     it('a crash before ack leaves a recoverable orphan row for a fresh store instance over the same file', async () => {
       // Use a real file path (not :memory:) so "crash" (opening a NEW handle)
-      // is meaningfully different from re-reading the same in-process db.
+      // is meaningfully different from re-reading the same in-process db
       const fs = await import('node:fs');
       const os = await import('node:os');
       const path = await import('node:path');
@@ -329,7 +329,7 @@ describe('SqliteExecutionStore', () => {
           },
           // #1301, migration 0061 — deliberately unequal to the entry's in
           // every component, so a store that wrote one column from the other
-          // fails here.
+          // fails here
           modelled_protective_exit_cost_breakdown: {
             spread_cost: 0.3,
             commission: 0.4,
@@ -394,7 +394,7 @@ describe('SqliteExecutionStore', () => {
 
       // `getFlattenAttribution` surfaces only `modelled_cost_breakdown` (the
       // one field `ingestFills()` needs) — read the raw row for the other
-      // five columns, which the production port never needs back.
+      // five columns, which the production port never needs back
       const row = db
         .prepare(
           `SELECT decision_price, quote_bid, quote_ask, quote_mid, quote_observed_at
@@ -484,7 +484,7 @@ describe('SqliteExecutionStore', () => {
 
           const attribution = await store.getFlattenAttribution('flatten-1');
           // The row still reads — the lot identity it carries is intact, and
-          // it is the lot identity the fill split actually needs.
+          // it is the lot identity the fill split actually needs
           expect(attribution?.lot_idempotency_keys).toEqual(['key-lot-1', 'key-lot-2']);
           expect(attribution?.modelled_cost_breakdown).toBeNull();
         });
@@ -512,7 +512,7 @@ describe('SqliteExecutionStore', () => {
       // JSON cannot encode NaN/Infinity, so their presence means the column
       // was written by something other than this file's `JSON.stringify` —
       // and letting one through would poison every prorated figure
-      // `redistributeOneFlatten` derives from it with NaN money.
+      // `redistributeOneFlatten` derives from it with NaN money
       it('rejects a non-finite component even though it parses as a number', async () => {
         const { db, store } = makeStore();
         await store.writeAheadFlatten(makeFlattenWriteAhead());
@@ -584,14 +584,14 @@ describe('SqliteExecutionStore', () => {
       // Same id, but under a DIFFERENT lot's key: the PK has not been
       // written for this pair, so this is not a duplicate of key-1's row —
       // an id-only match would wrongly report it as already ingested and
-      // silently drop key-2's own fill.
+      // silently drop key-2's own fill
       expect(
         await store.hasFill({
           idempotency_key: 'key-2',
           broker_fill_id: toBrokerFillId('shared-id'),
         }),
       ).toBe(false);
-      // The exact pair that was written IS reported as ingested.
+      // The exact pair that was written IS reported as ingested
       expect(
         await store.hasFill({
           idempotency_key: 'key-1',
@@ -645,7 +645,7 @@ describe('SqliteExecutionStore', () => {
     // #1220, migration 0054. Before this column `fills.fee` silently claimed
     // book currency for a number the venue may have quoted in USD — the
     // ruling's "not silently summed as GBP". The row records the currency
-    // verbatim; `ingestFills()` owns raising the contradiction.
+    // verbatim; `ingestFills()` owns raising the contradiction
     it('round-trips fee_currency verbatim, and omits it for an adapter that reports none', async () => {
       const { store } = makeStore();
       await store.writeAheadPosition(makePosition());
@@ -661,7 +661,7 @@ describe('SqliteExecutionStore', () => {
       const [gbp, usd, none] = await store.getFills('key-1');
       expect(gbp?.fee_currency).toBe('GBP');
       // Recorded, not coerced or dropped: a foreign currency reaching the
-      // store must stay legible to any later reconciliation.
+      // store must stay legible to any later reconciliation
       expect(usd?.fee_currency).toBe('USD');
       expect(none?.fee_currency).toBeUndefined();
     });
@@ -736,7 +736,7 @@ describe('SqliteExecutionStore', () => {
 
       // Re-advance carrying both a new fill and a (duplicate) close: the close
       // rejection must roll the fill back too, or a crash-shaped partial write
-      // becomes persistable state.
+      // becomes persistable state
       await expect(
         store.applyLotAdvance({
           idempotency_key: 'key-1',
@@ -771,7 +771,7 @@ describe('SqliteExecutionStore', () => {
 
     // #571: the split's per-lot share. Returned already paired with its lot,
     // so `redistributeFlattenFills` never indexes one array by the other's
-    // position.
+    // position
     it('round-trips each lot’s held quantity, paired with its own key', async () => {
       const { store } = makeStore();
 
@@ -786,7 +786,7 @@ describe('SqliteExecutionStore', () => {
     // A lot holding nothing (its entry fill has not landed) stays named — the
     // #571 decision, recorded in migration 0021: `executeExit`'s cancel loop
     // cancels its protective legs regardless of this journal, so dropping it
-    // here would remove the only signal that re-arms them (#525).
+    // here would remove the only signal that re-arms them (#525)
     it('journals a zero held quantity rather than dropping the lot that holds nothing', async () => {
       const { store } = makeStore();
 
@@ -816,7 +816,7 @@ describe('SqliteExecutionStore', () => {
 
     // A flatten journalled before migration 0020 added the column has NULL
     // there, not an empty JSON array — `ingestFills()` (#517) must read that
-    // as "cannot attribute", not throw trying to `JSON.parse(null)`.
+    // as "cannot attribute", not throw trying to `JSON.parse(null)`
     it('returns null, not a parse error, for a pre-migration row with no lot identity recorded', async () => {
       const { db, store } = makeStore();
       await store.writeAheadFlatten(makeFlattenWriteAhead({ idempotency_key: 'flatten-legacy' }));
@@ -828,7 +828,7 @@ describe('SqliteExecutionStore', () => {
     // Migration 0021's own backward-compatibility posture, the same one 0020
     // took: a flatten submitted before this column existed records no held
     // quantities, and `ingestFills()` must read that as "fall back to the
-    // entry-total split", not fail parsing a column never populated.
+    // entry-total split", not fail parsing a column never populated
     it('returns the lot keys with a null held-quantity list for a pre-0021 row', async () => {
       const { db, store } = makeStore();
       await store.writeAheadFlatten(makeFlattenWriteAhead({ idempotency_key: 'flatten-pre-0021' }));
@@ -840,20 +840,20 @@ describe('SqliteExecutionStore', () => {
         exit_reason: 'flatten',
         // #1550: read off migration 0019's own columns, so a pre-0021 row
         // carries them too — which is the point of taking them from here
-        // rather than from a lot that may already be swept.
+        // rather than from a lot that may already be swept
         instrument: 'AAPL',
         side: 'sell',
         modelled_cost_breakdown: null,
         // #1014 review, finding 3 — the flatten's SUBMITTED size, now the
         // denominator `redistributeOneFlatten` prorates the modelled cost
-        // breakdown against.
+        // breakdown against
         size: 25,
       });
     });
   });
 
   // Review feedback on #524 (kimi): the same unvalidated-cast defect class
-  // #509 closed repo-wide, freshly reintroduced by #517 if left unguarded.
+  // #509 closed repo-wide, freshly reintroduced by #517 if left unguarded
   describe('getFlattenAttribution — corrupted rows (#524 review, #571)', () => {
     it('throws, naming the idempotency_key, when the stored value is not valid JSON', async () => {
       const { db, store } = makeStore();
@@ -899,7 +899,7 @@ describe('SqliteExecutionStore', () => {
     // the source — but never quote the corrupted value itself: since #507 an
     // uncaught throw here is durably recorded to `audit_log`, and the raw
     // column content is untrusted in exactly the way that record must not
-    // carry.
+    // carry
     it('never quotes the corrupted raw value in the thrown error', async () => {
       const { db, store } = makeStore();
       await store.writeAheadFlatten(makeFlattenWriteAhead({ idempotency_key: 'flatten-secret' }));
@@ -913,7 +913,7 @@ describe('SqliteExecutionStore', () => {
 
     // #571's column is a SECOND place raw stored text reaches an error
     // message and a second unvalidated-parse risk, so it carries the same
-    // four guarantees rather than inheriting them by proximity.
+    // four guarantees rather than inheriting them by proximity
     it('throws, naming the idempotency_key, when the held quantities are not valid JSON', async () => {
       const { db, store } = makeStore();
       await store.writeAheadFlatten(makeFlattenWriteAhead({ idempotency_key: 'flatten-held-bad' }));
@@ -941,7 +941,7 @@ describe('SqliteExecutionStore', () => {
 
     // Fail closed, not clamp: `executeExit` refuses an over-exited lot BEFORE
     // this row is written, so a negative share is a corrupted record. Skipping
-    // it as "nothing to allocate" would strand that lot's quantity silently.
+    // it as "nothing to allocate" would strand that lot's quantity silently
     it('throws on a negative held quantity rather than treating it as no share', async () => {
       const { db, store } = makeStore();
       await store.writeAheadFlatten(makeFlattenWriteAhead({ idempotency_key: 'flatten-held-neg' }));
@@ -959,7 +959,7 @@ describe('SqliteExecutionStore', () => {
 
     // A length disagreement would pair a quantity with the WRONG lot — the
     // one corruption that produces a plausible-looking split instead of an
-    // obviously broken one.
+    // obviously broken one
     it.each([
       ['shorter than', [10]],
       ['longer than', [10, 15, 20]],
@@ -1109,7 +1109,7 @@ describe('SqliteExecutionStore', () => {
       expect(afterRow?.order_state).toBe('filled');
       expect(afterRow?.broker_order_ids).toBe(JSON.stringify(['order-1', 'order-1-fill']));
       // Unchanged — reconcile() is refreshing a KNOWN-acked row's answer, not
-      // resolving a new ambiguity (types/store.ts's doc on this method).
+      // resolving a new ambiguity (types/store.ts's doc on this method)
       expect(afterRow?.status).toBe(beforeRow?.status);
       expect(afterRow?.resolved_at).toBe(beforeRow?.resolved_at);
     });
@@ -1177,7 +1177,7 @@ describe('SqliteExecutionStore', () => {
       expect(sizes.get('key-lot-1')).toBe(10);
       expect(sizes.get('key-lot-2')).toBe(15);
       // Absent, not present at 0 — mirrors `DashboardQueryStore.getMarks`'
-      // own "missing is absent" answer, the shape this method follows.
+      // own "missing is absent" answer, the shape this method follows
       expect(sizes.has('key-lot-never-filled')).toBe(false);
     });
 
@@ -1229,7 +1229,7 @@ describe('SqliteExecutionStore', () => {
             qty: 10,
           }),
           // All three closing legs count — the predicate is `leg != 'entry'`,
-          // the SQL spelling of `ingest-fills.ts`'s `isExitFill`.
+          // the SQL spelling of `ingest-fills.ts`'s `isExitFill`
           makeFill({
             idempotency_key: 'key-lot-1',
             broker_fill_id: toBrokerFillId('x1'),
@@ -1267,7 +1267,7 @@ describe('SqliteExecutionStore', () => {
       expect(sizes.get('key-lot-1')).toBe(7);
       // Entry-only lot: absent, not 0 — the same "missing is absent" answer
       // `getEntryFillSizes` gives, which `heldQuantities` reads as "nothing
-      // closed yet".
+      // closed yet"
       expect(sizes.has('key-lot-2')).toBe(false);
       expect(sizes.has('key-lot-unknown')).toBe(false);
     });
@@ -1299,7 +1299,7 @@ describe('SqliteExecutionStore', () => {
     } {
       const db = openSharedStore(':memory:');
       // One database, two instances. The arm is a CONSTRUCTOR argument rather
-      // than a per-call one precisely so a caller cannot mix them.
+      // than a per-call one precisely so a caller cannot mix them
       return {
         db,
         live: new SqliteExecutionStore(db),
@@ -1321,7 +1321,7 @@ describe('SqliteExecutionStore', () => {
 
       // Same name, same bar, different arms — which is the normal case, since
       // both arms trade the same universe off the same tape. The keys differ
-      // only because `arm` is a hash input to `computeIdempotencyKey`.
+      // only because `arm` is a hash input to `computeIdempotencyKey`
       await live.writeAheadPosition(makePosition({ idempotency_key: 'live-key' }));
       await control.writeAheadPosition(makePosition({ idempotency_key: 'control-key' }));
       await live.applyLotAdvance({
@@ -1338,7 +1338,7 @@ describe('SqliteExecutionStore', () => {
       expect(armsOf(db, 'closed_trades')).toEqual(['control-key=control', 'live-key=live']);
       expect(armsOf(db, 'open_positions')).toEqual(['control-key=control', 'live-key=live']);
 
-      // The query the report and an operator both actually run.
+      // The query the report and an operator both actually run
       const controlKeys = db
         .prepare(`SELECT idempotency_key FROM closed_trades WHERE arm = 'control'`)
         .all() as { idempotency_key: string }[];
@@ -1380,7 +1380,7 @@ describe('SqliteExecutionStore', () => {
       // is the half a predicate written `arm = ? AND status = 'submitting' OR
       // (status = 'submitted' AND fills_swept_at IS NULL)` — the same clauses,
       // one pair of parens short — leaks across arms while still passing an
-      // all-`'submitting'` test.
+      // all-`'submitting'` test
       for (const [store, prefix] of [
         [live, 'live'],
         [control, 'control'],
@@ -1388,7 +1388,7 @@ describe('SqliteExecutionStore', () => {
         // Two DIFFERENT instruments, because one instrument may only ever have
         // one unresolved flatten (#1214 review — `writeAheadFlatten`'s own
         // guard). The arm-scoping claim under test is unaffected: it is about
-        // which arm's rows a scan returns, not which instrument they name.
+        // which arm's rows a scan returns, not which instrument they name
         await store.writeAheadFlatten(
           makeFlattenWriteAhead({ idempotency_key: `${prefix}-submitting`, instrument: 'AAPL' }),
         );
@@ -1408,7 +1408,7 @@ describe('SqliteExecutionStore', () => {
       // Before the fix, EACH scan below returned ALL FOUR rows — the live arm's
       // reconcile() would have asked its own (real) broker about the control
       // arm's keys, and the control arm's would have asked its own (simulated)
-      // broker about the live arm's.
+      // broker about the live arm's
       expect((await live.getUnresolvedFlattens()).map((r) => r.idempotency_key).sort()).toEqual([
         'live-submitted-unswept',
         'live-submitting',
@@ -1431,7 +1431,7 @@ describe('SqliteExecutionStore', () => {
    * #1112 AC5, migration 0045 — the sizing regime a row was written under,
    * so a `closed_trades`/`arm_comparison_samples` window can tell whether it
    * mixes rows sized off funded equity (no declared ceiling) with rows sized
-   * off the declared book.
+   * off the declared book
    */
   describe('sizing capital ceiling stamp (#1112)', () => {
     function ceilingsOf(
@@ -1491,7 +1491,7 @@ describe('SqliteExecutionStore', () => {
         )
         .all() as { sizing_capital_ceiling: number | null }[];
       // More than one distinct value in the window: exactly the condition a
-      // report must refuse to average over.
+      // report must refuse to average over
       expect(distinctCeilings).toHaveLength(2);
     });
   });

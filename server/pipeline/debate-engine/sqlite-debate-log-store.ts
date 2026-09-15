@@ -45,7 +45,7 @@ interface DebateLogRow {
   position: string | null;
   disagreement_summary: string | null;
   open_items_json: string | null;
-  /** SQLite has no boolean — 1/0, or null on a pre-0026 row. */
+  /** SQLite has no boolean — 1/0, or null on a pre-0026 row */
   converged: number | null;
   /** #1081 (migration 0041). Null on a pre-migration row — genuinely indeterminate. */
   termination: DebateTermination | null;
@@ -81,12 +81,12 @@ export class SqliteDebateLogStore implements DebateLogStore {
           // column is nullable precisely because pre-#426 rows have none, and
           // a retried tick's fresh trace must not overwrite the one that
           // actually ran the debate (the PK conflict below is what enforces
-          // that — first write wins).
+          // that — first write wins)
           entry.trace_id ?? null,
           // #617 replay fields. Null when the caller supplies none, which keeps
           // the pre-0026 callers (tests, backtest) writing valid rows; the
           // replay path reads a null `confidence` as "cannot replay this" and
-          // re-runs the debate rather than trading on a reconstructed blank.
+          // re-runs the debate rather than trading on a reconstructed blank
           entry.confidence ?? null,
           entry.synthesis ?? null,
           entry.position ?? null,
@@ -96,12 +96,12 @@ export class SqliteDebateLogStore implements DebateLogStore {
           // #1081. Null when the caller supplies none, same convention as
           // every other optional column here — a pre-0041 caller (tests, a
           // fixture) still writes a valid row, and the column's own NULL is
-          // the honest "not recorded" rather than a guessed classification.
+          // the honest "not recorded" rather than a guessed classification
           entry.termination ?? null,
           // #1380. Same convention as `termination` immediately above — a
           // caller that supplies no cause (every pre-0051 caller, and a
           // 'converged'/'non_converged' row that has none to give) writes
-          // NULL.
+          // NULL
           entry.termination_cause ?? null,
         );
     } catch (cause) {
@@ -157,7 +157,7 @@ export class SqliteDebateLogStore implements DebateLogStore {
    * (`writeRoundLog`'s own transaction nests as a SAVEPOINT): a throw from
    * either leaves neither the `debate_log` row nor any `debate_round_log`
    * rows, so a crash never strands a debate past `persistDebateLog`'s
-   * first-write-wins guard with its round rows unwritable forever.
+   * first-write-wins guard with its round rows unwritable forever
    */
   writeLogWithRounds(entry: DebateLog, rounds: DebateRoundLogEntry[]): void {
     this.db.transaction(() => {
@@ -185,11 +185,11 @@ export class SqliteDebateLogStore implements DebateLogStore {
       created_at: fromStoredTimestamp(row.created_at),
       // Absent rather than null on the domain object (#426): `DebateLog
       // .trace_id` is optional, and a pre-#426 row genuinely has no trace
-      // rather than a null one.
+      // rather than a null one
       ...(row.trace_id === null || row.trace_id === undefined ? {} : { trace_id: row.trace_id }),
       // Same convention for the #617 replay fields — a pre-0026 row genuinely
       // has no confidence, and the replay path distinguishes "absent" from
-      // "zero" to decide whether it may skip the LLM calls.
+      // "zero" to decide whether it may skip the LLM calls
       ...nullableField('confidence', row.confidence),
       ...nullableField('synthesis', row.synthesis),
       ...nullableField('position', row.position),
@@ -246,7 +246,7 @@ export class SqliteDebateLogStore implements DebateLogStore {
       llm_failure: number | null;
       non_failure: number | null;
     };
-    // `SUM` over zero matched rows is NULL, not 0 — an empty window.
+    // `SUM` over zero matched rows is NULL, not 0 — an empty window
     const llm_failure = row.llm_failure ?? 0;
     const non_failure = row.non_failure ?? 0;
     return { llm_failure, total: llm_failure + non_failure };
@@ -373,7 +373,7 @@ function parseOpenItems(
   return { open_items: parsed };
 }
 
-/** `{ key: value }` when the column has a value, `{}` when it is null/absent. */
+/** `{ key: value }` when the column has a value, `{}` when it is null/absent */
 function nullableField<K extends string, V>(
   key: K,
   value: V | null | undefined,

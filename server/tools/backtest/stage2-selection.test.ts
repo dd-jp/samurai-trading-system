@@ -73,7 +73,7 @@ describe('selectionsFrom', () => {
     expect(selections[0]).toMatchObject({
       config_hash: 'cfg-a',
       asset_class: 'crypto',
-      // The whole-sample Sharpe of the SELECTED config, not of the best window.
+      // The whole-sample Sharpe of the SELECTED config, not of the best window
       backtest_sharpe: 1.4,
       oos_sharpe: 0.9,
       pbo: 0.2,
@@ -112,7 +112,7 @@ describe('selectionsFrom', () => {
     expect(selections.map((selection) => selection.asset_class)).toEqual(['crypto', 'stocks']);
     expect(selections[1]?.pbo).toBe(0.01);
     // No DSR outcome for stocks: a typed refusal, and NULL is the only honest
-    // encoding — a stored 0 reads as certain insignificance.
+    // encoding — a stored 0 reads as certain insignificance
     expect(selections[1]?.dsr).toBeNull();
   });
 
@@ -131,7 +131,7 @@ describe('selectionsFrom', () => {
 
   it('freezes nothing when the trial grid was empty', () => {
     // A selection with no numbers behind it would arm the kill-lines with
-    // nothing, which is the failure mode #375/#384 exist to avoid.
+    // nothing, which is the failure mode #375/#384 exist to avoid
     expect(
       selectionsFrom({ verdict: verdict(), results: [], window: WINDOW, selectedAt: SELECTED_AT }),
     ).toEqual([]);

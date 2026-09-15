@@ -129,10 +129,10 @@ import { subclassOfUniverse } from './types.js';
 
 // Re-exported for existing importers (#739's "ONE derivation" moved to
 // `types.ts` in #752 to break a `production.ts` <-> `paper-profile.ts` import
-// cycle — see that function's doc comment).
+// cycle — see that function's doc comment)
 export { subclassOfUniverse };
 
-/** The header's three-value provenance taxonomy, as data. */
+/** The header's three-value provenance taxonomy, as data */
 export type ValueProvenance = 'SPEC' | 'DERIVED' | 'UNSOURCED';
 
 /**
@@ -163,39 +163,39 @@ export const PAPER_PROFILE_PROVENANCE = {
   tickIntervalMs: 'DERIVED',
   // #1013 — derived from `rateLimiterConfig.perAssetClass.stocks`'s budget,
   // #1012's measured per-call latency, and today's universe size. See the
-  // field's own comment for the arithmetic.
+  // field's own comment for the arithmetic
   maxConcurrentInstruments: 'DERIVED',
   universe: 'SPEC',
   // #1112: ADR-0015's 2026-08-18 amendment's £1,000 book, the same figure the
-  // arm comparison's `basis` (production.ts, smoke-run.ts) is stated against.
+  // arm comparison's `basis` (production.ts, smoke-run.ts) is stated against
   // DERIVED since #1180: it is that book multiplied by `SIZING_USD_PER_GBP`,
   // because the equity it clamps is USD-denominated. The BOOK is the spec
-  // value; this is an arithmetic expression of it.
+  // value; this is an arithmetic expression of it
   capitalCeilingUsd: 'DERIVED',
   // #1180 — SPEC in the sense the provenance vocabulary means: a chosen
   // figure, not one computed here. See `SIZING_USD_PER_GBP` for the
   // provenance of the number itself and for why it is a configured constant
-  // rather than a feed.
+  // rather than a feed
   capitalCeilingUsdPerGbp: 'SPEC',
   'traderConfig.conviction_floor': 'SPEC',
   // #668. SPEC rather than DERIVED: close − 5 minutes is not calculated from
   // anything here, it is the value #657 resolved on 2026-08-09 and ADR-0014's
-  // flat-by-close horizon is what makes it binding.
+  // flat-by-close horizon is what makes it binding
   'traderConfig.flatten_before_close_ms': 'SPEC',
   // #1389. UNSOURCED, and deliberately labelled so: no doc states how long
   // after the bell the flatten may keep trying. 5 minutes was CHOSEN — long
   // enough for several ticks at any cadence this profile has run, short enough
   // to stay well inside `verdictConfig.max_mark_age.stocks` (15 min), which is
-  // the ceiling gate 2a actually enforces on the price a flatten is marked at.
+  // the ceiling gate 2a actually enforces on the price a flatten is marked at
   // It is a starting point to be measured against real post-bell fills, not a
-  // derived constant.
+  // derived constant
   'traderConfig.flatten_after_close_ms': 'UNSOURCED',
   'traderConfig.max_risk_per_trade': 'SPEC',
   'traderConfig.asset_class_risk_multiplier.crypto': 'SPEC',
   // #1112 follow-up — DERIVED, not SPEC: 1.9x is computed from
   // D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION and #1112's own logged MU
   // deployment measurement, not stated directly by an ADR. See the
-  // assignment site's comment for the arithmetic.
+  // assignment site's comment for the arithmetic
   'traderConfig.asset_class_risk_multiplier.stocks': 'DERIVED',
   'traderConfig.atr_timeframe': 'SPEC',
   'traderConfig.atr_lookback': 'SPEC',
@@ -206,23 +206,23 @@ export const PAPER_PROFILE_PROVENANCE = {
   // ADR states, not a value computed here. `subclass_of` is a single leaf
   // because it is empty — the emptiness IS the decision, exactly as
   // `feedback.config.strategy_params`'s is: `DEFAULT_UNIVERSE` declares no
-  // subclass, so the regime is unarmed until the pool file classifies its rows.
+  // subclass, so the regime is unarmed until the pool file classifies its rows
   'traderConfig.subclass_of': 'SPEC',
   'traderConfig.subclass_brackets.index_etp_3x.take_profit_pct': 'SPEC',
   'traderConfig.subclass_brackets.index_etp_3x.stop_pct': 'SPEC',
   'traderConfig.subclass_brackets.index_etp_3x.deployment_fraction': 'SPEC',
   'traderConfig.subclass_brackets.index_etp_3x.round_trip_cost_pct': 'SPEC',
   // #897. SPEC: ADR-0018's 2026-09-03 amendment declares the reserve and its
-  // arithmetic; nothing here computes it from another config value.
+  // arithmetic; nothing here computes it from another config value
   'traderConfig.subclass_brackets.index_etp_3x.headroom_reserve_fraction': 'SPEC',
   'traderConfig.subclass_brackets.single_stock_etp_3x.take_profit_pct': 'SPEC',
   'traderConfig.subclass_brackets.single_stock_etp_3x.stop_pct': 'SPEC',
   'traderConfig.subclass_brackets.single_stock_etp_3x.deployment_fraction': 'SPEC',
   'traderConfig.subclass_brackets.single_stock_etp_3x.round_trip_cost_pct': 'SPEC',
-  // #897, as above.
+  // #897, as above
   'traderConfig.subclass_brackets.single_stock_etp_3x.headroom_reserve_fraction': 'SPEC',
   // `crypto: null` — "ADR-0018 sets no bracket here" — is a leaf value like any
-  // other and carries the same provenance: it is the ADR's own answer.
+  // other and carries the same provenance: it is the ADR's own answer
   'traderConfig.subclass_brackets.crypto': 'SPEC',
   'traderConfig.non_converged_haircut': 'SPEC',
   'traderConfig.reward_risk_multiple': 'SPEC',
@@ -237,7 +237,7 @@ export const PAPER_PROFILE_PROVENANCE = {
   'traderConfig.scale_in_conviction_delta': 'SPEC',
   // #748: the indicator-based early exit's decay criterion. SPEC, like every
   // other Trader threshold — `DEFAULT_EARLY_EXIT_CONFIG` is spread in unchanged
-  // and its default is argued at its definition, not fitted here.
+  // and its default is argued at its definition, not fitted here
   'traderConfig.early_exit.momentum_release_at': 'SPEC',
   'riskConfig.max_position_size_fraction_of_equity': 'UNSOURCED',
   'riskConfig.per_asset_cap_fraction_of_equity': 'UNSOURCED',
@@ -906,7 +906,7 @@ function buildFeedbackConfig(caps: typeof RISK_CAP_EQUITY_FRACTIONS): FeedbackCo
     return {
       // A tenth of the shipped cap, so a full ceiling-to-floor traverse needs
       // at least 7.5 consecutive breaching cycles. Same reasoning as `weights`:
-      // no dial may be dominated by the first few days of a soak.
+      // no dial may be dominated by the first few days of a soak
       max_step: PAPER_RISK_THRESHOLD_STEP_FRACTION * shipped,
       floor: PAPER_RISK_THRESHOLD_FLOOR_FRACTION * shipped,
       ceiling: shipped,
@@ -989,7 +989,7 @@ function buildFeedbackConfig(caps: typeof RISK_CAP_EQUITY_FRACTIONS): FeedbackCo
        * copy of a number three places already agree on.
        */
       max_pbo: 0.05,
-      /** `SPEC` — feedback-loop-spec.md story 13: "OOS/paper Sharpe < 0.5". */
+      /** `SPEC` — feedback-loop-spec.md story 13: "OOS/paper Sharpe < 0.5" */
       min_oos_sharpe: 0.5,
       /**
        * `SPEC`-adjacent — story 13 says "DSR insignificant" and leaves the
@@ -1065,15 +1065,15 @@ function buildDailyMetrics(): DailyMetricsConfig {
       new SqliteDailyEquityMetricsSource({
         // The series this process samples every tick on the portfolio's UTC-day
         // boundary (ADR-0006 §2) — capture was already unconditional; this
-        // reads it.
+        // reads it
         equity: new SqliteDailyEquityStore(db),
-        // The root's own instance, not a second one over the same handle.
+        // The root's own instance, not a second one over the same handle
         trades,
         logger,
         // `minReturnObservations` deliberately not overridden: the default IS
         // ADR-0006 §5's floor, and the class refuses anything lower. Raising it
         // toward 365 is the only defensible edit here, and it is one to make on
-        // evidence rather than in advance.
+        // evidence rather than in advance
       }),
     /**
      * `SPEC`-by-absence — 0, meaning INERT, and that is the whole point.
@@ -1108,7 +1108,7 @@ function llmBudget(maxDebates: number): RateLimitConfig {
   };
 }
 
-/** Five minutes — see `rateLimiterConfig`'s comment for why not one. */
+/** Five minutes — see `rateLimiterConfig`'s comment for why not one */
 const LLM_BUDGET_WINDOW_MS = 300_000;
 
 /**
@@ -1232,21 +1232,21 @@ export function buildStartingProfileConfigs(
   // `Required`, not another `Pick` member: each of these is optional on
   // `ProductionConfig` (they have documented fallbacks for a programmatic
   // caller), but the profile's whole job is to leave nothing to a fallback
-  // nobody chose — so the type says this profile always carries them.
+  // nobody chose — so the type says this profile always carries them
   // `llmBudgetUsd` and `tickIntervalMs` joined `rateLimiterConfig` here under
   // ADR-0008: a soak that inherited the 60s default interval, or no ceiling at
-  // all, would silently cost ~13x its budget.
+  // all, would silently cost ~13x its budget
   //
   // `stocksTradingWindow` joined them under #706 for the same reason and one
   // more: the fallback when it is absent is `?? true` (`scheduler.ts:74`) —
   // i.e. the whole LSE session, which is the OPPOSITE of the constraint. A
-  // profile that dropped it would tick 08:00-16:30 and look healthy doing it.
+  // profile that dropped it would tick 08:00-16:30 and look healthy doing it
   //
   // `maxConcurrentInstruments` joined them under #1013: the fallback when it
   // is absent is `?? 1` (`production.ts:2701`), which is what actually ran —
   // the universe walked one instrument at a time regardless of how many
   // workers `runTickPlan` could otherwise use. A profile that dropped it
-  // would silently go back to serial, not to some documented default width.
+  // would silently go back to serial, not to some documented default width
   Required<
     Pick<
       ProductionConfig,
@@ -1259,13 +1259,13 @@ export function buildStartingProfileConfigs(
   > {
   // ADR-0018 D5. The gate's classification and the list the run actually ticks
   // MUST be the same universe: a cap keyed to one list while another is traded
-  // sizes unclassified names with no envelope, or throws on every entry.
+  // sizes unclassified names with no envelope, or throws on every entry
   //
   // Naming `DEFAULT_UNIVERSE` twice — once here and once at the `universe` field
   // below — made that a convention held by matching identifiers. One parameter,
   // read by both, makes it hold by construction: the D5 gate's classification,
   // the Trader's `subclass_of` and the ticked list are the same list or none of
-  // them are.
+  // them are
   const subclassCap = d5EnvelopeFor(universe, bookCeilingGbp);
 
   const traderConfig: TraderConfig = {
@@ -1274,9 +1274,9 @@ export function buildStartingProfileConfigs(
     // docs/research/02-staged-deployment-plan.md ("half- or quarter-Kelly,
     // never full Kelly; quarter-Kelly or less in fat-tailed markets"):
     // `max_risk_per_trade: 0.01` with `asset_class_risk_multiplier.crypto:
-    // 0.5` puts a crypto entry at 0.5% of equity at maximum conviction.
+    // 0.5` puts a crypto entry at 0.5% of equity at maximum conviction
     // Spread by reference, never copied — a second copy of these numbers
-    // would drift from the trader's own default the first time either moves.
+    // would drift from the trader's own default the first time either moves
     ...DEFAULT_TRADER_CONFIG,
     // ADR-0018 D3/D5 (#739) — the SAME classification the Risk Manager's D5
     // gate caps against, from the same universe and the same derivation, so
@@ -1284,14 +1284,14 @@ export function buildStartingProfileConfigs(
     // disagree about what subclass an instrument is. `DEFAULT_UNIVERSE`
     // declares no subclasses today, so this is empty and the frozen bracket is
     // unarmed until the LSE-ETP pool file (#703 C1) classifies its rows —
-    // exactly the state `subclassCap` above is in, and for the same reason.
+    // exactly the state `subclassCap` above is in, and for the same reason
     subclass_of: subclassOfUniverse(universe),
     // #941 — ON here and OFF in `DEFAULT_TRADER_CONFIG`, which is the opposite
     // arrangement to `time_in_force` below, deliberately. Both are venue
     // constraints, but time-in-force is inert in simulation while flooring
     // changes the fill size, so a global default would silently move every
     // backtest and fixture result. The flag therefore lives with the profiles
-    // that actually submit to a venue.
+    // that actually submit to a venue
     //
     // Alpaca refuses a bracket at any fractional quantity and refuses a
     // fractional short outright; ADR-0018 D5 sizes by cash and so produces
@@ -1308,7 +1308,7 @@ export function buildStartingProfileConfigs(
     // `day`. The field is now per-asset-class on `TraderConfig` itself, and
     // `DEFAULT_TRADER_CONFIG` carries the correct value for BOTH classes —
     // so the venue constraint lives with the venue-shaped default rather
-    // than being re-stated by every profile that happens to hold crypto.
+    // than being re-stated by every profile that happens to hold crypto
   };
 
   const riskConfig: RiskConfig = {
@@ -1318,11 +1318,11 @@ export function buildStartingProfileConfigs(
     // (per-trade -> per-asset -> per-asset-class -> portfolio, spec "Check
     // Pipeline"), and so `binding_constraint` names the step an operator
     // would expect. Every one is well inside what an Alpaca paper account
-    // could take, deliberately: the first run is testing wiring, not size.
+    // could take, deliberately: the first run is testing wiring, not size
     //
     // #886: read straight off `RISK_CAP_EQUITY_FRACTIONS` rather than a
     // `caps` object multiplied against an anchor here — the fraction IS the
-    // value now, resolved against `portfolio.equity` at evaluate time.
+    // value now, resolved against `portfolio.equity` at evaluate time
     /** 5% of equity — the Trader's own 0.5-1% *risk* budget becomes a much larger *notional* once divided by a ~1-2% ATR stop, so this is the cap that actually binds first on BTC-USD. Skipped entirely for a D5-classified instrument (#886) — see the field's own doc comment. */
     max_position_size_fraction_of_equity:
       RISK_CAP_EQUITY_FRACTIONS.max_position_size_fraction_of_equity,
@@ -1351,7 +1351,7 @@ export function buildStartingProfileConfigs(
        * DERIVED — equal to the crypto asset-class cap: a cluster of
        * mutually-correlated instruments should not be able to exceed what a
        * single asset class may hold, which is the whole point of the check
-       * (risk-manager-spec.md step 6).
+       * (risk-manager-spec.md step 6)
        */
       cap_fraction_of_equity: RISK_CAP_EQUITY_FRACTIONS.concentration_cap_fraction_of_equity,
       /**
@@ -1378,7 +1378,7 @@ export function buildStartingProfileConfigs(
     min_viable_size: DEFAULT_TRADER_CONFIG.min_viable_notional,
     // Same venue constraint as traderConfig.whole_share_sizing, at the second
     // site that sets a size (#941): the cap gates trim a notional and re-derive
-    // the quantity, so a whole-share entry comes back fractional if any gate binds.
+    // the quantity, so a whole-share entry comes back fractional if any gate binds
     whole_share_sizing: true,
     /**
      * UNSOURCED — risk-manager-spec.md calls the CII threshold "an unpinned
@@ -1729,21 +1729,21 @@ export function buildStartingProfileConfigs(
 
   const executionConfig: ExecutionConfig = {
     // No fill is priced off this in paper (`AlpacaBrokerAdapter`, not the
-    // Simulated one); only the #1001 submit snapshot reads it, best-effort.
+    // Simulated one); only the #1001 submit snapshot reads it, best-effort
     // Correct so a backtest run over this same profile is not silently
-    // misconfigured.
+    // misconfigured
     simulated: {
       /**
        * SPEC — the same ATR(14) spec `DEFAULT_VOLATILITY_INDICATOR`
        * (production.ts) already justifies, including the `lookback: 15`
        * detail: `atr()` spends the first bar seeding `previousClose`, so N
-       * bars yield N-1 true ranges and a 14-period ATR needs 15.
+       * bars yield N-1 true ranges and a 14-period ATR needs 15
        */
       volatility_indicator: {
         indicator: 'atr',
         params: { period: 14 },
         // The breaker's realized-vol reading, on the same 1h bars every other
-        // indicator in the system uses (#315).
+        // indicator in the system uses (#315)
         timeframe: '1h',
         lookback: 15,
       },
@@ -1757,7 +1757,7 @@ export function buildStartingProfileConfigs(
        * SPEC — ADR-0015's 2026-08-30 amendment: the live equity venue is
        * Saxo, so every modelled fill (the control arm's Simulated adapter
        * and the submit-time snapshot, #1001) prices at Saxo's economics via
-       * `costConfig.venues.saxo` rather than at Alpaca's paper book.
+       * `costConfig.venues.saxo` rather than at Alpaca's paper book
        */
       venue: 'saxo',
     },
@@ -1898,7 +1898,7 @@ export function buildStartingProfileConfigs(
     volatility: {
       // See UNCALIBRATED_VOLATILITY_BASELINE: absolute ATR price units, no
       // observation to calibrate against yet, deliberately inert rather than
-      // deliberately trip-happy.
+      // deliberately trip-happy
       baseline: {
         crypto: UNCALIBRATED_VOLATILITY_BASELINE,
         stocks: UNCALIBRATED_VOLATILITY_BASELINE,
@@ -1951,7 +1951,7 @@ export function buildStartingProfileConfigs(
     // Inert in paper (Simulated adapter only), and every value is above
     // `CostModelImpl`'s structural 1bp spread/commission floor — a config at
     // or under the floor would be silently replaced by it (Principle 1: "no
-    // config can construct a frictionless fill").
+    // config can construct a frictionless fill")
     crypto: {
       /**
        * UNSOURCED — cost-model-backtest-spec.md OPEN-GAP-A specifies the
@@ -1967,13 +1967,13 @@ export function buildStartingProfileConfigs(
        * broker plan), and pessimistic against Alpaca's own crypto fee.
        */
       commissionRate: 0.0026,
-      /** UNSOURCED — `slippage = volatility * coefficient` (spec §3, deterministic mode); crypto's API latency (~100-200ms per spec) is the wider of the two. */
+      /** UNSOURCED — `slippage = volatility * coefficient` (spec §3, deterministic mode); crypto's API latency (~100-200ms per spec) is the wider of the two */
       slippageCoefficient: 0.05,
       /** UNSOURCED — the `k` in `impact = k * volatility * sqrt(size / adv)` (spec §4, Almgren-style). Higher for the thinner book. */
       impactK: 0.5,
     },
     stocks: {
-      /** UNSOURCED — half the crypto coefficient; US large-cap spreads are materially tighter. */
+      /** UNSOURCED — half the crypto coefficient; US large-cap spreads are materially tighter */
       spreadVolatilityCoefficient: 0.05,
       /**
        * SPEC — cost-model-backtest-spec.md §Commission: "Chan's ~5 bps
@@ -1981,9 +1981,9 @@ export function buildStartingProfileConfigs(
        * defaults."
        */
       commissionRate: 0.0005,
-      /** UNSOURCED — as crypto's, scaled down for a tighter, faster venue. */
+      /** UNSOURCED — as crypto's, scaled down for a tighter, faster venue */
       slippageCoefficient: 0.02,
-      /** UNSOURCED — as crypto's `impactK`, scaled down for a deeper book. */
+      /** UNSOURCED — as crypto's `impactK`, scaled down for a deeper book */
       impactK: 0.3,
     },
     /**
@@ -2486,7 +2486,7 @@ export function buildStartingProfileConfigs(
      * cap still governs the SHAPE of the spend; the limiter is the ceiling
      * underneath it.
      */
-    // The argument, not the constant (#739).
+    // The argument, not the constant (#739)
     universe,
     traderConfig,
     riskConfig,
@@ -2748,18 +2748,18 @@ export function paperStartingProfile(
     // independently-configured value, so paper's sizing denominator and the
     // arm comparison's `basis` are provably the same expression, not two
     // constants that happen to agree — which is why #1180's conversion had to
-    // move both together.
+    // move both together
     //
     // `buildControlArmWiring` (control-arm-wiring.ts) spreads the live arm's
     // `TraderStepDeps` verbatim into the control arm's, so this one line
     // reaches both arms — no separate control-arm override is needed or
     // wanted (a second knob that has to be kept in sync is exactly what
-    // framing (2) below rejects).
+    // framing (2) below rejects)
     //
     // Scoped to `paper` only, not `backtest`: backtest's cost-model
     // calibration and Stage-2 tooling read `portfolio.equity` unclamped today
     // and #1112 does not ask that path to change; widening the blast radius
-    // there is a separate decision.
+    // there is a separate decision
     //
     // **#1180: CONVERTED. The ceiling is a USD figure because the equity it
     // clamps is one.** `sizingEquity` (direct-bind.ts) does
@@ -2769,11 +2769,11 @@ export function paperStartingProfile(
     // the book this profile claims to size against (#949 flagged it, #1180
     // ruled it not accepted). `LIVE_BOOK_SIZING_USD` is the one converted
     // quantity, and the rate that produced it travels alongside it in
-    // `capitalCeilingUsdPerGbp` below so the two cannot be read apart.
+    // `capitalCeilingUsdPerGbp` below so the two cannot be read apart
     //
     // The field is not renamed: on a live run it holds
     // `SAMURAI_LIVE_MAX_CAPITAL_USD`, already USD and never converted, so a
-    // `_gbp` suffix would be wrong on the other half of the modes.
+    // `_gbp` suffix would be wrong on the other half of the modes
     //
     // **#1400 round 1: a GBP-NATIVE account takes the book raw.** #1180 is not
     // reversed — it ruled on the Alpaca USD account, where the equity being
@@ -2782,7 +2782,7 @@ export function paperStartingProfile(
     // `sizingEquity` clamps; a GBP account satisfies that invariant with
     // `LIVE_BOOK_GBP` itself. `capitalCeilingUsdPerGbp` is OMITTED rather than
     // set to 1: it is the field the startup log reads to announce a
-    // conversion, and on this path there is none to announce.
+    // conversion, and on this path there is none to announce
     ...(mode === 'paper'
       ? bookCurrency === 'GBP'
         ? { capitalCeilingUsd: toCapitalCeilingUsd(LIVE_BOOK_GBP, 'LIVE_BOOK_GBP') }
@@ -2797,7 +2797,7 @@ export function paperStartingProfile(
     // `portfolio.equity` unclamped and never hits `whole_share_sizing`'s
     // floor the way a real paper fill can). `live` is untouched by
     // construction — this key only exists in `paperStartingProfile`'s
-    // return, never in `liveStartingProfile`'s.
+    // return, never in `liveStartingProfile`'s
     //
     // `DEFAULT_UNIVERSE` carries no `subclass_of` entries, so every stocks
     // entry sizes on `decide.ts`'s generic ATR path (`bracket === null`),
@@ -2809,7 +2809,7 @@ export function paperStartingProfile(
     // book (paper's `sizingEquity` is unconverted GBP-as-USD, #949) — at
     // that basis, `whole_share_sizing` (#941, mandatory: Alpaca 422s
     // fractional brackets) floors several real `DEFAULT_UNIVERSE` names to
-    // zero shares (MU, GOOGL logged in #1112).
+    // zero shares (MU, GOOGL logged in #1112)
     //
     // Deployment fraction (`size * entry / equity`) on this path is
     // proportional to `asset_class_risk_multiplier.stocks` and otherwise
@@ -2820,7 +2820,7 @@ export function paperStartingProfile(
     // for a 14:03:54Z evaluation; 99876.86 is #1112's separately-quoted
     // SESSION-OPEN equity, an earlier read. Dividing the first tick's
     // notional by a different tick's equity conflates the two and cannot be
-    // trusted as the deployment fraction at either one.
+    // trusted as the deployment fraction at either one
     //
     // What the trim line DOES pin, without needing the equity at that tick:
     // `per_trade_size_cap`'s fraction is `RISK_CAP_EQUITY_FRACTIONS.max_position_size_fraction_of_equity`
@@ -2832,7 +2832,7 @@ export function paperStartingProfile(
     // untrimmed ask on that SAME tick was 12939.225, so the true deployment
     // fraction is bounded — not measured — at
     // `12939.225 / 105685.13 <= 12.243%`, tighter than the 12.96% an
-    // equity-conflated division gives.
+    // equity-conflated division gives
     //
     // Scaling that bound by D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION (0.25,
     // the single-stock ETP cap D5 states for a DIFFERENT sizing path) shows
@@ -2850,7 +2850,7 @@ export function paperStartingProfile(
     // 0.015625 / 0.01 = 1.5625x) — that stop is calibrated for a
     // 3x-leveraged ETP, materially more volatile than an unlevered stock's
     // realized ATR, so it understates the multiplier needed to reach the
-    // same cap.
+    // same cap
     //
     // Caveat this does not fix: this path has no code-enforced ceiling at
     // D5's 25%. At the `vol_floor_fraction` edge (the tightest stop the ATR
@@ -2862,7 +2862,7 @@ export function paperStartingProfile(
     // and does not close (#1135 tracks the Risk Manager caps that should
     // backstop it but currently read unclamped equity). 1.9x keeps the
     // reference tick's BOUNDED deployment under the cap; a higher-conviction
-    // entry at the same realized ATR is not prevented from exceeding it.
+    // entry at the same realized ATR is not prevented from exceeding it
     //
     // #1136 measured this rather than reasoning further from the Caveat
     // above: real paper-soak decisions (`trader_log`, `verdict_log`,
@@ -2880,7 +2880,7 @@ export function paperStartingProfile(
     // scale, not the ~$99,876 pre-#1112 broker balance — but that scale is
     // two bases, not one: commit 91f24192 (#1180, merged 2026-09-09) moved
     // the sizing ceiling mid-window from a flat `LIVE_BOOK_GBP` ($1,000) to
-    // `LIVE_BOOK_SIZING_USD = LIVE_BOOK_GBP * SIZING_USD_PER_GBP` ($1,270).
+    // `LIVE_BOOK_SIZING_USD = LIVE_BOOK_GBP * SIZING_USD_PER_GBP` ($1,270)
     // 2026-09-08 rows backsolve to ~$982 equity; 2026-09-14/09-15 rows
     // backsolve to ~$1,268. (The post-#1180 D5 single-stock target is
     // 25% x $1,270 = $317.50; the $250 quoted below is #1149's own claim,
@@ -2902,7 +2902,7 @@ export function paperStartingProfile(
     // ($1,385), QQQ (~$707-717, notional $2,126-2,826), MSFT (~$500,
     // notional $1,500), plus AVGO/AMZN/META/TSLA/AAPL all cleared $250 on
     // the control arm — 17 of `DEFAULT_UNIVERSE`'s 20 names produced at
-    // least one entry decision in this window.
+    // least one entry decision in this window
     //
     // `whole_share_sizing`'s floor (#941's `rounds_to_zero_shares`) fired
     // only 6 times across the 325 decisions (MSTR x2, QQQ/AAPL/MU/AMD x1
@@ -2920,7 +2920,7 @@ export function paperStartingProfile(
     // binding variable here. D5's 25%/$250 figure is a retune TARGET #1137
     // aimed at for one reference tick (full conviction, the #1112-logged MU
     // trim) on this path, not a maximum this path's real deployment ever
-    // respects.
+    // respects
     ...(mode === 'paper'
       ? {
           traderConfig: {
@@ -2946,7 +2946,7 @@ export function paperStartingProfile(
     // rejected) that log-order determinism turns out not to matter to any
     // Stage-2/backtest tooling. Nobody has audited that claim, so the cheap
     // and certain fix is preserving the original guarantee, not arguing it
-    // away.
+    // away
     ...(mode === 'backtest' ? { maxConcurrentInstruments: 1 } : {}),
     // #1511 — long-only book, gated to the ACTUAL Saxo-tradeable set. Same
     // `bookCurrency === 'GBP'` discriminator as `capitalCeilingUsd` above:
@@ -2955,7 +2955,7 @@ export function paperStartingProfile(
     // index.ts) — so this is the run's actual routed venue, not a proxy for
     // it. `DEFAULT_UNIVERSE` (every Alpaca run, `bookCurrency: 'USD'`) is
     // left unmarked: it trades no Saxo instrument, so nothing in it should
-    // ever match `long_only_instruments`.
+    // ever match `long_only_instruments`
     ...(mode === 'paper' && bookCurrency === 'GBP' && universe !== undefined
       ? {
           riskConfig: {

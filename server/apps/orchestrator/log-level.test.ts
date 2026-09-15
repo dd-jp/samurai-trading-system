@@ -26,7 +26,7 @@ class FakeStdout implements StdoutStream {
 
 // `satisfies`, not an annotation: annotating widens to the `LogEntry` union,
 // and the `{ ...ENTRY, level }` spread below then loses the fact that `event`
-// is present — which the union's warn/error arm requires.
+// is present — which the union's warn/error arm requires
 const ENTRY = {
   trace_id: 'trace-1',
   stage: 'trader',
@@ -79,7 +79,7 @@ describe('JsonLogger debug filtering', () => {
   it('does NOT throw the no-sink error for a suppressed line when no sink works', () => {
     // The fabricated-fault case. A dropped debug line must return before the
     // `reachedStdout || reachedFile` check; if it did not, verbosity config
-    // would raise #714's throw on a run whose logging is fine.
+    // would raise #714's throw on a run whose logging is fine
     const deadStdout: StdoutStream = {
       write() {
         throw new Error('EBADF');
@@ -91,7 +91,7 @@ describe('JsonLogger debug filtering', () => {
     const logger = new JsonLogger(undefined, deadStdout, { write: () => undefined }, false);
 
     expect(() => logger.log(ENTRY)).not.toThrow();
-    // …while a non-suppressed line on the same dead logger still escalates.
+    // …while a non-suppressed line on the same dead logger still escalates
     expect(() => logger.log({ ...ENTRY, level: 'info' })).toThrow(/EBADF/);
   });
 });

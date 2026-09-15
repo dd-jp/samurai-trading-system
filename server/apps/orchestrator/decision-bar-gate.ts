@@ -74,7 +74,7 @@ import type { DecisionBar } from './types.js';
  * transient LLM blips (rate limit, timeout) both retry and succeed inside
  * one bar, small enough that a persistently failing pass forfeits the bar
  * well short of the ~30 retries the production 2-minute-tick/1-hour-bar
- * cadence would otherwise allow.
+ * cadence would otherwise allow
  */
 export const DEFAULT_MAX_DECISION_RETRIES_PER_BAR = 5;
 
@@ -92,12 +92,12 @@ export const DEFAULT_MAX_DECISION_RETRIES_PER_BAR = 5;
  */
 export type RescindResult = 'retried' | 'forfeited' | 'stale';
 
-/** The tick loop's seam onto the gate — see `DebateBarDecisionGate`. */
+/** The tick loop's seam onto the gate — see `DebateBarDecisionGate` */
 export interface DecisionGate {
   /**
    * Claims the decision for the bar containing `tickTime` if no pass has
    * claimed it yet; returns `undefined` when the bar is already claimed (the
-   * common case — this tick runs the tick path only).
+   * common case — this tick runs the tick path only)
    */
   claim(instrument: string, tickTime: Date): DecisionBar | undefined;
   /**
@@ -112,9 +112,9 @@ export interface DecisionGate {
 }
 
 export class DebateBarDecisionGate implements DecisionGate {
-  /** Opening boundary (epoch ms) of the last bar each instrument claimed. */
+  /** Opening boundary (epoch ms) of the last bar each instrument claimed */
   readonly #claimedBarMs = new Map<string, number>();
-  /** Rescind count for the current bar's retry budget, per instrument (#785). */
+  /** Rescind count for the current bar's retry budget, per instrument (#785) */
   readonly #retries = new Map<string, number>();
   /**
    * The bar `#retries` is counting for, per instrument — tracked SEPARATELY
@@ -141,7 +141,7 @@ export class DebateBarDecisionGate implements DecisionGate {
     if (this.#claimedBarMs.get(instrument) === barMs) return undefined;
     this.#claimedBarMs.set(instrument, barMs);
     // Only a genuinely NEW bar resets the retry count — reclaiming the SAME
-    // bar after a 'retried' rescind must keep accumulating toward the budget.
+    // bar after a 'retried' rescind must keep accumulating toward the budget
     if (this.#retryBarMs.get(instrument) !== barMs) {
       this.#retries.set(instrument, 0);
       this.#retryBarMs.set(instrument, barMs);
@@ -160,7 +160,7 @@ export class DebateBarDecisionGate implements DecisionGate {
     if (retries >= this.#maxRetriesPerBar) {
       // Retry budget exhausted: the claim stays HELD, so no further pass
       // retries this bar — forfeit, reported to the caller rather than acted
-      // on here, since alerting is the tick loop's job, not the gate's.
+      // on here, since alerting is the tick loop's job, not the gate's
       return 'forfeited';
     }
     this.#retries.set(instrument, retries);

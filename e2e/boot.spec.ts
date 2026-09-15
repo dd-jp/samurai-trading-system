@@ -17,7 +17,7 @@
  */
 import { expect, test } from './support/test.ts';
 
-/** The settled crypto lane — present on Live and, via its verdict row, on Glance. */
+/** The settled crypto lane — present on Live and, via its verdict row, on Glance */
 const BTC_LANE = 'BTC-USD, crypto, go, at Execution';
 
 /**
@@ -34,7 +34,7 @@ const LANES = [
   'TSLA, stocks, quorum skip, at Analysts',
 ];
 
-/** Every named region each tab owes the spec's information inventory. */
+/** Every named region each tab owes the spec's information inventory */
 const GLANCE_REGIONS = ['P&L', 'Open risk', 'Verdicts this session'];
 const LIVE_REGIONS = ['Lanes'];
 const REVIEW_REGIONS = [
@@ -48,7 +48,7 @@ const REVIEW_REGIONS = [
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
   // The first poll has landed once the rail reads ALIVE; everything below
-  // reads the same painted snapshot.
+  // reads the same painted snapshot
   await expect(page.getByRole('complementary', { name: 'Rail' })).toContainText('ALIVE');
 });
 
@@ -59,7 +59,7 @@ test('boot: the rail reads the mode, providers and budgets; Glance is the first 
   await expect(rail.getByRole('tab')).toHaveText(['Glance', 'Live', 'Review']);
   await expect(rail.getByRole('tab', { name: 'Glance' })).toHaveAttribute('aria-selected', 'true');
 
-  // The rail resolved its mode from SAMURAI_MODE rather than defaulting.
+  // The rail resolved its mode from SAMURAI_MODE rather than defaulting
   await expect(rail).toContainText('PAPER');
   await expect(rail).toContainText('Alpaca');
   await expect(rail).toContainText('Polygon');
@@ -69,7 +69,7 @@ test('boot: the rail reads the mode, providers and budgets; Glance is the first 
   for (const region of GLANCE_REGIONS) {
     await expect(page.getByRole('region', { name: region, exact: true })).toBeVisible();
   }
-  // Open risk carries the fixture book, not an empty state.
+  // Open risk carries the fixture book, not an empty state
   await expect(page.getByRole('region', { name: 'Open risk' })).toContainText('BTC-USD');
 });
 
@@ -105,13 +105,13 @@ test('verdicts: settled lanes seed rows, newest first, with the HITL badge', asy
   const rows = verdicts.getByRole('button');
   await expect(rows).toHaveCount(4);
 
-  // Newest settle first: TSLA (47s), AAPL (84s), ETH (112s), BTC (170s).
+  // Newest settle first: TSLA (47s), AAPL (84s), ETH (112s), BTC (170s)
   await expect(rows.nth(0)).toHaveAccessibleName(/^TSLA, quorum skip/);
   await expect(rows.nth(1)).toHaveAccessibleName(/^AAPL, stopped/);
   await expect(rows.nth(3)).toHaveAccessibleName(/^BTC-USD, go/);
 
   // The verdict row for this trace carries `hitl_override`, so the badge and
-  // the gate wording both reach the row.
+  // the gate wording both reach the row
   await expect(rows.nth(2)).toHaveAccessibleName(
     /^ETH-USD, no-go, human override, risk_correlation$/,
   );
@@ -126,7 +126,7 @@ test('drawer: a verdict row jumps to Live with its trace; a lane opens its timel
   const drawer = page.getByRole('complementary', { name: 'Trace detail' });
   await expect(drawer.getByRole('heading', { level: 2 })).toHaveText('BTC-USD');
   await expect(drawer).toContainText('trace-p-btc');
-  // All six stages recorded — BTC's clean run to Execution — so none reads `not reached`.
+  // All six stages recorded — BTC's clean run to Execution — so none reads `not reached`
   await expect(
     drawer.getByRole('list', { name: 'Stage timeline' }).getByRole('listitem'),
   ).toHaveCount(6);
@@ -134,7 +134,7 @@ test('drawer: a verdict row jumps to Live with its trace; a lane opens its timel
   await expect(drawer).toContainText('technical-analyst');
   await expect(drawer).toContainText('influence');
   // The fixture's open BTC position carries no fill row on the wire: the
-  // drawer must say so rather than draw an empty list.
+  // drawer must say so rather than draw an empty list
   await expect(drawer).toContainText('long 0.3 @ 66,100.00');
   await expect(drawer).toContainText('No fill recorded against this order key');
 
@@ -182,7 +182,7 @@ test('a11y: tabs, lanes, verdict rows and trade rows are reachable by Tab and op
   await expect(tradeDrawer.getByRole('heading', { level: 2 })).toHaveText(/SPY|QQQ/);
 });
 
-/** Presses Tab until the focused element matches, so tab ORDER is what is asserted. */
+/** Presses Tab until the focused element matches, so tab ORDER is what is asserted */
 async function tabTo(
   page: import('@playwright/test').Page,
   selector: string,

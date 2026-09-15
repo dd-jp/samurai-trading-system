@@ -41,7 +41,7 @@ import type { AnthropicUsage } from './pricing.js';
 // Re-exported, not redefined: `nous-wire.ts` owns these now so
 // `nous-responses.ts` cannot fork them (see that module's header). Existing
 // importers — `shared/llm/index.ts`, `nous-messages-client.ts`,
-// `nous-sentiment-client.ts`, `nous-chat.test.ts` — are unaffected.
+// `nous-sentiment-client.ts`, `nous-chat.test.ts` — are unaffected
 export {
   DEFAULT_NOUS_TIMEOUT_MS,
   NousApiError,
@@ -67,7 +67,7 @@ export interface NousChatResult {
    * Normalised by `normaliseUsage`, so `input_tokens` EXCLUDES cached tokens
    * and `cache_read_input_tokens` carries them separately — the Anthropic
    * convention `priceUsage` bills against, not the OpenAI-inclusive one Nous
-   * reports on the wire.
+   * reports on the wire
    */
   usage: AnthropicUsage;
   /**
@@ -112,7 +112,7 @@ export interface NousChatOptions {
    * `UNGATED_LLM_IN_FLIGHT`; the composition root passes the one shared gate.
    */
   gate: LlmInFlightGate;
-  /** The caller's remaining deadline for the whole call, gate wait included — see `LlmInFlightRequest.budgetMs`. */
+  /** The caller's remaining deadline for the whole call, gate wait included — see `LlmInFlightRequest.budgetMs` */
   gateBudgetMs?: number | undefined;
   /**
    * What this caller's own call is expected to take, for the gate's estimate —
@@ -120,7 +120,7 @@ export interface NousChatOptions {
    * call", which is wrong for anything materially slower.
    */
   expectedCallMs?: number | undefined;
-  /** Names this call's stage on the gate's own log lines. */
+  /** Names this call's stage on the gate's own log lines */
   llmStage?: string | undefined;
   /**
    * Shrinks the network timeout by however long the gate wait already took,
@@ -132,7 +132,7 @@ export interface NousChatOptions {
 }
 
 interface NousChoice {
-  /** `refusal` is the OpenAI-compatible sibling of `content`: set instead of it when the model declines. */
+  /** `refusal` is the OpenAI-compatible sibling of `content`: set instead of it when the model declines */
   message?: { content?: unknown; refusal?: unknown };
   finish_reason?: unknown;
 }
@@ -206,7 +206,7 @@ async function dispatch(
   // the error paths (`buildApiError`, the JSON-parse-failure branch) don't
   // carry a `NousChatResult` at all, matching how `usage`/`latency_ms` are
   // already dropped on every thrown error at this boundary (see
-  // `NousTruncatedError`'s doc comment).
+  // `NousTruncatedError`'s doc comment)
   const ttfb_ms = Date.now() - dispatchedAt;
 
   if (!response.ok) {
@@ -219,7 +219,7 @@ async function dispatch(
   } catch (cause) {
     // A 2xx with an unparseable body (truncated stream, HTML from an
     // intermediary proxy) would otherwise escape as a raw, unclassified
-    // `SyntaxError`.
+    // `SyntaxError`
     throw new NousApiError(
       response.status,
       `Nous API error: response body could not be parsed as JSON (${
@@ -242,7 +242,7 @@ async function dispatch(
 
   // #1010 characterized this site as DROPPING every cache field the provider
   // reported, which made the all-zero `cache_read_input_tokens` column a
-  // property of this parser as well as of "nothing ever asks for caching".
+  // property of this parser as well as of "nothing ever asks for caching"
   // The drop is now fixed: `normaliseUsage` reads
   // `prompt_tokens_details.cached_tokens` and — critically — subtracts it out
   // of `input_tokens`, because Nous reports OpenAI-inclusive usage where a
@@ -251,7 +251,7 @@ async function dispatch(
   // requests measure under its cache minimum anyway, so this path normally
   // sees a zero and reports a real zero. It stops being zero on the retrieval
   // path (#969), where the provider caches large search prompts on its own
-  // initiative — which is exactly why the drop had to go.
+  // initiative — which is exactly why the drop had to go
   const usage = normaliseUsage(parsed.usage);
   const finish_reason = typeof choice.finish_reason === 'string' ? choice.finish_reason : null;
 

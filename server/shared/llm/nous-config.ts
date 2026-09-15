@@ -104,7 +104,7 @@ export interface NousCredentials {
   model: string;
 }
 
-/** The role-specific env vars, exported so the startup pre-flight can name them without duplicating the convention. */
+/** The role-specific env vars, exported so the startup pre-flight can name them without duplicating the convention */
 export function nousEnvVars(role: NousRole): { model: string; apiKey: string } {
   const prefix = `NOUS_${role.toUpperCase()}`;
   return { model: `${prefix}_MODEL`, apiKey: `${prefix}_API_KEY` };

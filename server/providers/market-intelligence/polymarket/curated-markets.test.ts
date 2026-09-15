@@ -60,7 +60,7 @@ const LIVE_SNAPSHOTS: Record<
   },
 };
 
-/** A 24h hourly series ending at `NOW`, moving past the dead band so a real item is asserted, not a zero vote. */
+/** A 24h hourly series ending at `NOW`, moving past the dead band so a real item is asserted, not a zero vote */
 function history(from: number, to: number): PolymarketPricePoint[] {
   const points: PolymarketPricePoint[] = [];
   for (let index = 0; index <= 24; index += 1) {
@@ -81,7 +81,7 @@ describe('CURATED_MACRO_MARKETS (#1120)', () => {
     // Guards the fixture table above against drifting out of sync with the
     // real one — a row added or renamed in `curated-markets.ts` with no
     // matching entry here would otherwise pass the next test by accident,
-    // via `market()`'s fallback default rather than a real per-row read.
+    // via `market()`'s fallback default rather than a real per-row read
     const marketSlugs = CURATED_MACRO_MARKETS.map((entry) => entry.marketSlug);
     expect(Object.keys(LIVE_SNAPSHOTS).sort()).toEqual([...marketSlugs].sort());
   });

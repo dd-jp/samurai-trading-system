@@ -63,7 +63,7 @@ describe('computeSessionVwap', () => {
     const calendar = new AlwaysOpenCalendar();
 
     // Sanity: the trap this test guards against is real — sessionStart alone
-    // would NOT signal "no session".
+    // would NOT signal "no session"
     expect(calendar.sessionStart(asOf)).toBeInstanceOf(Date);
     expect(calendar.sessionEnd(asOf)).toBeNull();
 
@@ -80,7 +80,7 @@ describe('computeSessionVwap', () => {
     // exists between yesterday's close and today's open (#66's ingestion
     // gate), so every bar with `close_time > sessionStart` is a bar of
     // TODAY's session regardless of which boundary `sessionStart` itself
-    // resolves to — see the module's own doc comment.
+    // resolves to — see the module's own doc comment
     const calendar = new UsEquityRegularHoursCalendar();
     const asOf = new Date('2026-07-15T14:00:00Z');
     const sessionStart = calendar.sessionStart(asOf);
@@ -154,7 +154,7 @@ describe('computeIndicator stays pure and calendar-free (#746)', () => {
     // @ts-expect-error — computeIndicator's signature is exactly (bars, spec).
     // A third argument, even a real TradingCalendar, must fail `tsc`. If this
     // directive ever goes unused, the signature has been widened to accept a
-    // calendar and this test — not just this comment — is what catches it.
+    // calendar and this test — not just this comment — is what catches it
     computeIndicator(bars, spec, calendar);
   });
 

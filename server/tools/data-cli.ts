@@ -25,7 +25,7 @@ import { HttpTiingoClient } from './backtest/index.js';
 import { ingestTiingoHistory } from './ingest-tiingo-history.js';
 import { STAGE2_SCRATCH_DB_PATH } from './run-stage2.js';
 
-/** Each command's runner, keyed by the word the operator types. */
+/** Each command's runner, keyed by the word the operator types */
 const COMMANDS: Readonly<Record<string, () => Promise<void>>> = {
   'ingest-history': () =>
     ingestTiingoHistory({
@@ -53,7 +53,7 @@ export async function main(argv: readonly string[]): Promise<void> {
   if (command === undefined || command === '--help' || command === '-h') {
     // Not an error when asked for explicitly; an error when simply omitted,
     // because a bare `npm run data` that silently did nothing would read as
-    // success.
+    // success
     console.log(usage());
     process.exitCode = command === undefined ? 1 : 0;
     return;
@@ -77,7 +77,7 @@ export async function main(argv: readonly string[]): Promise<void> {
 // Runs only when executed directly, never on import — the same guard
 // `run-stage2.ts` and the two underlying jobs use. Without it, importing this
 // module for its `COMMANDS` map (a test, or a barrel that happens to re-export
-// it) would parse argv and start a network-backed ingest as a side effect.
+// it) would parse argv and start a network-backed ingest as a side effect
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
   await main(process.argv);
 }

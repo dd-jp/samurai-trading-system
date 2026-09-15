@@ -87,7 +87,7 @@ import type { BarWindow, MarketDataService } from '../../../providers/market-dat
 import { describeThrownSafely } from '../../../shared/index.js';
 import type { Logger, UniverseInstrument } from '../types.js';
 
-/** See this module's doc for the derivation and for why `5m` is 936. */
+/** See this module's doc for the derivation and for why `5m` is 936 */
 export const FIRST_TICK_BAR_WINDOWS: readonly BarWindow[] = [
   { timeframe: '5m', lookback: RVOL_5M_LOOKBACK },
   { timeframe: '1h', lookback: 57 },
@@ -100,7 +100,7 @@ export interface BarPrefetchDeps {
   asOf: Date;
   logger: Logger;
   traceId: string;
-  /** Defaults to `FIRST_TICK_BAR_WINDOWS`; overridable for testing. */
+  /** Defaults to `FIRST_TICK_BAR_WINDOWS`; overridable for testing */
   windows?: readonly BarWindow[];
 }
 

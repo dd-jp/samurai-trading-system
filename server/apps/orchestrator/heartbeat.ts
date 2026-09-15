@@ -20,7 +20,7 @@ import type { Clock } from '../../shared/index.js';
 import { describeThrownSafely } from '../../shared/index.js';
 import type { Logger } from './types.js';
 
-/** The trade-channel surface the heartbeat needs — `heartbeatChannel` in alert-catalogue.ts. */
+/** The trade-channel surface the heartbeat needs — `heartbeatChannel` in alert-catalogue.ts */
 export interface HeartbeatChannel {
   postHeartbeat(timestamp: Date): Promise<void>;
 }
@@ -47,7 +47,7 @@ export class Heartbeat {
     }
   }
 
-  /** Emits on a fixed interval until `stop()` is called. */
+  /** Emits on a fixed interval until `stop()` is called */
   start(clock: Clock, intervalMs: number): NodeJS.Timeout {
     return setInterval(() => {
       void this.emit(clock);

@@ -53,7 +53,7 @@ export { SAXO_CREDENTIAL_ENV_VARS, SAXO_GATEWAY_URLS, type SaxoTradingEnvironmen
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_RETRY_CONFIG: RetryConfig = { maxAttempts: 3, baseDelayMs: 250, maxDelayMs: 4_000 };
-/** Saxo pages with `$top`; 500 is well above any single-account working set. */
+/** Saxo pages with `$top`; 500 is well above any single-account working set */
 const PAGE_SIZE = 500;
 
 export interface SaxoHttpBrokerClientOptions {
@@ -68,9 +68,9 @@ export interface SaxoHttpBrokerClientOptions {
   /** Defaults to `SAXO_CREDENTIAL_ENV_VARS[environment].token`. Never logged. Ignored when `tokenSource` is given. */
   accessToken?: string;
   environment?: SaxoTradingEnvironment;
-  /** Defaults to `SAXO_CREDENTIAL_ENV_VARS[environment].gateway`, then `SAXO_GATEWAY_URLS[environment]`. */
+  /** Defaults to `SAXO_CREDENTIAL_ENV_VARS[environment].gateway`, then `SAXO_GATEWAY_URLS[environment]` */
   baseUrl?: string;
-  /** Pins the account when the client holds more than one; otherwise the sole account is used. */
+  /** Pins the account when the client holds more than one; otherwise the sole account is used */
   accountKey?: string;
   timeoutMs?: number;
   retry?: RetryConfig;
@@ -342,7 +342,7 @@ function validateInstrumentDetails(
 
 /**
  * `/port/v1/balances/me` answers a single object, not a `{Data: [...]}`
- * envelope, so this does not go through `readData`/`listAll`.
+ * envelope, so this does not go through `readData`/`listAll`
  */
 function validateBalance(body: unknown, context: string): SaxoAccountBalance {
   if (!isRecord(body)) failValidation(context, 'expected an object', body);
@@ -434,7 +434,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
   /**
    * Asks the token source on every attempt, not once per client and not once
    * per operation: a rotation that lands between a failed attempt and its
-   * retry is picked up by the retry (#1523).
+   * retry is picked up by the retry (#1523)
    */
   private async headers(
     init: RequestInit,
@@ -462,7 +462,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
       async () => {
         // One token per attempt (#1222): a retried request is a second
         // upstream call and must be paced as one, not covered by the first
-        // attempt's token.
+        // attempt's token
         if (priority === 'priority') {
           await this.rateLimiter.acquire();
         } else {
@@ -492,7 +492,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
             }`,
           );
         }
-        // A 2xx with an empty body is a legitimate cancel/placement ack shape.
+        // A 2xx with an empty body is a legitimate cancel/placement ack shape
         if (text.length === 0) return validate(undefined, context);
         let parsed: unknown;
         try {
@@ -563,13 +563,13 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
         priority,
       );
       rows.push(...page.rows);
-      // `__next` is absolute on the gateway; strip the base so `request` re-prefixes it.
+      // `__next` is absolute on the gateway; strip the base so `request` re-prefixes it
       path = page.next?.startsWith(this.baseUrl) ? page.next.slice(this.baseUrl.length) : page.next;
     }
     return rows;
   }
 
-  /** Unauthenticated by account: reference data, no `AccountKey` in the path or query. */
+  /** Unauthenticated by account: reference data, no `AccountKey` in the path or query */
   async getInstrumentDetails(
     uic: number,
     assetType: SaxoAssetType,
@@ -664,7 +664,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
       validateBalance,
       // A once-per-boot funding read, not an order path: the priority lane
       // (#1419) exists for `placeOrder`/`cancelOrder` and the identity call
-      // they depend on, which must not queue behind a portfolio sweep.
+      // they depend on, which must not queue behind a portfolio sweep
       'background',
     );
   }

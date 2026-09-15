@@ -38,7 +38,7 @@ function makeView(overrides: Partial<AnalystView>): AnalystView {
 
 describe.skipIf(credentials === undefined)('detectDisagreements (real LLM integration)', () => {
   it('detects a semantic conflict between two bullish analysts with contradictory reasoning', async () => {
-    // Non-null by construction: the suite is skipped when this is undefined.
+    // Non-null by construction: the suite is skipped when this is undefined
     const { apiKey, baseUrl, model } = credentials as NonNullable<typeof credentials>;
     const client = new AnthropicLlmClient(
       new NousMessagesClient({ apiKey, baseUrl, gate: UNGATED_LLM_IN_FLIGHT }),
@@ -76,7 +76,7 @@ describe.skipIf(credentials === undefined)('detectDisagreements (real LLM integr
     // Logged, not asserted. The bake-off reads this to compare candidates
     // against the debate's own 15s crypto budget (latency-budget.ts) — one
     // sample is evidence for a human choosing a model, not a threshold worth
-    // failing a suite over.
+    // failing a suite over
     console.log(
       `[bake-off] model=${model} elapsed_ms=${elapsedMs} conflicts=${result.conflicts.length}`,
     );

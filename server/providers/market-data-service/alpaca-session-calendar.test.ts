@@ -112,7 +112,7 @@ describe('AlpacaHttpCalendarClient', () => {
 
   it('does not retry a status above the valid HTTP range (#1172)', async () => {
     // 600 cannot be a real HTTP status — a hostile/broken upstream, not a
-    // transient server error to retry against.
+    // transient server error to retry against
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ message: 'weird' }, 600, 'Weird'));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -218,7 +218,7 @@ describe('AlpacaEquitySessionCalendar', () => {
    * The scenario #684 exists for: 2026-08-17 is not a real early close and is
    * used here only as a stand-in date NOT in the hand-entered
    * `US_EARLY_CLOSE_DAYS` table — proving the early close comes from the
-   * FETCHED table, not from the table #684 replaces.
+   * FETCHED table, not from the table #684 replaces
    */
   const table = buildAlpacaSessionTable([
     { date: '2026-08-17', open: '09:30', close: '13:00' }, // an early close absent from the hand table
@@ -229,12 +229,12 @@ describe('AlpacaEquitySessionCalendar', () => {
 
   it('is a trading day exactly on the dates the fetched table lists', () => {
     expect(calendar.isTradingDay(new Date('2026-08-17T15:00:00Z'))).toBe(true);
-    // A Saturday, absent from the table — no separate weekend rule needed.
+    // A Saturday, absent from the table — no separate weekend rule needed
     expect(calendar.isTradingDay(new Date('2026-08-15T15:00:00Z'))).toBe(false);
   });
 
   it('computes isOpen from the FETCHED early close, not a hand-entered one', () => {
-    // 13:00 ET = 17:00 UTC in August (EDT).
+    // 13:00 ET = 17:00 UTC in August (EDT)
     expect(calendar.isOpen(new Date('2026-08-17T16:59:00Z'))).toBe(true);
     expect(calendar.isOpen(new Date('2026-08-17T17:00:00Z'))).toBe(false);
   });

@@ -151,7 +151,7 @@ export interface ControlArmAccountStateProviderInput {
    * constructor argument at the composition root and not a filter here.
    */
   closedTrades: ClosedTradeReader;
-  /** The control arm's open lots — the same arm-scoped store the breaker deps read. */
+  /** The control arm's open lots — the same arm-scoped store the breaker deps read */
   getOpenPositions: () => Promise<readonly OpenPosition[]>;
   /**
    * The SAME two calendars the live provider is given. Shared on purpose: the
@@ -191,7 +191,7 @@ export class ControlArmAccountStateProvider implements AccountStateProvider {
   }> {
     // One read, reused by all four figures — the live provider's own posture
     // (`realizedFor` and `consecutiveLosses` both read the same store) without
-    // its four separate round trips.
+    // its four separate round trips
     const book = await this.book(asOf);
     const trades = this.input.closedTrades.getClosedTradesBetween(EPOCH, asOf);
     const positions = await this.input.getOpenPositions();
@@ -206,7 +206,7 @@ export class ControlArmAccountStateProvider implements AccountStateProvider {
       // the anchor. `trades` is already `EPOCH..asOf`, i.e. the whole record,
       // and `SqliteClosedTradeStore.getClosedTradesBetween` orders it by
       // `closed_at` — see `realizedHighWaterMark` below for why that ordering
-      // is load-bearing here.
+      // is load-bearing here
       peak_equity: realizedHighWaterMark(trades, book),
       daily_basis: {
         crypto: this.sessionBasisFor('crypto', trades, asOf, book),
@@ -217,7 +217,7 @@ export class ControlArmAccountStateProvider implements AccountStateProvider {
     };
   }
 
-  /** Same split the live provider makes: `portfolio` rides the crypto (UTC) boundary. */
+  /** Same split the live provider makes: `portfolio` rides the crypto (UTC) boundary */
   private calendarFor(key: SessionEquityKey): TradingCalendar {
     return key === 'stocks' ? this.input.calendars.stocks : this.input.calendars.crypto;
   }
@@ -243,7 +243,7 @@ export class ControlArmAccountStateProvider implements AccountStateProvider {
     for (const trade of trades) {
       if (trade.closed_at.getTime() > sessionStart) {
         // Half-open at the start, matching `realizedSince`'s `closed_at > ?`,
-        // so consecutive sessions partition the timeline exactly once.
+        // so consecutive sessions partition the timeline exactly once
         if (key === 'portfolio' || trade.asset_class === key) {
           realizedSince += trade.realized_pnl_net;
         }
@@ -256,7 +256,7 @@ export class ControlArmAccountStateProvider implements AccountStateProvider {
     // The live provider's guard, for the live provider's reason: a non-positive
     // denominator makes the fraction Infinity or NaN, and both compare false
     // against the breaker's threshold — a wiped-out account would read as "no
-    // loss" rather than as a halt.
+    // loss" rather than as a halt
     if (!(openEquity > 0)) {
       return {
         known: false,
@@ -269,7 +269,7 @@ export class ControlArmAccountStateProvider implements AccountStateProvider {
     return { known: true, open_equity: openEquity, realized_pnl: realizedSince };
   }
 
-  /** As `BrokerAccountStateProvider.consecutiveLosses`, over the control's own rows. */
+  /** As `BrokerAccountStateProvider.consecutiveLosses`, over the control's own rows */
   private consecutiveLosses(trades: readonly ClosedTrade[], asOf: Date): number {
     const windowDays = this.input.lossStreakWindowDays ?? DEFAULT_LOSS_STREAK_WINDOW_DAYS;
     const from = asOf.getTime() - windowDays * MS_PER_DAY;
@@ -301,18 +301,18 @@ export class ControlArmAccountStateProvider implements AccountStateProvider {
  * authoritative fee ledger, and reading it here would be a third accounting of
  * the same trade.
  */
-/** The durable home for the anchor — `SqliteAccountStateStore`'s shape, narrowed. */
+/** The durable home for the anchor — `SqliteAccountStateStore`'s shape, narrowed */
 export interface BookAnchorStore {
-  /** The persisted anchor, or null before one was ever written. */
+  /** The persisted anchor, or null before one was ever written */
   peakEquity(): number | null;
-  /** First-write-wins: stores `equity` if absent, and returns the value in force. */
+  /** First-write-wins: stores `equity` if absent, and returns the value in force */
   anchorEquity(equity: number, asOf: Date): number;
 }
 
 export interface ControlBookAnchorResolverInput {
   /** The LIVE arm's provider. Read exactly once, at first boot, and never again. */
   liveAccountState: AccountStateProvider;
-  /** Keyed to `CONTROL_BOOK_ANCHOR_KEY` — never the live arm's `'default'` row. */
+  /** Keyed to `CONTROL_BOOK_ANCHOR_KEY` — never the live arm's `'default'` row */
   store: BookAnchorStore;
   /**
    * `LIVE_BOOK_SIZING_USD` (or `config.riskConfig.live_book_ceiling?.book`) —
@@ -372,10 +372,10 @@ export function buildControlBookAnchorResolver(
       const live = await input.liveAccountState.getAccountState(asOf);
       observed = Math.max(live.cash, live.peak_equity);
     } catch {
-      // #972 fix 2 — return the fallback for THIS tick without writing it.
+      // #972 fix 2 — return the fallback for THIS tick without writing it
       // `store.anchorEquity` is first-write-wins, so writing here would
       // permanently pin the anchor at the declared book on the strength of
-      // one transient failure.
+      // one transient failure
       return input.fallbackBook;
     }
 
@@ -389,7 +389,7 @@ export function buildControlBookAnchorResolver(
     // reached from `getAccountState` on the control arm's decision path for
     // exits too, and a throw here would block flat-by-close the same way a
     // guard above an early return would. So an unverified ceiling is left
-    // unapplied rather than refused outright.
+    // unapplied rather than refused outright
     const ceiling = input.liveBookCeiling;
     if (ceiling !== undefined && ceiling.same_currency_verified === true) {
       observed = Math.min(observed, ceiling.book);

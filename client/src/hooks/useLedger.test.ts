@@ -37,13 +37,13 @@ describe('useLedger', () => {
     );
     expect(result.current.map((e) => e.trace_id)).toEqual(['trace-eth']);
 
-    // Re-poll of the SAME settled lane must not re-stamp it.
+    // Re-poll of the SAME settled lane must not re-stamp it
     rerender({
       snapshot: snapshotWith({ pipeline: makeView([settled]), as_of: '2026-08-07T12:00:03.000Z' }),
     });
     expect(result.current.map((e) => e.trace_id)).toEqual(['trace-eth']);
 
-    // A second, distinct trace settling appends alongside it.
+    // A second, distinct trace settling appends alongside it
     const secondSettled = doneThrough('BTC-USD', 'trace-btc', 'verdict', {
       startMs: 60_000,
       outcome: 'no_go',

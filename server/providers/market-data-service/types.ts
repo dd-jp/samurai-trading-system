@@ -15,9 +15,9 @@
 export interface Bar {
   instrument: string;
   timeframe: string;
-  /** Source-native candle timestamp (period start). */
+  /** Source-native candle timestamp (period start) */
   open_time: Date;
-  /** open_time + timeframe — the point-in-time key. */
+  /** open_time + timeframe — the point-in-time key */
   close_time: Date;
   open: number;
   high: number;
@@ -28,11 +28,11 @@ export interface Bar {
   source: string;
 }
 
-/** Requested bar range: a timeframe and a lookback count ending at asOf. */
+/** Requested bar range: a timeframe and a lookback count ending at asOf */
 export interface BarWindow {
   /** '1m' | '5m' | '1h' | '1d' ... */
   timeframe: string;
-  /** Count of bars (or duration) ending at asOf. */
+  /** Count of bars (or duration) ending at asOf */
   lookback: number;
   /**
    * What a source should do when the venue cannot produce `lookback` bars
@@ -53,13 +53,13 @@ export interface BarWindow {
 
 /**
  * The current price for an instrument, scoped to when it was observed
- * rather than when it was requested.
+ * rather than when it was requested
  */
 export interface Mark {
   price: number;
   /**
    * When the price was OBSERVED (not the request time): last trade/quote
-   * time live; last completed bar's close_time in backtest.
+   * time live; last completed bar's close_time in backtest
    */
   observed_at: Date;
   source: string;
@@ -88,7 +88,7 @@ export const INDICATOR_KINDS = [
   // reasoning extended to leverage). None of the five reads `bar.volume` —
   // the volume-derived-targets-the-underlying criterion has no work under
   // this ticket; it stays live for whichever future kind (RVOL, MFI) first
-  // consumes volume.
+  // consumes volume
   'atr_pct',
   'macd_histogram',
   'adx',
@@ -134,11 +134,11 @@ export interface IndicatorSpec {
   timeframe: string;
 }
 
-/** A computed indicator value, pinned to the bar it was last updated from. */
+/** A computed indicator value, pinned to the bar it was last updated from */
 export interface IndicatorValue {
   indicator: string;
   value: number;
-  /** close_time of the last bar used to compute this value. */
+  /** close_time of the last bar used to compute this value */
   as_of_bar_close: Date;
 }
 
@@ -151,7 +151,7 @@ export interface IndicatorValue {
 export interface Quote {
   bid: number;
   ask: number;
-  /** When the quote was observed — checked against `asOf` like `Mark.observed_at`. */
+  /** When the quote was observed — checked against `asOf` like `Mark.observed_at` */
   observed_at: Date;
 }
 
@@ -166,7 +166,7 @@ export interface Quote {
  */
 export interface MarketDataStore {
   appendBars(bars: readonly Bar[]): void;
-  /** Ascending by close_time, filtered to `close_time <= asOf`, most recent `lookback`. */
+  /** Ascending by close_time, filtered to `close_time <= asOf`, most recent `lookback` */
   readBars(instrument: string, timeframe: string, asOf: Date, lookback: number): Bar[];
   upsertLatestMark(instrument: string, mark: Mark): void;
   readLatestMark(instrument: string): Mark | undefined;
@@ -182,7 +182,7 @@ export interface MarketDataStore {
 export interface DataSource {
   fetchBars(instrument: string, window: BarWindow, asOf: Date): Promise<Bar[]>;
   fetchMark(instrument: string, asOf: Date, mode: 'live' | 'backtest'): Promise<Mark>;
-  /** Optional: only implemented by sources that quote bid/ask. */
+  /** Optional: only implemented by sources that quote bid/ask */
   fetchQuote?(instrument: string, asOf: Date): Promise<Quote | null>;
 }
 

@@ -19,30 +19,30 @@ import { chargeTopUpTo, prorateCostBreakdown } from './fill-cost.js';
 import type { FlattenAttribution, NormalizedFill } from './types.js';
 
 export interface FlattenSplitInput {
-  /** The flatten's own `flatten_submissions.idempotency_key` — the bucket the raw fills arrived under. */
+  /** The flatten's own `flatten_submissions.idempotency_key` — the bucket the raw fills arrived under */
   clientOrderId: string;
-  /** The raw venue fill(s) for this flatten, in the feed's own order. */
+  /** The raw venue fill(s) for this flatten, in the feed's own order */
   rawFills: readonly NormalizedFill[];
-  /** The lots the flatten named, in the FIFO order the write-ahead recorded. */
+  /** The lots the flatten named, in the FIFO order the write-ahead recorded */
   lotKeys: readonly string[];
-  /** Each named lot's FIXED total share of this flatten — see `redistributeOneFlatten`'s doc on why only a journalled number works. */
+  /** Each named lot's FIXED total share of this flatten — see `redistributeOneFlatten`'s doc on why only a journalled number works */
   totalShare: ReadonlyMap<string, number>;
   attribution: Pick<FlattenAttribution, 'exit_reason' | 'modelled_cost_breakdown' | 'size'>;
 }
 
-/** What one raw fill became — the dedup ids it attributed and the quantity it could not place. */
+/** What one raw fill became — the dedup ids it attributed and the quantity it could not place */
 export interface RawFillOutcome {
   rawFill: NormalizedFill;
   attributed: readonly { idempotency_key: string; broker_fill_id: BrokerFillId }[];
-  /** `> 0` means the venue filled more than the named lots held when the flatten was submitted. */
+  /** `> 0` means the venue filled more than the named lots held when the flatten was submitted */
   leftover: number;
 }
 
 export interface FlattenSplit {
-  /** Per-lot exit fills, re-keyed to the lot, in allocation order. */
+  /** Per-lot exit fills, re-keyed to the lot, in allocation order */
   splits: ReadonlyMap<string, readonly NormalizedFill[]>;
   outcomes: readonly RawFillOutcome[];
-  /** Each named lot's share still unconsumed after every raw fill — a positive value is a residual the caller must mark (#549). */
+  /** Each named lot's share still unconsumed after every raw fill — a positive value is a residual the caller must mark (#549) */
   remaining: ReadonlyMap<string, number>;
 }
 
@@ -57,7 +57,7 @@ export function splitFlattenFills(input: FlattenSplitInput): FlattenSplit {
   // general instead of assuming that: if the feed ever legitimately offers
   // more than one raw fill for the same flatten in one poll, an EARLIER
   // one in this SAME pass must still count against a lot's fixed share
-  // before a LATER one is allocated, or the two would double-book it.
+  // before a LATER one is allocated, or the two would double-book it
   const remaining = new Map(totalShare);
   for (const rawFill of rawFills) {
     let leftover = rawFill.qty;
@@ -67,7 +67,7 @@ export function splitFlattenFills(input: FlattenSplitInput): FlattenSplit {
     // of these already exist in `fills`, this exact rawFill's split already
     // ran to completion in an earlier poll and its leftover was warned about
     // then — a re-offered fill (`SharedStore.hasFill`'s dedup contract)
-    // must not re-fire the same warning forever.
+    // must not re-fire the same warning forever
     const attributedIdsThisRawFill: { idempotency_key: string; broker_fill_id: BrokerFillId }[] =
       [];
     for (const lotKey of lotKeys) {
@@ -80,7 +80,7 @@ export function splitFlattenFills(input: FlattenSplitInput): FlattenSplit {
       // #1121: computed ahead of the object literal below because it feeds
       // BOTH `fee` (the charge) and `cost_breakdown` (the record of it) —
       // see `toFill`'s doc for why the modelled commission is charged rather
-      // than left as an unspent estimate.
+      // than left as an unspent estimate
       const flattenCostBreakdown =
         rawFill.cost_breakdown === undefined &&
         attribution.modelled_cost_breakdown !== null &&
@@ -92,7 +92,7 @@ export function splitFlattenFills(input: FlattenSplitInput): FlattenSplit {
         // Forced regardless of what the adapter tagged the raw fill — see
         // `redistributeFlattenFills`'s docstring (ingest-fills.ts). This is the fill-MECHANICS
         // leg ("a market order that closed the position"), not the reason it
-        // was submitted — `fills.leg` keeps its four-value CHECK unchanged.
+        // was submitted — `fills.leg` keeps its four-value CHECK unchanged
         leg: 'exit',
         // #793: the REASON leg — WHY this flatten was submitted, journalled
         // on write-ahead (`FlattenSubmissionWriteAhead.exit_reason`,
@@ -102,14 +102,14 @@ export function splitFlattenFills(input: FlattenSplitInput): FlattenSplit {
         // to `undefined` — `exactOptionalPropertyTypes`) only for a flatten
         // row written before 0031 (legacy, reason never recorded); every
         // flatten submitted from here forward always carries one
-        // (`executeExit` refuses to write ahead without it).
+        // (`executeExit` refuses to write ahead without it)
         ...(attribution.exit_reason === null ? {} : { exit_reason: attribution.exit_reason }),
         // #1001: the flatten's OWN key — `clientOrderId` is the
         // `flatten_submissions.idempotency_key` the caller looked this
         // attribution up by, i.e. the one that produced this raw fill,
         // before the split below re-keys the row to the LOT. Carried
         // through so the persisted row can be joined back to the specific
-        // flatten submission that priced it — see `Fill.flatten_idempotency_key`.
+        // flatten submission that priced it — see `Fill.flatten_idempotency_key`
         flatten_idempotency_key: clientOrderId,
         // `fills`' row identity is `(idempotency_key, broker_fill_id)` — the
         // table's PK — so the SAME venue fill id can legitimately hold ONE
@@ -119,7 +119,7 @@ export function splitFlattenFills(input: FlattenSplitInput): FlattenSplit {
         // per (lot, id) pair, not by id alone across every lot — a blanket
         // "this broker_fill_id exists somewhere, so skip it" rule would read
         // lot B's rightful share as a duplicate of lot A's the moment lot
-        // A's is persisted.
+        // A's is persisted
         //
         // `hasFill` itself now takes `idempotency_key` and scopes on the
         // full PK (#1320), so this suffix is no longer the ONLY thing
@@ -129,7 +129,7 @@ export function splitFlattenFills(input: FlattenSplitInput): FlattenSplit {
         // across polls for the reason `totalShare` above is: the SAME
         // (id, qty) pair recomputes every time, so a repeat poll dedupes
         // cleanly instead of colliding with a differently-sized earlier
-        // attempt.
+        // attempt
         broker_fill_id: toBrokerFillId(`${rawFill.broker_fill_id}:${lotKey}`),
         qty: take,
         // #1121: the venue-reported share (`rawFill.fee * share`) TOPPED UP
@@ -137,7 +137,7 @@ export function splitFlattenFills(input: FlattenSplitInput): FlattenSplit {
         // the same per-fill "top up, never stack" rule `toFill` applies to an
         // entry fill, and for the same reason: Saxo reports a fee computed
         // from the SAME constant this fallback's estimate came from, so adding
-        // rather than topping up would charge that flatten twice over.
+        // rather than topping up would charge that flatten twice over
         //
         // Per fill, not per lot (#1121). A flatten the venue splits into
         // several raw fills applies `max` to each slice, and `Σ max ≥ max(Σ,
@@ -149,7 +149,7 @@ export function splitFlattenFills(input: FlattenSplitInput): FlattenSplit {
         // share: `share` is `take / rawFill.qty` (sums to 1 per raw fill) and
         // `flattenCostBreakdown` is prorated by `take / attribution.size`
         // (sums to the lot's fraction of the submission), so neither side is
-        // re-counted across slices.
+        // re-counted across slices
         fee: chargeTopUpTo(rawFill.fee * share, flattenCostBreakdown?.commission),
         // #1001: FALLBACK only — `rawFill.cost_breakdown` is already set (and
         // left untouched by this spread) on the Simulated adapter's own
@@ -157,7 +157,7 @@ export function splitFlattenFills(input: FlattenSplitInput): FlattenSplit {
         // needs no modelled estimate substituted for it. On a real-broker
         // fill (`rawFill.cost_breakdown === undefined`, always, on that
         // path), this attaches the flatten's OWN submit-time modelled cost
-        // breakdown instead — the venue reports no breakdown of its own.
+        // breakdown instead — the venue reports no breakdown of its own
         //
         // #1014: prorated against the SUBMISSION's `size`,
         // NOT against `share`. The two denominators differ and the difference
@@ -172,18 +172,18 @@ export function splitFlattenFills(input: FlattenSplitInput): FlattenSplit {
         // the entire snapshot AGAIN across the second's, so the summed
         // modelled cost over the flatten's fills would come to twice the
         // single estimate it is supposed to reconstruct — and, since #1121,
-        // twice the amount actually charged.
+        // twice the amount actually charged
         //
         // `take / attribution.size` makes every slice a fraction of the one
         // submission instead, so the shares sum to 1.0 across the flatten
         // however many raw fills it arrives in — and to LESS than 1.0 if the
         // venue under-fills, which is the honest reading: the unfilled
-        // remainder was never traded and cost nothing.
+        // remainder was never traded and cost nothing
         //
         // `attribution.size > 0` is guarded rather than assumed: `executeExit`
         // never writes a zero-size flatten (it refuses when the held quantity
         // is not positive), so this is a corrupted-row guard, and dividing by
-        // it would silently write `Infinity`/`NaN` money onto a fill row.
+        // it would silently write `Infinity`/`NaN` money onto a fill row
         ...(flattenCostBreakdown !== undefined ? { cost_breakdown: flattenCostBreakdown } : {}),
         // #842: CLEARED, not inherited from `...rawFill`. `take` is this
         // lot's ALLOCATION of the raw fill, not the venue's cumulative
@@ -191,7 +191,7 @@ export function splitFlattenFills(input: FlattenSplitInput): FlattenSplit {
         // lot-scoped rather than the bare order id — so neither half of
         // `qty_is_cumulative`'s contract holds any more, and leaving it set
         // would invite `advanceLot`'s top-up to take a difference against a
-        // number that was never a cumulative total.
+        // number that was never a cumulative total
         qty_is_cumulative: false,
       };
 

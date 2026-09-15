@@ -36,13 +36,13 @@ export interface AgentIntelligence {
 }
 
 export interface IntelligenceItem {
-  /** Unique: agent_id + source + timestamp + entity. */
+  /** Unique: agent_id + source + timestamp + entity */
   id: string;
   /** e.g. 'bloomberg', 'reuters', 'twitter'. */
   source: string;
   type: 'news' | 'sentiment';
   timestamp: Date;
-  /** Ticker, company name, or event. */
+  /** Ticker, company name, or event */
   entity: string;
   /**
    * Who this item is evidence FOR (#1086). Absent means `'entity'` — the
@@ -64,9 +64,9 @@ export interface IntelligenceItem {
    */
   scope?: 'entity' | 'asset_class';
   headline: string;
-  /** 1 = bullish, 0 = neutral, -1 = bearish. */
+  /** 1 = bullish, 0 = neutral, -1 = bearish */
   sentiment: 1 | 0 | -1;
-  /** 0.0-1.0. */
+  /** 0.0-1.0 */
   confidence: number;
   summary?: string;
   url?: string;
@@ -108,5 +108,5 @@ export interface MarketContext {
   last_updated: Date | null;
 }
 
-/** Push-delivery callback passed to `MarketIntelligenceStore.subscribe`. */
+/** Push-delivery callback passed to `MarketIntelligenceStore.subscribe` */
 export type MarketContextCallback = (ctx: MarketContext) => void;

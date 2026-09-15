@@ -79,7 +79,7 @@ describe('detectDisagreements', () => {
     // This is the once-per-debate call the spec deliberately bounds. Left
     // unattributed it would leave a fixed slice of every debate's bill out of
     // the per-decision cost figure — the one number this instrumentation
-    // exists to produce.
+    // exists to produce
     const mock = new MockLlmClient();
     mock.enqueueText(JSON.stringify({ summary: 'ok', conflicts: [] }));
     const views = [makeView({ analyst_id: 'a1' }), makeView({ analyst_id: 'a2' })];
@@ -132,7 +132,7 @@ describe('detectDisagreements', () => {
   /**
    * Issue #361: the pinned model fences its JSON, so this detector was
    * silently degrading to `directional_fallback` on every debate — reporting
-   * "we compared directions" where a real semantic assessment was available.
+   * "we compared directions" where a real semantic assessment was available
    */
   it('reads a markdown-fenced LLM response as a semantic result (#361)', async () => {
     const mock = new MockLlmClient();

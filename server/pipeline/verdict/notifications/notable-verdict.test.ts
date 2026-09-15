@@ -36,7 +36,7 @@ describe('isNotableVerdict', () => {
     // instrument-passes/day the large majority end here, so notifying on these
     // is ~300 Telegram messages a day — alert fatigue by construction, and the
     // failure #342 split the heartbeat chat to avoid. An operator who mutes on
-    // day two loses the escalations that matter along with the noise.
+    // day two loses the escalations that matter along with the noise
     for (const reason of ['staleness', 'drift', 'dedup', 'market_closed'] as const) {
       expect(isNotableVerdict(decision({ no_go_reason: reason }))).toBe(false);
     }
@@ -51,7 +51,7 @@ describe('isNotableVerdict', () => {
     // Deliberate default. A `no_go_reason` added later quietly joining the
     // alert stream is the fatigue this exists to prevent; one quietly staying
     // out is a row in `verdict_log` that someone reads later. The second
-    // failure is recoverable and the first is not.
+    // failure is recoverable and the first is not
     expect(isNotableVerdict(decision({ no_go_reason: 'something_new' as never }))).toBe(false);
   });
 

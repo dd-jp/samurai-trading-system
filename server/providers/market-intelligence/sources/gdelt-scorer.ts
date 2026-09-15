@@ -85,13 +85,13 @@ import { themesFor } from './gdelt-themes.js';
  */
 const PROJECTED = { themes: 4, tone: 5 } as const;
 
-/** Milliseconds of the signal window and of the baseline behind it. */
+/** Milliseconds of the signal window and of the baseline behind it */
 export interface GdeltWindows {
   signalWindowMs: number;
   baselineWindowMs: number;
 }
 
-/** #556 point 1: a 1-hour signal window against a trailing 24-hour baseline. */
+/** #556 point 1: a 1-hour signal window against a trailing 24-hour baseline */
 export const DEFAULT_GDELT_WINDOWS: GdeltWindows = {
   signalWindowMs: 60 * 60 * 1000,
   baselineWindowMs: 24 * 60 * 60 * 1000,
@@ -108,10 +108,10 @@ export const DEFAULT_GDELT_WINDOWS: GdeltWindows = {
  */
 export const CONFIDENCE_HALF_POINT_TONE = 1;
 
-/** Fraction of the baseline's buckets that must carry at least one record. */
+/** Fraction of the baseline's buckets that must carry at least one record */
 export const MIN_BASELINE_BUCKET_FRACTION = 0.75;
 
-/** Mean records per baseline bucket below which the baseline is a sample, not a level. */
+/** Mean records per baseline bucket below which the baseline is a sample, not a level */
 export const MIN_BASELINE_RECORDS_PER_BUCKET = 2;
 
 /**
@@ -142,13 +142,13 @@ export type GdeltRefusalReason =
   | 'baseline_too_sparse'
   | 'signal_window_thin';
 
-/** What the derivation measured, emitted or not — the operator-facing numbers. */
+/** What the derivation measured, emitted or not — the operator-facing numbers */
 export interface GdeltAggregateStats {
   signal_records: number;
   baseline_records: number;
   baseline_buckets: number;
   baseline_buckets_populated: number;
-  /** `undefined` when the window held no parseable record. */
+  /** `undefined` when the window held no parseable record */
   signal_tone_mean: number | undefined;
   baseline_tone_mean: number | undefined;
   tone_delta: number | undefined;
@@ -169,14 +169,14 @@ export interface GdeltDeriveParams {
   windows?: GdeltWindows;
 }
 
-/** Themes and average tone out of one stored projection, or undefined when unusable. */
+/** Themes and average tone out of one stored projection, or undefined when unusable */
 export function parseGdeltProjection(
   payload: string,
 ): { themes: string[]; tone: number } | undefined {
   const fields = payload.split('\t');
   const themes = (fields[PROJECTED.themes] ?? '').split(';').filter((theme) => theme.length > 0);
   // V1.5TONE is `tone,positive,negative,polarity,…`; only the first field is
-  // the average tone #556 scores on.
+  // the average tone #556 scores on
   const tone = Number.parseFloat((fields[PROJECTED.tone] ?? '').split(',')[0] ?? '');
   if (!Number.isFinite(tone)) return undefined;
   return { themes, tone };
@@ -196,7 +196,7 @@ export function confidenceFromToneDelta(toneDelta: number): number {
   return magnitude / (magnitude + CONFIDENCE_HALF_POINT_TONE);
 }
 
-/** `-0` is a real value here, so the comparisons are explicit rather than `Math.sign`. */
+/** `-0` is a real value here, so the comparisons are explicit rather than `Math.sign` */
 function signOf(toneDelta: number): 1 | 0 | -1 {
   if (toneDelta > 0) return 1;
   if (toneDelta < 0) return -1;
@@ -237,7 +237,7 @@ export function deriveGdeltAggregate(
     if (parsed === undefined) continue;
     // The fetcher filters against the UNION of both legs' watchlists; which
     // leg a row belongs to is decided here, where `themesFor` is the
-    // authority (`gdelt-themes.ts`).
+    // authority (`gdelt-themes.ts`)
     if (!parsed.themes.some((theme) => watched.has(theme))) continue;
 
     if (at >= signalStart) {
@@ -264,7 +264,7 @@ export function deriveGdeltAggregate(
   };
 
   // Rule 1 first: a cold archive is the case where the other two numbers are
-  // most misleading, because the window they describe never existed.
+  // most misleading, because the window they describe never existed
   if (!populated.has(0)) return { emitted: false, reason: 'baseline_far_end_empty', stats };
   if (
     populated.size < Math.ceil(buckets * MIN_BASELINE_BUCKET_FRACTION) ||
@@ -281,7 +281,7 @@ export function deriveGdeltAggregate(
   // a code fault, not a thin window — and `signal_window_thin` is an
   // info-level "the world was quiet" that would bury it. `GdeltScoringPass.run`
   // catches per asset class and degrades to a logged warn, so this cannot take
-  // the poll timer down.
+  // the poll timer down
   if (signalMean === undefined || baselineMean === undefined || stats.tone_delta === undefined) {
     throw new Error(
       'deriveGdeltAggregate: coverage rules passed but a window mean is undefined ' +
@@ -297,7 +297,7 @@ export function deriveGdeltAggregate(
   const item: IntelligenceItem = {
     // Deterministic in (source, class, window end): replaying the same archive
     // derives the same id, so `MarketIntelligenceStore.ingest`'s dedupe makes a
-    // repeat within one bar a no-op rather than a second vote.
+    // repeat within one bar a no-op rather than a second vote
     id: `${MI_SOURCES.gdeltGkg}:${params.asset_class}:${params.windowEnd.toISOString()}`,
     source: MI_SOURCES.gdeltGkg,
     type: 'news',

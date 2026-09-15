@@ -72,7 +72,7 @@ export interface VerdictAuditEntry {
   trace_id: string;
   instrument: string;
   status: 'go' | 'no_go';
-  /** The gate that fired, or 'approved'. */
+  /** The gate that fired, or 'approved' */
   reason: string;
   hitl_override: boolean;
   timestamp: Date;
@@ -115,7 +115,7 @@ export interface RiskCriticRecord {
  */
 export interface AttributionSummary {
   analyst_id: string;
-  /** Rolling realized-R contribution. */
+  /** Rolling realized-R contribution */
   rolling_r: number;
   window_days: number;
 }
@@ -142,7 +142,7 @@ export interface PipelineStageEvent {
   instrument: string;
   asset_class: AssetClass;
   stage: PipelineStage;
-  /** `audit_log.decision` — the stage's decision word (`quorum_skip`, `no_go`, …). */
+  /** `audit_log.decision` — the stage's decision word (`quorum_skip`, `no_go`, …) */
   decision: string;
   timestamp: Date;
 }
@@ -157,7 +157,7 @@ export interface PipelineLiveTick {
   asset_class: AssetClass;
   stage: PipelineStage;
   trace_id: string;
-  /** `current_tick.updated_at` — when the tick entered this stage. */
+  /** `current_tick.updated_at` — when the tick entered this stage */
   entered_at: Date;
 }
 
@@ -210,7 +210,7 @@ export interface DashboardQueryStore {
    * Arm-less by scope (#1594): `debate_log` is written only by the live
    * debate path (`debate-adapter.ts`) — the control arm's `DebateResult` is
    * synthesized in memory and never written there — so this table cannot
-   * hold a control row for an `arm` parameter to filter.
+   * hold a control row for an `arm` parameter to filter
    */
   getRecentDebates(limit: number, asOf: Date): DebateLog[];
   /**
@@ -261,7 +261,7 @@ export interface DashboardQueryStore {
    * #1594: `arm` required, same guarantee as `getOpenPositions` (#1592) —
    * `verdict_log` carries no `arm` column, so the store discriminates on
    * `trace_id` instead, but the type-level contract is identical: a read
-   * names exactly one arm, and no read returns both.
+   * names exactly one arm, and no read returns both
    */
   getVerdictHistory(limit: number, asOf: Date, arm: TradingArm): VerdictAuditEntry[];
   /**
@@ -296,7 +296,7 @@ export interface DashboardQueryStore {
    * attribute, not a bug in the join.
    */
   getAttribution(asOf: Date, arm: TradingArm): Record<string, AttributionSummary>;
-  /** `arm` required (#1594), same guarantee as `getOpenPositions` (#1592). */
+  /** `arm` required (#1594), same guarantee as `getOpenPositions` (#1592) */
   getDailyMetrics(asOf: Date, arm: TradingArm): MetricsSuite;
   /**
    * The Feedback Loop's persisted matched-control comparisons (#971),

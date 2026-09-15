@@ -14,9 +14,9 @@
 import type { StoreHandle } from '../../shared/store/index.js';
 import { fromStoredTimestamp, toStoredTimestamp } from '../../shared/store/index.js';
 
-/** One day's equity observation, anchored to the portfolio session it opens. */
+/** One day's equity observation, anchored to the portfolio session it opens */
 export interface DailyEquityObservation {
-  /** The UTC-day boundary this observation is anchored to — never the sample time. */
+  /** The UTC-day boundary this observation is anchored to — never the sample time */
   session_start: Date;
   equity: number;
   /** When the sample was actually taken. `> session_start` by up to one tick interval. */

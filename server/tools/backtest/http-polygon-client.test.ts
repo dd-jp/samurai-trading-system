@@ -2,7 +2,7 @@
 // (internal to `venue-pacing.ts` and its own test — see that barrel's
 // comment), so this test imports it directly to insulate the default-bucket
 // assertions below from whatever `SAMURAI_PACING_POLYGON_*` an operator's
-// shell or `.env.local` happens to have set.
+// shell or `.env.local` happens to have set
 import { venuePacingEnvVars } from '../../shared/http/venue-pacing.js';
 import { resolvePolygonPacing, TokenBucket } from '../../shared/index.js';
 import { HttpPolygonClient, toPolygonTicker } from './http-polygon-client.js';
@@ -23,7 +23,7 @@ function jsonResponse(body: unknown, status = 200): Response {
  * A bucket that never makes a test wait: every scenario in this file except
  * the pacing describe block below is exercising something other than
  * pacing, and a slow/parked `acquire()` would either time out the test or
- * force it onto fake timers it doesn't otherwise need.
+ * force it onto fake timers it doesn't otherwise need
  */
 function unlimitedBucket(): TokenBucket {
   return new TokenBucket({ capacity: 1_000, refillPerSecond: 1_000 });
@@ -181,7 +181,7 @@ describe('HttpPolygonClient', () => {
   // straight to `RawPolygonAggregate[]` with no shape check at all — a
   // truncated or wrong-typed row would seed Stage 2's offline scratch store
   // with a `NaN`/`undefined` bar. Every case here asserts a throw, never a
-  // structurally-wrong object making it into `out`.
+  // structurally-wrong object making it into `out`
   describe('wire validation (#509)', () => {
     it('rejects a truncated aggregate missing required fields', async () => {
       const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ results: [{ t: 1, o: 1 }] }));
@@ -300,14 +300,14 @@ describe('HttpPolygonClient free-tier pacing (#510)', () => {
   // (a developer's shell, an `--env-file`) would otherwise make this test's
   // pass/fail depend on the operator's config rather than the checked-in
   // default. Clearing and restoring them scopes the test to what it claims
-  // to test.
+  // to test
   //
   // Only `SAMURAI_PACING_POLYGON_*` needs clearing here (not
   // Alpaca/ccxt/IBKR too) — `resolvePolygonPacing()` reads exclusively that
   // namespace (#510/#520, third review cycle), so an ambient Alpaca/IBKR
   // override cannot affect anything constructed in this describe block. See
   // 'is unaffected by a malformed UNRELATED venue override' below, which
-  // asserts that isolation directly rather than assuming it.
+  // asserts that isolation directly rather than assuming it
   const polygonEnvVars = Object.values(venuePacingEnvVars('polygon'));
   const previousEnv = new Map<string, string | undefined>();
 
@@ -332,7 +332,7 @@ describe('HttpPolygonClient free-tier pacing (#510)', () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ results: [] }));
     // Starts empty (0 of 1 capacity) so the very first call must wait for a
     // token — proving `fetchAggregates` calls `acquire()`, not merely stores
-    // the bucket unused (the defect this file's #510 comment above guards).
+    // the bucket unused (the defect this file's #510 comment above guards)
     const bucket = new TokenBucket({ capacity: 1, refillPerSecond: 1 });
     await bucket.acquire();
 
@@ -356,24 +356,24 @@ describe('HttpPolygonClient free-tier pacing (#510)', () => {
     // hard-coded again here, so this test proves "the client is paced by
     // whatever ops config says" — the actual acceptance criterion — instead
     // of merely reproducing today's `DEFAULT_POLYGON_PACING` values (already
-    // covered by `venue-pacing.test.ts`) a second time.
+    // covered by `venue-pacing.test.ts`) a second time
     const { capacity, refillPerSecond } = resolvePolygonPacing();
     const stepMs = 1_000 / refillPerSecond;
 
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ results: [] }));
     const client = new HttpPolygonClient({ apiKey: FAKE_KEY, fetchImpl });
 
-    const burst = 6; // > 5, the free-tier ceiling this bucket paces against.
+    const burst = 6; // > 5, the free-tier ceiling this bucket paces against
     const pending = Promise.all(
       Array.from({ length: burst }, (_, i) => client.fetchAggregates(`SYM${i}`, window, '1d')),
     );
 
-    // The bucket starts full at `capacity`: that many calls fire for free.
+    // The bucket starts full at `capacity`: that many calls fire for free
     await vi.advanceTimersByTimeAsync(0);
     expect(fetchImpl).toHaveBeenCalledTimes(capacity);
 
     // The rest are paced one token's worth of refill apart — a burst fired
-    // all at once would have called `fetchImpl` all 6 times already.
+    // all at once would have called `fetchImpl` all 6 times already
     for (let called = capacity + 1; called <= burst; called++) {
       await vi.advanceTimersByTimeAsync(stepMs);
       expect(fetchImpl).toHaveBeenCalledTimes(called);

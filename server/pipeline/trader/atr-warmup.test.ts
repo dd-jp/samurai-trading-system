@@ -97,7 +97,7 @@ const BARS: Bar[] = GOLDEN.bars.map((raw) => ({
   source: 'golden-fixture',
 }));
 
-/** ATR(14) computed over the `lookback` bars ENDING at `endIndex` (exclusive). */
+/** ATR(14) computed over the `lookback` bars ENDING at `endIndex` (exclusive) */
 function atrAt(endIndex: number, lookback: number): number {
   const start = Math.max(0, endIndex - lookback);
   const window = BARS.slice(start, endIndex);
@@ -117,15 +117,15 @@ const FLOOR = minimumBarsFor({
   timeframe: '1h',
   lookback: 15,
 });
-/** The converged width both specs now ask for. */
+/** The converged width both specs now ask for */
 const CONVERGED = 4 * PERIOD + 1;
-/** A comfortably-past-converged reference — same convention F2 used for RSI. */
+/** A comfortably-past-converged reference — same convention F2 used for RSI */
 const WARM = 200;
 
 /**
  * Same region `rsi-warmup.test.ts` uses, for the same reason: the golden
  * fixture's ordinary random-walk stretch (bars 60-200), excluding the
- * synthetic rising/falling/flat segments that would inflate every number.
+ * synthetic rising/falling/flat segments that would inflate every number
  */
 const REGION = Array.from({ length: 141 }, (_, i) => i + 60);
 
@@ -154,7 +154,7 @@ describe('both live ATR specs sit on a converged warm-up (#757)', () => {
   });
 
   it('the declared gate: relative shift floor vs converged, over the fixture region', () => {
-    // Reproduces exactly the numbers declared on #757 before adoption.
+    // Reproduces exactly the numbers declared on #757 before adoption
     const relShifts: number[] = [];
     const signedShifts: number[] = [];
     for (const end of REGION) {
@@ -168,16 +168,16 @@ describe('both live ATR specs sit on a converged warm-up (#757)', () => {
     const p90 = relShifts[Math.floor(relShifts.length * 0.9)] as number;
     const meanSigned = signedShifts.reduce((a, b) => a + b, 0) / signedShifts.length;
 
-    // The declared bar (median <= 15%, p90 <= 30%), both cleared.
+    // The declared bar (median <= 15%, p90 <= 30%), both cleared
     expect(median).toBeLessThanOrEqual(0.15);
     expect(p90).toBeLessThanOrEqual(0.3);
     // Pin the actual measured numbers, not just the pass/fail, so a future
     // change to `atr`'s arithmetic that moves this materially is visible
-    // rather than silently still-passing a loose bound.
+    // rather than silently still-passing a loose bound
     expect(median).toBeCloseTo(0.0301, 3);
     expect(p90).toBeCloseTo(0.0693, 3);
     // No material risk-increasing bias: converged does not read systematically
-    // lower (which would tighten the residual stop and delay the breaker).
+    // lower (which would tighten the residual stop and delay the breaker)
     expect(Math.abs(meanSigned)).toBeLessThan(0.02);
   });
 
@@ -191,9 +191,9 @@ describe('both live ATR specs sit on a converged warm-up (#757)', () => {
 
   it('and no longer the plain-mean seed the floor returns', () => {
     // At FLOOR bars, `trueRanges.length <= period` so `atr`'s smoothing loop
-    // never runs and the value is the seed — a plain mean of the true ranges.
+    // never runs and the value is the seed — a plain mean of the true ranges
     // The converged width pulls in enough history that the Wilder recursion
-    // actually smooths, which is the whole point of adopting it.
+    // actually smooths, which is the whole point of adopting it
     for (const end of [120, 200, 340, BARS.length]) {
       expect(Math.abs(atrAt(end, CONVERGED) - atrAt(end, FLOOR))).toBeGreaterThan(0);
     }

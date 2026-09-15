@@ -55,7 +55,7 @@ describe.each([
 
     expect(() => store.setRiskThreshold('max_pbo', 0.5)).toThrow(ThresholdBoundViolationError);
     // And the refusal LEAVES NO ROW: a rejected loosening must not land half
-    // way, or the next read picks up the value the write door just refused.
+    // way, or the next read picks up the value the write door just refused
     expect(store.getRiskThresholds()).toEqual({});
   });
 

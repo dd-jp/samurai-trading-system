@@ -19,7 +19,7 @@ describe('isRetryableAlpacaDataError', () => {
 
   it('does not retry a status above the valid HTTP range (#1172)', () => {
     // 599 is the top of the valid 5xx range; 600 cannot be a real HTTP status —
-    // a hostile/broken upstream, not a transient server error to retry against.
+    // a hostile/broken upstream, not a transient server error to retry against
     expect(isRetryableAlpacaDataError(new AlpacaDataProviderError('p', 599))).toBe(true);
     expect(isRetryableAlpacaDataError(new AlpacaDataProviderError('p', 600))).toBe(false);
   });

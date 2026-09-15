@@ -32,7 +32,7 @@ interface LlmSpendCapRow {
  * What `read()` hands back: the ceiling (or `null` for uncapped) alongside
  * `armed_at`, which is the only thing that tells a caller "armed uncapped"
  * apart from "never armed" — both have `budgetUsd: null`, but only the first
- * has a non-null `armedAt` (#1196).
+ * has a non-null `armedAt` (#1196)
  */
 export interface LlmSpendCapState {
   budgetUsd: number | null;
@@ -75,7 +75,7 @@ export class SqliteLlmSpendCapStore {
       .prepare('SELECT budget_usd, armed_at FROM llm_spend_cap WHERE id = 1')
       .get() as LlmSpendCapRow | undefined;
     if (row === undefined) return { budgetUsd: null, armedAt: null };
-    // A non-finite REAL divides into a meter that renders as `Infinity%`.
+    // A non-finite REAL divides into a meter that renders as `Infinity%`
     const budgetUsd =
       row.budget_usd !== null && Number.isFinite(row.budget_usd) ? row.budget_usd : null;
     return { budgetUsd, armedAt: row.armed_at };

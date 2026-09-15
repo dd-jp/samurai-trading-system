@@ -81,7 +81,7 @@ export interface AnalystSkipAlert {
   instrument: string;
   /** How many ticks in a row have skipped, including this one. Always >= 2. */
   consecutive_skips: number;
-  /** The mandatory failures behind THIS skip, already sanitized. */
+  /** The mandatory failures behind THIS skip, already sanitized */
   failures: AnalystFailure[];
   reported_at: Date;
 }
@@ -161,7 +161,7 @@ export interface AnalystsStepOptions {
   skipKinds?: AnalystSkipKindRelay;
 }
 
-/** The one method the analysts step calls on `GrokAgent`. */
+/** The one method the analysts step calls on `GrokAgent` */
 export interface MarketIntelligenceRefresh {
   refresh(trace_id: string, instrument: string, assetClass: AssetClass): Promise<boolean>;
 }
@@ -217,13 +217,13 @@ export function composeMarketIntelligence(
       let refreshed = false;
       for (const agent of present) {
         // `catch` rather than trusting the contract: one agent's failure must
-        // not stop the others from filling their own bucket.
+        // not stop the others from filling their own bucket
         try {
           if (await agent.refresh(trace_id, instrument, assetClass)) refreshed = true;
         } catch {
           // Deliberately swallowed here. Both shipped agents log their own
           // failures with the instrument and the cause; re-logging without
-          // that context would add noise, and rethrowing would fail the tick.
+          // that context would add noise, and rethrowing would fail the tick
         }
       }
       return refreshed;
@@ -254,17 +254,17 @@ export function buildAnalystsStep(
     // and not even the queue's own `spendCap.check()` does — `#pump` schedules
     // the drain on a microtask rather than entering it, so nothing of the
     // refresh runs on this stack at all. That is the whole difference from the
-    // multi-second round trips this line used to await.
+    // multi-second round trips this line used to await
     // Keeping the `await` keeps the ordering with the coverage check below
-    // deterministic for a caller that does supply a blocking agent.
+    // deterministic for a caller that does supply a blocking agent
     // No refresher throws: market intelligence is an optional input, and an
     // outage must degrade the debate to NO_DATA_MARKER rather than fail a tick
-    // that would otherwise have traded.
+    // that would otherwise have traded
     await options.marketIntelligence?.refresh(trace_id, signal.asset, signal.asset_class);
 
     // #752: after the refresh, so the freshest write for this tick is what
     // the coverage check reads. Never gates the tick — see `checkMiCoverage`'s
-    // doc comment (mi-coverage.ts) for why this is an alert, not a refusal.
+    // doc comment (mi-coverage.ts) for why this is an alert, not a refusal
     if (options.coverage !== undefined) {
       await checkMiCoverage(options.coverage, {
         trace_id,
@@ -279,7 +279,7 @@ export function buildAnalystsStep(
     if (logger !== undefined && result.failures.length > 0) {
       const mandatoryFailed = result.failures.some((failure) => failure.role === 'mandatory');
       // Sanitized once, used for both the message and the payload — the raw
-      // `result.failures` array is never logged wholesale.
+      // `result.failures` array is never logged wholesale
       const safe = result.failures.map((failure: AnalystFailure) => ({
         analyst_type: failure.analyst_type,
         role: failure.role,
@@ -305,10 +305,10 @@ export function buildAnalystsStep(
 
     // #431. The tick boundary is here, not inside `runAnalysts`, which knows
     // nothing about consecutive ticks — `result.skipped` is this tick's answer
-    // and the counter is what turns a series of them into a signal.
+    // and the counter is what turns a series of them into a signal
     // Before the alerting below, and unconditionally on a skip: the runner
     // reads this immediately after the step returns, so a throw from the alert
-    // transport must not be able to cost the audit row its reason (#1080).
+    // transport must not be able to cost the audit row its reason (#1080)
     const skipKind = skipKindOf(result.skipped, result.failures);
     if (skipKind !== undefined) {
       options.skipKinds?.set(trace_id, skipKind);
@@ -333,7 +333,7 @@ export function buildAnalystsStep(
     } else {
       // A single good tick clears the run: the alert is about CONSECUTIVE
       // skips, so an intermittent failure must not accumulate its way to an
-      // alert over a week of otherwise healthy ticks.
+      // alert over a week of otherwise healthy ticks
       consecutiveSkips.delete(signal.asset);
     }
 
@@ -367,7 +367,7 @@ async function postSkipAlert(
   } catch (error) {
     logger?.log({
       // The tick's own id, not the `'analyst-skip'` category label (#1280) —
-      // the same id `analyst_panel_degraded` above logs under, so the two join.
+      // the same id `analyst_panel_degraded` above logs under, so the two join
       //
       // Deliberately NOT the same call as the `analystSkipAlerts` log line
       // (alert-catalogue.ts), which keeps the constant on purpose: that line
@@ -375,7 +375,7 @@ async function postSkipAlert(
       // and so belongs to none of them. This line reports one delivery failing
       // in ONE instrument's analysts step, inside the tick whose id is in
       // scope. The two are asymmetric because they are about different events,
-      // not because one was missed.
+      // not because one was missed
       trace_id,
       stage: 'analysts',
       event: 'analyst_skip_alert_send_failed',

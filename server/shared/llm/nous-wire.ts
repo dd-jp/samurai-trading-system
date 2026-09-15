@@ -30,10 +30,10 @@
 
 import { type AnthropicUsage, rateFor } from './pricing.js';
 
-/** Caps how much of a response body is ever baked into an error message (goes straight to logs). */
+/** Caps how much of a response body is ever baked into an error message (goes straight to logs) */
 export const MAX_ERROR_BODY_CHARS = 500;
 
-/** Wider than the callers' own timeouts — a backstop that reaps a dangling socket after an outer race has settled, not a race partner. */
+/** Wider than the callers' own timeouts — a backstop that reaps a dangling socket after an outer race has settled, not a race partner */
 export const DEFAULT_NOUS_TIMEOUT_MS = 60_000;
 
 /**
@@ -131,7 +131,7 @@ export class NousTruncatedError extends Error {
  */
 export class NousRefusalError extends Error {
   readonly model: string;
-  /** The wire field that signalled the refusal, so the log names its evidence rather than a guess. */
+  /** The wire field that signalled the refusal, so the log names its evidence rather than a guess */
   readonly signal: string;
   /** Tokens the provider billed for this refused call. Unmetered — see the class doc comment. */
   readonly usage: { input_tokens: number; output_tokens: number };
@@ -161,7 +161,7 @@ export function truncateForError(text: string): string {
     : text;
 }
 
-/** Best-effort extraction of an OpenAI-style `{ error: { type, message } }` envelope. */
+/** Best-effort extraction of an OpenAI-style `{ error: { type, message } }` envelope */
 export function describeErrorBody(body: unknown): string | undefined {
   if (typeof body !== 'object' || body === null || !('error' in body)) return undefined;
   const detail = (body as { error?: { type?: unknown; message?: unknown } }).error;
@@ -183,7 +183,7 @@ export async function buildApiError(response: Response): Promise<NousApiError> {
   // or `statusText` — and this message goes to the log sink and to alert
   // transports. An upstream that returns a megabyte of prose in `error.message`
   // would otherwise put a megabyte into every retry's log line. The full body
-  // is still available unmodified on `.body` for anyone who needs it.
+  // is still available unmodified on `.body` for anyone who needs it
   const detail = truncateForError(describeErrorBody(body) ?? response.statusText);
   return new NousApiError(response.status, `Nous API error: ${response.status} ${detail}`, body);
 }
@@ -250,7 +250,7 @@ export interface NousWireUsage {
   completion_tokens?: unknown;
   /** OpenAI's nesting. What Nous actually returns on `/responses`. */
   prompt_tokens_details?: { cached_tokens?: unknown } | undefined;
-  /** The Responses API's own names, seen alongside the legacy pair. */
+  /** The Responses API's own names, seen alongside the legacy pair */
   input_tokens?: unknown;
   output_tokens?: unknown;
   input_tokens_details?: { cached_tokens?: unknown } | undefined;

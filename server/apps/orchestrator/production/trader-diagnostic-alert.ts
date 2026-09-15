@@ -40,7 +40,7 @@
 import type { TraderDiagnostic } from '../../../pipeline/trader/index.js';
 import { escalatesAt, type TradingArm } from '../../../shared/index.js';
 
-/** One degraded-but-continuing condition, on one instrument, on one tick. */
+/** One degraded-but-continuing condition, on one instrument, on one tick */
 export interface TraderDiagnosticAlert {
   instrument: string;
   diagnostic: TraderDiagnostic;
@@ -98,7 +98,7 @@ export interface TraderDiagnosticAlertChannel {
 export interface ObservedTraderDiagnostic {
   diagnostic: TraderDiagnostic;
   consecutive_ticks: number;
-  /** True at the threshold and on each bounded repeat — see `shouldAlertAtDiagnosticCount`. */
+  /** True at the threshold and on each bounded repeat — see `shouldAlertAtDiagnosticCount` */
   alert: boolean;
 }
 
@@ -200,7 +200,7 @@ export class TraderDiagnosticThrottle {
 
     // First occurrence of each kind wins. Two entries of one kind in a tick
     // describe the same condition, so their `detail` strings differ only by
-    // where they were noticed, and the earlier one is the position-level view.
+    // where they were noticed, and the earlier one is the position-level view
     const distinct = new Map<string, TraderDiagnostic>();
     for (const diagnostic of present) {
       if (!distinct.has(diagnostic.kind)) distinct.set(diagnostic.kind, diagnostic);
@@ -220,7 +220,7 @@ export class TraderDiagnosticThrottle {
 
     // Clear the runs for kinds this instrument did NOT report this tick. Scoped
     // to this instrument's own keys: a quiet tick on SPY says nothing about
-    // whether BTC-USD's calendar is still broken.
+    // whether BTC-USD's calendar is still broken
     const prefix = `${instrument}\0`;
     for (const key of this.#consecutive.keys()) {
       if (key.startsWith(prefix) && !seen.has(key)) this.#consecutive.delete(key);

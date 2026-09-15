@@ -169,7 +169,7 @@ import { openSharedStore, sharedStorePath } from '../shared/store/index.js';
  * trail, and `bar-prefetch.ts` for the definition this aliases — the
  * orchestrator's boot-time prefetch and this hand-run backfill warm the same
  * store for the same first tick and must not be able to disagree about which
- * windows that takes (#1543).
+ * windows that takes (#1543)
  */
 export const WARM_START_WINDOWS: readonly BarWindow[] = FIRST_TICK_BAR_WINDOWS;
 
@@ -181,7 +181,7 @@ export interface CoverageRow {
   first_bar: string | undefined;
   last_bar: string | undefined;
   satisfied: boolean;
-  /** Set when the fetch for this pair threw — a thrown fetch is a SHORT row, not an aborted run. */
+  /** Set when the fetch for this pair threw — a thrown fetch is a SHORT row, not an aborted run */
   error: string | undefined;
   /**
    * `Bar.source` of the most recently stored bar for this pair (#496) —
@@ -223,9 +223,9 @@ export const QUARANTINED_BAR_SOURCES: ReadonlySet<string> = new Set(['polygon'])
 
 export interface BackfillMarketDataDeps {
   store: MarketDataStore;
-  /** Defaults to `DEFAULT_UNIVERSE`; overridable for testing. */
+  /** Defaults to `DEFAULT_UNIVERSE`; overridable for testing */
   universe?: readonly UniverseInstrument[];
-  /** Defaults to `WARM_START_WINDOWS`; overridable for testing. */
+  /** Defaults to `WARM_START_WINDOWS`; overridable for testing */
   windows?: readonly BarWindow[];
   asOf: Date;
   fetchEquityBars: (symbol: string, window: BarWindow, asOf: Date) => Promise<Bar[]>;
@@ -235,7 +235,7 @@ export interface BackfillMarketDataDeps {
 /**
  * Fills `deps.store` for every (instrument, window) pair, skipping any pair
  * the store already covers, then returns a per-pair coverage report (AC:
- * "reports per-instrument coverage — first bar, last bar, row count").
+ * "reports per-instrument coverage — first bar, last bar, row count")
  */
 export async function backfillMarketData(deps: BackfillMarketDataDeps): Promise<CoverageRow[]> {
   const universe = deps.universe ?? DEFAULT_UNIVERSE;
@@ -257,7 +257,7 @@ export async function backfillMarketData(deps: BackfillMarketDataDeps): Promise<
       let fetchError: string | undefined;
       const isCrypto = instrument.asset_class === 'crypto';
       // Unconditional, checked before the "is the store already warm" branch
-      // below: stale bars from before #1157 must not satisfy a crypto row.
+      // below: stale bars from before #1157 must not satisfy a crypto row
       if (isCrypto) {
         fetchError =
           "backfillMarketData: crypto backfill is not supported — crypto left Samurai's " +
@@ -271,7 +271,7 @@ export async function backfillMarketData(deps: BackfillMarketDataDeps): Promise<
         // away from the OPERATOR's view even though the store itself kept
         // it. Caught here, turned into a SHORT row instead (AC: "so a short
         // backfill is visible rather than silent") — never rethrown, so this
-        // catch cannot itself throw out of the loop.
+        // catch cannot itself throw out of the loop
         try {
           const fetched = await deps.fetchEquityBars(instrument.asset, window, deps.asOf);
           deps.store.appendBars(fetched);
@@ -287,12 +287,12 @@ export async function backfillMarketData(deps: BackfillMarketDataDeps): Promise<
           // `INSERT OR IGNORE` per bar, so a throw partway through leaves the
           // bars it already wrote durably in the store — reporting the
           // pre-fetch count would under-report real coverage and send the
-          // operator back to re-fetch bars that are already there.
+          // operator back to re-fetch bars that are already there
           //
           // Guarded, because this runs inside a catch: if the store read
           // ALSO fails, keep the pre-fetch rows and say so, rather than
           // throwing out of the handler and aborting every remaining pair —
-          // which is the abort this catch exists to prevent.
+          // which is the abort this catch exists to prevent
           try {
             rows = deps.store.readBars(
               instrument.asset,
@@ -337,7 +337,7 @@ export async function backfillMarketData(deps: BackfillMarketDataDeps): Promise<
   return coverage;
 }
 
-/** `AlpacaBar` (`t,o,h,l,c,v`, timestamped at open) -> `Bar`, matching `AlpacaDataSource.fetchRawCandles`'s mapping. */
+/** `AlpacaBar` (`t,o,h,l,c,v`, timestamped at open) -> `Bar`, matching `AlpacaDataSource.fetchRawCandles`'s mapping */
 function alpacaBarToBar(
   instrument: string,
   timeframe: string,
@@ -423,7 +423,7 @@ export async function runFromEnvironment(): Promise<void> {
   // startup failure this run should not leave a freshly-created SQLite file
   // behind for (#791 AC1 reuses the live path's compiler-enforced
   // `AlertChannelSlots` mechanism rather than inventing a parallel one, and
-  // that mechanism has no silent default — see `alert-transport.ts`).
+  // that mechanism has no silent default — see `alert-transport.ts`)
   const alertsMode = resolveAlertsMode({});
 
   const dbPath = sharedStorePath();
@@ -433,16 +433,16 @@ export async function runFromEnvironment(): Promise<void> {
 
   // `buildAlertChannels` needs the store handle (its Telegram client
   // audit-logs inbound allowlist rejections through it), so this comes after
-  // `openSharedStore` even though `alertsMode` was resolved before it.
+  // `openSharedStore` even though `alertsMode` was resolved before it
   // `alertsMode` is never `undefined` here — this script injects nothing —
   // but the ternary mirrors `startFromEnvironment`'s own shape rather than
-  // asserting it away.
+  // asserting it away
   const channels =
     alertsMode === undefined ? {} : buildAlertChannels({ alertsMode, injected: {}, db, logger });
   // `log-only` mode returns no `dataFailoverAlerts` slot at all (see
   // `buildAlertChannels`'s doc) — default to the SAME log-only stand-in
   // `production.ts` defaults to for the live path (`production.ts:640`),
-  // rather than inventing a second one, so both paths degrade identically.
+  // rather than inventing a second one, so both paths degrade identically
   const dataFailoverAlertChannel: DataFailoverAlertChannel =
     channels.dataFailoverAlerts ?? loggingAlertChannel('dataFailoverAlerts', logger);
   const alertFailover = buildBackfillFailoverAlerter({
@@ -470,7 +470,7 @@ export async function runFromEnvironment(): Promise<void> {
   // moment it is actually needed, and a missing key then surfaces as the
   // fallback's own failure inside `withOhlcvFailover`'s combined error
   // (still loud, just scoped to the pair that actually failed over) rather
-  // than as a startup crash.
+  // than as a startup crash
   let polygonClient: PolygonBarsClient | undefined;
   const getPolygonClient = (): PolygonBarsClient => {
     polygonClient ??= new PolygonBarsClient({ rateLimiter: polygonBucket });
@@ -496,7 +496,7 @@ export async function runFromEnvironment(): Promise<void> {
       // short read for a guaranteed one. A genuinely unrescuable throw is
       // instead caught here by `withOhlcvFailover` (triggering the Polygon
       // fallback) and, if THAT also fails, by `backfillMarketData`'s own
-      // per-pair try/catch, turned into a SHORT coverage row.
+      // per-pair try/catch, turned into a SHORT coverage row
       const bars = await equityClient.getBars(symbol, window.timeframe, at, window.lookback);
       return bars.map((bar) => alpacaBarToBar(symbol, window.timeframe, bar));
     },
@@ -526,7 +526,7 @@ export async function runFromEnvironment(): Promise<void> {
   // as if it were a clean run: a caller that greps for a non-zero exit code
   // — cron, a CI step, an operator's own habit — is exactly who else must
   // not miss a polygon-sourced fill, not only the human reading the
-  // QUARANTINED rows above.
+  // QUARANTINED rows above
   const quarantined = coverage.filter((row) => row.quarantined);
   if (quarantined.length > 0) {
     console.error(

@@ -175,7 +175,7 @@ function notEvaluated(input: MetricsInput): string[] {
   }
   // Mirrors `liveBacktestDivergence`'s guard exactly. The `0` return stays —
   // a broken reference must not manufacture a breach — but the resulting
-  // "no breach" is not evidence of health, so it is recorded as un-run.
+  // "no breach" is not evidence of health, so it is recorded as un-run
   if (input.backtest_reference_sharpe <= 0) {
     lines.push(LIVE_BACKTEST_DIVERGENCE_OVER_MAX);
   }

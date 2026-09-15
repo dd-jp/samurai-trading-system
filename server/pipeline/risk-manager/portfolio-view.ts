@@ -30,7 +30,7 @@ import type { DailyPnl, PortfolioView, SessionBasis, SessionBasisByClass } from 
 export interface PortfolioAccountingInput {
   positions: OpenPosition[];
   marketData: MarketDataService;
-  /** Point-in-time read for every mark lookup — never wall-clock. */
+  /** Point-in-time read for every mark lookup — never wall-clock */
   asOf: Date;
   /**
    * Reads the instant the marks came back, which is when this view VALUES the
@@ -56,7 +56,7 @@ export interface PortfolioAccountingInput {
    * The unrealized half is added here, from the marks fetched below.
    */
   daily_basis: SessionBasisByClass;
-  /** Realized, from fills — not computed here (#83). */
+  /** Realized, from fills — not computed here (#83) */
   consecutive_losses: number;
   /**
    * FEED staleness bound per asset class (#640): max `asOf -
@@ -99,7 +99,7 @@ export interface PortfolioAccountingInput {
   unvaluable_marks?: UnvaluableMarkPolicy;
 }
 
-/** See `PortfolioAccountingInput.unvaluable_marks`. */
+/** See `PortfolioAccountingInput.unvaluable_marks` */
 export type UnvaluableMarkPolicy = 'refuse' | 'exclude';
 
 /**
@@ -163,9 +163,9 @@ export class StaleMarkError extends BookValuationError {
   constructor(
     readonly instrument: string,
     readonly observed_at: Date,
-    /** When the mark was RECEIVED — the coordinate freshness is judged at (#1111). */
+    /** When the mark was RECEIVED — the coordinate freshness is judged at (#1111) */
     readonly readAt: Date,
-    /** The tick's point-in-time coordinate, carried for the pass-duration it implies. */
+    /** The tick's point-in-time coordinate, carried for the pass-duration it implies */
     readonly asOf: Date,
     readonly freshness: Exclude<MarkFreshness, { status: 'fresh' }>,
   ) {
@@ -174,7 +174,7 @@ export class StaleMarkError extends BookValuationError {
     // the venue's disagreeing AFTER the mark was already in hand, which pass
     // latency can no longer explain at any magnitude — the pre-#1111 wording
     // asserted that disagreement for an offset that was only our own elapsed
-    // time between `asOf` and the read.
+    // time between `asOf` and the read
     const passMs = readAt.getTime() - asOf.getTime();
     const detail =
       freshness.status === 'stale'
@@ -368,7 +368,7 @@ async function readMarks(
   // that took a minute genuinely is a minute old by the time its price reaches
   // the exposure arithmetic. Judging each mark at its own arrival would call a
   // price fresh that is not fresh any more at the moment it is used, which is
-  // the direction #640 exists to refuse.
+  // the direction #640 exists to refuse
   const readAt = clock.now();
 
   const marks = new Map<string, number>();
@@ -381,7 +381,7 @@ async function readMarks(
       // asked for. Not distinguished from a read failure here: either way this
       // book has an unvalued position in it. Typed `MarkReadError`, not a
       // bare `Error`, so a caller narrowing on `BookValuationError` (#1089)
-      // catches this shape too.
+      // catches this shape too
       failures.push(
         new MarkReadError(
           instrument,
@@ -398,7 +398,7 @@ async function readMarks(
       // say WHICH held position is unvalued sends the operator looking through
       // the whole book. The source reason is folded into the MESSAGE, not left
       // to `cause`: `describeThrown` prints the message alone, so a reason that
-      // travels only as `cause` is a reason the operator never reads.
+      // travels only as `cause` is a reason the operator never reads
       failures.push(
         new MarkReadError(
           instrument,
@@ -410,7 +410,7 @@ async function readMarks(
       continue;
     }
 
-    // #640: fail closed on a STALE mark, not merely on a missing one.
+    // #640: fail closed on a STALE mark, not merely on a missing one
     //
     // A mark ARRIVING is not evidence the feed is alive — in live it may serve
     // from a TTL cache, and a halted or thin instrument keeps returning its
@@ -418,10 +418,10 @@ async function readMarks(
     // the Risk Manager exists to prevent: exposure, drawdown and daily PnL are
     // all computed from these marks, so a frozen price silently freezes the
     // drawdown breaker at whatever it read last and hands every cap a number
-    // that stopped being true.
+    // that stopped being true
     //
     // Collected rather than thrown on sight, so one stale name does not hide a
-    // second dark one from the same report.
+    // second dark one from the same report
     const assetClass = classByInstrument.get(instrument) ?? read.mark.asset_class;
     const freshness = classifyMarkFreshness(read.mark, readAt, max_mark_age[assetClass]);
     if (freshness.status !== 'fresh') {
@@ -439,7 +439,7 @@ async function readMarks(
   // judgement and the per-instrument reasons above are IDENTICAL under both
   // policies — the only difference is whether the report is thrown or
   // returned. The caller is responsible for making the degradation audible;
-  // see `ExitValuationDegradedAlertChannel` (orchestrator/production).
+  // see `ExitValuationDegradedAlertChannel` (orchestrator/production)
   if (policy === 'exclude') {
     return { marks, unvalued };
   }
@@ -452,7 +452,7 @@ async function readMarks(
     // Each failure's own text is folded in for the same reason as the
     // single-failure wrap above: `AggregateError.errors` is printed nowhere, so
     // a report naming the instruments but not the reasons tells the operator
-    // which positions are dark and nothing about why.
+    // which positions are dark and nothing about why
     const reasons = failures.map((failure) => failure.message).join('; ');
     throw new AggregateError(
       failures,
@@ -488,7 +488,7 @@ export async function computePortfolioView(
   // bound below can be the right one per class. Taken from the POSITIONS
   // rather than from the returned `Mark.asset_class`: the bound is a property
   // of what we hold, and reading it off the data source's own answer would let
-  // a mis-classified mark select the more permissive bound for itself.
+  // a mis-classified mark select the more permissive bound for itself
   const classByInstrument = new Map<string, AssetClass>(
     positions.map((position) => [position.instrument, position.asset_class]),
   );
@@ -507,7 +507,7 @@ export async function computePortfolioView(
   const reserved_exposure_by_instrument: Record<string, number> = {};
   const reserved_exposure_by_class = { crypto: 0, stocks: 0 };
   // Same single pass as the exposure math, over the same `marks` map — #332
-  // requires the marks be fetched once, and this is what makes that true.
+  // requires the marks be fetched once, and this is what makes that true
   const unrealized_by_class: Record<AssetClass, number> = { crypto: 0, stocks: 0 };
 
   for (const position of positions) {
@@ -516,7 +516,7 @@ export async function computePortfolioView(
     // conservative, which is exactly why `unvalued_instruments` travels on the
     // view and why `RiskManagerImpl.evaluate` refuses an ENTRY that sees a
     // non-empty one. Under the default `'refuse'` policy this list is empty
-    // and the loop is byte-for-byte what it was.
+    // and the loop is byte-for-byte what it was
     if (unvalued.includes(position.instrument)) continue;
     // Freeze §4: the VALUATION is always filled_size, never requested_size —
     // a partially-filled lot is marked at what actually filled, and an
@@ -524,7 +524,7 @@ export async function computePortfolioView(
     // RESERVATION below is a different question asked of the same row (what
     // has been committed to the venue and not come back), kept in its own
     // fields for exactly that reason — see
-    // `PortfolioView.reserved_exposure_by_instrument`.
+    // `PortfolioView.reserved_exposure_by_instrument`
     const mark = markFor(marks, position.instrument);
     const notional = position.filled_size * mark;
     exposure_by_instrument[position.instrument] =

@@ -2,7 +2,7 @@
  * Shared scaffolding for the Stage-2 research scripts (review 2026-08-06 E) —
  * previously duplicated verbatim in `run-stage2.ts` and
  * `run-stage2-cost-decomposition.ts`, each carrying its own copy of the #420
- * per-asset-class timeline rationale.
+ * per-asset-class timeline rationale
  */
 import {
   AlwaysOpenCalendar,
@@ -19,7 +19,7 @@ import type {
 } from './backtest/index.js';
 import { ReplayDriver } from './backtest/index.js';
 
-/** Everything a per-asset-class replay needs, however the calling script assembled it. */
+/** Everything a per-asset-class replay needs, however the calling script assembled it */
 export interface Stage2ReplayContext {
   store: Stage2HistoricalStore;
   costModel: CostModelImpl;
@@ -57,12 +57,12 @@ export function makeAssetClass(
     makeRunner: () =>
       new ReplayDriver({
         barSource: ctx.store,
-        // Scoped to this asset class's symbols, not the whole store (#420).
+        // Scoped to this asset class's symbols, not the whole store (#420)
         // The store's own `barTimestamps` is the union across every ingested
         // instrument, and stock/crypto daily bars close at different UTC
         // times — so an unscoped timeline steps a stock replay through every
         // crypto bar too, padding the return series with zeros and understating
-        // the per-period Sharpe by roughly sqrt(n_real / n_union).
+        // the per-period Sharpe by roughly sqrt(n_real / n_union)
         timeline: ctx.store.timelineFor(symbols),
         registry: ctx.store,
         costModel: ctx.costModel,
@@ -74,7 +74,7 @@ export function makeAssetClass(
         })),
         capitalPerTrade: ctx.capitalPerTrade,
         // The store's own timeframe, not a literal (#664): the driver and the
-        // bars it replays cannot disagree if only one of them decides.
+        // bars it replays cannot disagree if only one of them decides
         timeframe: ctx.store.timeframe,
         sessionCalendar: calendarFor(asset_class),
       }),

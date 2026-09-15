@@ -16,15 +16,15 @@
  */
 import type { Clock } from '../../../shared/index.js';
 
-/** The raw per-country score read, decoupled from any particular SDK/transport. */
+/** The raw per-country score read, decoupled from any particular SDK/transport */
 export interface CiiScoreProvider {
-  /** Returns the current CII (0-100) for a country code, or null if WorldMonitor has no score for it. */
+  /** Returns the current CII (0-100) for a country code, or null if WorldMonitor has no score for it */
   getCii(countryCode: string): Promise<number | null>;
 }
 
-/** How stale a cached score is allowed to get before a re-poll is attempted. */
+/** How stale a cached score is allowed to get before a re-poll is attempted */
 export interface CiiConsumerConfig {
-  /** Matches WorldMonitor's own decoupled poll cadence (5-15 min, ADR-0002 §2). */
+  /** Matches WorldMonitor's own decoupled poll cadence (5-15 min, ADR-0002 §2) */
   pollIntervalMs: number;
 }
 
@@ -92,7 +92,7 @@ export class CiiConsumer {
       .catch((error) => {
         console.error(`[cii-consumer] getCii failed for country=${country}:`, error);
         // Record the attempt (keeping the last known score) so a failing
-        // provider is retried on the next poll cycle, not on every call.
+        // provider is retried on the next poll cycle, not on every call
         this.cache.set(country, { score: priorScore, fetchedAt });
       })
       .finally(() => {

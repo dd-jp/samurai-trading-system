@@ -50,13 +50,13 @@ export interface Trade {
    * construction, per its spec definition "... − costs".
    */
   pnl: number;
-  /** Absolute traded notional (entry + exit), the turnover numerator. */
+  /** Absolute traded notional (entry + exit), the turnover numerator */
   notional: number;
   opened_at: Date;
   closed_at: Date;
 }
 
-/** The closed trades over the sample, in ascending `closed_at` order. */
+/** The closed trades over the sample, in ascending `closed_at` order */
 export interface TradeSeries {
   trades: readonly Trade[];
   /**
@@ -64,7 +64,7 @@ export interface TradeSeries {
    * traded notional / capital, so without it the ratio has no denominator.
    */
   averageCapital: number;
-  /** The sample the trades were drawn from — the exposure denominator. */
+  /** The sample the trades were drawn from — the exposure denominator */
   window: DateRange;
 }
 
@@ -91,19 +91,19 @@ export interface Split {
   test: DateRange[];
 }
 
-/** The MinBTL guard's verdict for a window. */
+/** The MinBTL guard's verdict for a window */
 export interface MinBtlVerdict {
-  /** Max independent trials the sample length supports (~45 / 5yr). */
+  /** Max independent trials the sample length supports (~45 / 5yr) */
   limit: number;
-  /** N — distinct configs evaluated for selection. */
+  /** N — distinct configs evaluated for selection */
   distinct_configs: number;
-  /** `distinct_configs > limit` — the strategy has out-searched its data. */
+  /** `distinct_configs > limit` — the strategy has out-searched its data */
   exceeded: boolean;
 }
 
 /** PBO's verdict. `reject` is the spec's kill line: PBO > 0.05. */
 export interface PboVerdict {
-  /** Probability the in-sample-best config underperforms the median OOS. */
+  /** Probability the in-sample-best config underperforms the median OOS */
   pbo: number;
   verdict: 'accept' | 'reject';
 }

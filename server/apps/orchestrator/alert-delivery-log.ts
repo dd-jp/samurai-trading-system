@@ -1,7 +1,7 @@
 /**
  * SQLite-backed durable record of a Telegram alert send that exhausted
  * retries (#1108) — see migration 0043 for why this is a dedicated table
- * rather than a row in `audit_log`.
+ * rather than a row in `audit_log`
  */
 
 import { sanitizeLogText } from '../../shared/sanitize-log-text.js';

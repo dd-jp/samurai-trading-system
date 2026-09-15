@@ -34,7 +34,7 @@ import {
 } from '@contracts';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-/** The modes the server may send (`DashboardSnapshot['mode']`, #539). */
+/** The modes the server may send (`DashboardSnapshot['mode']`, #539) */
 type ServerMode = DashboardSnapshot['mode'];
 
 /**
@@ -132,7 +132,7 @@ export type WireLlmSpendSummary = Omit<LlmSpendSummary, 'cap_usd' | 'cap_armed_a
 
 export const SNAPSHOT_URL = '/api/snapshot';
 export const POLL_INTERVAL_MS = 3_000;
-/** Two consecutive missed polls put the page into its stale state (spec). */
+/** Two consecutive missed polls put the page into its stale state (spec) */
 export const STALE_AFTER_MISSED_POLLS = 2;
 /**
  * How long a single poll may hang before it is abandoned (#606 item 3).
@@ -213,7 +213,7 @@ export interface SnapshotFeed {
   lastSuccessAt: string | null;
   /** Why the last poll failed, for the rail to name. `null` when the last poll worked. */
   error: string | null;
-  /** The rail's health discriminator — see `FeedStatus`'s doc comment. */
+  /** The rail's health discriminator — see `FeedStatus`'s doc comment */
   status: FeedStatus;
 }
 
@@ -228,7 +228,7 @@ export interface SnapshotFeed {
  */
 export type LiveFeed = Omit<SnapshotFeed, 'snapshot'> & { snapshot: WireSnapshot };
 
-/** A feed before its first validated snapshot — see `ColdStatus`. */
+/** A feed before its first validated snapshot — see `ColdStatus` */
 export type ColdFeed = Omit<SnapshotFeed, 'snapshot' | 'status'> & {
   snapshot: null;
   status: ColdStatus;
@@ -280,9 +280,9 @@ export function feedView(feed: SnapshotFeed): FeedView {
 export interface UseSnapshotOptions {
   url?: string;
   intervalMs?: number;
-  /** Injected for tests; defaults to the global `fetch`. */
+  /** Injected for tests; defaults to the global `fetch` */
   fetchImpl?: typeof fetch;
-  /** Injected for tests; defaults to `Date.now`. */
+  /** Injected for tests; defaults to `Date.now` */
   now?: () => number;
   /**
    * Sent as `Authorization: Bearer <authToken>` on every poll when non-empty
@@ -360,7 +360,7 @@ function hasWireShape(value: unknown): boolean {
   }
   // `llm_spend` is deliberately NOT required here — see `WireSnapshot`. It is
   // narrowed to `null` by `toWireSnapshot` instead, so an absent summary costs
-  // one panel its numbers rather than costing the operator the whole page.
+  // one panel its numbers rather than costing the operator the whole page
   for (const key of ['metrics', 'providers']) {
     const field = candidate[key];
     if (typeof field !== 'object' || field === null) return false;
@@ -370,7 +370,7 @@ function hasWireShape(value: unknown): boolean {
   return Array.isArray((pipeline as Record<string, unknown>).lanes);
 }
 
-/** A non-null object that is not an array — `typeof [] === 'object'`. */
+/** A non-null object that is not an array — `typeof [] === 'object'` */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -604,7 +604,7 @@ export function toWireSnapshot(body: unknown): WireSnapshot | null {
   const spend = candidate.llm_spend;
   // `spend` is `unknown`, so the spread source still needs a cast; narrowed
   // to `Omit<..., 'cap_usd' | 'cap_armed_at'>` so the two fields actually
-  // being normalized below stay compiler-checked against `WireLlmSpendSummary`.
+  // being normalized below stay compiler-checked against `WireLlmSpendSummary`
   const llm_spend: WireLlmSpendSummary | null = isSpendSummary(spend)
     ? {
         ...(spend as unknown as Omit<LlmSpendSummary, 'cap_usd' | 'cap_armed_at'>),
@@ -631,7 +631,7 @@ export function toWireSnapshot(body: unknown): WireSnapshot | null {
 
 interface FeedState {
   snapshot: WireSnapshot | null;
-  /** Two poll intervals with no successful (matching-contract) poll. */
+  /** Two poll intervals with no successful (matching-contract) poll */
   watchdogStale: boolean;
   /**
    * The most recent poll parsed as an object but carried a `contract_version`
@@ -687,7 +687,7 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
 
   // A ref, not state: the interval callback must see the current
   // url/fetch/now/authToken/arm without the effect being torn down and
-  // rebuilt, which would restart the poll clock on every payload.
+  // rebuilt, which would restart the poll clock on every payload
   const optionsRef = useRef({ url, fetchImpl, now, authToken, arm });
   optionsRef.current = { url, fetchImpl, now, authToken, arm };
 
@@ -697,7 +697,7 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
     // would outlive the effect, and a remount (React StrictMode does exactly
     // this in development) would then find `inFlight` still true from the
     // previous mount's aborted request and skip its own first poll — leaving
-    // the page blank until the next interval tick.
+    // the page blank until the next interval tick
     let inFlight = false;
     let lastSuccessMs = optionsRef.current.now();
     const controllers = new Set<AbortController>();
@@ -722,16 +722,16 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
 
       // Per POLL INVOCATION, not per effect (PR #607 review round 1, which
       // read it as effect-scoped): a fresh `timedOut` is created on every call,
-      // so one poll being declared dead cannot discard the NEXT poll's payload.
+      // so one poll being declared dead cannot discard the NEXT poll's payload
       // The flag reaching the guard below is always the one belonging to the
-      // request whose response is being examined.
+      // request whose response is being examined
       let timedOut = false;
       // Releasing the poll slot is idempotent and reachable from BOTH the
       // timeout and the `finally` (#606 item 3). Aborting a controller does
       // not settle a request that ignores its signal, so a `finally`-only
       // release leaves `inFlight` true forever after a hang — every later
       // `poll()` returns at the guard above, no retry is ever issued, and the
-      // page merely looks stale while having silently stopped polling.
+      // page merely looks stale while having silently stopped polling
       let released = false;
       const release = () => {
         if (released) return;
@@ -753,7 +753,7 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
         // Omitted entirely when there is no token, rather than sent as an
         // empty/blank `Authorization` header (#1038) — the no-token request
         // this dashboard sends by default must stay byte-for-byte the same
-        // shape it was before this option existed.
+        // shape it was before this option existed
         const headers =
           token !== undefined && token !== null && token !== ''
             ? { Authorization: `Bearer ${token}` }
@@ -771,7 +771,7 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
         // `timedOut` is checked after BOTH awaits, so a response whose headers
         // arrived in time but whose body hung is discarded too: a payload this
         // poll has already been declared dead over must not land later and
-        // rewrite the page from a snapshot the page never showed.
+        // rewrite the page from a snapshot the page never showed
         if (cancelled || timedOut) return;
         // Checked BEFORE `toWireSnapshot`/`hasWireShape`, deliberately
         // (#1316): a renamed or dropped field would also fail the structural
@@ -780,13 +780,13 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
         // it actually is. `readServerContractVersion` only needs `body` to be
         // an object — it makes no other claim about shape — so this check
         // runs on strictly less trust than the structural one and is meant to
-        // win the race to explain a bad payload.
+        // win the race to explain a bad payload
         const serverVersion = readServerContractVersion(body);
         if (serverVersion !== CONTRACT_VERSION) {
           // Deliberately does NOT advance `lastSuccessMs` and does NOT touch
           // `snapshot`: this poll produced nothing this client can trust the
           // shape of, so it is not a success by either measure the rest of
-          // this hook uses — see `FeedState.contractMismatch`'s doc comment.
+          // this hook uses — see `FeedState.contractMismatch`'s doc comment
           const message =
             serverVersion === undefined
               ? `served bundle disagrees with the server's wire contract (server sent no contract_version; this client expects ${CONTRACT_VERSION})`
@@ -810,13 +810,13 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
         }));
       } catch (cause) {
         // An abort is either this effect tearing down or the timeout above,
-        // and the timeout has already named itself in `error`.
+        // and the timeout has already named itself in `error`
         if (cancelled || controller.signal.aborted) return;
         // Deliberately leaves `snapshot` and `contractMismatch` untouched:
         // the numbers stay on screen and the watchdog decides when they are
         // stale; a prior mismatch stays a mismatch until a validating poll
         // clears it, rather than being papered over by an unrelated network
-        // error's message.
+        // error's message
         const message = describeError(cause);
         setState((prev) => (prev.error === message ? prev : { ...prev, error: message }));
       } finally {
@@ -831,7 +831,7 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
       // Evaluated on every tick, whether or not a request is outstanding: a
       // hung fetch never rejects, so a failure counter would sit at zero while
       // the data rots. "How long since a successful poll" is true of a hang, a
-      // rejection and a 500 alike.
+      // rejection and a 500 alike
       markStale(optionsRef.current.now() - lastSuccessMs > intervalMs * STALE_AFTER_MISSED_POLLS);
       void poll();
     }, intervalMs);

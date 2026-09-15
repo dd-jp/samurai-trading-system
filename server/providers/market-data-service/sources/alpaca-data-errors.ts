@@ -26,7 +26,7 @@ export class AlpacaDataTimeoutError extends Error {
 }
 
 export class AlpacaDataRateLimitError extends Error {
-  /** Provider-supplied hint (from a `Retry-After` header), if one was given. */
+  /** Provider-supplied hint (from a `Retry-After` header), if one was given */
   readonly retryAfterMs: number | undefined;
 
   constructor(message: string, retryAfterMs?: number) {
@@ -36,9 +36,9 @@ export class AlpacaDataRateLimitError extends Error {
   }
 }
 
-/** Any other upstream failure (auth, bad request, 5xx, network) — not classified further. */
+/** Any other upstream failure (auth, bad request, 5xx, network) — not classified further */
 export class AlpacaDataProviderError extends Error {
-  /** HTTP status code, when the failure came from a response rather than a network error. */
+  /** HTTP status code, when the failure came from a response rather than a network error */
   readonly status: number | undefined;
 
   constructor(message: string, status?: number) {
@@ -73,13 +73,13 @@ export class AlpacaDataProviderError extends Error {
 export class AlpacaDataUnderfetchError extends Error {
   readonly symbol: string;
   readonly timeframe: string;
-  /** Bars the caller asked for. */
+  /** Bars the caller asked for */
   readonly requested: number;
-  /** Bars the widened range actually produced. */
+  /** Bars the widened range actually produced */
   readonly received: number;
-  /** Start of the widest range searched (the retry's), ISO-8601. */
+  /** Start of the widest range searched (the retry's), ISO-8601 */
   readonly searchedFrom: string;
-  /** `asOf` — the point-in-time boundary, never widened. */
+  /** `asOf` — the point-in-time boundary, never widened */
   readonly searchedTo: string;
 
   constructor(details: {
@@ -126,7 +126,7 @@ export type AlpacaDataError =
 
 /**
  * Retryable set per transport-layer-spec.md's shared-conventions module:
- * Timeout | RateLimit | ProviderError-with-5xx-status.
+ * Timeout | RateLimit | ProviderError-with-5xx-status
  */
 export function isRetryableAlpacaDataError(error: unknown): boolean {
   if (error instanceof AlpacaDataTimeoutError || error instanceof AlpacaDataRateLimitError) {
@@ -138,7 +138,7 @@ export function isRetryableAlpacaDataError(error: unknown): boolean {
   return false;
 }
 
-/** Classifies a non-2xx Alpaca response into the typed hierarchy: 429 -> RateLimit, 408/504 -> Timeout, else -> ProviderError. */
+/** Classifies a non-2xx Alpaca response into the typed hierarchy: 429 -> RateLimit, 408/504 -> Timeout, else -> ProviderError */
 export async function classifyAlpacaDataResponse(
   response: Response,
   context: string,
@@ -159,7 +159,7 @@ export async function classifyAlpacaDataResponse(
 export function classifyAlpacaDataNetworkError(error: unknown, context: string): AlpacaDataError {
   // A caller-supplied signal's plain `AbortError` is deliberately NOT a timeout
   // and falls through to the non-retryable ProviderError branch — see
-  // `isTimeoutAbort`.
+  // `isTimeoutAbort`
   const message = error instanceof Error ? error.message : String(error);
   if (isTimeoutAbort(error)) {
     return new AlpacaDataTimeoutError(`Alpaca request timed out (${context}): ${message}`);

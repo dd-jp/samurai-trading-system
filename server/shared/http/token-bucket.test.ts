@@ -19,7 +19,7 @@ function recordingLogger(): { logger: Logger; entries: LogEntry[] } {
 // default clock advances in lockstep with `advanceTimersByTimeAsync` — same
 // convention as retry.test.ts, and the reason no hand-rolled clock is injected
 // here (one that drifted from the timers would hang the refill loop instead of
-// failing).
+// failing)
 describe('TokenBucket', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -40,7 +40,7 @@ describe('TokenBucket', () => {
       }),
     );
 
-    // No timer had to fire: the burst is what `capacity` buys.
+    // No timer had to fire: the burst is what `capacity` buys
     expect(acquired).toHaveLength(3);
   });
 
@@ -65,7 +65,7 @@ describe('TokenBucket', () => {
     // The failure this guards: computing a wait once and consuming on wake
     // lets both parked callers take the same refilled token and fire in the
     // same instant — the burst the bucket exists to prevent. Adapters do issue
-    // concurrent calls (Promise.all over two protective legs).
+    // concurrent calls (Promise.all over two protective legs)
     const bucket = new TokenBucket({ capacity: 1, refillPerSecond: 1 });
     await bucket.acquire();
 
@@ -89,7 +89,7 @@ describe('TokenBucket', () => {
     await bucket.acquire();
 
     // Ten seconds of idle credits far more than two tokens; the cap must hold,
-    // so exactly two acquires are free and the third waits a full second.
+    // so exactly two acquires are free and the third waits a full second
     await vi.advanceTimersByTimeAsync(10_000);
     await bucket.acquire();
     await bucket.acquire();
@@ -119,7 +119,7 @@ describe('TokenBucket', () => {
       }),
     ]);
 
-    // 2/second → one token every 500ms.
+    // 2/second → one token every 500ms
     await vi.advanceTimersByTimeAsync(500);
     expect(done).toBe(1);
     await vi.advanceTimersByTimeAsync(500);
@@ -145,7 +145,7 @@ describe('TokenBucket abort signal (#702)', () => {
 
   it('rejects a parked acquire the instant the signal aborts, without waiting for refill', async () => {
     // A near-zero refill rate: if this ever actually waited it out, the test
-    // would hang (or blow vitest's default timeout) rather than pass.
+    // would hang (or blow vitest's default timeout) rather than pass
     const bucket = new TokenBucket({ capacity: 1, refillPerSecond: 0.0001 });
     await bucket.acquire();
 
@@ -163,7 +163,7 @@ describe('TokenBucket abort signal (#702)', () => {
 
     await expect(bucket.acquire(controller.signal)).rejects.toThrow();
     // The aborted call never took the token — an unsignalled caller still
-    // acquires immediately.
+    // acquires immediately
     await expect(bucket.acquire()).resolves.toBeUndefined();
   });
 
@@ -205,7 +205,7 @@ describe('TokenBucket priority reserve (#391)', () => {
       reserveForPriority: 4,
     });
 
-    // Background callers may spend down to the reserve and no further: 6 of 10.
+    // Background callers may spend down to the reserve and no further: 6 of 10
     for (let i = 0; i < 6; i++) {
       await bucket.acquireBackground();
     }
@@ -216,7 +216,7 @@ describe('TokenBucket priority reserve (#391)', () => {
     });
 
     // No timer advance: the reserve is still there, so the order does not wait
-    // for a refill even though market data just took every token it could.
+    // for a refill even though market data just took every token it could
     await order;
     expect(orderPlaced).toBe(true);
   });
@@ -233,7 +233,7 @@ describe('TokenBucket priority reserve (#391)', () => {
     });
 
     // A background caller needs 1 + reserve = 5 tokens present, and 4 remain,
-    // so it waits a full second for the fifth to be minted.
+    // so it waits a full second for the fifth to be minted
     await vi.advanceTimersByTimeAsync(999);
     expect(extra).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
@@ -289,7 +289,7 @@ describe('TokenBucket wait telemetry (#1083)', () => {
 
   it('logs nothing for a wait under the threshold', async () => {
     const { logger, entries } = recordingLogger();
-    // 10 tok/s: the second acquire waits 100ms, well under the threshold.
+    // 10 tok/s: the second acquire waits 100ms, well under the threshold
     const bucket = new TokenBucket({ capacity: 1, refillPerSecond: 10 }, undefined, {
       logger,
       name: 'alpaca',
@@ -305,7 +305,7 @@ describe('TokenBucket wait telemetry (#1083)', () => {
 
   it('logs a wait at or beyond the threshold, naming the bucket and the priority lane', async () => {
     const { logger, entries } = recordingLogger();
-    // 1 tok/s: the second acquire waits exactly the threshold.
+    // 1 tok/s: the second acquire waits exactly the threshold
     const bucket = new TokenBucket({ capacity: 1, refillPerSecond: 1 }, undefined, {
       logger,
       name: 'alpaca',
@@ -321,10 +321,10 @@ describe('TokenBucket wait telemetry (#1083)', () => {
     // #1383: pacing under a working bucket is normal operation, not a fault —
     // `warn` here just added to the soak's warn-share without signaling anything
     // actionable (pre-#1435 raw count: 414/2102 lines, 19.7% of one soak, none
-    // of it starvation; #1435 adds the per-lane repeat window that bounds this).
+    // of it starvation; #1435 adds the per-lane repeat window that bounds this)
     expect(entry.level).toBe('info');
     // Grep-distinguishable: neither an LLM token-count field (`input_tokens`)
-    // nor a bare digit run (`429`) can match this event name.
+    // nor a bare digit run (`429`) can match this event name
     expect(entry.message).toContain('token_bucket_wait');
     expect(entry.event).toBe('token_bucket_wait');
     expect(entry.payload).toMatchObject({
@@ -423,7 +423,7 @@ describe('TokenBucket wait telemetry (#1083)', () => {
     expect(entries[0]?.trace_id).toBe('tick-abc');
   });
 
-  /** The lane must not narrow the trace — see shared/trace-context.ts. */
+  /** The lane must not narrow the trace — see shared/trace-context.ts */
   it('labels a background wait with the tick too', async () => {
     const { logger, entries } = recordingLogger();
     const bucket = new TokenBucket(
@@ -488,16 +488,16 @@ describe('TokenBucket wait telemetry repeat window (#1435)', () => {
     expect(entries).toHaveLength(1);
 
     // Same lane, still well inside the repeat window: suppressed, not a
-    // second line, but tracked so the next announcement can report it.
+    // second line, but tracked so the next announcement can report it
     const second = bucket.acquire();
     await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS);
     await second;
     expect(entries).toHaveLength(1);
 
     // Let the bucket sit idle past the repeat window (tokens simply refill to
-    // capacity and cap there), then force one more threshold-crossing wait.
+    // capacity and cap there), then force one more threshold-crossing wait
     await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS);
-    await bucket.acquire(); // instant: the idle capacity-1 bucket refilled.
+    await bucket.acquire(); // instant: the idle capacity-1 bucket refilled
     const third = bucket.acquire();
     await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS);
     await third;
@@ -527,7 +527,7 @@ describe('TokenBucket wait telemetry repeat window (#1435)', () => {
 
     // A priority wait immediately after, well inside the background lane's
     // repeat window, must still announce — it is a different lane's first
-    // crossing, not a repeat of the background one.
+    // crossing, not a repeat of the background one
     const priorityWait = bucket.acquire();
     await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS);
     await priorityWait;
@@ -549,7 +549,7 @@ describe('TokenBucket wait telemetry repeat window (#1435)', () => {
     // acquires" above), so the first admits at ~1000ms, the second at
     // ~2000ms, the third at ~3000ms — three DIFFERENT wait magnitudes from
     // one setup, which a single suppressed wait (the existing test above)
-    // cannot exercise.
+    // cannot exercise
     const order: number[] = [];
     const pending = Promise.all(
       [1, 2, 3].map(async (i) => {
@@ -561,13 +561,13 @@ describe('TokenBucket wait telemetry repeat window (#1435)', () => {
     await pending;
     expect(order).toEqual([1, 2, 3]);
     // Caller 1 announced (opened the window); callers 2 and 3 were folded in
-    // silently — no second or third line yet.
+    // silently — no second or third line yet
     expect(entries).toHaveLength(1);
 
     // Past the window: force one more threshold-crossing wait so the fold
-    // rides on this next announcement.
+    // rides on this next announcement
     await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS);
-    await bucket.acquire(); // instant: the idle capacity-1 bucket refilled.
+    await bucket.acquire(); // instant: the idle capacity-1 bucket refilled
     const fourth = bucket.acquire();
     await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS);
     await fourth;
@@ -581,7 +581,7 @@ describe('TokenBucket wait telemetry repeat window (#1435)', () => {
     // The announcing (4th) wait is ~1000ms — well under the true suppressed
     // max of 3000ms carried from caller 3. Kills the mutant that reports the
     // announcing wait's own magnitude as `max_suppressed_wait_ms` instead of
-    // the tracked maximum.
+    // the tracked maximum
     const payload = announcement?.payload as { wait_ms: number };
     expect(payload.wait_ms).toBeLessThan(3_000);
     expect(announcement?.message).toContain('2 more threshold-crossing wait');
@@ -603,7 +603,7 @@ describe('TokenBucket wait telemetry repeat window (#1435)', () => {
     // `TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS` only yields that same 8 because
     // this bucket's `refillPerSecond: 1` happens to make one cycle 1000ms —
     // the threshold's current value, not a derivation from it. If either
-    // constant's value changes, re-check this still lands on the last racer.
+    // constant's value changes, re-check this still lands on the last racer
     const raceCount =
       TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_PRIORITY_MS / TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS;
     const order: number[] = [];
@@ -623,7 +623,7 @@ describe('TokenBucket wait telemetry repeat window (#1435)', () => {
     // otherwise a catastrophic wait with no later same-lane crossing before
     // the window (or process exit) would never be reported. This is also the
     // `catastrophic_bypass` payload field's proof: the second entry is the
-    // ONLY way this test can reach two announcements inside one window.
+    // ONLY way this test can reach two announcements inside one window
     expect(entries).toHaveLength(2);
     const [firstAnnouncement, catastrophicAnnouncement] = entries;
     expect(firstAnnouncement?.payload).toMatchObject({
@@ -643,7 +643,7 @@ describe('TokenBucket wait telemetry repeat window (#1435)', () => {
     // `TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_PRIORITY_MS` must still be an
     // ordinary suppressed (folded) crossing, because background compares
     // against its own, higher bound. Kills the mutant that collapses the
-    // per-lane selection back to a single shared constant.
+    // per-lane selection back to a single shared constant
     const { logger, entries } = recordingLogger();
     const bucket = new TokenBucket(
       { capacity: 1, refillPerSecond: 1, reserveForPriority: 0 },
@@ -668,15 +668,15 @@ describe('TokenBucket wait telemetry repeat window (#1435)', () => {
     // Only caller 1 announced (opened the window); the last caller's wait
     // equals the priority bound but is still under the (higher) background
     // bound, so it stays folded rather than bypassing — no second entry
-    // appears while still inside the window.
+    // appears while still inside the window
     expect(entries).toHaveLength(1);
     expect(entries[0]?.payload).toMatchObject({ lane: 'background', catastrophic_bypass: false });
 
     // Force one more crossing past the window to surface what was folded —
     // proves callers 2..N were counted, not silently dropped, and that none
-    // of them (including the one at the priority bound) ever bypassed.
+    // of them (including the one at the priority bound) ever bypassed
     await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS);
-    await bucket.acquireBackground(); // instant: the idle capacity-1 bucket refilled.
+    await bucket.acquireBackground(); // instant: the idle capacity-1 bucket refilled
     const trailing = bucket.acquireBackground();
     await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS);
     await trailing;
@@ -715,14 +715,14 @@ describe('TokenBucket wait telemetry repeat window (#1435)', () => {
       name: 'alpaca',
     });
 
-    // Drain the real capacity (41) with instant acquires.
+    // Drain the real capacity (41) with instant acquires
     for (let i = 0; i < DEFAULT_VENUE_PACING.alpaca.capacity; i++) {
       await bucket.acquire();
     }
 
     // Two concurrent racers on the drained bucket: the 2nd admits at exactly
     // 1000ms (500ms/token * 2), opening the repeat window with one
-    // announcement.
+    // announcement
     const opening = Promise.all([bucket.acquire(), bucket.acquire()]);
     await vi.advanceTimersByTimeAsync(1_000);
     await opening;
@@ -732,7 +732,7 @@ describe('TokenBucket wait telemetry repeat window (#1435)', () => {
     // Re-drain (the bucket is back to empty after the two racers above), then
     // race 16 more concurrent priority callers from empty. The 16th admits at
     // exactly 16 * 500ms = 8000ms — the priority catastrophic bound — still
-    // well inside the first announcement's 45-minute window.
+    // well inside the first announcement's 45-minute window
     const raceCount = 16;
     const order: number[] = [];
     const pending = Promise.all(
@@ -767,7 +767,7 @@ describe('TokenBucket wait telemetry repeat window (#1435)', () => {
     // = 22`; first grant from drained costs `22 / 2.0 * 1000 = 11000ms`, each
     // further racer costs +500ms (linear): 20 racers land the 20th at
     // `11000 + 19*500 = 20500ms`, still under
-    // `TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_BACKGROUND_MS` (30000ms).
+    // `TOKEN_BUCKET_WAIT_LOG_CATASTROPHIC_BACKGROUND_MS` (30000ms)
     const { logger, entries } = recordingLogger();
     const bucket = new TokenBucket(DEFAULT_VENUE_PACING.alpaca, undefined, {
       logger,
@@ -792,7 +792,7 @@ describe('TokenBucket wait telemetry repeat window (#1435)', () => {
     expect(order).toHaveLength(raceCount);
 
     // One announcement (the first racer opens the window); every later racer,
-    // including the 20500ms worst case, stays folded — never a bypass.
+    // including the 20500ms worst case, stays folded — never a bypass
     expect(entries).toHaveLength(1);
     expect(entries[0]?.payload).toMatchObject({ lane: 'background', catastrophic_bypass: false });
   });

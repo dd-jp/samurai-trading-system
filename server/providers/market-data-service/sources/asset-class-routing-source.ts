@@ -55,20 +55,20 @@ export class AssetClassRoutingDataSource implements DataSource {
   readonly #assetClassOf: ReadonlyMap<string, AssetClass>;
 
   constructor(config: AssetClassRoutingSourceConfig) {
-    // Both sources, checked at CONSTRUCTION rather than on first use.
+    // Both sources, checked at CONSTRUCTION rather than on first use
     //
     // The type says `Record<AssetClass, DataSource>`, so a TypeScript caller
     // cannot omit one — but the composition root builds this object from a
     // universe at runtime, and the interesting callers are exactly the ones
     // assembling it dynamically. Without this, a missing source surfaces as
     // `undefined.fetchBars(...)` — an opaque `TypeError` thrown mid-tick, from
-    // inside a stage, on whichever instrument happened to route there first.
+    // inside a stage, on whichever instrument happened to route there first
     //
     // That is the same class of defect as a misrouted asset class: a wiring
     // error that reaches an operator as a stage failure rather than as a
     // startup failure, which is how #358 stayed invisible for a whole run. A
     // constructor guard turns it into a boot-time message naming the missing
-    // class, matching how `startFromEnvironment` already refuses missing seams.
+    // class, matching how `startFromEnvironment` already refuses missing seams
     const missing = (['crypto', 'stocks'] as const).filter(
       (assetClass) => config.sources[assetClass] === undefined,
     );

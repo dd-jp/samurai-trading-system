@@ -38,7 +38,7 @@ function gbp(value: number): string {
 
 /**
  * The current UK tax year's start year (`ukTaxYearLabel`'s inverse), the
- * default when `--tax-year` is not given.
+ * default when `--tax-year` is not given
  */
 export function currentTaxYearStartYear(now: Date): number {
   const label = ukTaxYearLabel(now);
@@ -78,7 +78,7 @@ export function parseTaxYearStartYear(argv: readonly string[], now: Date): numbe
  * under a heading that reads as the operator's real tax position (review
  * round 1, finding 16) — every other integrity fault this report can hit
  * throws rather than mis-reporting, and a misfiled paper report handed to an
- * accountant would be the worst version of that failure.
+ * accountant would be the worst version of that failure
  */
 export function assertLiveMode(mode: string): void {
   if (mode !== 'live') {
@@ -98,7 +98,7 @@ export interface CgtReportResult {
  * Composes the whole read → match → window chain once, so a production
  * caller exists for it (this project's dominant defect class is a tested
  * mechanism nothing calls) and so a test can exercise the composed chain
- * against `:memory:` without going through `isMain`.
+ * against `:memory:` without going through `isMain`
  */
 export function buildCgtReport(db: StoreHandle, startYear: number): CgtReportResult {
   const { legs, unconverted } = new SqliteCgtFillSource(db).getLiveEquityFillLegs();
@@ -212,7 +212,7 @@ if (isMain) {
   const dbPath = sharedStorePath(mode);
   // Same resolution the orchestrator uses, for the reason `report-arm-
   // comparison.ts` gives: a report that opened a different database than the
-  // running process writes would be confidently wrong rather than empty.
+  // running process writes would be confidently wrong rather than empty
   assertStorePathMatchesMode({ dbPath, mode });
   const db = openReadOnlyCgtStore(dbPath);
 

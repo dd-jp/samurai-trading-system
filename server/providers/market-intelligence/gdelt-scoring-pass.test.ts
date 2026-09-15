@@ -25,7 +25,7 @@ import {
 } from './sources/gdelt-scorer.js';
 
 const NOW = new Date('2026-09-03T12:34:00Z');
-/** `floorToBar(NOW)` on the 1h debate grid — the window end every derivation uses. */
+/** `floorToBar(NOW)` on the 1h debate grid — the window end every derivation uses */
 const BAR = new Date('2026-09-03T12:00:00Z');
 const HOUR_MS = 60 * 60 * 1000;
 const CONTEXT_WINDOW_MS = 24 * HOUR_MS;
@@ -54,7 +54,7 @@ function row(at: Date, tone: number, suffix: string): RawArchiveRow {
 
 /**
  * 24 populated baseline buckets at `baselineTone` plus a signal hour at
- * `signalTone` — the archive shape that clears every coverage rule.
+ * `signalTone` — the archive shape that clears every coverage rule
  */
 function seededArchive(baselineTone = 0, signalTone = 2): MiArchiveStore {
   const archive = new MiArchiveStore();
@@ -82,7 +82,7 @@ function seededArchive(baselineTone = 0, signalTone = 2): MiArchiveStore {
  * An archive that stays healthy across `bars` consecutive debate bars: every
  * hour from a full baseline before `BAR` up to the last bar's signal hour
  * carries enough records to clear every coverage rule, with the tone
- * alternating so each bar's delta is non-zero.
+ * alternating so each bar's delta is non-zero
  */
 function continuousArchive(bars: number): MiArchiveStore {
   const archive = new MiArchiveStore();
@@ -124,9 +124,9 @@ describe('GdeltScoringPass', () => {
     passFor(seededArchive(), store).run('trace-1');
 
     // The read `fundamental-analyst.ts` performs: asset class, 24h, the
-    // resolved MI subject for one instrument.
+    // resolved MI subject for one instrument
     const context = store.getContext('stocks', CONTEXT_WINDOW_MS, 'trace-1', BAR, 'SPY');
-    // #1164: a class-wide item routes to `intel`, not `news`.
+    // #1164: a class-wide item routes to `intel`, not `news`
     expect(context.news).toHaveLength(0);
     expect(context.intel).toHaveLength(1);
     expect(context.intel[0]?.entity).toBe(GDELT_MACRO_ENTITY);
@@ -140,7 +140,7 @@ describe('GdeltScoringPass', () => {
     const context = store.getContext('stocks', CONTEXT_WINDOW_MS, 'trace-1', BAR, 'SPY');
     // `hasCoverageFor`'s predicate, restated rather than imported so this
     // file does not depend on the orchestrator: an item covers an instrument
-    // only when its entity IS that instrument.
+    // only when its entity IS that instrument
     expect(context.intel.some((news) => news.entity === 'SPY')).toBe(false);
   });
 
@@ -176,7 +176,7 @@ describe('GdeltScoringPass', () => {
     expect(wideItem).toBeDefined();
     expect(narrowItem).toBeDefined();
     // Same rows, different answer: the 2h signal window swallows an hour of
-    // baseline-toned records, so the delta shrinks.
+    // baseline-toned records, so the delta shrinks
     expect(narrowItem?.confidence).toBeLessThan(wideItem?.confidence ?? 0);
   });
 
@@ -209,13 +209,13 @@ describe('GdeltScoringPass', () => {
 
     const refusals = entries.filter((entry) => entry.level === 'warn');
     // First, then every Nth — the `shouldAlertAt` convention `mi-coverage.ts`
-    // sets, so a persistent hole is loud once rather than every poll.
+    // sets, so a persistent hole is loud once rather than every poll
     expect(refusals).toHaveLength(2);
   });
 
   it('logs a thin signal window at info, not as a coverage failure', () => {
     const archive = seededArchive();
-    // A healthy baseline with no signal-window rows at all.
+    // A healthy baseline with no signal-window rows at all
     const trimmed = new MiArchiveStore();
     trimmed.write(
       archive
@@ -249,7 +249,7 @@ describe('GdeltScoringPass', () => {
     // repeat rather than replacing it, and nothing evicts — so without the
     // read-time collapse in `index.ts` a 24h read would hold 24 restatements
     // of one measurement, which `fundamental-analyst.ts` averages unweighted
-    // against the 0-1 items an LSE ETP gets from the wire.
+    // against the 0-1 items an LSE ETP gets from the wire
     const bars = 12;
     const clock = new SimulatedClock(NOW);
     const store = new MarketIntelligenceStore(clock);
@@ -271,10 +271,10 @@ describe('GdeltScoringPass', () => {
     expect(intel).toHaveLength(1);
     // `last_updated` answers "did a source speak recently", not "how many
     // items survived the read-time collapse", so it stays on the raw ingest
-    // record and must keep reporting the newest emit.
+    // record and must keep reporting the newest emit
     expect(context.last_updated?.toISOString()).toBe(lastBar.toISOString());
     // WHICH one survives, not merely how many: keeping the FIRST bar's item
-    // would satisfy the count and serve a day-old measurement forever.
+    // would satisfy the count and serve a day-old measurement forever
     expect(intel[0]?.timestamp.toISOString()).toBe(lastBar.toISOString());
     expect(intel[0]?.entity).toBe(GDELT_MACRO_ENTITY);
   });
@@ -290,7 +290,7 @@ describe('GdeltScoringPass', () => {
     pass.run('trace-3');
 
     // ~20k rows per read on the paper archive: the bar guard is what keeps
-    // the shipped 5-minute poll from paying for it twelve times an hour.
+    // the shipped 5-minute poll from paying for it twelve times an hour
     expect(reads).toHaveBeenCalledTimes(1);
   });
 
@@ -307,10 +307,10 @@ describe('GdeltScoringPass', () => {
 
     pass.run('trace-1');
     // Both legs share (source, window end, windows), so the slice is one read
-    // per BAR, not one per class — the whole point of the shared memo.
+    // per BAR, not one per class — the whole point of the shared memo
     expect(reads).toHaveBeenCalledTimes(1);
     // Which class a row belongs to is still decided per class, over the one
-    // slice: a shared read must not collapse the two legs into one item.
+    // slice: a shared read must not collapse the two legs into one item
     const stocks = store.getContext('stocks', CONTEXT_WINDOW_MS, 't', BAR, 'SPY').intel;
     const crypto = store.getContext('crypto', CONTEXT_WINDOW_MS, 't', BAR, 'BTC-USD').intel;
     expect(stocks).toHaveLength(1);
@@ -319,7 +319,7 @@ describe('GdeltScoringPass', () => {
     reads.mockClear();
     pass.run('trace-2');
     // The `#emittedBar` guard runs BEFORE the read, so a bar every class has
-    // already emitted for costs no archive read at all.
+    // already emitted for costs no archive read at all
     expect(reads).toHaveBeenCalledTimes(0);
   });
 });

@@ -104,7 +104,7 @@ class ZeroCostModel implements CostModel {
   }
 }
 
-/** A price path with enough trend reversals to open and close several lots. */
+/** A price path with enough trend reversals to open and close several lots */
 const CYCLE = [
   100, 101, 103, 106, 110, 115, 121, 128, 130, 129, 125, 120, 114, 108, 103, 99, 96, 94, 93, 95, 98,
   102, 107, 113, 120, 128, 133, 136, 138, 137, 133, 128, 122, 116, 111, 107, 104, 102, 101, 103,
@@ -219,7 +219,7 @@ describe('the gross reconstruction', () => {
     const reconstructed = await new GrossOfCostsTradeSource(priced.trades).closedTrades(WINDOW);
     const actual = await free.trades.closedTrades(WINDOW);
 
-    // A vacuous pass (both empty) would prove nothing about the arithmetic.
+    // A vacuous pass (both empty) would prove nothing about the arithmetic
     expect(actual.length).toBeGreaterThan(2);
     expect(reconstructed.map((t) => t.idempotency_key)).toEqual(
       actual.map((t) => t.idempotency_key),
@@ -228,7 +228,7 @@ describe('the gross reconstruction', () => {
     // The add-back has no per-side branch because the sign flip on a short
     // cancels out (see the module header's derivation). That is only PROVED if
     // the fixture path actually contains both sides — a long-only sample would
-    // leave the short algebra untested while the test still passed.
+    // leave the short algebra untested while the test still passed
     expect(actual.some((t) => t.side === 'buy')).toBe(true);
     expect(actual.some((t) => t.side === 'sell')).toBe(true);
 
@@ -278,7 +278,7 @@ describe('the gross reconstruction', () => {
   /**
    * The gross view must survive the eval path's own attestation: the fills are
    * passed through un-zeroed precisely so `assertCostModelPriced` keeps
-   * meaning what it says.
+   * meaning what it says
    */
   it('scores through the unmodified EvalExecutorImpl', async () => {
     const priced = await runReplay(new CostModelImpl(COST_CONFIG));
@@ -327,7 +327,7 @@ describe('attributeRunCosts', () => {
     );
 
     // spread(0.25 ATR, being half of 0.5×ATR) + slippage(0.2 ATR) + a small
-    // impact term — floors aside, ~0.45 ATR per fill for this fixture.
+    // impact term — floors aside, ~0.45 ATR per fill for this fixture
     expect(attribution.mean_adverse_move_in_atr).toBeGreaterThan(0.4);
     expect(attribution.mean_adverse_move_in_atr).toBeLessThan(0.6);
   });

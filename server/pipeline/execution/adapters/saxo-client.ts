@@ -17,7 +17,7 @@
  * ExchangeId `LSE_ETF` — `LSE` returns nothing (`lse-etp-pool.ts`).
  */
 
-/** VERIFIED: the three asset types the pool's lines resolve to. */
+/** VERIFIED: the three asset types the pool's lines resolve to */
 export type SaxoAssetType = 'Etn' | 'Etf' | 'Etc';
 
 export type SaxoBuySell = 'Buy' | 'Sell';
@@ -35,9 +35,9 @@ export interface SaxoInstrumentDetails {
   readonly AssetType: string;
   /** The currency `price x PriceToContractFactor` is denominated in. Not the quote unit. */
   readonly CurrencyCode: string;
-  /** The unit prices are QUOTED in — `GBX` on a pence line whose `CurrencyCode` is `GBP`. */
+  /** The unit prices are QUOTED in — `GBX` on a pence line whose `CurrencyCode` is `GBP` */
   readonly PriceCurrency?: string | undefined;
-  /** Required at the boundary, never defaulted to 1: a defaulted factor is the 100x guess #1302 removes. */
+  /** Required at the boundary, never defaulted to 1: a defaulted factor is the 100x guess #1302 removes */
   readonly PriceToContractFactor: number;
 }
 
@@ -54,7 +54,7 @@ export interface SaxoOrderDuration {
   readonly DurationType: SaxoDurationType;
 }
 
-/** VERIFIED: a related (IfDone) order inside the master's `Orders` array. */
+/** VERIFIED: a related (IfDone) order inside the master's `Orders` array */
 export interface SaxoRelatedOrderRequest {
   readonly OrderType: SaxoOrderType;
   readonly OrderPrice: number;
@@ -70,7 +70,7 @@ export interface SaxoRelatedOrderRequest {
 /**
  * VERIFIED: `POST /trade/v2/orders` body minus `AccountKey`, which the HTTP
  * client adds from the account it resolved at construction so the adapter
- * never holds an account identifier.
+ * never holds an account identifier
  */
 export interface SaxoOrderRequest {
   readonly Uic: number;
@@ -80,9 +80,9 @@ export interface SaxoOrderRequest {
   readonly OrderType: SaxoOrderType;
   readonly OrderPrice?: number | undefined;
   readonly OrderDuration: SaxoOrderDuration;
-  /** Always false: Saxo's algorithmic-trading disclosure flag, and this is an algorithm. */
+  /** Always false: Saxo's algorithmic-trading disclosure flag, and this is an algorithm */
   readonly ManualOrder: false;
-  /** <= 50 chars, NOT uniqueness-checked by the venue (doc 43). */
+  /** <= 50 chars, NOT uniqueness-checked by the venue (doc 43) */
   readonly ExternalReference: string;
   readonly Orders?: readonly SaxoRelatedOrderRequest[];
 }
@@ -113,7 +113,7 @@ export interface SaxoOpenOrder {
   readonly ExternalReference?: string | undefined;
   readonly Status: SaxoOpenOrderStatus;
   readonly OpenOrderType: string;
-  /** VERIFIED values: `IfDoneMaster`, `StandAlone`; `Oco` documented for activated leg pairs. */
+  /** VERIFIED values: `IfDoneMaster`, `StandAlone`; `Oco` documented for activated leg pairs */
   readonly OrderRelation?: string | undefined;
   readonly Price?: number | undefined;
   readonly Amount: number;
@@ -169,7 +169,7 @@ export interface SaxoOrderActivity {
 export interface SaxoNetPosition {
   readonly NetPositionId: string;
   readonly NetPositionBase: {
-    /** Signed: negative is short. */
+    /** Signed: negative is short */
     readonly Amount: number;
     readonly Uic: number;
     readonly AssetType: string;
@@ -232,7 +232,7 @@ export interface SaxoAccountBalanceReader {
 export interface SaxoOpenApiClient {
   /**
    * Reference data, read once per instrument when the resolver is built: it
-   * is the only endpoint that says what unit the line is quoted in (#1302).
+   * is the only endpoint that says what unit the line is quoted in (#1302)
    */
   getInstrumentDetails(uic: number, assetType: SaxoAssetType): Promise<SaxoInstrumentDetails>;
   placeOrder(request: SaxoOrderRequest, requestId: string): Promise<SaxoOrderPlacement>;

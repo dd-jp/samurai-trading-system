@@ -32,9 +32,9 @@ import type { Logger } from '../types/primitives.js';
 import { delay } from './delay.js';
 
 export interface TokenBucketConfig {
-  /** Burst size: how many calls may go out back-to-back from a full bucket. */
+  /** Burst size: how many calls may go out back-to-back from a full bucket */
   capacity: number;
-  /** Steady-state rate the bucket sustains once the burst is spent. */
+  /** Steady-state rate the bucket sustains once the burst is spent */
   refillPerSecond: number;
   /**
    * Tokens `acquireBackground()` may not spend, reserved for `acquire()`
@@ -55,7 +55,7 @@ export interface TokenBucketConfig {
   reserveForPriority?: number;
 }
 
-/** Which of the two lanes `take()` was called through — see `acquire()` vs `acquireBackground()`. */
+/** Which of the two lanes `take()` was called through — see `acquire()` vs `acquireBackground()` */
 type TokenBucketLane = 'priority' | 'background';
 
 /**
@@ -218,7 +218,7 @@ export class TokenBucket {
     private readonly telemetry?: TokenBucketTelemetry,
   ) {
     // Starts full: the first calls after process start are a legitimate burst,
-    // and starting empty would delay the first order for no protective gain.
+    // and starting empty would delay the first order for no protective gain
     this.tokens = config.capacity;
     this.lastRefill = now();
   }
@@ -268,7 +268,7 @@ export class TokenBucket {
     // `this.now()` once up front costs nothing on that (overwhelmingly common)
     // path. Uses the SAME injected clock as `refill()` deliberately — a
     // second, unrelated clock here could disagree with it under a faked timer
-    // and turn an instant grant into a phantom logged wait.
+    // and turn an instant grant into a phantom logged wait
     const startedAt = this.now();
     while (true) {
       signal?.throwIfAborted();
@@ -280,7 +280,7 @@ export class TokenBucket {
       }
       // Time until the deficit is minted. `refillPerSecond` is trusted to be
       // positive; a non-positive rate is a misconfiguration that would park
-      // every call forever rather than pace it.
+      // every call forever rather than pace it
       const waitMs = ((needed - this.tokens) / this.config.refillPerSecond) * 1000;
       await this.waitOrAbort(Math.max(waitMs, 0), signal);
     }
@@ -363,7 +363,7 @@ export class TokenBucket {
     // A bypass (a catastrophic wait announced while still inside the window)
     // is the only case that reaches here with `prior` defined AND still
     // inside the window — see `TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS` for why
-    // this still resets the window rather than adding a second line.
+    // this still resets the window rather than adding a second line
     const catastrophicBypass =
       prior !== undefined &&
       nowMs - prior.lastAnnouncedAtMs < TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS;
@@ -380,13 +380,13 @@ export class TokenBucket {
       // not derived from `lane` — see shared/trace-context.ts. This is the
       // ANNOUNCING call's tick, not necessarily the folded waits' — see
       // `logIfMaterialWait`'s docblock for why that mis-attribution is
-      // accepted.
+      // accepted
       trace_id: currentTraceId() ?? 'token-bucket',
       stage: 'rate_limit',
       event: 'token_bucket_wait',
       // #1383: pacing under a working bucket is expected behaviour, not a
       // fault to page on — `TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS` above is what
-      // still keeps genuine starvation visible.
+      // still keeps genuine starvation visible
       level: 'info',
       message:
         `token_bucket_wait: the '${this.telemetry.name}' bucket paced a ${lane} caller for ` +
@@ -433,7 +433,7 @@ export class TokenBucket {
     });
   }
 
-  /** Credits elapsed time as tokens, never above `capacity` (burst is bounded). */
+  /** Credits elapsed time as tokens, never above `capacity` (burst is bounded) */
   private refill(): void {
     const nowMs = this.now();
     const elapsedMs = Math.max(nowMs - this.lastRefill, 0);

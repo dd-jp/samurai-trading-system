@@ -18,7 +18,7 @@ import {
 import { NousSentimentClient } from './nous-sentiment-client.js';
 
 const START = new Date('2026-08-06T00:00:00Z');
-/** `Duration` is a plain ms number — the same 24h the analysts read. */
+/** `Duration` is a plain ms number — the same 24h the analysts read */
 const WINDOW_24H = 24 * 60 * 60 * 1000;
 
 function item(id: string): IntelligenceItem {
@@ -66,9 +66,9 @@ function build(
   options: {
     spendCap?: SpendCap;
     fail?: boolean;
-    /** Defaults `true` so existing tests exercise real, trusted retrieval. */
+    /** Defaults `true` so existing tests exercise real, trusted retrieval */
     retrievalEvidence?: boolean;
-    /** Defaults to one item per call; pass `() => []` for the empty-answer shape. */
+    /** Defaults to one item per call; pass `() => []` for the empty-answer shape */
     items?: (fetchIndex: number) => IntelligenceItem[];
     logger?: Logger;
     archive?: MiArchiveStore;
@@ -104,7 +104,7 @@ function build(
   return { agent, clock, store, sink, fetches: () => fetches };
 }
 
-/** An item with an X permalink `toArchiveProjection` accepts, so `#archive` writes. */
+/** An item with an X permalink `toArchiveProjection` accepts, so `#archive` writes */
 function archivableItem(statusId: string): IntelligenceItem {
   return { ...item(`i-${statusId}`), url: `https://x.com/someone/status/${statusId}` };
 }
@@ -123,23 +123,23 @@ describe('floorToRefreshBucket', () => {
     // This assertion used to read `=== 6`, deriving a 4h interval as 1/6th of
     // `MI_CONTEXT_WINDOW_MS` on a STALENESS argument. That argument was made
     // while nothing retrieved and the ingested item count was structurally
-    // zero, so it was bounding the freshness of an empty set.
+    // zero, so it was bounding the freshness of an empty set
     //
     // With real retrieval the binding constraint is SAMPLE SIZE:
     // `sentiment-analyst.ts` averages `social` wholesale, so buckets x
     // results-per-bucket is what decides whether three bot posts can swing
-    // the lens.
+    // the lens
     //
     // The assertion below is on the CONSTANT — 12 buckets per 24 hours — not
     // on how many actually fire. The scheduler emits no instruments outside
     // the session, so a 6.5h US session touches 4 of them and the real sample
-    // is 4 x 3 = 12 posts/instrument/session.
+    // is 4 x 3 = 12 posts/instrument/session
     //
     // Cost is the other half of the same decision and it is NOT slack: across
     // the 20-name universe (#1051) a soak is ~800 calls, ~$16 at the default
     // result count and ~$71 at the ceiling, against a $50 cap. Interval and
     // result count move together, and neither can be retuned alone. See
-    // `x-search-client.ts`.
+    // `x-search-client.ts`
     expect((24 * 60 * 60 * 1000) / GROK_REFRESH_MS).toBe(12);
   });
 });
@@ -147,7 +147,7 @@ describe('floorToRefreshBucket', () => {
 describe('GrokAgent', () => {
   it('calls once per bucket, however many passes arrive inside it', async () => {
     // The property the whole cadence decision rests on: at a 15-minute tick
-    // there are 8 passes per 2h bucket, and 7 of them must cost nothing.
+    // there are 8 passes per 2h bucket, and 7 of them must cost nothing
     const { agent, clock, fetches } = build();
 
     expect(await agent.refresh('t1', 'BTC-USD', 'crypto')).toBe(true);
@@ -180,7 +180,7 @@ describe('GrokAgent', () => {
 
   it('meters every call into the spend sink', async () => {
     // Without this the cap sums past xAI entirely and ADR-0008's ceiling is a
-    // fiction for the second provider.
+    // fiction for the second provider
     const { agent, sink } = build();
 
     await agent.refresh('t1', 'BTC-USD', 'crypto');
@@ -195,7 +195,7 @@ describe('GrokAgent', () => {
 
     // No call, no spend row, and — the part that matters — no item. The
     // analysts fall back to NO_DATA_MARKER, so "could not afford to look" stays
-    // distinguishable from "looked and saw nothing".
+    // distinguishable from "looked and saw nothing"
     expect(fetches()).toBe(0);
     expect(sink.calls).toBe(0);
     expect(store.getContext('crypto', WINDOW_24H, 't1').social).toEqual([]);
@@ -204,7 +204,7 @@ describe('GrokAgent', () => {
   it('does not throw when the call fails, and does not burn the bucket', async () => {
     // An xAI outage must degrade the debate to NO_DATA_MARKER, and one
     // transient failure must not buy a whole extra refresh bucket of silence
-    // — the bucket is not marked on failure, so the next pass retries.
+    // — the bucket is not marked on failure, so the next pass retries
     const { agent, store, fetches } = build({ fail: true });
 
     expect(await agent.refresh('t1', 'BTC-USD', 'crypto')).toBe(false);
@@ -228,7 +228,7 @@ describe('GrokAgent', () => {
     it('discards items that parsed cleanly but carry no evidence of retrieval', async () => {
       // A response that isn't tagged as retrieved cannot be told apart from
       // model recall, so it must not reach the analysts as signal — the same
-      // NO_DATA_MARKER degradation as an outage, not a fabricated neutral read.
+      // NO_DATA_MARKER degradation as an outage, not a fabricated neutral read
       const { agent, store } = build({ retrievalEvidence: false });
 
       await agent.refresh('t1', 'BTC-USD', 'crypto');
@@ -240,7 +240,7 @@ describe('GrokAgent', () => {
       // The call still cost money and still happened — only the ingest is
       // suppressed. Marking the bucket keeps a permanently-unretrieved client
       // (like NousSentimentClient) from being hammered every tick, and NOT
-      // metering would let an un-retrieved-but-billed call under-count spend.
+      // metering would let an un-retrieved-but-billed call under-count spend
       const { agent, sink, fetches } = build({ retrievalEvidence: false });
 
       expect(await agent.refresh('t1', 'BTC-USD', 'crypto')).toBe(true);
@@ -268,7 +268,7 @@ describe('GrokAgent', () => {
       // items every call (see that client's header). It must still log,
       // because silence here would be indistinguishable from "looked and saw
       // nothing" — but `warn` on every one of ~36 calls/day for a known,
-      // expected state would just train the log to be ignored.
+      // expected state would just train the log to be ignored
       const logger = recordingLogger();
       const { agent } = build({ retrievalEvidence: false, items: () => [], logger });
 
@@ -285,7 +285,7 @@ describe('GrokAgent', () => {
 
     it('ingests when the client does supply retrieval evidence', async () => {
       // The seam option 3 restores: a client that sets retrievalEvidence:
-      // true is trusted with no change to this file.
+      // true is trusted with no change to this file
       const { agent, store } = build({ retrievalEvidence: true });
 
       await agent.refresh('t1', 'BTC-USD', 'crypto');
@@ -321,7 +321,7 @@ describe('GrokAgent', () => {
   // defect this pins lives in the seam between the two: the agent meters and
   // marks the bucket on a RETURN, so what the client does with a refusal
   // decides whether a refused call is counted once or re-issued every tick
-  // (#1391).
+  // (#1391)
   describe('a refused call, through the real Nous client (#1391)', () => {
     afterEach(() => {
       vi.unstubAllGlobals();
@@ -388,7 +388,7 @@ describe('GrokAgent', () => {
 
     it('still leaves a transient failure retryable, bucket unmarked', async () => {
       // The carve-out must stay narrow: a 503 is not deterministic in the
-      // prompt, and the next pass must still pay to look again.
+      // prompt, and the next pass must still pay to look again
       const fetchMock = vi.fn(
         async () =>
           ({

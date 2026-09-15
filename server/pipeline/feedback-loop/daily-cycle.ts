@@ -64,7 +64,7 @@ function dialFor(proposal: TuningProposal, config: FeedbackConfig): TunableDial 
     : config.strategy_params[proposal.name];
 }
 
-/** The window's trades: `(now − attribution_window_ms, now]`. */
+/** The window's trades: `(now − attribution_window_ms, now]` */
 function tradesInWindow(input: DailyCycleInput, now: Date): ClosedTrade[] {
   const from = new Date(now.getTime() - input.config.attribution_window_ms);
   return input.trades.getClosedTradesBetween(from, now);
@@ -104,11 +104,11 @@ function tuneAnalystWeights(
 
   for (const credit of credits.values()) {
     // An analyst with a debate record but no weight row yet has nothing to
-    // step from; seeding it is the weight store's job, not a tuning cycle's.
+    // step from; seeding it is the weight store's job, not a tuning cycle's
     // That job has an owner since #371 — `seedAnalystWeights`, called by the
     // composition root at startup — so this skip is now the "an analyst the
     // root does not build appeared in a debate log" case, not the everyday
-    // one it used to be.
+    // one it used to be
     const from = weights[credit.analyst_id];
     if (from === undefined) {
       continue;
@@ -128,7 +128,7 @@ function tuneAnalystWeights(
       from,
       to,
       // Descriptive only — a weight carries no safety semantics, so
-      // `weights.tighten_is` just labels the audit trail.
+      // `weights.tighten_is` just labels the audit trail
       direction,
       applied_at: now,
       reason: 'attribution',
@@ -156,7 +156,7 @@ function applyTuningProposals(
     const dial = dialFor(proposal, config);
     // An undeclared dial has no floor/ceiling/step cap, so there is no
     // bounded move to make. Refusing is the guardrail: an unbounded tune is
-    // exactly what the hard bounds exist to prevent.
+    // exactly what the hard bounds exist to prevent
     if (dial === undefined) {
       throw new Error(
         `Tuning proposal for '${proposal.name}' has no ${proposal.kind} dial declared in ` +
@@ -181,7 +181,7 @@ function applyTuningProposals(
     // value would cross its research-mandated line. Nothing below runs in that
     // case — no `param_updates` entry, no `AdjustmentLog` row, no notice —
     // which is the point: a refused move must leave no trace that reads as an
-    // applied one.
+    // applied one
     if (isThreshold) {
       tuning.setRiskThreshold(proposal.name, to);
     } else {
@@ -202,7 +202,7 @@ function applyTuningProposals(
     // the operator has no other way to learn that a limit widened without
     // anyone asking them (ADR-0013 Decision 2). Tightenings are not
     // announced — they narrow what the system may lose. The send is
-    // fire-and-forget; a failed notice does not unwind the applied move.
+    // fire-and-forget; a failed notice does not unwind the applied move
     if (isThreshold && direction === 'loosen') {
       loosen_notices.notifyLoosenApplied({
         name: proposal.name,

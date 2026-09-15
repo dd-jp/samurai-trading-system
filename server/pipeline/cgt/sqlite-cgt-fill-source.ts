@@ -65,7 +65,7 @@ interface FillJoinRow extends FillRow {
 
 export interface CgtFillLegs {
   legs: CgtFillLeg[];
-  /** Fills whose currency is neither GBP nor GBX — see this file's header. */
+  /** Fills whose currency is neither GBP nor GBX — see this file's header */
   unconverted: UnconvertedCgtFill[];
 }
 
@@ -139,7 +139,7 @@ export class SqliteCgtFillSource {
       const rawCharges = fill.fee;
 
       // Pence FIRST — see this file's header on why a case-insensitive GBP
-      // comparison run first would swallow `GBp` and 100x it.
+      // comparison run first would swallow `GBp` and 100x it
       const divisor = isPenceCurrency(currency)
         ? PENCE_PER_GBP
         : currency.toUpperCase() === BOOK_CURRENCY
@@ -166,7 +166,7 @@ export class SqliteCgtFillSource {
         // silently zeroes a real disposal, a negative flips its sign, and
         // both would confidently misreport a live CGT event. Fall through to
         // unconverted instead of trusting a value that fails a sign check no
-        // real exchange rate can fail.
+        // real exchange rate can fail
         const fxRateToGbpSource =
           fill.fx_rate_to_gbp !== undefined
             ? `invalid_stored_rate:${fill.fx_rate_to_gbp}`
@@ -189,7 +189,7 @@ export class SqliteCgtFillSource {
   }
 }
 
-/** ISO 4217 minor unit: 100 pence (GBX/gbx/GBp/p, see `isPenceCurrency`) makes 1 GBP. */
+/** ISO 4217 minor unit: 100 pence (GBX/gbx/GBp/p, see `isPenceCurrency`) makes 1 GBP */
 const PENCE_PER_GBP = 100;
 
 function toLeg(

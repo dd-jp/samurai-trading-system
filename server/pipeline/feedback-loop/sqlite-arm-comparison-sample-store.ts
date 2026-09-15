@@ -86,7 +86,7 @@ interface ArmComparisonSampleRow {
   live_return_pct: number;
   live_max_drawdown_pct: number;
   live_refused_pass_count: number | null;
-  /** #1546, migration 0066 — `ExitClassDropCounts` as JSON, NULL on a pre-0066 row. */
+  /** #1546, migration 0066 — `ExitClassDropCounts` as JSON, NULL on a pre-0066 row */
   live_cost_basis_drops_json: string | null;
   control_trade_count: number;
   control_realized_pnl_net: number;
@@ -144,11 +144,11 @@ function fromRow(row: ArmComparisonSampleRow): PersistedArmComparisonSample {
       // `CHECK` in migration 0034, not a convention this mapper upholds. The
       // ternary is therefore not a guard and is not claimed to be one: it is
       // the `string | null` narrowing the row type needs, and both of the pairs
-      // it could otherwise produce are unrepresentable in the table.
+      // it could otherwise produce are unrepresentable in the table
       reason: row.diverged === 1 ? row.divergence_reason : null,
       // The floor THIS verdict was tested against (#982), read back as it was
       // written — never recomputed against whatever `MIN_TRADES_PER_ARM_FOR_
-      // DIVERGENCE` is today.
+      // DIVERGENCE` is today
       min_trades_per_arm: row.min_trades_per_arm,
     },
   };
@@ -197,7 +197,7 @@ export class SqliteArmComparisonSampleStore implements ArmComparisonSampleStore 
   /**
    * Most-recently-computed first, bounded by `asOf` like every other dashboard
    * read — a snapshot must never show a sample computed after the instant it
-   * claims to describe.
+   * claims to describe
    */
   getRecent(limit: number, asOf: Date): PersistedArmComparisonSample[] {
     const rows = this.db

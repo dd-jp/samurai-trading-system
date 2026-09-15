@@ -31,7 +31,7 @@ import type {
 } from './arm-comparison.js';
 import { exitClassOf, noCostBasisDrops } from './arm-comparison.js';
 
-/** A closed trade plus the arm that produced it (migration 0033). */
+/** A closed trade plus the arm that produced it (migration 0033) */
 export type ArmedClosedTrade = ClosedTrade & { arm: TradingArm };
 
 /**

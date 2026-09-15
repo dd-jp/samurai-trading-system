@@ -4,7 +4,7 @@ import BetterSqlite3 from 'better-sqlite3';
 // Leaf import, not `../index.js`: `stripLineComments`'s only consumers are this
 // test and `contracts/boundary.test.ts`, neither a real cross-module
 // production dependency the barrel exists to track — same reasoning as
-// `sqlite-decision-record-stores.test.ts`'s `../decision-records.js` import.
+// `sqlite-decision-record-stores.test.ts`'s `../decision-records.js` import
 import { stripLineComments } from '../strip-comments.js';
 import { MIGRATIONS_DIR, runMigrations } from './migrate.js';
 
@@ -64,7 +64,7 @@ function extractSqlBlocks(specText: string): string[] {
 /**
  * Splits on top-level `;` only — a naive `split(';')` breaks on the `;`-free
  * but paren-nested CHECK/column lists every CREATE TABLE here has, and would
- * silently truncate or merge statements instead of erroring.
+ * silently truncate or merge statements instead of erroring
  */
 function splitStatements(sql: string): string[] {
   const stmts: string[] = [];
@@ -123,7 +123,7 @@ function buildDbFromSpec(specText: string): BetterSqlite3.Database {
   const createTableStmts = allStatements.filter((s) => /^CREATE TABLE/i.test(s));
   const createIndexStmts = allStatements.filter((s) => /^CREATE (UNIQUE )?INDEX/i.test(s));
   // ALTER TABLE blocks are illustrative prose (see module doc) — recognized so
-  // they don't trip the `other` throw below, but otherwise unused.
+  // they don't trip the `other` throw below, but otherwise unused
   const other = allStatements.filter(
     (s) =>
       !/^CREATE TABLE/i.test(s) && !/^CREATE (UNIQUE )?INDEX/i.test(s) && !/^ALTER TABLE/i.test(s),
@@ -162,7 +162,7 @@ function tablesOf(db: BetterSqlite3.Database): string[] {
         // spec's own fenced CREATE TABLE at "Module: Migrations" vs.
         // `migrate.ts`'s `CREATE TABLE IF NOT EXISTS`, which SQLite's
         // `sqlite_master.sql` normalizes to the same text minus the `IF NOT
-        // EXISTS` clause), so it is diffed like any other table.
+        // EXISTS` clause), so it is diffed like any other table
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT IN ('sqlite_sequence')",
       )
       .all() as { name: string }[]
@@ -269,7 +269,7 @@ describe('spec vs migrated DB — shared-sqlite-store-spec.md column/index/CHECK
       // Column tuples and index sets can't see a table-level CHECK or a
       // widened CHECK value list on an existing column (e.g. #1251's
       // closed_trades.close_reason, arm_comparison_samples' table CHECK) —
-      // only the full normalized CREATE TABLE text catches those.
+      // only the full normalized CREATE TABLE text catches those
       expect(
         createTableSqlOf(specDb, table),
         `${table}: normalized CREATE TABLE text differs (likely a CHECK constraint)`,

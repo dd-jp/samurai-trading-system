@@ -86,7 +86,7 @@ import type {
   VerdictInput,
 } from './types.js';
 
-/** True if any semi_auto flag is set (verdict-spec.md "Module: Human-in-the-Loop"). */
+/** True if any semi_auto flag is set (verdict-spec.md "Module: Human-in-the-Loop") */
 function isFlagged(
   orderIntent: OrderIntent,
   riskDecision: RiskDecision,
@@ -140,7 +140,7 @@ export function assertAutomationLevelSupported(config: VerdictConfig): void {
   );
 }
 
-/** Whether the HITL gate engages, per the per-asset-class automation dial. */
+/** Whether the HITL gate engages, per the per-asset-class automation dial */
 function shouldEngageHitl(
   orderIntent: OrderIntent,
   riskDecision: RiskDecision,
@@ -197,7 +197,7 @@ export class VerdictImpl implements Verdict {
     const now = clock.now();
 
     // Gate 1: staleness — signal age vs the per-asset-class bound, measured
-    // from `decided_at`, NOT `decision_timestamp` (#1190).
+    // from `decided_at`, NOT `decision_timestamp` (#1190)
     //
     // `decision_timestamp` is the 1h DEBATE BAR coordinate (`bar_timestamp`,
     // floored by `floorToBar`/`DEBATE_BAR_TIMEFRAME_MS`), kept stable across
@@ -210,9 +210,9 @@ export class VerdictImpl implements Verdict {
     // no-gos with zero stale feeds behind them. `decided_at` is `clock.now()`
     // read at the top of the Trader function that built the intent (`asOf` in
     // `decide.ts`) and never floored, so two decisions of equal real freshness
-    // now measure equal regardless of where their shared bar puts them.
+    // now measure equal regardless of where their shared bar puts them
     //
-    // #894 — THE MANDATORY FLAT-BY-CLOSE FLATTEN SKIPS THIS GATE, AND ONLY IT.
+    // #894 — THE MANDATORY FLAT-BY-CLOSE FLATTEN SKIPS THIS GATE, AND ONLY IT
     //
     // Kept even though `decided_at` also comes out fresh for a flatten (it is
     // read the same way, at the same site): the exemption's reason was never
@@ -225,7 +225,7 @@ export class VerdictImpl implements Verdict {
     // without it, every flat-by-close flatten measured 26-56 minutes old
     // against `decision_timestamp` and was refused on a healthy feed as
     // readily as a degraded one. `decided_at` removes that accident; the
-    // exemption stays because the underlying reason never depended on it.
+    // exemption stays because the underlying reason never depended on it
     //
     // Scoped by `metadata.mandatory_flatten` — set by `buildFlattenExit` only
     // for `exit_reason: 'flatten'` — so the exemption cannot widen by
@@ -233,9 +233,9 @@ export class VerdictImpl implements Verdict {
     // discretionary exits (`signal_decay`, `direction_flip`), which ARE acting
     // on an opinion and stay bounded here exactly as before. Every later gate
     // still runs for a PRICED flatten: dedup (3) is what stops a repeated
-    // flatten double-submitting, and the breaker re-check (5) still applies.
+    // flatten double-submitting, and the breaker re-check (5) still applies
     // An UNPRICED one additionally skips the two price gates at the branch
-    // below, since `unpriced_exit` implies this marker — see the file header.
+    // below, since `unpriced_exit` implies this marker — see the file header
     //
     // This gate has effectively no PRODUCTION trigger left. `asOf` is read at
     // Trader intent-build time (`decide.ts`, before the mark/bars/precedent
@@ -248,7 +248,7 @@ export class VerdictImpl implements Verdict {
     // specifically, by an injected clock gap in
     // `flat-by-close-to-execution.test.ts` — not by a reachable production
     // scenario. A real trigger would need a stalled Trader/Risk stage, which
-    // has no test coverage of its own; nothing here claims one.
+    // has no test coverage of its own; nothing here claims one
     const signalAgeMs = now.getTime() - orderIntent.decided_at.getTime();
     const maxAgeMs = config.max_signal_age[orderIntent.asset_class];
     if (orderIntent.metadata.mandatory_flatten !== true && signalAgeMs > maxAgeMs) {
@@ -256,14 +256,14 @@ export class VerdictImpl implements Verdict {
       // `staleness` row says only that SOMETHING was too old, and the two
       // gates that can say that measure different quantities — this one the
       // opinion's age, `stale_feed` the price's. Reconstructing which, and by
-      // how much, meant joining `verdict_log` back to `debate_log` by hand.
+      // how much, meant joining `verdict_log` back to `debate_log` by hand
       return noGo('staleness', idempotencyKey, now, {
         measured_ms: signalAgeMs,
         bound_ms: maxAgeMs,
       });
     }
 
-    // #826 — THE UNPRICED MANDATORY FLATTEN SKIPS BOTH PRICE GATES.
+    // #826 — THE UNPRICED MANDATORY FLATTEN SKIPS BOTH PRICE GATES
     //
     // `buildFlattenExit` emits an `entry`/`stop`/`target` of zero, flagged
     // `metadata.unpriced_exit`, when the instrument's own mark could not be
@@ -272,12 +272,12 @@ export class VerdictImpl implements Verdict {
     // bracket's entry and would reject on `!(entry > 0)`, and gate 2a asks how
     // old a price is that was never obtained. Running them would turn the
     // Trader's deliberate degradation into a `no_go` — the missed exit #826
-    // exists to remove, moved one stage later.
+    // exists to remove, moved one stage later
     //
     // The mark is not even READ on this branch. During the stall it is the
     // failing call, and re-issuing it here would pay a second primary timeout
     // (~30s per `AlpacaHttpDataClient`'s retry budget) on the tick that is
-    // trying to get flat before the close.
+    // trying to get flat before the close
     //
     // Scoped by the flag alone, so the healthy path is byte-identical: an exit
     // that HAS a mark still drifts and still ages, and a normally-priced
@@ -291,7 +291,7 @@ export class VerdictImpl implements Verdict {
     // `types.ts`), so once engaged the bracket a reviewer sees is three
     // zeros, and their verdict is their own. The dedup gate in particular is
     // what keeps a repeated flatten from double-submitting while the feed is
-    // down.
+    // down
     //
     // `staleness` (gate 1) and `market_closed` (gate 4) do NOT still run for
     // such an intent, and this is the one place that is easy to get wrong:
@@ -299,22 +299,22 @@ export class VerdictImpl implements Verdict {
     // come off `exit_reason: 'flatten'` at `buildFlattenExit`), so gate 1's
     // #894 exemption and gate 4's #1388 exemption have both already fired by
     // the time control reaches here. Four gates are skipped for an unpriced
-    // flatten, not the two this branch skips.
+    // flatten, not the two this branch skips
     if (orderIntent.metadata.unpriced_exit !== true) {
       const noGoOnPrice = await this.#priceGates(orderIntent, marketData, config, clock, now);
       if (noGoOnPrice !== null) return noGoOnPrice;
     }
 
-    // Gate 3: idempotency dedup — existing order/fill for this key.
+    // Gate 3: idempotency dedup — existing order/fill for this key
     const alreadyActed = await positionStore.findByKey(idempotencyKey);
     if (alreadyActed) {
       return noGo('dedup', idempotencyKey, now);
     }
 
-    // Gate 4: market-open (stocks only; crypto is 24/7 and skips).
+    // Gate 4: market-open (stocks only; crypto is 24/7 and skips)
     //
     // #1388 — THE MANDATORY FLATTEN ALSO SKIPS THIS GATE, THE SAME WAY IT
-    // SKIPS GATE 1.
+    // SKIPS GATE 1
     //
     // #894 exempted `staleness` alone and left this gate unconditional,
     // reasoning "a shut venue cannot fill" — but that reasoning answers the
@@ -325,32 +325,32 @@ export class VerdictImpl implements Verdict {
     // live paper store, 2026-09-08: a flatten decided at 19:59:56.454Z —
     // inside ADR-0014's window — was refused `market_closed` at
     // 20:00:06.125Z, leaving the lot open through the close, the exact
-    // failure ADR-0014 exists to prevent.
+    // failure ADR-0014 exists to prevent
     //
     // Whether the venue then actually fills is a separate question this gate
     // does not need to answer: `execute.ts`'s `executeExit` already resolves
     // whatever the broker returns — filled, rejected, cancelled, or left
     // 'submitting' for reconcile on an ambiguous failure — without assuming
     // acceptance. Letting the order through costs nothing beyond what a
-    // normal flatten already costs.
+    // normal flatten already costs
     //
     // Unconditional, exactly like gate 1's exemption and scoped by the same
     // marker: see the file header for why `metadata.mandatory_flatten` and
-    // not `exit_reason` is the right thing to test.
+    // not `exit_reason` is the right thing to test
     if (orderIntent.asset_class === 'stocks' && !config.allow_extended_hours) {
       if (!tradingCalendar.isOpen(now) && orderIntent.metadata.mandatory_flatten !== true) {
         return noGo('market_closed', idempotencyKey, now);
       }
     }
 
-    // Gate 5: fire-time kill-switch / breaker re-check.
+    // Gate 5: fire-time kill-switch / breaker re-check
     const breakerTripped =
       breakers.portfolio_tripped || breakers.asset_class_tripped[orderIntent.asset_class];
     if (breakerTripped) {
       return noGo('breaker', idempotencyKey, now);
     }
 
-    // Gate 6: HITL — engaged per the automation dial + flags, else automated go.
+    // Gate 6: HITL — engaged per the automation dial + flags, else automated go
     if (!shouldEngageHitl(orderIntent, risk_decision, config)) {
       return {
         status: 'go',
@@ -364,7 +364,7 @@ export class VerdictImpl implements Verdict {
       };
     }
 
-    // KNOWN HAZARD IF THE DIAL IS EVER TURNED BACK (#434, ADR-0007).
+    // KNOWN HAZARD IF THE DIAL IS EVER TURNED BACK (#434, ADR-0007)
     //
     // The freshness gates (staleness, stale_feed, drift) ran ABOVE, and
     // nothing re-evaluates
@@ -377,11 +377,11 @@ export class VerdictImpl implements Verdict {
     // NOT guarded now, deliberately. `automation_level` is `auto`, this branch
     // is unreachable, and adding a check to an unreachable path is the exact
     // dead-mechanism pattern #430 exists to stop — it would be a guard nothing
-    // exercises, aging next to the code it claims to protect.
+    // exercises, aging next to the code it claims to protect
     //
     // The right fix is not a re-check anyway: ADR-0007 recommends ASYNC
     // approval — Verdict returns `pending`, the intent persists, a poller
-    // resumes it — which removes the human from the instrument pass entirely.
+    // resumes it — which removes the human from the instrument pass entirely
     // That was the actual reason the gate was dropped: `max_concurrent_
     // instruments: 1` plus an in-pass `await` means one pending tap blocks the
     // whole universe. Any real `semi_auto` needs that, not two re-run gates.
@@ -399,7 +399,7 @@ export class VerdictImpl implements Verdict {
       // refuses here exactly as it would in any other mode. Reached only
       // when the injected channel actually resolved, this overrides its
       // answer to `go` and records `would_require_approval: true`, because
-      // outside backtest this decision would have required a real one.
+      // outside backtest this decision would have required a real one
       return {
         status: 'go',
         order: orderIntent,
@@ -455,11 +455,11 @@ export class VerdictImpl implements Verdict {
     // `now` the read was issued with. `now` is still the point-in-time
     // coordinate the read is made AGAINST — the two are the same question only
     // when the fetch is instant, and a stalled vendor fetch (`getMark` has no
-    // failover and a ~30s retry budget) makes them minutes apart.
+    // failover and a ~30s retry budget) makes them minutes apart
     const readAt = clock.now();
 
     // Gate 2a: FEED staleness (#641) — how long ago the market last spoke,
-    // measured off `Mark.observed_at`.
+    // measured off `Mark.observed_at`
     //
     // Ordered BEFORE the drift gate, and on the same `mark` that gate reads
     // rather than a second fetch. A stale mark does not merely weaken the
@@ -467,7 +467,7 @@ export class VerdictImpl implements Verdict {
     // bracket's entry passes a gate that is supposed to be measuring live
     // movement, and one frozen far from it fires a `drift` no-go that names
     // the wrong cause. Running this first means a `drift` verdict always
-    // refers to real movement, and a dead feed is reported as a dead feed.
+    // refers to real movement, and a dead feed is reported as a dead feed
     //
     // Distinct from gate 1: that bounds how old our DECISION is, this bounds
     // how old the PRICE is. Both must hold — see `VerdictConfig.max_mark_age`.
@@ -479,7 +479,7 @@ export class VerdictImpl implements Verdict {
       // stamped ahead of us (clock disagreement, bounded by the receipt
       // tolerance), positive means the feed went quiet (bounded by
       // `max_mark_age`). The instrument is already a `verdict_log` column, so
-      // what the row was missing is the pair of numbers, not the name.
+      // what the row was missing is the pair of numbers, not the name
       return noGo('stale_feed', idempotencyKey, now, {
         measured_ms: freshness.age_ms,
         bound_ms: freshness.status === 'stale' ? freshness.bound_ms : freshness.tolerance_ms,
@@ -488,15 +488,15 @@ export class VerdictImpl implements Verdict {
 
     // Gate 2: drift — current price vs the bracket's entry, as a FRACTION of
     // that entry (#381). Absolute price distance cannot be set correctly for
-    // more than one instrument at a time; see `VerdictConfig.drift_tolerance_pct`.
+    // more than one instrument at a time; see `VerdictConfig.drift_tolerance_pct`
     //
     // Fails closed on a non-positive entry: `entry * pct` would be zero or
     // negative there, which would either reject everything or — worse, for a
     // negative entry — invert the comparison into a gate that passes on
     // unbounded drift. A bracket with no positive entry price is not a bracket
-    // this gate can reason about, so it is refused rather than waved through.
+    // this gate can reason about, so it is refused rather than waved through
     // The #826 unpriced flatten does not reach here at all; it is excluded by
-    // the caller, precisely so this refusal keeps its meaning.
+    // the caller, precisely so this refusal keeps its meaning
     if (!(orderIntent.entry > 0)) {
       return noGo('drift', idempotencyKey, now);
     }

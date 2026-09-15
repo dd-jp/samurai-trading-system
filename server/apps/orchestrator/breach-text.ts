@@ -138,7 +138,7 @@ const BREACH_TEXT: Record<BreachKind, BreachText> = {
   },
 };
 
-/** Short noun phrase for "an alert about ___ failed to send". */
+/** Short noun phrase for "an alert about ___ failed to send" */
 export function breachLabel(breaches: readonly string[]): string {
   return BREACH_TEXT[classifyBreach(breaches)].label;
 }

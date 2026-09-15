@@ -29,16 +29,16 @@ import type { AnalystView, Direction } from './types.js';
  * thing it multiplied.
  */
 const CONSENSUS_WEIGHT = 0.6;
-/** Weight given to the evidence-strength metric in the hybrid combination. */
+/** Weight given to the evidence-strength metric in the hybrid combination */
 export const EVIDENCE_WEIGHT = 0.4;
 
-/** Score returned when there is no debate state to evaluate (no views). */
+/** Score returned when there is no debate state to evaluate (no views) */
 const NO_DATA_SCORE = 0.5;
 
 /**
  * Number of key points per analyst considered "full" evidence for
  * normalization purposes; more key points than this don't add further
- * evidence-strength credit.
+ * evidence-strength credit
  */
 const KEY_POINTS_SATURATION = 3;
 
@@ -78,7 +78,7 @@ export function computeConvictionScore(
   return clamp(score);
 }
 
-/** Numeric positions for each direction on a bearish(-1)..bullish(+1) axis. */
+/** Numeric positions for each direction on a bearish(-1)..bullish(+1) axis */
 const DIRECTION_VALUE: Record<Direction, number> = {
   bearish: -1,
   neutral: 0,

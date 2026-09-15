@@ -101,7 +101,7 @@ const offlineBarSource = new FixtureDataSource(
  */
 const realFetch = globalThis.fetch;
 let reachedGdelt: string | undefined;
-/** Hosts this file tried to reach that nothing here accounts for (#701). */
+/** Hosts this file tried to reach that nothing here accounts for (#701) */
 const escapedToNetwork = new Set<string>();
 
 /**
@@ -125,7 +125,7 @@ function alpacaUnauthorized(): Response {
   });
 }
 
-/** Host of `url`, or `''` when it will not parse — never the full URL (#701). */
+/** Host of `url`, or `''` when it will not parse — never the full URL (#701) */
 function hostOf(url: string): string {
   try {
     return new URL(url).host;
@@ -137,12 +137,12 @@ function hostOf(url: string): string {
 beforeAll(() => {
   // `init` is deliberately absent: there is no longer any path that forwards a
   // request onward, so nothing here has anything to forward it WITH. The unused
-  // parameter was the last trace of the pass-through this fence replaced.
+  // parameter was the last trace of the pass-through this fence replaced
   globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
     // Each shape read explicitly: `String(new Request(url))` is the useless
     // '[object Request]', which contains no host and would walk straight past
     // this fence. A backstop that a caller can route around by passing a
-    // different-but-equivalent argument type is not a backstop.
+    // different-but-equivalent argument type is not a backstop
     const url =
       typeof input === 'string'
         ? input
@@ -155,21 +155,21 @@ beforeAll(() => {
       // Recorded, not thrown. Throwing here proves nothing: the poll is fired
       // as `void refresh(...)` and `refresh` never throws by contract, so the
       // rejection is swallowed into a warn log and every test still passes —
-      // which is exactly how the original defect stayed invisible.
+      // which is exactly how the original defect stayed invisible
       reachedGdelt = url;
       throw new Error('offline: the test suite must not reach GDELT');
     }
     // Alpaca is ANSWERED rather than recorded as an escape. Unlike the GDELT
     // case this is not a forgotten stub: startup's reconcile is supposed to ask
     // the broker, and the assertions below depend on it having asked. What must
-    // not happen is the asking leaving the machine.
+    // not happen is the asking leaving the machine
     //
     // Matched on the HOST, never `url.includes('alpaca.markets')`. A substring
     // test also matches the string appearing in some other host's path or query
     // — which would hand that host a canned 401 and record no escape, the exact
     // false-green accounting this fence exists to prevent. The GDELT branch
     // above keeps its substring test on purpose: it RECORDS and throws, so its
-    // false positive is loud, where this branch's would be silent.
+    // false positive is loud, where this branch's would be silent
     const host = hostOf(url);
     if (host === 'alpaca.markets' || host.endsWith('.alpaca.markets')) {
       return alpacaUnauthorized();
@@ -180,10 +180,10 @@ beforeAll(() => {
     // whole internet behind it, so a new vendor client added to startup would
     // silently begin making live calls from a unit suite and every gate would
     // stay green. Recorded rather than only thrown, for the reason the GDELT
-    // branch is: a caller that swallows rejections would otherwise hide it.
+    // branch is: a caller that swallows rejections would otherwise hide it
     //
     // Host only, in the record AND in the message. Market-data vendors commonly
-    // put the API key in the query string, and this error goes to CI logs.
+    // put the API key in the query string, and this error goes to CI logs
     const escaped = host === '' ? '<unparseable URL>' : host;
     escapedToNetwork.add(escaped);
     throw new Error(`offline: the test suite must not reach ${escaped}`);
@@ -251,17 +251,17 @@ const MUTATED_ENV_VARS = [
   // #330 (PR #447 review): the store path is keyed off SAMURAI_MODE now, and
   // the test below sets it. Restoring it at file scope for `NODE_ENV`'s reason
   // — vitest reuses a worker across files, and a leaked mode would repoint
-  // every later store open in that worker.
+  // every later store open in that worker
   'SAMURAI_MODE',
   // #322: every test in this file drives the real construction path, and that
-  // path now refuses to start until the operator has said where alerts go.
+  // path now refuses to start until the operator has said where alerts go
   // Defaulted to `log-only` per test below; the Telegram three are cleared so
   // an ambient value on the developer's machine cannot change what these
-  // tests exercise.
+  // tests exercise
   'SAMURAI_ALERTS',
   'TELEGRAM_BOT_TOKEN',
   'TELEGRAM_CHAT_ID',
-  // #342: the heartbeat's own destination, separate from the escalation chat.
+  // #342: the heartbeat's own destination, separate from the escalation chat
   'TELEGRAM_HEARTBEAT_CHAT_ID',
   // #511: the live profile's three variables. In this list for the same reason
   // as `SAMURAI_MODE` — a leaked live key or ceiling would change what a later
@@ -302,14 +302,14 @@ const STAGE_CONFIGS = {
   // See #691: the composition root now refuses a trader config whose
   // `flatten_before_close_ms` would silently disable flat-by-close, so this one
   // cannot stay an empty cast either. The real defaults, which is also what
-  // `paperStartingProfile` spreads.
+  // `paperStartingProfile` spreads
   traderConfig: DEFAULT_TRADER_CONFIG as never,
   riskConfig: {} as never,
   // See #434: the composition root reads the automation dial to refuse a
   // HITL-engaging config, so this one cannot stay an empty cast. And since
   // #1389 it reads `max_mark_age.stocks` too — the ceiling the post-close
   // flatten grace is bounded against, since gate 2a is what refuses a flatten
-  // priced off a stale mark.
+  // priced off a stale mark
   verdictConfig: {
     automation_level: { crypto: 'auto', stocks: 'auto' },
     max_mark_age: { crypto: 3_600_000, stocks: 3_600_000 },
@@ -319,7 +319,7 @@ const STAGE_CONFIGS = {
   // Like `verdictConfig` above, and for the same class of reason: since #634
   // `CircuitBreakers` validates its hysteresis band (`recovery_drawdown_pct <
   // max_drawdown_pct`) at construction, so an empty cast is a config the
-  // composition root cannot build.
+  // composition root cannot build
   breakerConfig: {
     daily_loss_pct: 0.05,
     daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
@@ -332,7 +332,7 @@ const STAGE_CONFIGS = {
   ciiConsumerConfig: { pollIntervalMs: 60_000 } as never,
   // #738: `universe` joined `REQUIRED_INJECTED_CONFIG` — these cases are
   // about credential/wiring refusals, not about which instruments trade, so
-  // they carry the same narrow default the smoke harness does.
+  // they carry the same narrow default the smoke harness does
   universe: SMOKE_TEST_UNIVERSE,
 };
 
@@ -345,7 +345,7 @@ describe('startFromEnvironment — real construction path', () => {
     process.env.SAMURAI_SENTIMENT = 'off';
 
     // No transports, no clients, no account-state or volatility provider —
-    // only the tuning configs the operator genuinely owns.
+    // only the tuning configs the operator genuinely owns
     const orchestrator = await startFromEnvironment({
       ...STAGE_CONFIGS,
       db: openSharedStore(':memory:'),
@@ -357,7 +357,7 @@ describe('startFromEnvironment — real construction path', () => {
 
     try {
       // Reaching here means the orphan scan and the startup reconcile both ran
-      // and the tick loop plus fill-sync poll are armed.
+      // and the tick loop plus fill-sync poll are armed
       expect(orchestrator.tickRunner).toBeDefined();
       expect(orchestrator.broker).toBeDefined();
     } finally {
@@ -436,7 +436,7 @@ describe('startFromEnvironment — real construction path', () => {
     // The guard's own tests cover the query; this one covers the WIRING —
     // credentials that would otherwise start cleanly, and a store the caller
     // injected, which is the path a soak restart actually takes. A guard
-    // nothing calls is this repo's dominant defect class.
+    // nothing calls is this repo's dominant defect class
     const error = await startFromEnvironment({
       ...STAGE_CONFIGS,
       db,
@@ -466,7 +466,7 @@ describe('startFromEnvironment — real construction path', () => {
     // Names the variable and how to supply it. The seams guard used to catch
     // this case by demanding an injected client; now that the client is built
     // here, the client's own error carries that weight instead — so this
-    // asserts the replacement is at least as legible as what it replaced.
+    // asserts the replacement is at least as legible as what it replaced
     expect(error.message).toContain('ALPACA_API_KEY');
     expect(error.message).toContain('.env.local');
   });
@@ -476,7 +476,7 @@ describe('startFromEnvironment — real construction path', () => {
     // unconfigured host learned about `ALPACA_API_KEY` alone — the broker
     // client is simply the first thing `buildProductionComponents`
     // constructs — and only discovered `ALPACA_API_SECRET`, then
-    // `NOUS_API_KEY`, on subsequent runs.
+    // `NOUS_API_KEY`, on subsequent runs
     delete process.env.ALPACA_API_KEY;
     delete process.env.ALPACA_API_SECRET;
     delete process.env.NOUS_API_KEY;
@@ -516,7 +516,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
     // Syntactically valid, functionally worthless: enough to construct the
     // HTTP clients, not enough to authenticate. Real credentials are never
     // required — or wanted — by this suite. Restored by the file-level
-    // `afterEach` above, along with everything else these tests touch.
+    // `afterEach` above, along with everything else these tests touch
     process.env.ALPACA_API_KEY = 'dummy-key-not-a-credential';
     process.env.ALPACA_API_SECRET = 'dummy-secret-not-a-credential';
     process.env.NOUS_API_KEY = 'dummy-nous-not-a-credential';
@@ -545,11 +545,11 @@ describe('startFromEnvironment — the shipped paper profile', () => {
       // reads it: the startup line names the FULL ADR-0001 universe, not the
       // BTC-USD smoke set it used to log. This is the end-to-end check that
       // the profile's universe survives `startFromEnvironment` — a live paper
-      // run that logs `universe: ["BTC-USD"]` is the bug this replaces.
+      // run that logs `universe: ["BTC-USD"]` is the bug this replaces
       //
       // #738 narrowed `DEFAULT_UNIVERSE` further, to equities-only — crypto
       // is out of Samurai's scope, so the "FULL" universe this line names no
-      // longer includes BTC-USD/ETH-USD.
+      // longer includes BTC-USD/ETH-USD
       expect(started?.payload).toMatchObject({
         mode: 'paper',
         universe: DEFAULT_UNIVERSE.map((instrument) => instrument.asset),
@@ -559,14 +559,14 @@ describe('startFromEnvironment — the shipped paper profile', () => {
       // #738 the volatility breaker's "no instruments configured for asset
       // class" warn fired for `stocks`; after #738 it fires for `crypto`
       // instead — crypto genuinely has zero instruments in the production
-      // schedule now, so that warn is the CORRECT state, not a gap.
+      // schedule now, so that warn is the CORRECT state, not a gap
       const inertClassWarn = entries.find((entry) =>
         entry.message.includes('no instruments configured for asset class'),
       );
       expect(inertClassWarn?.payload).toMatchObject({ asset_class: 'crypto' });
     } finally {
       // The loop, the heartbeat and the fill poll are all armed by `start()`;
-      // leaving them running would leak timers into the rest of the suite.
+      // leaving them running would leak timers into the rest of the suite
       await orchestrator.stop();
     }
   });
@@ -575,11 +575,11 @@ describe('startFromEnvironment — the shipped paper profile', () => {
     // The wiring assertion for #330, distinct from the predicate's own unit
     // tests: those prove the rule, this proves `startFromEnvironment` resolves
     // the path it is about to open from the mode. Re-keying it back to
-    // NODE_ENV is invisible to the unit tests and fails here.
+    // NODE_ENV is invisible to the unit tests and fails here
     //
     // `staging` is set precisely to show it does NOT reach the filename: before
     // #330 this run wrote `samurai-staging.sqlite`, which is the file a later
-    // live run on the same host would have inherited paper state from.
+    // live run on the same host would have inherited paper state from
     process.env.NODE_ENV = 'staging';
     process.env.SAMURAI_MODE = 'paper';
 
@@ -593,25 +593,25 @@ describe('startFromEnvironment — the shipped paper profile', () => {
     // kept writing to the now-nameless inode, so nothing appeared broken until
     // a restart would have dropped the whole session, and `llm_spend` (the
     // table ADR-0008's $50 cap is measured over) reset to zero with it. Any
-    // `npm run test` — including the one inside `npm run precommit` — was enough.
+    // `npm run test` — including the one inside `npm run precommit` — was enough
     //
     // Relocating the cwd rather than the assertion is deliberate: what is under
     // test is that the path is derived from SAMURAI_MODE and not NODE_ENV, and
     // that only holds if the production resolution runs untouched. So the test
     // moves itself somewhere destroying `data/` is harmless instead of moving
-    // the code somewhere it can be observed.
+    // the code somewhere it can be observed
     const sandbox = realpathSync(mkdtempSync(join(tmpdir(), 'samurai-startup-')));
     const cwd = process.cwd();
     process.chdir(sandbox);
 
     // Every path below is inside the try, so a construction failure restores
     // the cwd too rather than stranding the rest of the worker in a directory
-    // this test is about to delete.
+    // this test is about to delete
     let orchestrator: Awaited<ReturnType<typeof startFromEnvironment>> | undefined;
 
     try {
       // Deliberately NOT passing `db` — resolving the path internally is the
-      // whole point of this test.
+      // whole point of this test
       orchestrator = await startFromEnvironment({
         ...paperStartingProfile('paper'),
         logger,
@@ -621,13 +621,13 @@ describe('startFromEnvironment — the shipped paper profile', () => {
 
       expect(existsSync(join(sandbox, 'data/samurai-paper.sqlite'))).toBe(true);
       expect(existsSync(join(sandbox, 'data/samurai-staging.sqlite'))).toBe(false);
-      // And the warning this replaces is gone rather than merely quiet.
+      // And the warning this replaces is gone rather than merely quiet
       expect(entries.find((entry) => entry.message.includes('#330'))).toBeUndefined();
     } finally {
       await orchestrator?.stop();
       // Restore the cwd BEFORE removing the sandbox: every later test in this
       // worker resolves its own relative paths against it, and a process whose
-      // cwd has been deleted resolves nothing at all.
+      // cwd has been deleted resolves nothing at all
       process.chdir(cwd);
       rmSync(sandbox, { recursive: true, force: true });
     }
@@ -636,7 +636,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
   it('does not warn about a store handle it did not resolve', () => {
     // A caller injecting its own handle gets no warning, because this process
     // does not know what path that handle was opened on — warning about a path
-    // it never resolved would be a guess.
+    // it never resolved would be a guess
     const entries: Parameters<Logger['log']>[0][] = [];
     const logger: Logger = { log: (entry) => entries.push(entry) };
 
@@ -661,7 +661,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
     // The ticket's core claim: there is no path from an unconfigured host to a
     // running process whose alerts all go to a log nobody reads. Credentials
     // are present here, so the only thing standing between this call and a
-    // started orchestrator is the alerts decision.
+    // started orchestrator is the alerts decision
     delete process.env.SAMURAI_ALERTS;
 
     const error = await startFromEnvironment({
@@ -679,7 +679,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
   it('names every missing Telegram variable when the unattended mode is selected', async () => {
     // SECURITY: the bot token is set and the other two are not. The message
     // must name what is missing and carry no credential — it is written
-    // straight to stderr by the entrypoint's startup catch.
+    // straight to stderr by the entrypoint's startup catch
     const sentinel = '1234567:AA-not-a-real-bot-token-sentinel';
     process.env.SAMURAI_ALERTS = 'telegram';
     process.env.TELEGRAM_BOT_TOKEN = sentinel;
@@ -698,19 +698,19 @@ describe('startFromEnvironment — the shipped paper profile', () => {
     // rather than discovered one variable later. Matched inside the
     // parenthesised MISSING list rather than anywhere in the message — the
     // advice paragraph that follows also mentions the variable, and asserting
-    // on that would pass even if the pre-flight stopped requiring it.
+    // on that would pass even if the pre-flight stopped requiring it
     expect(error.message).toMatch(
       /required credential\(s\) are not set \([^)]*TELEGRAM_HEARTBEAT_CHAT_ID[^)]*\)/,
     );
     expect(error.message).not.toContain(sentinel);
-    // The token IS set, so it must not be reported as missing.
+    // The token IS set, so it must not be reported as missing
     expect(error.message).not.toContain('TELEGRAM_BOT_TOKEN');
   });
 
   it('boots with the real push transport under SAMURAI_ALERTS=telegram', async () => {
-    // The other half of #322: the unattended posture actually assembles.
+    // The other half of #322: the unattended posture actually assembles
     // Nothing here reaches Telegram — the client is constructed, and `stop()`
-    // runs long before the first 15-minute heartbeat.
+    // runs long before the first 15-minute heartbeat
     process.env.SAMURAI_ALERTS = 'telegram';
     process.env.TELEGRAM_BOT_TOKEN = 'dummy-token-not-a-credential';
     process.env.TELEGRAM_CHAT_ID = '-1001234567890';
@@ -733,14 +733,14 @@ describe('startFromEnvironment — the shipped paper profile', () => {
       expect(entries.some((e) => e.message.includes('SAMURAI_ALERTS=telegram'))).toBe(true);
       expect(entries.some((e) => e.message === 'orchestrator started')).toBe(true);
       // And the log-only warning is NOT emitted — the two are mutually
-      // exclusive, so this fails if the telegram branch silently fell back.
+      // exclusive, so this fails if the telegram branch silently fell back
       expect(entries.some((e) => e.message.includes('SAMURAI_ALERTS=log-only'))).toBe(false);
       // The bot token must not reach any log line: it is a bearer credential
-      // for the whole bot and sits in every request URL.
+      // for the whole bot and sits in every request URL
       expect(JSON.stringify(entries)).not.toContain('dummy-token-not-a-credential');
 
       // The assertion that actually proves the wiring, rather than proving a
-      // log line: drive the composed `Heartbeat` and watch the request leave.
+      // log line: drive the composed `Heartbeat` and watch the request leave
       // A startup log claiming `telegram` while the orchestrator was still
       // handed the log-only heartbeat would pass every check above and fail
       // this one. Transport stubbed — nothing reaches Telegram.
@@ -757,7 +757,7 @@ describe('startFromEnvironment — the shipped paper profile', () => {
         const [, init] = fetchStub.mock.calls[0] as [string, { body: string }];
         // #342: the HEARTBEAT chat, not the escalation chat. This is the
         // end-to-end half of the separation — a shipped entrypoint that still
-        // pointed both at TELEGRAM_CHAT_ID would fail here.
+        // pointed both at TELEGRAM_CHAT_ID would fail here
         expect(JSON.parse(init.body)).toMatchObject({ chat_id: '-1009876543210' });
       } finally {
         vi.unstubAllGlobals();
@@ -771,13 +771,13 @@ describe('startFromEnvironment — the shipped paper profile', () => {
     // `mode` is refused at the profile, before `startFromEnvironment` is even
     // called — so no store is opened and no client is constructed. Live stays
     // reachable, but only through `liveStartingProfile` or a caller passing
-    // values somebody tuned.
+    // values somebody tuned
     expect(() => paperStartingProfile('live')).toThrow(/live/i);
   });
 
   it('never reads the live key pair on a paper boot', () => {
     // #511's paper-side acceptance criterion, and the blast-radius check: a
-    // garbage live-only variable must not be able to fail a paper start.
+    // garbage live-only variable must not be able to fail a paper start
     process.env.SAMURAI_MODE = 'paper';
     process.env.ALPACA_LIVE_API_KEY = '';
     process.env.ALPACA_LIVE_API_SECRET = 'not-a-key';
@@ -834,7 +834,7 @@ describe('startFromEnvironment — the live profile (#511)', () => {
       // barrel rather than re-derived from `BENCHMARK_COMPOSITION` here
       // (#989 review — a second derivation can silently diverge from the
       // guard's own), so an `'AGG'` addition to `DEFAULT_UNIVERSE` can't
-      // silently break this test for an unrelated reason.
+      // silently break this test for an unrelated reason
       universe: DEFAULT_UNIVERSE.filter(
         (instrument) => !BENCHMARK_INSTRUMENTS.has(instrument.asset.toUpperCase()),
       ),
@@ -852,7 +852,7 @@ describe('startFromEnvironment — the live profile (#511)', () => {
 
       // The claim that matters: the broker client this root built talks to the
       // LIVE host. `buildDefaultAlpacaBrokerClient` logs the resolved base URL,
-      // which is the only place an operator can read it.
+      // which is the only place an operator can read it
       const brokerLine = entries.find((entry) =>
         entry.message.includes('LIVE Alpaca broker client'),
       );
@@ -863,12 +863,12 @@ describe('startFromEnvironment — the live profile (#511)', () => {
         baseUrl: 'https://api.alpaca.markets',
       });
 
-      // ...and the profile's own warn, naming the gates, reached the same log.
+      // ...and the profile's own warn, naming the gates, reached the same log
       const profileWarn = entries.find((entry) => entry.message.includes('LIVE STARTING PROFILE'));
       expect(profileWarn?.level).toBe('warn');
       expect(profileWarn?.payload).toMatchObject({ capital_ceiling_usd: 2_000 });
 
-      // No credential reaches the log, ever.
+      // No credential reaches the log, ever
       expect(JSON.stringify(entries)).not.toContain('dummy-live-key-not-a-credential');
       expect(JSON.stringify(entries)).not.toContain('dummy-live-secret-not-a-credential');
     } finally {
@@ -918,7 +918,7 @@ describe('startFromEnvironment — the live profile (#511)', () => {
     (ceiling) => {
       process.env.SAMURAI_LIVE_MAX_CAPITAL_USD = ceiling;
 
-      // Refused at the profile, before any store is opened or client built.
+      // Refused at the profile, before any store is opened or client built
       expect(() => startingProfileForMode('live')).toThrow('SAMURAI_LIVE_MAX_CAPITAL_USD');
     },
   );
@@ -944,7 +944,7 @@ describe('startFromEnvironment — the live profile (#511)', () => {
       }).then(resolvedUnexpectedly, (e: unknown) => e as Error);
 
       // The paper pair is still set, so a fallback would have started a live
-      // process authenticated against the wrong account.
+      // process authenticated against the wrong account
       expect(error.message).toContain(name);
       expect(missingCredentialEnvVars({}, 'log-only', 'live', 'alpaca')).toContain(name);
     },
@@ -953,7 +953,7 @@ describe('startFromEnvironment — the live profile (#511)', () => {
   it('keeps live state in its own store file, so a live run cannot inherit paper positions', () => {
     // #168/#330's invariant, re-asserted because #511 is the change that makes
     // the mode switch reachable at all. `resolveStoreMode` throws on an unset
-    // mode and the path is `data/samurai-{mode}.sqlite`, file per mode.
+    // mode and the path is `data/samurai-{mode}.sqlite`, file per mode
     process.env.SAMURAI_MODE = 'live';
     expect(sharedStorePath()).toContain('samurai-live.sqlite');
 
@@ -961,7 +961,7 @@ describe('startFromEnvironment — the live profile (#511)', () => {
     expect(sharedStorePath()).toContain('samurai-paper.sqlite');
 
     // And the composition root refuses a mode that disagrees with the path it
-    // resolved, rather than writing live state into the paper database.
+    // resolved, rather than writing live state into the paper database
     expect(() =>
       assertStorePathMatchesMode({ dbPath: 'data/samurai-paper.sqlite', mode: 'live' }),
     ).toThrow(/samurai-paper.sqlite/);

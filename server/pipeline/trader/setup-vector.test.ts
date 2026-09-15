@@ -64,7 +64,7 @@ function contribution(final_position: 'bullish' | 'bearish' | 'neutral') {
     // `opening` is always different from `final_position` by construction
     // above, so this two-round history always has exactly one transition —
     // computeInfluenceScore's rule (changes / (rounds - 1)) gives 1, not a
-    // hand-picked reading.
+    // hand-picked reading
     influence_score: 1,
   };
 }
@@ -128,7 +128,7 @@ describe('buildSetupVector', () => {
 
   it('embeds two instruments at different price levels identically when the setup is the same', () => {
     // The whole point of dividing by entry. A raw-price ATR would put BTC and
-    // AAPL in different regions of the space no matter how alike the setups.
+    // AAPL in different regions of the space no matter how alike the setups
     const aapl = buildSetupVector(debate(), {
       entry: 100,
       atr: 2,
@@ -165,7 +165,7 @@ describe('buildSetupVector', () => {
 
   it('separates a floored setup from a genuinely quiet one', () => {
     // Same tiny ATR; one had the vol floor engaged and one did not. If the
-    // stop-width feature were dropped these would be indistinguishable.
+    // stop-width feature were dropped these would be indistinguishable
     const quiet = buildSetupVector(debate(), { ...MARKET, atr: 0.01, stopDistance: 0.02 });
     const floored = buildSetupVector(debate(), { ...MARKET, atr: 0.01, stopDistance: 0.4 });
 

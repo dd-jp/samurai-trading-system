@@ -26,7 +26,7 @@ import {
 import { positiveIntegerFromEnv } from '../../shared/index.js';
 import { ENV_X_MAX_SEARCH_RESULTS } from './production/environment.js';
 
-/** The call the composition root makes, kept in one place so it cannot drift. */
+/** The call the composition root makes, kept in one place so it cannot drift */
 function readDial(raw: string | undefined): number {
   return positiveIntegerFromEnv(
     raw,
@@ -40,7 +40,7 @@ function readDial(raw: string | undefined): number {
 describe('SAMURAI_X_MAX_RESULTS', () => {
   it('names the variable an operator actually types', () => {
     // A rename here silently stops reading the operator's setting while every
-    // test that passes the value directly keeps passing.
+    // test that passes the value directly keeps passing
     expect(ENV_X_MAX_SEARCH_RESULTS).toBe('SAMURAI_X_MAX_RESULTS');
   });
 
@@ -59,7 +59,7 @@ describe('SAMURAI_X_MAX_RESULTS', () => {
     // `undefined` and the run continued at 3. A spend dial that silently
     // ignores what the operator typed is the failure worth being loud about —
     // they meant to change the cost and would find out days later that
-    // nothing changed.
+    // nothing changed
     expect(() => readDial('ten')).toThrow(/SAMURAI_X_MAX_RESULTS/);
     expect(() => readDial('0')).toThrow(/SAMURAI_X_MAX_RESULTS/);
     expect(() => readDial('-1')).toThrow(/SAMURAI_X_MAX_RESULTS/);
@@ -70,7 +70,7 @@ describe('SAMURAI_X_MAX_RESULTS', () => {
     // The asymmetry, asserted so it cannot be "tidied" into consistency:
     // parsing lets 100 through, and `XSearchClient` caps it at 10 with a
     // warning. Making this throw would be a boot failure over a value with a
-    // sensible reading.
+    // sensible reading
     expect(readDial('100')).toBe(100);
     expect(MAX_SEARCH_RESULTS_CEILING).toBeLessThan(100);
   });

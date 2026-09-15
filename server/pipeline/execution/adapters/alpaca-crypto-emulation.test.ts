@@ -71,13 +71,13 @@ class FakeVenue {
   readonly cancelledOrderIds: string[] = [];
   readonly submittedLimit: AlpacaLimitOrderRequest[] = [];
   readonly submittedStopLimit: AlpacaStopLimitOrderRequest[] = [];
-  /** Throw on the next plain-limit submit — AFTER the venue recorded the order (a timeout-after-accept). */
+  /** Throw on the next plain-limit submit — AFTER the venue recorded the order (a timeout-after-accept) */
   acceptThenThrowNextLimit = false;
-  /** Throw on the next plain-limit submit with the venue never seeing it. */
+  /** Throw on the next plain-limit submit with the venue never seeing it */
   rejectNextLimit = false;
-  /** Throw on the next stop-limit submit with the venue never seeing it. */
+  /** Throw on the next stop-limit submit with the venue never seeing it */
   rejectNextStopLimit = false;
-  /** Throw on the next cancel (transport failure, order untouched). */
+  /** Throw on the next cancel (transport failure, order untouched) */
   failNextCancel = false;
   private nextId = 1;
 
@@ -180,7 +180,7 @@ class FakeVenue {
     order.filled_at = filledAt;
   }
 
-  /** A partial fill followed by a venue-side terminal state. */
+  /** A partial fill followed by a venue-side terminal state */
   killPartiallyFilled(clientOrderId: string, qty: number, price: number, filledAt: string): void {
     const order = this.mustGet(clientOrderId);
     order.status = 'canceled';
@@ -232,19 +232,19 @@ describe('AlpacaCryptoLegEmulation — entry fill arms the plain legs', () => {
     const adapter = makeAdapter(venue, state);
 
     await adapter.submitBracket(cryptoBracket());
-    // Nothing armed yet: the legs wait on the fill, in the journal only.
+    // Nothing armed yet: the legs wait on the fill, in the journal only
     expect(venue.submittedStopLimit).toHaveLength(0);
     expect(journalRow(state)?.phase).toBe('pending_entry');
 
     venue.fill(LOT, 60_000, '2026-01-02T00:00:00Z');
     const fills = await adapter.fetchNewFills(new Date(0));
 
-    // The entry fill came back tagged for ingestFills' ordinary routing.
+    // The entry fill came back tagged for ingestFills' ordinary routing
     expect(fills).toEqual([
       expect.objectContaining({ client_order_id: LOT, leg: 'entry', qty: 0.5, price: 60_000 }),
     ]);
     // The exact leg wire bodies, pinned: plain orders, closing side, gtc,
-    // deterministic first-episode client order ids, no order_class anywhere.
+    // deterministic first-episode client order ids, no order_class anywhere
     expect(venue.submittedStopLimit).toEqual([
       {
         symbol: 'BTC/USD',
@@ -266,7 +266,7 @@ describe('AlpacaCryptoLegEmulation — entry fill arms the plain legs', () => {
         client_order_id: `${LOT}:target`,
       },
     ]);
-    // Both legs journalled as armed, with their venue ids.
+    // Both legs journalled as armed, with their venue ids
     const row = journalRow(state);
     expect(row?.phase).toBe('armed');
     expect(row?.stop_order_id).toBe(venue.venueId(`${LOT}:stop`));
@@ -284,7 +284,7 @@ describe('AlpacaCryptoLegEmulation — entry fill arms the plain legs', () => {
 
     expect(fills).toEqual([expect.objectContaining({ leg: 'entry', qty: 0.2 })]);
     // The residual is a live position — leaving it naked because the entry
-    // died early is the exact failure the emulation exists to remove.
+    // died early is the exact failure the emulation exists to remove
     expect(venue.submittedStopLimit[0]).toMatchObject({ qty: '0.2' });
     expect(journalRow(state)?.phase).toBe('armed');
     expect(journalRow(state)?.armed_qty).toBe(0.2);
@@ -298,7 +298,7 @@ describe('AlpacaCryptoLegEmulation — entry fill arms the plain legs', () => {
 
     venue.killPartiallyFilled(LOT, 0, 0, '2026-01-02T00:00:00Z');
     // filled_avg_price '0' with qty 0 never reaches collectFill's guards —
-    // a zero filled_qty is simply not a fill.
+    // a zero filled_qty is simply not a fill
     const fills = await adapter.fetchNewFills(new Date(0));
 
     expect(fills).toEqual([]);
@@ -343,11 +343,11 @@ describe('AlpacaCryptoLegEmulation — the OCO edge', () => {
 
     // The proof of the write-ahead: the cancel THREW, yet the journal already
     // says a sibling cancel is owed — a crash at the same instant leaves the
-    // same row, which is exactly what migration 0022 exists to record.
+    // same row, which is exactly what migration 0022 exists to record
     expect(journalRow(state)?.phase).toBe('cancelling_sibling');
     expect(venue.status(`${LOT}:stop`)).toBe('accepted');
 
-    // The restart: a fresh adapter over the same journal.
+    // The restart: a fresh adapter over the same journal
     const restarted = makeAdapter(venue, state);
     await restarted.fetchNewFills(new Date(0));
 
@@ -365,7 +365,7 @@ describe('AlpacaCryptoLegEmulation — the OCO edge', () => {
     await adapter.fetchNewFills(new Date(0));
 
     // The accepted double-fill window (#586) materialised: the market traded
-    // through both prices between polls.
+    // through both prices between polls
     venue.fill(`${LOT}:stop`, 57_000, '2026-01-02T00:01:00Z');
     venue.fill(`${LOT}:target`, 66_000, '2026-01-02T00:01:30Z');
     const fills = await adapter.fetchNewFills(new Date(0));
@@ -382,7 +382,7 @@ describe('AlpacaCryptoLegEmulation — the OCO edge', () => {
     ]);
     expect(journalRow(state)?.phase).toBe('resolved');
 
-    // Once per observation, not once per poll.
+    // Once per observation, not once per poll
     await adapter.fetchNewFills(new Date(0));
     expect(doubleFills.posted).toHaveLength(1);
   });
@@ -399,13 +399,13 @@ describe('AlpacaCryptoLegEmulation — crash-restart resumes from the journal', 
     // what reaches the caller is the credential-safe named-operation form,
     // optionally suffixed with a curated `venueMessage` (#1003) when the
     // cause exposes one on its dedicated property; the fake venue here
-    // doesn't, so this assertion only needs the stable prefix.
+    // doesn't, so this assertion only needs the stable prefix
     await expect(adapter.submitBracket(cryptoBracket())).rejects.toThrow(
       'alpaca submitBracket failed',
     );
 
     // The row survived the throw — a crash in the same window leaves the
-    // identical journal, which is the entire point of the write-ahead.
+    // identical journal, which is the entire point of the write-ahead
     const row = journalRow(state);
     expect(row?.phase).toBe('submitting');
     expect(row?.entry_order_id).toBeNull();
@@ -416,7 +416,7 @@ describe('AlpacaCryptoLegEmulation — crash-restart resumes from the journal', 
     expect(journalRow(state)?.phase).toBe('pending_entry');
     expect(journalRow(state)?.entry_order_id).toBe(venue.venueId(LOT));
 
-    // …and the adopted bracket continues to a normal arm.
+    // …and the adopted bracket continues to a normal arm
     venue.fill(LOT, 60_000, '2026-01-02T00:00:00Z');
     await restarted.fetchNewFills(new Date(0));
     expect(journalRow(state)?.phase).toBe('armed');
@@ -445,7 +445,7 @@ describe('AlpacaCryptoLegEmulation — crash-restart resumes from the journal', 
     await adapter.submitBracket(cryptoBracket());
     venue.fill(LOT, 60_000, '2026-01-02T00:00:00Z');
 
-    // The stop-leg placement dies; the target leg landed (Promise.all).
+    // The stop-leg placement dies; the target leg landed (Promise.all)
     venue.rejectNextStopLimit = true;
     await adapter.fetchNewFills(new Date(0)).catch(() => undefined);
     const row = journalRow(state);
@@ -460,7 +460,7 @@ describe('AlpacaCryptoLegEmulation — crash-restart resumes from the journal', 
     expect(armed?.stop_order_id).toBe(venue.venueId(`${LOT}:stop`));
     expect(armed?.target_order_id).toBe(venue.venueId(`${LOT}:target`));
     // The recovery ADOPTED the already-placed target rather than doubling it:
-    // one target order ever reached the venue.
+    // one target order ever reached the venue
     expect(
       venue.submittedLimit.filter((request) => request.client_order_id === `${LOT}:target`),
     ).toHaveLength(1);
@@ -498,12 +498,12 @@ describe('AlpacaCryptoLegEmulation — cancel and re-arm', () => {
     venue.fill(LOT, 60_000, '2026-01-02T00:00:00Z');
     await adapter.fetchNewFills(new Date(0));
     // The production sequence: executeExit cancels the whole bracket before
-    // its flatten; the flatten then fills only partially.
+    // its flatten; the flatten then fills only partially
     await adapter.cancel(LOT, 'BTC-USD');
 
     await adapter.rearmProtectiveLegs(LOT, 'BTC-USD', 'buy', 0.2, 57_000, 66_000);
 
-    // Fresh-episode ids (`:r1`), residual sizing, plain orders again.
+    // Fresh-episode ids (`:r1`), residual sizing, plain orders again
     expect(venue.submittedStopLimit[1]).toEqual({
       symbol: 'BTC/USD',
       side: 'sell',
@@ -519,7 +519,7 @@ describe('AlpacaCryptoLegEmulation — cancel and re-arm', () => {
     expect(row?.armed_qty).toBe(0.2);
 
     // The re-armed pair keeps the one-cancels-other promise, tagged under
-    // the LOT's own key so ingestFills routes them with no extra knowledge.
+    // the LOT's own key so ingestFills routes them with no extra knowledge
     venue.fill(`${LOT}:target:r1`, 66_000, '2026-01-02T01:00:00Z');
     const fills = await adapter.fetchNewFills(new Date(0));
     expect(fills).toContainEqual(

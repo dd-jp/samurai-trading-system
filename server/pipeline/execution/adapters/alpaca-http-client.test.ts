@@ -42,7 +42,7 @@ const ORDER_RESPONSE = {
   filled_at: null,
 };
 
-/** The flatten (#429) — a plain market order, never a bracket. */
+/** The flatten (#429) — a plain market order, never a bracket */
 const MARKET_ORDER_REQUEST: AlpacaMarketOrderRequest = {
   symbol: 'AAPL',
   side: 'sell',
@@ -122,7 +122,7 @@ describe('AlpacaHttpBrokerClient', () => {
       process.env.ALPACA_API_SECRET = FAKE_SECRET;
 
       // The paper pair is fully set, so a fallback would construct silently and
-      // authenticate the wrong account.
+      // authenticate the wrong account
       expect(() => new AlpacaHttpBrokerClient({ environment: 'live' })).toThrow(
         /ALPACA_LIVE_API_KEY/,
       );
@@ -141,7 +141,7 @@ describe('AlpacaHttpBrokerClient', () => {
       process.env.ALPACA_API_SECRET = FAKE_SECRET;
       process.env.ALPACA_LIVE_API_KEY = '';
 
-      // A blank live-only variable must not be able to fail a paper boot.
+      // A blank live-only variable must not be able to fail a paper boot
       expect(() => new AlpacaHttpBrokerClient({ environment: 'paper' })).not.toThrow();
       expect(() => new AlpacaHttpBrokerClient()).not.toThrow();
     });
@@ -151,7 +151,7 @@ describe('AlpacaHttpBrokerClient', () => {
       process.env.ALPACA_LIVE_API_SECRET = FAKE_SECRET;
 
       // `--env-file` turns a placeholder `ALPACA_LIVE_API_KEY=` into `''`, which
-      // is "not configured" — not a credential of length zero.
+      // is "not configured" — not a credential of length zero
       expect(() => new AlpacaHttpBrokerClient({ environment: 'live' })).toThrow(
         /ALPACA_LIVE_API_KEY/,
       );
@@ -205,7 +205,7 @@ describe('AlpacaHttpBrokerClient', () => {
     // The client sends `type: 'limit'` on every request regardless of
     // order_class (#260) but never inspects or narrows the response shape —
     // this proves a bracket order's nested `legs` survive untouched, not
-    // just the flat fields the other fixture happens to cover.
+    // just the flat fields the other fixture happens to cover
     const bracketResponse = {
       ...ORDER_RESPONSE,
       legs: [
@@ -277,7 +277,7 @@ describe('AlpacaHttpBrokerClient', () => {
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://paper-api.alpaca.markets/v2/orders');
     // Exact body: `type` is the wire-only addition, and NO `order_class`
-    // rides along — crypto rejects every advanced order class (#550).
+    // rides along — crypto rejects every advanced order class (#550)
     expect(JSON.parse(init.body as string)).toEqual({ ...request, type: 'limit' });
   });
 
@@ -338,7 +338,7 @@ describe('AlpacaHttpBrokerClient', () => {
       client_order_id: 'key-1:rearm',
       order_class: 'oco' as const,
       // #550's verified requirement: 422 code 40010001 "oco orders require
-      // take_profit.limit_price" for any shape that puts this top-level.
+      // take_profit.limit_price" for any shape that puts this top-level
       take_profit: { limit_price: '110' },
       stop_loss: { stop_price: '95' },
     };
@@ -410,7 +410,7 @@ describe('AlpacaHttpBrokerClient', () => {
     const result = await client.getOrderByClientOrderId('unknown-client-id');
 
     expect(result).toBeNull();
-    // 404 is not retryable, so the null-mapping must not have masked retries either.
+    // 404 is not retryable, so the null-mapping must not have masked retries either
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -637,7 +637,7 @@ describe('AlpacaHttpBrokerClient', () => {
   // reverting `isRetrySafeMethod` to always `true` leaves this test
   // green). The classification-level guarantee is proven in isolation by
   // `alpaca-broker-errors.test.ts`'s "timeout/rate-limit/5xx retryability is
-  // verb-aware" suite, which DOES fail under that same mutation.
+  // verb-aware" suite, which DOES fail under that same mutation
   describe('timeout retryability is verb-aware (#1275)', () => {
     it('does NOT retry a timeout on submitOrder (a POST), even with attempts to spare', async () => {
       const fetchMock = vi
@@ -661,7 +661,7 @@ describe('AlpacaHttpBrokerClient', () => {
     // one DOES exercise the classifier end to end — `cancelOrder` already
     // normalizes every terminal outcome to "nothing working under this id
     // any more" (204/404/422), so repeating it lands on that same
-    // normalization rather than mutating anything a first cancel did not.
+    // normalization rather than mutating anything a first cancel did not
     it('DOES retry a timeout on cancelOrder (a DELETE)', async () => {
       const fetchMock = vi
         .fn()
@@ -699,7 +699,7 @@ describe('AlpacaHttpBrokerClient', () => {
   // `alpaca-http-client.ts` from `shared/index.js`) to read the retry config
   // each placement actually hands it, independent of what the classifier
   // decides — so it also fails if a future edit removes `submitPlacement`
-  // and re-inlines a per-site override that only some placements get.
+  // and re-inlines a per-site override that only some placements get
   describe('maxAttempts: 1 is a single choke point across every placement (#1275 review item 2)', () => {
     const PLACEMENTS: Array<[string, (client: AlpacaHttpBrokerClient) => Promise<unknown>]> = [
       ['submitOrder', (client) => client.submitOrder(ORDER_REQUEST)],
@@ -747,7 +747,7 @@ describe('AlpacaHttpBrokerClient', () => {
 
     // Restored unconditionally, not at the end of the test body — a spy left
     // standing after a failed assertion would leak its call count into the
-    // next `it.each` iteration and misreport it.
+    // next `it.each` iteration and misreport it
     afterEach(() => {
       vi.restoreAllMocks();
     });
@@ -760,7 +760,7 @@ describe('AlpacaHttpBrokerClient', () => {
         const withRetrySpy = vi.spyOn(shared, 'withRetry');
 
         // Deliberately far from 1 — if a placement's override were dropped,
-        // it would fall back to THIS config instead of one attempt.
+        // it would fall back to THIS config instead of one attempt
         const client = new AlpacaHttpBrokerClient({
           apiKey: FAKE_KEY,
           apiSecret: FAKE_SECRET,
@@ -823,7 +823,7 @@ describe('AlpacaHttpBrokerClient — paper/live environment guard (#293)', () =>
   });
 
   // The one word that makes a process spend real money. Reachable only by
-  // typing it — never by defaulting, never by omission.
+  // typing it — never by defaulting, never by omission
   it('reaches the live host only for an explicit live environment', async () => {
     expect(await contactedHost({ environment: 'live' })).toBe(LIVE_HOST);
   });
@@ -833,7 +833,7 @@ describe('AlpacaHttpBrokerClient — paper/live environment guard (#293)', () =>
   });
 
   // THE key test: a live baseUrl with no environment stated. Before #293 this
-  // silently traded real money; the default must refuse, not accommodate.
+  // silently traded real money; the default must refuse, not accommodate
   it('refuses a live baseUrl when the environment is omitted (defaults to paper)', () => {
     expect(
       () =>
@@ -858,7 +858,7 @@ describe('AlpacaHttpBrokerClient — paper/live environment guard (#293)', () =>
   });
 
   // The "or vice versa" half: an operator who believes they are live but is
-  // silently filling paper orders has a broken risk model too.
+  // silently filling paper orders has a broken risk model too
   it('refuses the paper host when the environment says live', () => {
     expect(
       () =>
@@ -871,7 +871,7 @@ describe('AlpacaHttpBrokerClient — paper/live environment guard (#293)', () =>
     ).toThrow(/environment/);
   });
 
-  // A string-prefix check would let every one of these through to real money.
+  // A string-prefix check would let every one of these through to real money
   it.each([
     'https://API.ALPACA.MARKETS',
     'https://Api.Alpaca.Markets/',
@@ -1001,7 +1001,7 @@ describe('AlpacaHttpBrokerClient — wire validation (#509)', () => {
     // flatten, #429) has no verified live sample confirming Alpaca always
     // echoes `order_class` on a plain market order. Requiring them here would
     // be an unverified-shape guess on the live-order path with no consumer to
-    // justify it, so the validator must accept their absence.
+    // justify it, so the validator must accept their absence
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({
         id: 'alpaca-order-1',
@@ -1118,7 +1118,7 @@ describe('AlpacaHttpBrokerClient — wire validation (#509)', () => {
     // Deliberately the SAME fixture shape as the passthrough test above
     // (`limit_price`/`stop_price`, no `filled_qty`/`filled_avg_price`/
     // `filled_at`) — proves the leniency documented on `validateAlpacaOrderLeg`
-    // doesn't regress into rejecting a legitimate not-yet-filled leg.
+    // doesn't regress into rejecting a legitimate not-yet-filled leg
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({
         ...ORDER_RESPONSE,
@@ -1173,7 +1173,7 @@ describe('AlpacaHttpBrokerClient — wire validation (#509)', () => {
   it('getOrderByClientOrderId rethrows a validation failure rather than mapping it to null', async () => {
     // A malformed 200 body must not be mistaken for the 404 "no such order"
     // case — `failValidation` never sets `.status`, so the 404-only null
-    // mapping must not fire here.
+    // mapping must not fire here
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: 'alpaca-order-1' }));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -1193,14 +1193,14 @@ describe('AlpacaHttpBrokerClient — wire validation (#509)', () => {
     await expect(client.listOpenOrders()).resolves.toHaveLength(1);
     // The whole point of the `cancel()` fallback this serves: a DIFFERENT
     // route to the same order, so an outage of `orders:by_client_order_id`
-    // does not also take out the cancel path.
+    // does not also take out the cancel path
     const [url] = fetchMock.mock.calls[0] as [string];
     expect(url).toContain('/v2/orders?');
     expect(url).not.toContain('by_client_order_id');
     // One page at Alpaca's maximum, OLDEST first. The caller is looking for a
     // flatten wedged long enough for reconcile to have reached it — the oldest
     // open order there is — and Alpaca's `desc` default would drop exactly
-    // that one at the cap.
+    // that one at the cap
     expect(url).toContain('direction=asc');
     expect(url).toContain('limit=500');
   });
@@ -1287,7 +1287,7 @@ describe('AlpacaHttpBrokerClient — wire validation (#509)', () => {
     // Parse failures have no HTTP status, so `isRetryableAlpacaBrokerError`
     // classifies them non-retryable — this pins that a validation failure on
     // attempt 1 does NOT get retried, matching the documented intent for a
-    // shape failure (issue #509's design note).
+    // shape failure (issue #509's design note)
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: 'alpaca-order-1' }));
     vi.stubGlobal('fetch', fetchMock);
 

@@ -57,7 +57,7 @@ import { runMigrations } from '../../../shared/store/index.js';
 import type { IntelligenceItem } from '../types.js';
 import type { MiSourceId } from './mi-sources.js';
 
-/** `<dir>/migrations`, resolved next to this module — source and build output alike. */
+/** `<dir>/migrations`, resolved next to this module — source and build output alike */
 const MI_MIGRATIONS_DIR = fileURLToPath(new URL('./migrations', import.meta.url));
 
 /**
@@ -71,7 +71,7 @@ const MI_MIGRATIONS_DIR = fileURLToPath(new URL('./migrations', import.meta.url)
  */
 export type ArchiveFidelity = 'live' | 'backfill';
 
-/** One immutable vendor record, exactly as fetched. */
+/** One immutable vendor record, exactly as fetched */
 export interface RawArchiveRow {
   /**
    * `MiSourceId`, not `string` (#835): a writer cannot reach the archive
@@ -87,7 +87,7 @@ export interface RawArchiveRow {
   fidelity: ArchiveFidelity;
 }
 
-/** One normalized, scored item derived from a raw row. */
+/** One normalized, scored item derived from a raw row */
 export interface ArchivedItem {
   source: MiSourceId;
   native_id: string;
@@ -103,7 +103,7 @@ interface ItemRow {
   item_json: string;
 }
 
-/** `mi_archive_raw` as SQLite hands it back — every column a string. */
+/** `mi_archive_raw` as SQLite hands it back — every column a string */
 interface RawRow {
   source: MiSourceId;
   native_id: string;
@@ -138,7 +138,7 @@ function ensureParentDirectory(dbPath: string): void {
   mkdirSync(directory, { recursive: true });
 }
 
-/** `data/samurai-mi-{mode}.sqlite` — the path convention, in one place. */
+/** `data/samurai-mi-{mode}.sqlite` — the path convention, in one place */
 export function miArchivePath(mode: string): string {
   return `data/samurai-mi-${mode}.sqlite`;
 }
@@ -171,7 +171,7 @@ export class MiArchiveStore {
     this.db = new BetterSqlite3(dbPath);
     // WAL so a read-only backtest handle does not block the live writer, and
     // vice versa. The whole point of the separate file is that these two never
-    // wait on each other.
+    // wait on each other
     this.db.pragma('journal_mode = WAL');
     runMigrations(this.db, MI_MIGRATIONS_DIR);
   }
@@ -256,7 +256,7 @@ export class MiArchiveStore {
     // silent policy, and the whole point of `MI_SOURCE_HYDRATION` is that the
     // policy is stated where it is decided. Callers pass
     // `HYDRATING_MI_SOURCES` for the boot read; an offline re-derivation names
-    // the one source it is re-deriving.
+    // the one source it is re-deriving
     if (sources.length === 0) return [];
     const placeholders = sources.map(() => '?').join(', ');
     const rows = this.db
@@ -270,7 +270,7 @@ export class MiArchiveStore {
 
     return rows.map((row) => {
       const item = JSON.parse(row.item_json) as IntelligenceItem;
-      // JSON has no Date type; the store's window filter compares Dates.
+      // JSON has no Date type; the store's window filter compares Dates
       return { ...item, timestamp: new Date(item.timestamp) };
     });
   }
@@ -332,7 +332,7 @@ export class MiArchiveStore {
     return row?.newest == null ? undefined : new Date(row.newest);
   }
 
-  /** Raw rows for re-derivation — the point of keeping the bytes (#554). */
+  /** Raw rows for re-derivation — the point of keeping the bytes (#554) */
   rawRows(source: MiSourceId): RawArchiveRow[] {
     const rows = this.db
       .prepare('SELECT * FROM mi_archive_raw WHERE source = ? ORDER BY ingested_at ASC')
@@ -437,7 +437,7 @@ export class MiArchiveStore {
     return row?.streak ?? 0;
   }
 
-  /** Persists `streak` as the row's current consecutive-refusal count. */
+  /** Persists `streak` as the row's current consecutive-refusal count */
   recordRefusalStreak(
     source: MiSourceId,
     row_id: string,
@@ -457,7 +457,7 @@ export class MiArchiveStore {
       .run(source, row_id, streak, reason, asOf.toISOString());
   }
 
-  /** Clears the persisted streak once a row answers again — see `recordRefusalStreak`. */
+  /** Clears the persisted streak once a row answers again — see `recordRefusalStreak` */
   clearRefusalStreak(source: MiSourceId, row_id: string): void {
     this.db
       .prepare('DELETE FROM mi_refusal_streaks WHERE source = ? AND row_id = ?')

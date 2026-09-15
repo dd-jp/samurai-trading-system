@@ -178,7 +178,7 @@ export interface SignalDecayRead {
  */
 export async function readSignalDecay(input: {
   instrument: string;
-  /** The side of the lot being held — the direction the signal has to still support. */
+  /** The side of the lot being held — the direction the signal has to still support */
   side: 'buy' | 'sell';
   marketData: MarketDataService;
   asOf: Date;
@@ -195,7 +195,7 @@ export async function readSignalDecay(input: {
     // fetch record. MACD's 112-bar window therefore has to be the one that
     // populates the store; RSI's 57 is then served from it. Racing them with
     // `Promise.all`, or reading RSI first, makes the second call miss and
-    // doubles the upstream fetches this module claims not to make.
+    // doubles the upstream fetches this module claims not to make
     macd = (await marketData.getIndicator(instrument, MACD_SPEC, asOf)).value;
     rsi = (await marketData.getIndicator(instrument, RSI_SPEC, asOf)).value;
   } catch (cause) {
@@ -208,7 +208,7 @@ export async function readSignalDecay(input: {
   const vote = momentumVote(rsi, macd);
   // `momentumVote` answers "which way is momentum", in market terms. The
   // position's own side turns that into "does momentum still support THIS
-  // lot": a short is supported by bearish momentum.
+  // lot": a short is supported by bearish momentum
   const signed: AxisVote = vote === 0 || side === 'buy' ? vote : ((0 - vote) as AxisVote);
 
   return {

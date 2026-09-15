@@ -45,7 +45,7 @@ import {
 import { resolveStage2Source } from './stage2-source.js';
 import { makeAssetClass } from './stage2-support.js';
 
-/** The fixed MVP universe (CLAUDE.md "Broker Plan" / spec "User Stories"). */
+/** The fixed MVP universe (CLAUDE.md "Broker Plan" / spec "User Stories") */
 export const STOCK_SYMBOLS = ['SPY', 'QQQ', 'AAPL', 'TSLA'] as const;
 export const CRYPTO_SYMBOLS = ['BTC-USD', 'ETH-USD'] as const;
 
@@ -185,7 +185,7 @@ export const CALIBRATED_INTRADAY_COST_CONFIG: CostConfig = {
   // Layered via `venues` rather than `stocks.commissionRate` (kept 0 for the
   // Alpaca-priced legs this config also serves): the intraday stocks replay
   // stamps `MarketState.venue = 'saxo'` (`runStage2` below, #1032 item 2), so
-  // 8bps a side (ADR-0015:201) is what an intraday run now charges.
+  // 8bps a side (ADR-0015:201) is what an intraday run now charges
   venues: { saxo: { commissionRate: SAXO_COMMISSION_RATE } },
 };
 
@@ -230,7 +230,7 @@ export function costConfigFor(timeframe: string, env: NodeJS.ProcessEnv = proces
   return isDailyTimeframe(timeframe) ? CALIBRATED_COST_CONFIG : CALIBRATED_INTRADAY_COST_CONFIG;
 }
 
-/** Default window: the last 5 years, ending "now" — the spec's Starter-tier depth. */
+/** Default window: the last 5 years, ending "now" — the spec's Starter-tier depth */
 export function defaultFiveYearWindow(now: Date = new Date()): DateRange {
   return { start: new Date(now.getTime() - FIVE_YEARS_MS), end: now };
 }
@@ -286,7 +286,7 @@ export interface RunStage2Deps {
    */
   timeframe?: string;
   costConfig?: CostConfig;
-  /** Sink for the printed report — defaults to `console.log`. */
+  /** Sink for the printed report — defaults to `console.log` */
   print?: (line: string) => void;
   /**
    * Where the run's selected config is frozen (#375, #384) — the SHARED store,
@@ -357,7 +357,7 @@ export function universeFor(timeframe: string): readonly string[] {
 export function effectiveWindow(
   store: { bars: (symbol: string, window: DateRange) => Array<{ close_time: Date }> },
   requested: DateRange,
-  /** Defaults to the full daily universe, which is what every pre-#664 call meant. */
+  /** Defaults to the full daily universe, which is what every pre-#664 call meant */
   symbols: readonly string[] = [...STOCK_SYMBOLS, ...CRYPTO_SYMBOLS],
 ): DateRange {
   let start = requested.start;
@@ -398,7 +398,7 @@ export function effectiveWindow(
   return { start, end };
 }
 
-/** One asset class's fixed symbol/periodsPerYear pairing this script drives. */
+/** One asset class's fixed symbol/periodsPerYear pairing this script drives */
 
 /**
  * Ingests the full MVP universe, runs the 12-config grid across stocks and
@@ -450,18 +450,18 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
   // of this script (2026-08-05) asked for 5 years and received 2 — 501 stock
   // bars, earliest 2024-08-06. Replaying the requested window against that
   // produced `toReturnSeries: no bars in the sample` from inside the first
-  // fold, an opaque failure four layers down from its cause.
+  // fold, an opaque failure four layers down from its cause
   //
   // So the effective window is INTERSECTED across symbols and everything
   // downstream — replay, folds, and crucially MinBTL — runs on it. MinBTL's
   // trial cap is a function of sample length, so computing it over a window
   // the data does not cover would overstate how many configs the sample can
   // support, which is the one number in this verdict that exists to prevent
-  // exactly that kind of overfitting.
+  // exactly that kind of overfitting
   // Warn when EITHER boundary moved, naming which. A provider whose history
   // lags the request narrows the END instead of the start (stale or partial
   // vendor data), and warning only on the start would let that shrink the
-  // sample invisibly — the run output would read as a full-window run.
+  // sample invisibly — the run output would read as a full-window run
   const effective = effectiveWindow(store, window, symbols);
   const narrowedStart = effective.start.getTime() > window.start.getTime();
   const narrowedEnd = effective.end.getTime() < window.end.getTime();
@@ -495,12 +495,12 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
 
   // `periodsPerYearFor`, not the daily constants (#664): `periodsPerYear` is
   // the annualization base for every Sharpe in the suite, so a 1-minute replay
-  // annualized off 252 understates it by ~sqrt(390).
+  // annualized off 252 understates it by ~sqrt(390)
   // An intraday run is the LSE-ETP universe replayed on its US proxy
   // (ADR-0016) and its live venue is Saxo, so its stocks legs price at
   // `CALIBRATED_INTRADAY_COST_CONFIG.venues.saxo` (#1032 item 2). Daily
   // runs stay Alpaca-priced: `CALIBRATED_COST_CONFIG` carries no `venues`
-  // and the pinned daily results must not move.
+  // and the pinned daily results must not move
   const stocks = makeAssetClass(
     ctx,
     'stocks',
@@ -517,7 +517,7 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
 
   // #405: state the sizing POSITIVELY, before the run, rather than reporting
   // `exceeded: true` after 12 trials have already been spent. The cap exists
-  // to constrain the search; a reader should see what it constrained it to.
+  // to constrain the search; a reader should see what it constrained it to
   const results = await runTrialGrid({
     assetClasses,
     window: effective,
@@ -526,13 +526,13 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
     // Printed from INSIDE the run, off the sizing it actually used, rather
     // than from a second `sizeTrialGridToSample` call here. The two agreed —
     // same pure function, same window — but a verdict's audit trail should
-    // report what ran, not something computed alongside it.
+    // report what ran, not something computed alongside it
     //
     // N is `selected.length`, NOT `limit`. They differ whenever the cap does
     // not bind — a 5-year window supports ~45 trials and the cross-product
     // only asks for 12, where printing `limit` would announce a 45-config grid
     // and then run 12. That is the same reported-vs-actual divergence this
-    // change exists to remove, one line further along.
+    // change exists to remove, one line further along
     announceSizing: (sizing) =>
       print(
         `Stage 2: grid sized to N=${sizing.selected.length} from a ` +
@@ -586,7 +586,7 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
   return verdict;
 }
 
-/** Prints the full metrics suite per (config, asset class) plus the pass/kill decision. */
+/** Prints the full metrics suite per (config, asset class) plus the pass/kill decision */
 function printReport(
   results: readonly TrialGridResult[],
   verdict: Stage2Verdict,
@@ -668,15 +668,15 @@ function printReport(
  */
 if (import.meta.url === `file://${process.argv[1]}`) {
   // Polygon (2y) unless `STAGE2_SOURCE=free-stack` asks for the ten-year free
-  // stack — see `stage2-source.ts` for why the old path stays the default.
+  // stack — see `stage2-source.ts` for why the old path stays the default
   const {
     client: polygonClient,
     window: runWindow,
     label,
     // #664: read from `STAGE2_TIMEFRAME` (default '1d'), so a direct run — the
-    // only real caller of this script — is what drives an intraday replay.
+    // only real caller of this script — is what drives an intraday replay
     // `STAGE2_TIMEFRAME=1m STAGE2_SOURCE=free-stack` is the intended intraday
-    // invocation.
+    // invocation
     timeframe: runTimeframe,
   } = resolveStage2Source();
   console.log(
@@ -685,24 +685,24 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   );
   // Stated explicitly at the entrypoint rather than by changing `runStage2`'s
   // own default, so every existing caller and test keeps the cost config it
-  // was written against and only a direct run picks up the calibrated one.
+  // was written against and only a direct run picks up the calibrated one
   // The SHARED store, not the scratch `dbPath` this script opens for bars
   // (#375, #384): the Feedback Loop reads the frozen selection at runtime, and
   // a verdict written to a research scratch file is a verdict nobody can act
   // on. A direct run is the only caller that freezes; `runStage2`'s own tests
-  // pass no store and stay a dry run.
+  // pass no store and stay a dry run
   const shared = openSharedStore(sharedStorePath());
   runStage2({
     polygonClient,
     // Keyed on the run's timeframe (#875): a daily-fitted spread/ATR ratio
     // consumed against per-minute volatility is the defect #874's WARNING was
-    // the stopgap for.
+    // the stopgap for
     costConfig: costConfigFor(runTimeframe),
     window: runWindow,
     timeframe: runTimeframe,
     // Stated here rather than by changing `runStage2`'s `:memory:` default, so
     // only a direct run persists bars and every existing caller and test keeps
-    // the isolated in-memory store it was written against (#495).
+    // the isolated in-memory store it was written against (#495)
     dbPath: STAGE2_SCRATCH_DB_PATH,
     selections: new SqliteStage2SelectionStore(shared),
   }).catch((error: unknown) => {

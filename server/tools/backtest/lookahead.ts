@@ -15,13 +15,13 @@
  */
 import type { Clock } from '../../shared/index.js';
 
-/** The offending read: what was read, when it is stamped, and the replay's T. */
+/** The offending read: what was read, when it is stamped, and the replay's T */
 export interface LookaheadViolation {
   /** The store/data read that served the row, e.g. 'bars' or 'latest_mark'. */
   source: string;
-  /** The row's own timestamp — strictly after `clock_now` is the violation. */
+  /** The row's own timestamp — strictly after `clock_now` is the violation */
   row_timestamp: Date;
-  /** `clock.now()` at the moment of the read: the replay's simulated T. */
+  /** `clock.now()` at the moment of the read: the replay's simulated T */
   clock_now: Date;
 }
 

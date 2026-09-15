@@ -47,7 +47,7 @@ describe('openReadOnlyCgtStore', () => {
     const dir = mkdtempSync(join(tmpdir(), 'cgt-readonly-no-table-'));
     const dbPath = join(dir, 'bare.sqlite');
     // A bare SQLite file with none of the money-path tables — the schema this
-    // report was NOT written against.
+    // report was NOT written against
     const bare = new BetterSqlite3(dbPath);
     bare.exec('CREATE TABLE unrelated (id INTEGER PRIMARY KEY);');
     bare.close();

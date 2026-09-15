@@ -95,7 +95,7 @@ export class ExitSkipWriteThrottle {
     // Literally the same reason as last tick, and it doesn't get its own
     // repeat cadence: pure onset-once silence, no matter how long it's
     // budget-eligible for — this is what keeps an ordinary unchanged skip
-    // from ever re-alerting.
+    // from ever re-alerting
     if (contiguousRepeat && !needsBoundedRepeat(skip_reason)) return false;
     return budgetElapsed;
   }

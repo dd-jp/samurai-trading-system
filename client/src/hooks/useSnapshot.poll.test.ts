@@ -3,19 +3,19 @@
 // The POLL LOOP's failure behaviour (#606 item 3), as opposed to
 // `useSnapshot.test.ts`, which covers the pure boundary check. These tests need
 // timers and a mounted hook, so they live in their own jsdom file rather than
-// pulling the pure suite into a DOM environment.
+// pulling the pure suite into a DOM environment
 //
 // The property under test is the one an operator only discovers by reloading:
 // a dashboard that stopped polling looks exactly like a dashboard whose server
 // went quiet. A hung request must therefore be abandoned by the CLIENT, not
-// waited on indefinitely.
+// waited on indefinitely
 import { CONTRACT_VERSION } from '@contracts';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { fakeFetch, HANGS, makeSnapshot } from '../test-fixtures.ts';
 import { STALE_AFTER_MISSED_POLLS, useSnapshot } from './useSnapshot.ts';
 
-/** Short enough to keep the suite fast; the ratios are what the code reads. */
+/** Short enough to keep the suite fast; the ratios are what the code reads */
 const INTERVAL_MS = 20;
 
 /**
@@ -47,7 +47,7 @@ function pollDrivenClock(payloads: Parameters<typeof fakeFetch>[0]): {
   // held while that constant was 2. Raise it to 3 and a literal step would sit
   // exactly ON the horizon rather than past it, so a single hang would stop
   // tripping the watchdog and this test would quietly stop covering the
-  // stale-then-recovered path — with the `now()` guard below still passing.
+  // stale-then-recovered path — with the `now()` guard below still passing
   const STEP_MS = INTERVAL_MS * (STALE_AFTER_MISSED_POLLS + 1);
   const inner = fakeFetch(payloads);
   let clockMs = 0;
@@ -79,7 +79,7 @@ function pollDrivenClock(payloads: Parameters<typeof fakeFetch>[0]): {
  * later as an assertion on state the loop never reached.
  */
 async function stepFakeTimersUntil(predicate: () => boolean): Promise<void> {
-  const MAX_STEPS = 20; // 400ms of virtual time; generous, not tuned.
+  const MAX_STEPS = 20; // 400ms of virtual time; generous, not tuned
   for (let step = 0; step < MAX_STEPS; step += 1) {
     if (predicate()) return;
     await act(async () => {
@@ -116,7 +116,7 @@ async function flushMicrotasksUntil(predicate: () => boolean): Promise<void> {
 /**
  * The first two calls hang like `HANGS`; the third waits on a gate the test
  * holds open, so "the payload lands" is an event the test fires rather than
- * one that falls out of Promise microtask scheduling racing the fake clock.
+ * one that falls out of Promise microtask scheduling racing the fake clock
  */
 function hangsTwiceThenGatedFetch(payload: unknown): {
   fetchImpl: typeof fetch;
@@ -144,7 +144,7 @@ describe('useSnapshot polling', () => {
     // existed, this wedged `inFlight` true for the life of the page: every
     // later `poll()` returned at the guard, no retry was ever issued, and only
     // a manual reload recovered. The second payload landing is the proof that
-    // a retry happened.
+    // a retry happened
     vi.useFakeTimers();
     try {
       const { fetchImpl, now } = pollDrivenClock([HANGS, makeSnapshot()]);
@@ -154,18 +154,18 @@ describe('useSnapshot polling', () => {
 
       expect(result.current.snapshot?.as_of).toBe('2026-08-07T12:00:00.000Z');
       // The recovered poll clears the hang's error rather than leaving the page
-      // reporting a failure it has since recovered from.
+      // reporting a failure it has since recovered from
       expect(result.current.error).toBeNull();
       // Not stale BECAUSE a poll succeeded, not because the clock happened not to
       // have moved: the hang pushed the injected clock a full horizon past the
       // last success, so the watchdog had genuinely marked it stale before the
-      // recovery landed and cleared it (#709).
+      // recovery landed and cleared it (#709)
       expect(result.current.status).toBe('alive');
       // Keeps the line above honest. If the injected clock ever stopped being
       // read — a renamed option, a default reinstated — the status would sit alive
       // for want of elapsed time and the assertion would pass while testing
       // nothing. This fails in that case, because time only moves here when a
-      // poll is issued.
+      // poll is issued
       expect(now()).toBeGreaterThan(INTERVAL_MS * STALE_AFTER_MISSED_POLLS);
     } finally {
       vi.useRealTimers();
@@ -176,7 +176,7 @@ describe('useSnapshot polling', () => {
     // PR #607 review round 1 read `timedOut` as effect-scoped and expected a
     // recovered poll to be discarded. It is declared per invocation, and this
     // is the behaviour that says so: TWO consecutive hangs, then a payload
-    // that must be applied rather than swallowed by a previous poll's verdict.
+    // that must be applied rather than swallowed by a previous poll's verdict
     //
     // #1362: this used to run on real timers, and `waitFor(snapshot !== null)`
     // followed by `expect(error).toBeNull()` are two SEPARATE reads of
@@ -186,7 +186,7 @@ describe('useSnapshot polling', () => {
     // `prev`, so `snapshot` stayed set while `error` was overwritten by that
     // later poll's timeout — a race between two assertions, not a hook
     // defect. Fake timers plus a fetch the test gates itself mean no poll
-    // this test does not explicitly drive can ever fire between them.
+    // this test does not explicitly drive can ever fire between them
     vi.useFakeTimers();
     try {
       const timeoutMs = INTERVAL_MS * STALE_AFTER_MISSED_POLLS;
@@ -199,7 +199,7 @@ describe('useSnapshot polling', () => {
 
       // The gate gives the test full control of the mechanism under test:
       // both hangs have genuinely timed out (their own `timedOut` flags
-      // true), and the third poll is in flight but not yet resolved.
+      // true), and the third poll is in flight but not yet resolved
       expect(callCount()).toBe(3);
       expect(result.current.snapshot).toBeNull();
       expect(result.current.error).toBe(`snapshot request timed out after ${timeoutMs}ms`);
@@ -217,7 +217,7 @@ describe('useSnapshot polling', () => {
   it('exposes lastSuccessAt as the client clock, decoupled from a frozen generated_at (#1166)', async () => {
     // A single payload, reused by reference on every poll (`fakeFetch` clamps
     // to its last entry): `generated_at` never changes, modelling a stall in
-    // the underlying data while the HTTP round trip keeps succeeding.
+    // the underlying data while the HTTP round trip keeps succeeding
     const generatedAt = '2026-08-07T12:00:00.000Z';
     const payload = makeSnapshot({ generated_at: generatedAt });
     let clockMs = 1_000_000;
@@ -248,7 +248,7 @@ describe('useSnapshot polling', () => {
     // an independently chosen number. Asserted through the operator-visible
     // string, because that is where the choice is observable; comparing
     // `pollTimeoutMs` to its own formula would only fail if someone edited the
-    // implementation on purpose (PR #607 review round 1).
+    // implementation on purpose (PR #607 review round 1)
     expect(result.current.error).toBe(`snapshot request timed out after ${INTERVAL_MS * 2}ms`);
     // Still WAITING, never STALE: nothing has ever landed, so there are no
     // numbers to call old — the honest reading, and the one the page-level
@@ -315,7 +315,7 @@ describe('useSnapshot — contract mismatch (#1316)', () => {
     // absent too would already fail `hasWireShape`'s literal field checks in
     // other ways, so this payload otherwise validates — the ONLY thing wrong
     // with it is the missing version, which is exactly the skew this test
-    // exists to catch rather than let fall through as a healthy read.
+    // exists to catch rather than let fall through as a healthy read
     expect(staleServerPayload.alert_delivery_failures_24h).toBe(0);
 
     const { result } = renderHook(() =>
@@ -325,11 +325,11 @@ describe('useSnapshot — contract mismatch (#1316)', () => {
     await waitFor(() => expect(result.current.status).toBe('contract-mismatch'));
     // Not routed through the generic "did not match the wire shape" rejection
     // — the error names the skew specifically, not a proxy/captive-portal-
-    // shaped failure.
+    // shaped failure
     expect(result.current.error).toMatch(/contract/i);
     expect(result.current.error).not.toMatch(/did not match the wire shape/);
     // Never silently treated as healthy: no snapshot is admitted from a
-    // payload this client could not validate the shape of.
+    // payload this client could not validate the shape of
     expect(result.current.snapshot).toBeNull();
   });
 
@@ -351,7 +351,7 @@ describe('useSnapshot — contract mismatch (#1316)', () => {
     // A renamed field is exactly what #1316's decision comment names as the
     // motivating case: it fails `hasWireShape` too (no `positions` array),
     // and the version check must win the race to explain why, rather than
-    // the generic structural rejection masking a diagnosable skew.
+    // the generic structural rejection masking a diagnosable skew
     const renamed = makeSnapshot() as unknown as Record<string, unknown>;
     renamed.open_positions = renamed.positions;
     delete renamed.positions;
@@ -369,7 +369,7 @@ describe('useSnapshot — contract mismatch (#1316)', () => {
     // Fake timers, like the file's other multi-poll tests above: under real
     // timers this raced flaky (the healthy poll's state landing observed
     // before the mismatched poll's had fully settled) — the same flake class
-    // `pollDrivenClock`'s doc comment exists to explain, one poll earlier.
+    // `pollDrivenClock`'s doc comment exists to explain, one poll earlier
     vi.useFakeTimers();
     try {
       const staleServerPayload = makeSnapshot() as unknown as Record<string, unknown>;

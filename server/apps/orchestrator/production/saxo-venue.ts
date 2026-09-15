@@ -97,7 +97,7 @@ import { guardedStore, type StoreHandle } from '../../../shared/store/index.js';
 import type { Logger, UniverseInstrument } from '../types.js';
 import type { ProductionConfig } from './config.js';
 
-/** Which venue the run's `BrokerAdapter` is built against. */
+/** Which venue the run's `BrokerAdapter` is built against */
 export const BROKER_VENUE_ENV_VAR = 'SAMURAI_BROKER';
 
 export const BROKER_VENUES = ['alpaca', 'saxo'] as const;
@@ -167,11 +167,11 @@ export function saxoTradeableUniverse(
 
 export interface SaxoVenueDeps {
   mode: ProductionConfig['mode'];
-  /** The configured universe, checked against what this venue can actually route. */
+  /** The configured universe, checked against what this venue can actually route */
   universe: readonly UniverseInstrument[];
-  /** `ProductionConfig.accountState` — one of this and `accountFunding` is REQUIRED; see the module doc. */
+  /** `ProductionConfig.accountState` — one of this and `accountFunding` is REQUIRED; see the module doc */
   accountState: ProductionConfig['accountState'];
-  /** `ProductionConfig.accountFunding` — the GBP-native read (#1509). */
+  /** `ProductionConfig.accountFunding` — the GBP-native read (#1509) */
   accountFunding?: ProductionConfig['accountFunding'];
   db: StoreHandle;
   logger: Logger;
@@ -179,11 +179,11 @@ export interface SaxoVenueDeps {
   dormantLegsAlerts: DormantLegsUnresolvedAlertChannel;
   priceUnitAlerts: UnresolvedPriceUnitAlertChannel;
   clock?: Clock;
-  /** `ProductionConfig.saxoBrokerClient` — the wire client, defaulted to the SIM gateway. */
+  /** `ProductionConfig.saxoBrokerClient` — the wire client, defaulted to the SIM gateway */
   client?: SaxoOpenApiClient;
-  /** The bearer the default client reads per request (#1523); ignored when `client` is injected. */
+  /** The bearer the default client reads per request (#1523); ignored when `client` is injected */
   tokenSource?: SaxoTokenSource;
-  /** The account's shared outbound bucket, matching what `production.ts` does for Alpaca. */
+  /** The account's shared outbound bucket, matching what `production.ts` does for Alpaca */
   rateLimiter?: TokenBucket;
 }
 
@@ -203,7 +203,7 @@ export async function buildSaxoBroker(deps: SaxoVenueDeps): Promise<BrokerAdapte
     deps.client ??
     new SaxoHttpBrokerClient({
       // `sim` unconditionally: `assertSaxoVenueBootable` has already refused
-      // `live`, so no live bearer token is reachable from this module at all.
+      // `live`, so no live bearer token is reachable from this module at all
       environment: 'sim',
       logger: deps.logger,
       tokenSource: deps.tokenSource ?? buildSaxoTokenSource('sim', deps.logger),
@@ -211,7 +211,7 @@ export async function buildSaxoBroker(deps: SaxoVenueDeps): Promise<BrokerAdapte
     });
 
   // Every asset is in `tradeable` — `assertUniverseIsRoutable` above refused
-  // otherwise — so the empty branch is unreachable, not a silent drop.
+  // otherwise — so the empty branch is unreachable, not a silent drop
   const rows = deps.universe.flatMap((instrument) => {
     const row = tradeable.get(instrument.asset);
     return row === undefined ? [] : [row];
@@ -267,10 +267,10 @@ function logResolvedUnits(deps: SaxoVenueDeps, instruments: SaxoInstrumentResolv
       venue: 'saxo',
       mode: deps.mode,
       // 'sim' is asserted, not observed: buildSaxoBroker refuses live, and an
-      // injected client is not inspected for its gateway.
+      // injected client is not inspected for its gateway
       environment: 'sim',
       // Every asset resolves — the caller threw otherwise — so the empty
-      // branch drops nothing.
+      // branch drops nothing
       lines: deps.universe.flatMap((instrument) => {
         const ref = instruments.resolve(instrument.asset);
         return ref === undefined
@@ -379,10 +379,10 @@ export function buildSaxoTokenSource(
     // boot that stays silent about it defers the news to the first trade of
     // the session. Not a throw — the precedence above deliberately keeps a
     // lost refresher instead of falling back to an unrenewable bearer, and
-    // alerting on the state is #1524.
+    // alerting on the state is #1524
     const state = refresher.start();
     // A lost session already logged `saxo_session_lost` from inside `start()`;
-    // restating it here would double every boot failure.
+    // restating it here would double every boot failure
     if (state.status !== 'lost') {
       logger.log({
         trace_id: 'startup',

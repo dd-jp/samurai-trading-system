@@ -29,7 +29,7 @@ export function timeframeToMs(timeframe: string): number {
   return count * UNIT_MS[unit!]!;
 }
 
-/** True for day-grained timeframes, whose bar covers an entire session. */
+/** True for day-grained timeframes, whose bar covers an entire session */
 export function isDailyTimeframe(timeframe: string): boolean {
   return /^(\d+)d$/.test(timeframe);
 }

@@ -21,14 +21,14 @@ type Direction = DebateRow['direction'];
 export interface StanceStripProps {
   /** Per-round positions, oldest first. `undefined` when the debate recorded none. */
   stances: readonly Direction[] | undefined;
-  /** Where the analyst ended up — rendered beside the strip by the caller. */
+  /** Where the analyst ended up — rendered beside the strip by the caller */
   finalPosition: Direction;
 }
 
 /**
  * `Direction`, not `string` (#606 item 6): the only callers pass a wire
  * direction, and the wider type invited a `stance-<garbage>` class that no
- * stylesheet rule matches — a mark rendered with no colour and no meaning.
+ * stylesheet rule matches — a mark rendered with no colour and no meaning
  */
 function directionClass(direction: Direction): string {
   return `stance-mark stance-${direction}`;
@@ -48,7 +48,7 @@ export function StanceStrip({ stances, finalPosition }: StanceStripProps) {
       {stances.map((stance, round) => (
         // The round index is the identity here: a stance list is a fixed
         // sequence of rounds, so position IS the key, and two rounds with the
-        // same direction are legitimately identical values.
+        // same direction are legitimately identical values
         // biome-ignore lint/suspicious/noArrayIndexKey: round number is the row's identity
         <i key={round} className={directionClass(stance)} title={`round ${round + 1}: ${stance}`} />
       ))}

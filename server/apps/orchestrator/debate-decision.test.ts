@@ -42,7 +42,7 @@ describe('debateDecisionWord', () => {
     // `enforceLatencyBudget`'s LOW_CONFIDENCE_FALLBACK: neutral, zero
     // confidence, no rounds. This is the case that produced 22 of the 26
     // timed-out debates in the 2026-09-03 session, and the one that reads
-    // identically to a genuine wash unless it is named.
+    // identically to a genuine wash unless it is named
     const starved = resolvedDebate({
       direction: 'neutral',
       confidence: 0,
@@ -56,7 +56,7 @@ describe('debateDecisionWord', () => {
 
   it('separates a truncated synthesis from an absent one', () => {
     // A round DID finish, so the direction is a real (if truncated) answer —
-    // materially different from the case above, which has no answer at all.
+    // materially different from the case above, which has no answer at all
     const partial = resolvedDebate({
       converged: false,
       rounds_completed: 1,
@@ -82,7 +82,7 @@ describe('debateDecisionWord', () => {
     // Synthetic: no producer sets `read: false` yet (see `DebateResult.read`'s
     // docblock). This is the orchestrator-side half of the same guard rail
     // `debateWasDegraded` (trader/decide.ts) enforces, pinned so the two
-    // cannot silently disagree about the same result.
+    // cannot silently disagree about the same result
     const unread = resolvedDebate({
       direction: 'neutral',
       confidence: 0,
@@ -103,7 +103,7 @@ describe('debateDecisionWord', () => {
     // `budget_exhausted` fallback, minus the `timed_out` field that would make
     // it one. A classifier keying on the shape instead of the discriminator
     // would relabel the falsifier arm as broken and change what the comparison
-    // measures.
+    // measures
     const relay = new AnalystViewRelay();
     const control = buildControlDebateStep(relay);
 
@@ -125,7 +125,7 @@ describe('debateDecisionWord', () => {
   it('reports exactly the degraded words as degraded', () => {
     // The dashboard glosses on this predicate and the tick runner raises the
     // log level on it, so a direction leaking into it would recolour healthy
-    // traffic as breakage.
+    // traffic as breakage
     expect(isDegradedDecision('budget_exhausted')).toBe(true);
     expect(isDegradedDecision('timed_out_partial')).toBe(true);
     expect(isDegradedDecision('not_admitted')).toBe(true);

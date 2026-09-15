@@ -37,7 +37,7 @@
  * cannot leak through this message either.
  */
 
-/** One flatten fill whose quantity exceeded its named lots' journalled share. */
+/** One flatten fill whose quantity exceeded its named lots' journalled share */
 export interface FlattenOverfillWarning {
   /**
    * The `ExecutionInput.trace_id` of the Execution SURFACE this warning was
@@ -56,9 +56,9 @@ export interface FlattenOverfillWarning {
    * `control-arm-fill-sync` (the fill-sync poll's own surface).
    */
   trace_id: string;
-  /** The flatten's own `flatten_submissions.idempotency_key` (its `client_order_id`). */
+  /** The flatten's own `flatten_submissions.idempotency_key` (its `client_order_id`) */
   idempotency_key: string;
-  /** The quantity this poll could not attribute to any named lot. */
+  /** The quantity this poll could not attribute to any named lot */
   unattributed_qty: number;
   observed_at: Date;
 }

@@ -43,14 +43,14 @@ describe('technical confidence lattice', () => {
       ...new Set(enumerateTechnicalLattice().map((point) => point.confidence)),
     ].sort((a, b) => a - b);
 
-    // `assessAxes` rounds to 4dp (`round4`), so the thirds land as 0.3333/0.6667.
+    // `assessAxes` rounds to 4dp (`round4`), so the thirds land as 0.3333/0.6667
     expect(confidences).toEqual([0, 0.25, 0.3333, 0.4, 0.5, 0.6667, 0.75, 1]);
   });
 
   it('always emits enough key points to saturate the evidence term', () => {
     // KEY_POINTS_SATURATION is 3; the smallest technical view carries 2 axis
     // lines plus the 5 fixed lines. So `keyPointsScore` is 1.0 for every
-    // reachable stocks debate and the evidence term is (1 + avgConfidence) / 2.
+    // reachable stocks debate and the evidence term is (1 + avgConfidence) / 2
     for (const point of enumerateTechnicalLattice()) {
       expect(point.keyPoints).toBeGreaterThanOrEqual(7);
     }
@@ -62,7 +62,7 @@ describe('stocks conviction ceiling vs conviction_floor (#756 item 2)', () => {
     // #625 measured 0.5478 against 0.55 and called it a total halt. The
     // post-#625 formula excludes NO_DATA analysts from the evidence average
     // and the post-#745 analyst can reach confidence 1.0, so the same desk
-    // shape now tops out at 0.70.
+    // shape now tops out at 0.70
     expect(ceiling('absent', 'agrees')).toBeCloseTo(0.7, 10);
     expect(ceiling('absent', 'agrees')).toBeGreaterThan(FLOOR);
   });
@@ -87,7 +87,7 @@ describe('stocks conviction ceiling vs conviction_floor (#756 item 2)', () => {
     // authorises — is a separate, still-open question: whether
     // `conviction_floor` itself should exclude the boundary. That is #756
     // item 1, open per `gated-tape-conviction.test.ts`'s docstring, not
-    // #683's Option 1/2/3 choice.
+    // #683's Option 1/2/3 choice
     const weakest = directional('absent', 'agrees')
       .filter((sample) => sample.clears)
       .reduce((min, sample) => (sample.confidence < min.confidence ? sample : min));
@@ -99,7 +99,7 @@ describe('stocks conviction ceiling vs conviction_floor (#756 item 2)', () => {
   it('cannot trade against the mediator', () => {
     // `computeDirectionalConsensus` nets an opposing mediator against the lone
     // technical vote, so the consensus term collapses and the score cannot
-    // exceed EVIDENCE_WEIGHT.
+    // exceed EVIDENCE_WEIGHT
     expect(ceiling('absent', 'opposes')).toBeLessThan(FLOOR);
   });
 
@@ -114,7 +114,7 @@ describe('stocks conviction ceiling vs conviction_floor (#756 item 2)', () => {
     // The headline "clears from 0.25" is the ALL-ABSENT shape and is the most
     // permissive one. Fundamental and sentiment read different stores, so the
     // desk can sit on a split branch, and each branch that re-enters the
-    // evidence average raises the technical confidence needed.
+    // evidence average raises the technical confidence needed
     const minClearing = (shape: DeskShape): number =>
       directional(shape, 'agrees')
         .filter((sample) => sample.clears)
@@ -140,7 +140,7 @@ describe('LOW_CONVICTION_CAP interaction (#756 item 3)', () => {
     // #745 states the 0.40 cap "sits below the 0.55 stocks conviction floor on
     // purpose". That holds for the analyst's own confidence and does NOT hold
     // for the conviction the Trader gates on: a capped 0.40 still produces
-    // 0.6(0.5) + 0.4((1 + 0.4) / 2) = 0.58 once the mediator agrees.
+    // 0.6(0.5) + 0.4((1 + 0.4) / 2) = 0.58 once the mediator agrees
     //
     // RESOLVED by #870: #745's claim was corrected rather than the mechanism —
     // the cap is a damper, not a veto. The reasoning lives on
@@ -148,7 +148,7 @@ describe('LOW_CONVICTION_CAP interaction (#756 item 3)', () => {
     // (at most ~6.7% of ADR-0018 D5's deployment envelope, 0 at the weakest
     // gated read) is pinned end to end in
     // `server/pipeline/trader/gated-tape-conviction.test.ts`. This assertion
-    // is unchanged and is the measurement that finding rests on.
+    // is unchanged and is the measurement that finding rests on
     const cappedCeiling = directional('absent', 'agrees')
       .filter((sample) => sample.capped)
       .reduce((max, sample) => Math.max(max, sample.conviction), 0);

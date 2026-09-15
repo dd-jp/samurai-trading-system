@@ -10,7 +10,7 @@ export type CapitalCeilingUsd = number & { readonly __brand: 'CapitalCeilingUsd'
 /**
  * `source` is what the caller is asked to fix — a variable name or an
  * argument name, never a credential; the ceiling itself is not secret, and
- * quoting it back is what makes a typo visible.
+ * quoting it back is what makes a typo visible
  */
 export function toCapitalCeilingUsd(value: number, source: string): CapitalCeilingUsd {
   if (!Number.isFinite(value) || value <= 0) {

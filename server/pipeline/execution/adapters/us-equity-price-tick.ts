@@ -27,7 +27,7 @@
  * short mirrors all three.
  */
 
-/** SEC Rule 612: a penny at or above $1.00, an order of magnitude finer below. */
+/** SEC Rule 612: a penny at or above $1.00, an order of magnitude finer below */
 const TICK_AT_OR_ABOVE_ONE_DOLLAR = 0.01;
 const TICK_BELOW_ONE_DOLLAR = 0.0001;
 
@@ -72,7 +72,7 @@ export function snapToTick(value: number, direction: 'up' | 'down'): number {
   const nearest = Math.round(scaled);
 
   // Tolerance, not equality: the division above is itself lossy, so an on-tick
-  // price arrives a few ULPs to one side of the integer rather than on it.
+  // price arrives a few ULPs to one side of the integer rather than on it
   //
   // The tolerance is RELATIVE, not a flat 1e-9, because that dust scales with
   // the magnitude of `scaled`. Measured over every penny price up to $200k, it
@@ -89,7 +89,7 @@ export function snapToTick(value: number, direction: 'up' | 'down'): number {
   // A price below one tick floors to zero. Nothing on today's path can reach
   // here — both callers' ordering guards refuse a collapsed bracket first — but
   // the contract above promises a positive price, so it is enforced here rather
-  // than left resting on a caller that may not exist yet.
+  // than left resting on a caller that may not exist yet
   if (steps <= 0) {
     throw new Error(
       `snapToTick: ${value} rounded ${direction} onto the ${tick} grid collapses to a non-positive price`,
@@ -99,7 +99,7 @@ export function snapToTick(value: number, direction: 'up' | 'down'): number {
   return Number((steps * tick).toFixed(decimals));
 }
 
-/** The wire form: fixed to the leg's own tick, never `String(float)`. */
+/** The wire form: fixed to the leg's own tick, never `String(float)` */
 export function formatTickPrice(value: number): string {
   return value.toFixed(decimalsFor(tickFor(value)));
 }

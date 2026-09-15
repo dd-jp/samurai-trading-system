@@ -34,19 +34,19 @@ import type {
 import type { CorrelationEstimate } from './types.js';
 
 export interface CorrelationConfig {
-  /** Bar timeframe + lookback the return series is drawn from. */
+  /** Bar timeframe + lookback the return series is drawn from */
   window: BarWindow;
-  /** Minimum overlapping return observations before a pair is trusted; pairs below this are omitted. */
+  /** Minimum overlapping return observations before a pair is trusted; pairs below this are omitted */
   min_bars: number;
 }
 
 export interface CorrelationEstimateInput {
-  /** The intent's instrument — correlation is computed against this one. */
+  /** The intent's instrument — correlation is computed against this one */
   instrument: string;
-  /** Every other instrument currently held (from `PortfolioView.exposure_by_instrument`). */
+  /** Every other instrument currently held (from `PortfolioView.exposure_by_instrument`) */
   otherInstruments: string[];
   marketData: MarketDataService;
-  /** Point-in-time read for every bar lookup — never wall-clock. */
+  /** Point-in-time read for every bar lookup — never wall-clock */
   asOf: Date;
   config: CorrelationConfig;
 }
@@ -62,7 +62,7 @@ function logReturns(bars: Bar[]): number[] {
   return returns;
 }
 
-/** Pearson correlation over the trailing overlap of two return series. */
+/** Pearson correlation over the trailing overlap of two return series */
 function pearsonCorrelation(a: number[], b: number[]): number {
   const n = Math.min(a.length, b.length);
   const x = a.slice(-n);
@@ -99,11 +99,11 @@ export async function computeCorrelationEstimate(
       instruments.map(async (i) => {
         // `partial: 'allow'` (issue #292): a short window is degraded-but-valid
         // HERE and almost nowhere else — the `min_bars` check below already
-        // omits an under-covered pair rather than trusting a thin correlation.
+        // omits an under-covered pair rather than trusting a thin correlation
         // Without the opt-in, one sparse peer would reject this `Promise.all`
         // and take every instrument's correlation read down with it (and, via
         // production.ts's tick loop, forfeit the tick) instead of dropping the
-        // one pair that couldn't be estimated.
+        // one pair that couldn't be estimated
         const bars = await marketData.getBars(i, { ...config.window, partial: 'allow' }, asOf);
         return [i, logReturns(bars)] as const;
       }),
@@ -118,9 +118,9 @@ export async function computeCorrelationEstimate(
     const otherReturns = returnsByInstrument.get(other) ?? [];
     const overlap = Math.min(targetReturns.length, otherReturns.length);
     if (overlap < config.min_bars) {
-      // #303: still omitted from `correlations` — the fallback is unchanged.
+      // #303: still omitted from `correlations` — the fallback is unchanged
       // Naming it here is what lets the caller tell "not correlated" apart
-      // from "not measurable", which the empty slot alone could not express.
+      // from "not measurable", which the empty slot alone could not express
       insufficient_history.push(other);
       continue;
     }

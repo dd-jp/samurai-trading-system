@@ -11,7 +11,7 @@
 
 import type { PipelineLane, PipelineOutcome, PipelineStage, PipelineView } from '@contracts';
 
-/** The outcomes that settle a lane and earn a hanko stamp. */
+/** The outcomes that settle a lane and earn a hanko stamp */
 export type SettledOutcome = 'go' | 'no_go' | 'stopped' | 'quorum_skip';
 
 /** Newest-first display cap. `seen` is NOT capped — dedupe outlives eviction. */
@@ -21,7 +21,7 @@ export interface LedgerEntry {
   trace_id: string;
   instrument: string;
   outcome: SettledOutcome;
-  /** The stage the trace ended at, straight off the lane. */
+  /** The stage the trace ended at, straight off the lane */
   final_stage: PipelineStage | null;
   /**
    * The lane's last non-null `recorded_at` — when the decision actually
@@ -32,7 +32,7 @@ export interface LedgerEntry {
 }
 
 export interface LedgerState {
-  /** Newest first, at most `LEDGER_CAP` entries. */
+  /** Newest first, at most `LEDGER_CAP` entries */
   entries: readonly LedgerEntry[];
   /**
    * Every trace_id ever ledgered this session, including cap-evicted ones.
@@ -67,7 +67,7 @@ export function settledOutcome(outcome: PipelineOutcome): SettledOutcome | null 
   }
 }
 
-/** Last non-null `recorded_at` in pipeline order — the lane's settle moment. */
+/** Last non-null `recorded_at` in pipeline order — the lane's settle moment */
 function lastRecordedAt(lane: PipelineLane): string | null {
   let last: string | null = null;
   for (const cell of lane.cells) {

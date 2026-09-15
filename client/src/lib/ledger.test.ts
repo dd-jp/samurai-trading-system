@@ -101,7 +101,7 @@ describe('updateLedger — dedupe', () => {
       );
     }
     expect(state.entries.some((e) => e.trace_id === 'old-trace')).toBe(false);
-    // …and a re-observation of it must not re-stamp it.
+    // …and a re-observation of it must not re-stamp it
     const again = updateLedger(
       state,
       makeView([doneThrough('BTC-USD', 'old-trace', 'execution', { outcome: 'go' })]),
@@ -131,7 +131,7 @@ describe('updateLedger — cap and ordering', () => {
     // PR #582 review: `Date.parse` on a malformed timestamp returns NaN, and
     // a comparator that returns NaN makes sort ordering implementation-
     // defined — one bad row could scramble the whole batch. Unparseable
-    // entries must sink to the end in wire order instead.
+    // entries must sink to the end in wire order instead
     const next = makeView([
       doneThrough('A', 't-a', 'verdict', { startMs: 10_000, outcome: 'no_go' }),
       makeLane({
@@ -153,7 +153,7 @@ describe('updateLedger — cap and ordering', () => {
     ]);
     const state = updateLedger(createLedger(), next);
     // The three parseable entries hold newest-first; the two unparseable ones
-    // sink to the end in the order the wire delivered them.
+    // sink to the end in the order the wire delivered them
     expect(state.entries.map((e) => e.trace_id)).toEqual([
       't-b',
       't-c',

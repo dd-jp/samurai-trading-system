@@ -89,7 +89,7 @@ describe('paperStartingProfile', () => {
    * #1180: the rate travels with the ceiling as config so the boot log can
    * say which rate produced which ceiling — and so a live ceiling, declared
    * in USD and never converted, is distinguishable from a derived one rather
-   * than being stamped with a rate it never saw.
+   * than being stamped with a rate it never saw
    */
   it('carries the rate the ceiling was converted at, and only where one was applied (#1180)', () => {
     expect(paperStartingProfile('paper').capitalCeilingUsdPerGbp).toBe(SIZING_USD_PER_GBP);
@@ -111,7 +111,7 @@ describe('paperStartingProfile', () => {
 
   /**
    * #381 — the profile now names the universe it was tuned for, and the five
-   * dials that were only ever correct for one crypto instrument.
+   * dials that were only ever correct for one crypto instrument
    */
   describe('the full ADR-0001 universe', () => {
     it('supplies DEFAULT_UNIVERSE, so a paper start is not the smoke set by omission', () => {
@@ -119,26 +119,26 @@ describe('paperStartingProfile', () => {
       // nothing used to override it, which is why a live paper run logged
       // `universe: ["BTC-USD"]`. The profile is where that is answered,
       // because which instruments a paper run trades is a tuning decision of
-      // the same kind as every other value in this file.
+      // the same kind as every other value in this file
       //
       // #738: `DEFAULT_UNIVERSE` no longer carries BTC-USD/ETH-USD — crypto
       // is out of Samurai's scope (ADR-0014 amendment), and the production
-      // schedule this profile feeds must never resolve one.
+      // schedule this profile feeds must never resolve one
       const { universe } = paperStartingProfile('paper');
 
       // #1006: 'SPY' is gone too — it is a BENCHMARK_INSTRUMENTS member, and a
       // universe row for it made the orchestrator a second writer of the bars
-      // the outside-benchmark port already owns.
+      // the outside-benchmark port already owns
       expect(universe).toEqual(DEFAULT_UNIVERSE);
       // 20 names since the paper-soak widening. Asserted as a NUMBER as well as
       // an identity so a change to `DEFAULT_UNIVERSE` still has to be a
       // deliberate edit here — the identity check alone would follow it
-      // silently, and universe size is what every rate dial is derived from.
+      // silently, and universe size is what every rate dial is derived from
       expect(universe).toHaveLength(20);
       // No `BENCHMARK_INSTRUMENTS` member may appear: a universe row for one
       // makes the orchestrator a second writer of the benchmark port's own bar
       // rows (#1006). In paper this is NOT caught by #989's boot guard, which
-      // only fires when the calendar is not `UsEquityRegularHoursCalendar`.
+      // only fires when the calendar is not `UsEquityRegularHoursCalendar`
       for (const asset of BENCHMARK_INSTRUMENTS) {
         expect(universe?.map((instrument) => instrument.asset)).not.toContain(asset);
       }
@@ -153,7 +153,7 @@ describe('paperStartingProfile', () => {
       // startup warn below for BOTH. Now that crypto is out of the schedule,
       // "no instruments configured for asset class; volatility breaker reads
       // 0 (inert) for this class {crypto}" is the CORRECT startup state, not
-      // a gap this profile should paper over — crypto genuinely never ticks.
+      // a gap this profile should paper over — crypto genuinely never ticks
       const { universe } = paperStartingProfile('paper');
       const classes = new Set(universe?.map((instrument) => instrument.asset_class));
 
@@ -164,7 +164,7 @@ describe('paperStartingProfile', () => {
       // The absolute 500 this replaces was 250% of a $200 instrument — a
       // staleness gate that could never fire. Asserted as the resulting
       // dollar bound rather than as the fraction, because the bound is the
-      // thing that was wrong.
+      // thing that was wrong
       const { verdictConfig } = paperStartingProfile('paper');
 
       const equityBound = 200 * verdictConfig.drift_tolerance_pct.stocks;
@@ -172,7 +172,7 @@ describe('paperStartingProfile', () => {
       expect(equityBound).toBeGreaterThan(0);
 
       // ...and BTC-USD keeps the calibration the absolute value encoded: 500
-      // at a ~$100k entry, which is what 0.5% re-expresses.
+      // at a ~$100k entry, which is what 0.5% re-expresses
       expect(100_000 * verdictConfig.drift_tolerance_pct.crypto).toBeCloseTo(500, 10);
     });
 
@@ -182,8 +182,8 @@ describe('paperStartingProfile', () => {
       // than better. It stays harmless only while `automation_level` is
       // `auto` for BOTH classes — `shouldEngageHitl` returns false on that
       // check before `isFlagged` is ever called (it short-circuited on
-      // `manual` before ADR-0007, on the opposite branch of the same check).
-      // Pinned so turning either class to `semi_auto` fails here first.
+      // `manual` before ADR-0007, on the opposite branch of the same check)
+      // Pinned so turning either class to `semi_auto` fails here first
       const { verdictConfig } = paperStartingProfile('paper');
 
       expect(verdictConfig.automation_level.crypto).toBe('auto');
@@ -196,13 +196,13 @@ describe('paperStartingProfile', () => {
       // Trader intent-build time, bounded by the debate latency budget, not by
       // the quote's own `observed_at`. If it ever approached this bound, every
       // equity order would no-go on staleness and the soak would silently trade
-      // crypto only.
+      // crypto only
       //
       // 900,000ms against a 112,000ms budget is 8.03x: a debate that spends its
       // ENTIRE budget still hands Verdict an intent at an eighth of the
       // staleness bound. 5x is the floor below which "well clear" would stop
       // being true, since the gate also has to have room for the rest of the
-      // pass (Trader, Risk, Verdict) on top of the debate.
+      // pass (Trader, Risk, Verdict) on top of the debate
       const { verdictConfig } = paperStartingProfile('paper');
 
       expect(verdictConfig.max_signal_age.stocks).toBeGreaterThan(5 * LATENCY_BUDGET_MS.stocks);
@@ -237,7 +237,7 @@ describe('paperStartingProfile', () => {
       // first tick pulls the whole window from Alpaca's archive — and every
       // instrument in `DEFAULT_UNIVERSE` has years of daily history. This
       // pins the relationship the decision rests on: the window is a daily
-      // one, and short enough that a long-listed instrument always clears it.
+      // one, and short enough that a long-listed instrument always clears it
       const { correlationConfig } = paperStartingProfile('paper');
 
       expect(correlationConfig.window.timeframe).toBe('1d');
@@ -249,7 +249,7 @@ describe('paperStartingProfile', () => {
     // The whole point of the profile is that nobody has tuned it yet: the
     // volatility baseline is uncalibrated and the notional caps assume a
     // paper account's default equity. None of that may reach real money by
-    // way of the shipped entrypoint.
+    // way of the shipped entrypoint
     expect(() => paperStartingProfile('live')).toThrow(/live/i);
     expect(() => paperStartingProfile('live')).toThrow(/PAPER_STARTING_PROFILE|paper/i);
   });
@@ -263,7 +263,7 @@ describe('paperStartingProfile', () => {
     // The Risk pipeline trims per-trade -> per-asset -> per-asset-class ->
     // portfolio (risk-manager-spec.md "Check Pipeline"). If an outer cap were
     // tighter than an inner one, the inner one could never bind and the
-    // `binding_constraint` audit field would name the wrong step.
+    // `binding_constraint` audit field would name the wrong step
     const { riskConfig } = paperStartingProfile('paper');
 
     expect(riskConfig.max_position_size_fraction_of_equity).toBeLessThanOrEqual(
@@ -292,7 +292,7 @@ describe('paperStartingProfile', () => {
     // itself: above 1 the portfolio gross cap alone would permit more
     // notional than the account holds. Nothing in the docs asks for leverage
     // on a first paper run, and an Alpaca paper account would reject it
-    // anyway.
+    // anyway
     const { riskConfig } = paperStartingProfile('paper');
 
     expect(riskConfig.portfolio_gross_cap_fraction_of_equity).toBeLessThanOrEqual(1);
@@ -301,7 +301,7 @@ describe('paperStartingProfile', () => {
   it("does not set Risk's dust floor above the Trader's minimum notional", () => {
     // If Risk's floor were the higher of the two, every intent the Trader
     // considered viable would be trimmed and then rejected as dust — a run
-    // that boots and never trades.
+    // that boots and never trades
     const { riskConfig, traderConfig } = paperStartingProfile('paper');
 
     expect(riskConfig.min_viable_size).toBeLessThanOrEqual(traderConfig.min_viable_notional);
@@ -312,7 +312,7 @@ describe('paperStartingProfile', () => {
     // silently from `server/pipeline/trader/types.ts`. `asset_class_risk_multiplier`
     // is asserted per-key, not by object equality against the default, because
     // `stocks` is a deliberate #1112 departure (see the dedicated block below)
-    // while `crypto` still passes through unchanged.
+    // while `crypto` still passes through unchanged
     const { traderConfig } = paperStartingProfile('paper');
 
     expect(traderConfig.conviction_floor).toBe(DEFAULT_TRADER_CONFIG.conviction_floor);
@@ -328,7 +328,7 @@ describe('paperStartingProfile', () => {
     // deployment fraction of its own — D5's cap is reused here only as the
     // target the retuned multiplier must not exceed on the reference
     // scenario below, not as a claim that this path enforces it in general
-    // (see the caveat in the assignment site's comment).
+    // (see the caveat in the assignment site's comment)
     const D5_SINGLE_STOCK_CAP = 0.25;
 
     it('departs from the shared default for paper only, and never reaches live', () => {
@@ -343,7 +343,7 @@ describe('paperStartingProfile', () => {
       // carries no override of its own for this field — pinned here, not
       // just asserted absent, so a future live-side override that copies
       // paper's 1.9 without a fresh derivation fails this test rather than
-      // shipping unreviewed.
+      // shipping unreviewed
       const live = liveStartingProfile(LIVE_BOOK_GBP);
       expect(live.traderConfig.asset_class_risk_multiplier.stocks).toBe(1.0);
       expect(live.traderConfig.asset_class_risk_multiplier.stocks).toBe(
@@ -356,7 +356,7 @@ describe('paperStartingProfile', () => {
       // mutate the shared default it spreads from, which would otherwise
       // leak this departure into `liveStartingProfile` (spreads the SAME
       // `buildStartingProfileConfigs()`/`DEFAULT_TRADER_CONFIG`) and every
-      // other caller of the shared constant.
+      // other caller of the shared constant
       paperStartingProfile('paper');
 
       expect(DEFAULT_TRADER_CONFIG.asset_class_risk_multiplier.stocks).toBe(1.0);
@@ -367,7 +367,7 @@ describe('paperStartingProfile', () => {
       // cost-model calibration reads `portfolio.equity` unclamped and never
       // exercises `whole_share_sizing`'s floor the way a real paper fill
       // can, so retuning this path for backtest would be an unrelated
-      // change riding along.
+      // change riding along
       const { traderConfig } = paperStartingProfile('backtest');
 
       expect(traderConfig.asset_class_risk_multiplier.stocks).toBe(
@@ -479,7 +479,7 @@ describe('paperStartingProfile', () => {
       // 1.9 from 2.0 (neither should: M1's derivation shows the D5 cap does
       // not force that choice). The test above that pins `stocks: 1.9` via
       // `toBe` is what guards the shipped value; this one guards the
-      // consequence of whatever that value is.
+      // consequence of whatever that value is
       it("keeps the shipped multiplier's deployment under D5's single-stock cap", async () => {
         const { traderConfig } = paperStartingProfile('paper');
 
@@ -514,7 +514,7 @@ describe('paperStartingProfile', () => {
     // and with a two-asset-class universe a single value guarantees one of the
     // two halves dies. Both are asserted here, not just crypto's, because the
     // failure this pins is precisely "the value that was right for the old
-    // universe is wrong for the new one".
+    // universe is wrong for the new one"
     const { traderConfig } = paperStartingProfile('paper');
 
     expect(['gtc', 'ioc']).toContain(traderConfig.time_in_force.crypto);
@@ -526,13 +526,13 @@ describe('paperStartingProfile', () => {
     // manual -> semi_auto -> auto staging with `auto` from the start, in
     // paper AND live: `VerdictImpl.decide` awaits `requestApproval` inside
     // the instrument pass and `max_concurrent_instruments` is 1, so a human
-    // in this loop serializes the whole universe behind one tap.
+    // in this loop serializes the whole universe behind one tap
     //
     // Pinned for `paper` only because `live` cannot be asked: this profile
     // refuses to build in live mode at all (see the guard at the bottom of
     // paper-profile.ts), so a live composition root supplies its own tuned
     // `VerdictConfig`. ADR-0007's decision applies there too, but this file
-    // is not where it can be enforced.
+    // is not where it can be enforced
     const { verdictConfig } = paperStartingProfile('paper');
 
     expect(verdictConfig.automation_level.crypto).toBe('auto');
@@ -622,7 +622,7 @@ describe('paperStartingProfile', () => {
       // The ceiling that replaces "too slowly to trade", and it is a stronger
       // claim than plumbing-liveness. Entries are bar-gated, so cadence buys
       // EXIT resolution: doc 41 Result 2 measures the conditional tail as
-      // g(D) = 0.525%·√D on a 3x equity ETP, at a mean delay of τ/2.
+      // g(D) = 0.525%·√D on a 3x equity ETP, at a mean delay of τ/2
       //
       // Against ADR-0018 D3's -2.16% neutral stop, τ = 15 min overshoots by
       // ~1.44% — two thirds of the stop distance, i.e. a stop that does not
@@ -692,7 +692,7 @@ describe('paperStartingProfile', () => {
       // bounded per-bar retry can't turn a refusal into a runaway) — this
       // just checks that today's universe, and the width itself, both sit
       // comfortably clear of that ceiling on ordinary operation, one debate
-      // per instrument per window.
+      // per instrument per window
       const profile = paperStartingProfile('paper');
       const universe = profile.universe;
       const stocksBudget = profile.rateLimiterConfig.perAssetClass?.stocks;
@@ -711,7 +711,7 @@ describe('paperStartingProfile', () => {
       // `buildStartingProfileConfigs()`'s 6 — backtest's log-insertion-order
       // determinism depends on instruments running one at a time, unlike
       // paper/live width 6 (see paper-profile.ts's return statement and
-      // failover-data-source.ts's replay-determinism comment).
+      // failover-data-source.ts's replay-determinism comment)
       expect(paperStartingProfile('backtest').maxConcurrentInstruments).toBe(1);
       expect(paperStartingProfile('paper').maxConcurrentInstruments).toBe(6);
     });
@@ -725,7 +725,7 @@ describe('paperStartingProfile', () => {
       // gates (`perTradeSizeCap`, `perAssetExposureCap`) doing the real work
       // unassisted. If a universe edit adds a `subclass` to any instrument
       // while width stays > 1, this assertion — not a live drawdown — should
-      // be the first thing to notice.
+      // be the first thing to notice
       const profile = paperStartingProfile('paper');
       const universe = profile.universe;
       if (universe === undefined) {
@@ -744,10 +744,10 @@ describe('paperStartingProfile', () => {
     // auto-approves" after ADR-0007 removed the human gate, then blamed #384,
     // #375 and #333 as "three breakers that cannot fire" after all three
     // closed. A refusal whose evidence is checkable and wrong is worse than a
-    // vague one, because the next reader trusts it.
+    // vague one, because the next reader trusts it
     //
     // Pinned two ways: the closed numbers may not reappear, and the standing
-    // reason — the soak that would tune these values has not run — must.
+    // reason — the soak that would tune these values has not run — must
     const message = (() => {
       try {
         paperStartingProfile('live');
@@ -761,7 +761,7 @@ describe('paperStartingProfile', () => {
     // 2026-08-18 and still rendered here. The refusal is the second call site
     // of LIVE_MONEY_GATE_SUMMARY, so it is pinned on the same numbers as the
     // live boot — a list corrected in one message and not the other is the
-    // divergence live-money-gates.ts exists to prevent.
+    // divergence live-money-gates.ts exists to prevent
     for (const closed of [
       '#526',
       '#519',
@@ -777,27 +777,27 @@ describe('paperStartingProfile', () => {
       '#800',
       // Closed 2026-08-19 and deleted from the list in the same edit, per that
       // module's own rule: the change that made the mandatory flat-by-close
-      // exit survive a stalled mark source closes it.
+      // exit survive a stalled mark source closes it
       '#826',
       // Closed the same day by the change that stopped Verdict's staleness
       // gate refusing that flatten one stage later; the surviving half of the
-      // gap is cited as #900.
+      // gap is cited as #900
       '#894',
       // Closed 2026-08-26 (the "accept the wider envelope" ruling) and
-      // replaced by #925 in the same edit.
+      // replaced by #925 in the same edit
       '#798',
       // Closed 2026-08-26 (D5 cap authority + equity-relative caps shipped)
-      // and replaced by #932, the per_asset_cap gap #886 left open.
+      // and replaced by #932, the per_asset_cap gap #886 left open
       '#886',
-      // Closed 2026-08-30 by PR #948 — the funded-equity-vs-declared-book gap.
-      // The USD/GBP mismatch it flagged (not fixed) carries forward as #949.
+      // Closed 2026-08-30 by PR #948 — the funded-equity-vs-declared-book gap
+      // The USD/GBP mismatch it flagged (not fixed) carries forward as #949
       '#888',
       // Closed 2026-08-31 by PR #952 — the drawdown breaker's hard ceiling
       // raised to 0.45 and MEASURED_DRAWDOWN_ENVELOPE to 0.418, per David's
-      // approval to widen it to 0.45.
+      // approval to widen it to 0.45
       '#925',
       // Closed 2026-08-31 by PR #956 — per_asset_cap now exempts a
-      // D5-classified instrument the same way #886 exempted per_trade_size_cap.
+      // D5-classified instrument the same way #886 exempted per_trade_size_cap
       '#932',
     ]) {
       expect(message).not.toContain(closed);
@@ -813,7 +813,7 @@ describe('paperStartingProfile', () => {
   it('routes an operator to the live profile rather than to a dead end', () => {
     // #511: the refusal must not read as "live is unreachable". It is reachable
     // and deliberately explicit — through a profile whose caps come from a
-    // declared ceiling rather than from an assumed paper balance.
+    // declared ceiling rather than from an assumed paper balance
     expect(() => paperStartingProfile('live')).toThrow('liveStartingProfile');
     expect(() => paperStartingProfile('live')).toThrow('SAMURAI_LIVE_MAX_CAPITAL_USD');
   });
@@ -821,21 +821,21 @@ describe('paperStartingProfile', () => {
   it('bounds the hard drawdown breaker above the designed envelope, as a fraction', () => {
     // `PortfolioView.drawdown_pct` is computed as `(peak - equity) / peak`
     // (portfolio-view.ts) — a FRACTION, despite the `_pct` name. A `30` here
-    // would mean 3000% and never trip.
+    // would mean 3000% and never trip
     //
     // 0.44 is the owner ruling on #634, re-sited 2026-08-31 by David's
     // approval of #925 above ADR-0018's measured drawdown envelope (26.2%
     // index ETPs / 41.8% single-stock at today's sizing, #729/#798 —
-    // supersedes the older 23.1%/26.2% pair the trip used to sit above).
+    // supersedes the older 23.1%/26.2% pair the trip used to sit above)
     // CONTEXT.md's "~20-25%" is that envelope's design target, not the halt
-    // line — it binds on the RE-ARM edge below instead.
+    // line — it binds on the RE-ARM edge below instead
     const { breakerConfig } = paperStartingProfile('paper');
 
     expect(breakerConfig.max_drawdown_pct).toBe(0.44);
     expect(breakerConfig.max_drawdown_pct).toBeGreaterThan(0.418);
 
     // The hysteresis band (#634): re-arm strictly inside the trip level, and
-    // back within the design envelope rather than merely off its worst point.
+    // back within the design envelope rather than merely off its worst point
     expect(breakerConfig.auto_rearm.recovery_drawdown_pct).toBe(0.2);
     expect(breakerConfig.auto_rearm.recovery_drawdown_pct).toBeLessThan(
       breakerConfig.max_drawdown_pct,
@@ -846,7 +846,7 @@ describe('paperStartingProfile', () => {
     // Same fraction convention for the per-class tier (#333) — and the same
     // trap: these share ONE denominator with the portfolio figure (portfolio
     // equity), so a `5` here would be 500% and the class tier would never trip,
-    // silently leaving only the account-wide floor in place.
+    // silently leaving only the account-wide floor in place
     for (const asset_class of ['crypto', 'stocks'] as const) {
       const threshold = breakerConfig.daily_loss_pct_by_class[asset_class];
       expect(threshold).toBeGreaterThan(0);
@@ -859,7 +859,7 @@ describe('paperStartingProfile', () => {
     // indicator read in as `Infinity` to trip the breaker conservatively. A
     // baseline of `Infinity` (or one large enough that `baseline * multiplier`
     // overflows to `Infinity`) would make `reading > baseline * multiplier`
-    // false even for that sentinel, silently disabling the fail-closed path.
+    // false even for that sentinel, silently disabling the fail-closed path
     const { breakerConfig } = paperStartingProfile('paper');
     const { baseline, multiplier } = breakerConfig.volatility;
 
@@ -880,7 +880,7 @@ describe('paperStartingProfile', () => {
     // cost-model-backtest-spec.md Principle 1: no config may manufacture a
     // frictionless fill. `CostModelImpl` floors at 1bp; a profile at or under
     // that floor would be silently replaced by it rather than modelling the
-    // venue's real frictions.
+    // venue's real frictions
     const { costConfig } = paperStartingProfile('paper');
 
     for (const assetClass of ['crypto', 'stocks'] as const) {
@@ -890,7 +890,7 @@ describe('paperStartingProfile', () => {
       expect(costConfig[assetClass].impactK).toBeGreaterThan(0);
     }
     // Crypto taker fees are materially worse than a US equity commission
-    // (cost-model-backtest-spec.md story 4).
+    // (cost-model-backtest-spec.md story 4)
     expect(costConfig.crypto.commissionRate).toBeGreaterThan(costConfig.stocks.commissionRate);
   });
 
@@ -913,7 +913,7 @@ describe('paperStartingProfile', () => {
     expect(first).not.toBe(second);
     expect(first.riskConfig).not.toBe(second.riskConfig);
     // Includes the nested #366 block: a caller that mutated a dial's bounds
-    // would otherwise be editing the next run's safety limits.
+    // would otherwise be editing the next run's safety limits
     expect(first.feedback).not.toBe(second.feedback);
     expect(first.feedback?.config).not.toBe(second.feedback?.config);
   });
@@ -935,7 +935,7 @@ describe('paperStartingProfile', () => {
       // Same rule as the eight: this file supplies tuning VALUES. Where an
       // operator's alerts go is a deployment decision resolved from
       // `SAMURAI_ALERTS` (alert-transport.ts), and hard-coding one posture
-      // into a checked-in file is what #322 exists to prevent.
+      // into a checked-in file is what #322 exists to prevent
       expect(feedback?.loosenNotices).toBeUndefined();
       expect(feedback?.intervalMs).toBeUndefined();
     });
@@ -944,7 +944,7 @@ describe('paperStartingProfile', () => {
       // The inversion of the #345 posture, decided in #379: leaving this unset
       // made a sixth fully-tested mechanism nothing calls. What makes it safe
       // is the source's own 60-observation gate (ADR-0006 §5), not the
-      // omission — see the two store-level cases in production.test.ts.
+      // omission — see the two store-level cases in production.test.ts
       expect(paperStartingProfile('paper').feedback?.metrics).toBeDefined();
     });
 
@@ -957,7 +957,7 @@ describe('paperStartingProfile', () => {
       // in-memory handle pins BOTH halves: that the profile defers, and that
       // what it defers to is the gated `SqliteDailyEquityMetricsSource` rather
       // than something that would make "never checked" read as "did not
-      // breach".
+      // breach"
       if (typeof metrics.source !== 'function') {
         throw new Error('metrics.source must be a factory: the profile opens no database');
       }
@@ -968,13 +968,13 @@ describe('paperStartingProfile', () => {
           trades: { getClosedTradesBetween: () => [] },
           logger: { log: () => undefined },
           // #384: the revalidation source. Empty here, which is the state a
-          // deployment that has never run Stage 2 is in.
+          // deployment that has never run Stage 2 is in
           stage2Selections: new SqliteStage2SelectionStore(db),
           clock: new SystemClock(),
         });
         expect(source).toBeInstanceOf(SqliteDailyEquityMetricsSource);
         // Empty series: the gate refuses, which is the state every soak-length
-        // run is in.
+        // run is in
         expect(source.getDailyMetrics()).toBeUndefined();
       } finally {
         db.close();
@@ -986,13 +986,13 @@ describe('paperStartingProfile', () => {
       // there is no frozen Sharpe to compare against. A plausible number here
       // would arm `autoTighten` — which WRITES every risk threshold — against
       // a reference nobody measured. `<= 0` makes `liveBacktestDivergence`
-      // refuse to manufacture a breach.
+      // refuse to manufacture a breach
       expect(paperStartingProfile('paper').feedback?.metrics?.backtest_reference_sharpe).toBe(0);
     });
 
     it('refuses live mode for the feedback block too, not only the eight', () => {
       // The guard is on `paperStartingProfile` itself, so a new block cannot
-      // be added past it — this pins that rather than trusting it.
+      // be added past it — this pins that rather than trusting it
       expect(() => paperStartingProfile('live')).toThrow();
     });
 
@@ -1002,7 +1002,7 @@ describe('paperStartingProfile', () => {
       // The one silent-data-loss failure mode in this block. The cycle reads
       // `(now - window, now]` and its timer restarts with the process, so a
       // window equal to the cadence leaves every trade that closed inside a
-      // restart's re-phasing unattributed forever.
+      // restart's re-phasing unattributed forever
       expect(config?.attribution_window_ms).toBeGreaterThan(DEFAULT_FEEDBACK_INTERVAL_MS);
     });
 
@@ -1012,7 +1012,7 @@ describe('paperStartingProfile', () => {
 
       // `impliedWeight` pulls a zero-credit analyst to the band's MIDPOINT
       // (attribution.ts). Any band not centred on the neutral multiplier
-      // silently re-weights every analyst that produced no evidence.
+      // silently re-weights every analyst that produced no evidence
       expect((weights.floor + weights.ceiling) / 2).toBeCloseTo(1);
     });
 
@@ -1021,7 +1021,7 @@ describe('paperStartingProfile', () => {
       if (weights === undefined) throw new Error('no weights dial');
 
       // Spec story 4: no analyst "swings wildly, drops to zero permanently, or
-      // dominates".
+      // dominates"
       expect(weights.floor).toBeGreaterThan(0);
       expect(weights.ceiling).toBeLessThan(Number.POSITIVE_INFINITY);
       expect(weights.ceiling).toBeGreaterThan(weights.floor);
@@ -1035,7 +1035,7 @@ describe('paperStartingProfile', () => {
       const cyclesToTraverse = (weights.ceiling - weights.floor) / weights.max_step;
       // A dial that could run floor-to-ceiling inside the 14-day soak (#238)
       // would let the first few trades decide the whole trajectory — the
-      // "swings wildly" story 4 rules out.
+      // "swings wildly" story 4 rules out
       expect(cyclesToTraverse).toBeGreaterThan(14);
     });
 
@@ -1046,7 +1046,7 @@ describe('paperStartingProfile', () => {
       // Both fields were `influence_score` compensation. Credit is correctness
       // alone now, so a profile still setting them would be configuring a knob
       // nothing consults — this fails if one is reintroduced without a
-      // consumer.
+      // consumer
       expect('shadow_credit' in config).toBe(false);
       expect('shadow_influence_ceiling' in config).toBe(false);
     });
@@ -1054,17 +1054,17 @@ describe('paperStartingProfile', () => {
     it('sets the three kill-lines the spec states literally', () => {
       // feedback-loop-spec.md story 13: "PBO > 0.05, OOS/paper Sharpe < 0.5,
       // DSR insignificant". The first two are stated as numbers and must not
-      // drift; `PboVerdict`'s own reject line is the same 0.05.
+      // drift; `PboVerdict`'s own reject line is the same 0.05
       const kill = paperStartingProfile('paper').feedback?.config.kill_thresholds;
 
       expect(kill?.max_pbo).toBe(0.05);
       expect(kill?.min_oos_sharpe).toBe(0.5);
       // A probability, so a value outside (0,1) could never be breached or
-      // could never pass.
+      // could never pass
       expect(kill?.min_deflated_sharpe).toBeGreaterThan(0);
       expect(kill?.min_deflated_sharpe).toBeLessThan(1);
       // A FRACTIONAL drop against the backtest reference, not a Sharpe
-      // difference (`liveBacktestDivergence`, feedback-loop/metrics.ts).
+      // difference (`liveBacktestDivergence`, feedback-loop/metrics.ts)
       expect(kill?.max_live_backtest_divergence).toBeGreaterThan(0);
       expect(kill?.max_live_backtest_divergence).toBeLessThanOrEqual(1);
     });
@@ -1077,7 +1077,7 @@ describe('paperStartingProfile', () => {
       // `runDailyCycle` rejects a config whose `strategy_params` and
       // `risk_thresholds` share a name (`param_updates` is one flat map and
       // would silently drop one). Running the real cycle over the real
-      // profile is the only check that catches that here.
+      // profile is the only check that catches that here
       const result = runDailyCycle({
         clock: new SimulatedClock(new Date('2026-08-05T00:00:00.000Z')),
         trades: new InMemoryClosedTradeStore(),

@@ -34,7 +34,7 @@ function seed(
   sizingCapitalCeiling: number | null,
   // #1121 AC5: defaults to 1 (the post-fix / control-arm-always-correct
   // state) so every pre-existing call site — none of which is about this
-  // ticket — keeps exercising the row shape it already did.
+  // ticket — keeps exercising the row shape it already did
   modelledCostCharged: 0 | 1 = 1,
 ): void {
   db.prepare(
@@ -221,7 +221,7 @@ describe('SqliteArmComparisonSource.getClosedTradeWindowBetween — #1121 AC5 co
     // pure pre-#1112 window shares one wrong sizing scale — but unlike that
     // case, this one is not a benign consistent view. It must still empty,
     // not merely "not throw and pass through" the way `oneSizingRegime`
-    // would for an all-null sizing window.
+    // would for an all-null sizing window
     expect(source.getClosedTradeWindowBetween(from, to).trades).toEqual([]);
   });
 
@@ -287,7 +287,7 @@ describe('SqliteArmComparisonSource.getClosedTradeWindowBetween — #1546 per-ex
     add('live-flatten-dropped-1', 'live', 'flatten', 0);
     add('live-flatten-dropped-2', 'live', 'signal_decay', 0);
     // The legacy pre-migration-0031 spelling of a flatten, which must not fall
-    // into the protective bucket.
+    // into the protective bucket
     add('live-legacy-exit-dropped', 'live', 'exit', 0);
     add('control-stop-kept', 'control', 'stop', 1);
     add('control-flatten-kept', 'control', 'direction_flip', 1);
@@ -307,7 +307,7 @@ describe('SqliteArmComparisonSource.getClosedTradeWindowBetween — #1546 per-ex
       },
     });
     // The counts describe the population the trades were taken from: every kept
-    // row above is one of these, and nothing dropped is.
+    // row above is one of these, and nothing dropped is
     expect(trades.map((trade) => trade.idempotency_key).sort()).toEqual([
       'control-flatten-kept',
       'control-stop-kept',
@@ -429,13 +429,13 @@ describe('SqliteArmComparisonSource.getRefusedPassCountsBetween — #1099', () =
       created_at: new Date('2026-07-17T23:59:59.999Z'),
     });
     // Exactly `from`: excluded, so consecutive windows partition the timeline
-    // exactly as `getClosedTradeWindowBetween` does.
+    // exactly as `getClosedTradeWindowBetween` does
     seedTraderLog(db, {
       trace_id: 'at-from:control',
       skip_reason: 'control_arm_valuation_refused',
       created_at: from,
     });
-    // Exactly `to`: included, same half-open rule.
+    // Exactly `to`: included, same half-open rule
     seedTraderLog(db, {
       trace_id: 'at-to:control',
       skip_reason: 'control_arm_valuation_refused',

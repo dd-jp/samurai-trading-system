@@ -6,9 +6,9 @@
  * is shared, so no site can drift to a different arithmetic.
  */
 export interface EscalationCadence {
-  /** Consecutive count at which the first alert fires. */
+  /** Consecutive count at which the first alert fires */
   readonly after: number;
-  /** Further consecutive counts between repeats. */
+  /** Further consecutive counts between repeats */
   readonly every: number;
 }
 

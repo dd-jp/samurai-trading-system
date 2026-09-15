@@ -144,7 +144,7 @@ export const ALERT_CHANNEL_FIELDS = [
   // verdict reached the operator only if something downstream happened to
   // alert. Filtered at the decorator so wiring it does not buy ~300 messages
   // a day. Not a catalogue entry: its port is shaped for a `VerdictDecision`
-  // and implemented by Verdict's own `TelegramChannel`.
+  // and implemented by Verdict's own `TelegramChannel`
   'verdictAlerts',
 ] as const satisfies readonly (keyof AlertChannelSlots)[];
 
@@ -177,14 +177,14 @@ export const ALL_ALERT_CHANNEL_FIELDS_COVERED: {
  */
 export const TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR = 'TELEGRAM_HEARTBEAT_CHAT_ID';
 
-/** What `SAMURAI_ALERTS=telegram` needs in the environment. */
+/** What `SAMURAI_ALERTS=telegram` needs in the environment */
 export const TELEGRAM_ALERT_ENV_VARS = [
   'TELEGRAM_BOT_TOKEN',
   'TELEGRAM_CHAT_ID',
   TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR,
 ] as const;
 
-/** The alert channels, as `buildProductionOrchestrator` takes them. */
+/** The alert channels, as `buildProductionOrchestrator` takes them */
 export type AlertChannels = Pick<ProductionConfig, (typeof ALERT_CHANNEL_FIELDS)[number]>;
 
 /**
@@ -261,20 +261,20 @@ export function buildAlertChannels(deps: {
   // #342. Resolved before the client is constructed, so a misconfigured pair
   // fails with nothing built. `undefined` only when the caller supplied its own
   // heartbeat channel — then no chat id is read, and the equality refusal below
-  // does not apply to a decision this module did not make.
+  // does not apply to a decision this module did not make
   const heartbeatChatId =
     deps.injected.heartbeatChannel === undefined ? requireHeartbeatChatId(chatId) : undefined;
 
   // The bot token is read by the client itself, from the environment — not
-  // re-read here, so there is exactly one place that touches it.
+  // re-read here, so there is exactly one place that touches it
   const telegram = new TelegramBotApiClient({
     // Where the client posts its own repeated-delivery-failure notice. The
     // same chat the alerts go to: it is the channel the operator is already
-    // watching.
+    // watching
     alertChatId: chatId,
     // Durable record of a send that exhausts retries (#1108) — the same
     // shared store every other component here writes to, so "how many
-    // escalations went undelivered" survives the process that raised them.
+    // escalations went undelivered" survives the process that raised them
     alertDeliveryLog: new SqliteAlertDeliveryLog(deps.db),
     logger: deps.logger,
   });
@@ -284,7 +284,7 @@ export function buildAlertChannels(deps: {
   // the beat goes to `TELEGRAM_HEARTBEAT_CHAT_ID` would name a destination no
   // heartbeat reaches. This line is what an operator checks their alerting
   // against before an unattended soak, and a confidently wrong destination is
-  // worse than no claim at all.
+  // worse than no claim at all
   const heartbeatClause =
     heartbeatChatId === undefined
       ? 'The heartbeat is not routed here at all: ProductionConfig.heartbeatChannel was ' +
@@ -308,7 +308,7 @@ export function buildAlertChannels(deps: {
     // Never the token, and never either chat id: none is a secret worth a log
     // line, and the token is a bearer credential for the entire bot. The
     // heartbeat field is the machine-readable form of the clause above — two
-    // values, because there are two real paths.
+    // values, because there are two real paths
     payload: {
       alerts: 'telegram',
       heartbeat: heartbeatChatId === undefined ? 'caller-supplied' : 'separate-chat',
@@ -336,7 +336,7 @@ export function buildAlertChannels(deps: {
   return channels;
 }
 
-/** `channels[id] = channel` with the key and the value typed together, which a plain assignment loses on a union key. */
+/** `channels[id] = channel` with the key and the value typed together, which a plain assignment loses on a union key */
 function assign<K extends AlertId>(channels: AlertChannels, id: K, channel: AlertPort<K>): void {
   const slot: Pick<AlertChannelSlots, K> = channels;
   slot[id] = channel;

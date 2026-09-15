@@ -73,10 +73,10 @@ export interface LotJournal {
   /**
    * Write-ahead: persist the intended lot at `pending` BEFORE the broker
    * call, so a crash between decision and broker-ack is recoverable (#86
-   * reconciles those orphans against the broker).
+   * reconciles those orphans against the broker)
    */
   writeAheadPosition(position: OpenPosition): Promise<void>;
-  /** Persist the post-ack transition (`pending` → `submitted`). */
+  /** Persist the post-ack transition (`pending` → `submitted`) */
   updatePositionState(
     idempotency_key: string,
     update: { order_state: OrderState; broker_order_ids: string[] },
@@ -85,7 +85,7 @@ export interface LotJournal {
 
 /**
  * Reads over `fills`: the dedup check and the per-lot fill history the fill
- * poll and both residual-protection surfaces reconstruct held quantity from.
+ * poll and both residual-protection surfaces reconstruct held quantity from
  */
 export interface FillReader {
   /**
@@ -136,7 +136,7 @@ export interface FillReader {
 /**
  * What `ingestFills()` persists through and nothing else does: the atomic
  * lot advance, and the flatten-row reads and marks that route a flatten's
- * fill back to the lot(s) it closed.
+ * fill back to the lot(s) it closed
  */
 export interface FillJournal {
   /**
@@ -180,7 +180,7 @@ export interface FillJournal {
 /**
  * The flatten path's write-ahead-then-resolve journal over
  * `flatten_submissions` (#508 review, PR #516) — written by `executeExit`,
- * settled by `reconcile()`.
+ * settled by `reconcile()`
  */
 export interface FlattenJournal {
   /**
@@ -215,7 +215,7 @@ export interface FlattenJournal {
    * that used to have none.
    */
   writeAheadFlatten(submission: FlattenSubmissionWriteAhead): Promise<void>;
-  /** Persist the post-ack transition (`'submitting'` → `'submitted'`). */
+  /** Persist the post-ack transition (`'submitting'` → `'submitted'`) */
   resolveFlattenSubmitted(
     idempotency_key: string,
     update: { order_state: OrderState; broker_order_ids: string[] },
@@ -347,7 +347,7 @@ export interface FlattenJournal {
 
 /**
  * The #549 durable marker on a lot whose partial-flatten residual is not yet
- * confirmed protected, and the sweep worklist it feeds.
+ * confirmed protected, and the sweep worklist it feeds
  */
 export interface ResidualMarkers {
   /**
@@ -525,13 +525,13 @@ export type SharedStore = PositionReader &
 
 /**
  * One lot the #549 residual-protection sweep still has work to do on — see
- * `SharedStore.getUnprotectedResidualLots`.
+ * `SharedStore.getUnprotectedResidualLots`
  */
 export interface UnprotectedResidualLot {
   position: OpenPosition;
-  /** When the unprotected residual was FIRST observed (migration 0024). */
+  /** When the unprotected residual was FIRST observed (migration 0024) */
   unprotected_since: Date;
-  /** When this episode's operator alert was posted; null if it never was. */
+  /** When this episode's operator alert was posted; null if it never was */
   alerted_at: Date | null;
   /**
    * When the TRUTHFUL permanent-gap page (a confirmed venue refusal) was
@@ -543,7 +543,7 @@ export interface UnprotectedResidualLot {
 
 /**
  * One `flatten_submissions` row `reconcile()`'s sweep still has work to do
- * on — see `SharedStore.getUnresolvedFlattens`.
+ * on — see `SharedStore.getUnresolvedFlattens`
  */
 export interface UnresolvedFlattenSubmission {
   idempotency_key: string;
@@ -616,7 +616,7 @@ export interface UnresolvedFlattenSubmission {
  * re-checking.
  */
 export interface FlattenAttribution {
-  /** In the `opened_at` order `executeExit` read the lots in — the FIFO order the split allocates in. */
+  /** In the `opened_at` order `executeExit` read the lots in — the FIFO order the split allocates in */
   lot_idempotency_keys: readonly string[];
   /**
    * #1550: the flatten's own instrument, read off the same write-ahead row
@@ -695,25 +695,25 @@ export interface FlattenAttribution {
   size: number;
 }
 
-/** One poll's atomic advance of a single lot — see `SharedStore.applyLotAdvance`. */
+/** One poll's atomic advance of a single lot — see `SharedStore.applyLotAdvance` */
 export interface LotAdvance {
   idempotency_key: string;
   /** New fills this poll ingested (already deduped against `hasFill`). One row per fill — CONTEXT.md invariant #4. */
   fills: readonly Fill[];
-  /** The lot state recomputed from ALL persisted + new fills; absent while no entry fill exists. */
+  /** The lot state recomputed from ALL persisted + new fills; absent while no entry fill exists */
   position_update?: { filled_size: number; avg_entry_price: number; order_state: OrderState };
-  /** The realized record, on round-trip-to-flat only. */
+  /** The realized record, on round-trip-to-flat only */
   closed_trade?: ClosedTrade;
 }
 
-/** The write-ahead record for `SharedStore.writeAheadFlatten` — see there for why it exists. */
+/** The write-ahead record for `SharedStore.writeAheadFlatten` — see there for why it exists */
 export interface FlattenSubmissionWriteAhead {
   idempotency_key: string;
   instrument: string;
   asset_class: AssetClass;
-  /** The CLOSING side, carried straight through from the exit intent. */
+  /** The CLOSING side, carried straight through from the exit intent */
   side: 'buy' | 'sell';
-  /** The held quantity being flattened. */
+  /** The held quantity being flattened */
   size: number;
   submitted_at: Date;
   /**

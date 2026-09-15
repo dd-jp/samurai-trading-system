@@ -34,7 +34,7 @@ import type { SaxoAccountBalanceReader } from '../../../pipeline/execution/adapt
 import type { RiskConfig } from '../../../pipeline/risk-manager/index.js';
 import type { AccountFunding, AccountFundingSource } from './account-state.js';
 
-/** The currency `LIVE_BOOK_GBP` is denominated in (ADR-0015's 2026-08-18 amendment). */
+/** The currency `LIVE_BOOK_GBP` is denominated in (ADR-0015's 2026-08-18 amendment) */
 export const LIVE_BOOK_CURRENCY = 'GBP';
 
 export function saxoFunding(client: SaxoAccountBalanceReader): AccountFundingSource {
@@ -46,7 +46,7 @@ export function saxoFunding(client: SaxoAccountBalanceReader): AccountFundingSou
         // `TotalValue` is the account value including open positions, which is
         // the figure peak-equity, the drawdown envelope and the book ceilings
         // are all defined against. `CashBalance` alone would read as a
-        // drawdown the moment cash is deployed into a position.
+        // drawdown the moment cash is deployed into a position
         equity: balance.TotalValue,
         currency: balance.Currency,
       };
@@ -63,7 +63,7 @@ export interface SameCurrencyVerdict {
 /**
  * Case-insensitive because ISO 4217 codes are case-insensitive identifiers and
  * a casing difference is not a funding fact; nothing else is normalised, so a
- * venue answering anything but the book's currency stays refused.
+ * venue answering anything but the book's currency stays refused
  */
 export function verifySameCurrency(
   funding: AccountFunding,
@@ -118,7 +118,7 @@ export function assertSameCurrencyFunding(verdict: SameCurrencyVerdict): void {
 /**
  * Returns `config` unchanged when the verdict is unverified — absent is what
  * the guard already refuses on, and writing `false` explicitly would claim a
- * check ran on configs that carry no ceiling at all.
+ * check ran on configs that carry no ceiling at all
  */
 export function armSameCurrencyCeilings(
   config: RiskConfig,

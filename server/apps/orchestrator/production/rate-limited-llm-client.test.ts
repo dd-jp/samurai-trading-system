@@ -82,7 +82,7 @@ describe('RateLimitedLlmClient', () => {
 
     // The venue counted the request the moment it went out; a local counter
     // that only credits successes drifts under exactly the failure conditions
-    // it exists to protect.
+    // it exists to protect
     expect(order).toEqual(['recorded', 'issued']);
   });
 

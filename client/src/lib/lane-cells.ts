@@ -31,7 +31,7 @@ import { type Presented, presentCell } from './state-presentation.ts';
 
 const STAGES_WITHOUT_RECORDED_DECISION: readonly PipelineStage[] = ['trader', 'risk'];
 
-/** What a lane's `debate` cell needs from the debate the same trace produced. */
+/** What a lane's `debate` cell needs from the debate the same trace produced */
 export type DebateTermination = Pick<DebateRow, 'termination' | 'termination_cause'>;
 
 /**
@@ -57,7 +57,7 @@ function cellsByStageOf(lane: PipelineLane): ReadonlyMap<PipelineStage, Pipeline
   return new Map(lane.cells.map((cell) => [cell.stage, cell]));
 }
 
-/** What a present cell's decision area says when the store recorded no word. */
+/** What a present cell's decision area says when the store recorded no word */
 function fallbackText(cell: PipelineCell): string {
   if (cell.state === 'not_reached') return 'not reached';
   if (cell.state === 'skipped') return 'skipped — the tick continued';
@@ -70,11 +70,11 @@ function fallbackText(cell: PipelineCell): string {
 
 export interface ResolvedCell {
   stage: PipelineStage;
-  /** `false` when the wire carried no cell for this stage. */
+  /** `false` when the wire carried no cell for this stage */
   present: boolean;
-  /** The state word and its tone, paired so a caller cannot render one without the other (#1138). */
+  /** The state word and its tone, paired so a caller cannot render one without the other (#1138) */
   state: Presented;
-  /** Whether `audit_log` recorded a decision word for this cell — the matrix's render gate. */
+  /** Whether `audit_log` recorded a decision word for this cell — the matrix's render gate */
   hasRecordedDecision: boolean;
   /**
    * The bare `audit_log` word (`no_trade`, `budget_exhausted`, …), never

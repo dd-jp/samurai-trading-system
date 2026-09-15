@@ -23,7 +23,7 @@ import { buildAnalystContributions } from './analyst-contribution.js';
 import { computeDebateId } from './debate-id.js';
 import type { AnalystView, DebateResult, Direction, RoundVerdict } from './types.js';
 
-/** Hard cap on debate rounds (spec: "hard cap of 3 rounds maximum"). */
+/** Hard cap on debate rounds (spec: "hard cap of 3 rounds maximum") */
 export const MAX_ROUNDS = 3;
 
 /**
@@ -46,11 +46,11 @@ export interface RoundContext {
   signal?: AbortSignal | undefined;
 }
 
-/** One persona's contribution to a single round. */
+/** One persona's contribution to a single round */
 export interface DebateArgument {
   persona: 'bull' | 'bear';
   round: number;
-  /** Free-text argument this persona made this round. */
+  /** Free-text argument this persona made this round */
   argument: string;
 }
 
@@ -76,7 +76,7 @@ export interface MediatorAssessment {
   stances: RoundStance[];
 }
 
-/** One analyst's debate-lens stance in a given round (round supplied by the orchestrator). */
+/** One analyst's debate-lens stance in a given round (round supplied by the orchestrator) */
 export interface RoundStance {
   analyst_id: string;
   stance: Direction;
@@ -93,16 +93,16 @@ export interface MediatorSynthesis {
   confidence: number;
   direction: Direction;
   disagreement_summary: string;
-  /** Unresolved disagreements; empty when converged. */
+  /** Unresolved disagreements; empty when converged */
   open_items: string[];
 }
 
-/** Mediator port (#26): assesses convergence and synthesizes after each round. */
+/** Mediator port (#26): assesses convergence and synthesizes after each round */
 export interface MediatorPersona {
   assess(context: RoundContext): Promise<MediatorAssessment>;
 }
 
-/** Personas + clock injected into a debate run. */
+/** Personas + clock injected into a debate run */
 export interface DebatePersonas {
   bull: DebaterPersona;
   bear: DebaterPersona;
@@ -110,16 +110,16 @@ export interface DebatePersonas {
   clock: Clock;
 }
 
-/** Everything a debate needs beyond the personas: the analyst input and its provenance keys. */
+/** Everything a debate needs beyond the personas: the analyst input and its provenance keys */
 export interface DebateInput {
   views: AnalystView[];
-  /** Instrument symbol, part of the deterministic debate_id. */
+  /** Instrument symbol, part of the deterministic debate_id */
   instrument: string;
-  /** Bar timestamp, part of the deterministic debate_id. */
+  /** Bar timestamp, part of the deterministic debate_id */
   bar: Date;
 }
 
-/** Per-run knobs that are not debate INPUT (nothing here is hashed into `debate_id`). */
+/** Per-run knobs that are not debate INPUT (nothing here is hashed into `debate_id`) */
 export interface RunDebateOptions {
   /**
    * Round cap for THIS debate, defaulting to `MAX_ROUNDS` (#581). An integer in
@@ -210,7 +210,7 @@ export async function runDebate(
 
   // Loop always runs at least once, so lastAssessment is defined; this guards
   // the impossible empty-loop case for the type-checker and any future caller
-  // that lowers MAX_ROUNDS to 0.
+  // that lowers MAX_ROUNDS to 0
   if (lastAssessment === undefined) {
     throw new Error('runDebate: debate produced no mediator assessment');
   }
@@ -222,7 +222,7 @@ export async function runDebate(
   // report converged=false AND a non-empty open_items so downstream (Trader,
   // Risk) can apply caution. The orchestrator owns this rather than trusting
   // the mediator port — if the mediator hands back empty open_items on a
-  // non-converged cap, fall back to the disagreement summary.
+  // non-converged cap, fall back to the disagreement summary
   const openItems =
     !converged && synthesis.open_items.length === 0
       ? [synthesis.disagreement_summary]
@@ -242,7 +242,7 @@ export async function runDebate(
     round_verdicts: roundVerdicts,
     debate_id: computeDebateId(instrument, bar, views),
     // The SAME `bar` that was just hashed into `debate_id`, carried forward to
-    // the Trader so it never floors a second clock read of its own (#687).
+    // the Trader so it never floors a second clock read of its own (#687)
     bar_timestamp: bar,
     read: true,
   };
