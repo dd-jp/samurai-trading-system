@@ -2864,10 +2864,14 @@ export function paperStartingProfile(
     // #1136 measured this rather than reasoning further from the Caveat
     // above: real paper-soak decisions (`trader_log`,
     // `data/samurai-paper.sqlite`) from the corrected book scale landing
-    // (ddce6e6, 2026-09-05T15:25:33Z)
-    // through 2026-09-15T13:48:30Z — 325 decisions — show this path has no
-    // $250 ceiling in practice, because (per the Caveat above) it has no
-    // code-enforced ceiling of any kind. Real entries were submitted at
+    // (ddce6e6, 2026-09-05T15:25:33Z) through 2026-09-15T13:48:30Z — 325
+    // decisions — show this path has no $250 ceiling in practice, because
+    // (per the Caveat above) it has no code-enforced ceiling of any kind.
+    // Every entry row carries `base_risk_fraction = 0.019` (= 0.01 x 1.9,
+    // this file's retuned multiplier), and each row's stop distance and
+    // size solve for `equity` in the hundreds, not the ~$99,876 pre-#1112
+    // broker balance — the window is inside the corrected basis, not just
+    // after the commit that shipped it. Real entries were submitted at
     // notional well above $250 for every one of the highest-priced names a
     // 25%-of-$1,000 reading would predict excluded: GOOGL (~$346-348,
     // notional $1,043-1,384), QQQ (~$707-717, notional $2,126-2,826), MSFT
@@ -2879,14 +2883,11 @@ export function paperStartingProfile(
     // successfully on other ticks in the same window. Only MU and AMD never
     // entered here, and for both, `below_conviction_floor` plus
     // `neutral_direction_while_flat` (the strategy not wanting in) outnumber
-    // `rounds_to_zero_shares` (the sizing floor) 8:1 and 9:1 — sizing is not
-    // the binding constraint even for the two names closest to it. This
-    // replaces a version of this paragraph that had treated D5's 25%/$250
-    // figure as a code-enforced ceiling on this path; it is not — it is a
-    // retune TARGET #1137 aimed at for one reference tick (full conviction,
-    // the #1112-logged MU trim), not a maximum this path's real deployment
-    // ever respects. The 10-of-20 "structurally excluded" census in #1149
-    // inherits that same error.
+    // `rounds_to_zero_shares` (the sizing floor) 11:1 and 9:1 — sizing is
+    // not the binding constraint even for the two names closest to it. D5's
+    // 25%/$250 figure is a retune TARGET #1137 aimed at for one reference
+    // tick (full conviction, the #1112-logged MU trim) on this path, not a
+    // maximum this path's real deployment ever respects.
     ...(mode === 'paper'
       ? {
           traderConfig: {
