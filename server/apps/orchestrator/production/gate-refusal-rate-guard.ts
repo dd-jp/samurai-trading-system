@@ -45,6 +45,42 @@
  * `maxConcurrentInstruments` / `maxInFlightLlmCalls` rather than a flat
  * number. Until then this is picked for headroom over every plausible shipped
  * configuration, and the headroom is finite — see the constant's own doc.
+ *
+ * ## First real measurement (#1427) — the 0.667 baseline is incomplete
+ *
+ * The running soak predates migration 0065, so `llm_gate_refusals` is still
+ * empty; `audit_log.decision = 'not_admitted'` is a faithful proxy —
+ * `gateRefusedDebateResult` writes exactly one of those rows on the same code
+ * path that would call `recordGateRefusal` (`debate-adapter.ts`). Over a live
+ * 2026-09-15 75-minute window: 34 refused / 40 debate decisions = **0.85** —
+ * 18pp above the 0.667 debate-only baseline this file derives, and closer to
+ * the 0.90 baseline this file only expects at `maxConcurrentInstruments` = 20.
+ * The cap was not widened; the baseline formula is missing a term.
+ *
+ * `NousAccountInFlightGate` is shared by construction across every
+ * Nous-speaking client the composition root builds, sentiment included
+ * (`llm-in-flight-wiring.test.ts`'s whole point — "two gates would cap two
+ * halves of one queue and cap neither"). The same window's gate-wait/refusal
+ * log events split 65 debate-stage (30 admitted-after-wait, 35 refused) and
+ * 18 market-intelligence-sentiment-stage (18 admitted-after-wait, **0**
+ * refused). MI calls queue for and consume the same account-wide slot as
+ * debate calls, lengthening the queue every debate call waits behind, but
+ * `debates_logged` — and `audit_log`'s `not_admitted` proxy — only count the
+ * debate side, so MI's contention shows up entirely as extra debate refusals
+ * with no matching denominator growth. Solving `(N' - 2) / N' = 0.85` for the
+ * *effective* contender count gives N' ≈ 13.3 — roughly `maxConcurrentInstruments`
+ * (6) plus this window's MI call volume, not 6 alone.
+ *
+ * MI is never itself refused in this data (0/18) — it appears to queue rather
+ * than time out at this call volume — so it costs debate admissions without
+ * costing itself any. #1427's derived predicate should be a function of total
+ * per-bar Nous contenders (debate fan-out + MI sentiment fan-out), not
+ * `maxConcurrentInstruments` in isolation; that correction is not applied
+ * below, since 0.95 still clears the measured 0.85 with 10pp of margin and
+ * changing a shipped alert threshold on a single 75-minute window is not
+ * warranted. What this measurement rules out is treating 0.667/0.90 as the
+ * ceiling of normal operation — MI call frequency, not just instrument count,
+ * is a lever on where the healthy ratio actually sits.
  */
 import { describeThrownSafely } from '../../../shared/index.js';
 import type { Logger } from '../types.js';
@@ -58,6 +94,9 @@ export const GATE_REFUSAL_RATE_WINDOW_MS = 24 * 60 * 60 * 1000;
  * 0.95 is chosen to clear the by-design `(N - 2) / N` baseline at every width
  * this system plausibly runs: 0.667 at the shipped `maxConcurrentInstruments`
  * of 6 (28 pp of headroom), 0.90 if that cap were ever widened to 20 (5 pp).
+ * The first real measurement (#1427, see this file's doc) came in at 0.85 —
+ * above 0.667 because MI sentiment calls share the same account-wide gate
+ * and are not in `maxConcurrentInstruments`, but still 10pp under 0.95.
  * Universe SIZE does not move the baseline — the 20-name sweep `defaults.ts`
  * and the debate-engine spec both reason about runs at width 6, so it is four
  * waves at 0.667, not one at 0.90. The headroom runs out at a width of 40,
