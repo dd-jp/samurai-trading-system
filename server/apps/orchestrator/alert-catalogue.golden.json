@@ -1551,8 +1551,82 @@
     {
       "log": null,
       "logInTrace": null,
-      "text": "Samurai UNATTRIBUTED FLATTEN FILL: flatten flatten-2 sold 3 against lot lot-9, which had already closed, as of 2026-01-02T10:00:00.000Z.\nFill fill-4 is booked, but that lot's closed trade understates the sale — check the venue for a REVERSE position no open lot explains, and correct the realized record by hand.",
+      "text": "Samurai UNATTRIBUTED FLATTEN FILL: flatten flatten-2 sold 3 3LDE against lot lot-9, which had already closed, as of 2026-01-02T10:00:00.000Z.\nFill fill-4 is booked, but that lot's closed trade understates the sale — check the venue for a SHORT 3LDE position no open lot explains, and correct the realized record by hand.",
       "rejected": "telegram 502",
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    },
+    {
+      "log": null,
+      "logInTrace": null,
+      "text": "Samurai UNATTRIBUTED FLATTEN FILL: flatten flatten-3 bought to close 2 3SDE against lot lot-10, which had already closed, as of 2026-01-02T10:00:00.000Z.\nFill fill-5 is booked, but that lot's closed trade understates the buy-back — check the venue for a LONG 3SDE position no open lot explains, and correct the realized record by hand.",
+      "rejected": "telegram 502",
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    }
+  ],
+  "unrecordedVenuePositionAlerts": [
+    {
+      "log": {
+        "trace_id": "fill-sync",
+        "stage": "execution",
+        "event": "unrecorded_venue_position",
+        "level": "error",
+        "message": "the venue holds a position no open lot in the store explains — this exposure is invisible to the Risk Manager; reconcile it by hand",
+        "payload": {
+          "instrument": "3LDE",
+          "qty": 40,
+          "side": "buy",
+          "observed_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "logInTrace": {
+        "trace_id": "fill-sync",
+        "stage": "execution",
+        "event": "unrecorded_venue_position",
+        "level": "error",
+        "message": "the venue holds a position no open lot in the store explains — this exposure is invisible to the Risk Manager; reconcile it by hand",
+        "payload": {
+          "instrument": "3LDE",
+          "qty": 40,
+          "side": "buy",
+          "observed_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "text": "Samurai UNRECORDED VENUE POSITION [fill-sync]: the venue holds 40 3LDE (buy) with no open lot in the store, as of 2026-09-10T08:15:00.000Z.\nThe Risk Manager computes exposure from the store, so this position is invisible to every cap and will not be flattened by close. Nothing was written — adopting it would mean inventing the bracket and stop it has none of. Close or record it by hand.",
+      "rejected": "telegram 502",
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    },
+    {
+      "log": {
+        "trace_id": "control-arm-fill-sync",
+        "stage": "execution",
+        "event": "unrecorded_venue_position",
+        "level": "error",
+        "message": "the venue holds a position no open lot in the store explains — this exposure is invisible to the Risk Manager; reconcile it by hand",
+        "payload": {
+          "instrument": "3LDE",
+          "qty": 40,
+          "side": "buy",
+          "observed_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "logInTrace": {
+        "trace_id": "control-arm-fill-sync",
+        "stage": "execution",
+        "event": "unrecorded_venue_position",
+        "level": "error",
+        "message": "the venue holds a position no open lot in the store explains — this exposure is invisible to the Risk Manager; reconcile it by hand",
+        "payload": {
+          "instrument": "3LDE",
+          "qty": 40,
+          "side": "buy",
+          "observed_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "text": null,
+      "rejected": null,
       "sendFailed": null,
       "sendFailedInTrace": null
     }

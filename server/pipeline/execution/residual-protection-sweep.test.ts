@@ -31,6 +31,7 @@ import type {
   ResidualExposureAlert,
   ResidualExposureAlertChannel,
 } from './types.js';
+import { UnrecordedVenuePositionThrottle } from './unrecorded-venue-position-throttle.js';
 
 /**
  * #1214: the default `ExecutionInput.sessionCalendars` — an open venue for
@@ -263,6 +264,8 @@ function makeInput(
     residualExposureAlerts,
     flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
     flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
+    unrecordedVenuePositionAlerts: { postUnrecordedVenuePositionAlert: async () => {} },
+    unrecordedVenuePositionThrottle: new UnrecordedVenuePositionThrottle(),
     logger,
     filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
   };

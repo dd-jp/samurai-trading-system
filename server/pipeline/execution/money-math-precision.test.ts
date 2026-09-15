@@ -46,6 +46,7 @@ import type {
   NormalizedFill,
   NormalizedOrder,
 } from './types.js';
+import { UnrecordedVenuePositionThrottle } from './unrecorded-venue-position-throttle.js';
 
 /**
  * #1214: `ExecutionInput.sessionCalendars`. An open venue for both classes —
@@ -327,6 +328,8 @@ function makeInput(broker: BrokerAdapter, store: TestExecutionStore): ExecutionI
     residualExposureAlerts: { postResidualExposureAlert: async () => {} },
     flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
     flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
+    unrecordedVenuePositionAlerts: { postUnrecordedVenuePositionAlert: async () => {} },
+    unrecordedVenuePositionThrottle: new UnrecordedVenuePositionThrottle(),
     filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
     logger: { log: () => {} },
   };

@@ -178,6 +178,14 @@ export type {
 } from './unattributed-flatten-fill-alert.js';
 export type { UnpricedFillAlert, UnpricedFillAlertChannel } from './unpriced-fill-alert.js';
 export type {
+  UnrecordedVenuePositionAlert,
+  UnrecordedVenuePositionAlertChannel,
+} from './unrecorded-venue-position-alert.js';
+export {
+  UNRECORDED_VENUE_POSITION_REPAGE_EVERY_MS,
+  UnrecordedVenuePositionThrottle,
+} from './unrecorded-venue-position-throttle.js';
+export type {
   UnresolvedPriceUnitAlert,
   UnresolvedPriceUnitAlertChannel,
 } from './unresolved-price-unit-alert.js';

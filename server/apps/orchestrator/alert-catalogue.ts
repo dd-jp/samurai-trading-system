@@ -64,6 +64,7 @@ export const ALERT_IDS = [
   'gateRefusalRateAlerts',
   'nonSterlingFeeAlerts',
   'unattributedFlattenFillAlerts',
+  'unrecordedVenuePositionAlerts',
   'saxoSessionLostAlerts',
   'saxoWeeklyReminderAlerts',
 ] as const satisfies readonly (keyof AlertChannelSlots)[];
@@ -1143,13 +1144,56 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
   unattributedFlattenFillAlerts: {
     method: 'postUnattributedFlattenFillAlert',
     delivery: 'awaited',
+    // #1550: instrument and side come off the payload. The text hardcoded
+    // "sold" and "REVERSE" (short), which inverts on a buy-to-close — that
+    // over-runs a closed SHORT and leaves the account long.
     text: (alert) =>
-      `Samurai UNATTRIBUTED FLATTEN FILL: flatten ${alert.flatten_idempotency_key} sold ` +
-      `${alert.qty} against lot ${alert.lot_idempotency_key}, which had already closed, as of ` +
+      `Samurai UNATTRIBUTED FLATTEN FILL: flatten ${alert.flatten_idempotency_key} ` +
+      `${alert.side === 'sell' ? 'sold' : 'bought to close'} ${alert.qty} ${alert.instrument} ` +
+      `against lot ${alert.lot_idempotency_key}, which had already closed, as of ` +
       `${alert.observed_at.toISOString()}.\n` +
-      `Fill ${alert.broker_fill_id} is booked, but that lot's closed trade understates the sale — ` +
-      'check the venue for a REVERSE position no open lot explains, and correct the realized ' +
-      'record by hand.',
+      `Fill ${alert.broker_fill_id} is booked, but that lot's closed trade understates the ` +
+      `${alert.side === 'sell' ? 'sale' : 'buy-back'} — check the venue for ` +
+      `${alert.side === 'sell' ? 'a SHORT' : 'a LONG'} ${alert.instrument} position no open lot ` +
+      'explains, and correct the realized record by hand.',
+  },
+
+  unrecordedVenuePositionAlerts: {
+    method: 'postUnrecordedVenuePositionAlert',
+    delivery: 'awaited',
+    // The live arm only (#1349's split, the same one `flattenReconcileAlerts`
+    // takes): `control-arm-wiring.ts` builds both arms' `reconcile()` off this
+    // same function against a SIMULATED broker, whose book no operator can act
+    // on. Without this predicate the control arm's simulated positions would
+    // reach a real phone.
+    page: (alert) => !isControlArmTraceId(alert.trace_id),
+    // LOGGED, not in `UNLOGGED_ALERT_IDS`: reconcile.ts writes no line for this
+    // condition. The divergence reaches the log at `warn` from a DIFFERENT
+    // module (`runPoll`, fill-sync.ts) and only on the poll path, so a log-only
+    // stand-in here is the sole record on the startup pass rather than a
+    // duplicate — `flattenReconcileAlerts`' arrangement exactly.
+    log: (alert) => ({
+      trace_id: alert.trace_id,
+      stage: 'execution',
+      event: 'unrecorded_venue_position',
+      level: 'error',
+      message:
+        'the venue holds a position no open lot in the store explains — this exposure is ' +
+        'invisible to the Risk Manager; reconcile it by hand',
+      payload: {
+        instrument: alert.instrument,
+        qty: alert.qty,
+        side: alert.side,
+        observed_at: alert.observed_at.toISOString(),
+      },
+    }),
+    text: (alert) =>
+      `Samurai UNRECORDED VENUE POSITION [${alert.trace_id}]: the venue holds ${alert.qty} ` +
+      `${alert.instrument} (${alert.side}) with no open lot in the store, as of ` +
+      `${alert.observed_at.toISOString()}.\n` +
+      'The Risk Manager computes exposure from the store, so this position is invisible to every ' +
+      'cap and will not be flattened by close. Nothing was written — adopting it would mean ' +
+      'inventing the bracket and stop it has none of. Close or record it by hand.',
   },
 
   saxoSessionLostAlerts: {

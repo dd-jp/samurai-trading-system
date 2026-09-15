@@ -80,7 +80,12 @@ import {
 } from './fill-cost.js';
 import { splitFlattenFills } from './flatten-attribution.js';
 import { markResidualsUnprotected, maybeRearmResidual } from './residual-protection.js';
-import type { FillIngestInput, NonSterlingFeeAlert, NormalizedFill } from './types.js';
+import type {
+  FillIngestInput,
+  FlattenAttribution,
+  NonSterlingFeeAlert,
+  NormalizedFill,
+} from './types.js';
 
 /**
  * #1087: a lot `reconcile()` adopted as `filled`/`partially_filled` from
@@ -793,7 +798,14 @@ async function redistributeOneFlatten(
   // make this poll's own write suppress the first-ever warning for a raw fill
   // that both over-fills and names an already-closed lot.
   for (const [lotKey, splitFills] of unattributed) {
-    await persistUnattributedSplits(input, clientOrderId, lotKey, splitFills, failures);
+    await persistUnattributedSplits(
+      input,
+      attribution,
+      clientOrderId,
+      lotKey,
+      splitFills,
+      failures,
+    );
   }
 
   // #549: the durable "residual observed, protection not confirmed" marker,
@@ -889,6 +901,7 @@ async function redistributeOneFlatten(
  */
 async function persistUnattributedSplits(
   input: FillIngestInput,
+  attribution: FlattenAttribution,
   clientOrderId: string,
   lotKey: string,
   splitFills: readonly NormalizedFill[],
@@ -939,6 +952,17 @@ async function persistUnattributedSplits(
       continue;
     }
 
+    // AFTER the successful `applyLotAdvance`, mirroring `advanceLot`'s own
+    // ordering: the fee contradiction is reported about a fill that is
+    // durably in the CGT source, never about one whose write threw. The
+    // instrument comes off the flatten's write-ahead because the named lot is
+    // terminal and holds no `OpenPosition` (#1550).
+    await warnOnNonSterlingFee(
+      input,
+      { idempotency_key: lotKey, instrument: attribution.instrument },
+      fill,
+    );
+
     safeLog(input.logger, {
       trace_id: input.trace_id,
       stage: 'execution',
@@ -959,6 +983,8 @@ async function persistUnattributedSplits(
         trace_id: input.trace_id,
         flatten_idempotency_key: clientOrderId,
         lot_idempotency_key: lotKey,
+        instrument: attribution.instrument,
+        side: attribution.side,
         broker_fill_id: fill.broker_fill_id,
         qty: fill.qty,
         observed_at: input.clock.now(),
@@ -1508,10 +1534,18 @@ async function cumulativeTopUp(
  * `NonSterlingFeeAlert`'s CREDENTIALS boundary: the channel's own thrown
  * error is never logged, since an alert transport can carry a credential in
  * its failure text.
+ *
+ * #1550: the second parameter is the two fields this reads, not an
+ * `OpenPosition`. `persistUnattributedSplits` books against a lot that has
+ * already left `getOpenPositions()` and therefore has no `OpenPosition` to
+ * pass — and that path feeds the same CGT fill source as the two that do, so
+ * a foreign fee reaching it silently was the whole gap. The two existing call
+ * sites pass their `OpenPosition` unchanged; this only stops the type from
+ * demanding a record the third caller cannot produce.
  */
 async function warnOnNonSterlingFee(
   input: FillIngestInput,
-  position: OpenPosition,
+  position: { idempotency_key: string; instrument: string },
   fill: NormalizedFill,
 ): Promise<void> {
   const currency = fill.fee_currency;

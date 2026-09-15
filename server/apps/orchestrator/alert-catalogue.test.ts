@@ -346,9 +346,36 @@ const FIXTURES: { readonly [K in AlertId]: readonly AlertOf<K>[] } = {
       trace_id: 'fill-sync',
       flatten_idempotency_key: 'flatten-2',
       lot_idempotency_key: 'lot-9',
+      instrument: '3LDE',
+      side: 'sell',
       broker_fill_id: 'fill-4',
       qty: 3,
       observed_at: new Date('2026-01-02T10:00:00Z'),
+    },
+    // #1550: the buy-to-close half. The pre-#1550 text said "sold" and
+    // "REVERSE" unconditionally, which on this case named the wrong verb and
+    // the wrong direction — a buy over-running a closed SHORT leaves a LONG.
+    {
+      trace_id: 'fill-sync',
+      flatten_idempotency_key: 'flatten-3',
+      lot_idempotency_key: 'lot-10',
+      instrument: '3SDE',
+      side: 'buy',
+      broker_fill_id: 'fill-5',
+      qty: 2,
+      observed_at: new Date('2026-01-02T10:00:00Z'),
+    },
+  ],
+  // #1550: live arm, then control arm — the second must log and send nothing,
+  // the `page` predicate `flattenReconcileAlerts` above is fixtured for.
+  unrecordedVenuePositionAlerts: [
+    { trace_id: 'fill-sync', instrument: '3LDE', qty: 40, side: 'buy', observed_at: AT },
+    {
+      trace_id: 'control-arm-fill-sync',
+      instrument: '3LDE',
+      qty: 40,
+      side: 'buy',
+      observed_at: AT,
     },
   ],
   saxoSessionLostAlerts: [
@@ -392,6 +419,7 @@ const INVOKE: { readonly [K in AlertId]: (port: AlertPort<K>, alert: AlertOf<K>)
   gateRefusalRateAlerts: (port, alert) => port.postGateRefusalRateAlert(alert),
   nonSterlingFeeAlerts: (port, alert) => port.postNonSterlingFeeAlert(alert),
   unattributedFlattenFillAlerts: (port, alert) => port.postUnattributedFlattenFillAlert(alert),
+  unrecordedVenuePositionAlerts: (port, alert) => port.postUnrecordedVenuePositionAlert(alert),
   saxoSessionLostAlerts: (port, alert) => port.postSaxoSessionLostAlert(alert),
   saxoWeeklyReminderAlerts: (port, alert) => port.postSaxoWeeklyReminderAlert(alert),
 };

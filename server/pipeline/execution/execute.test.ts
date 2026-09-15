@@ -44,6 +44,7 @@ import type {
   ResidualExposureAlert,
   ResidualExposureAlertChannel,
 } from './types.js';
+import { UnrecordedVenuePositionThrottle } from './unrecorded-venue-position-throttle.js';
 
 /**
  * #1214: `ExecutionInput.sessionCalendars`. An open venue for both classes —
@@ -291,6 +292,8 @@ function makeInput(overrides: Partial<ExecutionInput> = {}): ExecutionInput {
     residualExposureAlerts: makeResidualExposureAlerts(),
     flattenOverfillAlerts: makeFlattenOverfillAlerts(),
     flattenReconcileAlerts: makeFlattenReconcileAlerts(),
+    unrecordedVenuePositionAlerts: { postUnrecordedVenuePositionAlert: async () => {} },
+    unrecordedVenuePositionThrottle: new UnrecordedVenuePositionThrottle(),
     // #573: `execute()` routes every failure it observes into the
     // `ExecutionResult` it returns rather than a log line, so a no-op is
     // enough for almost every test here. The exceptions pass their own

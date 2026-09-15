@@ -52,6 +52,7 @@ import type {
   UnattributedFlattenFillAlert,
   UnattributedFlattenFillAlertChannel,
 } from './types.js';
+import { UnrecordedVenuePositionThrottle } from './unrecorded-venue-position-throttle.js';
 
 /**
  * #1214: the default `ExecutionInput.sessionCalendars` — an open venue for
@@ -330,6 +331,9 @@ function makeInput(
     ...(unattributedFlattenFillAlerts === undefined ? {} : { unattributedFlattenFillAlerts }),
     // #519: `ingestFills()` never reconciles, so this is never posted to.
     flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
+    // #1550: likewise — the unrecorded scan is reconcile's, not ingest's.
+    unrecordedVenuePositionAlerts: { postUnrecordedVenuePositionAlert: async () => {} },
+    unrecordedVenuePositionThrottle: new UnrecordedVenuePositionThrottle(),
     logger,
     // Fresh per call by default — matches production's one-throttle-per-
     // composition-root lifetime, since `makeInput()` itself is called once
@@ -1815,12 +1819,17 @@ describe('ExecutionImpl.ingestFills', () => {
         { broker_fill_id: 'f1:key-1', leg: 'exit', qty: 10 },
         { broker_fill_id: 'f2:key-1', leg: 'exit', qty: 4 },
       ]);
-      // Visible: paged, with the flatten and the lot both named.
+      // Visible: paged, with the flatten and the lot both named — and, since
+      // #1550, the INSTRUMENT and the closing SIDE, read off the flatten's own
+      // write-ahead row because the named lot holds no `OpenPosition` to read
+      // them from.
       expect(alerts.alerts).toMatchObject([
         {
           trace_id: 'trace-1',
           flatten_idempotency_key: 'flatten-2',
           lot_idempotency_key: 'key-1',
+          instrument: 'AAPL',
+          side: 'sell',
           broker_fill_id: 'f2:key-1',
           qty: 4,
         },
@@ -4886,6 +4895,127 @@ describe('a non-sterling fee is a loud contradiction, not a silent GBP sum (#122
     expect(
       logger.entries.filter((entry) => entry.message === FEE_CURRENCY_NOT_BOOK_CURRENCY),
     ).toHaveLength(1);
+  });
+
+  // #1550. Before this, `persistUnattributedSplits` was the ONE booking path
+  // that never ran this check: it books through `applyLotAdvance` into the
+  // same `fills` table the CGT source reads, but it holds no `OpenPosition`
+  // for the instrument (the named lot is terminal by construction), and
+  // `warnOnNonSterlingFee` demanded one. So a foreign fee on a split naming a
+  // closed lot reached the book with neither the #1220 error line nor the
+  // #1465 page.
+  it('raises the same line and page for a split booked against an already-closed lot', async () => {
+    const { store } = openTestExecutionStore();
+    await seedPosition(store, { idempotency_key: 'key-1', requested_size: 10, stop: 95 });
+    // A second, unrelated open lot: without it `ingestFills` returns at its
+    // own "no open positions" guard before redistribution runs, which is the
+    // last-open-lot case execution-spec.md hands to reconcile.ts instead.
+    await seedPosition(store, {
+      idempotency_key: 'key-other',
+      instrument: 'TSLA',
+      requested_size: 5,
+      stop: 190,
+    });
+    const journalFlatten = async (key: string, held: number): Promise<void> => {
+      await store.writeAheadFlatten({
+        idempotency_key: key,
+        instrument: 'AAPL',
+        asset_class: 'stocks',
+        side: 'sell',
+        size: held,
+        submitted_at: OPENED_AT,
+        lot_held_quantities: [{ idempotency_key: 'key-1', held }],
+        exit_reason: 'flatten',
+        decision_price: null,
+        quote_bid: null,
+        quote_ask: null,
+        quote_mid: null,
+        modelled_cost_breakdown: null,
+        quote_observed_at: null,
+      });
+      await store.resolveFlattenSubmitted(
+        key,
+        { order_state: 'submitted', broker_order_ids: [`${key}:order`] },
+        OPENED_AT,
+      );
+    };
+    await journalFlatten('flatten-1', 10);
+
+    const entry = fill({
+      client_order_id: 'key-1',
+      broker_fill_id: toBrokerFillId('e1'),
+      leg: 'entry',
+      qty: 10,
+    });
+    const firstFlattenFill = fill({
+      client_order_id: 'flatten-1',
+      broker_fill_id: toBrokerFillId('f1'),
+      leg: 'exit',
+      qty: 10,
+      timestamp: new Date('2026-07-20T15:30:00Z'),
+    });
+    const secondFlattenFill = fill({
+      client_order_id: 'flatten-2',
+      broker_fill_id: toBrokerFillId('f2'),
+      leg: 'exit',
+      qty: 4,
+      fee: 0.8,
+      fee_currency: 'USD',
+      timestamp: new Date('2026-07-20T15:45:00Z'),
+    });
+
+    const feeAlerts = makeNonSterlingFeeAlerts();
+    const logger = recordingLogger();
+    const poll = async (fills: readonly NormalizedFill[]): Promise<void> => {
+      await new ExecutionImpl(
+        makeInput(
+          new ScriptedBroker([...fills]),
+          store,
+          undefined,
+          undefined,
+          logger,
+          undefined,
+          undefined,
+          undefined,
+          feeAlerts,
+        ),
+      ).ingestFills();
+    };
+
+    await poll([entry]);
+    await poll([entry, firstFlattenFill]);
+    expect((await store.getPosition('key-1'))?.order_state).toBe('closed');
+
+    await journalFlatten('flatten-2', 4);
+    await poll([entry, firstFlattenFill, secondFlattenFill]);
+
+    // The same error line the two booking paths with an `OpenPosition` raise,
+    // naming the instrument off the flatten's write-ahead row.
+    expect(logger.entries).toContainEqual(
+      expect.objectContaining({
+        level: 'error',
+        message: FEE_CURRENCY_NOT_BOOK_CURRENCY,
+        payload: expect.objectContaining({
+          idempotency_key: 'key-1',
+          instrument: 'AAPL',
+          broker_fill_id: 'f2:key-1',
+          fee: 0.8,
+          fee_currency: 'USD',
+        }),
+      }),
+    );
+    // And the #1465 page, not just the line.
+    expect(feeAlerts.alerts).toMatchObject([
+      { idempotency_key: 'key-1', instrument: 'AAPL', fee_currency: 'USD' },
+    ]);
+
+    // Once per fill here too: the check sits behind the same `hasFill` gate
+    // the persist does, so the re-offer every later poll makes stays quiet.
+    await poll([entry, firstFlattenFill, secondFlattenFill]);
+    expect(
+      logger.entries.filter((line) => line.message === FEE_CURRENCY_NOT_BOOK_CURRENCY),
+    ).toHaveLength(1);
+    expect(feeAlerts.alerts).toHaveLength(1);
   });
 });
 

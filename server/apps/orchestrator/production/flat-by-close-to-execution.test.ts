@@ -40,7 +40,11 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEBATE_BAR_TIMEFRAME_MS, floorToBar } from '../../../pipeline/debate-engine/index.js';
-import { FilledZeroSizeThrottle, SqliteExecutionStore } from '../../../pipeline/execution/index.js';
+import {
+  FilledZeroSizeThrottle,
+  SqliteExecutionStore,
+  UnrecordedVenuePositionThrottle,
+} from '../../../pipeline/execution/index.js';
 import { CircuitBreakers, type RiskDecision } from '../../../pipeline/risk-manager/index.js';
 import { FixtureSetupStore } from '../../../pipeline/trader/index.js';
 import type { VerdictDecision } from '../../../pipeline/verdict/index.js';
@@ -335,6 +339,8 @@ async function driveFlatten(venue: Venue, opts: DriveFlattenOptions = {}) {
     residualExposureAlerts: { postResidualExposureAlert: async () => {} },
     flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
     flattenReconcileAlerts: { postFlattenReconcileAlert: async () => {} },
+    unrecordedVenuePositionAlerts: { postUnrecordedVenuePositionAlert: async () => {} },
+    unrecordedVenuePositionThrottle: new UnrecordedVenuePositionThrottle(),
     logger: { log: vi.fn() },
     filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
   })(verdict);
