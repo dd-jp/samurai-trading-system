@@ -395,8 +395,11 @@ export interface ExecutionResult {
 /**
  * The specific escalation event behind a `ReconcileDivergence.escalation`
  * (#1577, widened #1585) — see that field's doc for why a named event replaced
- * a bare boolean. `wedge_cancelled` is `cancelWedgedFlatten`'s single outcome;
- * the other three are `cancelNeverConfirmedFlatten`'s (reconcile.ts), in the
+ * a bare boolean. `wedge_cancelled` is the one label `cancelWedgedFlatten`'s
+ * branch sets regardless of which of its own three outcomes (throttled,
+ * cancel-failed, cancel-issued) produced it — those three stay collapsed
+ * under one name, unlike the three below, which each get their own; the
+ * other three are `cancelNeverConfirmedFlatten`'s (reconcile.ts), in the
  * order that function tries them.
  */
 export type ReconcileEscalation =
