@@ -36,6 +36,7 @@
     "classify:debate-termination": "tsx server/tools/classify-debate-termination.ts",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
+    "knip": "knip",
     "precommit": "yarn lint:fix && yarn typecheck && yarn test:coverage",
     "place-soak-position": "tsx --env-file=.env.local server/tools/place-soak-position.ts",
     "saxo:login": "tsx --env-file=.env.local server/tools/saxo-login.ts"
@@ -55,6 +56,7 @@
     "@vitejs/plugin-react": "^6.0.5",
     "@vitest/coverage-v8": "4.1.11",
     "jsdom": "^30.0.1",
+    "knip": "^6.35.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "tsx": "^4.23.11",
