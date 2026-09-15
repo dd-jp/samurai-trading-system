@@ -216,11 +216,11 @@ function exitPriceFor(trade: ClosedTrade, fillsByTrade: ReadonlyMap<string, Fill
 
 /**
  * `providers` defaults to `NULL_PROVIDER_STATUS` (every tile
- * `not_configured`) rather than being required, so a dashboard started without
- * third-party credentials — and every existing test that calls this with two
- * arguments — keeps working. The reader is injected rather than called
- * directly because it is the one input here that is live, timer-refreshed
- * state; taking it as a parameter is what preserves this function's purity.
+ * `not_configured`) rather than being required, so a dashboard started
+ * without third-party credentials keeps working. The reader is injected
+ * rather than called directly because it is the one input here that is live,
+ * timer-refreshed state; taking it as a parameter is what preserves this
+ * function's purity.
  *
  * `mode` and `arm` are both required, with NO default, deliberately (#539,
  * #1592). Each is a fact the caller must have already resolved — the run the
