@@ -428,6 +428,13 @@ export class SqliteExecutionStore implements SharedStore {
         // than trusting the caller's worklist read: see this method's own
         // doc (types/store.ts) for why a race must not overwrite a lot that
         // un-wedged itself between read and write.
+        //
+        // `order_state IN (...) AND filled_size = 0` restates
+        // `isWedgedZeroFillLot` (key-scheme-guard.ts) in SQL — a WHERE clause
+        // cannot import a TS predicate. Widen one without the other and this
+        // guard silently rejects rows the TS predicate still calls wedged;
+        // the caller (wedged-zero-fill-sweep.ts) re-checks after a no-op to
+        // catch exactly that divergence (#1601).
         `UPDATE open_positions
             SET order_state = 'abandoned', abandon_reason = ?
           WHERE arm = ? AND idempotency_key = ?
