@@ -2861,14 +2861,63 @@ export function paperStartingProfile(
     // reference tick's BOUNDED deployment under the cap; a higher-conviction
     // entry at the same realized ATR is not prevented from exceeding it.
     //
-    // Structurally unreachable regardless of this multiplier: any name whose
-    // share price exceeds D5's ~$250 single-stock per-position cash (25% of
-    // the $1,000 book) cannot be entered in whole shares at any deployment at
-    // or under that cap — e.g. MU (~$996) and GOOGL (~$342). This is
-    // arithmetic, not a tuning failure, and is exactly what ADR-0016
-    // anticipates: `DEFAULT_UNIVERSE`'s SPY/QQQ/AAPL/TSLA-style names are not
-    // the tradeable product; LSE leveraged ETPs are. See the follow-up issue
-    // this PR links for the fuller census of excluded names.
+    // #1136 measured this rather than reasoning further from the Caveat
+    // above: real paper-soak decisions (`trader_log`, `verdict_log`,
+    // `data/samurai-paper.sqlite`) from the corrected book scale landing
+    // (ddce6e6, 2026-09-05T15:25:33Z) through 2026-09-15T13:48:30Z — 325
+    // decisions, 37 of them Trader-stage entries — show this path has no
+    // $250 ceiling in practice, because (per the Caveat above) it has no
+    // code-enforced ceiling of any kind. 28 of the 37 entry rows log
+    // `base_risk_fraction = 0.019` (= 0.01 x 1.9, this file's retuned
+    // multiplier) directly; the other 9 log `0.019 x conviction_multiplier`
+    // instead (6 control-arm rows at a fixed 0.4444 multiplier, 3 live-arm
+    // rows at their own LLM-derived multiplier). On all 37, back-computing
+    // `equity` from each row's `size`, `stop_distance` (`atr_k` x ATR,
+    // `atr_k = 2.0`) and risk fraction lands inside the corrected book
+    // scale, not the ~$99,876 pre-#1112 broker balance — but that scale is
+    // two bases, not one: commit 91f24192 (#1180, merged 2026-09-09) moved
+    // the sizing ceiling mid-window from a flat `LIVE_BOOK_GBP` ($1,000) to
+    // `LIVE_BOOK_SIZING_USD = LIVE_BOOK_GBP * SIZING_USD_PER_GBP` ($1,270).
+    // 2026-09-08 rows backsolve to ~$982 equity; 2026-09-14/09-15 rows
+    // backsolve to ~$1,268. (The post-#1180 D5 single-stock target is
+    // 25% x $1,270 = $317.50; the $250 quoted below is #1149's own claim,
+    // not this path's current target.)
+    //
+    // Real entries cleared $250 notional for most of the highest-priced
+    // names a 25%-of-$1,000 reading would predict excluded, but that needs
+    // two qualifiers. 34 of the 37 entry decisions are control-arm
+    // (`trace_id` carries a `:control` suffix); only 3 are live-arm, and one
+    // of those (PLTR) was refused at Verdict, so only 2 live lots actually
+    // opened — SMCI ($75.34) and NVDA ($213.86), both under $250. The >$250
+    // notional below is carried entirely by the control arm, which still
+    // refutes #1149 (both arms share `decide.ts`'s sizing path) but is not
+    // this path's real LIVE deployment. Separately, 9 of the 37 entry
+    // decisions never reached the broker: `verdict_log` shows all 9 refused
+    // at the Verdict stage (5 staleness, 4 drift), so "submitted" does not
+    // apply to them — one is a GOOGL decision; the only real GOOGL lot in
+    // this window is 4 @ $346.14 = $1,385. Accounting for both: GOOGL
+    // ($1,385), QQQ (~$707-717, notional $2,126-2,826), MSFT (~$500,
+    // notional $1,500), plus AVGO/AMZN/META/TSLA/AAPL all cleared $250 on
+    // the control arm — 17 of `DEFAULT_UNIVERSE`'s 20 names produced at
+    // least one entry decision in this window.
+    //
+    // `whole_share_sizing`'s floor (#941's `rounds_to_zero_shares`) fired
+    // only 6 times across the 325 decisions (MSTR x2, QQQ/AAPL/MU/AMD x1
+    // each) — a rare, borderline event: QQQ, AAPL and MSTR each ALSO entered
+    // successfully on other ticks in the same window. Only MU, AMD, and
+    // SOFI never entered here. For MU and AMD, `below_conviction_floor`
+    // plus `neutral_direction_while_flat` (the strategy not wanting in)
+    // outnumber `rounds_to_zero_shares` (the sizing floor) 11:1 and 9:1 —
+    // sizing is not the binding constraint even for the two names closest
+    // to it. SOFI (~$18, on #1149's own list of names NOT excluded at $250)
+    // never entered either — 15 decisions in this window (7
+    // neutral_direction_while_flat, 5 below_conviction_floor, 3
+    // session_closing), zero `rounds_to_zero_shares` hits — so its absence
+    // has nothing to do with sizing: further evidence price is not the
+    // binding variable here. D5's 25%/$250 figure is a retune TARGET #1137
+    // aimed at for one reference tick (full conviction, the #1112-logged MU
+    // trim) on this path, not a maximum this path's real deployment ever
+    // respects.
     ...(mode === 'paper'
       ? {
           traderConfig: {
