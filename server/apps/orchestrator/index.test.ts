@@ -30,6 +30,21 @@ import {
 import type { ProductionOrchestrator } from './production.js';
 
 /**
+ * `missingCredentialEnvVars` reads `savedSessionExists(tokenFilePath('sim'))`
+ * against the REAL filesystem (#1523) — a developer machine with a live
+ * `yarn saxo:login` session on disk (`data/saxo-tokens/sim.json`, gitignored)
+ * flips the saved-session branch underneath every test below that exercises
+ * the `saxo` venue without injecting a broker, independent of what that test
+ * sets up. Pinned false here so those tests assert on the no-saved-session
+ * path they were written against; `credentialRequirements()` is exercised
+ * directly with an explicit `savedSaxoSession` where the true branch matters.
+ */
+vi.mock('../../pipeline/execution/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../pipeline/execution/index.js')>();
+  return { ...actual, savedSessionExists: vi.fn(() => false) };
+});
+
+/**
  * See the twin in `startup.test.ts`. Resolve arm of the `.then(…, …)` pairs
  * below, so `error` types as `Error` instead of the
  * `Error | ProductionOrchestrator` union the old `.catch(e => e as Error)`
