@@ -329,8 +329,9 @@ export class SqliteQueryStore implements DashboardQueryStore {
   }
 
   /**
-   * **LIVE arm only (#1318)**, like `getOpenPositions` and `getRecentClosedTrades`
-   * above, and `getAttribution` and `getRiskCritics` below. Falsifier arm 2 writes its own
+   * **LIVE arm only (#1318)**, like `getAttribution` and `getRiskCritics`
+   * below — `getOpenPositions` and `getRecentClosedTrades` above are no
+   * longer live-only; #1592 parameterized both by `arm`. Falsifier arm 2 writes its own
    * `verdict_log` rows under a `trace_id` carrying `CONTROL_TRACE_SUFFIX`
    * (#753) — `verdict_log` has no `debate_id` column, so unlike
    * `getRiskCritics` there is only the one discriminator to apply. The filter
@@ -365,7 +366,12 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * `risk_critic_log` on `debate_id`), so exactly one row comes back per
    * decision.
    *
-   * ## LIVE arm only, like every other read here
+   * ## LIVE arm only
+   *
+   * `getOpenPositions` and `getRecentClosedTrades` above took the same shape
+   * until #1592 parameterized both by `arm`; this read still hardcodes it,
+   * excluding the falsifier's control-arm rows the same way `getVerdictHistory`
+   * above does.
    *
    * Falsifier arm 2 writes its own `risk_log`/`trader_log` rows under the
    * `control:` `debate_id` namespace (`CONTROL_DEBATE_ID_PREFIX`) and under a
@@ -645,7 +651,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
     //  - `audit_log` in the window — every instrument the LIVE arm actually
     //    ran and attributed (#1319: the control arm's own attributed rows are
     //    excluded below — like `getOpenPositions` and `getRecentClosedTrades`,
-    //    which filter on the `arm = 'live'` column, and like
+    //    which filter on a bound `arm = ?` parameter (#1592), and like
     //    `getVerdictHistory` and `getRiskCritics` (#1318), which filter on
     //    `trace_id NOT LIKE`, since `audit_log` has no `arm` column of its
     //    own). This is the source the lanes are built from, so a lane can no
