@@ -316,7 +316,7 @@ describe('the control arm is wired to its own account state, not the live one (#
 /**
  * The book ANCHOR (#753, second pass).
  *
- * The first version of this provider took a constant `LIVE_BOOK_GBP`. `yarn
+ * The first version of this provider took a constant `LIVE_BOOK_GBP`. `npm run
  * smoke` proved what that costs on a paper account — measured BEFORE #1112,
  * when paper's `capitalCeilingUsd` did not exist and neither arm's Trader
  * ask was clamped: the live arm sized off its full ~100,000 broker equity

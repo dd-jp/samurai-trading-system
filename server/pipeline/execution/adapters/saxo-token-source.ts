@@ -2,7 +2,7 @@
  * Where `SaxoHttpBrokerClient` gets its bearer, per request (#1523).
  *
  * Saxo's documented model for a direct retail client is: log in by hand ONCE
- * (`yarn saxo:login`, #1522), then keep the session alive by exchanging the
+ * (`npm run saxo:login`, #1522), then keep the session alive by exchanging the
  * refresh token before its window closes. Certificate-based headless auth is
  * institutional-only. Every exchange ROTATES the refresh token — Saxo's
  * security page: *"this refresh token replaces and invalidates the previous
@@ -16,7 +16,7 @@
  * close it. Saxo invalidates the old refresh token when the new one is
  * ISSUED, not when it is first used, so a crash between the gateway's reply
  * and the `rename` strands the session whatever the ordering — the recovery
- * for that is a new `yarn saxo:login`, which is why the lost state is
+ * for that is a new `npm run saxo:login`, which is why the lost state is
  * reported rather than retried away.
  *
  * ## Timing comes from the response, never from the docs
@@ -66,7 +66,7 @@ export class SaxoSessionLostError extends Error {}
  * is guarded by `this.lostReason !== undefined`) — so "one alert per lost
  * episode, not per failed request" falls out of that guard rather than
  * needing a throttle of its own. A NEW episode is a new instance: this
- * process only ever gets one by restarting after a fresh `yarn saxo:login`
+ * process only ever gets one by restarting after a fresh `npm run saxo:login`
  * (`buildSaxoTokenSource`, production/saxo-venue.ts), which is also the only
  * way `lostReason` is ever cleared.
  *
@@ -101,14 +101,14 @@ export interface SaxoTokenSource {
    * flight has finished writing. Async because of that join: Saxo invalidated
    * the previous refresh token when it issued the one in flight, so a process
    * that exits between receipt and `rename` strands the session and costs the
-   * operator a manual `yarn saxo:login`. Idempotent.
+   * operator a manual `npm run saxo:login`. Idempotent.
    */
   stop(): Promise<void>;
 }
 
 /**
  * The pre-#1523 behaviour, kept for the operator who pasted a developer-portal
- * token into `SAXO_SIM_ACCESS_TOKEN` and never ran `yarn saxo:login`: one
+ * token into `SAXO_SIM_ACCESS_TOKEN` and never ran `npm run saxo:login`: one
  * string, no renewal, and a state that says so out loud rather than reporting
  * a healthy session that will 401 within the day.
  */
@@ -271,7 +271,7 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
     }
     if (record === undefined) {
       this.lose(
-        `no saved session at ${tokenPath} — run \`yarn saxo:login --env ${environment}\` once`,
+        `no saved session at ${tokenPath} — run \`npm run saxo:login -- --env ${environment}\` once`,
       );
       return;
     }
@@ -284,7 +284,7 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
     this.record = record;
     if (Date.parse(record.refreshTokenExpiresAt) <= this.clock.now().getTime()) {
       this.lose(
-        `the saved refresh token expired at ${record.refreshTokenExpiresAt} — run \`yarn saxo:login --env ${environment}\` again`,
+        `the saved refresh token expired at ${record.refreshTokenExpiresAt} — run \`npm run saxo:login -- --env ${environment}\` again`,
       );
       return;
     }
@@ -339,7 +339,7 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
       obtainedAt: now.toISOString(),
       // Carried forward, not restamped (#1524): a silent rotation is not a
       // manual login, and `loggedInAt` answers "when did an operator last run
-      // `yarn saxo:login`", not "when did this process last renew its bearer"
+      // `npm run saxo:login`", not "when did this process last renew its bearer"
       // — see `SaxoTokenFileRecord.loggedInAt`.
       ...(record.loggedInAt === undefined ? {} : { loggedInAt: record.loggedInAt }),
     };

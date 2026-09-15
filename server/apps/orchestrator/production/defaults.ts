@@ -367,7 +367,7 @@ export function buildDefaultLlmClient(
  * The LLM budget used when `ProductionConfig.rateLimiterConfig` is omitted
  * (#388) — a backstop for a programmatic caller, NOT the soak's numbers.
  * `paperStartingProfile` supplies its own, sized against the real universe,
- * and that is what `yarn orchestrator` and `yarn smoke` run on.
+ * and that is what `npm run orchestrator` and `npm run smoke` run on.
  *
  * Deliberately generous rather than tight. This limiter is a CEILING that
  * catches a misconfiguration or a runaway loop, not a scheduler: a budget that

@@ -2,7 +2,7 @@
  * TDD for #887: the dashboard's bind guard must refuse a non-loopback `HOST`
  * unless a credential is configured — and must NOT refuse the default
  * loopback bind just because no credential exists, since that default is
- * every `yarn dashboard` invocation today. Written before `bind-guard.ts`
+ * every `npm run dashboard` invocation today. Written before `bind-guard.ts`
  * existed; see that file's header for the full design rationale (ADR-0019).
  */
 import {
@@ -31,7 +31,7 @@ describe('isLoopbackHost', () => {
 });
 
 describe('isBindAllowed — the conjunctive predicate', () => {
-  it('permits loopback with no credential — the default path every yarn dashboard uses', () => {
+  it('permits loopback with no credential — the default path every npm run dashboard uses', () => {
     expect(isBindAllowed('127.0.0.1', undefined)).toBe(true);
     expect(isBindAllowed('::1', undefined)).toBe(true);
   });

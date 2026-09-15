@@ -2,7 +2,7 @@
  * Tests for the checked-in paper starting profile (#323).
  *
  * The profile's job is narrow: satisfy `REQUIRED_INJECTED_CONFIG` with values
- * that are internally consistent, so `yarn orchestrator` boots to a tick loop
+ * that are internally consistent, so `npm run orchestrator` boots to a tick loop
  * instead of throwing at the seams guard. These tests pin the properties that
  * make it *usable* rather than merely *present* — a profile that boots and
  * then rejects or halts everything is indistinguishable, at a glance, from a
@@ -807,7 +807,7 @@ describe('paperStartingProfile', () => {
     }
     expect(message).toContain('#238');
     expect(message).toContain('has not run');
-    expect(message).toContain('yarn check:live-gates');
+    expect(message).toContain('npm run check:live-gates');
   });
 
   it('routes an operator to the live profile rather than to a dead end', () => {

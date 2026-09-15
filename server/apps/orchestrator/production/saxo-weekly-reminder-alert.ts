@@ -30,7 +30,7 @@
  *
  * `SaxoTokenRefresher` loads the saved session ONCE, at `load()`, and never
  * re-reads the file afterwards except through its own rotations — an
- * operator running `yarn saxo:login` again while the orchestrator process is
+ * operator running `npm run saxo:login` again while the orchestrator process is
  * still up does not reach a `SaxoTokenRefresher` that has already gone
  * `lost` (recovering that requires a restart, which is #1523's territory,
  * not this ticket's). Reading `readTokenFile(tokenPath)` fresh on every fire

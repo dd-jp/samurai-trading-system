@@ -1,18 +1,18 @@
 /**
  * Supervises the two long-lived processes — orchestrator and dashboard — as a
- * single foreground `yarn serve`. Logic lives here rather than in `index.ts`
+ * single foreground `npm run serve`. Logic lives here rather than in `index.ts`
  * so it is reachable by a test; the entrypoint is the thin half, mirroring
  * `dashboard/server.ts` + `dashboard/index.ts`.
  *
  * Three decisions are load-bearing:
  *
- * **The children are spawned against `dist/`, not via `yarn orchestrator` /
- * `yarn dashboard`.** Both of those scripts begin with `yarn build`, so
+ * **The children are spawned against `dist/`, not via `npm run orchestrator` /
+ * `npm run dashboard`.** Both of those scripts begin with `npm run build`, so
  * spawning them would run two `tsc` invocations concurrently into the same
- * `dist/`. `yarn serve` builds once, then this file launches the built
+ * `dist/`. `npm run serve` builds once, then this file launches the built
  * entrypoints. `--env-file=.env.local` stays on the *children* so each
  * inherits exactly the environment behaviour of its own script, including
- * refusing to start when `.env.local` is absent — and `yarn serve` passes the
+ * refusing to start when `.env.local` is absent — and `npm run serve` passes the
  * same flag to *this* process, which is load-bearing rather than cosmetic:
  * `sharedStorePath()` derives the database filename from `SAMURAI_MODE`
  * (#330), so a supervisor that skipped the env file could migrate a different
@@ -35,7 +35,7 @@
  * `serve` means "both up"; one silently down is the failure worth surfacing
  * loudly. The asymmetric alternative — keep trading when only the dashboard
  * dies — would make this the unattended-soak launcher, which it is not:
- * `yarn orchestrator` remains the money-path entrypoint.
+ * `npm run orchestrator` remains the money-path entrypoint.
  *
  * `detached` is left at its default (false) so the children stay in this
  * process group and a terminal Ctrl-C reaches them directly. The explicit
@@ -60,8 +60,8 @@ export type SupervisedChild = Pick<ChildProcess, 'kill'> & {
  * Migrates the shared store to completion, then lets go of it.
  *
  * This exists because `serve` is the first thing that opens that database from
- * two processes *simultaneously* — until now an operator started `yarn
- * orchestrator` and `yarn dashboard` seconds apart, by hand. `runMigrations`
+ * two processes *simultaneously* — until now an operator started `npm run
+ * orchestrator` and `npm run dashboard` seconds apart, by hand. `runMigrations`
  * reads `schema_migrations` outside a transaction and then applies each
  * migration inside its own, so two processes opening a brand-new file can both
  * conclude nothing is applied and both run `CREATE TABLE`.
@@ -69,7 +69,7 @@ export type SupervisedChild = Pick<ChildProcess, 'kill'> & {
  * This is not a narrow window. Measured at exactly the two-process width
  * `serve` uses, against a fresh DB: **48 of 50 trials failed**, splitting
  * between "table bars already exists" and "database is locked". With the store
- * migrated first: 0 of 50. Without this call the first-ever `yarn serve` on a
+ * migrated first: 0 of 50. Without this call the first-ever `npm run serve` on a
  * clean machine would almost certainly have died on startup — and, under the
  * fail-fast policy below, taken the other half down with it.
  *
@@ -238,7 +238,7 @@ export function startSupervisor(effects: SupervisorEffects = {}): Supervisor {
               // (`kill -TERM` aimed at the orchestrator alone, which drains
               // and returns 0) is still a failure of `serve`, and reporting
               // success while logging "stopping the other" would strand a
-              // `yarn serve || alert` caller with no alert.
+              // `npm run serve || alert` caller with no alert.
               exitCode = code === null || code === 0 ? 1 : code;
               log(`${name} exited (${signal ?? `code ${code ?? 'unknown'}`}); stopping the other.`);
             } else if (code !== null && code !== 0 && exitCode === 0) {

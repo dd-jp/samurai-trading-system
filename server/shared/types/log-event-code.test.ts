@@ -4,7 +4,7 @@
  * PRESENCE is the compiler's job: `LogEntry` is a union on `level`, so a
  * `warn`/`error` line with no `event` does not type-check. The
  * `@ts-expect-error` block below is what makes that testable — relax the
- * union and the suppressions become unused, which `yarn typecheck` reports as
+ * union and the suppressions become unused, which `npm run typecheck` reports as
  * an error. It fails in `tsc -p tsconfig.test.json`, not in `vitest`.
  *
  * SPELLING is this file's runtime half. `LogEventCode` is deliberately not a

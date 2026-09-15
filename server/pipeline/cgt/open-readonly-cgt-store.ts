@@ -1,5 +1,5 @@
 /**
- * Review round 1, check 4: `yarn report:cgt` must never take a write handle
+ * Review round 1, check 4: `npm run report:cgt` must never take a write handle
  * on the live-money store, and must never run migrations against it — both
  * of which `openSharedStore` does (WAL/pragma setup plus `runMigrations`),
  * possibly while the orchestrator holds the same file open. This opens the

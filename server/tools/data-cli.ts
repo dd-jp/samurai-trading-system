@@ -1,5 +1,5 @@
 /**
- * One entry point for the data-loading jobs — `yarn data <command>`.
+ * One entry point for the data-loading jobs — `npm run data -- <command>`.
  *
  * Replaces two near-identical `package.json` scripts (`ingest-history`,
  * `backfill-market-data`) that differed only in which file they pointed at.
@@ -37,7 +37,7 @@ const COMMANDS: Readonly<Record<string, () => Promise<void>>> = {
 
 function usage(): string {
   return (
-    'Usage: yarn data <command>\n\n' +
+    'Usage: npm run data -- <command>\n\n' +
     'Commands:\n' +
     '  ingest-history         Stage-2 research history from Tiingo into the\n' +
     '                         scratch database (re-runs are free once covered).\n' +
@@ -52,7 +52,7 @@ export async function main(argv: readonly string[]): Promise<void> {
 
   if (command === undefined || command === '--help' || command === '-h') {
     // Not an error when asked for explicitly; an error when simply omitted,
-    // because a bare `yarn data` that silently did nothing would read as
+    // because a bare `npm run data` that silently did nothing would read as
     // success.
     console.log(usage());
     process.exitCode = command === undefined ? 1 : 0;

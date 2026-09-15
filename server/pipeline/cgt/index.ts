@@ -2,7 +2,7 @@
  * #1518 — UK CGT disposal-matching recordkeeping for the live Saxo GIA
  * equity leg. NOT tax advice — see `docs/cgt-disposal-matching.md`.
  *
- * `server/tools/report-cgt-disposals.ts` (`yarn report:cgt`) is the caller.
+ * `server/tools/report-cgt-disposals.ts` (`npm run report:cgt`) is the caller.
  */
 export {
   ANNUAL_EXEMPT_AMOUNT_GBP,

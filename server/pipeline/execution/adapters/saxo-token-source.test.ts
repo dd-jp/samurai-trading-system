@@ -269,7 +269,7 @@ describe('SaxoTokenRefresher', () => {
     await expect(refresher.getAccessToken()).rejects.toBeInstanceOf(SaxoSessionLostError);
     expect(refresher.sessionState()).toMatchObject({ status: 'lost' });
     expect(entries.map((entry) => entry.event)).toContain('saxo_session_lost');
-    expect(JSON.stringify(entries)).toContain('yarn saxo:login');
+    expect(JSON.stringify(entries)).toContain('npm run saxo:login');
   });
 
   it('posts to sessionLostAlerts exactly once per instance, even across repeated failed calls (#1524)', async () => {
@@ -283,7 +283,7 @@ describe('SaxoTokenRefresher', () => {
     expect(sessionLostAlerts.alerts).toHaveLength(1);
     expect(sessionLostAlerts.alerts[0]).toMatchObject({
       environment: 'sim',
-      reason: expect.stringContaining('yarn saxo:login'),
+      reason: expect.stringContaining('npm run saxo:login'),
     });
   });
 
@@ -293,7 +293,7 @@ describe('SaxoTokenRefresher', () => {
     await expect(firstRefresher.getAccessToken()).rejects.toBeInstanceOf(SaxoSessionLostError);
     expect(first.alerts).toHaveLength(1);
 
-    // A fresh `yarn saxo:login` writes a usable session; the restarted process
+    // A fresh `npm run saxo:login` writes a usable session; the restarted process
     // gets a brand-new `SaxoTokenRefresher`, which is the only way `lostReason`
     // is ever cleared — see `SaxoSessionLostAlert`'s doc.
     writeTokenFile(path, savedRecord());
@@ -474,7 +474,7 @@ describe('SaxoTokenRefresher', () => {
    * Shutdown joins an in-flight rotation. The gateway invalidated the previous
    * refresh token when it issued this one, so a process that exits between
    * receipt and `rename` has no working token at all on its next boot — the
-   * operator has to run `yarn saxo:login` again. `stop()` resolving early is
+   * operator has to run `npm run saxo:login` again. `stop()` resolving early is
    * that exit: `buildShutdownHandler` calls `exit(0)` the moment it does.
    */
   it('does not resolve stop() until a rotation in flight has been written to disk', async () => {

@@ -190,7 +190,7 @@ function parseArmParam(
  * anticipated or a file that has no business being fetched, and 404 is the
  * honest answer to both. Everything Vite emits for this app is here
  * (`.js`/`.css`/`.svg`/`.woff2`/`.woff` assets, `.map` sourcemaps,
- * `index.html`) — verified against a real `yarn build:web` output, not
+ * `index.html`) — verified against a real `npm run build:web` output, not
  * assumed: `@fontsource` emits a `.woff` fallback beside every `.woff2` and
  * the built CSS references it 36 times, so the ticket's five-entry map would
  * have 404'd every font on a browser without woff2 support.
@@ -262,7 +262,7 @@ export function resolveBundlePath(root: string, urlPath: string): string | null 
  * Two distinct failures, because they have different fixes and only one of
  * them is visible as a missing file:
  *
- *  1. **No `index.html`.** Nobody ran `yarn build:web`. A bare 404 is the most
+ *  1. **No `index.html`.** Nobody ran `npm run build:web`. A bare 404 is the most
  *     confusing outcome the v2 changeover can produce — the process boots,
  *     `/api/snapshot` works, the page is blank — so this names the path and
  *     the command.
@@ -286,7 +286,7 @@ export function bundleDiagnostic(root: string): string | null {
     return (
       `Dashboard bundle not found: ${indexPath} does not exist.\n` +
       'The React client is built ahead of time and served from disk (ADR-0010).\n' +
-      'Run `yarn build` (or `yarn build:web`) and reload. `GET /api/snapshot` is\n' +
+      'Run `npm run build` (or `npm run build:web`) and reload. `GET /api/snapshot` is\n' +
       'unaffected and still serving JSON.\n'
     );
   }
@@ -298,7 +298,7 @@ export function bundleDiagnostic(root: string): string | null {
       '(`tsx server/apps/service-api/index.ts`) points at; the built bundle lives\n' +
       'in `dist/client/` and is what `node dist/server/apps/service-api/index.js`\n' +
       'resolves.\n' +
-      'Run `yarn build` and start from `dist/`. `GET /api/snapshot` is unaffected.\n'
+      'Run `npm run build` and start from `dist/`. `GET /api/snapshot` is unaffected.\n'
     );
   }
   return null;

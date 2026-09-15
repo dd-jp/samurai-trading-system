@@ -12,7 +12,7 @@
  * manager or OS-level supervision — no `pm2`/`nodemon`/`forever` dependency
  * in `package.json`, no `.plist`/`.service` file anywhere in the repo, no
  * `launchctl`/`systemctl`/`crontab` reference in the docs. README documents
- * exactly one way to run this: `yarn start` / `yarn serve` in a foreground
+ * exactly one way to run this: `npm start` / `npm run serve` in a foreground
  * terminal, stopped by Ctrl-C. If this process exits on an arbitrary fault, the system
  * stays down until a human notices and restarts it by hand — for a live-money
  * system that is a worse outcome than the fault itself. That is the
@@ -32,7 +32,7 @@
  * the `running`/`shuttingDown`/`settle` closure in `supervisor.ts` — between
  * a child's `'exit'` and `shutdown()`'s `child.kill()` loop — a later Ctrl-C
  * might not reach both children, and `done` might never resolve, hanging
- * `yarn serve` with both children still live. That is still strictly better
+ * `npm run serve` with both children still live. That is still strictly better
  * than the alternative this ticket is deciding against: exiting the
  * supervisor turns that same fault into a hard SIGTERM race against whichever
  * child is mid-drain, which is the exact orphaned-verdict shape #209 exists to

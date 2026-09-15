@@ -113,7 +113,7 @@ export interface ControlArmAccountStateProviderInput {
    *
    * A resolver rather than a constant because the anchor has to be the LIVE
    * arm's starting equity, and that is not known at construction. It was a
-   * constant (`LIVE_BOOK_GBP`) in this module's first version, and `yarn smoke`
+   * constant (`LIVE_BOOK_GBP`) in this module's first version, and `npm run smoke`
    * caught what that costs — measured BEFORE #1112, when paper's
    * `capitalCeilingUsd` did not exist and neither arm's Trader ask was
    * clamped: the live arm sized off its full ~$100,000 broker equity while a

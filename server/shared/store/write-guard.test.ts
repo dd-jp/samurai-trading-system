@@ -13,7 +13,7 @@ import {
 } from './write-guard.js';
 
 describe('isStoreWriteGuardEnabled', () => {
-  it('is on for an unset NODE_ENV — `yarn smoke` runs with none', () => {
+  it('is on for an unset NODE_ENV — `npm run smoke` runs with none', () => {
     expect(isStoreWriteGuardEnabled({})).toBe(true);
   });
 
@@ -173,7 +173,7 @@ describe('STAGE_OWNED_TABLES', () => {
   it('declares exactly the stages on STORE_OWNER_STAGES', () => {
     // The runtime half. The compile-time half is the
     // `Record<StoreOwnerStage, …>` annotation on the declaration itself, which
-    // fails `yarn typecheck` in BOTH directions (verified by experiment — see
+    // fails `npm run typecheck` in BOTH directions (verified by experiment — see
     // that binding's doc comment).
     expect(Object.keys(STAGE_OWNED_TABLES).sort()).toEqual([...STORE_OWNER_STAGES].sort());
   });

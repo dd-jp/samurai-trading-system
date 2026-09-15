@@ -169,7 +169,7 @@ describe('the cold-store first pass (#1543)', () => {
     await runTechnicalPass(harness);
 
     // Measured, not quoted: `service.ts`'s own AC3 comment records EIGHT
-    // windows from a `yarn smoke` run, but that fixture cannot serve the
+    // windows from a `npm run smoke` run, but that fixture cannot serve the
     // deeper 5m windows, so its narrower specs missed on row COUNT rather
     // than on freshness. Against history deep enough to satisfy every
     // window — which is what a real cold venue is — the narrow 5m specs

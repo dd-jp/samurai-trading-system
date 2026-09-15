@@ -377,7 +377,7 @@ function countCostBasisDrops(
  * refused.** Every row written before migration 0045 was sized against the
  * paper broker's funded equity (~$100,000) rather than the declared book, so
  * a NULL row is not an unknown scale — it is a KNOWN-WRONG one, ~100x. The
- * daily cycle (production.ts) and `yarn report:arms` both window backwards
+ * daily cycle (production.ts) and `npm run report:arms` both window backwards
  * from now on a fixed `window_ms`, so the first window after this migration
  * ships necessarily straddles the cutover; refusing it would produce no
  * comparison at all for a full window, exactly when #1112's corrected sizing

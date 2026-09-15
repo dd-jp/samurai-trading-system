@@ -4,7 +4,7 @@
  *
  * `sharedStorePath()` (src/shared/store/open-shared-store.ts) resolves to
  * `data/samurai-{mode}.sqlite` RELATIVE to the process cwd, and vitest's cwd is
- * the repo root — the same file a live `yarn orchestrator` is holding open. On
+ * the repo root — the same file a live `npm run orchestrator` is holding open. On
  * 2026-08-06 `startup.test.ts` opened and then `rmSync`-ed that exact path
  * while a paper run was mid-flight. Nothing failed visibly: the orchestrator
  * and the dashboard both kept writing to the now-unlinked inode, so the damage
@@ -86,7 +86,7 @@ export default function setup(): () => void {
     // Throwing from a `globalSetup` teardown is reported ("error during close")
     // but does NOT fail the run — measured on vitest 4.1.10, exit code 0 with a
     // deliberately offending probe test. A guard that reports a live-store wipe
-    // and then exits green is worse than no guard, because `yarn precommit` and
+    // and then exits green is worse than no guard, because `npm run precommit` and
     // CI both read the exit code and nothing else. So the exit code is set
     // here, and the throw is kept only because it is what prints the message.
     process.exitCode = 1;

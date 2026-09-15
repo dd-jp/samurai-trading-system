@@ -233,7 +233,7 @@ export class RateLimiter {
    * Added by #388 for one reason worth naming, because "expose internals for a
    * test" would be a bad one. #388 IS this class having no production caller,
    * and the check that would have caught that is not a unit test — every unit
-   * test passed while nothing constructed it. It is `yarn smoke`'s gate, which
+   * test passed while nothing constructed it. It is `npm run smoke`'s gate, which
    * asserts on observable effects of a real process (see #364's `debate_log`
    * assertion, whose mutation was invisible to all 1600+ unit tests). A
    * counter that stays at zero after a run that debated is the only cheap,

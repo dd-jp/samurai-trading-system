@@ -8,7 +8,7 @@
 // inferred project with default compiler options, and reported 40 phantom
 // errors per file: `Cannot find name 'describe'` (ts2593/ts2582),
 // `Cannot find name 'expect'` (ts2304). Nothing was wrong with the tests —
-// `yarn typecheck` was green throughout — but the editor could not see it.
+// `npm run typecheck` was green throughout — but the editor could not see it.
 //
 // With `references`, tsserver finds the file in a referenced project and loads
 // THAT project's options, so tests get `vitest/globals` and `server/` keeps the
@@ -30,7 +30,7 @@
 // file exists to prevent.
 //
 // Neither referenced project sets `composite: true`, because nothing builds
-// through this file — `yarn build` and `yarn typecheck` invoke the two projects
+// through this file — `npm run build` and `npm run typecheck` invoke the two projects
 // directly with `-p`. Editor resolution does not need it (verified against
 // tsserver: test files report `tsconfig.test.json`, `server/` files report
 // `tsconfig.build.json`). `tsc -b` WOULD need it, so add it there if a

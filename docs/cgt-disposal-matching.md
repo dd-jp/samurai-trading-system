@@ -203,8 +203,8 @@ lines. See "Currency" above.
 ## Running the report
 
 ```
-yarn report:cgt                      # current UK tax year, against SAMURAI_MODE's store
-yarn report:cgt -- --tax-year 2024-25
+npm run report:cgt                      # current UK tax year, against SAMURAI_MODE's store
+npm run report:cgt -- --tax-year 2024-25
 ```
 
 The report prints the store mode and path on every run, and refuses outright

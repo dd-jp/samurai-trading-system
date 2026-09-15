@@ -9,7 +9,7 @@
 //
 // Kept as a second config rather than by widening `tsconfig.build.json`'s
 // `include` so the build's emit surface stays exactly the shipped code. Run via
-// `yarn typecheck`, which runs both. The root `tsconfig.json` references this
+// `npm run typecheck`, which runs both. The root `tsconfig.json` references this
 // project so editors resolve test files to it — see that file.
 {
   "extends": "./tsconfig.build.json",

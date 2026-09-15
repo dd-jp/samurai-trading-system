@@ -509,7 +509,7 @@ function healthyFilledZeroSizeWedge(
         // Hardcoded, not `ALERT_AFTER_CONSECUTIVE_ZERO_SIZE`, on purpose
         // (#1125 review) — importing the constant here would make a mutation
         // that changes it (e.g. 3 -> 4) pass this unit suite silently,
-        // leaving `yarn test`'s only coverage of that mutation the 19 tests
+        // leaving `npm run test`'s only coverage of that mutation the 19 tests
         // across `filled-zero-size-throttle.test.ts` and friends that already
         // catch it. Do not "tidy" this into a reference to the constant.
         consecutive: 3,
@@ -1871,7 +1871,7 @@ describe('FixedAccountStateProvider', () => {
 describe('smoke-mode containment (#293/#320/#324)', () => {
   /**
    * The safety property the ticket asks for in one assertion: it must be
-   * impossible for `yarn orchestrator` to select fixtures or the simulated
+   * impossible for `npm run orchestrator` to select fixtures or the simulated
    * broker. `smoke-run.ts` is a leaf — nothing on the shipped entrypoint's
    * import graph reaches it, and nothing on the package's export surface names
    * it. Re-exporting any of it from the barrel would make it reachable, so
@@ -2043,7 +2043,7 @@ describe('runSmoke (end-to-end, real composition root)', () => {
    * five different things did not happen.
    *
    * The end-to-end version of this is a manual mutation (starve
-   * `buildSmokeFixtureBars`, rebuild, run `yarn smoke`, observe exit 1) and is
+   * `buildSmokeFixtureBars`, rebuild, run `npm run smoke`, observe exit 1) and is
    * recorded in the PR body — it cannot be expressed here without giving
    * `runSmoke` a seam whose only purpose would be to weaken the run.
    */
@@ -3080,7 +3080,7 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
   describe('the risk critic (#957)', () => {
     it('fails when no risk_critic_log row was written for a viable entry', () => {
       // The mutation this check exists to catch, verified by hand: delete the
-      // `critic:` line from `buildProductionComponents` and `yarn smoke` goes
+      // `critic:` line from `buildProductionComponents` and `npm run smoke` goes
       // red here, while every unit test stays green.
       const gate = evaluateSmokeGate(
         transactedObservations(),
@@ -3280,7 +3280,7 @@ describe('evaluateSmokeGate — exit path (#576)', () => {
 // gate closes that gap by also checking `.reason` off the SAME lookup
 // result, so — unlike the extraction's original claim — the wrong-key call
 // site IS now covered: substituting the wrong key at `findSweepDivergence`'s
-// call site fails `yarn smoke`'s gate (`sweepDivergenceReason` does not name
+// call site fails `npm run smoke`'s gate (`sweepDivergenceReason` does not name
 // the #549 sweep), because both fields the gate checks come off the one
 // lookup this function performs. Pinned here, top-level and never through
 // `gateFor`/`evaluateSmokeGate`, against a hand-built divergence list, so

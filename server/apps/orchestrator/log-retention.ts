@@ -68,11 +68,11 @@
  *
  * - **Descriptor identity.** This process's own stdout/stderr (fd 1 and 2)
  *   may BE one of these files: directly, under a shell redirect
- *   (`yarn orchestrator > logs/orchestrator-DATE.log`), or indirectly, under
+ *   (`npm run orchestrator > logs/orchestrator-DATE.log`), or indirectly, under
  *   the supervisor's `stdio: 'inherit'` — a spawned child inherits its
  *   parent's descriptors verbatim, so the orchestrator's fd 1/2 are the exact
  *   same open file as the supervisor's own redirect target
- *   (`supervisor-*.log`) when launched via `yarn serve`. `fstatSync` on those
+ *   (`supervisor-*.log`) when launched via `npm run serve`. `fstatSync` on those
  *   two descriptors and comparing `{dev, ino}` against each candidate file
  *   catches both cases without knowing either filename in advance. A
  *   descriptor that is a TTY, a pipe, or closed (`EBADF`) simply contributes
@@ -81,7 +81,7 @@
  * - **Recency.** Anything this process cannot identify by descriptor — most
  *   concretely, a sibling process's own redirect target when it is not the
  *   parent or child of this one (`service-api.log` from a dashboard started
- *   standalone, outside `yarn serve`) — is judged by mtime instead: a process
+ *   standalone, outside `npm run serve`) — is judged by mtime instead: a process
  *   still appending to a file keeps moving its mtime forward, so "not written
  *   to inside the retention window" is the operative definition of dead for a
  *   file this process has no other way to identify.
@@ -238,7 +238,7 @@
  * deployment target), and, on Linux ext4 (CI's `ubuntu-latest`, the `checks`
  * job in `.github/workflows/ci.yml`), the regression test named below —
  * which asserts the exact same numeric behaviour, not a proxy for it —
- * passing there as part of every `yarn test` run this PR's CI performs. Gating on
+ * passing there as part of every `npm run test` run this PR's CI performs. Gating on
  * `stat.size` instead would see that recovered apparent length, truncate
  * again on the very next boot, and destroy whatever the writer had appended
  * since the previous one — every boot after the first, for as long as the

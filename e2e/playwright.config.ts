@@ -28,9 +28,9 @@ import { resolveE2ePort } from './support/port.ts';
 
 const HOST = '127.0.0.1';
 /**
- * Drawn fresh per `yarn e2e` invocation via `resolveE2ePort` (#1298) — never a
+ * Drawn fresh per `npm run e2e` invocation via `resolveE2ePort` (#1298) — never a
  * fixed number like the old `8788`, which made two checkouts running
- * `yarn e2e` at once collide outright. This is the suite's single port
+ * `npm run e2e` at once collide outright. This is the suite's single port
  * source: `BASE_URL` below and `webServer.env.PORT` both derive from this one
  * value, and nothing else in the e2e suite holds a copy of it.
  *
@@ -54,7 +54,7 @@ const BASE_URL = `http://${HOST}:${PORT}`;
 /**
  * Repo root, resolved from THIS FILE rather than from `process.cwd()`: the
  * server builds and serves out of the checkout the config lives in, whatever
- * directory `yarn e2e` was invoked from.
+ * directory `npm run e2e` was invoked from.
  */
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 
@@ -94,7 +94,7 @@ export default defineConfig({
   webServer: {
     // Builds what it serves: the point of this suite is the real bundle, and a
     // stale `dist/` would test bytes nobody is shipping.
-    command: 'yarn build && node dist/server/apps/service-api/fixture-server.js',
+    command: 'npm run build && node dist/server/apps/service-api/fixture-server.js',
     cwd: repoRoot,
     url: `${BASE_URL}/api/snapshot`,
     // `tsc` + `vite build` from cold; the 60s default is not enough.

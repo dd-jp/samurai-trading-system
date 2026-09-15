@@ -1203,7 +1203,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
       `Samurai SAXO SESSION LOST (${alert.environment}): ${alert.reason}\n` +
       `Detected ${alert.reported_at.toISOString()}.\n` +
       'No order can reach this venue until a fresh session is established. Run ' +
-      `\`yarn saxo:login --env ${alert.environment}\` to log in again.`,
+      `\`npm run saxo:login -- --env ${alert.environment}\` to log in again.`,
     sendFailed: (alert, error) => ({
       trace_id: 'saxo-token',
       stage: 'orchestrator',
@@ -1239,7 +1239,7 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
     text: (alert) =>
       `Samurai SAXO WEEKLY RE-LOGIN REMINDER (${alert.environment}): Saxo recommends logging in ` +
       'by hand at least once a week — run ' +
-      `\`yarn saxo:login --env ${alert.environment}\` before Monday's open.\n` +
+      `\`npm run saxo:login -- --env ${alert.environment}\` before Monday's open.\n` +
       (alert.last_logged_in_at === undefined
         ? 'The current saved session has no recorded manual login (predates this reminder, or ' +
           'none has been run yet).\n'

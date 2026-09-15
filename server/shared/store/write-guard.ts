@@ -173,7 +173,7 @@ export interface StoreWriteGuardEnvironment {
  * testable rather than an inline `process.env` read scattered through the
  * construction sites.
  *
- * On everywhere except a real production or live-money run. `yarn smoke` runs
+ * On everywhere except a real production or live-money run. `npm run smoke` runs
  * with no `NODE_ENV` at all, which is why the unset case is ON rather than
  * off: the smoke gate driving the real composition root is where this earns
  * its keep. A PAPER run is also guarded on purpose — paper is the rehearsal,

@@ -93,7 +93,7 @@ function armAriaLabel(
  * bundle) could fall through to the healthy branch by simply not being
  * `'contract-mismatch'`. `rendersHealthTiles` makes that a required field of
  * every entry here, so a new `FeedStatus` member forces a typed decision at
- * `yarn typecheck` time instead of an implicit "yes" by omission.
+ * `npm run typecheck` time instead of an implicit "yes" by omission.
  *
  * `announce` is that same lesson applied to the one literal comparison still
  * left outside this record after #1316 — `HealthBlock`'s `role=` attribute,

@@ -56,7 +56,7 @@
  *
  * ## Usage
  *
- *   yarn classify:debate-termination --log <path>[,<path>...] [--since ISO] [--until ISO] [--db <path>] [--apply]
+ *   npm run classify:debate-termination -- --log <path>[,<path>...] [--since ISO] [--until ISO] [--db <path>] [--apply]
  *
  * `--log` accepts multiple JSONL orchestrator log files (comma-separated or
  * repeated) — a rotated log means the window an operator cares about can span
