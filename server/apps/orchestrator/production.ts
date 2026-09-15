@@ -4114,13 +4114,29 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
       // point-in-time determinism, so a prefetch could only double every
       // replay read.
       if (config.mode !== 'backtest') {
-        await prefetchBars({
+        const prefetch = await prefetchBars({
           marketData: components.marketData,
           universe: components.universe,
           asOf: clock.now(),
           logger,
           traceId: 'startup',
         });
+        // `bar_prefetch_complete` already warns on a PARTIAL failure; this is
+        // the distinct case where NOTHING warmed and the tick loop is about to
+        // arm on exactly the cold store #1543 exists to avoid.
+        if (prefetch.warmed === 0 && prefetch.failed > 0) {
+          logger.log({
+            trace_id: 'startup',
+            stage: 'market_data',
+            event: 'bar_prefetch_total_failure',
+            level: 'error',
+            message:
+              `bar prefetch warmed ZERO of ${prefetch.failed} (instrument, window) pair(s) — ` +
+              'the tick loop is about to arm on a completely cold store; the first tick will pay ' +
+              'the full cold sweep this ticket exists to avoid',
+            payload: { failed: prefetch.failed },
+          });
+        }
       }
 
       loop = startTickLoop({

@@ -26,6 +26,7 @@ import {
   type DataSource,
   FixtureDataSource,
   type Mark,
+  type MarketDataService,
   MarketDataServiceImpl,
   type Quote,
   SqliteMarketDataStore,
@@ -305,5 +306,52 @@ describe('what the cold sweep costs against the derived deadline (#1543 premise)
     await runTechnicalPass(warm);
 
     expect(warm.source.windows).toHaveLength(0);
+  });
+});
+
+describe('prefetchBars fail-soft per (instrument, window) pair', () => {
+  it('does not throw when getBars fails for one pair, counts it as failed, still warms the rest, and logs the failure', async () => {
+    const logger = new SilentLogger();
+    const windows: readonly BarWindow[] = [
+      { timeframe: '5m', lookback: 10 },
+      { timeframe: '1h', lookback: 20 },
+    ];
+    const universe: readonly UniverseInstrument[] = [
+      { asset: 'SPY', asset_class: 'stocks' },
+      { asset: 'QQQ', asset_class: 'stocks' },
+    ];
+    const calls: string[] = [];
+    const marketData: Pick<MarketDataService, 'getBars'> = {
+      getBars: async (instrument, window) => {
+        calls.push(`${instrument}/${window.timeframe}/${window.lookback}`);
+        if (instrument === 'SPY' && window.timeframe === '5m') {
+          throw new Error('venue unreachable');
+        }
+        return [];
+      },
+    };
+
+    const result = await prefetchBars({
+      marketData,
+      universe,
+      asOf: ASOF,
+      logger,
+      traceId: 'startup',
+      windows,
+    });
+
+    expect(result).toEqual({ warmed: 3, failed: 1 });
+    // Every pair was attempted — the one failure did not short-circuit the loop.
+    expect(calls).toEqual(['SPY/5m/10', 'SPY/1h/20', 'QQQ/5m/10', 'QQQ/1h/20']);
+
+    const failureEntry = logger.entries.find(
+      (entry) => entry.event === 'bar_prefetch_window_failed',
+    );
+    expect(failureEntry).toBeDefined();
+    expect(failureEntry?.payload).toMatchObject({
+      instrument: 'SPY',
+      timeframe: '5m',
+      lookback: 10,
+    });
   });
 });
