@@ -63,6 +63,8 @@ export const ALERT_IDS = [
   'llmFailureRateAlerts',
   'nonSterlingFeeAlerts',
   'unattributedFlattenFillAlerts',
+  'saxoSessionLostAlerts',
+  'saxoWeeklyReminderAlerts',
 ] as const satisfies readonly (keyof AlertChannelSlots)[];
 
 export type AlertId = (typeof ALERT_IDS)[number];
@@ -81,6 +83,7 @@ export const UNLOGGED_ALERT_IDS = [
   'exitValuationAlerts',
   'nonSterlingFeeAlerts',
   'unattributedFlattenFillAlerts',
+  'saxoSessionLostAlerts',
 ] as const satisfies readonly AlertId[];
 
 export type UnloggedAlertId = (typeof UNLOGGED_ALERT_IDS)[number];
@@ -1097,6 +1100,57 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
       `Fill ${alert.broker_fill_id} is booked, but that lot's closed trade understates the sale — ` +
       'check the venue for a REVERSE position no open lot explains, and correct the realized ' +
       'record by hand.',
+  },
+
+  saxoSessionLostAlerts: {
+    method: 'postSaxoSessionLostAlert',
+    delivery: 'detached',
+    text: (alert) =>
+      `Samurai SAXO SESSION LOST (${alert.environment}): ${alert.reason}\n` +
+      `Detected ${alert.reported_at.toISOString()}.\n` +
+      'No order can reach this venue until a fresh session is established. Run ' +
+      `\`yarn saxo:login --env ${alert.environment}\` to log in again.`,
+    sendFailed: (alert, error) => ({
+      trace_id: 'saxo-token',
+      stage: 'orchestrator',
+      event: 'saxo_session_lost_alert_send_failed',
+      level: 'error',
+      message: 'Saxo session-lost alert failed to send — the session is still lost',
+      payload: {
+        environment: alert.environment,
+        reason: alert.reason,
+        reported_at: alert.reported_at.toISOString(),
+        error: describeThrownSafely(error),
+      },
+    }),
+  },
+
+  saxoWeeklyReminderAlerts: {
+    method: 'postSaxoWeeklyReminderAlert',
+    delivery: 'awaited',
+    // `warn`: nothing has failed, this is a standing reminder Saxo itself
+    // recommends (see saxo-weekly-reminder-alert.ts's module doc).
+    log: (alert) => ({
+      trace_id: 'saxo-weekly-reminder',
+      stage: 'orchestrator',
+      event: 'saxo_weekly_relogin_reminder',
+      level: 'warn',
+      message: `weekly Saxo ${alert.environment} re-login reminder due. ${LOG_ONLY_CANNOT_PAGE}`,
+      payload: {
+        environment: alert.environment,
+        last_logged_in_at: alert.last_logged_in_at ?? null,
+        reported_at: alert.reported_at.toISOString(),
+      },
+    }),
+    text: (alert) =>
+      `Samurai SAXO WEEKLY RE-LOGIN REMINDER (${alert.environment}): Saxo recommends logging in ` +
+      'by hand at least once a week — run ' +
+      `\`yarn saxo:login --env ${alert.environment}\` before Monday's open.\n` +
+      (alert.last_logged_in_at === undefined
+        ? 'The current saved session has no recorded manual login (predates this reminder, or ' +
+          'none has been run yet).\n'
+        : `The current session was last established by a manual login at ${alert.last_logged_in_at}.\n`) +
+      `Sent ${alert.reported_at.toISOString()}.`,
   },
 };
 

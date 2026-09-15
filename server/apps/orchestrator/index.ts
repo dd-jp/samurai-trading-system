@@ -98,6 +98,7 @@ import {
   resolveBrokerVenue,
   saxoTradeableUniverse,
 } from './production/saxo-venue.js';
+import { SaxoWeeklyReminder } from './production/saxo-weekly-reminder-alert.js';
 import { resolveUsEquitySessionCalendar } from './production/us-equity-session-source.js';
 import {
   buildProductionOrchestrator,
@@ -858,13 +859,43 @@ export async function startFromEnvironment(
   // for the same reason the client is built once: the refresher owns the saved
   // session file, and two of them would rotate the same refresh token against
   // each other. Whoever builds the client builds this.
-  const saxoTokenSource =
-    venue === 'saxo' && injected.broker === undefined && injected.saxoBrokerClient === undefined
-      ? buildSaxoTokenSource('sim', logger)
-      : undefined;
+  const saxoIsOwnedHere =
+    venue === 'saxo' && injected.broker === undefined && injected.saxoBrokerClient === undefined;
+
+  // #1524. No forced log-only default (unlike `legResizeAlerts` etc. below):
+  // `saxoSessionLostAlerts` has no log-only form — `lose()`'s own
+  // `saxo_session_lost` line already covers that mode — so an absent channel
+  // here is the correct `log-only` posture, not a gap.
+  const saxoSessionLostAlerts =
+    injected.saxoSessionLostAlerts ?? alertChannels.saxoSessionLostAlerts;
+
+  const saxoTokenSource = saxoIsOwnedHere
+    ? buildSaxoTokenSource('sim', logger, {
+        ...(saxoSessionLostAlerts === undefined
+          ? {}
+          : { sessionLostAlerts: saxoSessionLostAlerts }),
+      })
+    : undefined;
 
   const saxoClient =
     saxoTokenSource === undefined ? undefined : buildSaxoVenueClient(logger, saxoTokenSource);
+
+  // #1524's other half — the weekly reminder. Scoped to the same condition as
+  // `saxoTokenSource` above: a caller that injected its own broker/client has
+  // already chosen its Saxo wiring, and this nudge belongs to the token file
+  // this process itself owns, not to one it never reads.
+  const saxoWeeklyReminder = saxoIsOwnedHere
+    ? new SaxoWeeklyReminder({
+        environment: 'sim',
+        tokenPath: tokenFilePath('sim'),
+        channel:
+          injected.saxoWeeklyReminderAlerts ??
+          alertChannels.saxoWeeklyReminderAlerts ??
+          loggingAlertChannel('saxoWeeklyReminderAlerts', logger),
+        logger,
+        clock,
+      })
+    : undefined;
 
   // The GBP-native funding read. Skipped when the caller supplied a whole
   // `accountState` or its own funding source, so this never fires under a test
@@ -990,9 +1021,13 @@ export async function startFromEnvironment(
   const started =
     saxoTokenSource === undefined
       ? orchestrator
-      : withSaxoSessionStop(orchestrator, saxoTokenSource);
+      : withSaxoSessionStop(orchestrator, saxoTokenSource, saxoWeeklyReminder);
 
   const orphans = await orchestrator.start();
+  // Armed after a successful boot, not at construction: a boot that throws
+  // before this line (a refused credential, a currency mismatch) should not
+  // leave a reminder timer running against an orchestrator that never started.
+  saxoWeeklyReminder?.start();
   orchestrator.logger.log({
     trace_id: 'startup',
     stage: 'orchestrator',
@@ -1034,16 +1069,25 @@ export async function startFromEnvironment(
  * copying them carries no `this` binding to lose. Exported so that spread —
  * the one wiring line no `startFromEnvironment` test can reach offline — is
  * testable.
+ *
+ * `weeklyReminder` (#1524) is stopped alongside the token source, same order
+ * reasoning as `tokenSource`: it is a plain `unref`'d timer, so stopping it
+ * first or last costs nothing correctness-wise, but folding it in here (rather
+ * than a separate wrapper) keeps `startFromEnvironment` from needing two spread
+ * layers for one shutdown. Optional and defaulted so the existing two-argument
+ * call shape — and every test written against it — keeps working unchanged.
  */
 export function withSaxoSessionStop(
   orchestrator: ProductionOrchestrator,
   tokenSource: SaxoTokenSource,
+  weeklyReminder?: SaxoWeeklyReminder,
 ): ProductionOrchestrator {
   return {
     ...orchestrator,
     stop: async () => {
       await orchestrator.stop();
       await tokenSource.stop();
+      weeklyReminder?.stop();
     },
   };
 }
