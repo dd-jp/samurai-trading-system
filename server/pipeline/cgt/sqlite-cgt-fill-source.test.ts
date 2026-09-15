@@ -66,10 +66,11 @@ function seedFill(
   timestamp: Date,
   feeCurrency: string | null = null,
   fxRateToGbp: number | null = null,
+  fxRateToGbpSource: string | null = null,
 ): void {
   db.prepare(
-    `INSERT INTO fills (idempotency_key, broker_fill_id, leg, price, qty, fee, timestamp, fee_currency, fx_rate_to_gbp)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO fills (idempotency_key, broker_fill_id, leg, price, qty, fee, timestamp, fee_currency, fx_rate_to_gbp, fx_rate_to_gbp_source)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     key,
     brokerFillId,
@@ -80,6 +81,7 @@ function seedFill(
     toStoredTimestamp(timestamp),
     feeCurrency,
     fxRateToGbp,
+    fxRateToGbpSource,
   );
 }
 
@@ -207,8 +209,32 @@ describe('SqliteCgtFillSource — currency handling (#1518 review round 1, findi
   it('routes a non-GBP/GBX fee (e.g. USD) to the unconverted list, in native currency, rather than aborting the report or inventing an FX rate', () => {
     const db = openSharedStore(':memory:');
     seedClosedTrade(db, 'usd-1', 'LSE:TEST', 'stocks', 'buy', 'live');
-    seedFill(db, 'usd-1', 'f1', 'entry', 100, 10, 1, new Date('2025-06-02T08:05:00Z'), 'USD');
-    seedFill(db, 'usd-1', 'f2', 'target', 120, 10, 2, new Date('2025-06-02T14:00:00Z'), 'USD');
+    seedFill(
+      db,
+      'usd-1',
+      'f1',
+      'entry',
+      100,
+      10,
+      1,
+      new Date('2025-06-02T08:05:00Z'),
+      'USD',
+      null,
+      'not_reported_by_venue',
+    );
+    seedFill(
+      db,
+      'usd-1',
+      'f2',
+      'target',
+      120,
+      10,
+      2,
+      new Date('2025-06-02T14:00:00Z'),
+      'USD',
+      null,
+      'not_reported_by_venue',
+    );
 
     const { legs, unconverted } = new SqliteCgtFillSource(db).getLiveEquityFillLegs();
 
@@ -217,8 +243,83 @@ describe('SqliteCgtFillSource — currency handling (#1518 review round 1, findi
     expect(unconverted.every((f) => f.currency === 'USD')).toBe(true);
     expect(unconverted.find((f) => f.kind === 'acquisition')?.grossAmount).toBe(1000);
     expect(unconverted.find((f) => f.kind === 'disposal')?.grossAmount).toBe(1200);
+    // #1521 round 1 review: the report's UNCONVERTED section must be able to
+    // say WHY a fill has no rate, not just that it doesn't.
+    expect(unconverted.every((f) => f.fxRateToGbpSource === 'not_reported_by_venue')).toBe(true);
   });
 
+  it('falls back to a distinct reason when a fill predates fx_rate_to_gbp_source entirely (no row value at all)', () => {
+    const db = openSharedStore(':memory:');
+    seedClosedTrade(db, 'usd-legacy-1', 'LSE:TEST', 'stocks', 'buy', 'live');
+    seedFill(
+      db,
+      'usd-legacy-1',
+      'f1',
+      'entry',
+      100,
+      10,
+      1,
+      new Date('2025-06-02T08:05:00Z'),
+      'USD',
+    );
+
+    const { unconverted } = new SqliteCgtFillSource(db).getLiveEquityFillLegs();
+
+    expect(unconverted).toHaveLength(1);
+    expect(unconverted[0].fxRateToGbpSource).toBe('no_rate_stored');
+  });
+
+  it('refuses to convert on a zero or negative stored rate, listing the fill unconverted instead of zeroing or sign-flipping it', () => {
+    const db = openSharedStore(':memory:');
+    seedClosedTrade(db, 'usd-zero-1', 'LSE:TEST', 'stocks', 'buy', 'live');
+    seedFill(
+      db,
+      'usd-zero-1',
+      'f1',
+      'entry',
+      100,
+      10,
+      1,
+      new Date('2025-06-02T08:05:00Z'),
+      'USD',
+      0,
+    );
+
+    seedClosedTrade(db, 'usd-neg-1', 'LSE:TEST', 'stocks', 'buy', 'live');
+    seedFill(
+      db,
+      'usd-neg-1',
+      'f1',
+      'entry',
+      100,
+      10,
+      1,
+      new Date('2025-06-02T08:05:00Z'),
+      'USD',
+      -0.8,
+    );
+
+    const { legs, unconverted } = new SqliteCgtFillSource(db).getLiveEquityFillLegs();
+
+    expect(legs).toHaveLength(0);
+    expect(unconverted).toHaveLength(2);
+    // Ordered by idempotency_key ('usd-neg-1' sorts before 'usd-zero-1'), not
+    // insertion order — matches the query's own ORDER BY.
+    expect(unconverted.map((f) => f.fxRateToGbpSource)).toEqual([
+      'invalid_stored_rate:-0.8',
+      'invalid_stored_rate:0',
+    ]);
+  });
+
+  // Pins the MULTIPLY direction this module assumes: `fx_rate_to_gbp` is read
+  // as GBP received per 1 unit of native currency, so `nativeAmount * rate`
+  // is the GBP amount. #1521 round 1 review: this is asserted by
+  // `sqlite-cgt-fill-source.ts`'s own header comment, not observed from a
+  // real Saxo payload — no reachable Saxo surface has ever populated this
+  // column for a real fill (see `docs/cgt-disposal-matching.md`'s
+  // "#1521's field verification" section), so this test can only pin the
+  // code's own self-consistent behaviour, not confirm it matches whatever
+  // field Saxo eventually reports the rate on.
   it('converts a USD fill on the stored venue rate instead of listing it unconverted (#1521)', () => {
     const db = openSharedStore(':memory:');
     seedClosedTrade(db, 'usd-rated-1', 'LSE:TEST', 'stocks', 'buy', 'live');

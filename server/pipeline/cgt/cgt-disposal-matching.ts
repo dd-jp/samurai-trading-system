@@ -73,11 +73,12 @@ export interface CgtFillLeg {
  * A fill the caller could not price in sterling — its `fee_currency` (which
  * also names the currency `grossAmount`/`charges` are denominated in, see
  * `sqlite-cgt-fill-source.ts`) is neither GBP nor a pence sub-unit
- * (GBX/gbx/GBp/p), and no venue-applied `fx_rate_to_gbp` (#1521) was stored
- * on the fill either, so this module has no rate to convert it with. A
- * non-GBP fill that DOES carry a stored rate is converted by the caller and
- * never reaches this shape. Carried in native currency so the report can
- * name exactly what is missing rather than guess or drop it silently.
+ * (GBX/gbx/GBp/p), and the venue-applied `fx_rate_to_gbp` (#1521) is either
+ * absent or not a usable rate (stored but zero or negative), so this module
+ * has no rate to convert it with. A non-GBP fill that carries a stored rate
+ * greater than zero is converted by the caller and never reaches this
+ * shape. Carried in native currency so the report can name exactly what is
+ * missing rather than guess or drop it silently.
  */
 export interface UnconvertedCgtFill {
   instrument: string;
@@ -87,6 +88,16 @@ export interface UnconvertedCgtFill {
   grossAmount: number;
   charges: number;
   currency: string;
+  /**
+   * Why this fill has no usable GBP rate — the row's own `fx_rate_to_gbp_source`
+   * (#1521) when no rate is stored at all, `'no_rate_stored'` when the row
+   * predates the column, or `` `invalid_stored_rate:${value}` `` when a
+   * stored rate exists but is zero or negative (which this module refuses to
+   * multiply by rather than silently zeroing or flipping the sign of a real
+   * disposal). Never blank — an accountant reading the report's unconverted
+   * section needs to know why a line is missing, not just that it is.
+   */
+  fxRateToGbpSource: string;
   idempotency_key: string;
   broker_fill_id: string;
 }

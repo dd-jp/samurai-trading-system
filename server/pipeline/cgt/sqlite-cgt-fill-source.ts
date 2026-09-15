@@ -34,12 +34,16 @@
  * `price_to_contract_factor`). Anything else (USD on the pool lines the #1220
  * sterling gate keeps out of `tradeableUniverse()`) converts on `fills.fx_rate_to_gbp`
  * when a row carries one (#1521, migration 0060) — `grossAmount`/`charges`
- * multiplied by the stored rate, never re-derived or looked up here. A row
- * with neither a book currency nor a stored rate cannot be priced in sterling
- * without inventing an FX rate, so it is returned separately, in native
- * currency, rather than guessed into the matched total or used to abort the
- * whole report. Classification reuses `isPenceCurrency`/`BOOK_CURRENCY`
- * rather than a local GBP/GBX string comparison — `book-currency.ts` checks
+ * multiplied by the stored rate, never re-derived or looked up here — and
+ * only when that rate is strictly positive (round 1 review: a zero or
+ * negative stored value is refused, not multiplied by, since it would
+ * silently zero out or sign-flip a real disposal). A row with neither a book
+ * currency nor a usable stored rate cannot be priced in sterling without
+ * inventing an FX rate, so it is returned separately, in native currency,
+ * carrying why (`fxRateToGbpSource`), rather than guessed into the matched
+ * total or used to abort the whole report. Classification reuses
+ * `isPenceCurrency`/`BOOK_CURRENCY` rather than a local GBP/GBX string
+ * comparison — `book-currency.ts` checks
  * pence FIRST specifically because `GBp` (pence) upper-cases to `GBP` and a
  * naive case-insensitive pound test would 100x it.
  */
@@ -144,7 +148,7 @@ export class SqliteCgtFillSource {
 
       if (divisor !== undefined) {
         legs.push(toLeg(fill, instrument, kind, rawGrossAmount / divisor, rawCharges / divisor));
-      } else if (fill.fx_rate_to_gbp !== undefined) {
+      } else if (fill.fx_rate_to_gbp !== undefined && fill.fx_rate_to_gbp > 0) {
         // #1521: the venue's own rate, applied verbatim — never re-derived,
         // never blended with a spot lookup. See this file's header.
         legs.push(
@@ -157,6 +161,16 @@ export class SqliteCgtFillSource {
           ),
         );
       } else {
+        // A stored rate that is zero or negative is not a rate this module
+        // will multiply by (round 1 review, recorded not fixed) — a zero
+        // silently zeroes a real disposal, a negative flips its sign, and
+        // both would confidently misreport a live CGT event. Fall through to
+        // unconverted instead of trusting a value that fails a sign check no
+        // real exchange rate can fail.
+        const fxRateToGbpSource =
+          fill.fx_rate_to_gbp !== undefined
+            ? `invalid_stored_rate:${fill.fx_rate_to_gbp}`
+            : (fill.fx_rate_to_gbp_source ?? 'no_rate_stored');
         unconverted.push({
           instrument,
           kind,
@@ -165,6 +179,7 @@ export class SqliteCgtFillSource {
           grossAmount: rawGrossAmount,
           charges: rawCharges,
           currency,
+          fxRateToGbpSource,
           idempotency_key: fill.idempotency_key,
           broker_fill_id: fill.broker_fill_id,
         });
