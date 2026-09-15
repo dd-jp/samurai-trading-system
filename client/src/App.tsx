@@ -1,19 +1,25 @@
 /**
- * The composition root: one poll, one rail, three tabs.
+ * The composition root: one poll per arm, one rail, three tabs.
  *
- * State that outlives a poll lives here — which tab is open and what each
- * tab has selected — so a 3-second re-render never resets any of it. The
- * verdict ledger and equity series live in `useLedger`/`useEquitySamples`.
- * Everything below is a pure function of `snapshot` plus that state.
+ * State that outlives a poll lives here — which tab is open, which arm is
+ * selected, and what each tab has selected — so a 3-second re-render never
+ * resets any of it. The verdict ledger and equity series live in
+ * `useLedger`/`useEquitySamples`. Everything below is a pure function of
+ * `snapshot` plus that state.
  *
- * It is also where the client decides, once, whether a snapshot exists at all
- * (#1520): before the first one lands this renders `ColdStart` and nothing
- * else, and after it the rail and all three tabs are handed a non-null
- * `WireSnapshot`. That is a guarantee rather than a reading, because the feed
- * never clears a snapshot it has accepted — see `feedView` in
+ * Switching arms (#1593) is a `key`-forced remount of `ArmView`, not a state
+ * update inside it — see that component's doc comment for why. `App` itself
+ * owns `tab`/`arm` and the hash they are read from/written to, so a remount
+ * on arm switch does not lose which tab was open.
+ *
+ * `ArmView` is where the client decides, once per arm, whether a snapshot
+ * exists at all (#1520): before the first one lands it renders `ColdStart`
+ * and nothing else, and after it the rail and all three tabs are handed a
+ * non-null `WireSnapshot`. That is a guarantee rather than a reading, because
+ * the feed never clears a snapshot it has accepted — see `feedView` in
  * `hooks/useSnapshot.ts`.
  */
-import type { VerdictRow } from '@contracts';
+import type { TradingArmWire, VerdictRow } from '@contracts';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ColdStart } from './components/ColdStart.tsx';
 import { Rail, TABS, type Tab } from './components/Rail.tsx';
@@ -40,10 +46,44 @@ function isTab(value: string): value is Tab {
   return TABS.some((entry) => entry.id === value);
 }
 
+function isArm(value: string | undefined): value is TradingArmWire {
+  return value === 'live' || value === 'control';
+}
+
+/**
+ * The hash's two segments (#1593): `#<tab>` or `#<tab>/control`. Live carries
+ * no second segment at all — not `#<tab>/live` — so every existing bare-hash
+ * assertion (`#live`, `#review`, e2e/boot.spec.ts) keeps matching unchanged,
+ * and a fresh open or an unrecognised second segment both fall through to the
+ * same default `armFromHash` returns.
+ */
+function hashSegments(): [tab: string, arm: string | undefined] {
+  const raw = window.location.hash.replace(/^#/, '');
+  const [tab = '', arm] = raw.split('/');
+  return [tab, arm];
+}
+
 /** The tab named by `location.hash`, so a tab survives a reload and can be linked. */
 function tabFromHash(): Tab {
-  const hash = window.location.hash.replace(/^#/, '');
-  return isTab(hash) ? hash : 'glance';
+  const [tab] = hashSegments();
+  return isTab(tab) ? tab : 'glance';
+}
+
+/**
+ * The arm named by `location.hash`'s second segment. Absent or unrecognised
+ * both read as `'live'` (AC: "an unknown hash arm reads as Live") — there is
+ * no third state here, unlike `FeedStatus`'s cold-start machinery, because a
+ * bad arm segment is not a diagnosis worth surfacing, just a link that named
+ * the default.
+ */
+function armFromHash(): TradingArmWire {
+  const [, arm] = hashSegments();
+  return isArm(arm) ? arm : 'live';
+}
+
+/** The hash a given tab/arm pair writes — the inverse of the two readers above. */
+function hashFor(tab: Tab, arm: TradingArmWire): string {
+  return arm === 'control' ? `#${tab}/control` : `#${tab}`;
 }
 
 /**
@@ -87,6 +127,8 @@ function safeSessionStorage(): TokenStorage {
 
 interface DashboardProps {
   live: LiveFeed;
+  arm: TradingArmWire;
+  onArm: (next: TradingArmWire) => void;
   tab: Tab;
   onTab: (next: Tab) => void;
   onOpenTrace: (selection: Selection) => void;
@@ -109,11 +151,27 @@ interface DashboardProps {
  * by a later stale or mismatched poll. Which tab is open and what it has
  * selected stay in `App`, above the gate, for the same reason they always
  * did.
+ *
+ * The Control banner renders here, OUTSIDE the three `tab === …` branches
+ * below (#1593), so it is on screen for every tab rather than being one
+ * tab's furniture — the AC's "on every tab" is a structural fact about where
+ * this sits in the tree, not a per-tab prop threaded three times.
  */
 function Dashboard(props: DashboardProps) {
-  const { live, tab, onTab, onOpenTrace, liveSelection, onSelectLive, reviewKey, onSelectReview } =
-    props;
+  const {
+    live,
+    arm,
+    onArm,
+    tab,
+    onTab,
+    onOpenTrace,
+    liveSelection,
+    onSelectLive,
+    reviewKey,
+    onSelectReview,
+  } = props;
   const { snapshot } = live;
+  const isControl = arm === 'control';
 
   const ledger = useLedger(snapshot);
   const equitySamples = useEquitySamples(snapshot);
@@ -123,27 +181,73 @@ function Dashboard(props: DashboardProps) {
   );
 
   return (
-    <div className={`app app-${tab}`}>
-      <Rail feed={live} tab={tab} onTab={onTab} />
-      <main id={`panel-${tab}`} role="tabpanel" aria-labelledby={`tab-${tab}`}>
-        {tab === 'glance' && (
-          <GlanceTab
-            snapshot={snapshot}
-            equitySamples={equitySamples}
-            ledger={ledger}
-            verdictsByTrace={verdictsByTrace}
-            onOpenTrace={onOpenTrace}
-          />
-        )}
-        {tab === 'live' && (
-          <LiveTab snapshot={snapshot} selection={liveSelection} onSelect={onSelectLive} />
-        )}
-        {tab === 'review' && (
-          <ReviewTab snapshot={snapshot} selectedKey={reviewKey} onSelect={onSelectReview} />
-        )}
-      </main>
+    <div className={isControl ? 'app-shell app-control' : 'app-shell'}>
+      {isControl && (
+        <div className="control-banner" role="status" data-field="control-banner">
+          CONTROL ARM — simulated fills, no money
+        </div>
+      )}
+      <div className={`app app-${tab}`}>
+        <Rail feed={live} tab={tab} onTab={onTab} arm={arm} onArm={onArm} />
+        <main id={`panel-${tab}`} role="tabpanel" aria-labelledby={`tab-${tab}`}>
+          {tab === 'glance' && (
+            <GlanceTab
+              snapshot={snapshot}
+              equitySamples={equitySamples}
+              ledger={ledger}
+              verdictsByTrace={verdictsByTrace}
+              onOpenTrace={onOpenTrace}
+            />
+          )}
+          {tab === 'live' && (
+            <LiveTab snapshot={snapshot} selection={liveSelection} onSelect={onSelectLive} />
+          )}
+          {tab === 'review' && (
+            <ReviewTab snapshot={snapshot} selectedKey={reviewKey} onSelect={onSelectReview} />
+          )}
+        </main>
+      </div>
     </div>
   );
+}
+
+interface ArmViewProps {
+  arm: TradingArmWire;
+  onArm: (next: TradingArmWire) => void;
+  authToken: string | null;
+  snapshotOptions: UseSnapshotOptions | undefined;
+  tab: Tab;
+  onTab: (next: Tab) => void;
+  onOpenTrace: (selection: Selection) => void;
+  liveSelection: Selection | null;
+  onSelectLive: (selection: Selection) => void;
+  reviewKey: string | null;
+  onSelectReview: (key: string | null) => void;
+}
+
+/**
+ * Owns the poll for ONE arm (#1593). `key={arm}` on its call site in `App`
+ * below is what makes this do its job: React remounts a keyed component
+ * rather than re-rendering it when the key changes, so switching arms tears
+ * this whole subtree down and rebuilds it from `useSnapshot`'s own initial
+ * state — the previous arm's snapshot cannot be shown as current because
+ * nothing about it survives the remount, not even transiently. That is a
+ * stronger guarantee than clearing a field would be, and asks nothing of
+ * `useSnapshot` itself, which stays ignorant of arms being switched under it.
+ *
+ * Which tab is open and what it has selected are NOT reset by this remount —
+ * those live one level up, in `App`, deliberately outside this component.
+ */
+function ArmView(props: ArmViewProps) {
+  const { arm, onArm, authToken, snapshotOptions, ...rest } = props;
+  const feed = useSnapshot({ authToken, arm, ...snapshotOptions });
+
+  // The one place the client asks whether a snapshot exists (#1520), now
+  // scoped to the currently-selected arm's own feed.
+  const view = feedView(feed);
+  if (view.kind === 'cold') return <ColdStart feed={view.feed} />;
+
+  return <Dashboard live={view.feed} arm={arm} onArm={onArm} {...rest} />;
 }
 
 export interface AppProps {
@@ -183,20 +287,36 @@ export function App({ snapshotOptions }: AppProps = {}) {
     }
   }, []);
 
-  const feed = useSnapshot({ authToken, ...snapshotOptions });
-
   const [tab, setTab] = useState<Tab>(tabFromHash);
+  const [arm, setArm] = useState<TradingArmWire>(armFromHash);
   useEffect(() => {
-    const onHash = () => setTab(tabFromHash());
+    const onHash = () => {
+      setTab(tabFromHash());
+      setArm(armFromHash());
+    };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
-  const openTab = useCallback((next: Tab) => {
-    setTab(next);
-    if (window.location.hash !== `#${next}`) {
-      window.history.replaceState(null, '', `#${next}`);
-    }
-  }, []);
+  const openTab = useCallback(
+    (next: Tab) => {
+      setTab(next);
+      const nextHash = hashFor(next, arm);
+      if (window.location.hash !== nextHash) {
+        window.history.replaceState(null, '', nextHash);
+      }
+    },
+    [arm],
+  );
+  const openArm = useCallback(
+    (next: TradingArmWire) => {
+      setArm(next);
+      const nextHash = hashFor(tab, next);
+      if (window.location.hash !== nextHash) {
+        window.history.replaceState(null, '', nextHash);
+      }
+    },
+    [tab],
+  );
 
   const [liveSelection, setLiveSelection] = useState<Selection | null>(null);
   const [reviewKey, setReviewKey] = useState<string | null>(null);
@@ -208,18 +328,13 @@ export function App({ snapshotOptions }: AppProps = {}) {
     [openTab],
   );
 
-  // The one place the client asks whether a snapshot exists (#1520). Below
-  // this line every leaf has one, for the rest of the session — see
-  // `feedView`. Every hook above it runs unconditionally: the cold branch
-  // returns early, and a hook after it would change the hook order on the
-  // poll that ends the cold start. The snapshot-derived hooks live in
-  // `Dashboard` instead, where the snapshot is already non-null.
-  const view = feedView(feed);
-  if (view.kind === 'cold') return <ColdStart feed={view.feed} />;
-
   return (
-    <Dashboard
-      live={view.feed}
+    <ArmView
+      key={arm}
+      arm={arm}
+      onArm={openArm}
+      authToken={authToken}
+      snapshotOptions={snapshotOptions}
       tab={tab}
       onTab={openTab}
       onOpenTrace={openTrace}

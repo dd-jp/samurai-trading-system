@@ -10,6 +10,10 @@
  * signal — every state has a word beside it.
  */
 
+.app-shell {
+  min-height: 100vh;
+}
+
 .app {
   min-height: 100vh;
   display: grid;
@@ -19,6 +23,29 @@
   font-size: 14px;
   line-height: 1.5;
   background: var(--bg);
+}
+
+/*
+ * The tint is deliberately faint (#1593 — "the banner is the signal, the
+ * tint redundant"): it must never be the only thing telling an operator
+ * which arm they are looking at, so it is a wash over the ground colour, not
+ * a state colour of its own like `.rail-stale`/`.rail-mismatch` are.
+ */
+.app-control .app {
+  background: rgb(var(--amber-rgb) / 0.04);
+}
+
+.control-banner {
+  background: rgb(var(--amber-rgb) / 0.18);
+  border-bottom: 1px solid rgb(var(--amber-rgb) / 0.5);
+  color: var(--amber);
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  text-align: center;
+  padding: var(--space-2) var(--space-4);
 }
 
 .mono {
@@ -120,6 +147,41 @@ code {
 .brand i {
   font-style: normal;
   color: var(--cyan);
+}
+
+/* ---------- arm selector (#1593) ---------- */
+
+.arm-toggle {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.arm-btn {
+  flex: 1;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.arm-btn + .arm-btn {
+  border-left: 1px solid var(--border);
+}
+
+.arm-btn:hover {
+  color: var(--text);
+}
+
+.arm-btn-on {
+  color: var(--text);
+  background: rgb(var(--amber-rgb) / 0.16);
 }
 
 .rail-tabs [role="tablist"] {
