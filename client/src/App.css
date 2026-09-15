@@ -534,7 +534,14 @@ main {
   font-variant-numeric: tabular-nums;
 }
 
-.kv-truncate {
+.kv-list[data-section="trade"] dd:not(.mono) {
+  text-align: left;
+  font-variant-numeric: normal;
+}
+
+.kv-truncate,
+.stance-name,
+.fill-id {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -889,7 +896,7 @@ main {
 .gate-line,
 .condition-list li {
   display: grid;
-  grid-template-columns: 88px minmax(0, 1fr);
+  grid-template-columns: 100px minmax(0, 1fr);
   gap: 10px;
   align-items: baseline;
   margin: 0;
@@ -899,6 +906,10 @@ main {
 .gate-line > .state,
 .condition-list li > .state {
   justify-self: start;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .gate-line + .gate-line,
@@ -925,12 +936,6 @@ main {
   grid-template-columns: minmax(0, 1fr) auto 56px max-content;
   gap: 10px;
   align-items: center;
-}
-
-.stance-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .stance-strip {
@@ -993,9 +998,6 @@ main {
 .fill-id {
   grid-column: 1 / -1;
   font-size: 11px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* ---------- review ---------- */
