@@ -8,6 +8,7 @@ import {
   isTradingPathFile,
   parseChangedFiles,
   partitionChangedFiles,
+  resolveMergeBase,
   TRADING_PATH_PREFIXES,
 } from './mutation-local.js';
 
@@ -135,5 +136,63 @@ describe('getChangedFiles against a real git repo (#1634)', () => {
     const changed = getChangedFiles('base-ref', repo);
 
     expect(changed).not.toContain('server/pipeline/verdict/index.ts');
+  });
+});
+
+describe('getChangedFiles resolves the merge-base, not a bare diff against baseRef (#1642 review)', () => {
+  let repo: string;
+  let headBranch: string;
+  let rootSha: string;
+
+  beforeAll(() => {
+    repo = realpathSync(mkdtempSync(join(tmpdir(), 'samurai-mutation-mergebase-')));
+    gitIn(repo, 'init', '-q');
+    gitIn(repo, 'config', 'user.email', 'test@example.com');
+    gitIn(repo, 'config', 'user.name', 'Test');
+    headBranch = execFileSync('git', ['-C', repo, 'symbolic-ref', '--short', 'HEAD'], {
+      encoding: 'utf8',
+    }).trim();
+
+    writeIn(repo, 'server/pipeline/execution/shared.ts', 'export const shared = "root";\n');
+    gitIn(repo, 'add', '-A');
+    gitIn(repo, 'commit', '-q', '-m', 'root');
+    rootSha = execFileSync('git', ['-C', repo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    gitIn(repo, 'branch', 'base-ref');
+
+    // baseRef (main) advances after the branch point, modifying a file this branch
+    // never touches — the scenario the two-dot bug misread as "changed here".
+    gitIn(repo, 'checkout', '-q', 'base-ref');
+    writeIn(repo, 'server/pipeline/execution/shared.ts', 'export const shared = "main-drift";\n');
+    gitIn(repo, 'add', '-A');
+    gitIn(repo, 'commit', '-q', '-m', 'main drift');
+
+    // Back on the feature side, which diverged from root before that drift landed.
+    gitIn(repo, 'checkout', '-q', headBranch);
+    writeIn(repo, 'server/pipeline/execution/own-change.ts', 'export const own = 1;\n');
+    gitIn(repo, 'add', '-A');
+    gitIn(repo, 'commit', '-q', '-m', 'feature change');
+  });
+
+  afterAll(() => {
+    rmSync(repo, { recursive: true, force: true });
+  });
+
+  it('resolves to the commit baseRef and HEAD last shared, not baseRef itself', () => {
+    expect(resolveMergeBase('base-ref', repo)).toBe(rootSha);
+  });
+
+  it('excludes a file baseRef modified after the branch point but this branch never touched', () => {
+    const changed = getChangedFiles('base-ref', repo);
+
+    expect(changed).toContain('server/pipeline/execution/own-change.ts');
+    expect(changed).not.toContain('server/pipeline/execution/shared.ts');
+  });
+
+  it('still includes an uncommitted edit to an already-tracked file', () => {
+    writeIn(repo, 'server/pipeline/execution/own-change.ts', 'export const own = 2;\n');
+
+    const changed = getChangedFiles('base-ref', repo);
+
+    expect(changed).toContain('server/pipeline/execution/own-change.ts');
   });
 });

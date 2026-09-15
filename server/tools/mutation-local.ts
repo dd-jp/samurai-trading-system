@@ -2,8 +2,12 @@
  * Diff-scoped Stryker mutation gate (#1634, decided by #1626).
  *
  * Mirrors `test:local`'s `vitest run --changed origin/main` pattern: mutate only
- * files changed vs a base ref, not the whole repo — a full-repo Stryker run against
- * ~2900 tests is not viable per-PR. Automates the manual "delete the effect, confirm
+ * files changed since baseRef and HEAD diverged, not the whole repo — a full-repo
+ * Stryker run against ~2900 tests is not viable per-PR. "Changed" is resolved from
+ * the merge-base, not a bare diff against baseRef, so baseRef moving after the branch
+ * point (e.g. main advancing mid-PR) doesn't pull its commits into scope; uncommitted
+ * working-tree changes stay in scope either way (see `getChangedFiles`). Automates
+ * the manual "delete the effect, confirm
  * the gate goes red" discipline `docs/coding-standards.md` describes, for the
  * trading-path packages only (#1626's resolution: pipeline/trader, risk-manager,
  * verdict, execution — the stages that size, gate and submit orders). Every other
@@ -75,15 +79,27 @@ export function partitionChangedFiles(files: readonly string[]): PartitionedChan
   };
 }
 
+/** The commit `baseRef` and `HEAD` last shared, so a bare `git diff` against it excludes baseRef's own later history. */
+export function resolveMergeBase(baseRef: string, root: string): string {
+  return execFileSync('git', ['-C', root, 'merge-base', baseRef, 'HEAD'], {
+    encoding: 'utf8',
+  }).trim();
+}
+
 /**
- * Files changed vs `baseRef`, repo-relative, filtered to ones still present on disk.
- * `--diff-filter=ACMR` already excludes deletes; the `existsSync` check additionally
- * covers a rename-then-delete or a path a test double doesn't create.
+ * Files changed since `baseRef` and `HEAD` diverged, repo-relative, filtered to ones
+ * still present on disk. Diffs against the merge-base rather than `baseRef` directly:
+ * a plain `git diff baseRef` is worktree-vs-ref, so anything `baseRef` changed after
+ * the branch point (e.g. main moving mid-PR) reads as "changed" too. Diffing from the
+ * merge-base keeps uncommitted working-tree changes in scope while dropping baseRef's
+ * own drift. `--diff-filter=ACMR` already excludes deletes; the `existsSync` check
+ * additionally covers a rename-then-delete or a path a test double doesn't create.
  */
 export function getChangedFiles(baseRef: string, root: string): readonly string[] {
+  const mergeBase = resolveMergeBase(baseRef, root);
   const diffOutput = execFileSync(
     'git',
-    ['-C', root, 'diff', '--name-only', '--diff-filter=ACMR', baseRef],
+    ['-C', root, 'diff', '--name-only', '--diff-filter=ACMR', mergeBase],
     { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
   );
   return parseChangedFiles(diffOutput).filter((file) => existsSync(`${root}/${file}`));
@@ -92,9 +108,10 @@ export function getChangedFiles(baseRef: string, root: string): readonly string[
 function printHelp(): void {
   console.log(`Usage: npm run mutation:local -- [baseRef]
 
-Runs Stryker Mutator against trading-path files changed vs baseRef (default:
-${DEFAULT_BASE_REF}), mirroring test:local's diff-scoped pattern. Trading-path
-packages:
+Runs Stryker Mutator against trading-path files changed since baseRef (default:
+${DEFAULT_BASE_REF}) and HEAD diverged, mirroring test:local's diff-scoped pattern.
+baseRef's own commits after that point are excluded; uncommitted working-tree
+changes are included. Trading-path packages:
 ${TRADING_PATH_PREFIXES.map((prefix) => `  ${prefix}`).join('\n')}
 
 Non-trading-path changes (dashboard, tooling, other server packages) are listed

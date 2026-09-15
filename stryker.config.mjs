@@ -1,7 +1,8 @@
 // Stryker Mutator config for the trading-path mutation gate (#1634, decided by #1626).
 //
 // Not run bare — `npm run mutation:local` (server/tools/mutation-local.ts) invokes this
-// with `--mutate` restricted to trading-path files changed vs a base ref, mirroring
+// with `--mutate` restricted to trading-path files changed since a base ref and HEAD
+// diverged (merge-base, not a bare diff — see `getChangedFiles`), mirroring
 // `test:local`'s `vitest run --changed origin/main` diff-scoped pattern. A full-repo
 // run against ~2900 tests is not viable per-PR (#1626's resolution). The `mutate`
 // glob below is only the fallback for someone running `stryker run` directly.
@@ -41,7 +42,6 @@ export default {
   // 'perTest' scopes each mutant's rerun to the tests that actually cover its line
   // instead of the full suite — required for per-PR runtime given ~2900 tests total.
   coverageAnalysis: 'perTest',
-  ignoreStatic: true,
   // `graphify-out` is a symlink to the main checkout's knowledge-graph output; Node's
   // `copyFile` can't clone whatever it resolves to inside a git worktree ("operation
   // not supported on socket", confirmed 2026-09-15) and it isn't test input anyway.
