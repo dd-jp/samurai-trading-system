@@ -38,8 +38,10 @@
  *
  * A retry must tolerate a re-arm that actually SUCCEEDED venue-side before a
  * crash lost its confirmation. Every `rearmProtectiveLegs` path does:
- * equities adopt-or-place on the deterministic `:rearm` wire id
- * (`AlpacaBrokerAdapter`, the #600/#603 posture); the crypto emulation
+ * equities adopt-or-place over the lot's derived re-arm wire ids
+ * (`AlpacaBrokerAdapter`, the #600/#603 posture — the walk is attempt-indexed
+ * because Alpaca consumes a `client_order_id` permanently, #1346); the crypto
+ * emulation
  * retires its previous episode's legs before arming a fresh journalled
  * episode (`AlpacaCryptoLegEmulation.rearm`); the Simulated adapter re-sets
  * the same protected quantity. So the sweep retries through the SAME broker

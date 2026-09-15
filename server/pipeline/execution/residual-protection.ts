@@ -238,7 +238,7 @@ export async function maybeRearmResidual(
     // adapter adopted legs it verified already live) — so the marker clears.
     // Best-effort: if this write fails the sweep retries a re-arm that is
     // already in place, which every adapter path tolerates (equities
-    // adopt-or-place on the deterministic `:rearm` wire id; crypto emulation
+    // adopt-or-place over the lot's derived re-arm wire ids; crypto emulation
     // retires stale legs before arming; Simulated re-sets the same qty).
     await bestEffortMarkerWrite(input, position, now, 'confirm-protected');
   } catch (error) {

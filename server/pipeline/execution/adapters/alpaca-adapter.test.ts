@@ -17,7 +17,8 @@ import { openTestExecutionStore } from '../sqlite-store-harness.js';
 import type { ExecutionConfig, ExecutionInput, NativeBracketRequest } from '../types.js';
 import type { UnpricedFillAlert, UnpricedFillAlertChannel } from '../unpriced-fill-alert.js';
 import { AlpacaBrokerAdapter, DEFAULT_UNPRICED_FILL_AGE_OUT_MS } from './alpaca-adapter.js';
-import type { AlpacaBrokerClient, AlpacaOrder } from './alpaca-client.js';
+import { AlpacaBrokerProviderError } from './alpaca-broker-errors.js';
+import type { AlpacaBrokerClient, AlpacaOcoOrderRequest, AlpacaOrder } from './alpaca-client.js';
 import { AlpacaHttpBrokerClient } from './alpaca-http-client.js';
 
 /**
@@ -2701,11 +2702,21 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
     });
   });
 
-  // #549 adopt-or-place: the wire id is deterministic (`${key}:rearm`), so a
-  // re-arm that succeeded venue-side before a crash lost its confirmation is
-  // ADOPTED by the retry rather than double-submitted (or misread as a fresh
-  // failure when the venue rejects the duplicate client order id).
+  // #549 adopt-or-place: the wire ids are derived (`${key}:rearm`,
+  // `${key}:rearm-1`, ...), so a re-arm that succeeded venue-side before a
+  // crash lost its confirmation is ADOPTED by the retry rather than
+  // double-submitted (or misread as a fresh failure when the venue rejects the
+  // duplicate client order id).
   describe('re-arm adopt-or-place (#549)', () => {
+    /**
+     * A venue that answers per `client_order_id` and has nothing under the ids
+     * the map does not name — the shape #1346 measured. A fake answering the
+     * same order for EVERY id would claim the whole wire-id space is spent.
+     */
+    function venueHolding(rows: Record<string, unknown>) {
+      return vi.fn(async (clientOrderId: string) => rows[clientOrderId] ?? null);
+    }
+
     /** A live prior OCO whose qty/levels match the canonical (6, 95, 110) request. */
     function matchingPriorOco() {
       return {
@@ -2754,9 +2765,9 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         .mockResolvedValue({ ...acceptedOrder(), id: 'rearm-2', order_class: 'oco', legs: [] });
       const cancelOrder = vi.fn().mockResolvedValue(undefined);
       // Sized for the OLD residual (9), request now wants 6.
-      const getOrderByClientOrderId = vi
-        .fn()
-        .mockResolvedValue({ ...matchingPriorOco(), qty: '9' });
+      const getOrderByClientOrderId = venueHolding({
+        'key-1:rearm': { ...matchingPriorOco(), qty: '9' },
+      });
       const adapter = adapterWith(
         makeClient({ submitOcoOrder, cancelOrder, getOrderByClientOrderId }),
       );
@@ -2774,9 +2785,9 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         .mockResolvedValue({ ...acceptedOrder(), id: 'rearm-2', order_class: 'oco', legs: [] });
       const cancelOrder = vi.fn().mockResolvedValue(undefined);
       const prior = matchingPriorOco();
-      const getOrderByClientOrderId = vi
-        .fn()
-        .mockResolvedValue({ ...prior, limit_price: undefined });
+      const getOrderByClientOrderId = venueHolding({
+        'key-1:rearm': { ...prior, limit_price: undefined },
+      });
       const adapter = adapterWith(
         makeClient({ submitOcoOrder, cancelOrder, getOrderByClientOrderId }),
       );
@@ -2823,9 +2834,9 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         .fn()
         .mockResolvedValue({ ...acceptedOrder(), id: 'rearm-2', order_class: 'oco', legs: [] });
       const cancelOrder = vi.fn().mockResolvedValue(undefined);
-      const getOrderByClientOrderId = vi
-        .fn()
-        .mockResolvedValue({ ...matchingPriorOco(), status: 'done_for_day' });
+      const getOrderByClientOrderId = venueHolding({
+        'key-1:rearm': { ...matchingPriorOco(), status: 'done_for_day' },
+      });
       const adapter = adapterWith(
         makeClient({ submitOcoOrder, cancelOrder, getOrderByClientOrderId }),
       );
@@ -2860,20 +2871,204 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       const submitOcoOrder = vi
         .fn()
         .mockResolvedValue({ ...acceptedOrder(), id: 'rearm-2', order_class: 'oco', legs: [] });
-      const getOrderByClientOrderId = vi.fn().mockResolvedValue({
-        ...acceptedOrder(),
-        id: 'prior-rearm-oco',
-        client_order_id: 'key-1:rearm',
-        order_class: 'oco',
-        status: 'canceled',
-        legs: [],
+      const getOrderByClientOrderId = venueHolding({
+        'key-1:rearm': {
+          ...acceptedOrder(),
+          id: 'prior-rearm-oco',
+          client_order_id: 'key-1:rearm',
+          order_class: 'oco',
+          status: 'canceled',
+          legs: [],
+        },
       });
       const adapter = adapterWith(makeClient({ submitOcoOrder, getOrderByClientOrderId }));
 
       await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
 
-      // A cancelled prior protects nothing — the retry submits.
+      // A cancelled prior protects nothing — the retry submits. Under the NEXT
+      // wire id, not `key-1:rearm`: that one is spent for good (#1346).
       expect(submitOcoOrder).toHaveBeenCalledTimes(1);
+      expect(submitOcoOrder).toHaveBeenCalledWith(
+        expect.objectContaining({ client_order_id: 'key-1:rearm-1' }),
+      );
+    });
+  });
+
+  /**
+   * #1346 — a wire id a re-arm spends is spent FOREVER.
+   *
+   * MEASURED against Alpaca paper 2026-09-15 (docs/research/43, round 3):
+   * reusing a `client_order_id` is refused with
+   * `422 {"code":42210000,"message":"client_order_id must be unique"}` while
+   * the prior rests, `422 {"code":40010001,...}` the instant after it goes
+   * `canceled`, the same 90 s later, and the same against a 13-day-old
+   * canceled row. The venue double below enforces exactly that rule, so a
+   * re-arm scheme that reuses an id fails here the way it fails on the venue
+   * — and a scheme that places while a prior still RESTS trips the
+   * "at most one live OCO" assertion, the #516 hazard from the other side.
+   */
+  describe('re-arm wire ids are consumed permanently (#1346)', () => {
+    function measuredAlpacaVenue() {
+      const rows = new Map<string, AlpacaOrder>();
+      let placed = 0;
+
+      const submitOcoOrder = vi.fn(async (request: AlpacaOcoOrderRequest): Promise<AlpacaOrder> => {
+        if (rows.has(request.client_order_id)) {
+          throw new AlpacaBrokerProviderError(
+            'Alpaca rejected POST /v2/orders: 422 {"code":40010001,"message":"client_order_id must be unique"}',
+            422,
+            '40010001',
+            'client_order_id must be unique',
+            'POST',
+          );
+        }
+        placed += 1;
+        const row: AlpacaOrder = {
+          ...acceptedOrder(),
+          id: `oco-${placed}`,
+          client_order_id: request.client_order_id,
+          order_class: 'oco',
+          qty: request.qty,
+          limit_price: request.take_profit.limit_price,
+          legs: [
+            {
+              id: `oco-${placed}-stop`,
+              type: 'stop',
+              status: 'held',
+              filled_qty: '0',
+              filled_avg_price: null,
+              filled_at: null,
+              stop_price: request.stop_loss.stop_price,
+            },
+          ],
+        };
+        rows.set(row.client_order_id, row);
+        return row;
+      });
+
+      const getOrderByClientOrderId = vi.fn(
+        async (clientOrderId: string): Promise<AlpacaOrder | null> =>
+          rows.get(clientOrderId) ?? null,
+      );
+
+      const cancelOrder = vi.fn(async (alpacaOrderId: string): Promise<void> => {
+        for (const [key, row] of rows) {
+          if (row.id === alpacaOrderId) rows.set(key, { ...row, status: 'canceled' });
+        }
+      });
+
+      const resting = (): AlpacaOrder[] =>
+        [...rows.values()].filter((row) => row.status === 'accepted');
+
+      return { submitOcoOrder, getOrderByClientOrderId, cancelOrder, resting, rows };
+    }
+
+    // THE DEFECT. A lot is re-armed, the next `executeExit` cancels that OCO
+    // (#516), the flatten partially fills, and the fresh residual marks the
+    // SAME lot — an ordinary two-partial-flatten sequence. Under a single
+    // `:rearm` id the second re-arm 422s, and every later sweep pass 422s
+    // identically: the marker never clears and the residual is never
+    // protected. A permanent protection gap wearing a transient error's
+    // clothes.
+    it('protects the SAME lot a second time after its first re-arm was cancelled', async () => {
+      const venue = measuredAlpacaVenue();
+      const adapter = adapterWith(makeClient(venue));
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+      expect(venue.resting().map((row) => row.client_order_id)).toEqual(['key-1:rearm']);
+
+      await venue.cancelOrder('oco-1');
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
+
+      expect(venue.resting().map((row) => row.client_order_id)).toEqual(['key-1:rearm-1']);
+      expect(venue.resting().map((row) => row.qty)).toEqual(['4']);
+    });
+
+    // The other direction: advancing must never leave two OCOs able to fire
+    // at one residual. A resting prior is either ADOPTED (nothing submitted)
+    // or CANCELLED before the walk moves past it.
+    it('never leaves two live OCOs on one lot across a cancel-and-replace', async () => {
+      const venue = measuredAlpacaVenue();
+      const adapter = adapterWith(makeClient(venue));
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+      // Re-armed again for a SMALLER residual while the first still rests:
+      // the mismatch forces cancel-and-replace rather than adoption.
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
+
+      expect(venue.resting().map((row) => row.client_order_id)).toEqual(['key-1:rearm-1']);
+      expect(venue.rows.get('key-1:rearm')?.status).toBe('canceled');
+    });
+
+    // Adoption still short-circuits the walk: an unchanged residual whose OCO
+    // already rests must cost no second id, or a lot that is merely re-swept
+    // would burn through `MAX_REARM_ATTEMPTS` for nothing.
+    it('adopts the resting prior instead of advancing when nothing changed', async () => {
+      const venue = measuredAlpacaVenue();
+      const adapter = adapterWith(makeClient(venue));
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+
+      expect(venue.submitOcoOrder).toHaveBeenCalledTimes(1);
+      expect(venue.cancelOrder).not.toHaveBeenCalled();
+    });
+
+    // Bounded, and loud at the bound: the walk refuses rather than submitting
+    // under an id the venue is certain to reject. `residual-protection-sweep`
+    // turns the throw into `residual_rearm_failed` with the marker KEPT, so
+    // the residual stays visible instead of being silently written off.
+    it('throws once every wire id this lot may use is spent', async () => {
+      const venue = measuredAlpacaVenue();
+      const adapter = adapterWith(makeClient(venue));
+
+      for (let spent = 0; spent < 4; spent += 1) {
+        await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+        await venue.cancelOrder(`oco-${spent + 1}`);
+      }
+
+      await expect(adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110)).rejects.toThrow(
+        /exhausted all 4 re-arm wire ids/,
+      );
+      expect(venue.submitOcoOrder).toHaveBeenCalledTimes(4);
+    });
+
+    // `cancel()` must follow the walk. Cancelling `key-1:rearm` — spent and
+    // long terminal — while `key-1:rearm-1` rests would leave a protective
+    // leg live behind a cancelled bracket, free to fire into the position the
+    // flatten is about to close (#516, #867).
+    it('cancel() retires the NEWEST re-arm, not the first id the lot ever used', async () => {
+      const venue = measuredAlpacaVenue();
+      const adapter = adapterWith(
+        makeClient({
+          ...venue,
+          // Forces `resolveCancelTargets` down the venue-lookup path rather
+          // than the in-process `rearmedLegs` shortcut, which is what a
+          // restarted process faces.
+          getOrderByClientOrderId: vi.fn(async (clientOrderId: string) =>
+            clientOrderId === 'key-1' ? null : (venue.rows.get(clientOrderId) ?? null),
+          ),
+        }),
+      );
+
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+      await venue.cancelOrder('oco-1');
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
+
+      const restarted = adapterWith(
+        makeClient({
+          ...venue,
+          getOrderByClientOrderId: vi.fn(async (clientOrderId: string) =>
+            clientOrderId === 'key-1' ? null : (venue.rows.get(clientOrderId) ?? null),
+          ),
+        }),
+      );
+      await restarted.cancel('key-1', 'AAPL');
+
+      expect(venue.cancelOrder).toHaveBeenCalledWith('oco-2');
+      expect(venue.resting()).toEqual([]);
     });
   });
 
