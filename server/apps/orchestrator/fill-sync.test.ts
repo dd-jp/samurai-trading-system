@@ -515,6 +515,58 @@ describe('startFillSync', () => {
       await sync.stop();
     });
 
+    // #1577: `action` alone collapsed `cancelWedgedFlatten`'s escalated cancel
+    // onto the benign flatten adopt one pass earlier — both are
+    // `action: 'adopted'`, differing only in `reason`, so the escalation
+    // never reached the log once the benign line had already deduped it.
+    it('logs the wedged-flatten cancel escalation even though it shares action: adopted with the benign adopt already logged for the episode', async () => {
+      const logger = makeLogger();
+      const benignAdopted = {
+        idempotency_key: 'key-nvda-flatten',
+        instrument: 'NVDA',
+        store_state: 'submitted' as const,
+        broker_state: 'submitted' as const,
+        action: 'adopted' as const,
+        kind: 'flatten' as const,
+        reason: "flatten journal said 'submitted'; broker reports 'submitted'",
+      };
+      const escalatedAdopted = {
+        ...benignAdopted,
+        reason:
+          "flatten journal said 'submitted'; broker reports 'submitted'; the venue still " +
+          'reports this flatten after 300s — past the bound, so it is being CANCELLED',
+        escalated: true as const,
+      };
+      const execution = makeExecution({
+        reconcile: vi
+          .fn()
+          .mockResolvedValueOnce(makeReport({ divergences: [benignAdopted] }))
+          .mockResolvedValueOnce(makeReport({ divergences: [escalatedAdopted] }))
+          .mockResolvedValue(makeReport()),
+      });
+      const sync = startFillSync({
+        execution,
+        clock: { now: () => new Date() },
+        logger,
+        fillPollIntervalMs: 1_000,
+        reconcileTraceId: 'test-reconcile',
+        fillSyncTraceId: 'test-fill-sync',
+      });
+
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      const divergenceLines = logger.entries.filter(
+        (entry) => entry.message === 'reconcile divergence',
+      );
+      expect(divergenceLines).toHaveLength(2);
+      const firstPayload = divergenceLines[0]?.payload as { action: string; escalated?: true };
+      expect(firstPayload).toMatchObject({ action: 'adopted' });
+      expect(firstPayload.escalated).toBeUndefined();
+      expect(divergenceLines[1]?.payload).toMatchObject({ action: 'adopted', escalated: true });
+
+      await sync.stop();
+    });
+
     it('does not demote an adopted divergence the zero-size throttle cannot back — a flatten row, or a bracket adopt not yet filled (#1122)', async () => {
       const logger = makeLogger();
       const flattenAdopted = {

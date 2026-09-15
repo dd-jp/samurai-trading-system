@@ -631,6 +631,7 @@ async function reconcileFlatten(
       action: 'adopted',
       kind: 'flatten',
       reason: `${adopted}; ${await cancelWedgedFlatten(input, row, order.order_state, now)}`,
+      escalated: true,
     };
   }
 
