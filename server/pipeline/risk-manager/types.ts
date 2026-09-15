@@ -125,11 +125,12 @@ export interface PortfolioView {
    * adapter) can ack a lookup hit in either state before a quantity is ever
    * known, and `execute.ts` writes that ack straight onto the row. This IS
    * reserved, at the full `requested_size`, because it has the release path
-   * the general case above lacks: it is exactly `wedged-zero-fill-sweep.ts`'s
-   * own selection, so either `ingestFills()` advances `filled_size` off zero
-   * (ordinary exposure math takes over) or that sweep abandons the row after
-   * `WEDGED_ZERO_FILL_ABANDON_AFTER_MS` — either way this reservation stops
-   * applying. See `isAdoptedZeroFillLot` in `portfolio-view.ts`.
+   * the general case above lacks: it is exactly the shape
+   * `wedged-zero-fill-sweep.ts` selects on (`isWedgedZeroFillLot`,
+   * shared/store/, #1586), so either `ingestFills()` advances `filled_size`
+   * off zero (ordinary exposure math takes over) or that sweep abandons the
+   * row after `WEDGED_ZERO_FILL_ABANDON_AFTER_MS` — either way this
+   * reservation stops applying.
    *
    * That release is not on a clock. `reconcileLot` has no age-out: its
    * `undetermined` branch (the adapter threw, which is evidence of nothing)

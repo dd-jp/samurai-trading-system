@@ -9,6 +9,7 @@ export {
   assertNoStaleKeyScheme,
   findStaleKeySchemeLots,
   IN_FLIGHT_ORDER_STATES,
+  isWedgedZeroFillLot,
   type StaleKeySchemeLot,
   TERMINAL_ORDER_STATES,
 } from './key-scheme-guard.js';

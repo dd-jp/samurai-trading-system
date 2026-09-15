@@ -88,6 +88,7 @@
  */
 
 import { describeThrownSafely, logCaughtFailure } from '../../shared/index.js';
+import { isWedgedZeroFillLot } from '../../shared/store/index.js';
 import type { ReconcileDivergence, WedgedSweepInput } from './types.js';
 
 /**
@@ -138,8 +139,7 @@ export async function sweepWedgedZeroFillLots(
   const positions = await store.getOpenPositions();
   const wedged = positions.filter(
     (position) =>
-      (position.order_state === 'filled' || position.order_state === 'partially_filled') &&
-      position.filled_size === 0 &&
+      isWedgedZeroFillLot(position) &&
       now.getTime() - position.opened_at.getTime() >= WEDGED_ZERO_FILL_ABANDON_AFTER_MS,
   );
 
