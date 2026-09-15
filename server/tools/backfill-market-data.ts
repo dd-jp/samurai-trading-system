@@ -22,21 +22,29 @@
  *
  * `WARM_START_WINDOWS` below is not chosen — it is the max, per timeframe,
  * over every production call site that requests bars/indicators for a
- * `DEFAULT_UNIVERSE` instrument on a live/paper first tick. As of this
- * writing that is:
+ * `DEFAULT_UNIVERSE` instrument on a live/paper first tick. Since #1543 it is
+ * `FIRST_TICK_BAR_WINDOWS`, defined in
+ * `server/apps/orchestrator/production/bar-prefetch.ts` and re-exported below:
+ * the orchestrator now warms the same list at boot, and two independently
+ * maintained copies of a list whose whole job is not to go stale is the exact
+ * failure #1543 found (this one was still at `WARMUP_5M` for `5m` two tickets
+ * after #797 added a 936-bar `5m` consumer). The derivation, per line:
  *
- *   - `5m`, lookback `WARMUP_5M` (260) — #742 moved the technical analyst's
- *     `SMA_SPEC`/`RSI_SPEC` from `1h` to `5m` (RSI's own `recommendedWarmupFor`
- *     window is 57 5m bars; `WARMUP_5M` is the shared, wider pre-warm those
- *     specs collapse onto, imported directly rather than re-derived so this
- *     list cannot drift from the constant that actually governs the fetch).
- *     Leaving this timeframe out would not fabricate anything — a cold
- *     `computeIndicator` call still throws `InsufficientBarsError` below its
- *     15-bar floor rather than answering short — but it would make the warm
- *     start inert for the path that matters most: a first live/paper tick
- *     would fall through to a live `DataSource.fetchBars` call instead of
- *     reading the pre-filled store, defeating this script's whole purpose for
- *     the very analyst it was written to serve.
+ *   - `5m`, lookback `RVOL_5M_LOOKBACK` (936) — #742 moved the technical
+ *     analyst's `SMA_SPEC`/`RSI_SPEC` from `1h` to `5m` (RSI's own
+ *     `recommendedWarmupFor` window is 57 5m bars; `WARMUP_5M` (260) is the
+ *     shared, wider pre-warm those specs collapse onto), and #797 then added
+ *     `computeRvol`'s WIDER 936-bar read on the same timeframe — so 936, not
+ *     260, is the max this line is defined as. `bar-prefetch.ts` imports that
+ *     constant rather than repeating its value, so this list cannot drift from
+ *     the one that actually governs the fetch. Leaving this timeframe out would not
+ *     fabricate anything — a cold `computeIndicator` call still throws
+ *     `InsufficientBarsError` below its 15-bar floor rather than answering
+ *     short — but it would make the warm start inert for the path that matters
+ *     most: a first live/paper tick would fall through to a live
+ *     `DataSource.fetchBars` call instead of reading the pre-filled store,
+ *     defeating this script's whole purpose for the very analyst it was
+ *     written to serve.
  *   - `1h`, lookback 57 — retained for what #742 left on `1h`: the technical
  *     analyst's own context-candle read (`CONTEXT_TIMEFRAME`, `key_points`
  *     prose only, never direction/confidence), the trader's ATR stop window
@@ -131,12 +139,12 @@ import {
   resolveAlertsMode,
   type UniverseInstrument,
 } from '../apps/orchestrator/index.js';
+import { FIRST_TICK_BAR_WINDOWS } from '../apps/orchestrator/production/bar-prefetch.js';
 import type {
   DataFailoverAlert,
   DataFailoverAlertChannel,
 } from '../apps/orchestrator/production/data-failover.js';
 import type { Logger } from '../apps/orchestrator/types.js';
-import { WARMUP_5M } from '../pipeline/analysts/technical-analyst.js';
 import {
   AlpacaHttpDataClient,
   type Bar,
@@ -156,12 +164,14 @@ import {
 } from '../shared/index.js';
 import { openSharedStore, sharedStorePath } from '../shared/store/index.js';
 
-/** See the module doc "The derived timeframe list" above for the citation trail. */
-export const WARM_START_WINDOWS: readonly BarWindow[] = [
-  { timeframe: '5m', lookback: WARMUP_5M },
-  { timeframe: '1h', lookback: 57 },
-  { timeframe: '1d', lookback: 30 },
-];
+/**
+ * See the module doc "The derived timeframe list" above for the citation
+ * trail, and `bar-prefetch.ts` for the definition this aliases — the
+ * orchestrator's boot-time prefetch and this hand-run backfill warm the same
+ * store for the same first tick and must not be able to disagree about which
+ * windows that takes (#1543).
+ */
+export const WARM_START_WINDOWS: readonly BarWindow[] = FIRST_TICK_BAR_WINDOWS;
 
 export interface CoverageRow {
   instrument: string;
