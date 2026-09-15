@@ -1520,5 +1520,101 @@
       "sendFailed": null,
       "sendFailedInTrace": null
     }
+  ],
+  "saxoSessionLostAlerts": [
+    {
+      "log": null,
+      "logInTrace": null,
+      "text": "Samurai SAXO SESSION LOST (sim): the refresh token was rejected (HTTP 400)\nDetected 2026-09-10T08:15:00.000Z.\nNo order can reach this venue until a fresh session is established. Run `yarn saxo:login --env sim` to log in again.",
+      "rejected": null,
+      "sendFailed": {
+        "trace_id": "saxo-token",
+        "stage": "orchestrator",
+        "event": "saxo_session_lost_alert_send_failed",
+        "level": "error",
+        "message": "Saxo session-lost alert failed to send — the session is still lost",
+        "payload": {
+          "environment": "sim",
+          "reason": "the refresh token was rejected (HTTP 400)",
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "error": "telegram 502"
+        }
+      },
+      "sendFailedInTrace": {
+        "trace_id": "saxo-token",
+        "stage": "orchestrator",
+        "event": "saxo_session_lost_alert_send_failed",
+        "level": "error",
+        "message": "Saxo session-lost alert failed to send — the session is still lost",
+        "payload": {
+          "environment": "sim",
+          "reason": "the refresh token was rejected (HTTP 400)",
+          "reported_at": "2026-09-10T08:15:00.000Z",
+          "error": "telegram 502"
+        }
+      }
+    }
+  ],
+  "saxoWeeklyReminderAlerts": [
+    {
+      "log": {
+        "trace_id": "saxo-weekly-reminder",
+        "stage": "orchestrator",
+        "event": "saxo_weekly_relogin_reminder",
+        "level": "warn",
+        "message": "weekly Saxo live re-login reminder due. SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.",
+        "payload": {
+          "environment": "live",
+          "last_logged_in_at": "2026-09-07T18:00:00.000Z",
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "logInTrace": {
+        "trace_id": "saxo-weekly-reminder",
+        "stage": "orchestrator",
+        "event": "saxo_weekly_relogin_reminder",
+        "level": "warn",
+        "message": "weekly Saxo live re-login reminder due. SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.",
+        "payload": {
+          "environment": "live",
+          "last_logged_in_at": "2026-09-07T18:00:00.000Z",
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "text": "Samurai SAXO WEEKLY RE-LOGIN REMINDER (live): Saxo recommends logging in by hand at least once a week — run `yarn saxo:login --env live` before Monday's open.\nThe current session was last established by a manual login at 2026-09-07T18:00:00.000Z.\nSent 2026-09-10T08:15:00.000Z.",
+      "rejected": "telegram 502",
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    },
+    {
+      "log": {
+        "trace_id": "saxo-weekly-reminder",
+        "stage": "orchestrator",
+        "event": "saxo_weekly_relogin_reminder",
+        "level": "warn",
+        "message": "weekly Saxo sim re-login reminder due. SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.",
+        "payload": {
+          "environment": "sim",
+          "last_logged_in_at": null,
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "logInTrace": {
+        "trace_id": "saxo-weekly-reminder",
+        "stage": "orchestrator",
+        "event": "saxo_weekly_relogin_reminder",
+        "level": "warn",
+        "message": "weekly Saxo sim re-login reminder due. SAMURAI_ALERTS=log-only cannot page anyone about this; use SAMURAI_ALERTS=telegram for an unattended run.",
+        "payload": {
+          "environment": "sim",
+          "last_logged_in_at": null,
+          "reported_at": "2026-09-10T08:15:00.000Z"
+        }
+      },
+      "text": "Samurai SAXO WEEKLY RE-LOGIN REMINDER (sim): Saxo recommends logging in by hand at least once a week — run `yarn saxo:login --env sim` before Monday's open.\nThe current saved session has no recorded manual login (predates this reminder, or none has been run yet).\nSent 2026-09-10T08:15:00.000Z.",
+      "rejected": "telegram 502",
+      "sendFailed": null,
+      "sendFailedInTrace": null
+    }
   ]
 }

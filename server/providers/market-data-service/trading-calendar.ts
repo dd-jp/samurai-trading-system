@@ -214,6 +214,11 @@ export const ET_ZONE = 'America/New_York';
  * guard has to ask "what civil date is it in London right now" to measure
  * the horizon to `LSE_TABLE_COVERAGE_END`, and reimplementing this fixpoint
  * there would be a second, driftable copy of it.
+ *
+ * Also exported (alongside `toCivilDate`, `nextCivilDay` and
+ * `wallClockToInstant`) for `production/saxo-weekly-reminder-alert.ts`
+ * (#1524): the weekly re-login reminder needs "next Sunday 18:00 London,
+ * DST included" and this file already owns the only `Intl` fixpoint for it.
  */
 export const LONDON_ZONE = 'Europe/London';
 const SESSION_OPEN_MINUTES = 9 * 60 + 30; // 09:30 ET

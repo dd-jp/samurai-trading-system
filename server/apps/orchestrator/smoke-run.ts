@@ -6876,16 +6876,22 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // a real rate — log-only is enough, same posture as the other channels
       // above that this run never exercises.
       llmFailureRateAlerts: loggingAlertChannel('llmFailureRateAlerts', logger),
-      // #1400 — the Saxo adapter's three. This run is Alpaca/simulated-broker
-      // only (`SAMURAI_BROKER` is never read here, the same posture as
-      // `SAMURAI_MODE`), so no Saxo adapter exists to post any of them and
-      // these slots are never exercised. Log-only stand-ins, same posture as
+      // #1400 — the Saxo adapter's three, plus #1524's two. This run is
+      // Alpaca/simulated-broker only (`SAMURAI_BROKER` is never read here,
+      // the same posture as `SAMURAI_MODE`), so no Saxo adapter or reminder
+      // timer exists to post any of them and these slots are never
+      // exercised. Log-only stand-ins, same posture as
       // `lseCalendarCoverageAlerts` above; the venue's own refusals and
       // wiring are held by `saxo-venue.test.ts` and
       // `saxo-composition-root.test.ts`.
       legResizeAlerts: loggingAlertChannel('legResizeAlerts', logger),
       dormantLegsAlerts: loggingAlertChannel('dormantLegsAlerts', logger),
       priceUnitAlerts: loggingAlertChannel('priceUnitAlerts', logger),
+      // No log-only form (UNLOGGED_ALERT_IDS): `lose()` already logs
+      // `saxo_session_lost` at `error` before consulting this port, same
+      // posture as `nonSterlingFeeAlerts` below.
+      saxoSessionLostAlerts: { postSaxoSessionLostAlert: () => {} },
+      saxoWeeklyReminderAlerts: loggingAlertChannel('saxoWeeklyReminderAlerts', logger),
       // #1465 — the twenty-fifth `ALERT_CHANNEL_FIELDS` member. A bare no-op,
       // same reason as `traderDiagnosticAlerts`/`thresholdClampAlerts` above:
       // this port has deliberately no log-only form (its caller already

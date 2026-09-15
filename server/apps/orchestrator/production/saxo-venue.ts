@@ -68,6 +68,7 @@ import type {
   LegResizeUnverifiedAlertChannel,
   SaxoInstrumentResolver,
   SaxoOpenApiClient,
+  SaxoSessionLostAlertChannel,
   SaxoTokenSource,
   SaxoTradingEnvironment,
   UnresolvedPriceUnitAlertChannel,
@@ -350,9 +351,16 @@ export function buildSaxoTokenSource(
    * `tokenPath` overrides `tokenFilePath(environment)`, for `RunLoginDeps`'
    * reason (saxo-login.ts): a test must be able to exercise the precedence
    * above against a sandboxed file, and never against the operator's real
-   * saved session.
+   * saved session. `sessionLostAlerts` (#1524) is forwarded to the refresher
+   * unchanged — absent under `SAMURAI_ALERTS=log-only`, since
+   * `saxoSessionLostAlerts` has no log-only form (the refresher's own
+   * `saxo_session_lost` line already covers that mode).
    */
-  deps: { env?: NodeJS.ProcessEnv; tokenPath?: string } = {},
+  deps: {
+    env?: NodeJS.ProcessEnv;
+    tokenPath?: string;
+    sessionLostAlerts?: SaxoSessionLostAlertChannel;
+  } = {},
 ): SaxoTokenSource {
   const env = deps.env ?? process.env;
   const path = deps.tokenPath ?? tokenFilePath(environment);
@@ -362,6 +370,9 @@ export function buildSaxoTokenSource(
       config: resolveSaxoOAuthConfig(environment, env),
       tokenPath: path,
       logger,
+      ...(deps.sessionLostAlerts === undefined
+        ? {}
+        : { sessionLostAlerts: deps.sessionLostAlerts }),
     });
     // Primed HERE rather than on the first order: an expired or unreadable
     // saved session is an operator problem (`yarn saxo:login` again), and a

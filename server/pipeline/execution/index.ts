@@ -76,8 +76,17 @@ export {
   SaxoOAuthError,
 } from './adapters/saxo-oauth.js';
 export type { SaxoTokenFileRecord } from './adapters/saxo-token-file.js';
-export { savedSessionExists, tokenFilePath } from './adapters/saxo-token-file.js';
-export type { SaxoSessionState, SaxoTokenSource } from './adapters/saxo-token-source.js';
+export {
+  readTokenFile,
+  savedSessionExists,
+  tokenFilePath,
+} from './adapters/saxo-token-file.js';
+export type {
+  SaxoSessionLostAlert,
+  SaxoSessionLostAlertChannel,
+  SaxoSessionState,
+  SaxoTokenSource,
+} from './adapters/saxo-token-source.js';
 export {
   SaxoSessionLostError,
   SaxoTokenRefresher,

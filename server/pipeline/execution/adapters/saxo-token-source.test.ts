@@ -17,7 +17,12 @@ import { SaxoHttpBrokerClient } from './saxo-http-client.js';
 import type { FetchLike } from './saxo-oauth.js';
 import type { SaxoTokenFileRecord } from './saxo-token-file.js';
 import { readTokenFile, writeTokenFile } from './saxo-token-file.js';
-import type { SaxoRefreshTimers, SaxoSessionState } from './saxo-token-source.js';
+import type {
+  SaxoRefreshTimers,
+  SaxoSessionLostAlert,
+  SaxoSessionLostAlertChannel,
+  SaxoSessionState,
+} from './saxo-token-source.js';
 import { SaxoSessionLostError, SaxoTokenRefresher } from './saxo-token-source.js';
 
 const CONFIG = {
@@ -79,6 +84,13 @@ function fakeTimers(): { timers: SaxoRefreshTimers; scheduled: ScheduledRefresh[
   };
 }
 
+function recordingSessionLostAlerts(): SaxoSessionLostAlertChannel & {
+  alerts: SaxoSessionLostAlert[];
+} {
+  const alerts: SaxoSessionLostAlert[] = [];
+  return { alerts, postSaxoSessionLostAlert: (alert) => alerts.push(alert) };
+}
+
 function tokenResponse(
   body: { access_token: string; refresh_token: string },
   status = 201,
@@ -107,6 +119,7 @@ describe('SaxoTokenRefresher', () => {
       fetchImpl?: FetchLike;
       writeRecord?: (path: string, record: SaxoTokenFileRecord) => void;
       backoff?: { baseMs: number; maxMs: number };
+      sessionLostAlerts?: SaxoSessionLostAlertChannel;
     } = {},
   ) {
     const clock = movableClock();
@@ -129,6 +142,9 @@ describe('SaxoTokenRefresher', () => {
         }),
       ...(overrides.writeRecord === undefined ? {} : { writeRecord: overrides.writeRecord }),
       ...(overrides.backoff === undefined ? {} : { backoff: overrides.backoff }),
+      ...(overrides.sessionLostAlerts === undefined
+        ? {}
+        : { sessionLostAlerts: overrides.sessionLostAlerts }),
     });
     return { refresher, clock, scheduled, entries, calls, logger };
   }
@@ -200,6 +216,18 @@ describe('SaxoTokenRefresher', () => {
     void refresher.stop();
   });
 
+  it('carries loggedInAt forward through a rotation unchanged — a rotation is not a manual login (#1524)', async () => {
+    const loggedInAt = new Date(START - 86_400_000).toISOString();
+    writeTokenFile(path, savedRecord({ loggedInAt }));
+    const { refresher, scheduled } = build();
+    refresher.start();
+    scheduled[0]?.callback();
+    await refresher.whenIdle();
+
+    expect(readTokenFile(path)?.loggedInAt).toBe(loggedInAt);
+    void refresher.stop();
+  });
+
   it('never adopts a token it could not save — a crash at the persist step leaves the old one in use', async () => {
     writeTokenFile(path, savedRecord());
     const { refresher, scheduled, entries } = build({
@@ -242,6 +270,67 @@ describe('SaxoTokenRefresher', () => {
     expect(refresher.sessionState()).toMatchObject({ status: 'lost' });
     expect(entries.map((entry) => entry.event)).toContain('saxo_session_lost');
     expect(JSON.stringify(entries)).toContain('yarn saxo:login');
+  });
+
+  it('posts to sessionLostAlerts exactly once per instance, even across repeated failed calls (#1524)', async () => {
+    const sessionLostAlerts = recordingSessionLostAlerts();
+    const { refresher } = build({ sessionLostAlerts });
+
+    await expect(refresher.getAccessToken()).rejects.toBeInstanceOf(SaxoSessionLostError);
+    await expect(refresher.getAccessToken()).rejects.toBeInstanceOf(SaxoSessionLostError);
+    await expect(refresher.getAccessToken()).rejects.toBeInstanceOf(SaxoSessionLostError);
+
+    expect(sessionLostAlerts.alerts).toHaveLength(1);
+    expect(sessionLostAlerts.alerts[0]).toMatchObject({
+      environment: 'sim',
+      reason: expect.stringContaining('yarn saxo:login'),
+    });
+  });
+
+  it('a fresh instance after a re-login alerts again — the episode resets with the process (#1524)', async () => {
+    const first = recordingSessionLostAlerts();
+    const firstRefresher = build({ sessionLostAlerts: first }).refresher;
+    await expect(firstRefresher.getAccessToken()).rejects.toBeInstanceOf(SaxoSessionLostError);
+    expect(first.alerts).toHaveLength(1);
+
+    // A fresh `yarn saxo:login` writes a usable session; the restarted process
+    // gets a brand-new `SaxoTokenRefresher`, which is the only way `lostReason`
+    // is ever cleared — see `SaxoSessionLostAlert`'s doc.
+    writeTokenFile(path, savedRecord());
+    const second = recordingSessionLostAlerts();
+    const secondRefresher = build({ sessionLostAlerts: second }).refresher;
+    expect(await secondRefresher.getAccessToken()).toBe(SAVED_ACCESS);
+    expect(second.alerts).toHaveLength(0);
+    void secondRefresher.stop();
+
+    // A LATER loss on the new instance alerts again, independent of the first.
+    const failing = build({
+      sessionLostAlerts: second,
+      fetchImpl: async () => new Response('{"error":"invalid_grant"}', { status: 400 }),
+    });
+    failing.refresher.start();
+    failing.scheduled[0]?.callback();
+    await failing.refresher.whenIdle();
+    expect(second.alerts).toHaveLength(1);
+
+    // `lose()` clears the timer without re-arming it, so nothing should ever
+    // invoke this callback again in production — but if something did (a
+    // stray re-entry into `runRefresh()` on an already-lost instance), the
+    // guard at its top, not a second dedup check, is what must stop a second
+    // alert.
+    failing.scheduled[0]?.callback();
+    await failing.refresher.whenIdle();
+    expect(second.alerts).toHaveLength(1);
+  });
+
+  it('does not page when no sessionLostAlerts channel is supplied (log-only posture)', async () => {
+    const { refresher, entries } = build();
+
+    await expect(refresher.getAccessToken()).rejects.toBeInstanceOf(SaxoSessionLostError);
+
+    // The refusal is still logged — see the pre-existing "no saved session"
+    // case — this only proves the optional channel costs nothing when absent.
+    expect(entries.map((entry) => entry.event)).toContain('saxo_session_lost');
   });
 
   it('reports the session lost when the saved refresh token has already expired', async () => {
