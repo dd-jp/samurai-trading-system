@@ -679,6 +679,59 @@ describe('startFillSync', () => {
       await sync.stop();
     });
 
+    // #1609: `sweepWedgedZeroFillLots`'s two independent push sites — the
+    // SQL-guard shape mismatch and the store-write `catch` block — share
+    // `action: 'undetermined'` AND `kind: 'sweep'`, the same collision shape
+    // #1585 fixed for the never-confirmed-flatten trio, just on a sweep row
+    // instead of a flatten row.
+    it('logs two different wedged-zero-fill sweep escalations on the same lot as distinct episodes', async () => {
+      const logger = makeLogger();
+      const base = {
+        idempotency_key: 'key-meta-1',
+        instrument: 'META',
+        store_state: 'filled' as const,
+        broker_state: null,
+        action: 'undetermined' as const,
+        kind: 'sweep' as const,
+      };
+      const shapeMismatch = {
+        ...base,
+        reason: 'wedged-zero-fill shape mismatch: isWedgedZeroFillLot still matches',
+        escalation: 'sweep_shape_mismatch' as const,
+      };
+      const abandonFailed = {
+        ...base,
+        reason: 'wedged-zero-fill abandon failed: store write failed',
+        escalation: 'sweep_abandon_failed' as const,
+      };
+      const execution = makeExecution({
+        reconcile: vi
+          .fn()
+          .mockResolvedValueOnce(makeReport({ divergences: [shapeMismatch] }))
+          .mockResolvedValueOnce(makeReport({ divergences: [abandonFailed] }))
+          .mockResolvedValue(makeReport()),
+      });
+      const sync = startFillSync({
+        execution,
+        clock: { now: () => new Date() },
+        logger,
+        fillPollIntervalMs: 1_000,
+        reconcileTraceId: 'test-reconcile',
+        fillSyncTraceId: 'test-fill-sync',
+      });
+
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      const divergenceLines = logger.entries.filter(
+        (entry) => entry.message === 'reconcile divergence',
+      );
+      expect(
+        divergenceLines.map((entry) => (entry.payload as { escalation?: string }).escalation),
+      ).toEqual(['sweep_shape_mismatch', 'sweep_abandon_failed']);
+
+      await sync.stop();
+    });
+
     it('does not demote an adopted divergence the zero-size throttle cannot back — a flatten row, or a bracket adopt not yet filled (#1122)', async () => {
       const logger = makeLogger();
       const flattenAdopted = {

@@ -184,6 +184,7 @@ export async function sweepWedgedZeroFillLots(
               `wedged-zero-fill shape mismatch: isWedgedZeroFillLot still matches ` +
               `'${position.idempotency_key}' but abandonWedgedZeroFillLot's SQL guard did not ` +
               '— the TS predicate and its SQL restatement have diverged (#1601)',
+            escalation: 'sweep_shape_mismatch',
           });
         }
         continue;
@@ -220,6 +221,7 @@ export async function sweepWedgedZeroFillLots(
         action: 'undetermined',
         kind: 'sweep',
         reason: `wedged-zero-fill abandon failed: ${describeThrownSafely(error)}`,
+        escalation: 'sweep_abandon_failed',
       });
     }
   }

@@ -394,19 +394,28 @@ export interface ExecutionResult {
 
 /**
  * The specific escalation event behind a `ReconcileDivergence.escalation`
- * (#1577, widened #1585) — see that field's doc for why a named event replaced
- * a bare boolean. `wedge_cancelled` is the one label `cancelWedgedFlatten`'s
- * branch sets regardless of which of its own three outcomes (throttled,
- * cancel-failed, cancel-issued) produced it — those three stay collapsed
- * under one name, unlike the three below, which each get their own; the
- * other three are `cancelNeverConfirmedFlatten`'s (reconcile.ts), in the
- * order that function tries them.
+ * (#1577, widened #1585, #1609) — see that field's doc for why a named event
+ * replaced a bare boolean. `wedge_cancelled` is the one label
+ * `cancelWedgedFlatten`'s branch sets regardless of which of its own three
+ * outcomes (throttled, cancel-failed, cancel-issued) produced it — those
+ * three stay collapsed under one name, unlike the three below, which each
+ * get their own; those three are `cancelNeverConfirmedFlatten`'s
+ * (reconcile.ts), in the order that function tries them. The last two are
+ * `sweepWedgedZeroFillLots`'s (wedged-zero-fill-sweep.ts, #1609): both share
+ * `action: 'undetermined'` and `kind: 'sweep'`, which without a distinguishing
+ * `escalation` collided under `reconcileDedupState` (fill-sync.ts) — a lot
+ * that alternates between the two across polls would have logged only the
+ * first. `sweep_shape_mismatch` is `abandonWedgedZeroFillLot`'s SQL guard
+ * having drifted from `isWedgedZeroFillLot` (#1601); `sweep_abandon_failed` is
+ * the pre-existing store-write failure this sweep's `catch` block reports.
  */
 export type ReconcileEscalation =
   | 'wedge_cancelled'
   | 'never_confirmed_throttled'
   | 'never_confirmed_cancel_failed'
-  | 'never_confirmed_coverage_short';
+  | 'never_confirmed_coverage_short'
+  | 'sweep_shape_mismatch'
+  | 'sweep_abandon_failed';
 
 export interface ReconcileDivergence {
   idempotency_key: string;
@@ -460,7 +469,12 @@ export interface ReconcileDivergence {
    * (fill-sync.ts) tell these apart from the benign action they share AND from
    * each other — a row cancelled once, still short of coverage, is a different
    * fact than the same row still throttled from an earlier cancel, even though
-   * both are `action: 'undetermined'`.
+   * both are `action: 'undetermined'`. #1609 added the last two:
+   * `sweepWedgedZeroFillLots` (wedged-zero-fill-sweep.ts) has two independent
+   * push sites that share `action: 'undetermined'` AND `kind: 'sweep'` — the
+   * SQL-guard shape mismatch (`sweep_shape_mismatch`) and the store-write
+   * `catch` block (`sweep_abandon_failed`) — which collided under the same
+   * dedup before this field told them apart.
    */
   escalation?: ReconcileEscalation;
   /**
