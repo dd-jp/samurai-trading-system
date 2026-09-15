@@ -139,22 +139,19 @@ describe('ATR migration (#304) — Trader’s deleted computeAtr vs MDS computeI
   // pinned the honest way: every case here is a window wide enough for the
   // period it claims, which is exactly the invariant `atrIndicatorSpec`
   // encodes and the only shape Trader can present now.
-  it.each([
-    1,
-    2,
-    6,
-    13,
-    LOOKBACK,
-  ])('agrees exactly for an ATR(%i) over its own lookback + 1 fetch width', (lookback) => {
-    for (let seed = 1; seed <= 25; seed++) {
-      const bars = pseudoRandomBars(lookback + 1, seed);
-      const legacy = LEGACY_TRADER_ATR(bars, lookback);
-      expect(legacy).not.toBeNull();
-      // MDS rounds to 8dp for determinism; the legacy function did not.
-      // That fixed rounding is the ONLY numeric difference between them.
-      expect(mdsAtr(bars, lookback)).toBeCloseTo(legacy as number, 8);
-    }
-  });
+  it.each([1, 2, 6, 13, LOOKBACK])(
+    'agrees exactly for an ATR(%i) over its own lookback + 1 fetch width',
+    (lookback) => {
+      for (let seed = 1; seed <= 25; seed++) {
+        const bars = pseudoRandomBars(lookback + 1, seed);
+        const legacy = LEGACY_TRADER_ATR(bars, lookback);
+        expect(legacy).not.toBeNull();
+        // MDS rounds to 8dp for determinism; the legacy function did not.
+        // That fixed rounding is the ONLY numeric difference between them.
+        expect(mdsAtr(bars, lookback)).toBeCloseTo(legacy as number, 8);
+      }
+    },
+  );
 
   it('agrees on the exact fetch width decide.ts uses, to the last bit', () => {
     // `atr_lookback + 1` bars -> exactly `atr_lookback` true ranges, so

@@ -433,9 +433,16 @@ describe('closed trades', () => {
     expect(within(drawer).getByText('+$11.20')).toBeTruthy();
     expect(within(drawer).getByText('−$2.41')).toBeTruthy();
     expect(within(drawer).getAllByText('+$8.79').length).toBeGreaterThan(0);
-    expect(
-      within(drawer).getByText(/Entry 552\.10 · exit 559\.80 · \$11,042\.00 notional at entry/),
-    ).toBeTruthy();
+    expect(within(drawer).getByText('long 20 · stocks')).toBeTruthy();
+    expect(within(drawer).getByText('target hit')).toBeTruthy();
+    expect(within(drawer).getByText('06:30:00Z – 08:00:00Z')).toBeTruthy();
+    const keyCell = within(drawer).getByText('k1');
+    expect(keyCell.title).toBe('k1');
+    const pnl = drawer.querySelector<HTMLElement>('[data-section="pnl"]');
+    if (pnl === null) throw new Error('pnl section not found');
+    expect(within(pnl).getByText('552.10')).toBeTruthy();
+    expect(within(pnl).getByText('559.80')).toBeTruthy();
+    expect(within(pnl).getByText('$11,042.00')).toBeTruthy();
     const fills = within(drawer).getByRole('list', { name: 'Fills' });
     expect(within(fills).getByText(/f-entry/)).toBeTruthy();
     expect(within(fills).getByText(/f-target/)).toBeTruthy();
@@ -532,6 +539,6 @@ describe('control arm', () => {
     expect(within(drawer).getByText('Control arm: no LLM critic — not applicable')).toBeTruthy();
     // The control's own Risk decision (binding constraint, conditions) is
     // real and still renders normally — only the critic verdict is N/A.
-    expect(within(drawer).getByText(/no binding constraint recorded/)).toBeTruthy();
+    expect(within(drawer).getByText(/no binding constraint — no gate named one/)).toBeTruthy();
   });
 });

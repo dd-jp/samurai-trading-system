@@ -178,7 +178,7 @@ export async function ingestFills(input: FillIngestInput): Promise<void> {
   // verify that before trusting this comment for a new adapter (#1087:
   // `SimulatedBrokerAdapter` violated it once; fixed at the source
   // (simulated-adapter.ts), not here). Widening this floor to re-verify it
-  // is not diagnosable through `yarn smoke`'s gate (#1125): the excluded
+  // is not diagnosable through `npm run smoke`'s gate (#1125): the excluded
   // scripted fill surfaces as a per-lot-aggregated contained failure with no
   // `GATE:` line and no naming of what broke about this floor specifically.
   const since = earliest(positions.map((position) => position.opened_at));
@@ -1505,7 +1505,7 @@ async function cumulativeTopUp(
  * `countCostBasisDrops` (sqlite-arm-comparison-source.ts) counts kept and
  * dropped rows per arm and per exit class off the same read the comparison is
  * built from, and `ArmPerformance.cost_basis_drops` carries both classes' drop
- * rates to `yarn report:arms` and the FL sample (migration 0066) — so #1412
+ * rates to `npm run report:arms` and the FL sample (migration 0066) — so #1412
  * can weight or bound the selection term instead of assuming it away. Nothing
  * about the charge taken here changed: this fallback still fires only for a
  * leg whose own submission captured, and a flatten whose

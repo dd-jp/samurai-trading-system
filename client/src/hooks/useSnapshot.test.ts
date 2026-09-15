@@ -30,17 +30,12 @@ describe('toWireSnapshot', () => {
     expect(snapshot?.mode).toBeNull();
   });
 
-  it.each([
-    ['staging'],
-    [''],
-    ['PAPER'],
-    [' live'],
-    [42],
-    [null],
-    [{ mode: 'live' }],
-  ])('narrows the unrecognised mode %o to null', (mode) => {
-    expect(toWireSnapshot(raw({ mode }))?.mode).toBeNull();
-  });
+  it.each([['staging'], [''], ['PAPER'], [' live'], [42], [null], [{ mode: 'live' }]])(
+    'narrows the unrecognised mode %o to null',
+    (mode) => {
+      expect(toWireSnapshot(raw({ mode }))?.mode).toBeNull();
+    },
+  );
 
   it('never coerces an unknown mode toward "paper"', () => {
     // The asymmetric failure this whole field exists to prevent: a page that
@@ -261,14 +256,13 @@ describe('toWireSnapshot', () => {
       expect(toWireSnapshot(body)?.metrics.profit_factor).toEqual({ kind: 'ratio', value: 0 });
     });
 
-    it.each([
-      { kind: 'ratio', value: 2.5 },
-      { kind: 'no_losses' },
-      { kind: 'unreadable' },
-    ])("passes today's server shape %o through untouched", (shape) => {
-      const body = raw({ metrics: { ...makeMetrics(), profit_factor: shape } });
-      expect(toWireSnapshot(body)?.metrics.profit_factor).toEqual(shape);
-    });
+    it.each([{ kind: 'ratio', value: 2.5 }, { kind: 'no_losses' }, { kind: 'unreadable' }])(
+      "passes today's server shape %o through untouched",
+      (shape) => {
+        const body = raw({ metrics: { ...makeMetrics(), profit_factor: shape } });
+        expect(toWireSnapshot(body)?.metrics.profit_factor).toEqual(shape);
+      },
+    );
 
     // Each row is wrapped in its own 1-tuple: `it.each` spreads a row that is
     // itself an array as a MULTI-argument call rather than a single `%o`

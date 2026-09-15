@@ -1,6 +1,6 @@
 /**
  * One-time 5-year history ingest via Tiingo (review 2026-08-06 A2) —
- * `yarn ingest-history`.
+ * `npm run ingest-history`.
  *
  * Fills the persistent Stage-2 scratch store (`data/stage2-bars.sqlite`)
  * with the pinned 5-year window for the MVP universe, from Tiingo's free

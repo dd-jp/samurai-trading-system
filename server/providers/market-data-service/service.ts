@@ -338,7 +338,7 @@ export class MarketDataServiceImpl implements MarketDataService {
    * chasing pagination detail still has this line's `duration_ms` as the
    * signal that a fetch paginated slowly, just not how many pages it took.
    *
-   * AC3 volume bound (measured, not estimated — `yarn smoke`, 4 ticks,
+   * AC3 volume bound (measured, not estimated — `npm run smoke`, 4 ticks,
    * paper/live mode): a single instrument's technical analyst issues 8
    * distinct (timeframe, lookback) `getBars` windows per tick (observed:
    * 5m/260, 1h/20, 5m/112, 5m/84, 5m/81, 5m/936, 1h/57, 1d/30). Cache hits

@@ -586,10 +586,8 @@ function TradesTable(props: ReviewTabProps) {
 }
 
 const NO_TIMELINE: Readonly<Record<NonNullable<TradeDetail['absence']['trace']>, string>> = {
-  unreachable:
-    'No trace id reaches this trade — the stage record keys on the Risk decision, and none in the recent-decisions window names its debate.',
-  aged_out:
-    'This trace has aged out of the 15-minute pipeline window; the Risk decision and verdict below are what remain.',
+  unreachable: 'No trace id reaches this trade — no recent Risk decision names its debate.',
+  aged_out: 'Trace aged out of the 15-minute pipeline window; Risk decision and verdict remain.',
 };
 
 function TradeDrawer({ snapshot, selectedKey }: Pick<ReviewTabProps, 'snapshot' | 'selectedKey'>) {
@@ -614,14 +612,32 @@ function TradeDrawer({ snapshot, selectedKey }: Pick<ReviewTabProps, 'snapshot' 
       <div className="drawer-head">
         {verdict !== undefined && <Seal outcome={verdict.status} />}
         <h2 className="display">{trade.instrument}</h2>
-        <b className={tone}>{formatSignedUsd(trade.realized_pnl_net)}</b>
-        <span className="mono muted drawer-trace">{trade.idempotency_key}</span>
+        <b className={`drawer-pnl mono ${tone}`}>{formatSignedUsd(trade.realized_pnl_net)}</b>
       </div>
-      <p className="drawer-line muted">
-        {sideWord(trade.side)} {formatQty(trade.filled_size)} · {trade.asset_class} ·{' '}
-        {presentCloseReason(trade.close_reason).word} · {formatClockUtc(trade.opened_at)} to{' '}
-        {formatClockUtc(trade.closed_at)}
-      </p>
+      <dl className="kv-list" data-section="trade">
+        <div className="kv">
+          <dt>Position</dt>
+          <dd>
+            {sideWord(trade.side)} {formatQty(trade.filled_size)} · {trade.asset_class}
+          </dd>
+        </div>
+        <div className="kv">
+          <dt>Closed by</dt>
+          <dd>{presentCloseReason(trade.close_reason).word}</dd>
+        </div>
+        <div className="kv">
+          <dt>Held</dt>
+          <dd className="mono">
+            {formatClockUtc(trade.opened_at)} – {formatClockUtc(trade.closed_at)}
+          </dd>
+        </div>
+        <div className="kv">
+          <dt>Key</dt>
+          <dd className="mono muted kv-truncate" title={trade.idempotency_key}>
+            {trade.idempotency_key}
+          </dd>
+        </div>
+      </dl>
 
       <h3>Why it was taken</h3>
       <DebateSection
@@ -649,6 +665,18 @@ function TradeDrawer({ snapshot, selectedKey }: Pick<ReviewTabProps, 'snapshot' 
       <h3>P&amp;L breakdown</h3>
       <dl className="kv-list" data-section="pnl">
         <div className="kv">
+          <dt>Entry</dt>
+          <dd className="mono">{formatPrice(trade.entry_price)}</dd>
+        </div>
+        <div className="kv">
+          <dt>Exit</dt>
+          <dd className="mono">{formatPrice(trade.exit_price)}</dd>
+        </div>
+        <div className="kv">
+          <dt>Notional</dt>
+          <dd className="mono">{formatUsd(trade.filled_size * trade.entry_price)}</dd>
+        </div>
+        <div className="kv">
           <dt>Gross</dt>
           <dd className={`mono ${pnlTone(gross)}`}>{formatSignedUsd(gross)}</dd>
         </div>
@@ -661,10 +689,8 @@ function TradeDrawer({ snapshot, selectedKey }: Pick<ReviewTabProps, 'snapshot' 
           <dd className={`mono ${tone}`}>{formatSignedUsd(trade.realized_pnl_net)}</dd>
         </div>
       </dl>
-      <p className="muted small">
-        Fees are the only cost the wire itemises; spread is inside the fill prices. Entry{' '}
-        {formatPrice(trade.entry_price)} · exit {formatPrice(trade.exit_price)} ·{' '}
-        {formatUsd(trade.filled_size * trade.entry_price)} notional at entry.
+      <p className="drawer-caveat">
+        Spread sits inside fill prices; fees are the only itemised cost.
       </p>
 
       <h3>Fills</h3>

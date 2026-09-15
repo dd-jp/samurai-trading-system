@@ -39,7 +39,7 @@ Market Data Service ─┐
 ## Tech Stack
 
 - **Language:** TypeScript (Node 24+ per `engines`; CI pins `.nvmrc` = 24)
-- **Package manager:** Yarn 4.18.0 (via Corepack; `packageManager` field). There is no `package-lock.json`
+- **Package manager:** npm 11.17.0 (`packageManager` field pins it for Corepack-aware tooling). `package-lock.json` is committed
 - **Tests:** Vitest
 - **Linter/formatter:** Biome
 - **State:** SQLite via `better-sqlite3`, one file per environment (`data/samurai-<env>.sqlite`), 39 forward migrations
@@ -48,8 +48,7 @@ Market Data Service ─┐
 
 ## Prerequisites
 
-- Node.js 24
-- Corepack enabled (`corepack enable`) — Yarn 4 comes from `packageManager`, no Yarn binary is vendored
+- Node.js 24 (ships with npm)
 - (Optional) Alpaca API key for paper trading
 - (Optional) Nous API key for live LLM debate
 
@@ -57,25 +56,25 @@ Market Data Service ─┐
 
 ```bash
 # Install dependencies
-yarn install --immutable
+npm ci
 
 # Run tests
-yarn test
+npm run test
 
 # Type-check (server, tests, client, e2e — four projects)
-yarn typecheck
+npm run typecheck
 
 # Build (emits dist/server + dist/contracts + dist/client, copies SQL migrations)
-yarn build
+npm run build
 
 # Lint
-yarn lint
-yarn lint:fix
+npm run lint
+npm run lint:fix
 ```
 
-`yarn precommit` runs lint:fix → typecheck → test:coverage in one pass. There is
+`npm run precommit` runs lint:fix → typecheck → test:coverage in one pass. There is
 no separate format step: `biome check` **is** the formatter as well as the
-linter, so `yarn lint` already fails on an unformatted file and `yarn lint:fix`
+linter, so `npm run lint` already fails on an unformatted file and `npm run lint:fix`
 already rewrites it. A check-only `yarn format` used to lead that chain, which
 made the gate abort on precisely the fault the next step existed to fix.
 
@@ -84,12 +83,12 @@ made the gate abort on precisely the fault the next step existed to fix.
 ### Orchestrator (live tick loop)
 
 ```bash
-yarn orchestrator
+npm run orchestrator
 ```
 
 Runs the full pipeline: market data → analysts → debate → trader → risk → verdict → execution. The scheduler routes crypto (24/7) and stocks (market hours via the trading calendar). Default universe is QQQ, AAPL, TSLA (`DEFAULT_UNIVERSE` in `server/apps/orchestrator/scheduler.ts`) — SPY was dropped in #1006 and the crypto pair left with the scope change. It is not the live universe either: ADR-0016 puts live instruments on LSE leveraged ETPs.
 
-`yarn orchestrator` builds first, then runs `node --env-file=.env.local dist/server/apps/orchestrator/index.js`. The built entrypoint does **not** read a `.env` file on its own — pass `--env-file` or export the variables. The tracked `.env` holds empty placeholders and is not a configured environment; real credentials belong in the gitignored `.env.local`. An empty or whitespace-only value counts as **missing**, not as configured.
+`npm run orchestrator` builds first, then runs `node --env-file=.env.local dist/server/apps/orchestrator/index.js`. The built entrypoint does **not** read a `.env` file on its own — pass `--env-file` or export the variables. The tracked `.env` holds empty placeholders and is not a configured environment; real credentials belong in the gitignored `.env.local`. An empty or whitespace-only value counts as **missing**, not as configured.
 
 #### Required environment
 
@@ -122,7 +121,7 @@ Two roles, each with its own default model. Set a `_MODEL` override only if you 
 | Variable | Used by |
 | --- | --- |
 | `POLYGON_API_KEY` | Stage-2 historical bars (free tier: 5 calls/min, ~2 years of history — a fallback source, not the backfill source) |
-| `TIINGO_API_KEY` | `yarn ingest-history` — Stage-2 history ingestion |
+| `TIINGO_API_KEY` | `npm run ingest-history` — Stage-2 history ingestion |
 | `WORLDMONITOR_API_KEY` | WorldMonitor CII feed (ADR-0002). The adapter stays parked until this is set |
 | `PORT`, `HOST` | Dashboard bind address (defaults `8787`, `127.0.0.1`). Binding `HOST` to anything other than `127.0.0.1`/`::1` refuses to start unless `SAMURAI_DASHBOARD_TOKEN` (below) is also set — see #887/ADR-0019 |
 | `SAMURAI_DASHBOARD_TOKEN` | Required to bind the dashboard's `HOST` off loopback (#887/ADR-0019). Also verified per request against `GET /api/snapshot` whenever configured, host-independent (#1038) — see `server/apps/service-api/bind-guard.ts` and `request-auth.ts` |
@@ -146,7 +145,7 @@ Alpaca's published limit is **200 requests per minute per account**, shared by t
 
 #### Optional — durable log sink
 
-`yarn orchestrator` writes the structured log to stdout **and** to a rotating file, so a run started without a shell redirect still leaves a diagnostic trace behind. All three variables are optional; the defaults are the intended configuration.
+`npm run orchestrator` writes the structured log to stdout **and** to a rotating file, so a run started without a shell redirect still leaves a diagnostic trace behind. All three variables are optional; the defaults are the intended configuration.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -186,7 +185,7 @@ There is deliberately no default. A process that silently fell back to log-only 
 ### Smoke run (pre-soak gate)
 
 ```bash
-yarn smoke
+npm run smoke
 ```
 
 An **offline** end-to-end run through all six stages with no Alpaca call — it proves the wiring, not the credentials or venue semantics. Universe is BTC-USD only, so a closed US session cannot make an empty tick plan look like a clean run. It does not clear ADR-0004 §5's "wiring validated" bar, which needs one real paper tick.
@@ -194,7 +193,7 @@ An **offline** end-to-end run through all six stages with no Alpaca call — it 
 ### Service API + client (operator view)
 
 ```bash
-yarn api                # http://127.0.0.1:8787   (alias: yarn dashboard)
+npm run api                # http://127.0.0.1:8787   (alias: npm run dashboard)
 ```
 
 Read-only HTTP view over the same SQLite file the orchestrator writes: pipeline lanes per instrument, positions, debates, verdicts, per-analyst performance, LLM spend against the cap, and provider-status tiles. It resolves the store path from `SAMURAI_MODE` exactly as the orchestrator does — `NODE_ENV` stopped selecting the file in #330 — so it cannot show a healthy, empty system from the wrong file. Provider credentials are optional here — a missing key degrades that tile to `not_configured` rather than blocking startup.
@@ -212,19 +211,19 @@ Read-only HTTP view over the same SQLite file the orchestrator writes: pipeline 
 **Two ways to run it.**
 
 ```bash
-# 1. Built bundle, one process — what an operator runs, and what `yarn api` does.
+# 1. Built bundle, one process — what an operator runs, and what `npm run api` does.
 #    The same node:http server serves the React bundle from dist/client/ AND /api/snapshot.
-yarn build
+npm run build
 SAMURAI_MODE=paper node dist/server/apps/service-api/index.js        # http://127.0.0.1:8787
 
 # 2. Vite dev server — hot reload while working on client/.
 #    TWO terminals: Vite serves the page, the service API still serves the data.
-SAMURAI_MODE=paper PORT=8799 yarn dev:api                     # data  (tsx watch, no build)
-PORT=8799 yarn dev:web                                        # page → http://localhost:5173
+SAMURAI_MODE=paper PORT=8799 npm run dev:api                     # data  (tsx watch, no build)
+PORT=8799 npm run dev:web                                        # page → http://localhost:5173
 ```
 
-`yarn dev:api` runs the service API from source under `tsx`, so it restarts on
-edit and needs no `yarn build`. It always prints the
+`npm run dev:api` runs the service API from source under `tsx`, so it restarts on
+edit and needs no `npm run build`. It always prints the
 `*** DASHBOARD UI NOT SERVABLE ***` banner, and in dev that is expected noise
 rather than a fault: from source `bundleRoot` resolves to `client/`, the Vite
 *source* template, because in this mode the page is Vite's job on `:5173` and
@@ -249,10 +248,10 @@ An orchestrator that is up but between ticks legitimately shows idle chips in th
 ### Both together — the one command an operator runs
 
 ```bash
-yarn start              # alias: yarn serve
+npm start              # alias: npm run serve
 ```
 
-Builds once, then supervises the orchestrator and the service API as one foreground process; a single Ctrl-C stops both. There is no third process for the UI: the client is a static bundle that the service API serves. Signals are forwarded to the children and the supervisor waits for both to exit rather than exiting first — killing it mid-tick is what creates an orphaned verdict. Either child dying takes the other down with a non-zero exit. `yarn orchestrator` remains the money-path entrypoint for the unattended soak.
+Builds once, then supervises the orchestrator and the service API as one foreground process; a single Ctrl-C stops both. There is no third process for the UI: the client is a static bundle that the service API serves. Signals are forwarded to the children and the supervisor waits for both to exit rather than exiting first — killing it mid-tick is what creates an orphaned verdict. Either child dying takes the other down with a non-zero exit. `npm run orchestrator` remains the money-path entrypoint for the unattended soak.
 
 ### Stage-2 backtest / validation
 
@@ -260,13 +259,13 @@ Hand-run scripts, not part of the tick loop:
 
 ```bash
 # Tiingo history → SQLite (needs TIINGO_API_KEY)
-yarn data ingest-history        # alias: yarn ingest-history
+npm run data -- ingest-history        # alias: npm run ingest-history
 
 # Warm-start OHLCV bars for the live universe, from the free stack
-yarn data backfill-market-data  # alias: yarn backfill-market-data
+npm run data -- backfill-market-data  # alias: npm run backfill-market-data
 
-# The rest run against dist/ after `yarn build`. They read POLYGON_API_KEY /
-# TIINGO_API_KEY, so pass the env file the same way `yarn orchestrator` does.
+# The rest run against dist/ after `npm run build`. They read POLYGON_API_KEY /
+# TIINGO_API_KEY, so pass the env file the same way `npm run orchestrator` does.
 node --env-file=.env.local dist/server/tools/run-stage2.js                   # walk-forward / CPCV / PBO / MinBTL / DSR
 node --env-file=.env.local dist/server/tools/run-spread-calibration.js       # measured spreads for the cost model
 node --env-file=.env.local dist/server/tools/run-stage2-cost-decomposition.js
@@ -278,24 +277,24 @@ node --env-file=.env.local dist/server/tools/run-stage2-cost-decomposition.js
 
 ```bash
 # Full suite
-yarn test
+npm run test
 
 # Watch mode
-yarn test:watch
+npm run test:watch
 
 # With coverage
-yarn test:coverage
+npm run test:coverage
 
 # Only what your branch touched — vitest --changed against origin/main.
 # A fast inner-loop check, NOT a substitute for the full run: it needs an
 # up-to-date origin/main, and it cannot see a break in a file you did not edit.
-yarn test:local
+npm run test:local
 
 # Specific stage
-yarn vitest run server/pipeline/debate-engine/
+npx vitest run server/pipeline/debate-engine/
 ```
 
-The suite is **4578 tests across 266 files** (4577 passing; one `describe.skipIf` integration test — `server/pipeline/debate-engine/disagreement-detector.integration.test.ts` — that runs only when live LLM credentials are present). Measured 2026-09-03 on `yarn test`.
+The suite is **4578 tests across 266 files** (4577 passing; one `describe.skipIf` integration test — `server/pipeline/debate-engine/disagreement-detector.integration.test.ts` — that runs only when live LLM credentials are present). Measured 2026-09-03 on `npm run test`.
 
 `vitest.config.ts` also writes a durable, machine-readable per-test record to
 `.vitest-reports/junit.xml` (gitignored) on every run, alongside the normal
@@ -305,7 +304,7 @@ it survives after the process exits ([#809](https://github.com/dd-jp/samurai-tra
 
 CI (`.github/workflows/ci.yml`) runs on every PR and has two jobs:
 
-- **checks** — `yarn lint`, `yarn typecheck`, `yarn build`, `yarn build:web`, `yarn test`, `yarn check:citations`, and a guard that the indicator golden fixture was generated rather than hand-edited. Each runs even if an earlier one fails, so a lint break can't hide a test break.
+- **checks** — `npm run lint`, `npm run typecheck`, `npm run build`, `npm run build:web`, `npm run test`, `npm run check:citations`, and a guard that the indicator golden fixture was generated rather than hand-edited. Each runs even if an earlier one fails, so a lint break can't hide a test break.
 - **e2e** — the Playwright suite against the built bundle, on its own runner with Chromium installed; failures upload traces.
 
 Both must pass before merge.
@@ -345,12 +344,12 @@ samurai-trading-system/
 │   ├── shared/            # Types, clock, SQLite store + migrations, HTTP, LLM
 │   └── tools/             # offline only, never on the money path
 │       ├── backtest/      # Fill simulation, validation, replay, Stage-2 selection
-│       ├── data-cli.ts    # `yarn data` — history ingestion, market-data backfill
-│       ├── check-path-citations.ts    # `yarn check:citations` — CI gate over the docs
-│       ├── check-live-money-gates.ts  # `yarn check:live-gates` — the cited gates are still open
-│       ├── report-arm-comparison.ts   # `yarn report:arms`
-│       ├── report-cgt-disposals.ts    # `yarn report:cgt`
-│       ├── place-soak-position.ts     # `yarn place-soak-position`
+│       ├── data-cli.ts    # `npm run data` — history ingestion, market-data backfill
+│       ├── check-path-citations.ts    # `npm run check:citations` — CI gate over the docs
+│       ├── check-live-money-gates.ts  # `npm run check:live-gates` — the cited gates are still open
+│       ├── report-arm-comparison.ts   # `npm run report:arms`
+│       ├── report-cgt-disposals.ts    # `npm run report:cgt`
+│       ├── place-soak-position.ts     # `npm run place-soak-position`
 │       └── run-stage2*.ts, measure-conviction-ceiling.ts  # hand-run, no script
 │
 ├── contracts/             # THE WIRE BOUNDARY — imported by both, importing neither
@@ -382,7 +381,7 @@ without knowing the working directory:
 dist/client/                              # vite outDir — the bundle
 dist/server/apps/service-api/index.js     # resolves the bundle as ../../../client/
 dist/server/apps/orchestrator/index.js    # spawned by the supervisor
-dist/server/apps/supervisor/index.js      # yarn start
+dist/server/apps/supervisor/index.js      # npm start
 ```
 
 ## Scripts
@@ -391,35 +390,35 @@ Every script in `package.json`, all 29 of them. There are no others.
 
 | Tier | Script | What it does |
 | --- | --- | --- |
-| dev | `yarn dev:web` | Vite dev server for `client/` → `localhost:5173`. Proxies `/api` to the service API |
-| dev | `yarn dev:api` | Service API from source under `tsx`, restarts on edit. Run alongside `dev:web` |
-| build | `yarn build` | `tsc` + `build:migrations` + `build:web`. Emits `dist/` |
-| build | `yarn build:migrations` | Copies `server/shared/store/migrations/*.sql` into `dist/`. `tsc` emits no `.sql`, so without it the built orchestrator finds no migrations to apply. Sub-step of `build` |
-| build | `yarn build:web` | Client `tsc` + `vite build`. Sub-step of `build`, and **also its own CI step** (`ci.yml`) so a frontend-toolchain failure is named as one instead of surfacing as "build failed" |
-| run | **`yarn start`** | **The one full-system command.** Builds, then supervises orchestrator + service API |
-| run | `yarn serve` | Alias for `yarn start` |
-| run | `yarn orchestrator` | Money path alone — the unattended-soak entrypoint |
-| run | `yarn api` | Operator view alone |
-| run | `yarn dashboard` | Alias for `yarn api` |
-| run | `yarn smoke` | Offline end-to-end gate |
-| data | `yarn data <cmd>` | Dispatcher: `ingest-history` / `backfill-market-data`. Bare `yarn data` prints usage and exits 1 |
-| data | `yarn ingest-history` | Alias for `yarn data ingest-history` |
-| data | `yarn backfill-market-data` | Alias for `yarn data backfill-market-data` |
-| quality | `yarn typecheck` | Four projects: server, tests, client tests, e2e |
-| quality | `yarn test` | Full vitest suite |
-| quality | `yarn test:coverage` | Same suite under v8 coverage. What `precommit` runs |
-| quality | `yarn test:local` | `vitest --changed origin/main` — only what the branch touched. Inner loop, not a gate |
-| quality | `yarn test:watch` | Vitest in watch mode |
-| quality | `yarn e2e` | Playwright suite against the built bundle, on a port picked fresh per run (#1298) so two checkouts can run it at once. CI job of its own |
-| quality | `yarn lint` | `biome check .` — lint **and** formatting, both gated in CI |
-| quality | `yarn lint:fix` | `biome check --write .` — fixes both |
-| quality | `yarn precommit` | `lint:fix` → `typecheck` → `test:coverage` |
-| quality | `yarn check:citations` | `tsx server/tools/check-path-citations.ts` — every backticked path in the tracked docs resolves. **A CI step**, and it reads this file too |
-| quality | `yarn mutation:local` | `tsx server/tools/mutation-local.ts` — Stryker Mutator, scoped to trading-path files (`pipeline/trader`, `risk-manager`, `verdict`, `execution`) changed vs a base ref, mirroring `test:local`'s diff pattern. 80% score bar on those packages only (#1634). Implementer gate, not CI: GitHub Actions is billing-blocked on this repo |
-| ops | `yarn check:live-gates` | `tsx server/tools/check-live-money-gates.ts` — re-verifies that the issues the live-money gate list cites are still open, so a closed issue cannot silently falsify the gate |
-| ops | `yarn report:arms` | `tsx server/tools/report-arm-comparison.ts` — the LLM arm vs. the indicator-only control |
-| ops | `yarn report:cgt` | `tsx server/tools/report-cgt-disposals.ts` — per-tax-year CGT disposal matching for the live Saxo GIA leg (#1518, `docs/cgt-disposal-matching.md`). NOT tax advice |
-| ops | `yarn place-soak-position` | `tsx --env-file=.env.local server/tools/place-soak-position.ts` — hand-places a soak position. Reads `.env.local`, so it touches the venue |
+| dev | `npm run dev:web` | Vite dev server for `client/` → `localhost:5173`. Proxies `/api` to the service API |
+| dev | `npm run dev:api` | Service API from source under `tsx`, restarts on edit. Run alongside `dev:web` |
+| build | `npm run build` | `tsc` + `build:migrations` + `build:web`. Emits `dist/` |
+| build | `npm run build:migrations` | Copies `server/shared/store/migrations/*.sql` into `dist/`. `tsc` emits no `.sql`, so without it the built orchestrator finds no migrations to apply. Sub-step of `build` |
+| build | `npm run build:web` | Client `tsc` + `vite build`. Sub-step of `build`, and **also its own CI step** (`ci.yml`) so a frontend-toolchain failure is named as one instead of surfacing as "build failed" |
+| run | **`npm start`** | **The one full-system command.** Builds, then supervises orchestrator + service API |
+| run | `npm run serve` | Alias for `npm start` |
+| run | `npm run orchestrator` | Money path alone — the unattended-soak entrypoint |
+| run | `npm run api` | Operator view alone |
+| run | `npm run dashboard` | Alias for `npm run api` |
+| run | `npm run smoke` | Offline end-to-end gate |
+| data | `npm run data -- <cmd>` | Dispatcher: `ingest-history` / `backfill-market-data`. Bare `npm run data` prints usage and exits 1 |
+| data | `npm run ingest-history` | Alias for `npm run data -- ingest-history` |
+| data | `npm run backfill-market-data` | Alias for `npm run data -- backfill-market-data` |
+| quality | `npm run typecheck` | Four projects: server, tests, client tests, e2e |
+| quality | `npm run test` | Full vitest suite |
+| quality | `npm run test:coverage` | Same suite under v8 coverage. What `precommit` runs |
+| quality | `npm run test:local` | `vitest --changed origin/main` — only what the branch touched. Inner loop, not a gate |
+| quality | `npm run test:watch` | Vitest in watch mode |
+| quality | `npm run e2e` | Playwright suite against the built bundle, on a port picked fresh per run (#1298) so two checkouts can run it at once. CI job of its own |
+| quality | `npm run lint` | `biome check .` — lint **and** formatting, both gated in CI |
+| quality | `npm run lint:fix` | `biome check --write .` — fixes both |
+| quality | `npm run precommit` | `lint:fix` → `typecheck` → `test:coverage` |
+| quality | `npm run check:citations` | `tsx server/tools/check-path-citations.ts` — every backticked path in the tracked docs resolves. **A CI step**, and it reads this file too |
+| quality | `npm run mutation:local` | `tsx server/tools/mutation-local.ts` — Stryker Mutator, scoped to trading-path files (`pipeline/trader`, `risk-manager`, `verdict`, `execution`) changed vs a base ref, mirroring `test:local`'s diff pattern. 80% score bar on those packages only (#1634). Implementer gate, not CI: GitHub Actions is billing-blocked on this repo |
+| ops | `npm run check:live-gates` | `tsx server/tools/check-live-money-gates.ts` — re-verifies that the issues the live-money gate list cites are still open, so a closed issue cannot silently falsify the gate |
+| ops | `npm run report:arms` | `tsx server/tools/report-arm-comparison.ts` — the LLM arm vs. the indicator-only control |
+| ops | `npm run report:cgt` | `tsx server/tools/report-cgt-disposals.ts` — per-tax-year CGT disposal matching for the live Saxo GIA leg (#1518, `docs/cgt-disposal-matching.md`). NOT tax advice |
+| ops | `npm run place-soak-position` | `tsx --env-file=.env.local server/tools/place-soak-position.ts` — hand-places a soak position. Reads `.env.local`, so it touches the venue |
 
 **Five run scripts build first** (`start`, `orchestrator`, `api`, `smoke`,
 `data`), deliberately. A stale `dist/` fails *silently* — the process boots and
@@ -432,13 +431,13 @@ run from source, which is the whole point of them.
 **The four aliases are kept on purpose**, not left over. `serve`/`dashboard`
 are the names an operator's muscle memory and several source comments still
 use (`server/apps/supervisor/supervisor.ts`, `e2e/playwright.config.ts`);
-`ingest-history`/`backfill-market-data` predate the `yarn data` dispatcher and
+`ingest-history`/`backfill-market-data` predate the `npm run data` dispatcher and
 survive because a runbook or cron entry may name either (see the header of
 `server/tools/data-cli.ts`). Renaming a script an unattended job invokes fails
 silently outside the checkout, where nothing here can see it.
 
 **There is no `format` script.** `biome check` formats as well as lints, so
-`yarn lint` already fails on an unformatted file and `yarn lint:fix` already
+`npm run lint` already fails on an unformatted file and `npm run lint:fix` already
 rewrites it — a check-only `format` was a strict subset of `lint` that could
 only ever duplicate its verdict.
 
@@ -473,9 +472,9 @@ script and are not missing one. They are hand-run research jobs, invoked as
 
 ## Status
 
-All twelve charted components are implemented and under test; the pipeline runs end-to-end offline (`yarn smoke`). Outstanding:
+All twelve charted components are implemented and under test; the pipeline runs end-to-end offline (`npm run smoke`). Outstanding:
 
-- **One real Alpaca paper tick** — ADR-0004 §5's "wiring validated" bar. `yarn smoke` is offline and does not clear it.
+- **One real Alpaca paper tick** — ADR-0004 §5's "wiring validated" bar. `npm run smoke` is offline and does not clear it.
 - **14-day unattended soak** (#238) — the "paper trading achieved" bar. Shorter soaks have run, and a hand-placed lifecycle probe on 2026-08-26 took one position entry → bracket → flat-by-close → venue fill → store close against live paper Alpaca (surfacing and fixing #921/#922). The qualifying 14-day unattended window has not.
 - **A Saxo order adapter** — Saxo Capital Markets UK (GIA) over OpenAPI is the decided live venue (ADR-0015, 2026-08-30) and no adapter exists. ccxt and IBKR remain data sources only; IBKR was disqualified as a venue on cost (#906).
 - **WorldMonitor CII feed** — consumer seam built, live wiring parked pending `WORLDMONITOR_API_KEY`.

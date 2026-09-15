@@ -1,6 +1,6 @@
 /**
  * #1518's export: every CGT disposal on the live Saxo GIA equity book, for
- * one UK tax year, matched same-day → 30-day → Section 104 — `yarn
+ * one UK tax year, matched same-day → 30-day → Section 104 — `npm run
  * report:cgt`.
  *
  * NOT TAX ADVICE. This is a recordkeeping aid, not a filing. Every figure

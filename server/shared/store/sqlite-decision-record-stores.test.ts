@@ -79,7 +79,7 @@ describe('SqliteRiskLogStore (#726)', () => {
     // in 0028's CHECK(status IN ('approved', 'rejcted', 'error')) would stay
     // green through every other test in this repo — nothing else writes a
     // 'rejected' row through this store to a real (non-fake) database, and
-    // yarn smoke never produces a rejection either.
+    // npm run smoke never produces a rejection either.
     const db = openSharedStore(':memory:');
     const store = new SqliteRiskLogStore(db);
 

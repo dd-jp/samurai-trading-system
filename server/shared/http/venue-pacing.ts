@@ -256,7 +256,7 @@ export const DEFAULT_VENUE_PACING: VenuePacingConfig = {
    * decision, not two.
    *
    * What genuinely slows against the old 2.5 is bulk historical backfill
-   * (`yarn backfill-market-data`), by ~20%; that is an offline tool and not a
+   * (`npm run backfill-market-data`), by ~20%; that is an offline tool and not a
    * reason to spend live-path margin.
    *
    * Why an unverified burst is an acceptable risk where an unverified

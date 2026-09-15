@@ -90,7 +90,7 @@ export function getChangedFiles(baseRef: string, root: string): readonly string[
 }
 
 function printHelp(): void {
-  console.log(`Usage: yarn mutation:local [baseRef]
+  console.log(`Usage: npm run mutation:local -- [baseRef]
 
 Runs Stryker Mutator against trading-path files changed vs baseRef (default:
 ${DEFAULT_BASE_REF}), mirroring test:local's diff-scoped pattern. Trading-path

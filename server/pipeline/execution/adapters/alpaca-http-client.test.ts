@@ -752,27 +752,28 @@ describe('AlpacaHttpBrokerClient', () => {
       vi.restoreAllMocks();
     });
 
-    it.each(
-      PLACEMENTS,
-    )('%s runs withRetry with maxAttempts: 1, independent of the client-wide retry config', async (_name, invoke) => {
-      const fetchMock = vi.fn().mockResolvedValue(jsonResponse(ORDER_RESPONSE));
-      vi.stubGlobal('fetch', fetchMock);
-      const withRetrySpy = vi.spyOn(shared, 'withRetry');
+    it.each(PLACEMENTS)(
+      '%s runs withRetry with maxAttempts: 1, independent of the client-wide retry config',
+      async (_name, invoke) => {
+        const fetchMock = vi.fn().mockResolvedValue(jsonResponse(ORDER_RESPONSE));
+        vi.stubGlobal('fetch', fetchMock);
+        const withRetrySpy = vi.spyOn(shared, 'withRetry');
 
-      // Deliberately far from 1 — if a placement's override were dropped,
-      // it would fall back to THIS config instead of one attempt.
-      const client = new AlpacaHttpBrokerClient({
-        apiKey: FAKE_KEY,
-        apiSecret: FAKE_SECRET,
-        retry: { maxAttempts: 7, baseDelayMs: 1, maxDelayMs: 1 },
-      });
+        // Deliberately far from 1 — if a placement's override were dropped,
+        // it would fall back to THIS config instead of one attempt.
+        const client = new AlpacaHttpBrokerClient({
+          apiKey: FAKE_KEY,
+          apiSecret: FAKE_SECRET,
+          retry: { maxAttempts: 7, baseDelayMs: 1, maxDelayMs: 1 },
+        });
 
-      await invoke(client);
+        await invoke(client);
 
-      expect(withRetrySpy).toHaveBeenCalledTimes(1);
-      const retryConfig = withRetrySpy.mock.calls[0]?.[1] as { maxAttempts: number };
-      expect(retryConfig.maxAttempts).toBe(1);
-    });
+        expect(withRetrySpy).toHaveBeenCalledTimes(1);
+        const retryConfig = withRetrySpy.mock.calls[0]?.[1] as { maxAttempts: number };
+        expect(retryConfig.maxAttempts).toBe(1);
+      },
+    );
   });
 });
 

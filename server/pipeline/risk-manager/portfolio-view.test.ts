@@ -694,21 +694,24 @@ describe('computePortfolioView — feed staleness (#640)', () => {
       ['MARA', 82_730],
       ['COIN', 89_718],
       ['MSTR', 144_576],
-    ])('values the book when %s’s mark arrives %sms after asOf, itself fresh', async (instrument, passLatencyMs) => {
-      const readAt = new Date(asOf.getTime() + passLatencyMs);
-      const input = makeInput({
-        positions: [makePosition({ instrument })],
-        clock: { now: () => readAt },
-        marketData: makeMarketDataObservedAt({
-          // Stamped a beat before the read returned, which is where a live
-          // quote clock puts it — and far ahead of `asOf`, which is what the
-          // pre-#1111 coordinate refused on.
-          [instrument]: { price: 100, observed_at: new Date(readAt.getTime() - 200) },
-        }),
-      });
+    ])(
+      'values the book when %s’s mark arrives %sms after asOf, itself fresh',
+      async (instrument, passLatencyMs) => {
+        const readAt = new Date(asOf.getTime() + passLatencyMs);
+        const input = makeInput({
+          positions: [makePosition({ instrument })],
+          clock: { now: () => readAt },
+          marketData: makeMarketDataObservedAt({
+            // Stamped a beat before the read returned, which is where a live
+            // quote clock puts it — and far ahead of `asOf`, which is what the
+            // pre-#1111 coordinate refused on.
+            [instrument]: { price: 100, observed_at: new Date(readAt.getTime() - 200) },
+          }),
+        });
 
-      await expect(computePortfolioView(input)).resolves.toBeDefined();
-    });
+        await expect(computePortfolioView(input)).resolves.toBeDefined();
+      },
+    );
 
     it('still refuses a mark genuinely past its bound, however long the pass took', async () => {
       // #640 is not weakened by the coordinate change: same 145s pass, but the

@@ -26,7 +26,7 @@
  * ## Operating procedure
  *
  *   1. Inside the equity entry window (13:30-14:45Z), SIGINT the soak.
- *   2. `yarn place-soak-position --confirm`   (omit --confirm for a dry run)
+ *   2. `npm run place-soak-position -- --confirm`   (omit --confirm for a dry run)
  *   3. Restart the soak.
  *   4. Expect the flatten on the tail tick at 19:55-20:00Z.
  *

@@ -945,7 +945,7 @@ export interface DashboardSnapshot {
    * server were built from different `DashboardSnapshot` shapes — reachable
    * in both directions on this deployment, because `server.ts` serves
    * `dist/client/` per request with `Cache-Control: no-cache` rather than
-   * resolving it once at boot: a `yarn build` while the process keeps running
+   * resolving it once at boot: a `npm run build` while the process keeps running
    * serves new client code with no restart (new-client/old-server), and a
    * long-lived operator tab or a browser cache can just as easily hold an old
    * client against a server that has since restarted on new code
@@ -959,7 +959,7 @@ export interface DashboardSnapshot {
    * "remember to also update X" conventions are prone to silently skipping.
    * This value is instead DERIVED from `DASHBOARD_SNAPSHOT_FIELD_NAMES`, whose
    * coverage of `keyof DashboardSnapshot` is enforced in BOTH directions at
-   * `yarn typecheck` time (the two-part idiom `alert-transport.ts` uses for
+   * `npm run typecheck` time (the two-part idiom `alert-transport.ts` uses for
    * `AlertChannelSlots`, after ten silent misses taught that lesson there):
    * `as const satisfies readonly (keyof DashboardSnapshot)[]` rejects a name
    * in the list that isn't a real field (catches a stale rename OF a listed
@@ -997,7 +997,7 @@ export interface DashboardSnapshot {
  * which makes the exhaustiveness check below compare the union against
  * itself and pass unconditionally, catching nothing; confirmed by
  * temporarily adding `brand_new_field?: number` to `DashboardSnapshot` under
- * the old annotation and observing `yarn typecheck` pass with the hash
+ * the old annotation and observing `npm run typecheck` pass with the hash
  * unchanged) keeps this a literal-string tuple, so TypeScript can reject a
  * listed name that ISN'T a real key. It cannot, by itself, catch a real key
  * that's simply missing from the list — see
@@ -1038,11 +1038,11 @@ export const DASHBOARD_SNAPSHOT_FIELD_NAMES = [
  * `CONTRACT_VERSION` from it independently, rather than only comparing the
  * constant to itself) stops covering every key of
  * `DashboardSnapshot`, the mapped type below gains a required key for each
- * missing field name, so `{}` no longer satisfies it and `yarn typecheck`
+ * missing field name, so `{}` no longer satisfies it and `npm run typecheck`
  * fails, naming the missing key(s) in the error.
  *
  * Verified non-vacuous the same way: with `brand_new_field?: number` added
- * to `DashboardSnapshot` and NOT added here, `yarn typecheck` fails on this
+ * to `DashboardSnapshot` and NOT added here, `npm run typecheck` fails on this
  * line with:
  *   Property 'brand_new_field' is missing in type '{}' but required in type
  *   '{ brand_new_field: never; }'.

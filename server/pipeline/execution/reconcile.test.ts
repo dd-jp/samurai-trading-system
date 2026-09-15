@@ -583,26 +583,25 @@ describe('reconcile — the terminal-row sweep (#1088)', () => {
     expect(await store.getPosition('key-old-rejected')).toBeNull();
   });
 
-  it.each([
-    'rejected',
-    'cancelled',
-    'expired',
-  ] as const)('sweeps an old enough %s row with filled_size = 0', async (order_state) => {
-    const { store } = openTestExecutionStore();
-    await store.writeAheadPosition(
-      pendingPosition({
-        idempotency_key: `key-old-${order_state}`,
-        order_state,
-        filled_size: 0,
-        decision_timestamp: OLD_ENOUGH,
-      }),
-    );
+  it.each(['rejected', 'cancelled', 'expired'] as const)(
+    'sweeps an old enough %s row with filled_size = 0',
+    async (order_state) => {
+      const { store } = openTestExecutionStore();
+      await store.writeAheadPosition(
+        pendingPosition({
+          idempotency_key: `key-old-${order_state}`,
+          order_state,
+          filled_size: 0,
+          decision_timestamp: OLD_ENOUGH,
+        }),
+      );
 
-    const report = await new ExecutionImpl(makeInput(store, makeBroker())).reconcile();
+      const report = await new ExecutionImpl(makeInput(store, makeBroker())).reconcile();
 
-    expect(report.swept).toBe(1);
-    expect(await store.getPosition(`key-old-${order_state}`)).toBeNull();
-  });
+      expect(report.swept).toBe(1);
+      expect(await store.getPosition(`key-old-${order_state}`)).toBeNull();
+    },
+  );
 
   it('leaves a terminal row untouched when it is not old enough yet', async () => {
     const { store } = openTestExecutionStore();

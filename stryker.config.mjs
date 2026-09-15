@@ -1,6 +1,6 @@
 // Stryker Mutator config for the trading-path mutation gate (#1634, decided by #1626).
 //
-// Not run bare — `yarn mutation:local` (server/tools/mutation-local.ts) invokes this
+// Not run bare — `npm run mutation:local` (server/tools/mutation-local.ts) invokes this
 // with `--mutate` restricted to trading-path files changed vs a base ref, mirroring
 // `test:local`'s `vitest run --changed origin/main` diff-scoped pattern. A full-repo
 // run against ~2900 tests is not viable per-PR (#1626's resolution). The `mutate`
@@ -15,10 +15,10 @@
 //
 // No CI wiring: GitHub Actions is billing-blocked on this repo
 // (`actions-billing-blocks-all-ci` memory). Deferred next step once billing unblocks:
-// run `yarn mutation:local <merge-base-sha>` against the merged tree.
+// run `npm run mutation:local -- <merge-base-sha>` against the merged tree.
 /** @type {import('@stryker-mutator/api/core').PartialStrykerOptions} */
 export default {
-  packageManager: 'yarn',
+  packageManager: 'npm',
   testRunner: 'vitest',
   vitest: {
     configFile: 'vitest.config.ts',

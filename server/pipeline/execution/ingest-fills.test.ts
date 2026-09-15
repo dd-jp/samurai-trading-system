@@ -2909,39 +2909,39 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
   // wire is invisible under today's model, where their `commission` components
   // coincide. `modelledProtectiveExitCostBreakdown` is deliberately distinct
   // from `modelledCostBreakdown` in every component so the cross fails here.
-  it.each([
-    'stop',
-    'target',
-  ] as const)('prorates the modelled PROTECTIVE exit cost breakdown onto a %s leg fill', async (leg) => {
-    const { store } = openTestExecutionStore();
-    await seedPosition(store, {
-      requested_size: 10,
-      side: 'buy',
-      modelled_cost_breakdown: modelledCostBreakdown,
-      modelled_protective_exit_cost_breakdown: modelledProtectiveExitCostBreakdown,
-    });
-    const broker = new ScriptedBroker([
-      fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 10 }),
-      fill({
-        broker_fill_id: toBrokerFillId('x1'),
-        leg,
-        qty: 4,
-        price: 95,
-        timestamp: new Date('2026-07-20T15:30:00Z'),
-      }),
-    ]);
+  it.each(['stop', 'target'] as const)(
+    'prorates the modelled PROTECTIVE exit cost breakdown onto a %s leg fill',
+    async (leg) => {
+      const { store } = openTestExecutionStore();
+      await seedPosition(store, {
+        requested_size: 10,
+        side: 'buy',
+        modelled_cost_breakdown: modelledCostBreakdown,
+        modelled_protective_exit_cost_breakdown: modelledProtectiveExitCostBreakdown,
+      });
+      const broker = new ScriptedBroker([
+        fill({ broker_fill_id: toBrokerFillId('e1'), leg: 'entry', qty: 10 }),
+        fill({
+          broker_fill_id: toBrokerFillId('x1'),
+          leg,
+          qty: 4,
+          price: 95,
+          timestamp: new Date('2026-07-20T15:30:00Z'),
+        }),
+      ]);
 
-    await new ExecutionImpl(makeInput(broker, store)).ingestFills();
+      await new ExecutionImpl(makeInput(broker, store)).ingestFills();
 
-    const fills = await store.getFills('key-1');
-    // share = 4/10 of the protective snapshot, linearly.
-    expectCostBreakdownCloseTo(fills.find((row) => row.broker_fill_id === 'x1')?.cost_breakdown, {
-      spread_cost: 0.8,
-      commission: 1.2,
-      slippage: 0.4,
-      market_impact: 0.8,
-    });
-  });
+      const fills = await store.getFills('key-1');
+      // share = 4/10 of the protective snapshot, linearly.
+      expectCostBreakdownCloseTo(fills.find((row) => row.broker_fill_id === 'x1')?.cost_breakdown, {
+        spread_cost: 0.8,
+        commission: 1.2,
+        slippage: 0.4,
+        market_impact: 0.8,
+      });
+    },
+  );
 
   it('leaves cost_breakdown unset on a protective leg fill when the lot carries no protective snapshot', async () => {
     const { store } = openTestExecutionStore();

@@ -1635,7 +1635,7 @@
     {
       "log": null,
       "logInTrace": null,
-      "text": "Samurai SAXO SESSION LOST (sim): the refresh token was rejected (HTTP 400)\nDetected 2026-09-10T08:15:00.000Z.\nNo order can reach this venue until a fresh session is established. Run `yarn saxo:login --env sim` to log in again.",
+      "text": "Samurai SAXO SESSION LOST (sim): the refresh token was rejected (HTTP 400)\nDetected 2026-09-10T08:15:00.000Z.\nNo order can reach this venue until a fresh session is established. Run `npm run saxo:login -- --env sim` to log in again.",
       "rejected": null,
       "sendFailed": {
         "trace_id": "saxo-token",
@@ -1691,7 +1691,7 @@
           "reported_at": "2026-09-10T08:15:00.000Z"
         }
       },
-      "text": "Samurai SAXO WEEKLY RE-LOGIN REMINDER (live): Saxo recommends logging in by hand at least once a week — run `yarn saxo:login --env live` before Monday's open.\nThe current session was last established by a manual login at 2026-09-07T18:00:00.000Z.\nSent 2026-09-10T08:15:00.000Z.",
+      "text": "Samurai SAXO WEEKLY RE-LOGIN REMINDER (live): Saxo recommends logging in by hand at least once a week — run `npm run saxo:login -- --env live` before Monday's open.\nThe current session was last established by a manual login at 2026-09-07T18:00:00.000Z.\nSent 2026-09-10T08:15:00.000Z.",
       "rejected": "telegram 502",
       "sendFailed": null,
       "sendFailedInTrace": null
@@ -1721,7 +1721,7 @@
           "reported_at": "2026-09-10T08:15:00.000Z"
         }
       },
-      "text": "Samurai SAXO WEEKLY RE-LOGIN REMINDER (sim): Saxo recommends logging in by hand at least once a week — run `yarn saxo:login --env sim` before Monday's open.\nThe current saved session has no recorded manual login (predates this reminder, or none has been run yet).\nSent 2026-09-10T08:15:00.000Z.",
+      "text": "Samurai SAXO WEEKLY RE-LOGIN REMINDER (sim): Saxo recommends logging in by hand at least once a week — run `npm run saxo:login -- --env sim` before Monday's open.\nThe current saved session has no recorded manual login (predates this reminder, or none has been run yet).\nSent 2026-09-10T08:15:00.000Z.",
       "rejected": "telegram 502",
       "sendFailed": null,
       "sendFailedInTrace": null

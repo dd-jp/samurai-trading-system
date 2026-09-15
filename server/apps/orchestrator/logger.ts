@@ -66,7 +66,7 @@
  * run trading with no trace anywhere — the outcome this whole decision exists
  * to prevent. Hence the stderr write, which is attempted *before* the throw
  * and is what actually holds the evidence: stderr is a genuinely separate
- * destination under `yarn orchestrator > log.txt`, under `| tee`, and under a
+ * destination under `npm run orchestrator > log.txt`, under `| tee`, and under a
  * supervisor that splits the two streams.
  *
  * It is a last resort and not a third managed sink, and the run is **not**
@@ -498,7 +498,7 @@ export class JsonLogger implements Logger {
  * synchronous only for files and TTYs; for a *pipe* it is asynchronous, so an
  * EPIPE never reaches the write call at all. Measured on the deployment
  * target before this was written (macOS, Node 24, parent destroys the read end
- * of a `spawn`ed child's stdout — which is `yarn serve`'s own
+ * of a `spawn`ed child's stdout — which is `npm run serve`'s own
  * `stdio: 'inherit'` shape, and a detached tmux session's):
  *
  * - with no `'error'` listener: the first write after the pipe died raised

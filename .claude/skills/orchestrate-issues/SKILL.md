@@ -53,7 +53,7 @@ One `Agent` per ticket: `subagent_type: general-purpose`, `isolation: "worktree"
 - Verify the ticket premise against the tree before coding; a disproved premise is reported, not patched over.
 - Mutation evidence both directions in the PR body, pasted verbatim.
 - Comment rules from CLAUDE.md; no narration, delete stale comments touched.
-- Never `git stash`, never force-push, never commit `.yarn/install-state.gz`, never print secrets.
+- Never `git stash`, never force-push, never commit a `package-lock.json` change that wasn't produced by `npm install`, never print secrets.
 - Before running gates, self-review the whole amended region (not just changed lines) against: internal contradictions, unquantified security claims, multi-concern bullets, cross-doc divergence, and confirm the mutation evidence is real (delete the effect, watch the gate go red, restore it) rather than asserted. This is what keeps review to one round — do it before the reviewer does.
 - Run the implementer gate (§5a) before pushing, `--changed` pinned to the batch's `BASE_SHA` (§1), not `origin/main` — main moves mid-drain. Report unrelated gate failures verbatim, do not fix them.
 - Commit with the session's attribution lines. Push, open a DRAFT PR with `--body-file`, body starts `Closes #N`. Do not merge.
@@ -82,7 +82,7 @@ Local only. Two tiers — full suite runs once per PR, at merge time, not twice.
 **5a. Implementer gate** (worktree, before push) — scoped to what the branch actually touched:
 
 ```
-yarn lint && yarn typecheck && yarn test:local -- --changed <BASE_SHA> && yarn check:citations
+npm run lint && npm run typecheck && npm run test:local -- --changed <BASE_SHA> && npm run check:citations
 ```
 
 `<BASE_SHA>` is the batch's pinned base from §1, never `origin/main` bare (it moves mid-drain, and the default `test:local` script points at it).
@@ -90,12 +90,12 @@ yarn lint && yarn typecheck && yarn test:local -- --changed <BASE_SHA> && yarn c
 **5b. Merged-tree gate** (scratch worktree, §6, before every merge) — the full suite, run once per merge because this is the gate that actually catches cross-branch interaction:
 
 ```
-yarn lint && yarn typecheck && yarn build && yarn test && yarn check:citations && yarn smoke && yarn e2e
+npm run lint && npm run typecheck && npm run build && npm run test && npm run check:citations && npm run smoke && npm run e2e
 python3 server/providers/market-data-service/__fixtures__/generate-indicator-golden.py
 git status --porcelain -- server/providers/market-data-service/__fixtures__/indicator-golden.json   # must be empty
 ```
 
-`yarn smoke` must print `GATE: PASS — the pipeline transacted end to end in a real process.`; exit 0 alone is not the gate. `yarn build` already chains `build:web`. There is no pytest gate. `smoke`/`e2e` only ever run here — they test end-to-end wiring a single branch's diff can't isolate.
+`npm run smoke` must print `GATE: PASS — the pipeline transacted end to end in a real process.`; exit 0 alone is not the gate. `npm run build` already chains `build:web`. There is no pytest gate. `smoke`/`e2e` only ever run here — they test end-to-end wiring a single branch's diff can't isolate.
 
 ## 6. Merge (one PR at a time)
 

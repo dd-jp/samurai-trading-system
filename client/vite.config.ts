@@ -36,7 +36,7 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      // Dev-only convenience: `yarn dev:web` serves the app from Vite's dev
+      // Dev-only convenience: `npm run dev:web` serves the app from Vite's dev
       // server but talks to the real dashboard HTTP server (dashboard-spec.md
       // "Module: HTTP Server") for `/api/snapshot`. Production never proxies
       // — the built bundle and the JSON endpoint are served by the same

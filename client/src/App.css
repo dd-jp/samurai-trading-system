@@ -625,6 +625,28 @@ main {
 
 .kv dd {
   margin: 0;
+  min-width: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.kv-list[data-section="trade"] dd:not(.mono) {
+  text-align: left;
+  font-variant-numeric: normal;
+}
+
+/* text-overflow: ellipsis only paints at the inline-end; a right-aligned
+   nowrap cell overflows and clips silently on the left instead. */
+.kv dd.kv-truncate {
+  text-align: left;
+}
+
+.kv-truncate,
+.stance-name,
+.fill-id {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .kv-total {
@@ -926,6 +948,12 @@ main {
   font-size: 18px;
 }
 
+.drawer-pnl {
+  margin-left: auto;
+  font-size: 16px;
+  white-space: nowrap;
+}
+
 .drawer-trace {
   margin-left: auto;
   font-size: 11px;
@@ -960,9 +988,11 @@ main {
 }
 
 .timeline-stage {
-  display: flex;
+  display: grid;
+  grid-template-columns: 68px auto;
   gap: 6px;
   align-items: baseline;
+  justify-items: start;
 }
 
 .timeline-decision {
@@ -971,13 +1001,24 @@ main {
   overflow-wrap: anywhere;
 }
 
+/* A fixed badge column, so every line's text starts on one left edge whatever the word's width. */
 .gate-line,
 .condition-list li {
-  display: flex;
+  display: grid;
+  grid-template-columns: 100px minmax(0, 1fr);
   gap: 10px;
   align-items: baseline;
   margin: 0;
   font-size: 13px;
+}
+
+.gate-line > .state,
+.condition-list li > .state {
+  justify-self: start;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .gate-line + .gate-line,
@@ -1001,7 +1042,7 @@ main {
 
 .stance-row {
   display: grid;
-  grid-template-columns: 1fr auto auto auto;
+  grid-template-columns: minmax(0, 1fr) auto 56px max-content;
   gap: 10px;
   align-items: center;
 }
@@ -1039,13 +1080,33 @@ main {
 .stance-influence {
   font-size: 12px;
   color: var(--muted);
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .fill-list {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 8px;
   font-size: 12px;
+}
+
+.fill-row {
+  display: grid;
+  grid-template-columns: 76px 56px minmax(0, 1fr) auto;
+  column-gap: 10px;
+  align-items: baseline;
+  font-variant-numeric: tabular-nums;
+}
+
+.fill-price {
+  text-align: right;
+}
+
+.fill-id {
+  grid-column: 1 / -1;
+  font-size: 11px;
 }
 
 /* ---------- review ---------- */

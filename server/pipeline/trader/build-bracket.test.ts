@@ -264,28 +264,29 @@ describe('sizeBracket', () => {
     it.each([
       { name: 'index ETP', bracket: INDEX_ETP },
       { name: 'single-stock ETP', bracket: SINGLE_STOCK_ETP },
-    ])('$name: size x entry lands on deployment x (1 - reserve) x equity at full conviction', ({
-      bracket,
-    }) => {
-      const entry = 40;
-      const stopDistance = bracket.stop_pct * entry;
-      const result = sizeBracket({
-        ...baseline,
-        entry,
-        conviction: 1,
-        cosine_multiplier: 1,
-        bracket,
-        priced: { ...priced, stop_distance: stopDistance },
-      });
-      expect(result.skip).toBeNull();
-      expect((result.sized?.size ?? Number.NaN) * entry).toBeCloseTo(
-        bracket.deployment_fraction * (1 - bracket.headroom_reserve_fraction) * EQUITY,
-        6,
-      );
-      expect(result.sized?.sizing.base_risk_fraction).toBeCloseTo(riskFractionFor(bracket), 12);
-      expect(result.sized?.sizing.frozen_bracket).toEqual(bracket);
-      expect(result.sized?.sizing.frozen_bracket).not.toBe(bracket);
-    });
+    ])(
+      '$name: size x entry lands on deployment x (1 - reserve) x equity at full conviction',
+      ({ bracket }) => {
+        const entry = 40;
+        const stopDistance = bracket.stop_pct * entry;
+        const result = sizeBracket({
+          ...baseline,
+          entry,
+          conviction: 1,
+          cosine_multiplier: 1,
+          bracket,
+          priced: { ...priced, stop_distance: stopDistance },
+        });
+        expect(result.skip).toBeNull();
+        expect((result.sized?.size ?? Number.NaN) * entry).toBeCloseTo(
+          bracket.deployment_fraction * (1 - bracket.headroom_reserve_fraction) * EQUITY,
+          6,
+        );
+        expect(result.sized?.sizing.base_risk_fraction).toBeCloseTo(riskFractionFor(bracket), 12);
+        expect(result.sized?.sizing.frozen_bracket).toEqual(bracket);
+        expect(result.sized?.sizing.frozen_bracket).not.toBe(bracket);
+      },
+    );
 
     it('ignores the asset-class multiplier under a frozen bracket', () => {
       const stopDistance = INDEX_ETP.stop_pct * 40;

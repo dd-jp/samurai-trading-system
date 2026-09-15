@@ -31,7 +31,7 @@
  * Ticket #323: it now actually can. The entrypoint passes the checked-in
  * paper starting profile (`./paper-profile.ts`) — the eight per-stage config
  * objects `REQUIRED_INJECTED_CONFIG` demands, every value carrying its
- * provenance — so there is a path from `yarn orchestrator` to a running tick
+ * provenance — so there is a path from `npm run orchestrator` to a running tick
  * loop for the first time. Those values are explicitly a *starting point for
  * tuning*, not tuned values, and `paperStartingProfile` refuses `live`
  * outright for that reason.
@@ -360,7 +360,7 @@ export function credentialRequirements(): readonly {
     /** The resolved broker venue (#1400) — what decides whether the Alpaca ORDER path exists at all. */
     venue: BrokerVenue;
     /**
-     * Whether `yarn saxo:login` has saved a SIM session (#1523). Passed in
+     * Whether `npm run saxo:login` has saved a SIM session (#1523). Passed in
      * rather than read here so the two Saxo entries below — which require
      * opposite sets of variables on opposite sides of it — are testable
      * without a token file on the machine running the suite.
@@ -481,7 +481,7 @@ export function credentialRequirements(): readonly {
       // constructor would refuse on, and two lists that could drift apart
       // defeat it.
       // Since #1523 the variable is the FALLBACK, not the only way in: a run
-      // with a saved `yarn saxo:login` session reads its bearer from the token
+      // with a saved `npm run saxo:login` session reads its bearer from the token
       // file and renews it, so demanding the pasted token there would refuse
       // exactly the boot this repo now wants. `buildSaxoTokenSource` makes the
       // same choice in the same order; this stays a report of what that
@@ -750,7 +750,7 @@ export async function startFromEnvironment(
         "log-only keeps the composition root's log-only stand-ins. For a paper run, pass the " +
         'checked-in starting profile: ' +
         'startFromEnvironment(paperStartingProfile(mode)) from server/apps/orchestrator/paper-profile.ts ' +
-        '— that is exactly what `yarn orchestrator` does. To supply your own, see ' +
+        '— that is exactly what `npm run orchestrator` does. To supply your own, see ' +
         'ProductionConfig in server/apps/orchestrator/production.ts.',
     );
   }
@@ -1066,7 +1066,7 @@ export async function startFromEnvironment(
  * 2. `stop()` is awaited because it joins an in-flight rotation. Saxo
  *    invalidated the previous refresh token when it issued the one in flight,
  *    so exiting between receipt and `rename` strands the session and costs the
- *    operator a manual `yarn saxo:login`. `buildShutdownHandler` calls
+ *    operator a manual `npm run saxo:login`. `buildShutdownHandler` calls
  *    `effects.exit(0)` the moment this resolves, so the join has to happen
  *    here or it does not happen at all.
  *
@@ -1378,7 +1378,7 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
     // there: `startFromEnvironment` is what dozens of tests call directly with
     // no `fetch` stubbed, and threading a live Alpaca calendar fetch into it
     // would turn every one of those into a real outbound network call. Placing
-    // it here means only the actual `yarn orchestrator` process ever awaits
+    // it here means only the actual `npm run orchestrator` process ever awaits
     // it; `resolveUsEquitySessionCalendar` itself is unit-tested directly with
     // an injected `AlpacaCalendarClient`, the same split `startingProfileForMode`'s
     // own doc comment explains for the mode/profile hop.

@@ -33,8 +33,8 @@
  *
  * ## Smoke-gate exclusion, stated rather than skipped
  *
- * `docs/coding-standards.md` requires a `yarn smoke` assertion for a newly
- * wired mechanism. `yarn smoke` runs offline with no Nous credentials, so
+ * `docs/coding-standards.md` requires a `npm run smoke` assertion for a newly
+ * wired mechanism. `npm run smoke` runs offline with no Nous credentials, so
  * `sentimentCredentials` is `undefined`, no MI agent is built, and
  * `marketIntelligenceRefresh` is `undefined` by design — there is no
  * enforcement for the gate to observe, and a construction check would pass for

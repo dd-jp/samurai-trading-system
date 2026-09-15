@@ -94,7 +94,7 @@ Three properties define it, and each one is a decision made on the map rather th
 25. As the Orchestrator, I want the data-source routing map built over the whole candidate pool rather than the active list, so that an active-list change never produces an unknown-instrument throw mid-session.
 26. ~~As the Orchestrator, I want the crypto pair always present in the active list, so that 24/7 coverage is unaffected by an equities screener that did not run.~~ **Withdrawn 2026-08-16 — crypto is out of Samurai's scope** ([ADR-0014](../adr/0014-intraday-flat-by-close-horizon.md) amendment). Note what is lost with it: this story was the reason a failed equities screener could not take *all* coverage down. That protection now rests entirely on story 12's fallback, which makes story 12 load-bearing where it was previously a second line of defence. **The fallback's alert is therefore no longer optional** — see Open Question 2, closed below.
 27. As the Orchestrator, I want the existing stocks-market-closed filter to keep working unchanged, so that a widened equity list still never ticks into a closed market.
-28. As an operator, I want `yarn screener` to run the selection by hand, so that I can inspect tomorrow's list before the session opens.
+28. As an operator, I want `npm run screener` to run the selection by hand, so that I can inspect tomorrow's list before the session opens.
 29. As an operator, I want the screener scheduled out of hours by launchd, so that selection never competes with the tick loop for rate limit or CPU.
 30. As an operator, I want a screener failure to leave yesterday's watchlist in place and alert, so that one bad run does not cascade into a lost session.
 31. As a reviewer, I want the pool's provenance recorded with a date and a source, so that "where did this list come from" has an answer a year later.
@@ -112,7 +112,7 @@ Resolved: **the Universe Selector is not a pipeline stage at all.** It runs *bet
 
 ### Module and entrypoint
 
-A new `server/pipeline/universe-selector/` module with a `yarn screener` entrypoint, scheduled out of hours by launchd. It is a batch program, not a service: it reads bars, ranks, writes a watchlist, exits. It holds no state between runs beyond the watchlist itself. <!-- cite-exempt: planned — the universe-selector module is specced and not built; this marker fails once the directory exists -->
+A new `server/pipeline/universe-selector/` module with a `npm run screener` entrypoint, scheduled out of hours by launchd. It is a batch program, not a service: it reads bars, ranks, writes a watchlist, exits. It holds no state between runs beyond the watchlist itself. <!-- cite-exempt: planned — the universe-selector module is specced and not built; this marker fails once the directory exists -->
 
 ### The selection pipeline (#398)
 
@@ -349,7 +349,7 @@ The two candidates were a store row (one store for all state, dashboard-queryabl
 
 1. **The staleness check is defined against the target session, not the file's age**, and that is the rule the cadence section above depends on. A store row holds `written_for_session` as a first-class column that the fallback queries directly. On disk the same fact lives inside the file, so answering "is this stale" requires opening and parsing the artifact — and the failure mode being guarded is *the artifact being unreadable*. A staleness check that must read the file to know the file is bad is the wrong shape.
 2. **Crash-restart must not lose it.** Both survive a restart, but the store is already the thing this system restarts against, and adding a second persistence mechanism means two recovery paths where one is exercised daily and the other never.
-3. **The reviewability argument for the artifact is real but is answered more cheaply.** The stated benefit was reading tomorrow's list before the session — which `yarn screener` already provides by printing it, and which the dashboard provides continuously once the row exists. Neither needs a file.
+3. **The reviewability argument for the artifact is real but is answered more cheaply.** The stated benefit was reading tomorrow's list before the session — which `npm run screener` already provides by printing it, and which the dashboard provides continuously once the row exists. Neither needs a file.
 
 **Follow-on obligations, so this does not land half-done:** it needs a migration (a plain additive table, unlike the `current_tick` stage-enum rebuild the Orchestrator spec calls for); the transition log (entered/held/pinned/dropped) belongs in the same write and in the same transaction, so a partial write cannot leave a list without its provenance; and story 21's complete-replacement-not-merge requirement is satisfied by writing one row per target session rather than by mutating a single mutable row.
 
