@@ -91,12 +91,14 @@ function PnlCard({ snapshot, equitySamples }: Pick<GlanceTabProps, 'snapshot' | 
   const isControl = arm === 'control';
   const equity = snapshot.providers.alpaca.balance?.equity ?? null;
 
-  // `pnl` is required on `WireSnapshot`'s type, but nothing at the fetch
-  // boundary (`useSnapshot.ts`'s `hasWireShape`) actually checks for it —
-  // the same "type that lies" gap that field's own doc comment warns a
-  // renderer must not trust. A snapshot from a server predating #1595 (or one
-  // whose `pnl` build threw and was stripped by an intermediary) must read as
-  // a named absence, never as £0.00 (AC).
+  // `pnl` is `PnlHeadlineWire | null` on `useSnapshot.ts`'s `WireSnapshot` —
+  // widened there (PR #1619 review, finding 1) because `CONTRACT_VERSION`'s
+  // hash is deliberately shallow (top-level field names only, per
+  // `contracts/snapshot.ts`), so a rename inside `PnlHeadlineWire.overall`/
+  // `.today` moves nothing there and this component would otherwise
+  // dereference straight into a shape it never checked. `null` is also what
+  // an intermediary that stripped a build failure looks like. Either way it
+  // must read as a named absence, never as £0.00 (AC).
   if (pnl == null) {
     return (
       <section className="panel" aria-label="P&L">
@@ -134,7 +136,9 @@ function PnlCard({ snapshot, equitySamples }: Pick<GlanceTabProps, 'snapshot' | 
         </div>
       </div>
       <div className="pnl-block">
-        <h3>Today</h3>
+        <h3>
+          Today <span className="muted small">(Europe/London calendar day)</span>
+        </h3>
         <div className="big-row">
           <span className={`big ${pnlTone(today.net_gbp)}`} data-field="pnl-today">
             {formatSignedGbp(today.net_gbp)}

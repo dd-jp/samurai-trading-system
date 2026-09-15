@@ -195,6 +195,38 @@ describe('toWireSnapshot', () => {
     expect(toWireSnapshot(body)?.llm_spend).toEqual(body.llm_spend);
   });
 
+  it('passes a real pnl headline through untouched', () => {
+    const body = raw();
+    expect(toWireSnapshot(body)?.pnl).toEqual(body.pnl);
+  });
+
+  it('narrows an absent, null, or non-object pnl to null (PR #1619 review, finding 1)', () => {
+    const absent = raw();
+    delete absent.pnl;
+    expect(toWireSnapshot(absent)?.pnl).toBeNull();
+    expect(toWireSnapshot(raw({ pnl: null }))?.pnl).toBeNull();
+    expect(toWireSnapshot(raw({ pnl: 'unavailable' }))?.pnl).toBeNull();
+    expect(toWireSnapshot(raw({ pnl: [] }))?.pnl).toBeNull();
+  });
+
+  it('narrows a pnl headline missing overall or today to null instead of dereferencing it', () => {
+    // `CONTRACT_VERSION` hashes only `DashboardSnapshot`'s own top-level field
+    // names (`contracts/snapshot.ts`), so a rename nested inside
+    // `PnlHeadlineWire.overall`/`.today` moves nothing there and lands here
+    // structurally "known good" but missing the field `PnlCard` dereferences
+    // straight into with no error boundary — the same shape `llm_spend`'s
+    // `all_time`/`per_debate` check above guards.
+    const headline = makeSnapshot().pnl as unknown as Record<string, unknown>;
+    const withoutOverall = { ...headline };
+    delete withoutOverall.overall;
+    const withoutToday = { ...headline };
+    delete withoutToday.today;
+
+    for (const pnl of [withoutOverall, withoutToday, { ...headline, overall: 'x' }, {}]) {
+      expect(toWireSnapshot(raw({ pnl }))?.pnl).toBeNull();
+    }
+  });
+
   it('rejects a body that is not a snapshot at all', () => {
     expect(toWireSnapshot(null)).toBeNull();
     expect(toWireSnapshot('<html>captive portal</html>')).toBeNull();

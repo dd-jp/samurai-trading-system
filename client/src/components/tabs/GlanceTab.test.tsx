@@ -97,12 +97,7 @@ describe('P&L', () => {
   });
 
   it('names an absent headline instead of drawing £0.00 — the "type that lies" boundary gap', () => {
-    const snapshot = makeSnapshot();
-    // `pnl` is typed as required, but nothing at the fetch boundary enforces
-    // that at runtime (`useSnapshot.ts`'s `hasWireShape` doesn't check it) —
-    // this exercises exactly the gap that leaves open, deliberately bypassing
-    // the type to do it.
-    (snapshot as { pnl?: unknown }).pnl = undefined;
+    const snapshot = makeSnapshot({ pnl: null });
     renderGlance(snapshot);
     expect(
       screen.getByText('No P&L headline on this snapshot — the server did not include one.'),
