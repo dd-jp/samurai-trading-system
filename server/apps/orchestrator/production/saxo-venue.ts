@@ -68,13 +68,21 @@ import type {
   LegResizeUnverifiedAlertChannel,
   SaxoInstrumentResolver,
   SaxoOpenApiClient,
+  SaxoTokenSource,
+  SaxoTradingEnvironment,
   UnresolvedPriceUnitAlertChannel,
 } from '../../../pipeline/execution/index.js';
 import {
+  resolveSaxoOAuthConfig,
+  SAXO_CREDENTIAL_ENV_VARS,
   SaxoBrokerAdapter,
   SaxoHttpBrokerClient,
+  SaxoTokenRefresher,
   SqliteBrokerStateStore,
+  StaticSaxoTokenSource,
+  savedSessionExists,
   saxoInstrumentResolverFromVenue,
+  tokenFilePath,
 } from '../../../pipeline/execution/index.js';
 import type { LseEtpPoolRow } from '../../../providers/universe-pool/index.js';
 import {
@@ -172,6 +180,8 @@ export interface SaxoVenueDeps {
   clock?: Clock;
   /** `ProductionConfig.saxoBrokerClient` — the wire client, defaulted to the SIM gateway. */
   client?: SaxoOpenApiClient;
+  /** The bearer the default client reads per request (#1523); ignored when `client` is injected. */
+  tokenSource?: SaxoTokenSource;
   /** The account's shared outbound bucket, matching what `production.ts` does for Alpaca. */
   rateLimiter?: TokenBucket;
 }
@@ -195,6 +205,7 @@ export async function buildSaxoBroker(deps: SaxoVenueDeps): Promise<BrokerAdapte
       // `live`, so no live bearer token is reachable from this module at all.
       environment: 'sim',
       logger: deps.logger,
+      tokenSource: deps.tokenSource ?? buildSaxoTokenSource('sim', deps.logger),
       rateLimiter: deps.rateLimiter ?? buildSaxoRateLimiter(deps.logger),
     });
 
@@ -299,12 +310,98 @@ function buildSaxoRateLimiter(logger: Logger): TokenBucket {
  * `sim` unconditionally, matching `buildSaxoBroker`: no live token is read on
  * any path this venue reaches.
  */
-export function buildSaxoVenueClient(logger: Logger): SaxoHttpBrokerClient {
+export function buildSaxoVenueClient(
+  logger: Logger,
+  tokenSource: SaxoTokenSource = buildSaxoTokenSource('sim', logger),
+): SaxoHttpBrokerClient {
   return new SaxoHttpBrokerClient({
     environment: 'sim',
     logger,
+    tokenSource,
     rateLimiter: buildSaxoRateLimiter(logger),
   });
+}
+
+/**
+ * Where the run's Saxo bearer comes from (#1523), in strict precedence:
+ *
+ * 1. **A saved `yarn saxo:login` session** (`data/saxo-tokens/<env>.json`) —
+ *    the refresher, which rotates the refresh token before its window closes
+ *    and reports the session lost when it cannot. A file that is present but
+ *    expired or unreadable still takes this branch and still reports lost: a
+ *    fall-through to the pasted token below would put the run back on a
+ *    bearer nothing can renew, which is the 401 this ticket exists to remove,
+ *    now invisible.
+ * 2. **A pasted `SAXO_{SIM,LIVE}_ACCESS_TOKEN`** — the pre-#1523 developer
+ *    portal token. Kept because it is what every SIM run used until now, and
+ *    logged as unrefreshable so a soak that dies at the 24-hour mark is
+ *    diagnosable from its own startup line.
+ * 3. Neither: refuse, naming the login command.
+ *
+ * Parameterised by environment and not hardcoded to `sim` even though the
+ * venue only ever passes `sim` (it refuses `SAMURAI_MODE=live` outright): the
+ * live path differs only in which file and which app credentials it reads, so
+ * the branch that would have to be written later is the one already tested.
+ */
+export function buildSaxoTokenSource(
+  environment: SaxoTradingEnvironment,
+  logger: Logger,
+  /**
+   * `tokenPath` overrides `tokenFilePath(environment)`, for `RunLoginDeps`'
+   * reason (saxo-login.ts): a test must be able to exercise the precedence
+   * above against a sandboxed file, and never against the operator's real
+   * saved session.
+   */
+  deps: { env?: NodeJS.ProcessEnv; tokenPath?: string } = {},
+): SaxoTokenSource {
+  const env = deps.env ?? process.env;
+  const path = deps.tokenPath ?? tokenFilePath(environment);
+  if (savedSessionExists(path)) {
+    const refresher = new SaxoTokenRefresher({
+      environment,
+      config: resolveSaxoOAuthConfig(environment, env),
+      tokenPath: path,
+      logger,
+    });
+    // Primed HERE rather than on the first order: an expired or unreadable
+    // saved session is an operator problem (`yarn saxo:login` again), and a
+    // boot that stays silent about it defers the news to the first trade of
+    // the session. Not a throw — the precedence above deliberately keeps a
+    // lost refresher instead of falling back to an unrenewable bearer, and
+    // alerting on the state is #1524.
+    const state = refresher.start();
+    // A lost session already logged `saxo_session_lost` from inside `start()`;
+    // restating it here would double every boot failure.
+    if (state.status !== 'lost') {
+      logger.log({
+        trace_id: 'startup',
+        stage: 'orchestrator',
+        event: 'saxo_session_resumed',
+        level: 'info',
+        message: `Saxo ${environment} session resumed from the saved login`,
+        payload: { venue: 'saxo', environment, ...state },
+      });
+    }
+    return refresher;
+  }
+  const names = SAXO_CREDENTIAL_ENV_VARS[environment];
+  const pasted = env[names.token]?.trim();
+  if (pasted !== undefined && pasted.length > 0) {
+    logger.log({
+      trace_id: 'startup',
+      stage: 'orchestrator',
+      event: 'saxo_session_unrefreshable',
+      level: 'warn',
+      message: `Saxo ${environment} run is using the pasted ${names.token}; it cannot be renewed and expires on the gateway's own schedule`,
+      payload: { environment, token_file: path, source: 'env' },
+    });
+    return new StaticSaxoTokenSource(pasted);
+  }
+  throw new Error(
+    `Orchestrator cannot start: the Saxo ${environment} venue has no bearer. Run ` +
+      `\`yarn saxo:login --env ${environment}\` once to save a refreshable session at ${path}, ` +
+      `or set ${names.token} to a portal token for a single short run.`,
+  );
 }
 
 function assertSaxoVenueBootable(deps: SaxoVenueDeps): void {

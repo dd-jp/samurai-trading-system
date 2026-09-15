@@ -3,10 +3,11 @@
  * sim|live`. Runs the Authorization Code Grant
  * (developer.saxo/openapi/learn/oauth-authorization-code-grant) once per
  * environment and saves the resulting access/refresh tokens to a
- * gitignored, owner-only file. Today's only working credential is the
- * developer portal's 24-hour SIM-only token (saxo-http-client.ts) — this
- * command is what makes a LIVE token obtainable at all, and what replaces
- * hand-copying the portal token for SIM.
+ * gitignored, owner-only file. The saved session is what the orchestrator's
+ * refresher renews from (#1523, adapters/saxo-token-source.ts); the developer
+ * portal's 24-hour SIM-only token remains a fallback for an operator who has
+ * not run this command, and is the only credential that ever existed before
+ * it.
  *
  * Every line this command prints goes through `printSafely`, which routes
  * through the shared `maskCredentials` redaction pass (the same one
@@ -16,92 +17,45 @@
  */
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
-import { dirname, isAbsolute, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { isAbsolute, resolve } from 'node:path';
+import type { SaxoTradingEnvironment } from '../pipeline/execution/adapters/saxo-http-client.js';
+import type {
+  FetchLike,
+  SaxoOAuthConfig as SaxoLoginConfig,
+  SaxoTokenResponse,
+} from '../pipeline/execution/adapters/saxo-oauth.js';
 import {
-  SAXO_CREDENTIAL_ENV_VARS,
-  SAXO_GATEWAY_URLS,
-  type SaxoTradingEnvironment,
-} from '../pipeline/execution/adapters/saxo-http-client.js';
+  requestSaxoToken,
+  resolveSaxoOAuthConfig as resolveLoginConfig,
+  SaxoOAuthError as SaxoLoginError,
+} from '../pipeline/execution/adapters/saxo-oauth.js';
+import type { SaxoTokenFileRecord } from '../pipeline/execution/adapters/saxo-token-file.js';
+import { tokenFilePath, writeTokenFile } from '../pipeline/execution/adapters/saxo-token-file.js';
 import { fetchWithTimeout, maskCredentials } from '../shared/index.js';
 
 /**
- * `server/tools/` → repo root, two levels up. Token-file paths are anchored
- * here rather than at `process.cwd()` (review round 1, finding 1): the
- * gitignore pattern `data/saxo-tokens/` is root-anchored, so a cwd-relative
- * `resolve()` produced a path the ignore rule doesn't match whenever this
- * command ran from anywhere but the repo root.
+ * The token endpoint, the config resolution and the token FILE all moved to
+ * `pipeline/execution/adapters/` for #1523: the refresher that keeps the
+ * session alive runs inside the orchestrator and must not import this CLI.
+ * They are re-exported because this module's callers (and its tests) still
+ * spell them this way.
  */
-const REPO_ROOT = fileURLToPath(new URL('../../', import.meta.url));
-
-export class SaxoLoginError extends Error {}
-
-export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
+export {
+  type FetchLike,
+  resolveLoginConfig,
+  type SaxoLoginConfig,
+  SaxoLoginError,
+  type SaxoTokenFileRecord,
+  type SaxoTokenResponse,
+  tokenFilePath,
+  writeTokenFile,
+};
 
 const DEFAULT_TIMEOUT_MS = 15_000;
-const DEFAULT_REDIRECT_URI = 'http://localhost:8080/callback';
-
-/**
- * Both Saxo apps register the same localhost redirect (#1522's ticket
- * body); the environment picks which authorize/token host it points at.
- */
-const DEFAULT_AUTH_URLS: Readonly<Record<SaxoTradingEnvironment, string>> = {
-  sim: 'https://sim.logonvalidation.net/authorize',
-  live: 'https://live.logonvalidation.net/authorize',
-};
-const DEFAULT_TOKEN_URLS: Readonly<Record<SaxoTradingEnvironment, string>> = {
-  sim: 'https://sim.logonvalidation.net/token',
-  live: 'https://live.logonvalidation.net/token',
-};
-
-const APP_CREDENTIAL_ENV_VARS: Readonly<
-  Record<SaxoTradingEnvironment, { appKey: string; appSecret: string }>
-> = {
-  sim: { appKey: 'SAXO_SIM_APP_KEY', appSecret: 'SAXO_SIM_APP_SECRET' },
-  live: { appKey: 'SAXO_LIVE_APP_KEY', appSecret: 'SAXO_LIVE_APP_SECRET' },
-};
-
-export interface SaxoLoginConfig {
-  environment: SaxoTradingEnvironment;
-  appKey: string;
-  appSecret: string;
-  authUrl: string;
-  tokenUrl: string;
-  redirectUri: string;
-  gatewayBaseUrl: string;
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
-}
-
-function readEnv(env: NodeJS.ProcessEnv, name: string): string | undefined {
-  const value = env[name]?.trim();
-  return value === undefined || value.length === 0 ? undefined : value;
-}
-
-export function resolveLoginConfig(
-  environment: SaxoTradingEnvironment,
-  env: NodeJS.ProcessEnv = process.env,
-): SaxoLoginConfig {
-  const credNames = APP_CREDENTIAL_ENV_VARS[environment];
-  const appKey = readEnv(env, credNames.appKey);
-  const appSecret = readEnv(env, credNames.appSecret);
-  if (appKey === undefined) {
-    throw new SaxoLoginError(`${credNames.appKey} is not set. Provide it via .env.local.`);
-  }
-  if (appSecret === undefined) {
-    throw new SaxoLoginError(`${credNames.appSecret} is not set. Provide it via .env.local.`);
-  }
-  const upper = environment.toUpperCase();
-  const authUrl = readEnv(env, `SAXO_${upper}_AUTH_URL`) ?? DEFAULT_AUTH_URLS[environment];
-  const tokenUrl = readEnv(env, `SAXO_${upper}_TOKEN_URL`) ?? DEFAULT_TOKEN_URLS[environment];
-  const redirectUri = readEnv(env, `SAXO_${upper}_REDIRECT_URI`) ?? DEFAULT_REDIRECT_URI;
-  const gatewayNames = SAXO_CREDENTIAL_ENV_VARS[environment];
-  const gatewayBaseUrl = readEnv(env, gatewayNames.gateway) ?? SAXO_GATEWAY_URLS[environment];
-  return { environment, appKey, appSecret, authUrl, tokenUrl, redirectUri, gatewayBaseUrl };
 }
 
 export function randomState(): string {
@@ -201,19 +155,11 @@ export function waitForCallback(
   return { server, result };
 }
 
-export interface SaxoTokenResponse {
-  accessToken: string;
-  refreshToken: string;
-  /** ISO instant, derived from the response's `expires_in` (measured 1200 s live, 2026-09-14 — never hardcoded). */
-  accessTokenExpiresAt: string;
-  /** ISO instant, derived from the response's `refresh_token_expires_in` (measured 3600 s live, 2026-09-14 — never hardcoded). */
-  refreshTokenExpiresAt: string;
-}
-
 /**
- * HTTP Basic AppKey:AppSecret at the token URL. Both 200 and 201 count as
- * success — the live gateway measured 201 on 2026-09-14 (#1522's dispatch
- * facts); the docs' example shows 200.
+ * The authorization-code half of the token endpoint. The refresh half is the
+ * refresher's (#1523); both post to the same endpoint under the same Basic
+ * auth and the same 200-or-201 rule, so they share one implementation
+ * (`requestSaxoToken`, saxo-oauth.ts).
  */
 export async function exchangeAuthorizationCode(
   config: Pick<SaxoLoginConfig, 'tokenUrl' | 'appKey' | 'appSecret' | 'redirectUri'>,
@@ -221,102 +167,12 @@ export async function exchangeAuthorizationCode(
   now: Date,
   fetchImpl: FetchLike,
 ): Promise<SaxoTokenResponse> {
-  const basic = Buffer.from(`${config.appKey}:${config.appSecret}`).toString('base64');
-  const body = new URLSearchParams({
-    grant_type: 'authorization_code',
-    code,
-    redirect_uri: config.redirectUri,
-  });
-  let response: Response;
-  try {
-    response = await fetchImpl(config.tokenUrl, {
-      method: 'POST',
-      headers: {
-        authorization: `Basic ${basic}`,
-        'content-type': 'application/x-www-form-urlencoded',
-      },
-      body: body.toString(),
-    });
-  } catch (cause) {
-    throw new SaxoLoginError(
-      `Saxo token exchange failed: network error — ${
-        cause instanceof Error ? cause.message : String(cause)
-      }`,
-    );
-  }
-  let text: string;
-  try {
-    text = await response.text();
-  } catch (cause) {
-    throw new SaxoLoginError(
-      `Saxo token exchange failed: response body could not be read — ${
-        cause instanceof Error ? cause.message : String(cause)
-      }`,
-    );
-  }
-  // Masked even though a token-endpoint error body is not expected to echo
-  // the app secret back — defense in depth, matching saxo-http-client.ts's
-  // own error-body posture.
-  if (response.status !== 200 && response.status !== 201) {
-    throw new SaxoLoginError(
-      `Saxo token exchange failed: HTTP ${response.status} — ${maskCredentials(text).slice(0, 500)}`,
-    );
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new SaxoLoginError('Saxo token exchange failed: response body was not valid JSON.');
-  }
-  if (
-    !isRecord(parsed) ||
-    typeof parsed.access_token !== 'string' ||
-    parsed.access_token.length === 0 ||
-    typeof parsed.refresh_token !== 'string' ||
-    parsed.refresh_token.length === 0 ||
-    typeof parsed.expires_in !== 'number' ||
-    !Number.isFinite(parsed.expires_in) ||
-    typeof parsed.refresh_token_expires_in !== 'number' ||
-    !Number.isFinite(parsed.refresh_token_expires_in)
-  ) {
-    throw new SaxoLoginError(
-      'Saxo token exchange failed: response body is missing access_token/refresh_token/expires_in/refresh_token_expires_in.',
-    );
-  }
-  return {
-    accessToken: parsed.access_token,
-    refreshToken: parsed.refresh_token,
-    accessTokenExpiresAt: new Date(now.getTime() + parsed.expires_in * 1000).toISOString(),
-    refreshTokenExpiresAt: new Date(
-      now.getTime() + parsed.refresh_token_expires_in * 1000,
-    ).toISOString(),
-  };
-}
-
-export function tokenFilePath(environment: SaxoTradingEnvironment): string {
-  return resolve(REPO_ROOT, 'data', 'saxo-tokens', `${environment}.json`);
-}
-
-export interface SaxoTokenFileRecord extends SaxoTokenResponse {
-  environment: SaxoTradingEnvironment;
-  obtainedAt: string;
-}
-
-/**
- * Directory `0o700`, file `0o600` — owner-read-only, matching
- * `rotating-file-sink.ts`'s posture for the most sensitive file this process
- * writes. `{ mode }` on `mkdirSync`/`writeFileSync` only applies at CREATE
- * (review round 1, finding 2) — every re-login (the access token lives
- * 1200 s) is a rewrite over an already-existing file/directory, so the mode
- * is enforced explicitly with `chmodSync` after every write, not assumed
- * from creation.
- */
-export function writeTokenFile(path: string, record: SaxoTokenFileRecord): void {
-  const dir = dirname(path);
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  chmodSync(dir, 0o700);
-  writeFileSync(path, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
-  chmodSync(path, 0o600);
+  return requestSaxoToken(
+    config,
+    { grant_type: 'authorization_code', code, redirect_uri: config.redirectUri },
+    now,
+    fetchImpl,
+  );
 }
 
 const IDENTITY_FIELDS = ['UserId', 'ClientKey', 'Name', 'Culture', 'Language'] as const;

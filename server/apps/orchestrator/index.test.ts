@@ -12,10 +12,12 @@ import { mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { SaxoTokenSource } from '../../pipeline/execution/index.js';
 import type { LogEntry } from '../../shared/index.js';
 import {
   assertStorePathMatchesMode,
   buildShutdownHandler,
+  credentialRequirements,
   installFaultHandlers,
   missingCredentialEnvVars,
   paperStartingProfile,
@@ -23,7 +25,9 @@ import {
   runEntrypointLogRetention,
   startFromEnvironment,
   storePathEncodesTradingMode,
+  withSaxoSessionStop,
 } from './index.js';
+import type { ProductionOrchestrator } from './production.js';
 
 /**
  * See the twin in `startup.test.ts`. Resolve arm of the `.then(…, …)` pairs
@@ -350,6 +354,32 @@ describe('missingCredentialEnvVars', () => {
         'saxo',
       ),
     ).toEqual(['ALPACA_API_KEY', 'ALPACA_API_SECRET']);
+  });
+
+  /**
+   * #1523. The saved-session branch reads no pasted token but hard-requires
+   * the app credentials — `resolveSaxoOAuthConfig` throws on a missing
+   * `SAXO_SIM_APP_KEY`, and every refresh re-sends the pair as Basic auth.
+   * Asserted against the table's own predicates rather than through
+   * `missingCredentialEnvVars`, which reads the real `data/saxo-tokens/sim.json`
+   * path: this suite must never depend on, create, or clobber the operator's
+   * saved session.
+   */
+  it('swaps the pasted Saxo token for the app credentials once a saved session exists', () => {
+    const context = {
+      injected: {},
+      alertsMode: 'log-only' as const,
+      mode: 'paper' as const,
+      venue: 'saxo' as const,
+    };
+    const required = (savedSaxoSession: boolean): string[] =>
+      credentialRequirements()
+        .filter((requirement) => !requirement.unusedByThisRun({ ...context, savedSaxoSession }))
+        .flatMap((requirement) => [...requirement.vars])
+        .filter((name) => name.startsWith('SAXO_'));
+
+    expect(required(false)).toEqual(['SAXO_SIM_ACCESS_TOKEN']);
+    expect(required(true)).toEqual(['SAXO_SIM_APP_KEY', 'SAXO_SIM_APP_SECRET']);
   });
 
   it('never returns a credential VALUE, only its variable name', () => {
@@ -854,5 +884,84 @@ describe('runEntrypointLogRetention (#1116)', () => {
     // asserts against — the guard runs only under `node index.js`, so no
     // in-process test can observe the call's effect instead.
     expect(source.slice(guardIndex)).toMatch(/^\s*runEntrypointLogRetention\(/m);
+  });
+});
+
+/**
+ * #1523. `startFromEnvironment` cannot reach this offline — the Saxo arm needs
+ * the venue resolved and a token source built — so the spread is asserted
+ * directly.
+ */
+describe('withSaxoSessionStop', () => {
+  function fakeTokenSource(record: (event: string) => void): SaxoTokenSource {
+    return {
+      getAccessToken: async () => 'unused-in-this-test',
+      sessionState: () => ({
+        status: 'active',
+        accessTokenExpiresAt: '2026-09-15T12:20:00.000Z',
+        refreshTokenExpiresAt: '2026-09-15T12:40:00.000Z',
+        failedAttempts: 0,
+      }),
+      stop: async () => {
+        record('token-source-stop');
+      },
+    };
+  }
+
+  /**
+   * The drain still sends Saxo requests (flatten, cancel), so the refresher
+   * has to outlive it — a source stopped first stops renewing, and a tick that
+   * outlives the refresh lead would drain on an expired bearer.
+   */
+  it('stops the token refresher AFTER the orchestrator has drained, keeping the rest of the surface', async () => {
+    const calls: string[] = [];
+    const orchestrator = {
+      universe: [{ asset: 'SPY' }],
+      stop: async () => {
+        calls.push('orchestrator-stop');
+      },
+    } as unknown as ProductionOrchestrator;
+
+    const wrapped = withSaxoSessionStop(
+      orchestrator,
+      fakeTokenSource((e) => calls.push(e)),
+    );
+    await wrapped.stop();
+
+    expect(calls).toEqual(['orchestrator-stop', 'token-source-stop']);
+    expect(wrapped.universe).toBe(orchestrator.universe);
+  });
+
+  /**
+   * `buildShutdownHandler` calls `effects.exit(0)` the moment this resolves,
+   * so a `stop()` that is not awaited kills the process mid-rotation — and
+   * Saxo invalidated the previous refresh token when it issued the one in
+   * flight, so that is a stranded session, not a retry.
+   */
+  it('does not resolve until the token source has finished its own shutdown', async () => {
+    let releaseSource = (): void => {};
+    const sourceFinished = new Promise<void>((resolve) => {
+      releaseSource = resolve;
+    });
+    let stopResolved = false;
+    const orchestrator = { stop: async () => {} } as unknown as ProductionOrchestrator;
+    const tokenSource: SaxoTokenSource = {
+      ...fakeTokenSource(() => {}),
+      stop: () => sourceFinished,
+    };
+
+    const pending = withSaxoSessionStop(orchestrator, tokenSource)
+      .stop()
+      .then(() => {
+        stopResolved = true;
+      });
+    await Promise.resolve();
+
+    expect(stopResolved).toBe(false);
+
+    releaseSource();
+    await pending;
+
+    expect(stopResolved).toBe(true);
   });
 });

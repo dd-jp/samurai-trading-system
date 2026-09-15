@@ -48,9 +48,13 @@
  */
 import { basename, dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import type { SaxoTokenSource } from '../../pipeline/execution/index.js';
 import {
   ALPACA_CREDENTIAL_ENV_VARS,
+  SAXO_APP_CREDENTIAL_ENV_VARS,
   SAXO_CREDENTIAL_ENV_VARS,
+  savedSessionExists,
+  tokenFilePath,
 } from '../../pipeline/execution/index.js';
 import { LseRegularHoursCalendar } from '../../providers/market-data-service/index.js';
 import { MiArchiveStore, miArchivePath } from '../../providers/market-intelligence/index.js';
@@ -89,6 +93,7 @@ import {
 import {
   type BrokerVenue,
   buildSaxoBroker,
+  buildSaxoTokenSource,
   buildSaxoVenueClient,
   resolveBrokerVenue,
   saxoTradeableUniverse,
@@ -333,7 +338,7 @@ function parseMode(raw: string | undefined): ProductionConfig['mode'] {
  * import time. Building the list per call reads them when they are needed
  * instead, which is also the only moment their values matter.
  */
-function credentialRequirements(): readonly {
+export function credentialRequirements(): readonly {
   vars: readonly string[];
   /**
    * True when this run never touches these variables — because the caller
@@ -347,6 +352,13 @@ function credentialRequirements(): readonly {
     mode: ProductionConfig['mode'];
     /** The resolved broker venue (#1400) — what decides whether the Alpaca ORDER path exists at all. */
     venue: BrokerVenue;
+    /**
+     * Whether `yarn saxo:login` has saved a SIM session (#1523). Passed in
+     * rather than read here so the two Saxo entries below — which require
+     * opposite sets of variables on opposite sides of it — are testable
+     * without a token file on the machine running the suite.
+     */
+    savedSaxoSession: boolean;
   }) => boolean;
   /**
    * Names in `vars` that a DIFFERENT variable can satisfy instead, keyed by
@@ -461,11 +473,34 @@ function credentialRequirements(): readonly {
       // the live Alpaca entry gives: this pre-flight exists to report what the
       // constructor would refuse on, and two lists that could drift apart
       // defeat it.
+      // Since #1523 the variable is the FALLBACK, not the only way in: a run
+      // with a saved `yarn saxo:login` session reads its bearer from the token
+      // file and renews it, so demanding the pasted token there would refuse
+      // exactly the boot this repo now wants. `buildSaxoTokenSource` makes the
+      // same choice in the same order; this stays a report of what that
+      // constructor would refuse on.
       vars: [SAXO_CREDENTIAL_ENV_VARS.sim.token],
-      unusedByThisRun: ({ injected, venue }) =>
+      unusedByThisRun: ({ injected, venue, savedSaxoSession }) =>
         venue !== 'saxo' ||
         injected.saxoBrokerClient !== undefined ||
-        injected.broker !== undefined,
+        injected.broker !== undefined ||
+        savedSaxoSession,
+    },
+    {
+      // The other half of the entry above: the saved-session branch does NOT
+      // read the pasted token, but it hard-requires the app credentials —
+      // `buildSaxoTokenSource` → `resolveSaxoOAuthConfig` throws
+      // `SAXO_SIM_APP_KEY is not set` — and every refresh re-sends them as
+      // Basic auth. Without this a run with a token file and no app key
+      // passes the pre-flight and fails on the first `getAccessToken`, which
+      // is exactly the drift this list exists to prevent. Only SIM, for the
+      // reason above: live is refused outright.
+      vars: [SAXO_APP_CREDENTIAL_ENV_VARS.sim.appKey, SAXO_APP_CREDENTIAL_ENV_VARS.sim.appSecret],
+      unusedByThisRun: ({ injected, venue, savedSaxoSession }) =>
+        venue !== 'saxo' ||
+        injected.saxoBrokerClient !== undefined ||
+        injected.broker !== undefined ||
+        !savedSaxoSession,
     },
   ];
 }
@@ -554,9 +589,13 @@ export function missingCredentialEnvVars(
   venue: BrokerVenue,
 ): string[] {
   const isSet = (name: string): boolean => (process.env[name] ?? '').trim().length > 0;
+  const savedSaxoSession = savedSessionExists(tokenFilePath('sim'));
 
   return credentialRequirements()
-    .filter((requirement) => !requirement.unusedByThisRun({ injected, alertsMode, mode, venue }))
+    .filter(
+      (requirement) =>
+        !requirement.unusedByThisRun({ injected, alertsMode, mode, venue, savedSaxoSession }),
+    )
     .flatMap((requirement) =>
       requirement.vars.filter(
         (name) => !isSet(name) && !(requirement.alternatives?.[name] ?? []).some(isSet),
@@ -815,10 +854,17 @@ export async function startFromEnvironment(
   // would be two budgets against one limit. Built only when neither an adapter
   // nor a client was injected — a caller that passed either has already chosen
   // its transport, and the funding read must not open a second one behind it.
-  const saxoClient =
+  // The bearer the client reads PER REQUEST (#1523), built beside the client
+  // for the same reason the client is built once: the refresher owns the saved
+  // session file, and two of them would rotate the same refresh token against
+  // each other. Whoever builds the client builds this.
+  const saxoTokenSource =
     venue === 'saxo' && injected.broker === undefined && injected.saxoBrokerClient === undefined
-      ? buildSaxoVenueClient(logger)
+      ? buildSaxoTokenSource('sim', logger)
       : undefined;
+
+  const saxoClient =
+    saxoTokenSource === undefined ? undefined : buildSaxoVenueClient(logger, saxoTokenSource);
 
   // The GBP-native funding read. Skipped when the caller supplied a whole
   // `accountState` or its own funding source, so this never fires under a test
@@ -941,6 +987,11 @@ export async function startFromEnvironment(
     mode,
   });
 
+  const started =
+    saxoTokenSource === undefined
+      ? orchestrator
+      : withSaxoSessionStop(orchestrator, saxoTokenSource);
+
   const orphans = await orchestrator.start();
   orchestrator.logger.log({
     trace_id: 'startup',
@@ -957,7 +1008,44 @@ export async function startFromEnvironment(
     },
   });
 
-  return orchestrator;
+  return started;
+}
+
+/**
+ * Folds the token refresher into the orchestrator's own shutdown (#1523),
+ * AFTER it — in that order for two reasons, both of which cost a live session
+ * if reversed:
+ *
+ * 1. `orchestrator.stop()` drains an in-flight tick, and that drain (flatten,
+ *    cancel) still sends Saxo requests. A refresher stopped first stops
+ *    renewing, so a tick that outlives the ≤60 s refresh lead — routine, since
+ *    a tick is LLM-bound — would be draining on an expired bearer. Stopping
+ *    first buys nothing anyway: the timer is `unref`'d, so it never holds the
+ *    process open.
+ * 2. `stop()` is awaited because it joins an in-flight rotation. Saxo
+ *    invalidated the previous refresh token when it issued the one in flight,
+ *    so exiting between receipt and `rename` strands the session and costs the
+ *    operator a manual `yarn saxo:login`. `buildShutdownHandler` calls
+ *    `effects.exit(0)` the moment this resolves, so the join has to happen
+ *    here or it does not happen at all.
+ *
+ * A spread rather than a subclass because `buildProductionOrchestrator`
+ * returns a plain object literal whose methods close over its own locals, so
+ * copying them carries no `this` binding to lose. Exported so that spread —
+ * the one wiring line no `startFromEnvironment` test can reach offline — is
+ * testable.
+ */
+export function withSaxoSessionStop(
+  orchestrator: ProductionOrchestrator,
+  tokenSource: SaxoTokenSource,
+): ProductionOrchestrator {
+  return {
+    ...orchestrator,
+    stop: async () => {
+      await orchestrator.stop();
+      await tokenSource.stop();
+    },
+  };
 }
 
 /**
