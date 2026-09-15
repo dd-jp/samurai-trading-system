@@ -46,8 +46,8 @@ ws.onmessage = (ev) => {
   const upper = text.toUpperCase();
   const fin = FIN.test(upper);
   for (const t of TICKERS) {
-    const hasCash = new RegExp('\\$' + t + '\\b').test(upper);
-    const hasBare = new RegExp('(?<![A-Z$])' + t + '(?![A-Z])').test(upper);
+    const hasCash = new RegExp(`\\$${t}\\b`).test(upper);
+    const hasBare = new RegExp(`(?<![A-Z$])${t}(?![A-Z])`).test(upper);
     if (!hasCash && !hasBare) continue;
     if (hasCash) cashtagHits++;
     if (hasBare) bareHits++;

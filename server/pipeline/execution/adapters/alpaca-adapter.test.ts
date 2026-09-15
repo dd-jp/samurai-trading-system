@@ -2988,6 +2988,16 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       return { submitOcoOrder, getOrderByClientOrderId, cancelOrder, resting, rows };
     }
 
+    function patchRow(
+      venue: ReturnType<typeof measuredAlpacaVenue>,
+      key: string,
+      patch: Partial<AlpacaOrder>,
+    ): void {
+      const prior = venue.rows.get(key);
+      if (!prior) throw new Error(`patchRow: no row set for ${key} yet`);
+      venue.rows.set(key, { ...prior, ...patch });
+    }
+
     // THE DEFECT. A lot is re-armed, the next `executeExit` cancels that OCO
     // (#516), the flatten partially fills, and the fresh residual marks the
     // SAME lot — an ordinary two-partial-flatten sequence. Under a single
@@ -3142,11 +3152,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       // ...and that cancel LOST the race to attempt 0's own fill. The venue
       // row ends `filled`, not `canceled` — the outcome `cancelOrder`'s
       // 404/422 tolerance exists to absorb
-      venue.rows.set('key-1:rearm', {
-        ...venue.rows.get('key-1:rearm')!,
-        status: 'filled',
-        filled_qty: '6',
-      });
+      patchRow(venue, 'key-1:rearm', { status: 'filled', filled_qty: '6' });
 
       // The third pass — the sweep re-verifying a lot it has already re-armed
       // twice. This is where the short-circuit used to overwrite the newest
@@ -3177,17 +3183,10 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
 
       await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
       await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
-      venue.rows.set('key-1:rearm', {
-        ...venue.rows.get('key-1:rearm')!,
-        status: 'filled',
-        filled_qty: '6',
-      });
+      patchRow(venue, 'key-1:rearm', { status: 'filled', filled_qty: '6' });
       // Cancelled AT THE VENUE, not by this walk — the #429 intervention path
       // (an operator flattening from the Alpaca UI, a day order expiring)
-      venue.rows.set('key-1:rearm-1', {
-        ...venue.rows.get('key-1:rearm-1')!,
-        status: 'canceled',
-      });
+      patchRow(venue, 'key-1:rearm-1', { status: 'canceled' });
       venue.submitOcoOrder.mockClear();
 
       await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
@@ -3208,15 +3207,8 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
 
       await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
       await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
-      venue.rows.set('key-1:rearm', {
-        ...venue.rows.get('key-1:rearm')!,
-        status: 'pending_cancel',
-      });
-      venue.rows.set('key-1:rearm-1', {
-        ...venue.rows.get('key-1:rearm-1')!,
-        status: 'filled',
-        filled_qty: '4',
-      });
+      patchRow(venue, 'key-1:rearm', { status: 'pending_cancel' });
+      patchRow(venue, 'key-1:rearm-1', { status: 'filled', filled_qty: '4' });
       venue.submitOcoOrder.mockClear();
 
       await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
@@ -3241,11 +3233,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
       // The cancel lost the race to a PARTIAL fill — the ordinary outcome for
       // a stop or target leg, and the remainder keeps working
-      venue.rows.set('key-1:rearm', {
-        ...venue.rows.get('key-1:rearm')!,
-        status: 'partially_filled',
-        filled_qty: '2',
-      });
+      patchRow(venue, 'key-1:rearm', { status: 'partially_filled', filled_qty: '2' });
       venue.submitOcoOrder.mockClear();
 
       await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 3, 95, 110);
@@ -3282,11 +3270,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
 
       await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
       await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
-      venue.rows.set('key-1:rearm', {
-        ...venue.rows.get('key-1:rearm')!,
-        status: 'filled',
-        filled_qty: '4',
-      });
+      patchRow(venue, 'key-1:rearm', { status: 'filled', filled_qty: '4' });
       expect(venue.resting().map((row) => row.client_order_id)).toEqual(['key-1:rearm-1']);
       venue.submitOcoOrder.mockClear();
 
@@ -3312,15 +3296,8 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
 
       await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
       await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
-      venue.rows.set('key-1:rearm', {
-        ...venue.rows.get('key-1:rearm')!,
-        status: 'filled',
-        filled_qty: '4',
-      });
-      venue.rows.set('key-1:rearm-1', {
-        ...venue.rows.get('key-1:rearm-1')!,
-        status: 'canceled',
-      });
+      patchRow(venue, 'key-1:rearm', { status: 'filled', filled_qty: '4' });
+      patchRow(venue, 'key-1:rearm-1', { status: 'canceled' });
       venue.submitOcoOrder.mockClear();
       venue.cancelOrder.mockClear();
 
@@ -3532,10 +3509,10 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
           // bookkeeping `cancel()` later trusts must name the leg that is
           // actually live, never a terminal one from a lower index
           if (workingAtExit.length === 1) {
-            if (namedId !== workingAtExit[0]!.id) {
+            if (namedId !== workingAtExit[0]?.id) {
               violations.push(
                 `${where} bookkeeping names ${String(namedId)}, ` +
-                  `working leg is ${workingAtExit[0]!.id}`,
+                  `working leg is ${workingAtExit[0]?.id}`,
               );
             }
           }
@@ -3564,11 +3541,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
         // Attempt 0 closes its own residual normally — no #1573 race at all,
         // the issue's point that this needs FEWER coincidences
-        venue.rows.set('key-1:rearm', {
-          ...venue.rows.get('key-1:rearm')!,
-          status: 'filled',
-          filled_qty: '4',
-        });
+        patchRow(venue, 'key-1:rearm', { status: 'filled', filled_qty: '4' });
         // The entry order itself: this lot has actually bought 6 by now, 2 more
         // than attempt 0 ever knew to close. Same bare `clientOrderId` — no
         // `:rearm` suffix — so this is a DIFFERENT venue row from every attempt
@@ -3600,11 +3573,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         const adapter = adapterWith(makeClient(venue));
 
         await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 4, 95, 110);
-        venue.rows.set('key-1:rearm', {
-          ...venue.rows.get('key-1:rearm')!,
-          status: 'filled',
-          filled_qty: '4',
-        });
+        patchRow(venue, 'key-1:rearm', { status: 'filled', filled_qty: '4' });
         // The entry never grew past what attempt 0 was armed for — this lot
         // really is flat, and the new lookup must not turn a correct adopt into
         // an unnecessary re-arm

@@ -723,7 +723,6 @@ export function Rail(props: RailProps) {
         </div>
       </nav>
       <nav className="rail-tabs" aria-label="Tabs">
-        {/* biome-ignore lint/a11y/useKeyWithClickEvents: no click handler here — the key handler implements the tablist arrow-key contract for the tab buttons inside. */}
         <div role="tablist" aria-orientation="vertical" onKeyDown={onTabKey}>
           {TABS.map((entry) => (
             <button
