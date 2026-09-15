@@ -1,7 +1,11 @@
 import type { AlpacaBalanceWire, MetricsSuiteWire, TradingArmWire } from '@contracts';
 import type { FeedStatus, LiveFeed, SnapshotFeed, WireSnapshot } from '../hooks/useSnapshot.ts';
 import { formatClockUtc, formatPercent, formatUsd } from '../lib/format.ts';
-import { providerStateWord, WAITING_FOR_FIRST_SNAPSHOT } from '../lib/vocabulary.ts';
+import {
+  CONTROL_NO_TICK,
+  providerStateWord,
+  WAITING_FOR_FIRST_SNAPSHOT,
+} from '../lib/vocabulary.ts';
 import { CapMeter } from './CapMeter.tsx';
 
 /**
@@ -206,7 +210,23 @@ function ModeBlock({ snapshot }: { snapshot: WireSnapshot }) {
   );
 }
 
+/**
+ * The control arm is wired with its own in-memory `InMemoryCurrentTickStore`
+ * (`control-arm-wiring.ts`), never persisted, so `tick_status` and the
+ * pipeline's `live_*` fields can never hold a control row — the server
+ * comment quoted below is `sqlite-query-store.ts`'s own name for this state.
+ * Reading them as "idle" under the control arm would understate the absence
+ * as a quiet moment rather than a structural one (#1597).
+ */
 function LiveTickBlock({ snapshot }: { snapshot: WireSnapshot }) {
+  if (snapshot.arm === 'control') {
+    return (
+      <div className="rail-block" data-field="live-tick">
+        <span className="label">Live tick</span>
+        <span className="rail-value muted">{CONTROL_NO_TICK}</span>
+      </div>
+    );
+  }
   const tick = snapshot.tick_status ?? null;
   const enteredAt = snapshot.pipeline.live_entered_at ?? null;
   const traceId = tick?.trace_id ?? snapshot.pipeline.live_trace_id ?? null;
@@ -241,6 +261,23 @@ function balanceFigures(balance: AlpacaBalanceWire) {
   ];
 }
 
+/**
+ * dashboard-spec.md's arm selector rule: "Providers, LLM spend and alert
+ * delivery render identically in both views, labelled as system" (#1597).
+ * These three tiles read fields the wire never scopes by arm — there is only
+ * one Alpaca/Polygon probe, one LLM spend ledger and one alert channel per
+ * process — so the label states plainly that switching arms will not change
+ * them, rather than leaving an operator to infer it from the figures staying
+ * put across a switch.
+ */
+function SystemTag() {
+  return (
+    <span className="muted small" data-system-fact="true">
+      system — identical in both arms
+    </span>
+  );
+}
+
 function ProvidersBlock({ snapshot }: { snapshot: WireSnapshot }) {
   const alpaca = snapshot.providers.alpaca;
   const polygon = snapshot.providers.polygon;
@@ -250,6 +287,10 @@ function ProvidersBlock({ snapshot }: { snapshot: WireSnapshot }) {
   ];
   return (
     <div className="rail-block" data-field="providers">
+      <div className="rail-meter-head">
+        <span className="label">Providers</span>
+        <SystemTag />
+      </div>
       {rows.map(({ name, tile }) => {
         const word = tile === undefined ? null : providerStateWord(tile.state);
         return (
@@ -337,7 +378,10 @@ function AlertDeliveryBlock({ snapshot }: { snapshot: WireSnapshot }) {
   if (count === 0) return null;
   return (
     <div className="rail-block rail-alert-degraded" data-field="alert-delivery-failures">
-      <span className="label">Alert channel</span>
+      <div className="rail-meter-head">
+        <span className="label">Alert channel</span>
+        <SystemTag />
+      </div>
       <span className="rail-value" data-alert-degraded="true">
         {count} alert{count === 1 ? '' : 's'} failed to deliver in the last 24h
       </span>
@@ -519,6 +563,7 @@ function SpendBlock({ snapshot }: { snapshot: WireSnapshot }) {
       }
       footnote={(over) => (
         <>
+          <SystemTag />
           {windows != null && (
             <span className="rail-note mono" data-field="llm-windows">
               24h {formatUsd(windows.last_24h.cost_usd)} · 7d {formatUsd(windows.last_7d.cost_usd)}{' '}

@@ -27,7 +27,7 @@ import {
 } from '../../lib/format.ts';
 import { resolveTrade, type TradeDetail, tradeDebate } from '../../lib/resolve-trace.ts';
 import { presentCloseReason } from '../../lib/state-presentation.ts';
-import { sideWord } from '../../lib/vocabulary.ts';
+import { CONTROL_NO_ANALYSTS, CONTROL_NO_DEBATE, sideWord } from '../../lib/vocabulary.ts';
 import { Seal } from '../Seal.tsx';
 import { pnlTone, StateWord } from '../StateWord.tsx';
 import { DebateSection, FillsList, GatesSection, Timeline } from '../TraceSections.tsx';
@@ -422,11 +422,31 @@ function BenchmarksCard({ benchmarks }: { benchmarks: readonly OutsideBenchmarkR
   );
 }
 
-function AnalystsCard({ analysts }: { analysts: readonly AnalystPerformanceRow[] }) {
+/**
+ * `analysts[]` is the Feedback Loop's per-analyst DEBATE attribution
+ * (`getAnalystWeights`, unscoped by arm) — the control arm runs no debate,
+ * so it earns no analyst its own weight or rolling R could belong to. Unlike
+ * `risk_critics`/`verdicts`/`pipeline` (#1594), this read was not widened to
+ * take `arm`, because there is nothing arm-scoped to widen it to: a control
+ * row would have to attribute a trade to an analyst that never argued for it.
+ * Showing the live arm's weights under the control view would be exactly the
+ * live-arm-only leak dashboard-spec.md's arm selector rule forbids (#1597),
+ * so this card reads the structural absence directly rather than rendering
+ * `analysts[]` at all.
+ */
+function AnalystsCard({
+  analysts,
+  isControl,
+}: {
+  analysts: readonly AnalystPerformanceRow[];
+  isControl: boolean;
+}) {
   return (
     <section className="card" aria-label="Analysts">
       <h3>Analyst weights</h3>
-      {analysts.length === 0 ? (
+      {isControl ? (
+        <p className="empty-state">{CONTROL_NO_ANALYSTS}</p>
+      ) : analysts.length === 0 ? (
         <p className="empty-state">
           No analyst weights on this snapshot — the Feedback Loop writes them after its first
           attribution cycle.
@@ -455,15 +475,18 @@ function AnalystsCard({ analysts }: { analysts: readonly AnalystPerformanceRow[]
           })}
         </ul>
       )}
-      <p className="muted small">
-        Weight is the Feedback Loop's current trust; rolling R is attributed return over the window.
-        Neither is a hit rate — the wire carries no per-analyst accuracy.
-      </p>
+      {!isControl && (
+        <p className="muted small">
+          Weight is the Feedback Loop's current trust; rolling R is attributed return over the
+          window. Neither is a hit rate — the wire carries no per-analyst accuracy.
+        </p>
+      )}
     </section>
   );
 }
 
-function whyTaken(debate: DebateRow | undefined): string {
+function whyTaken(debate: DebateRow | undefined, isControl: boolean): string {
+  if (isControl) return CONTROL_NO_DEBATE;
   if (debate === undefined) return 'debate not in the recent-debates window';
   const lead = [...debate.contributions].sort((a, b) => b.influence_score - a.influence_score)[0];
   const rounds = `${debate.direction} · ${debate.rounds} rounds`;
@@ -479,10 +502,11 @@ function TradeRow(props: {
   trade: ClosedTradeRow;
   debate: DebateRow | undefined;
   asOf: string;
+  isControl: boolean;
   selected: boolean;
   onSelect: () => void;
 }) {
-  const { trade, debate, asOf, selected, onSelect } = props;
+  const { trade, debate, asOf, isControl, selected, onSelect } = props;
   const tone = pnlTone(trade.realized_pnl_net);
   const closeReason = presentCloseReason(trade.close_reason);
   // Same hook `TraceSections.tsx`'s `DebateSection` sets (#1080's
@@ -508,7 +532,7 @@ function TradeRow(props: {
         <span className="mono muted">{formatHeld(trade.opened_at, trade.closed_at)}</span>
         <StateWord state={closeReason} />
         <span className="muted trade-why" data-degraded={degraded ? 'true' : undefined}>
-          {whyTaken(debate)}
+          {whyTaken(debate, isControl)}
         </span>
         <span className={`mono trade-pnl ${tone}`}>{formatSignedUsd(trade.realized_pnl_net)}</span>
       </button>
@@ -519,6 +543,7 @@ function TradeRow(props: {
 function TradesTable(props: ReviewTabProps) {
   const { snapshot, selectedKey, onSelect } = props;
   const trades = snapshot.closed_trades;
+  const isControl = snapshot.arm === 'control';
   return (
     <section className="trades" aria-label="Closed trades">
       <div className="section-head">
@@ -549,6 +574,7 @@ function TradesTable(props: ReviewTabProps) {
               trade={trade}
               debate={tradeDebate(snapshot.debates, trade)}
               asOf={snapshot.as_of}
+              isControl={isControl}
               selected={selectedKey === trade.idempotency_key}
               onSelect={() => onSelect(trade.idempotency_key)}
             />
@@ -582,6 +608,7 @@ function TradeDrawer({ snapshot, selectedKey }: Pick<ReviewTabProps, 'snapshot' 
   const { trade, verdict } = detail;
   const gross = trade.realized_pnl_net + trade.fees_total;
   const tone = pnlTone(trade.realized_pnl_net);
+  const isControl = snapshot.arm === 'control';
   return (
     <aside className="drawer" aria-label="Trade detail" data-key={trade.idempotency_key}>
       <div className="drawer-head">
@@ -597,7 +624,12 @@ function TradeDrawer({ snapshot, selectedKey }: Pick<ReviewTabProps, 'snapshot' 
       </p>
 
       <h3>Why it was taken</h3>
-      <DebateSection debate={detail.debate} inFlight={false} linkedBy={detail.debateJoin} />
+      <DebateSection
+        debate={detail.debate}
+        inFlight={false}
+        linkedBy={detail.debateJoin}
+        isControl={isControl}
+      />
 
       <h3>Stages</h3>
       {detail.cells !== null ? (
@@ -611,6 +643,7 @@ function TradeDrawer({ snapshot, selectedKey }: Pick<ReviewTabProps, 'snapshot' 
         riskCritic={detail.riskCritic}
         verdict={verdict}
         keyedBy={detail.riskCriticJoin}
+        isControl={isControl}
       />
 
       <h3>P&amp;L breakdown</h3>
@@ -657,7 +690,7 @@ export function ReviewTab(props: ReviewTabProps) {
             <ArmCard comparisons={snapshot.arm_comparison} />
             <BenchmarksCard benchmarks={snapshot.outside_benchmarks} />
           </div>
-          <AnalystsCard analysts={snapshot.analysts} />
+          <AnalystsCard analysts={snapshot.analysts} isControl={snapshot.arm === 'control'} />
         </div>
         <TradesTable {...props} />
       </div>

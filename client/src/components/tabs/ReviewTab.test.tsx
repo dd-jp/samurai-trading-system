@@ -2,6 +2,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import {
+  makeAnalyst,
   makeArmComparison,
   makeClosedTrade,
   makeDebate,
@@ -208,6 +209,11 @@ describe('summary cards', () => {
     expect(screen.getByText(/has not computed a comparison yet/)).toBeTruthy();
     expect(screen.getByText(/has not measured an outside benchmark yet/)).toBeTruthy();
     expect(screen.getByText(/No analyst weights on this snapshot/)).toBeTruthy();
+    // #1597: the "neither is a hit rate" footnote is unconditional on the
+    // live arm — it explains the Feedback Loop's own vocabulary regardless of
+    // whether any row has been attributed yet — so an empty attribution cycle
+    // must not silently drop it along with the (control-only) analyst rows.
+    expect(screen.getByText(/wire carries no per-analyst accuracy/)).toBeTruthy();
   });
 });
 
@@ -466,5 +472,66 @@ describe('closed trades', () => {
   it('names an empty history', () => {
     renderReview(makeSnapshot({ closed_trades: [] }));
     expect(screen.getByText(/No closed trade in the recent-history window/)).toBeTruthy();
+  });
+});
+
+/**
+ * #1597: the control arm structurally cannot have an analyst-weights read
+ * (`AnalystsCard`'s doc comment) or a debate ("why it was taken", the Risk
+ * critic's verdict sub-line) — each names its own absence rather than
+ * rendering the live arm's figures, or a blank.
+ */
+describe('control arm', () => {
+  it('names the analyst-weights absence instead of the live arm’s weights', () => {
+    renderReview(makeSnapshot({ arm: 'control', analysts: [makeAnalyst({ weight: 0.9 })] }));
+    const analysts = screen.getByRole('region', { name: 'Analysts' });
+    expect(
+      within(analysts).getByText('Control arm: no debate, no analyst weights — not applicable'),
+    ).toBeTruthy();
+    expect(within(analysts).queryByRole('img', { name: /weight \d+%/ })).toBeNull();
+    expect(within(analysts).queryByText(/no per-analyst accuracy/)).toBeNull();
+  });
+
+  it('names the debate absence as "why it was taken" instead of the live arm’s debate for the same instrument', () => {
+    renderReview(
+      makeSnapshot({
+        arm: 'control',
+        closed_trades: [
+          makeClosedTrade({ idempotency_key: 'k1', debate_id: 'd1', instrument: 'SPY' }),
+        ],
+        // Same instrument as the closed trade — proves the row is skipped by
+        // arm, not merely absent from this fixture.
+        debates: [makeDebate({ debate_id: 'd1', instrument: 'SPY', direction: 'bullish' })],
+      }),
+    );
+    const row = screen.getByRole('button', { name: /^SPY/ });
+    expect(within(row).getByText('Control arm: no LLM debate — not applicable')).toBeTruthy();
+    expect(within(row).queryByText(/bullish · \d+ rounds/)).toBeNull();
+  });
+
+  it('names the critic-verdict absence in the trade drawer while the Risk decision itself still renders', () => {
+    renderReview(
+      makeSnapshot({
+        arm: 'control',
+        closed_trades: [makeClosedTrade({ idempotency_key: 'k1', debate_id: 'd1' })],
+        debates: [],
+        risk_critics: [
+          makeRiskCritic({
+            debate_id: 'd1',
+            trace_id: 'trace-spy',
+            instrument: 'SPY',
+            binding_constraint: null,
+            critic_verdict: null,
+          }),
+        ],
+      }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /^SPY, long/ }));
+    const drawer = screen.getByRole('complementary', { name: 'Trade detail' });
+    expect(within(drawer).getByText('Control arm: no LLM debate — not applicable')).toBeTruthy();
+    expect(within(drawer).getByText('Control arm: no LLM critic — not applicable')).toBeTruthy();
+    // The control's own Risk decision (binding constraint, conditions) is
+    // real and still renders normally — only the critic verdict is N/A.
+    expect(within(drawer).getByText(/no binding constraint recorded/)).toBeTruthy();
   });
 });

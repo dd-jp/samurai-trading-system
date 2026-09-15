@@ -68,3 +68,17 @@ export function providerStateWord(state: string): string | null {
 export const PNL_RATE_SOURCE_WORD: Readonly<Record<PnlRateSource, string>> = {
   static_sizing_rate: 'static sizing rate',
 };
+
+/**
+ * dashboard-spec.md's "Absence is named per arm" sentences (#1597) — one
+ * place so Glance, Live and Review cannot drift on the exact wording for a
+ * figure the control arm structurally cannot have. The first two are quoted
+ * verbatim in the spec's Arm selector section; `CONTROL_NO_CRITIC` and
+ * `CONTROL_NO_ANALYSTS` follow the same "Control arm: … — not applicable"
+ * shape for the two absences the spec names without spelling out the words.
+ */
+export const CONTROL_NO_DEBATE = 'Control arm: no LLM debate — not applicable';
+export const CONTROL_NO_EQUITY = 'Control arm: simulated broker — no equity figure';
+export const CONTROL_NO_TICK = 'Control arm: tick status is not persisted';
+export const CONTROL_NO_CRITIC = 'Control arm: no LLM critic — not applicable';
+export const CONTROL_NO_ANALYSTS = 'Control arm: no debate, no analyst weights — not applicable';

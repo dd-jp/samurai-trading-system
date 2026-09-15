@@ -111,7 +111,6 @@ function LaneRow(props: {
 function LaneList(props: LiveTabProps) {
   const { snapshot, selection, onSelect } = props;
   const lanes = snapshot.pipeline.lanes;
-  const debates = snapshot.debates;
   const running = lanes.filter((lane) => lane.outcome === 'in_flight').length;
   return (
     <section className="lanes" aria-label="Lanes">
@@ -140,7 +139,7 @@ function LaneList(props: LiveTabProps) {
             <LaneRow
               key={lane.instrument}
               lane={lane}
-              debate={laneDebate(debates, lane)}
+              debate={laneDebate(snapshot, lane)}
               selected={
                 selection !== null &&
                 selection.instrument === lane.instrument &&
@@ -201,6 +200,7 @@ function TraceDrawer(props: LiveTabProps) {
   }
   const detail = resolveTrace(snapshot, selection);
   const { lane, traceId, settled } = detail;
+  const isControl = snapshot.arm === 'control';
   return (
     <aside className="drawer" aria-label="Trace detail" data-trace-id={traceId ?? ''}>
       <div className="drawer-head">
@@ -228,6 +228,7 @@ function TraceDrawer(props: LiveTabProps) {
         riskCritic={detail.riskCritic}
         verdict={detail.verdict}
         keyedBy={detail.riskCriticJoin}
+        isControl={isControl}
       />
 
       <h3>Debate</h3>
@@ -235,6 +236,7 @@ function TraceDrawer(props: LiveTabProps) {
         debate={detail.debate}
         inFlight={detail.inFlight}
         linkedBy={detail.debateJoin}
+        isControl={isControl}
       />
 
       <h3>Order and fills</h3>

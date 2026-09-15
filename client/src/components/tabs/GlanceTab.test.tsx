@@ -151,4 +151,25 @@ describe('open risk', () => {
     renderGlance(makeSnapshot({ positions: [] }));
     expect(screen.getByText(/No open position — nothing at risk/)).toBeTruthy();
   });
+
+  /**
+   * #1597: Alpaca is the LIVE broker, so its equity is a live-arm-only figure
+   * (dashboard-spec.md's arm selector rule). The deployed-notional half comes
+   * from `positions`, which IS arm-scoped, and still renders.
+   */
+  it('names the control arm’s absent equity denominator rather than Alpaca’s', () => {
+    renderGlance(
+      makeSnapshot({
+        arm: 'control',
+        positions: [makePosition({ filled_size: 18, mark_price: 100 })],
+      }),
+    );
+    const card = screen.getByRole('region', { name: 'Open risk' });
+    expect(
+      within(card).getByText(
+        /\$1,800\.00 deployed · Control arm: simulated broker — no equity figure/,
+      ),
+    ).toBeTruthy();
+    expect(within(card).queryByText(/of \$100,112\.98/)).toBeNull();
+  });
 });
