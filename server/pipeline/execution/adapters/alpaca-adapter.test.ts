@@ -2346,6 +2346,57 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       ]);
     });
 
+    it('keeps an IN-PROCESS re-arm id even when the direct lookup breaks — it needs no venue', async () => {
+      // The re-armed id was placed by this process, so the venue's outage
+      // cannot cost it. Re-deriving it from the list could only lose it —
+      // one page, and a leg past it reads as `null` — and cancelling the
+      // parent while a protective leg is live is the #516 hazard itself.
+      let directFails = false;
+      const getOrderByClientOrderId = vi.fn(async (clientOrderId: string) => {
+        if (directFails) throw new Error('order-details 503');
+        if (clientOrderId === 'key-1') return { ...acceptedOrder(), id: 'bracket-venue-id' };
+        return {
+          ...acceptedOrder(),
+          id: 'rearm-venue-id',
+          order_class: 'oco' as const,
+          qty: '6',
+          limit_price: '110',
+          legs: [
+            {
+              id: 'rearm-stop-leg',
+              type: 'stop' as const,
+              status: 'held',
+              filled_qty: '0',
+              filled_avg_price: null,
+              filled_at: null,
+              stop_price: '95',
+            },
+          ],
+        };
+      });
+      const listOpenOrders = vi
+        .fn()
+        .mockResolvedValue([
+          { ...acceptedOrder(), id: 'bracket-venue-id', client_order_id: 'key-1' },
+        ]);
+      const cancelOrder = vi.fn().mockResolvedValue(undefined);
+      const adapter = adapterWith(
+        makeClient({ getOrderByClientOrderId, listOpenOrders, cancelOrder }),
+      );
+      await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
+      cancelOrder.mockClear();
+      directFails = true;
+
+      await adapter.cancel('key-1', 'AAPL');
+
+      expect(cancelOrder.mock.calls.map(([id]) => id)).toEqual([
+        'rearm-venue-id',
+        'bracket-venue-id',
+      ]);
+      // The list is asked for the PARENT only — the re-arm never needed it.
+      expect(listOpenOrders).toHaveBeenCalledTimes(1);
+    });
+
     it('still refuses, naming the original cause, when the venue is unreachable on BOTH endpoints', async () => {
       const cancelOrder = vi.fn();
       const adapter = adapterWith(

@@ -1,6 +1,6 @@
 -- Bounds the terminal-with-unswept-fills check, and gives it a clock that
 -- starts when the shape APPEARS rather than when the flatten was submitted
--- (#1500 review round 5, findings 1 and 2).
+-- (#1500).
 --
 -- `reconcileFlatten` releases a terminal flatten whose fills were never swept,
 -- on the venue's own book. Two things that column-less design got wrong:

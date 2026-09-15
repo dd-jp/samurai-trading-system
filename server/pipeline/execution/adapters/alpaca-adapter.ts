@@ -604,14 +604,19 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   ): Promise<{ order: string | null; rearmedOrder: string | null }> {
     const inProcessRearm = this.rearmedLegs.get(clientOrderId) ?? null;
     const order = await this.lookupOpenOrderId(clientOrderId);
-    // A direct lookup that FAILED answers for neither id — the list below is
-    // asked for both from one snapshot, and asking the same failing endpoint
-    // again first would only cost a round trip to fail the same way.
+    // An id this process re-armed itself is known WITHOUT the venue, so it
+    // stands even when the direct lookup just failed: re-deriving it from the
+    // list can only lose it (the list is one page, and a re-armed leg past
+    // that page reads as `null`), and cancelling the parent while a protective
+    // leg is still live is the outcome this whole path exists to avoid. Only
+    // when nothing is known in-process does a failed direct lookup carry over
+    // — the same endpoint would fail the same way, and the list below answers
+    // for both ids from one snapshot.
     const rearmed: LookedUpOrderId =
-      'error' in order
-        ? order
-        : inProcessRearm !== null
-          ? { id: inProcessRearm }
+      inProcessRearm !== null
+        ? { id: inProcessRearm }
+        : 'error' in order
+          ? order
           : await this.lookupOpenOrderId(`${clientOrderId}:rearm`);
     if (!('error' in order) && !('error' in rearmed)) {
       return { order: order.id, rearmedOrder: rearmed.id };

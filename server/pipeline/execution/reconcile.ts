@@ -798,8 +798,8 @@ async function cancelNeverConfirmedFlatten(
   }
 
   const reason =
-    `${provenance}. It was CANCELLED at the venue, and ${coverage.note} — so this flatten ` +
-    'closed nothing and the journal row is resolved rather than left blocking every later ' +
+    `${provenance}. It was CANCELLED at the venue, and ${coverage.note} — so no replacement ` +
+    'can over-sell, and the journal row is resolved rather than left blocking every later ' +
     'flatten on the instrument. A fill arriving later is still attributed to the lots this ' +
     'flatten named (getFlattenAttribution does not filter on status)';
   await postFlattenReconcileAlert(input, row, reason, now);
@@ -910,8 +910,8 @@ async function judgeTerminalUnsweptFlatten(
     };
   }
   const reason =
-    `${provenance}. ${coverage.note} — so its fills were applied to the store and only the ` +
-    'sweep mark was lost, leaving nothing to sweep. The journal row is resolved rather than ' +
+    `${provenance}. ${coverage.note} — so nothing this flatten filled is missing from the ` +
+    'store, and only the sweep mark was lost. The journal row is resolved rather than ' +
     'left blocking every later flatten on the instrument. This is an INFERENCE from the ' +
     "venue's book, not a completed sweep";
   await postFlattenReconcileAlert(input, row, reason, now);
@@ -1012,9 +1012,11 @@ async function venueCoversStoreHeld(
   }
   // A SURPLUS is not coverage either, though it passes the test above. The
   // venue holding MORE than the store thinks it holds means some of that book
-  // is quantity the store has no lot for (`findUnrecordedVenuePositions`
-  // reports exactly this), and an unbooked exit fill up to the size of that
-  // surplus hides inside it: the sum still covers, while the lot it belonged
+  // is quantity the store has no lot for, and nothing else reports that:
+  // `findUnrecordedVenuePositions` compares instrument PRESENCE, so a surplus
+  // on an instrument the store already knows is invisible to it. An unbooked
+  // exit fill up to the size of that surplus hides inside it: the sum still
+  // covers, while the lot it belonged
   // to is over-stated. That is the same fills-not-booked state as a short
   // venue — no over-sell, since a replacement would be sized off the store's
   // smaller number, but a released row whose fills are missing from the
@@ -1027,6 +1029,19 @@ async function venueCoversStoreHeld(
         `the venue holds ${venueQty} ${row.instrument} against ${storeHeld} the store considers ` +
         'held — a surplus the store has no lot for, which an unbooked exit fill of its size ' +
         'would hide inside, so this book cannot corroborate the store',
+    };
+  }
+  // Nothing held is coverage for the only question this answers — a
+  // replacement sized off the store cannot over-sell what the store does not
+  // hold — but it is coverage on an EMPTY comparison, so the note must not
+  // borrow the language of the corroborated case below and claim the venue
+  // confirmed anything about this flatten's fills.
+  if (storeHeld === 0) {
+    return {
+      covered: true,
+      note:
+        `the store holds no ${row.instrument} for this flatten to close, so nothing it could ` +
+        'still be owed is at risk — the venue book says nothing either way about what filled',
     };
   }
   return {
