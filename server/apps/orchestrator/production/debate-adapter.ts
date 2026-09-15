@@ -701,7 +701,12 @@ export function replayedDebateResult(persisted: ReplayableDebateLog): DebateResu
     // including a tick after a process restart — and the intent must be keyed
     // to the bar the row records, not to whenever the replay happened to run.
     bar_timestamp: persisted.bar_timestamp,
-    // A persisted row is a debate that actually ran.
+    // A persisted row is a debate that actually ran. Hardcoded rather than
+    // read off `persisted` because `debate_log` has no `read` column to read
+    // it back from (#1418) — harmless today since no producer ever persists
+    // `read: false`, but a future one that did would resurrect here as
+    // `true`, reversing exactly the classification #1393 built `read` to
+    // protect.
     read: true,
   };
 }
