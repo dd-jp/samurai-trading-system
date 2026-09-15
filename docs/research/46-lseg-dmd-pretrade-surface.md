@@ -90,7 +90,7 @@ It is the event stream, not the snapshot. Direct evidence: the `2026-09-14T11:00
 **24 separate rows** for ISIN `IE00B7Y34M31` (the 3USL/3LUS pair) alone, with `distributionTime`
 values spanning `11:00:04.638...Z` through `11:00:59.851...Z` — i.e. every quote update that
 instrument pair received during that one-minute window, not one row per instrument. Each row also
-carries a numeric `instrumentId` (`72057594038070487` for 3USL, `72057594038056292` for 3LUS in
+carries a numeric `instrumentId` (`72057594038070487` for 3LUS, `72057594038056292` for 3USL in
 this file) that DMD itself uses to distinguish the two currency lines sharing one ISIN — so the
 ISIN collision the ticket might have worried about is already resolved by the file's own schema.
 **The script now assigns rows by this `instrumentId`, not by a price-scale guess** (an earlier
@@ -98,18 +98,24 @@ version of this doc claimed the instrumentId split "corroborated by price scale"
 actually assigned every row by price scale alone and never read the `instrumentId` back — a false
 method claim caught in review): `_classify_shared_isin_instrument_ids()` classifies each of the two
 `instrumentId` values for `IE00B7Y34M31` **once**, from its own median two-sided price across the
-full sample (72057594038070487 → 3USL, ~13,000s = GBX pence; 72057594038056292 → 3LUS, ~160-190s =
-USD, no overlap across 1,113/1,113 rows carrying a two-sided quote each), then looks that
-`instrumentId` up per row — so a single wide print or an intraday move on either line can no longer
-flip its assignment. A per-row price-scale check still runs afterward as an independent sanity
-check, not the assignment mechanism: on this sample it flags **0 of 2,226 matched rows** as
-disagreeing with their instrumentId-based assignment (`analyze`'s
+full sample (72057594038070487 → **3LUS**, median 13,512 GBX pence; 72057594038056292 → **3USL**,
+median 182.21 USD — no overlap, and matches `lse-etp-pool.ts`'s declared currencies, GBX for 3LUS
+and USD for 3USL, cross-checked against ADR-0015:224's 3LUS ask of 13,484 GBX; an earlier version
+of this doc had the two tickers swapped, caught in review), then looks that `instrumentId` up per
+row — so a single wide print or an intraday move on either line can no longer flip its assignment.
+A per-row check still runs afterward, genuinely independent of the assignment mechanism: it
+compares each row's own price scale against `lse-etp-pool.ts`'s declared currency for the tik it
+was assigned, not against the median-price rule that produced the assignment in the first place
+(an earlier version of this check re-applied that same rule, so it could never disagree with
+itself — caught in review, see the script's `SHARED_ISIN_TIK_CURRENCY` comment). On this sample it
+flags **0 of 2,221 two-sided rows** as disagreeing (`analyze`'s
 `3USL/3LUS instrumentId classification` line; also
 [`archive/raw/2026-09-15-46-dmd-analyze-output.txt`](archive/raw/2026-09-15-46-dmd-analyze-output.txt)).
-2 rows total (one 16:30 post-close print on each sampled date) carry an `instrumentId` this method
-never saw with a two-sided quote and fall back to the price heuristic for coverage-counting only —
-both are zero/zero rows, so no published spread or session-profile figure in this doc depends on
-them. This is *better* than a snapshot for this ticket's purposes — it gives many observations
+The other 5 rows (of 2,226 total matched — 1,113 per instrumentId, 1,111 two-sided for 3LUS and
+1,110 for 3USL) are not two-sided; all 5 carry an `instrumentId` pass 1 already classified, so
+**0 rows fall back** to the price heuristic — no published spread or session-profile figure in
+this doc depends on a fallback-classified row. This is *better* than a snapshot for this ticket's
+purposes — it gives many observations
 per instrument per session (hundreds to low thousands per ticker across the sampled window, see §
 Coverage) rather than one point estimate per file, which is what makes the dispersion and
 session-profile statistics below possible at all. It does mean a *single* file cannot be read as
@@ -210,8 +216,8 @@ files carried at least one row for that ISIN):
 
 ```
 ticker  rows  two-sided  files_present/108     ticker  rows  two-sided  files_present/108
-3USL    1111       1111       94                3AAP    3037       3035       96
-3LUS    1115       1110       98                MST3       0          0        0   <- the gap
+3USL    1113       1110       98                3AAP    3037       3035       96
+3LUS    1113       1111       96                MST3       0          0        0   <- the gap
 LQQ3    2249       2243       98                LAM3    1822       1822       94
 NVD3    3032       3031       98                3LAL    1321       1318       89
 3LNV    2560       2556       96                LPP3     646        645       82
@@ -242,8 +248,8 @@ bucket across both sampled dates — the sampling basis for every median below.
 
 ```
 ticker  open_rt  open_hs   mid_rt   mid_hs  close_rt  close_hs  n_open   n_mid  n_close
-3USL      11.9      5.9     12.7      6.3      15.2      7.6      260     659      168
-3LUS      11.6      5.8     12.2      6.1      14.2      7.1      258     659      160
+3USL      11.6      5.8     12.2      6.1      14.2      7.1      258     659      160
+3LUS      11.9      5.9     12.7      6.3      15.2      7.6      260     659      168
 LQQ3      15.5      7.8     19.1      9.5      21.6     10.8      519    1334      321
 NVD3      30.5     15.3     20.9     10.5      13.1      6.6      647    1809      501
 3LNV     127.5     63.7    116.8     58.4     111.8     55.9      538    1522      426
@@ -285,7 +291,7 @@ independent confirmation of doc 53's specific multiplier** — 2 dates cannot se
 Q4's underpowered-sample caveat.
 
 **3 of the 4 rows that narrow into the close instead of widening are the pool's tightest,
-most-liquid names**: 3USL (0.78x), 3LUS (0.82x), LQQ3 (0.72x) — the three smallest open-bucket
+most-liquid names**: 3USL (0.82x), 3LUS (0.78x), LQQ3 (0.72x) — the three smallest open-bucket
 round-trip spreads in the whole table (11.6-15.5 bps), against a pool open-bucket median round-trip
 of **159.0 bps** (79.5 bps half-spread — this is the same quantity, computed
 per-instrument-then-medianed across the table above rather than per-tick, as the dispersion
@@ -304,14 +310,21 @@ cost on top.
 the reader to compute:** the pool's own open-bucket median round-trip, **159.0 bps**, is **~3.1x**
 `59-universe-tradeability-screen.md` §3.1's single-stock total round-trip budget at ADR-0017's
 assumed win rate (**52.1 bps**) and **~11.2x** its index budget (**14.2 bps**, which is already
-negative net of Saxo's 16 bps commission alone). Only **6 of the 30 covered rows** sit under the
-52.1 bps single-stock ceiling at all — 3USL (11.9), 3LUS (11.6), LQQ3 (15.5), NVD3 (30.5), 3KOR
-(39.3), PLT3 (44.0) — three of which (3USL, 3LUS, LQQ3) are also the three of the four rows above
-that narrow into the close. Every other row exceeds the single-stock budget, several (LCO3 487.8,
-3LIP 666.7, 3LSQ 462.0) by an order of magnitude or more. **Spread alone, before commission,
-already disqualifies most of the pool's 31 rows under doc 59's stated cost budgets** — this doc
-supplies the missing per-line spread evidence doc 59 §3.2's criterion (b) row flagged as "**No.**
-... **Not evaluable per line**" (see § What remains).
+negative net of Saxo's 16 bps commission alone). Only **1 of the 30 covered rows clears doc 59
+§3.1 criterion (b)'s round-trip-spread threshold for its own subclass** — not 6, as an earlier
+version of this paragraph claimed by comparing every row against the single-stock **total** ceiling
+(52.1 bps, which already nets out Saxo's 16 bps commission) rather than each subclass's spread-only
+budget. Doc 59's own criterion (b) thresholds are **≤36 bps round-trip for single-stock** and
+**≤0 bps for index** (i.e. unsatisfiable as bracketed) at ADR-0017's assumed win rate. Of the six
+rows the earlier version named — 3USL (11.6), 3LUS (11.9), LQQ3 (15.5), NVD3 (30.5), 3KOR (39.3),
+PLT3 (44.0) — four (3USL, 3LUS, LQQ3, 3KOR) are `index_etp_3x` per `lse-etp-pool.ts` and so have no
+positive spread budget to clear regardless of how tight their spread measures; of the remaining two
+`single_stock_etp_3x` rows, NVD3 (30.5 bps) clears the 36 bps threshold and PLT3 (44.0 bps) does
+not. **Correct count: 1 of 30 (NVD3).** Every other row exceeds even the more permissive
+single-stock budget, several (LCO3 487.8, 3LIP 666.7, 3LSQ 462.0) by an order of magnitude or more.
+**Spread alone, before commission, already disqualifies effectively the whole pool under doc 59's
+stated cost budgets** — this doc supplies the missing per-line spread evidence doc 59 §3.2's
+criterion (b) row flagged as "**No.** ... **Not evaluable per line**" (see § What remains).
 
 ## Restating #875's p90-vs-median dispersion on permissible data
 
@@ -342,7 +355,7 @@ in-session open bucket measured here, or a sampling difference, is **not answera
 investigation** — the retracted script and its raw pull no longer exist to compare against. By
 open-bucket median half-spread, the widest instruments are **3LIP (333.3 bps), LCO3 (243.9 bps),
 3LSQ (231.0 bps), LPP3 (157.9 bps), 3LMO (141.1 bps)**, and the tightest are **3KOR (19.7 bps),
-NVD3 (15.3 bps), LQQ3 (7.8 bps), 3USL (5.9 bps), 3LUS (5.8 bps)** — reproduced via `analyze`'s
+NVD3 (15.3 bps), LQQ3 (7.8 bps), 3LUS (5.9 bps), 3USL (5.8 bps)** — reproduced via `analyze`'s
 "widest 5"/"tightest 5" lines — the same tight/wide split as the session-profile table above.
 
 ## Acceptance criteria — met, with the stated gap and caveats

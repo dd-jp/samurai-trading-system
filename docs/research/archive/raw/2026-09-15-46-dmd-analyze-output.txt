@@ -3,7 +3,7 @@ orderBookType values seen: {'3'}
 sourceVenue values seen: {'1'}
 EMS (bidMarketSize/offerMarketSize) nonzero: 119/49522 (0.24%)
 bidYield/offerYield nonzero: 0/49522
-3USL/3LUS instrumentId classification: 0 rows fell back to the price-scale heuristic (no two-sided quote seen for their instrumentId in pass 1); 0 two-sided rows had a price scale that disagreed with their instrumentId-based assignment (0 expected if the classification is sound)
+3USL/3LUS instrumentId classification: 0 rows fell back to the price-scale heuristic (no two-sided quote seen for their instrumentId in pass 1); 0 two-sided rows had a price scale that disagreed with the pool's declared currency for their assigned tik (0 expected if the classification is correct — this check is independent of it, sourced from lse-etp-pool.ts's currency field rather than this script's own price-derived assignment)
 
 === intermediate evidence (not just final aggregates — re-verifiable without a live DMD window) ===
 EMS-nonzero rows by distributionTime minute (119 total, should equal 119 above):
@@ -58,8 +58,8 @@ MST3 SI check (one file per participant, from `si`):
   NMTRIAIR-SI_QUOTES-NMTRIAIR-2026-09-14T18_14.csv  MST3 present=False
 
 === coverage (union across all sampled files) ===
-3USL   rows= 1113 two-sided= 1111 files_present=96/108
-3LUS   rows= 1113 two-sided= 1110 files_present=98/108
+3USL   rows= 1113 two-sided= 1110 files_present=98/108
+3LUS   rows= 1113 two-sided= 1111 files_present=96/108
 LQQ3   rows= 2249 two-sided= 2243 files_present=98/108
 NVD3   rows= 3032 two-sided= 3031 files_present=98/108
 3LNV   rows= 2560 two-sided= 2556 files_present=96/108
@@ -92,8 +92,8 @@ LAA3   rows=  644 two-sided=  635 files_present=87/108
 covered: 30/31 rows (29/30 distinct ISINs)
 
 === per-instrument round-trip / half-spread, open vs midday vs close bucket (median, bps) ===
-3USL   open_rt=   11.9 open_hs=    5.9 mid_rt=   12.7 mid_hs=    6.3 close_rt=   15.2 close_hs=    7.6 n_open= 260 n_mid= 659 n_close= 168
-3LUS   open_rt=   11.6 open_hs=    5.8 mid_rt=   12.2 mid_hs=    6.1 close_rt=   14.2 close_hs=    7.1 n_open= 258 n_mid= 659 n_close= 160
+3USL   open_rt=   11.6 open_hs=    5.8 mid_rt=   12.2 mid_hs=    6.1 close_rt=   14.2 close_hs=    7.1 n_open= 258 n_mid= 659 n_close= 160
+3LUS   open_rt=   11.9 open_hs=    5.9 mid_rt=   12.7 mid_hs=    6.3 close_rt=   15.2 close_hs=    7.6 n_open= 260 n_mid= 659 n_close= 168
 LQQ3   open_rt=   15.5 open_hs=    7.8 mid_rt=   19.1 mid_hs=    9.5 close_rt=   21.6 close_hs=   10.8 n_open= 519 n_mid=1334 n_close= 321
 NVD3   open_rt=   30.5 open_hs=   15.3 mid_rt=   20.9 mid_hs=   10.5 close_rt=   13.1 close_hs=    6.6 n_open= 647 n_mid=1809 n_close= 501
 3LNV   open_rt=  127.5 open_hs=   63.7 mid_rt=  116.8 mid_hs=   58.4 close_rt=  111.8 close_hs=   55.9 n_open= 538 n_mid=1522 n_close= 426
@@ -132,8 +132,8 @@ narrow into close (<1x): ['3USL', '3LUS', 'LQQ3', 'LCO3']
 --- open bucket only (matches #875's pre-open capture) --- n_instruments=30
   median-of-medians=79.48bps  max/median=4.19x  max/min=57.70x  p90/median=2.81x
   widest 5 (half-spread bps): [('3LIP', 333.3333333333325), ('LCO3', 243.90243902438976), ('3LSQ', 231.0231023102312), ('LPP3', 157.8947368421048), ('3LMO', 141.0934744268079)]
-  tightest 5 (half-spread bps): [('3KOR', 19.67118048704106), ('NVD3', 15.26051885764116), ('LQQ3', 7.755190256429267), ('3USL', 5.937801659828871), ('3LUS', 5.77716644178651)]
+  tightest 5 (half-spread bps): [('3KOR', 19.67118048704106), ('NVD3', 15.26051885764116), ('LQQ3', 7.755190256429267), ('3LUS', 5.937801659828871), ('3USL', 5.77716644178651)]
 --- full session (open+midday+close) --- n_instruments=30
   median-of-medians=64.42bps  max/median=4.70x  max/min=49.93x  p90/median=2.62x
   widest 5 (half-spread bps): [('LCO3', 303.03030303030306), ('3LIP', 177.92379570764203), ('3LSQ', 172.2723543888435), ('3LMO', 136.58147051989334), ('LPP3', 131.9261213720312)]
-  tightest 5 (half-spread bps): [('PLT3', 18.248175182481752), ('NVD3', 10.958046336881697), ('LQQ3', 9.435677647415645), ('3USL', 6.319937544146622), ('3LUS', 6.069300375193083)]
+  tightest 5 (half-spread bps): [('PLT3', 18.248175182481752), ('NVD3', 10.958046336881697), ('LQQ3', 9.435677647415645), ('3LUS', 6.319937544146622), ('3USL', 6.069300375193083)]

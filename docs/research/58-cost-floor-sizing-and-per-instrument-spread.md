@@ -214,8 +214,12 @@ delayed pre-trade files (doc 46's Method section quotes #1034's clearance). Head
 round-trip **159.0 bps** (79.5 bps half-spread), cross-sectional dispersion **max/median 4.19x, max/min 57.70x**
 open-bucket — narrower dispersion than F6's retracted 12.61x/480.5x, but still **~3.1x** doc 59 §3.1's
 single-stock total round-trip cost budget (52.1 bps) and **~11.2x** its index budget (14.2 bps) at ADR-0017's
-assumed win rate. Only 6 of 30 rows sit under the single-stock budget at all. Every place below that cited
-F2b's endpoint claim, F2c's recommendation, or an F6 figure remains marked retracted in place rather than
+assumed win rate. Against doc 59 §3.1 criterion (b)'s per-subclass spread-only thresholds (≤36 bps
+single-stock, ≤0 bps index — unsatisfiable as bracketed) rather than the single-stock total ceiling
+applied to every row regardless of subclass, only **1 of 30 rows clears its subclass's threshold**
+(NVD3, 30.5 bps); four of the six tightest-quoted rows (3USL, 3LUS, LQQ3, 3KOR) are `index_etp_3x`
+and so have no positive spread budget to clear at all, however tight their spread measures. Every
+place below that cited F2b's endpoint claim, F2c's recommendation, or an F6 figure remains marked retracted in place rather than
 silently removed or rewritten, per this repo's never-delete rule — the reasoning that once rested on them stays
 visible as what it was; doc 46 is the number to cite going forward, not any figure below this line.
 

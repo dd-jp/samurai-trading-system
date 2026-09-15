@@ -83,8 +83,19 @@ for _tik, _isin in POOL:
 # discussion). The assignment below classifies each instrumentId ONCE, from the
 # median two-sided price across every row carrying it — not per row — so a single
 # auction print or an intraday move cannot flip an already-classified line. The tik
-# named here is whichever one this ISIN's HIGHER-median-price instrumentId maps to.
-SHARED_ISIN_HIGHER_PRICE_TIK = {"IE00B7Y34M31": "3USL"}
+# named here is whichever one this ISIN's HIGHER-median-price instrumentId maps to:
+# 3LUS is the GBX-pence line (`currency: 'GBX'` in lse-etp-pool.ts) so it prices
+# ~74x 3USL's USD line (~1/GBPUSD) — measured median bid 13,512 GBX vs 182.21 USD
+# on this sample, cross-checked against ADR-0015:224 (3LUS ask 13,484 GBX) and doc
+# 44:1090 (3LUS £135.52). An earlier version of this constant had this inverted.
+SHARED_ISIN_HIGHER_PRICE_TIK = {"IE00B7Y34M31": "3LUS"}
+
+# Currency each shared-ISIN tik quotes in, per server/providers/universe-pool/lse-etp-pool.ts's
+# `currency` field (verified 2026-09-05/09 Saxo lines, not derived from this script's own DMD
+# price data). Used only by the anomaly check below, as a source independent of the instrumentId
+# classification it is checking — the classification ranks instrumentIds by their own median DMD
+# price, so a check built from the same DMD price column would just agree with itself.
+SHARED_ISIN_TIK_CURRENCY = {"3LUS": "GBX", "3USL": "USD"}
 
 # Sampling window used in the doc: two available trading dates (2026-09-11,
 # 2026-09-14 — retention observed at pull time), 15-min cadence 04:00-16:30
@@ -327,15 +338,19 @@ def load_observations():
                         higher_tik = SHARED_ISIN_HIGHER_PRICE_TIK[isin]
                         remaining = [t for t in tiks if t != higher_tik][0]
                         tik = higher_tik if bid > 1000 else remaining
-                    # Sanity check, independent of assignment: does this row's own
-                    # price scale still match the ~1000 GBX-pence-vs-USD boundary
-                    # for the tik it was assigned? A stable mismatch across many
-                    # rows would mean the instrumentId->tik classification itself
-                    # went wrong, not just one noisy print.
+                    # Independent check: does this row's own DMD price scale match
+                    # the currency lse-etp-pool.ts declares for the tik it was
+                    # assigned (GBX pence, ~74x the USD line on this pair)? That
+                    # currency label is sourced from Saxo-verified pool data, not
+                    # from this script's own instrumentId classification (which
+                    # ranks instrumentIds by their own median DMD price) — a
+                    # SHARED_ISIN_HIGHER_PRICE_TIK-based check here would just be
+                    # the classification rule agreeing with itself, not a real
+                    # cross-check; an earlier version of this counter did that and
+                    # was structurally incapable of ever firing on this path.
                     if bid > 0 and off > 0:
-                        higher_tik = SHARED_ISIN_HIGHER_PRICE_TIK[isin]
-                        expect_high = tik == higher_tik
-                        if expect_high != (bid > 1000):
+                        expect_gbx = SHARED_ISIN_TIK_CURRENCY[tik] == "GBX"
+                        if expect_gbx != (bid > 1000):
                             price_scale_anomalies += 1
                 obs[tik].append(dict(bucket=b, file=fn, bid=bid, offer=off, instrumentId=instid))
     return obs, files, dict(
@@ -431,7 +446,9 @@ def cmd_analyze():
     print(f"3USL/3LUS instrumentId classification: {meta['unclassified_fallback']} rows fell back "
           f"to the price-scale heuristic (no two-sided quote seen for their instrumentId in pass 1); "
           f"{meta['price_scale_anomalies']} two-sided rows had a price scale that disagreed with "
-          f"their instrumentId-based assignment (0 expected if the classification is sound)")
+          f"the pool's declared currency for their assigned tik (0 expected if the classification "
+          f"is correct — this check is independent of it, sourced from lse-etp-pool.ts's currency "
+          f"field rather than this script's own price-derived assignment)")
     print()
 
     print("=== intermediate evidence (not just final aggregates — re-verifiable without a live "
