@@ -411,6 +411,24 @@ export interface DebateLog {
 }
 
 /**
+ * One round's mediator verdict, persisted separately from `DebateLog` (#1517).
+ * Not folded into `DebateLog` as a JSON column: `debate_log` is write-once per
+ * `debate_id` (see `DebateLog`'s own doc), and this is the `llm_call_log`
+ * pattern instead — a separate append-only table keyed by `debate_id`, one row
+ * per round, so the flip-rate query (round 1's direction vs the max round's) is
+ * a plain `GROUP BY debate_id`. Written once, in the same call as the owning
+ * `DebateLog` row (`persistDebateLog`), never updated.
+ */
+export interface DebateRoundLogEntry {
+  debate_id: string;
+  /** 1-indexed, matching `RoundVerdict.round`. */
+  round: number;
+  direction: Direction;
+  confidence: number;
+  created_at: Date;
+}
+
+/**
  * Persisted real-field record of a `VerdictDecision` (verdict-spec.md story
  * 17, shared-sqlite-store-spec.md `verdict_log`). Real-field companion to the
  * generic `audit_log` (digests/hashes only) — mirrors `DebateLog`'s pattern of

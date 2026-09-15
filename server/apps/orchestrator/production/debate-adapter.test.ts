@@ -4,6 +4,7 @@ import type {
   AnalystView,
   AnthropicMessageRequest,
   AnthropicMessagesClient,
+  DebateResult,
   LlmClient,
   LlmRequest,
   SpendCap,
@@ -36,7 +37,7 @@ import type {
   Logger,
 } from '../../../shared/index.js';
 import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
-import { buildDebateStep } from './debate-adapter.js';
+import { buildDebateStep, persistDebateLog } from './debate-adapter.js';
 
 const NOW = new Date('2026-07-28T14:00:00Z');
 const CLOCK: Clock = { now: () => NOW };
@@ -296,6 +297,14 @@ describe('buildDebateStep', () => {
       .prepare('SELECT COUNT(*) AS n FROM debate_log WHERE debate_id = ?')
       .get(result.debate_id) as { n: number };
     expect(count.n).toBe(1);
+
+    // #1517 — the per-round verdicts persistDebateLog now writes alongside
+    // the debate_log row, one per round the fake mediator actually ran.
+    const roundRows = db
+      .prepare('SELECT round, direction FROM debate_round_log WHERE debate_id = ? ORDER BY round')
+      .all(result.debate_id) as { round: number; direction: string }[];
+    expect(roundRows.length).toBe(result.rounds_completed);
+    expect(roundRows[roundRows.length - 1]?.direction).toBe(result.direction);
 
     const row = store.getByDebateId(result.debate_id);
     expect(row).toBeDefined();
@@ -757,6 +766,9 @@ describe('buildDebateStep', () => {
       writeLog: (log) => {
         store.writeLog(log);
       },
+      writeLogWithRounds: (log, entries) => {
+        store.writeLogWithRounds(log, entries);
+      },
       getByDebateId: (id) => {
         reads += 1;
         if (reads === 1) {
@@ -1014,6 +1026,77 @@ describe('buildDebateStep latency budget (#374)', () => {
     expect(timeout).toBeDefined();
     expect(timeout?.stage).toBe('debate');
     expect(timeout?.trace_id).toBe('trace-1');
+  });
+});
+
+/**
+ * `persistDebateLog` with a PARTIAL/timed-out `DebateResult` — `round_verdicts`
+ * non-empty, `rounds_completed >= 1`, `timed_out` set. `buildDebateStep`
+ * cannot produce this shape today (see `persistDebateLog`'s own doc comment:
+ * `maxRounds` is hardwired to `MAX_ROUNDS_BY_ASSET_CLASS[asset_class]`, 1 for
+ * both classes since #1080, so a debate either completes its one round
+ * cleanly or times out with ZERO rounds completed — the "degrades to the
+ * fallback when the single round stalls before it closes" test above already
+ * covers that zero-round case). Calling `persistDebateLog` directly is the
+ * only way to drive the round rows for a truncated-but-partial debate through
+ * the real write call rather than reasserting `round_verdicts` on the
+ * `DebateResult` in isolation (already covered, `latency-budget.test.ts`).
+ */
+describe('persistDebateLog with a partial/timed-out result (#1558 review)', () => {
+  function makePartialResult(overrides: Partial<DebateResult> = {}): DebateResult {
+    return {
+      synthesis: 'Round 1 leaned bullish before the budget fired.',
+      position: 'Hold — insufficient debate to act.',
+      confidence: 0.4,
+      contributions: [],
+      disagreement_summary: 'Bear had not yet rebutted round 1 when the budget fired.',
+      open_items: ['debate did not complete within latency budget'],
+      converged: false,
+      rounds_completed: 1,
+      latency_ms: LATENCY_BUDGET_MS.stocks,
+      direction: 'bullish',
+      round_verdicts: [{ round: 1, direction: 'bullish', confidence: 0.4 }],
+      debate_id: 'debate-partial-1',
+      bar_timestamp: NOW,
+      read: true,
+      timed_out: {
+        budget_ms: LATENCY_BUDGET_MS.stocks,
+        elapsed_ms: LATENCY_BUDGET_MS.stocks,
+        cause: 'budget',
+      },
+      ...overrides,
+    };
+  }
+
+  it('writes the round 1 verdict alongside the degraded debate_log row', () => {
+    const store = new SqliteDebateLogStore(openSharedStore(':memory:'));
+
+    persistDebateLog({
+      store,
+      result: makePartialResult(),
+      instrument: 'AAPL',
+      clock: CLOCK,
+      trace_id: 'trace-1',
+      logger: undefined,
+    });
+
+    const log = store.getByDebateId('debate-partial-1');
+    expect(log).toBeDefined();
+    expect(log?.rounds).toBe(1);
+
+    const rounds = store.listRoundVerdicts(
+      new Date('2026-07-28T00:00:00Z'),
+      new Date('2026-07-29T00:00:00Z'),
+    );
+    expect(rounds).toEqual([
+      {
+        debate_id: 'debate-partial-1',
+        round: 1,
+        direction: 'bullish',
+        confidence: 0.4,
+        created_at: NOW,
+      },
+    ]);
   });
 });
 

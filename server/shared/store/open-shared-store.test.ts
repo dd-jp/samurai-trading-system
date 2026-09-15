@@ -88,6 +88,11 @@ const TABLES = [
   // root armed its spend cap with (#1140), so the dashboard's meter measures
   // against the cap being enforced rather than a copy of the number.
   'llm_spend_cap',
+  // `debate_round_log` (0064) — each round's mediator verdict (#1517), so
+  // the flip-rate report can compare round 1's direction against the final
+  // round's without `debate_log` (one row per debate, final state only)
+  // having to carry a transcript.
+  'debate_round_log',
 ];
 
 /**
@@ -96,7 +101,7 @@ const TABLES = [
  * That prose number silently drifted twice (it read "twenty" and "twenty-one"
  * simultaneously while the schema held 22), so it is pinned here.
  */
-const CONSOLIDATED_SCHEMA_TABLE_COUNT = 34;
+const CONSOLIDATED_SCHEMA_TABLE_COUNT = 35;
 
 /**
  * The migration list, derived from disk so a new `NNNN_*.sql` file changes no
@@ -107,7 +112,7 @@ const CONSOLIDATED_SCHEMA_TABLE_COUNT = 34;
  */
 const MIGRATIONS = listMigrations(MIGRATIONS_DIR);
 const MIGRATION_VERSIONS = MIGRATIONS.map((migration) => migration.version);
-const HIGHEST_KNOWN_MIGRATION_VERSION = 63;
+const HIGHEST_KNOWN_MIGRATION_VERSION = 64;
 
 /** A temp copy of `MIGRATIONS_DIR` holding every migration through `throughVersion`, inclusive. */
 function copyMigrationsUpTo(throughVersion: number): string {

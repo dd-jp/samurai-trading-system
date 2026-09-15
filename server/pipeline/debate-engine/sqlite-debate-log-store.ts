@@ -17,6 +17,7 @@
 import type {
   DebateLog,
   DebateLogStore,
+  DebateRoundLogEntry,
   DebateTermination,
   DebateTerminationCause,
 } from '../../shared/index.js';
@@ -116,6 +117,55 @@ export class SqliteDebateLogStore implements DebateLogStore {
     }
   }
 
+  /**
+   * Persists this debate's per-round verdicts (#1517), one row per entry.
+   * NOT part of the `DebateLogStore` port (#1558 review round 2 — nothing
+   * outside this class and `InMemoryDebateLogStore`'s discard called it
+   * through the port; same off-port-but-public precedent as
+   * `getTerminationCauseWindowCounts` below, kept public rather than
+   * `private` so this file's own tests can exercise it directly). Called
+   * only by `writeLogWithRounds`, which wraps this and `writeLog` in one
+   * transaction — the FK on `debate_round_log.debate_id` (migration 0064)
+   * therefore always resolves, since the owning `debate_log` row lands
+   * first in the same transaction. A mid-loop failure leaves none of a
+   * debate's rounds written rather than a truncated prefix a flip-rate
+   * query would silently misread as the whole debate.
+   */
+  writeRoundLog(entries: DebateRoundLogEntry[]): void {
+    if (entries.length === 0) {
+      return;
+    }
+    const insert = this.db.prepare(
+      `INSERT INTO debate_round_log (debate_id, round, direction, confidence, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    );
+    this.db.transaction((rows: DebateRoundLogEntry[]) => {
+      for (const row of rows) {
+        insert.run(
+          row.debate_id,
+          row.round,
+          row.direction,
+          row.confidence,
+          toStoredTimestamp(row.created_at),
+        );
+      }
+    })(entries);
+  }
+
+  /**
+   * `writeLog` + `writeRoundLog` under one `better-sqlite3` transaction
+   * (`writeRoundLog`'s own transaction nests as a SAVEPOINT): a throw from
+   * either leaves neither the `debate_log` row nor any `debate_round_log`
+   * rows, so a crash never strands a debate past `persistDebateLog`'s
+   * first-write-wins guard with its round rows unwritable forever.
+   */
+  writeLogWithRounds(entry: DebateLog, rounds: DebateRoundLogEntry[]): void {
+    this.db.transaction(() => {
+      this.writeLog(entry);
+      this.writeRoundLog(rounds);
+    })();
+  }
+
   getByDebateId(debate_id: string): DebateLog | undefined {
     const row = this.db.prepare('SELECT * FROM debate_log WHERE debate_id = ?').get(debate_id) as
       | DebateLogRow
@@ -200,6 +250,39 @@ export class SqliteDebateLogStore implements DebateLogStore {
     const llm_failure = row.llm_failure ?? 0;
     const non_failure = row.non_failure ?? 0;
     return { llm_failure, total: llm_failure + non_failure };
+  }
+
+  /**
+   * Every round-verdict row over `(from, to]`, in `debate_id`/`round` order —
+   * the raw feed `server/tools/report-debate-round-flip-rate.ts` groups by
+   * `debate_id` (#1517). Not part of the `DebateLogStore` port, same #785
+   * precedent as `getTerminationCauseWindowCounts` immediately above: a
+   * read-only aggregate for one report tool, not a capability every
+   * implementer needs.
+   */
+  listRoundVerdicts(from: Date, to: Date): DebateRoundLogEntry[] {
+    const rows = this.db
+      .prepare(
+        `SELECT debate_id, round, direction, confidence, created_at
+           FROM debate_round_log
+          WHERE created_at > ? AND created_at <= ?
+          ORDER BY debate_id, round`,
+      )
+      .all(toStoredTimestamp(from), toStoredTimestamp(to)) as {
+      debate_id: string;
+      round: number;
+      direction: Direction;
+      confidence: number;
+      created_at: string;
+    }[];
+
+    return rows.map((row) => ({
+      debate_id: row.debate_id,
+      round: row.round,
+      direction: row.direction,
+      confidence: row.confidence,
+      created_at: fromStoredTimestamp(row.created_at),
+    }));
   }
 }
 

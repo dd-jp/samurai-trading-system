@@ -1,5 +1,6 @@
 import {
   buildDebateLog,
+  buildDebateRoundLogRows,
   DEBATE_BAR_TIMEFRAME_MS,
   floorToBar,
   InMemoryDebateLogStore,
@@ -227,6 +228,32 @@ describe('buildDebateLog — termination_cause (#1380)', () => {
   });
 });
 
+describe('buildDebateRoundLogRows (#1517)', () => {
+  it('projects each round_verdicts entry into a row keyed by debate_id', () => {
+    const result = makeResult({
+      round_verdicts: [
+        { round: 1, direction: 'bearish', confidence: 0.3 },
+        { round: 2, direction: 'bullish', confidence: 0.7 },
+      ],
+    });
+    const created_at = new Date('2026-07-14T09:00:08Z');
+
+    expect(buildDebateRoundLogRows(result, created_at)).toEqual([
+      { debate_id: 'debate-1', round: 1, direction: 'bearish', confidence: 0.3, created_at },
+      { debate_id: 'debate-1', round: 2, direction: 'bullish', confidence: 0.7, created_at },
+    ]);
+  });
+
+  it('returns an empty array when the result carries no round_verdicts', () => {
+    // No override: `makeResult`'s base object omits `round_verdicts` entirely
+    // (absent, matching every real producer that predates #1517) rather than
+    // setting it to `undefined` — `exactOptionalPropertyTypes` rejects the
+    // latter as a `Partial<DebateResult>` override.
+    const result = makeResult();
+    expect(buildDebateRoundLogRows(result, new Date('2026-07-14T09:00:08Z'))).toEqual([]);
+  });
+});
+
 describe('InMemoryDebateLogStore', () => {
   it('a completed debate: row exists and is joinable by debate_id', () => {
     const store = new InMemoryDebateLogStore();
@@ -269,6 +296,20 @@ describe('InMemoryDebateLogStore', () => {
 
     expect(store.getByDebateId('debate-1')).toEqual(first);
     expect(store.getByDebateId('debate-2')).toEqual(second);
+  });
+
+  it('writeLogWithRounds writes the log, readable by getByDebateId, and discards rounds without throwing (#1558 review) — writeRoundLog is off this store now, no reader exists on this port', () => {
+    const store = new InMemoryDebateLogStore();
+    const result = makeResult({
+      round_verdicts: [{ round: 1, direction: 'bullish', confidence: 0.5 }],
+    });
+    const created_at = new Date('2026-07-14T09:00:08Z');
+    const log = buildDebateLog(result, 'BTC-USD', created_at);
+
+    expect(() =>
+      store.writeLogWithRounds(log, buildDebateRoundLogRows(result, created_at)),
+    ).not.toThrow();
+    expect(store.getByDebateId(log.debate_id)).toEqual(log);
   });
 });
 

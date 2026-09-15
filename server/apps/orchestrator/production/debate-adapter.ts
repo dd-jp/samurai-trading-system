@@ -77,6 +77,7 @@ import {
   applyAnalystWeights,
   buildAnalystContributions,
   buildDebateLog,
+  buildDebateRoundLogRows,
   computeConvictionScore,
   computeDebateId,
   type DebatePersonas,
@@ -95,6 +96,7 @@ import {
   type RateLimiter,
   type RoundContext,
   type RoundStance,
+  type RoundVerdict,
   runBearPersona,
   runBullPersona,
   runDebate,
@@ -215,6 +217,7 @@ export function buildDebatePersonas(
   let lastBull: PersonaResponse | undefined;
   let lastBear: PersonaResponse | undefined;
   const accumulatedStances: AnalystRoundStance[] = [];
+  const roundVerdicts: RoundVerdict[] = [];
   let currentState: PartialDebateState | undefined;
 
   const bull: DebaterPersona = {
@@ -293,6 +296,7 @@ export function buildDebatePersonas(
       // bull and bear argue the side they were assigned, so their stance says
       // nothing about conviction (see `computeDirectionalConsensus`).
       const confidence = computeConvictionScore(context.views, accumulatedStances, response.stance);
+      roundVerdicts.push({ round: context.round, direction: response.stance, confidence });
 
       // Recorded AFTER the round's LLM calls returned, so this is always a
       // completed round (#374). `debate_id` is required by
@@ -320,6 +324,12 @@ export function buildDebatePersonas(
               : ['debate did not converge before the latency budget fired'],
           rounds_completed: context.round,
           direction: response.stance,
+          // Snapshot rather than the live array, matching `contributions`
+          // above (`buildAnalystContributions` over a fresh copy of
+          // `accumulatedStances`) — a caller holding an old `currentState`
+          // reads what had completed AT THAT SNAPSHOT, not whatever
+          // `roundVerdicts` grows to later.
+          round_verdicts: [...roundVerdicts],
           debate_id,
         };
       }
@@ -409,8 +419,18 @@ export function buildDebatePersonas(
  * a broken store, so failing the tick before the Trader stage is the
  * fail-safe direction (no trade), and matches `auditLog.record`'s unguarded
  * call in `tick-runner.ts`.
+ *
+ * Exported for `debate-adapter.test.ts` alone (#1558 review) — driving a
+ * PARTIAL/timed-out debate with `rounds_completed >= 1` through this
+ * function is otherwise unreachable via `buildDebateStep`: that function
+ * hardwires `maxRounds` to `MAX_ROUNDS_BY_ASSET_CLASS[asset_class]` (line
+ * ~1069), which is 1 for both asset classes as of #1080, so a debate that
+ * times out with any partial round data already recorded cannot be produced
+ * through the public step today. This is the same structural fact #1517's
+ * flip-rate report states: nothing exercises this branch in production
+ * either, currently.
  */
-function persistDebateLog(params: {
+export function persistDebateLog(params: {
   store: DebateLogStore;
   result: DebateResult;
   instrument: string;
@@ -451,7 +471,17 @@ function persistDebateLog(params: {
   // within the same bar carries a FRESH trace against the same content-hashed
   // `debate_id` and must not overwrite the attribution of the debate it did
   // not run.
-  store.writeLog(buildDebateLog(result, instrument, clock.now(), trace_id));
+  const written_at = clock.now();
+  // One transaction (`writeLogWithRounds`): the FK on debate_round_log
+  // (migration 0064) always resolves since debate_log commits first inside
+  // it, and a throw from either write leaves neither row — this function's
+  // own first-write-wins guard above (`getByDebateId`) would otherwise block
+  // every retry from ever gaining the round rows for a debate_log row that
+  // made it in alone.
+  store.writeLogWithRounds(
+    buildDebateLog(result, instrument, written_at, trace_id),
+    buildDebateRoundLogRows(result, written_at),
+  );
 
   return undefined;
 }

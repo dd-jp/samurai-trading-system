@@ -64,6 +64,20 @@ export interface AnalystContribution {
 }
 
 /**
+ * One round's mediator verdict — the datum #1517's flip-rate measurement
+ * needs (does the final round's direction differ from round 1's) that no
+ * existing field carries: `DebateResult.direction`/`confidence` are the
+ * FINAL round only, and `contributions[].stance_during_debate` is each
+ * ANALYST's upstream stance, not the mediator's own synthesis.
+ */
+export interface RoundVerdict {
+  /** 1-indexed, matching `RoundContext.round`. */
+  round: number;
+  direction: Direction;
+  confidence: number;
+}
+
+/**
  * Downstream contract: what the Trader receives. A compact payload — not a
  * full transcript — with enough context to consolidate analyst views into an
  * action without drowning in argumentation.
@@ -223,4 +237,20 @@ export interface DebateResult {
     /** `ReserveResult`'s own refusal text: which budget was exhausted, and by how much. */
     reason: string;
   };
+  /**
+   * Every round's mediator verdict, in round order (#1517). Set by
+   * `runDebate` (a full round-orchestrator loop) and by
+   * `enforceLatencyBudget`'s timeout branch (whatever rounds completed
+   * before the budget fired, `[]` on its no-partial-state fallback) —
+   * always an array, never a partial one, on those two paths. Absent on
+   * every other producer (the rate-limit refusal, the control arm's
+   * axis-vote decisions, the replay-from-log shape): they have no round to
+   * report and predate this field, matching `timed_out?`/`rate_limited?`'s
+   * own sibling-optional-field convention rather than forcing every
+   * producer to invent a value. This is an ANALYTICS addition, like
+   * `debate_log` itself — it does not change decision #10 (round-by-round
+   * OPERATIONAL state is still not persisted for crash-recovery; a crashed
+   * debate still re-runs from scratch).
+   */
+  round_verdicts?: RoundVerdict[];
 }

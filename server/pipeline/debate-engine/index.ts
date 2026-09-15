@@ -16,7 +16,12 @@ export {
   priceUsage,
   rateFor,
 } from '../../shared/llm/pricing.js';
-export type { DebateLog, DebateLogStore, DebateTermination } from '../../shared/types.js';
+export type {
+  DebateLog,
+  DebateLogStore,
+  DebateRoundLogEntry,
+  DebateTermination,
+} from '../../shared/types.js';
 export type { AnalystRoundStance } from './analyst-contribution.js';
 export { buildAnalystContributions } from './analyst-contribution.js';
 export type { AnalystCollectionResult, ExpectedAnalyst } from './analyst-response-collector.js';
@@ -25,6 +30,7 @@ export { computeConvictionScore } from './conviction-score.js';
 export { computeDebateId } from './debate-id.js';
 export {
   buildDebateLog,
+  buildDebateRoundLogRows,
   DEBATE_BAR_TIMEFRAME_MS,
   floorToBar,
   InMemoryDebateLogStore,
@@ -131,5 +137,11 @@ export type {
 } from './round-orchestrator.js';
 export { MAX_ROUNDS, runDebate } from './round-orchestrator.js';
 export { SqliteDebateLogStore } from './sqlite-debate-log-store.js';
-export type { AnalystContribution, AnalystView, DebateResult, Direction } from './types.js';
+export type {
+  AnalystContribution,
+  AnalystView,
+  DebateResult,
+  Direction,
+  RoundVerdict,
+} from './types.js';
 export { applyAnalystWeights, weightedConvictionFactor } from './weighted-conviction.js';

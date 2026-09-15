@@ -4,7 +4,14 @@
  * changes when a consumer's needs change, a record when the domain does, and
  * they rarely move together.
  */
-import type { ClosedTrade, DebateLog, SetupNeighbor, SetupVector, VerdictLog } from './records.js';
+import type {
+  ClosedTrade,
+  DebateLog,
+  DebateRoundLogEntry,
+  SetupNeighbor,
+  SetupVector,
+  VerdictLog,
+} from './records.js';
 
 /**
  * Owned by the Feedback Loop (Stage 6, `docs/wayfinder/feedback-loop-map.md`
@@ -42,6 +49,23 @@ export interface DebateLogStore {
   writeLog(entry: DebateLog): void;
   /** FL's attribution join point — absent for a debate never completed. */
   getByDebateId(debate_id: string): DebateLog | undefined;
+  /**
+   * Persists the completed debate's log row AND its per-round verdicts
+   * (#1517) as one unit (coding-standards.md "Multi-write store mutations
+   * are transactional", `applyLotAdvance` precedent) — the caller's own
+   * duplicate guard (`getByDebateId`) means a debate_log row written
+   * without its round rows can never be repaired by a retry, so a crash
+   * between the two writes must leave neither rather than an unrepairable
+   * orphan. `rounds` may be empty (a producer with no round data);
+   * implementations should treat that as writing no round rows, not an
+   * error. The per-round write itself (`writeRoundLog` on
+   * `SqliteDebateLogStore`) is deliberately NOT part of this port (#1558
+   * review round 2) — nothing outside this method's own implementations
+   * called it separately, so widening the port for it would advertise a
+   * capability only this method needs, the same reasoning #785 already
+   * applied to the read-only aggregates below.
+   */
+  writeLogWithRounds(entry: DebateLog, rounds: DebateRoundLogEntry[]): void;
 }
 
 /**

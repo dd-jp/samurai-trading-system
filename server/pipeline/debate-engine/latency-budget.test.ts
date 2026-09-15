@@ -65,6 +65,7 @@ function makePartialState(overrides: Partial<PartialDebateState> = {}): PartialD
     rounds_completed: 1,
     direction: 'bullish',
     debate_id: 'debate-1',
+    round_verdicts: [{ round: 1, direction: 'bullish', confidence: 0.4 }],
     ...overrides,
   };
 }
@@ -220,6 +221,7 @@ describe('enforceLatencyBudget', () => {
     expect(result.open_items).toEqual(partial.open_items);
     expect(result.converged).toBe(false);
     expect(result.timed_out).toEqual({ budget_ms: 30_000, elapsed_ms: 30_000, cause: 'budget' });
+    expect(result.round_verdicts).toEqual(partial.round_verdicts);
   });
 
   it('falls back to a default low-confidence result when no partial state exists', async () => {
@@ -244,6 +246,7 @@ describe('enforceLatencyBudget', () => {
     expect(result.rounds_completed).toBe(0);
     expect(result.debate_id).toBe('debate-1');
     expect(result.timed_out).toEqual({ budget_ms: 30_000, elapsed_ms: 30_000, cause: 'budget' });
+    expect(result.round_verdicts).toEqual([]);
   });
 
   it('logs the timeout event via DebateLogger.logTimeout', async () => {

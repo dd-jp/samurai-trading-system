@@ -26,6 +26,7 @@ export type {
   BrokerFillId,
   ClosedTrade,
   DebateLog,
+  DebateRoundLogEntry,
   DebateTermination,
   DebateTerminationCause,
   ExitReason,
