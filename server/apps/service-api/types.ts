@@ -195,8 +195,8 @@ export interface DashboardSnapshotBuilder {
     store: DashboardQueryStore,
     asOf: Date,
     mode: StoreMode,
+    arm: TradingArm,
     providers?: ProviderStatusReader,
-    arm?: TradingArm,
   ): DashboardSnapshot;
 }
 

@@ -861,6 +861,16 @@ export class InMemoryQueryStore implements DashboardQueryStore {
    * behavior — `server.test.ts`'s `TwoArmQueryStore`) but ignored here — this
    * fixture's data has never varied by arm, and giving it a second, static
    * "control" fixture set is out of scope for a dev/test seed store.
+   *
+   * Consequence for `fixture-server.ts` (the Playwright/e2e entry): the real
+   * `server.ts` handler stamps the wire snapshot's `arm` field from the
+   * request's own `?arm=` regardless of what the store returns, so hitting
+   * `?arm=control` against the fixture server yields these same live rows
+   * mislabelled `arm: 'control'`. Arm-scoping IS proven at the HTTP layer —
+   * `server.test.ts`'s `TwoArmQueryStore` covers it against the real server —
+   * but any Playwright/e2e test built against this fixture store (#1595)
+   * cannot use position/closed-trade content to tell the arms apart; it would
+   * pass vacuously against a regression that broke real cross-arm scoping.
    */
   getOpenPositions(_asOf: Date, _arm: TradingArm): OpenPosition[] {
     return OPEN_POSITIONS;

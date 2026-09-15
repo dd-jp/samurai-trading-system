@@ -208,7 +208,7 @@ describe('buildSnapshot', () => {
       getMark: () => makeMark(110),
     });
 
-    const snap = buildSnapshot(store, AS_OF, 'paper');
+    const snap = buildSnapshot(store, AS_OF, 'paper', 'live');
 
     expect(snap.positions).toHaveLength(1);
     expect(snap.positions[0]?.unrealized_pnl).toBe(100);
@@ -223,7 +223,7 @@ describe('buildSnapshot', () => {
       getMark: () => makeMark(90),
     });
 
-    const snap = buildSnapshot(store, AS_OF, 'paper');
+    const snap = buildSnapshot(store, AS_OF, 'paper', 'live');
 
     expect(snap.positions[0]?.unrealized_pnl).toBe(50);
   });
@@ -234,7 +234,7 @@ describe('buildSnapshot', () => {
       getRecentDebates: () => [makeDebate()],
     });
 
-    const snap = buildSnapshot(store, AS_OF, 'paper');
+    const snap = buildSnapshot(store, AS_OF, 'paper', 'live');
 
     expect(snap.as_of).toBe(AS_OF.toISOString());
     expect(typeof snap.generated_at).toBe('string');
@@ -253,7 +253,7 @@ describe('buildSnapshot', () => {
       getAttribution: () => attribution,
     });
 
-    const snap = buildSnapshot(store, AS_OF, 'paper');
+    const snap = buildSnapshot(store, AS_OF, 'paper', 'live');
 
     const tech = snap.analysts.find((a) => a.analyst_id === 'technical-analyst');
     const sent = snap.analysts.find((a) => a.analyst_id === 'sentiment-analyst');
@@ -290,7 +290,7 @@ describe('buildSnapshot', () => {
       getRecentDebates: () => [makeDebate({ contributions, rounds: 3 })],
     });
 
-    const snap = buildSnapshot(store, AS_OF, 'paper');
+    const snap = buildSnapshot(store, AS_OF, 'paper', 'live');
 
     expect(snap.debates[0]?.contributions[0]?.stance_during_debate).toEqual([
       'bearish',
@@ -321,7 +321,7 @@ describe('buildSnapshot', () => {
     ];
     const store = fakeStore({ getRecentDebates: () => [makeDebate({ contributions: legacy })] });
 
-    const snap = buildSnapshot(store, AS_OF, 'paper');
+    const snap = buildSnapshot(store, AS_OF, 'paper', 'live');
 
     expect(snap.debates[0]?.contributions[0]?.stance_during_debate).toBeUndefined();
   });
@@ -344,7 +344,7 @@ describe('buildSnapshot', () => {
       getRecentDebates: () => [makeDebate({ contributions: corrupt, rounds: 3 })],
     });
 
-    const snap = buildSnapshot(store, AS_OF, 'paper');
+    const snap = buildSnapshot(store, AS_OF, 'paper', 'live');
 
     expect(snap.debates[0]?.contributions[0]?.stance_during_debate).toBeUndefined();
   });
@@ -358,23 +358,27 @@ describe('buildSnapshot', () => {
     };
     const store = fakeStore({ getTickStatus: () => tick });
 
-    expect(buildSnapshot(store, AS_OF, 'paper').tick_status).toEqual(tick);
+    expect(buildSnapshot(store, AS_OF, 'paper', 'live').tick_status).toEqual(tick);
   });
 
   it('projects the injected run mode verbatim, never a default (#539)', () => {
     // Both directions, because the failure that matters is asymmetric: a
     // page that says "paper" during a live run is how an operator watches
     // real money believing it is simulated.
-    expect(buildSnapshot(fakeStore(), AS_OF, 'live').mode).toBe('live');
-    expect(buildSnapshot(fakeStore(), AS_OF, 'paper').mode).toBe('paper');
-    expect(buildSnapshot(fakeStore(), AS_OF, 'backtest').mode).toBe('backtest');
+    expect(buildSnapshot(fakeStore(), AS_OF, 'live', 'live').mode).toBe('live');
+    expect(buildSnapshot(fakeStore(), AS_OF, 'paper', 'live').mode).toBe('paper');
+    expect(buildSnapshot(fakeStore(), AS_OF, 'backtest', 'live').mode).toBe('backtest');
   });
 
   // #1592: the snapshot's own arm scoping — which arm's positions/closed
   // trades it carries, and that it names that arm on the wire.
   describe('arm scoping (#1592)', () => {
-    it('defaults to the live arm when none is given, and stamps it on the snapshot', () => {
-      const snap = buildSnapshot(fakeStore(), AS_OF, 'paper');
+    // "no ?arm= given defaults to live" is a fact about the HTTP layer
+    // (server.ts's parseArmParam, covered by server.test.ts) — buildSnapshot
+    // itself takes arm as a required parameter with no default, so this only
+    // checks that the 'live' case stamps correctly, same as 'control' below.
+    it('stamps the requested arm on the snapshot when it is live', () => {
+      const snap = buildSnapshot(fakeStore(), AS_OF, 'paper', 'live');
       expect(snap.arm).toBe('live');
     });
 
@@ -391,7 +395,7 @@ describe('buildSnapshot', () => {
         },
       });
 
-      const snap = buildSnapshot(store, AS_OF, 'paper', undefined, 'control');
+      const snap = buildSnapshot(store, AS_OF, 'paper', 'control');
 
       expect(seenArms).toEqual({ positions: 'control', closedTrades: 'control' });
       expect(snap.arm).toBe('control');
@@ -408,18 +412,18 @@ describe('buildSnapshot', () => {
           arm === 'live' ? [liveTrade] : [controlTrade],
       });
 
-      const liveSnap = buildSnapshot(store, AS_OF, 'paper', undefined, 'live');
+      const liveSnap = buildSnapshot(store, AS_OF, 'paper', 'live');
       expect(liveSnap.positions.map((p) => p.idempotency_key)).toEqual(['live-key']);
       expect(liveSnap.closed_trades.map((t) => t.idempotency_key)).toEqual(['live-trade']);
 
-      const controlSnap = buildSnapshot(store, AS_OF, 'paper', undefined, 'control');
+      const controlSnap = buildSnapshot(store, AS_OF, 'paper', 'control');
       expect(controlSnap.positions.map((p) => p.idempotency_key)).toEqual(['control-key']);
       expect(controlSnap.closed_trades.map((t) => t.idempotency_key)).toEqual(['control-trade']);
     });
   });
 
   it('renders an empty state (zero rows, not a throw) when the store has no data', () => {
-    const snap = buildSnapshot(fakeStore(), AS_OF, 'paper');
+    const snap = buildSnapshot(fakeStore(), AS_OF, 'paper', 'live');
 
     expect(snap.positions).toEqual([]);
     expect(snap.closed_trades).toEqual([]);
@@ -449,6 +453,7 @@ describe('buildSnapshot', () => {
       }),
       AS_OF,
       'paper',
+      'live',
     );
 
     expect(snap.metrics.profit_factor).toEqual({ kind: 'no_losses' });
@@ -465,6 +470,7 @@ describe('buildSnapshot', () => {
       fakeStore({ getDailyMetrics: () => ({ ...METRICS, profit_factor: 0 }) }),
       AS_OF,
       'paper',
+      'live',
     );
 
     const roundTripped = JSON.parse(JSON.stringify(snap)) as {
@@ -495,7 +501,7 @@ describe('buildSnapshot', () => {
     ];
     const store = fakeStore({ getVerdictHistory: () => verdicts });
 
-    const snap = buildSnapshot(store, AS_OF, 'paper');
+    const snap = buildSnapshot(store, AS_OF, 'paper', 'live');
 
     expect(snap.verdicts).toHaveLength(2);
     expect(snap.verdicts[0]).toMatchObject({
@@ -525,7 +531,7 @@ describe('buildSnapshot', () => {
       }),
     });
 
-    const snap = buildSnapshot(store, AS_OF, 'paper');
+    const snap = buildSnapshot(store, AS_OF, 'paper', 'live');
 
     expect(snap.pipeline.lanes).toHaveLength(1);
     expect(snap.pipeline.lanes[0]).toMatchObject({
@@ -548,7 +554,7 @@ describe('buildSnapshot', () => {
       },
     });
 
-    buildSnapshot(store, AS_OF, 'paper');
+    buildSnapshot(store, AS_OF, 'paper', 'live');
 
     // This read rides a 3-second poll; an unbounded one would degrade the
     // whole dashboard as the audit log grows through a 14-day soak.
@@ -575,7 +581,7 @@ describe('buildSnapshot', () => {
       },
     });
 
-    const snap = buildSnapshot(store, AS_OF, 'paper');
+    const snap = buildSnapshot(store, AS_OF, 'paper', 'live');
 
     expect(snap.alert_delivery_failures_24h).toBe(4);
     expect(asked).toEqual(AS_OF);
@@ -590,7 +596,7 @@ describe('buildSnapshot', () => {
   // the running process (not the store, which does not change on rebuild)
   // can move when that happens.
   it("stamps the snapshot with the server's own CONTRACT_VERSION, regardless of the store", () => {
-    const snap = buildSnapshot(fakeStore(), AS_OF, 'paper');
+    const snap = buildSnapshot(fakeStore(), AS_OF, 'paper', 'live');
 
     expect(snap.contract_version).toBe(CONTRACT_VERSION);
   });
@@ -600,10 +606,16 @@ describe('buildSnapshot', () => {
   it("carries the store's LLM cap onto the wire, uncapped included", () => {
     const spend = fakeStore().getLlmSpend(AS_OF);
 
-    expect(buildSnapshot(fakeStore(), AS_OF, 'paper').llm_spend.cap_usd).toBe(spend.cap_usd);
+    expect(buildSnapshot(fakeStore(), AS_OF, 'paper', 'live').llm_spend.cap_usd).toBe(
+      spend.cap_usd,
+    );
     expect(
-      buildSnapshot(fakeStore({ getLlmSpend: () => ({ ...spend, cap_usd: null }) }), AS_OF, 'paper')
-        .llm_spend.cap_usd,
+      buildSnapshot(
+        fakeStore({ getLlmSpend: () => ({ ...spend, cap_usd: null }) }),
+        AS_OF,
+        'paper',
+        'live',
+      ).llm_spend.cap_usd,
     ).toBeNull();
   });
 
@@ -613,7 +625,7 @@ describe('buildSnapshot', () => {
   it("carries the store's cap_armed_at onto the wire, null included", () => {
     const spend = fakeStore().getLlmSpend(AS_OF);
 
-    expect(buildSnapshot(fakeStore(), AS_OF, 'paper').llm_spend.cap_armed_at).toBe(
+    expect(buildSnapshot(fakeStore(), AS_OF, 'paper', 'live').llm_spend.cap_armed_at).toBe(
       spend.cap_armed_at,
     );
     expect(
@@ -621,6 +633,7 @@ describe('buildSnapshot', () => {
         fakeStore({ getLlmSpend: () => ({ ...spend, cap_usd: null, cap_armed_at: null }) }),
         AS_OF,
         'paper',
+        'live',
       ).llm_spend.cap_armed_at,
     ).toBeNull();
   });
@@ -647,7 +660,7 @@ describe('buildSnapshot', () => {
         ],
       });
 
-      const snap = buildSnapshot(store, AS_OF, 'paper');
+      const snap = buildSnapshot(store, AS_OF, 'paper', 'live');
 
       expect(snap.closed_trades).toHaveLength(1);
       expect(snap.closed_trades[0]).toMatchObject({
@@ -679,7 +692,7 @@ describe('buildSnapshot', () => {
         ],
       });
 
-      const snap = buildSnapshot(store, AS_OF, 'paper');
+      const snap = buildSnapshot(store, AS_OF, 'paper', 'live');
 
       // (104*4 + 106*6) / 10 = 105.2
       expect(snap.closed_trades[0]?.exit_price).toBeCloseTo(105.2);
@@ -700,7 +713,7 @@ describe('buildSnapshot', () => {
         getFillsForTrades: () => [], // no fills captured for this lot
       });
 
-      const snap = buildSnapshot(store, AS_OF, 'paper');
+      const snap = buildSnapshot(store, AS_OF, 'paper', 'live');
 
       // grossPnl = -69.3 + 1.8 = -67.5; delta = -67.5/15 = -4.5;
       // sell => exit = entry - delta = 495.6 - (-4.5) = 500.1
@@ -722,7 +735,7 @@ describe('buildSnapshot', () => {
         getFillsForTrades: () => [fill],
       });
 
-      const snap = buildSnapshot(store, AS_OF, 'paper');
+      const snap = buildSnapshot(store, AS_OF, 'paper', 'live');
 
       expect(snap.fills).toHaveLength(1);
       expect(snap.fills[0]).toMatchObject({
@@ -754,7 +767,7 @@ describe('buildSnapshot', () => {
         },
       });
 
-      buildSnapshot(store, AS_OF, 'paper');
+      buildSnapshot(store, AS_OF, 'paper', 'live');
 
       expect(askedKeys).toEqual(['K-old', 'K-new']);
     });
@@ -802,7 +815,12 @@ describe('buildSnapshot', () => {
     };
 
     it('projects both arms with every column, dates as ISO strings', () => {
-      const snap = buildSnapshot(fakeStore({ getArmComparisons: () => [SAMPLE] }), AS_OF, 'paper');
+      const snap = buildSnapshot(
+        fakeStore({ getArmComparisons: () => [SAMPLE] }),
+        AS_OF,
+        'paper',
+        'live',
+      );
 
       expect(snap.arm_comparison).toEqual([
         {
@@ -835,6 +853,7 @@ describe('buildSnapshot', () => {
         }),
         AS_OF,
         'paper',
+        'live',
       );
 
       expect(snap.arm_comparison[0]?.diverged).toBe(true);
@@ -843,7 +862,12 @@ describe('buildSnapshot', () => {
 
     /** Empty is a required field holding an empty array, never an absent one. */
     it('emits an empty array when FL has computed no comparison', () => {
-      const snap = buildSnapshot(fakeStore({ getArmComparisons: () => [] }), AS_OF, 'paper');
+      const snap = buildSnapshot(
+        fakeStore({ getArmComparisons: () => [] }),
+        AS_OF,
+        'paper',
+        'live',
+      );
 
       expect(snap.arm_comparison).toEqual([]);
       expect('arm_comparison' in snap).toBe(true);
@@ -871,6 +895,7 @@ describe('buildSnapshot', () => {
         }),
         AS_OF,
         'paper',
+        'live',
       );
 
       expect(snap.arm_comparison[0]?.live.refused_pass_count).toBeNull();
@@ -951,7 +976,7 @@ describe('buildSnapshot', () => {
         ],
       });
 
-      const snap = buildSnapshot(store, AS_OF, 'paper');
+      const snap = buildSnapshot(store, AS_OF, 'paper', 'live');
 
       expect(snap.risk_critics).toHaveLength(1);
       const row = snap.risk_critics[0];
@@ -1016,7 +1041,7 @@ describe('buildSnapshot', () => {
         ],
       });
 
-      const snap = buildSnapshot(store, AS_OF, 'paper');
+      const snap = buildSnapshot(store, AS_OF, 'paper', 'live');
 
       expect(snap.risk_critics[0]?.conditions).toEqual([]);
       expect(snap.risk_critics[0]?.dropped_conditions).toEqual([
@@ -1040,7 +1065,7 @@ describe('buildSnapshot', () => {
         ],
       });
 
-      const snap = buildSnapshot(store, AS_OF, 'paper');
+      const snap = buildSnapshot(store, AS_OF, 'paper', 'live');
 
       expect(snap.risk_critics[0]?.conditions).toBeNull();
       expect(snap.risk_critics[0]?.dropped_conditions).toBeNull();
@@ -1062,7 +1087,7 @@ describe('buildSnapshot', () => {
         ],
       });
 
-      const snap = buildSnapshot(store, AS_OF, 'paper');
+      const snap = buildSnapshot(store, AS_OF, 'paper', 'live');
 
       expect(snap.risk_critics[0]?.critic_verdict).toBeNull();
       expect(snap.risk_critics[0]?.reasoning).toBeNull();
@@ -1072,7 +1097,7 @@ describe('buildSnapshot', () => {
 
     /** Empty is a required field holding an empty array, never an absent one. */
     it('emits an empty array when no Risk decision is on record', () => {
-      const snap = buildSnapshot(fakeStore({ getRiskCritics: () => [] }), AS_OF, 'paper');
+      const snap = buildSnapshot(fakeStore({ getRiskCritics: () => [] }), AS_OF, 'paper', 'live');
 
       expect(snap.risk_critics).toEqual([]);
       expect('risk_critics' in snap).toBe(true);
@@ -1091,7 +1116,7 @@ describe('buildSnapshot', () => {
       }),
     });
 
-    const snap = buildSnapshot(store, AS_OF, 'paper');
+    const snap = buildSnapshot(store, AS_OF, 'paper', 'live');
 
     // #413's idle frame, end to end: a closed market is the common case, and
     // the lanes must still be there to say so.

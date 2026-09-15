@@ -923,7 +923,7 @@ const _assertDashboardSnapshotFieldNamesCoverAllKeys: {
  * cryptographic and does not need to be: the only property this mechanism
  * needs is "the field list changing changes the output", which a 32-bit
  * non-cryptographic hash already gives with a collision risk irrelevant at
- * this input size (19 short field names).
+ * this input size (20 short field names).
  */
 function fnv1aHex(input: string): string {
   let hash = 0x811c9dc5;

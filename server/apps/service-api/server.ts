@@ -6,7 +6,7 @@
  * react/vite are devDependencies that produce bytes on disk at build time).
  *
  * Two `GET` surfaces:
- *   - `GET /api/snapshot` → `buildSnapshot(store, now, mode, providers, arm)` as
+ *   - `GET /api/snapshot` → `buildSnapshot(store, now, mode, arm, providers)` as
  *                           JSON. Requires a valid `Authorization: Bearer <token>`
  *                           against `SAMURAI_DASHBOARD_TOKEN` whenever that
  *                           credential is configured (#1038, `request-auth.ts`);
@@ -165,8 +165,10 @@ function isTradingArm(value: string): value is TradingArm {
  * `?arm=` for `GET /api/snapshot` (#1592). Absent means `'live'` — never
  * guessed otherwise: an unrecognised value, an empty string, or the param
  * repeated more than once (ambiguous — `URLSearchParams.get` would silently
- * take only the first) is refused rather than defaulted, so a typo in the
- * query string can never be misread as a request for the live arm.
+ * take only the first) is refused rather than defaulted. This only catches a
+ * typo in the VALUE (`?arm=lvie`) — a typo in the KEY (`?ram=control`,
+ * `?Arm=control`) is indistinguishable from the param being absent at all,
+ * by HTTP query-string design, and silently returns live.
  */
 function parseArmParam(
   searchParams: URLSearchParams,
@@ -403,7 +405,7 @@ export function createDashboardServer(opts: DashboardServerOptions): DashboardSe
         return;
       }
       try {
-        const snapshot = buildSnapshot(store, new Date(), mode, providers, parsedArm.arm);
+        const snapshot = buildSnapshot(store, new Date(), mode, parsedArm.arm, providers);
         res.writeHead(200, JSON_HEADERS).end(JSON.stringify(snapshot));
       } catch (err) {
         if (res.headersSent) {
