@@ -399,6 +399,17 @@ export interface ReconcileDivergence {
   /** Operator-facing detail — the adapter's error on `undetermined`. */
   reason: string;
   /**
+   * Set only by `reconcileFlatten`'s `cancelWedgedFlatten` escalation
+   * (reconcile.ts) — a flatten past `UNRESOLVABLE_FLATTEN_MAX_AGE_MS` whose
+   * cancel has just been issued at the venue. That return shares
+   * `action: 'adopted'` with the benign adopt reached one branch above it
+   * (they differ only in `reason`), so `runPoll`'s dedup (fill-sync.ts) folds
+   * this into the state it compares — otherwise the escalation never gets
+   * its own line once the benign adopt has already logged for the episode
+   * (#1577).
+   */
+  escalated?: true;
+  /**
    * `'bracket'` for a `reconcileLot` row, keyed to an `OpenPosition`.
    * `'flatten'` for a `reconcileFlatten` row. `'unrecorded'` for
    * `findUnrecordedVenuePositions`'s rows — a venue position the store never

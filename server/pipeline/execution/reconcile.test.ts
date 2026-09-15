@@ -924,6 +924,10 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
 
     expect(broker.cancelCalls).toEqual([{ client_order_id: FLATTEN_KEY, instrument: 'AAPL' }]);
     expect(report.divergences[0]?.reason).toContain('CANCELLED');
+    // #1577: `escalated` is what lets `runPoll`'s dedup (fill-sync.ts) tell
+    // this apart from the benign adopt it shares `action: 'adopted'` with.
+    expect(report.divergences[0]?.action).toBe('adopted');
+    expect(report.divergences[0]?.escalated).toBe(true);
     expect(alerts).toHaveLength(1);
     expect(alerts[0]?.idempotency_key).toBe(FLATTEN_KEY);
 
@@ -943,9 +947,14 @@ describe('reconcile — the flatten-journal sweep (#519, #526)', () => {
     const broker = makeBroker();
     workingFlattenBook(broker);
 
-    await new ExecutionImpl(makeInput(store, broker)).reconcile();
+    const report = await new ExecutionImpl(makeInput(store, broker)).reconcile();
 
     expect(broker.cancelCalls).toEqual([]);
+    // #1577: the benign adopt this row still produces must NOT carry
+    // `escalated` — that is what lets `runPoll`'s dedup (fill-sync.ts) log a
+    // later escalation on the same row as a distinct episode.
+    expect(report.divergences[0]?.action).toBe('adopted');
+    expect(report.divergences[0]?.escalated).toBeUndefined();
   });
 
   it('does NOT cancel a row the venue already reports terminal — there is nothing working to cancel', async () => {

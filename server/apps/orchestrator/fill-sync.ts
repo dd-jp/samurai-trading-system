@@ -162,6 +162,18 @@ function reconcileDivergenceLevel(divergence: ReconcileDivergence): LogLevel {
 }
 
 /**
+ * `lastReconcileAction`'s comparison value (#1577). `action` alone collapses
+ * `cancelWedgedFlatten`'s escalated cancel onto the benign flatten adopt that
+ * precedes it in the same episode — both are `action: 'adopted'`, differing
+ * only in `reason` — so a row that already logged the benign line never logs
+ * the escalation. Folding `escalated` in gives the two states distinct
+ * dedup values without widening `action` itself.
+ */
+function reconcileDedupState(divergence: ReconcileDivergence): string {
+  return divergence.escalated ? `${divergence.action}:escalated` : divergence.action;
+}
+
+/**
  * The `error`-level messages this loop writes when a pass rejects — one per
  * `catch` below. Exported because the smoke gate's `FillSyncFailureRecorder`
  * (smoke-run.ts, #1049) matches on them: a reworded literal here with a stale
@@ -367,9 +379,10 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
       for (const divergence of report.divergences) {
         const dedupKey = divergence.idempotency_key || divergence.instrument;
         reportedThisPass.add(dedupKey);
+        const dedupState = reconcileDedupState(divergence);
         // Repeat pass, same state: already logged — see `lastReconcileAction`.
-        if (lastReconcileAction.get(dedupKey) === divergence.action) continue;
-        lastReconcileAction.set(dedupKey, divergence.action);
+        if (lastReconcileAction.get(dedupKey) === dedupState) continue;
+        lastReconcileAction.set(dedupKey, dedupState);
         deps.logger.log({
           trace_id: deps.reconcileTraceId,
           stage: 'execution',
