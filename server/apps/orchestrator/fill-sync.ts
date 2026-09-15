@@ -113,11 +113,25 @@ import type { Logger } from './types.js';
  * no backstop either"; having no backstop is the argument for raising it, not
  * for leaving it quiet.
  *
- * Every other case stays at `info`, deliberately: a flatten's `adopted` (
- * `kind: 'flatten'`) writes no `OpenPosition`, so the throttle above cannot
- * see it and there is no backstop to quiet against; `rejected` carries no
- * such backstop either, but it describes an order the venue refused — no
- * position exists, so nothing is exposed. `debug` is dropped unless
+ * Every other case stays at `info`, deliberately. A flatten's `adopted`
+ * (`kind: 'flatten'`) writes no `OpenPosition`, so the throttle above cannot
+ * see it — but since #1214/#1500 it does not need to, and #1411 measured that
+ * there is nothing here worth quieting anyway. `getUnresolvedFlattens`
+ * (sqlite-shared-store.ts) is bounded by resolution, not age, so an unresolved
+ * row is re-read every poll forever; the benign `adopted` is the only branch of
+ * `reconcileFlatten` that posts no `FlattenReconcileAlert`, and it is reachable
+ * only inside `UNRESOLVABLE_FLATTEN_MAX_AGE_MS` (5min, then
+ * `cancelWedgedFlatten` pages) or `UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS` (30min,
+ * then `judgeTerminalUnsweptFlatten` pages). A wrong flatten-adopt escalates to
+ * an operator within 30 minutes or stops being unresolved. Demoting it would
+ * still be a bad trade: measured over `logs/` (5,823 structured lines), this
+ * shape is 22 lines across 22 distinct episodes — 0.38%, one line per flatten,
+ * no repeats, `lastReconcileAction` below having already collapsed the poll's
+ * re-reads — against the 618/2102 = 29.4% flood that justified the bracket
+ * demotion. One line per flatten is the only record that a flatten was
+ * reconciled at all. `rejected` carries no backstop either, but it describes an
+ * order the venue refused — no position exists, so nothing is exposed. `debug`
+ * is dropped unless
  * `SAMURAI_LOG_LEVEL=debug` (logger.ts) — using it anywhere the throttle
  * doesn't independently cover would be silent deletion, which #1096
  * explicitly refused ("suppressing it wholesale would have hidden the one
