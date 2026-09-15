@@ -179,11 +179,10 @@ function reconcileDivergenceLevel(divergence: ReconcileDivergence): LogLevel {
  * and still short of coverage is not the same fact as the same row merely
  * throttled from an earlier cancel.
  *
- * Shared with `lastSweepAction`'s loop below (#1615) — that loop used to
- * compare bare `action` on its own, which is the identical collision for a
- * different source: `sweepResidualProtection`'s (residual-protection-sweep.ts)
- * six push sites all share `action: 'undetermined'` and `kind: 'sweep'`, so a
- * lot moving between two of them logged only the first. One function, so the
+ * Shared with `lastSweepAction`'s loop below (#1615): `sweepResidualProtection`'s
+ * (residual-protection-sweep.ts) push sites are the identical collision for a
+ * different source — see `ReconcileEscalation`'s doc (execution.ts) for the
+ * full site count and why one of them needs two values. One function, so the
  * two loops cannot drift on what "same dedup state" means.
  */
 function reconcileDedupState(divergence: ReconcileDivergence): string {
@@ -353,12 +352,12 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
    *
    * Keyed on `reconcileDedupState()` (#1615), not bare `action`, for the
    * same reason `lastReconcileAction` below is: `sweepResidualProtection`'s
-   * (residual-protection-sweep.ts) six push sites all share
-   * `action: 'undetermined'`, so a bare-`action` key logged only the first of
-   * whichever one a lot hit first and stayed silent through every later,
-   * distinct one — the transition this map exists to report. Naming what
-   * "state" means here was previously just `action`; it is now this file's
-   * one dedup-state shape, matching `lastReconcileAction`'s.
+   * (residual-protection-sweep.ts) push sites all share `action:
+   * 'undetermined'` — see `ReconcileEscalation`'s doc (execution.ts) for the
+   * site count — so a bare-`action` key logs only the first of whichever one
+   * a lot hit first and stays silent through every later, distinct one: the
+   * transition this map exists to report. One dedup-state shape, matching
+   * `lastReconcileAction`'s.
    */
   const lastSweepAction = new Map<string, string>();
   /**

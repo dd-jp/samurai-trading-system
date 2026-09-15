@@ -498,13 +498,11 @@ export interface ReconcileDivergence {
    * SQL-guard shape mismatch (`sweep_shape_mismatch`) and the store-write
    * `catch` block (`sweep_abandon_failed`) — which collided under the same
    * dedup before this field told them apart. #1615 tagged
-   * `sweepResidualProtection`'s (residual-protection-sweep.ts) six push
-   * sites the same way — all `action: 'undetermined'` and `kind: 'sweep'`,
-   * previously indistinguishable from each other AND from
-   * `sweepWedgedZeroFillLots`' two under both `reconcileDedupState`
-   * (fill-sync.ts, which this field already fixed for) and the SEPARATE
-   * `lastSweepAction`-keyed dedup in the same file, which #1615 also widened
-   * to read this field — it had been comparing bare `action` alone.
+   * `sweepResidualProtection`'s (residual-protection-sweep.ts) push sites the
+   * same way, and widened `lastSweepAction` (fill-sync.ts) — a SEPARATE dedup
+   * keyed off this same field — to read it too; see `ReconcileEscalation`'s
+   * doc above for the site count and the `rearm_unsupported`/
+   * `rearm_retry_failed` split.
    */
   escalation?: ReconcileEscalation;
   /**
