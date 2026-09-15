@@ -37,6 +37,8 @@ This is the part most easily misread. Leverage scales gains and losses alike, so
 
 > **Superseded 2026-08-10 by Result 4.** The table above is wrong in sign at 3×. Its error is the phrase *"fixed-percentage cost"* — the cost is not fixed across the leverage step. Keep reading for the measurement that replaces it.
 
+> **Premise corrected 2026-09-15 by [#1434](https://github.com/dd-jp/samurai-trading-system/issues/1434).** This is a separate correction from the one above — the sign-error note above is about the economics table, not this sentence. "A flat-by-close strategy never holds one overnight" is empirically false: [#1389](https://github.com/dd-jp/samurai-trading-system/issues/1389) measured 6 of 9 control-arm lots carrying overnight on 2026-09-08 with no flatten intent ever produced, on a flatten-window bug since fixed. The conclusion this sentence draws (decay does not need modelling) still stands, but for a different reason than "never holds one overnight" — see [`docs/research/60-leveraged-etp-ter-and-overnight-decay-exposure.md`](60-leveraged-etp-ter-and-overnight-decay-exposure.md) and [ADR-0016's 2026-09-15 amendment](../adr/0016-universe-leveraged-etps-ungated.md).
+
 ## Result 3 — the LSE/US overlap holds most of the day's range
 
 Run to test whether a London-hours strategy on a US-underlying ETP gives up too much. SPY 5-minute bars, 125 sessions, 2026-02-01 → 2026-08-01:
