@@ -414,6 +414,7 @@ Every script in `package.json`, all 29 of them. There are no others.
 | quality | `npm run lint:fix` | `biome check --write .` — fixes both |
 | quality | `npm run precommit` | `lint:fix` → `typecheck` → `test:coverage` |
 | quality | `npm run check:citations` | `tsx server/tools/check-path-citations.ts` — every backticked path in the tracked docs resolves. **A CI step**, and it reads this file too |
+| quality | `npm run mutation:local` | `tsx server/tools/mutation-local.ts` — Stryker Mutator, scoped to trading-path files (`pipeline/trader`, `risk-manager`, `verdict`, `execution`) changed vs a base ref, mirroring `test:local`'s diff pattern. 80% score bar on those packages only (#1634). Implementer gate, not CI: GitHub Actions is billing-blocked on this repo |
 | ops | `npm run check:live-gates` | `tsx server/tools/check-live-money-gates.ts` — re-verifies that the issues the live-money gate list cites are still open, so a closed issue cannot silently falsify the gate |
 | ops | `npm run report:arms` | `tsx server/tools/report-arm-comparison.ts` — the LLM arm vs. the indicator-only control |
 | ops | `npm run report:cgt` | `tsx server/tools/report-cgt-disposals.ts` — per-tax-year CGT disposal matching for the live Saxo GIA leg (#1518, `docs/cgt-disposal-matching.md`). NOT tax advice |

@@ -232,6 +232,12 @@ coverage/
 # so a failing test's name survives after the process/scrollback is gone.
 .vitest-reports/
 
+# Stryker Mutator (#1634): sandbox working dir, log, and reports. Root-anchored
+# per the /lib/ scar above — Stryker's own defaults use /reports and /stryker.log.
+/.stryker-tmp/
+/stryker.log
+/reports/
+
 # Shared SQLite state store (local dev data, never committed)
 *.sqlite
 *.sqlite3
