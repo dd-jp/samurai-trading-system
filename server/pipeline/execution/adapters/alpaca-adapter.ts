@@ -48,6 +48,7 @@ import {
   type UnpricedFillRecord,
 } from '../broker-state-store.js';
 import type { OcoDoubleFillAlertChannel } from '../oco-double-fill-alert.js';
+import { ProtectiveRearmUnsupportedError } from '../protective-rearm-unsupported.js';
 import type {
   BrokerAck,
   BrokerAdapter,
@@ -118,6 +119,13 @@ const ALPACA_FILL_SWEEP_TRACE_ID = 'alpaca-fetch-new-fills';
  * (`code 40010001`), `422` 90 s later, and `422` against a 13-day-old canceled
  * row. So each re-arm that ends up cancelled burns its id for good, and a lot
  * that re-arms more than once needs a wire id it has not spent yet.
+ *
+ * A COUNT OF IDS, indexed from ZERO — `4` means attempts `0..3`, whose wire ids
+ * are `:rearm`, `:rearm-1`, `:rearm-2`, `:rearm-3`. `MAX_EXIT_RETRY_ATTEMPTS`
+ * (execute.ts) spells the SAME four-candidate budget as `3`, because its walk
+ * counts the base key as attempt zero and the constant as the last SUFFIX.
+ * Nothing derives one bound from the other; the two spellings are a naming
+ * inconsistency, not an arithmetic difference.
  */
 const MAX_REARM_ATTEMPTS = 4;
 
@@ -1097,6 +1105,28 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // find the newest OCO without probing all `MAX_REARM_ATTEMPTS` ids on
     // every exit.
     //
+    // THE WALK READS THE WHOLE ALLOCATED SEQUENCE BEFORE IT ADOPTS ANYTHING
+    // (#1570 review). Returning at the first adoptable index instead was a
+    // reachable downgrade, because a TERMINAL prior can sit below a RESTING
+    // one: this method cancels a stale-sized prior before stepping past it,
+    // and `cancelOrder` tolerates losing that race to the order's own fill —
+    // so attempt 0 ends `filled` while attempt 1 rests. A walk that short-
+    // circuited on attempt 0 then pointed `rearmedLegs` and
+    // `recordBracketOrderIds` at the FILLED no-op, and the next `cancel()`
+    // preferred that in-process id, retired nothing, and left attempt 1's OCO
+    // live and unmanaged behind a cancelled bracket — the two-live-legs hazard
+    // (#516) this whole mechanism exists to prevent, reintroduced by the
+    // bookkeeping rather than by the orders.
+    //
+    // Hence the two slots below: `live` (the highest RESTING prior that
+    // matches this request) and `settled` (the highest whose own fills are
+    // already closing the residual), with `live` preferred outright. A resting
+    // OCO is protection that can still fire and must be what every downstream
+    // id points at; a filled one only records that the episode closed itself.
+    // The cost is one extra lookup on the common adopt path — this runs on the
+    // residual sweep's cadence, not on `cancel()`'s every-exit path, so it is
+    // paid where there is room for it.
+    //
     // Adoption is CONDITIONAL on the prior matching THIS request (#549
     // review): a still-resting prior sized for a DIFFERENT residual (further
     // exit fills landed between the crashed attempt and this retry) must not
@@ -1138,80 +1168,112 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // two rows can never carry one `client_order_id` (measured, doc 43 round 3).
     // The lookup below returns at most one row by construction.
     const RESTING_STATUSES = ['new', 'accepted', 'pending_new', 'accepted_for_bidding'];
-    for (let attempt = 0; attempt < MAX_REARM_ATTEMPTS; attempt += 1) {
-      const rearmClientOrderId = rearmWireId(clientOrderId, attempt);
-      const prior = await this.call('rearmProtectiveLegs', () =>
-        this.input.client.getOrderByClientOrderId(rearmClientOrderId),
-      );
+    let live: AlpacaOrder | null = null;
+    let settled: AlpacaOrder | null = null;
+    let freeAttempt: number | null = null;
 
-      if (prior !== null) {
-        const priorState = mapOrderState(prior.status);
-        if (
-          priorState === 'filled' ||
-          priorState === 'partially_filled' ||
-          (RESTING_STATUSES.includes(prior.status) && rearmOrderMatches(prior, qty, stop, target))
-        ) {
-          this.rearmedLegs.set(clientOrderId, prior.id);
-          // Same column semantics as the fresh-place path below — the OCO's
-          // parent id IS the take-profit (see that path's `.legs` note).
-          this.state.recordBracketOrderIds('alpaca', clientOrderId, {
-            entry_order_id: null,
-            stop_order_id: legOrderIds(prior.legs).stop_order_id,
-            target_order_id: prior.id,
-          });
-          return;
-        }
-        if (!['cancelled', 'rejected', 'expired'].includes(priorState)) {
-          // Live but stale-sized, or a status that does not prove it dead:
-          // retire it before the walk steps over it. `cancelOrder` resolves on
-          // 404/422 (already-terminal), so losing the race to the prior's own
-          // fill is not a failure here — the submit below is what would
-          // surface a real problem.
-          await this.call('rearmProtectiveLegs', () => this.input.client.cancelOrder(prior.id));
-        }
-        continue;
+    for (let attempt = 0; attempt < MAX_REARM_ATTEMPTS; attempt += 1) {
+      const prior = await this.call('rearmProtectiveLegs', () =>
+        this.input.client.getOrderByClientOrderId(rearmWireId(clientOrderId, attempt)),
+      );
+      if (prior === null) {
+        freeAttempt = attempt;
+        break;
       }
 
-      const response = await this.call('rearmProtectiveLegs', () =>
-        this.input.client.submitOcoOrder({
-          symbol: toAlpacaSymbol(instrument),
-          side: closingSide,
-          qty: String(qty),
-          time_in_force: 'gtc',
-          client_order_id: rearmClientOrderId,
-          order_class: 'oco',
-          take_profit: { limit_price: formatTickPrice(target) },
-          stop_loss: { stop_price: formatTickPrice(stop) },
-        }),
-      );
+      const priorState = mapOrderState(prior.status);
+      if (priorState === 'filled' || priorState === 'partially_filled') {
+        settled = prior;
+        continue;
+      }
+      if (RESTING_STATUSES.includes(prior.status) && rearmOrderMatches(prior, qty, stop, target)) {
+        // Two resting priors on one lot are unreachable through this walk —
+        // an index is only allocated once the one below it stopped resting —
+        // but the invariant is what the money depends on, so it is ENFORCED
+        // here rather than assumed: whichever is older is retired.
+        const superseded = live;
+        if (superseded !== null) {
+          await this.call('rearmProtectiveLegs', () =>
+            this.input.client.cancelOrder(superseded.id),
+          );
+        }
+        live = prior;
+        continue;
+      }
+      if (!['cancelled', 'rejected', 'expired'].includes(priorState)) {
+        // Live but stale-sized, or a status that does not prove it dead:
+        // retire it before the walk steps over it. `cancelOrder` resolves on
+        // 404/422 (already-terminal), so losing the race to the prior's own
+        // fill is not a failure here — the submit below is what would
+        // surface a real problem.
+        await this.call('rearmProtectiveLegs', () => this.input.client.cancelOrder(prior.id));
+      }
+    }
 
-      this.rearmedLegs.set(clientOrderId, response.id);
-      // NOT `...legOrderIds(response.legs)`: that helper finds the target leg
-      // by scanning `.legs` for a `type: 'limit'` entry, which is where a
-      // BRACKET's take-profit child lives. An OCO's take-profit is the TOP
-      // LEVEL order itself (`response.id`) — `.legs` here holds only the ONE
-      // stop-loss child — so `target_order_id` is set directly rather than
-      // reusing that scan and silently recording `null`.
+    // `live` over `settled`: see the two-slot note above. Only one of these is
+    // ever protection that can still fire.
+    const adopted = live ?? settled;
+    if (adopted !== null) {
+      this.rearmedLegs.set(clientOrderId, adopted.id);
+      // Same column semantics as the fresh-place path below — the OCO's
+      // parent id IS the take-profit (see that path's `.legs` note).
       this.state.recordBracketOrderIds('alpaca', clientOrderId, {
         entry_order_id: null,
-        stop_order_id: legOrderIds(response.legs).stop_order_id,
-        target_order_id: response.id,
+        stop_order_id: legOrderIds(adopted.legs).stop_order_id,
+        target_order_id: adopted.id,
       });
       return;
     }
 
-    // Every id this lot may use is owned by an order that is not protecting
-    // it. Throwing is the honest answer and takes the caller's existing alert
-    // path (`residual_rearm_failed`, marker kept): the alternative — placing
-    // under a spent id — is a guaranteed 422, and inventing an unbounded id
-    // space would replace a loud refusal with a quiet one.
-    throw new Error(
-      `Alpaca adapter exhausted all ${MAX_REARM_ATTEMPTS} re-arm wire ids for lot ` +
-        `'${clientOrderId}' (${rearmWireId(clientOrderId, 0)} .. ` +
-        `${rearmWireId(clientOrderId, MAX_REARM_ATTEMPTS - 1)}): each is already owned by an ` +
-        'order at the venue that is not protecting this residual, and Alpaca refuses a reused ' +
-        'client_order_id permanently (measured, docs/research/43). The residual is NOT protected.',
+    if (freeAttempt === null) {
+      // Every id this lot may use is owned by an order that is not protecting
+      // it, and Alpaca never releases one — so NO later pass can protect this
+      // residual either. That is the permanent-gap shape #1214 already has a
+      // remedy for, so this throws the type that routes there
+      // (`ProtectiveRearmUnsupportedError`): the callers re-flatten the
+      // residual, page against the permanent-gap dedup column, and stop
+      // retrying. Thrown OUTSIDE `this.call` deliberately — that wrapper's
+      // `sanitizeBrokerError` would erase the discriminant (see the class's own
+      // INVARIANT note). The alternative — placing under a spent id — is a
+      // guaranteed 422, and inventing an unbounded id space would replace a
+      // loud refusal with a quiet one.
+      throw new ProtectiveRearmUnsupportedError(
+        'alpaca',
+        `Alpaca adapter exhausted all ${MAX_REARM_ATTEMPTS} re-arm wire ids for lot ` +
+          `'${clientOrderId}' (${rearmWireId(clientOrderId, 0)} .. ` +
+          `${rearmWireId(clientOrderId, MAX_REARM_ATTEMPTS - 1)}): each is already owned by an ` +
+          'order at the venue that is not protecting this residual, and Alpaca refuses a reused ' +
+          'client_order_id permanently (measured, docs/research/43). The residual is NOT ' +
+          'protected, and no retry of this call can change that.',
+      );
+    }
+
+    const rearmClientOrderId = rearmWireId(clientOrderId, freeAttempt);
+    const response = await this.call('rearmProtectiveLegs', () =>
+      this.input.client.submitOcoOrder({
+        symbol: toAlpacaSymbol(instrument),
+        side: closingSide,
+        qty: String(qty),
+        time_in_force: 'gtc',
+        client_order_id: rearmClientOrderId,
+        order_class: 'oco',
+        take_profit: { limit_price: formatTickPrice(target) },
+        stop_loss: { stop_price: formatTickPrice(stop) },
+      }),
     );
+
+    this.rearmedLegs.set(clientOrderId, response.id);
+    // NOT `...legOrderIds(response.legs)`: that helper finds the target leg
+    // by scanning `.legs` for a `type: 'limit'` entry, which is where a
+    // BRACKET's take-profit child lives. An OCO's take-profit is the TOP
+    // LEVEL order itself (`response.id`) — `.legs` here holds only the ONE
+    // stop-loss child — so `target_order_id` is set directly rather than
+    // reusing that scan and silently recording `null`.
+    this.state.recordBracketOrderIds('alpaca', clientOrderId, {
+      entry_order_id: null,
+      stop_order_id: legOrderIds(response.legs).stop_order_id,
+      target_order_id: response.id,
+    });
   }
 
   /**

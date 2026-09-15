@@ -18,10 +18,23 @@
  * attempting costs nothing and a post-hoc discriminator carries exactly the
  * same information. A flag would only earn its place on the interface — and
  * in every test double that implements it — if the attempt cost a venue round
- * trip.
+ * trip. That choice is also what lets a refusal the venue's CAPABILITIES
+ * cannot predict carry the same meaning — see the next paragraph.
  *
- * This module does not decide what to do about a naked residual on such a
- * venue; it only lets a caller tell a permanent gap from a transient failure.
+ * NOT ONLY A VENUE-WIDE CAPABILITY GAP (#1346/#1570). The discriminant means
+ * "no retry of this call can protect this residual", and a refusal can earn
+ * that per LOT as well as per venue: the Alpaca adapter consumes a
+ * `client_order_id` permanently (measured, docs/research/43 round 3), so once
+ * a lot has spent every re-arm wire id `MAX_REARM_ATTEMPTS` allows it, every
+ * later pass is refused for a fixed reason too. Routing that through this type
+ * is deliberate — the remedy below is identical, and a second permanent-gap
+ * category would give the operator a second page to learn and this repo a
+ * third classification to keep in step. What the two cases do NOT share is
+ * blast radius: a venue gap condemns every lot, a spent-ids gap condemns one.
+ * `venue` is what says which.
+ *
+ * This module does not decide what to do about a naked residual; it only lets
+ * a caller tell a permanent gap from a transient failure.
  * What is DONE about it was decided by the owner on 2026-09-08 (#1214, option
  * 2 of the three the ticket listed): the residual is re-flattened, not
  * re-armed and not merely alerted — see `reflattenResidual`
@@ -47,7 +60,11 @@ export class ProtectiveRearmUnsupportedError extends Error {
    * instance.
    */
   readonly protectiveRearmUnsupported = true;
-  /** Which venue cannot express it — 'saxo'. Composed here, never from a response body. */
+  /**
+   * Which venue refused permanently — 'saxo' for the capability gap, 'alpaca'
+   * for a lot that has spent every re-arm wire id. Composed here, never from a
+   * response body.
+   */
   readonly venue: string;
 
   constructor(venue: string, message: string) {

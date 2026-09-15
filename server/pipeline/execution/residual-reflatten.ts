@@ -1,6 +1,8 @@
 /**
- * #1214's recorded remedy for a residual on a venue that cannot re-arm:
- * CLOSE it, do not protect it.
+ * #1214's recorded remedy for a residual whose lot can never be re-armed —
+ * the venue cannot express entry-less legs at all (Saxo), or the lot has spent
+ * every re-arm wire id the venue will grant it (Alpaca, #1346): CLOSE it, do
+ * not protect it.
  *
  * David's decision (2026-09-08, option 2) turns on a fact about where this
  * code runs: both `maybeRearmResidual` triggers are gated on
@@ -327,7 +329,7 @@ export async function reflattenResidual(
     event: 'residual_reflatten_submitted',
     level: 'warn',
     message:
-      'this venue cannot arm protective legs, so the naked residual was CLOSED instead of ' +
+      'this lot can never be re-armed, so the naked residual was CLOSED instead of ' +
       'protected (#1214) — a market order for the residual is live at the venue',
     payload: {
       idempotency_key: lotKey,

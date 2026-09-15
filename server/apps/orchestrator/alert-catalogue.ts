@@ -323,8 +323,8 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
       event: 'residual_exposure_unprotected',
       level: 'error',
       message: alert.rearm_unsupported
-        ? 'a residual position is unprotected and this venue cannot arm protective legs at ' +
-          'all, so no retry will ever protect it — close or protect the order by hand'
+        ? 'a residual position is unprotected and re-arming it is PERMANENTLY refused, so no ' +
+          'retry will ever protect it — close or protect the order by hand'
         : 'a partially-filled flatten left a residual position and re-arming its protective ' +
           'legs failed — the position is unprotected; check the order on the venue by hand',
       // Field by field, so `trace_id` is not repeated inside the payload it
@@ -348,11 +348,19 @@ export const ALERT_CATALOGUE: { readonly [K in AlertId]: AlertSpec<K> } = {
 
       // #1214: the two cases need different operator behaviour, so they must
       // not read alike. A failed re-arm is retried by the #549 sweep on cadence
-      // and may clear itself; a venue that cannot express an entry-less
-      // protective pair at all never will, and the operator IS the remedy.
+      // and may clear itself; a permanently refused one never will, and the
+      // operator IS the remedy.
+      //
+      // WHY it is permanent is deliberately not spelled out (#1570): the flag
+      // covers a venue that cannot express an entry-less protective pair at all
+      // (Saxo) AND a lot that has spent every re-arm order id the venue will
+      // grant it (Alpaca, which never releases a `client_order_id`). Naming
+      // only the first made the page false for the second, and what the
+      // operator must DO is identical either way. The which-and-why is in the
+      // log line's `trace_id` and the adapter's own error text.
       const remedyClause = alert.rearm_unsupported
-        ? `Lot ${alert.idempotency_key}. This venue cannot arm protective legs at all (no ` +
-          `entry-less stop+target), so NOTHING will retry stop ${alert.stop} / target ` +
+        ? `Lot ${alert.idempotency_key}. Re-arming this lot is PERMANENTLY refused — not a bad ` +
+          `minute at the venue — so NOTHING will retry stop ${alert.stop} / target ` +
           `${alert.target}.\nClose or protect this position by hand.`
         : `Lot ${alert.idempotency_key}. Re-arming at stop ${alert.stop} / target ${alert.target} ` +
           'failed.\nCheck the position on the venue and re-arm or close it by hand.';
