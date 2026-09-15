@@ -1544,6 +1544,45 @@ describe('SqliteQueryStore.getPipelineActivity', () => {
       expect(activity.live).toEqual([]);
     });
 
+    /**
+     * The test above seeds ETH-USD (live) and ZETA (control) as disjoint
+     * instruments, so `laneInstruments` excludes ETH-USD regardless of the
+     * `arm === 'control'` guard — it passes even if that guard is deleted.
+     * This test shares one instrument between a live `current_tick` row and a
+     * control `audit_log` row, which is the realistic case (control runs
+     * nested inside live for the same instrument on every poll): AAPL is IN
+     * `laneInstruments` from its control row, so only the guard itself keeps
+     * the live tick out of `.live`.
+     */
+    it('keeps a live current_tick out of a control read even when the tick instrument has a control lane', () => {
+      const db = makeDb();
+      seedTick(db, {
+        instrument: 'AAPL',
+        asset_class: 'stocks',
+        stage: 'debate',
+        trace_id: 'trace-live',
+        at: minutesBefore(1),
+      });
+      seedAudit(db, {
+        trace_id: `trace-aapl${CONTROL_TRACE_SUFFIX}`,
+        stage: 'analysts',
+        decision: 'quorum_met',
+        at: minutesBefore(1),
+        instrument: 'AAPL',
+        asset_class: 'stocks',
+      });
+
+      const activity = new SqliteQueryStore(db).getPipelineActivity(
+        10,
+        LOOKBACK_MS,
+        NOW,
+        'control',
+      );
+
+      expect(activity.universe).toEqual([{ instrument: 'AAPL', asset_class: 'stocks' }]);
+      expect(activity.live).toEqual([]);
+    });
+
     /** The `arm: 'live'` mirror of the test above: unaffected by the new branch. */
     it('still includes current_tick for arm: "live"', () => {
       const db = makeDb();

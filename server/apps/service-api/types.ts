@@ -268,6 +268,14 @@ export interface DashboardQueryStore {
    * model and consults no critic; it does not mean "no risk decisions".
    */
   getRiskCritics(limit: number, asOf: Date, arm: TradingArm): RiskCriticRecord[];
+  /**
+   * Arm-less by structure, not by oversight (#1594; listed among the control
+   * arm's structural limits in wayfinder map #1590). `analyst_weights` carries
+   * no `arm` column: the Feedback Loop that writes it takes only the live
+   * arm's closed trades (`SqliteClosedTradeStore`'s `arm: 'live'` default) —
+   * the control arm has no analyst contributions to credit, so there is no
+   * control-arm weight set for a parameter to select between.
+   */
   getAnalystWeights(asOf: Date): Record<string, number>;
   /**
    * #1594: `arm` required, same guarantee as `getOpenPositions` (#1592).

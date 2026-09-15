@@ -342,9 +342,9 @@ export class SqliteQueryStore implements DashboardQueryStore {
   }
 
   /**
-   * Parameterized by `arm` (#1594; previously LIVE-only, #1318), like
-   * `getOpenPositions` and `getRecentClosedTrades` above — a read names
-   * exactly one arm, and no read returns both. `verdict_log` carries no `arm`
+   * Scoped by `arm`, like `getOpenPositions` and `getRecentClosedTrades`
+   * above — a read names exactly one arm, and no read returns both.
+   * `verdict_log` carries no `arm`
    * column, so unlike those two this discriminates on `trace_id`: falsifier
    * arm 2 writes its own `verdict_log` rows under a `trace_id` carrying
    * `CONTROL_TRACE_SUFFIX` (#753), and `verdict_log` has no `debate_id`
@@ -380,7 +380,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * `risk_critic_log` on `debate_id`), so exactly one row comes back per
    * decision.
    *
-   * ## Parameterized by `arm` (#1594; previously LIVE-only, #1318)
+   * ## Scoped by `arm`
    *
    * Like `getVerdictHistory` above, `arm` picks which of the two decision
    * streams this window shows — a read names exactly one arm, and no read
@@ -479,9 +479,9 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * `getContributionsForAttribution` keeps it — only a row this build
    * itself classified as latency-truncated is dropped.
    *
-   * Parameterized by `arm` (#1594; previously hardcoded to `'live'`), like
-   * `getOpenPositions` (#1592) — bound rather than a literal, so a typo here
-   * can no longer silently pin every caller to one arm. `getAttribution(asOf,
+   * Scoped by `arm`, like `getOpenPositions` (#1592) — bound rather than a
+   * literal, so a typo here cannot silently pin every caller to one arm.
+   * `getAttribution(asOf,
    * 'control')` returns `{}`: the `JOIN` is onto `debate_log`, and the control
    * arm never writes that table (`axis-vote-decision.ts` — its `DebateResult`
    * is synthesized in-memory, with no debate to log), so no `closed_trades`
@@ -529,7 +529,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
     return summary;
   }
 
-  /** Parameterized by `arm` (#1594; previously hardcoded to `'live'`), like `getAttribution` above. */
+  /** Scoped by `arm`, like `getAttribution` above. */
   getDailyMetrics(asOf: Date, arm: TradingArm): MetricsSuite {
     const from = new Date(asOf.getTime() - 24 * 60 * 60 * 1000);
     const rows = this.db
@@ -842,10 +842,9 @@ export class SqliteQueryStore implements DashboardQueryStore {
    * win `chosenTrace` would blank a lane whose real trace sits in the same
    * window — the identical symptom, one path over.
    *
-   * Parameterized by `arm` (#1594; previously LIVE-only, #1326), same
-   * discriminator as the universe leg above and as `getVerdictHistory`/
-   * `getRiskCritics` (#1318): `0001_init.sql` declares `audit_log.trace_id
-   * TEXT NOT NULL` and no migration ever adds a `debate_id` column to this
+   * Scoped by `arm`, same discriminator as the universe leg above and as
+   * `getVerdictHistory`/`getRiskCritics` (#1318): `0001_init.sql` declares
+   * `audit_log.trace_id TEXT NOT NULL` and no migration ever adds a `debate_id` column to this
    * table (unlike `trader_log`/`debate_log`/`risk_critic_log`, which do), so
    * `trace_id`'s operator (`armLikeOperator`) is both sufficient — there is
    * no second discriminator to also filter on — and safe against a NULL
