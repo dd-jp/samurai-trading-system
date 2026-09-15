@@ -5,6 +5,7 @@ import {
   SqliteExecutionStore,
 } from '../../../pipeline/execution/index.js';
 import type {
+  PersistedBreakerState,
   RiskConfig,
   RiskCriticProducer,
   RiskCriticVerdict,

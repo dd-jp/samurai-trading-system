@@ -61,7 +61,7 @@ async function seedPosition(
     avg_entry_price: 0,
     stop: 95,
     target: 110,
-    // NOT in reconcile's IN_FLIGHT set, so `reconcile()`'s bracket pass
+    // NOT in reconcile's IN_FLIGHT_ORDER_STATES set, so `reconcile()`'s bracket pass
     // leaves it alone and only the #549 sweep acts on it.
     order_state: 'partially_filled',
     broker_order_ids: [`${LOT}:entry`],

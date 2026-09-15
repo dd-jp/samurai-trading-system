@@ -24,6 +24,7 @@ import {
   describeThrown,
   type OpenPosition,
 } from '../../shared/index.js';
+import { IN_FLIGHT_ORDER_STATES } from '../../shared/store/index.js';
 import type { DailyPnl, PortfolioView, SessionBasis, SessionBasisByClass } from './types.js';
 
 export interface PortfolioAccountingInput {
@@ -232,18 +233,20 @@ export function unrealizedFor(position: OpenPosition, mark: number): number {
 
 /**
  * The states whose unfilled remainder is RESERVED against the entry caps
- * (#1019) — see `PortfolioView.reserved_exposure_by_instrument` for why this
- * is `pending`/`submitted` and deliberately not `partially_filled`.
+ * (#1019) — see `PortfolioView.reserved_exposure_by_instrument` for what the
+ * reservation is and why it excludes `partially_filled`.
  *
- * Kept in step with `reconcile.ts`'s `IN_FLIGHT` on purpose: that pass is the
- * only mechanism that ever terminalizes one of these rows from broker truth,
- * so a state reserved here but not revisited there would be a reservation
- * with no release.
+ * DERIVED from `IN_FLIGHT_ORDER_STATES` rather than written out, because the
+ * invariant is not that the two lists happen to match — it is **reserve only
+ * what reconcile can release**. `reconcile()`'s bracket pass takes its
+ * worklist from that constant and is the only mechanism that ever moves one
+ * of these rows off its state from broker truth, so a state reserved here but
+ * absent there would be a reservation with no release path, blocking its
+ * subclass's cap for as long as the row survives.
  */
-const RESERVABLE_ORDER_STATES: ReadonlySet<OpenPosition['order_state']> = new Set([
-  'pending',
-  'submitted',
-]);
+const RESERVABLE_ORDER_STATES: ReadonlySet<OpenPosition['order_state']> = new Set(
+  IN_FLIGHT_ORDER_STATES,
+);
 
 /**
  * Notional this lot has committed to the venue and not yet received: the

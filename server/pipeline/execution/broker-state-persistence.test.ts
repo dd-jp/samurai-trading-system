@@ -187,7 +187,7 @@ describe('AlpacaBrokerAdapter across a restart', () => {
     // (execute.ts) and only advances it to `submitted` AFTER `submitBracket`
     // RETURNS. So a missing journal row implies `submitBracket` did not
     // return, which implies the lot is still `pending`, which is in-flight
-    // (reconcile.ts `IN_FLIGHT`) — and startup reconcile runs before the first
+    // (reconcile.ts `IN_FLIGHT_ORDER_STATES`) — and startup reconcile runs before the first
     // fill poll. Alpaca's `getOrder` answers from the VENUE by client order
     // id, needing no local state, so it repopulates both cache and journal.
     const { path, db } = openFileStore();

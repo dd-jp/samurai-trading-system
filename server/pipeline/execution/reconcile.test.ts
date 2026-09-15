@@ -1883,7 +1883,7 @@ describe('reconcile — the wedged-zero-fill sweep (#1186)', () => {
 
     // #1215's rule: no venue order is cancelled or re-placed. This lot's
     // bracket-pass never even reached the broker — `filled` is not
-    // `IN_FLIGHT` — so nothing was submitted or looked up for it.
+    // `IN_FLIGHT_ORDER_STATES` — so nothing was submitted or looked up for it.
     expect(broker.submits).toHaveLength(0);
   });
 

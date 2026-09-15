@@ -4424,7 +4424,7 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
     // `FilledZeroSizeThrottle.clear()` runs from exactly one call site
     // (`advanceLot`'s `filledSize > 0` branch). Once a lot is adopted
     // `filled`/`partially_filled`, `reconcile()` never revisits it —
-    // `reconcileLot` only runs for `IN_FLIGHT` (`pending`/`submitted`)
+    // `reconcileLot` only runs for `IN_FLIGHT_ORDER_STATES` (`pending`/`submitted`)
     // positions (reconcile.ts), so its own `rejected`/`adopted` branches
     // cannot fire on an already-wedged lot either. The only way a wedged
     // lot leaves `filled`/zero-size without going through `advanceLot` is

@@ -108,17 +108,30 @@ export interface PortfolioView {
    * terminal state, so the reservation survives a restart and is released by
    * the fill or the terminalization rather than by a separate release path.
    *
-   * **Scoped to `pending`/`submitted`, never `partially_filled`.** A
-   * partially-filled lot whose venue-side remainder is dead has no mechanism
-   * that ever advances it — `ingestFills` recomputes only from a NEW fill,
-   * `sweepTerminalPositions` deletes only already-terminal rows, and
-   * `wedged-zero-fill-sweep.ts` covers the zero-fill case alone — so counting
-   * its remainder would strand a reservation that blocks the subclass
-   * forever. `reconcile()`'s bracket pass revisits exactly `pending` and
-   * `submitted` (`IN_FLIGHT`), so those two states have a bounded lifetime
-   * and are the only ones safe to reserve against. Nothing is lost for the
-   * race this closes: reaching `partially_filled` requires a fill poll to
-   * have run, which is the same event that closes the window.
+   * **Scoped to `pending`/`submitted`, never `partially_filled` — the test is
+   * a RELEASE PATH, not a time bound.** A partially-filled lot whose
+   * venue-side remainder is dead has no mechanism that ever advances it:
+   * `ingestFills` recomputes only from a NEW fill, `sweepTerminalPositions`
+   * deletes only already-terminal rows, and `wedged-zero-fill-sweep.ts`
+   * covers the zero-fill case alone. Counting its remainder would strand a
+   * reservation that blocks the subclass forever. `pending`/`submitted` are
+   * exactly the states `reconcile()`'s bracket pass revisits
+   * (`IN_FLIGHT_ORDER_STATES`, which `portfolio-view.ts` derives this scope
+   * from), and adopting broker truth there is what releases the reservation —
+   * on a fill, on a `rejected` for an order the venue never received, on any
+   * terminalization.
+   *
+   * That release is not on a clock. `reconcileLot` has no age-out: its
+   * `undetermined` branch (the adapter threw, which is evidence of nothing)
+   * deliberately writes nothing, and an order the venue genuinely reports as
+   * still working stays `submitted` for as long as it rests. Both hold the
+   * reservation open, and both are the SAFE direction — a resting order is
+   * committed notional, and over-reserving on an adapter outage withholds
+   * headroom rather than inventing it, the same asymmetry `reservedNotional`'s
+   * `Math.max(…, 0)` is written for. Only the flatten journal has a forced
+   * age-out (`UNRESOLVABLE_FLATTEN_MAX_AGE_MS`), because an unresolved row
+   * there BLOCKS the mandatory flat-by-close; nothing comparable is at stake
+   * here.
    *
    * **Never folded into `gross_exposure`, `equity` or `drawdown_pct`, and
    * never into `BreakerEvalInput`.** `equity = cash + gross_exposure`, and

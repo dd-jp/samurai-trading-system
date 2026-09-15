@@ -50,6 +50,21 @@ export const TERMINAL_ORDER_STATES: readonly OrderState[] = [
   'abandoned',
 ];
 
+/**
+ * `order_state`s a crash can strand: written ahead, or acked by the venue but
+ * not advanced since. `reconcile()`'s bracket pass revisits exactly these and
+ * adopts broker truth for them.
+ *
+ * Lives here for the same reason `TERMINAL_ORDER_STATES` does — two stages
+ * read it and neither owns it (coding-standards.md "A port consumed by more
+ * than one stage… moves to `shared/` when the second consumer arrives").
+ * `pipeline/execution/reconcile.ts` picks its worklist from it;
+ * `pipeline/risk-manager/portfolio-view.ts` derives the states whose unfilled
+ * remainder is reserved against the entry caps from it (#1019), because the
+ * only safe reservation is one the reconcile pass can release.
+ */
+export const IN_FLIGHT_ORDER_STATES: readonly OrderState[] = ['pending', 'submitted'];
+
 /** A lot still in flight whose key predates the #686 derivation. */
 export interface StaleKeySchemeLot {
   idempotency_key: string;

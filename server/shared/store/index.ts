@@ -8,6 +8,7 @@ export { type FillRow, fromFillRow } from './fill-row.js';
 export {
   assertNoStaleKeyScheme,
   findStaleKeySchemeLots,
+  IN_FLIGHT_ORDER_STATES,
   type StaleKeySchemeLot,
   TERMINAL_ORDER_STATES,
 } from './key-scheme-guard.js';

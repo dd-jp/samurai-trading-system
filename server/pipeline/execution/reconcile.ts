@@ -80,16 +80,16 @@
  * ## The wedged-zero-fill sweep (#1186)
  *
  * A lot adopted `filled`/`partially_filled` whose `filled_size` never moves
- * off zero is NOT yet terminal, so the sweep above never reaches it, and it
- * is not `IN_FLIGHT`, so this file's own bracket pass never revisits it
- * either — the gap `wedged-zero-fill-sweep.ts` closes. Called the same way
+ * off zero is NOT yet terminal, so the sweep above never reaches it, and it is
+ * not `IN_FLIGHT_ORDER_STATES`, so this file's own bracket pass never revisits
+ * it either — the gap `wedged-zero-fill-sweep.ts` closes. Called the same way
  * the residual sweep is (both production call sites, live and control arm,
  * store-evidence-only), just after it.
  */
 
 import type { OpenPosition, OrderState } from '../../shared/index.js';
 import { coversQty, describeThrownSafely, heldQuantitiesFor, safeLog } from '../../shared/index.js';
-import { TERMINAL_ORDER_STATES } from '../../shared/store/index.js';
+import { IN_FLIGHT_ORDER_STATES, TERMINAL_ORDER_STATES } from '../../shared/store/index.js';
 import { sweepResidualProtection } from './residual-protection-sweep.js';
 import type {
   NormalizedOrder,
@@ -100,9 +100,6 @@ import type {
   UnresolvedFlattenSubmission,
 } from './types.js';
 import { sweepWedgedZeroFillLots } from './wedged-zero-fill-sweep.js';
-
-/** The states a crash can strand: written ahead, or acked but not advanced. */
-const IN_FLIGHT: readonly OrderState[] = ['pending', 'submitted'];
 
 /**
  * #1088: how old a terminal, size-0 `open_positions` row's
@@ -277,7 +274,9 @@ export async function reconcile(input: ReconcileInput): Promise<ReconcileReport>
   // `getOpenPositions()` is every non-terminal lot; the in-flight ones are
   // the subset a crash can have left disagreeing with the venue.
   const positions = await store.getOpenPositions();
-  const inFlight = positions.filter((position) => IN_FLIGHT.includes(position.order_state));
+  const inFlight = positions.filter((position) =>
+    IN_FLIGHT_ORDER_STATES.includes(position.order_state),
+  );
 
   const divergences: ReconcileDivergence[] = [];
   let corrected = 0;
@@ -319,8 +318,9 @@ export async function reconcile(input: ReconcileInput): Promise<ReconcileReport>
   // same shape `sweepResidualProtection` above already takes with its own
   // `getUnprotectedResidualLots()` rather than reusing this function's
   // `positions` — a lot it retires is never one `reconcileLot` above needed
-  // to act on (it is not `IN_FLIGHT`) or one `findUnrecordedVenuePositions`
-  // below should compare against a venue read (it has no venue position).
+  // to act on (it is not `IN_FLIGHT_ORDER_STATES`) or one
+  // `findUnrecordedVenuePositions` below should compare against a venue read
+  // (it has no venue position).
   const wedgedZeroFillSweep = await sweepWedgedZeroFillLots(input);
   for (const divergence of wedgedZeroFillSweep.divergences) {
     divergences.push(divergence);
