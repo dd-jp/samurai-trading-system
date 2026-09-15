@@ -4,7 +4,7 @@
     "server/apps/*/index.ts",
     "server/apps/service-api/fixture-server.ts",
     "e2e/**/*.spec.ts",
-    "server/tools/*.ts"
+    "server/tools/data-cli.ts"
   ],
   "ignore": ["docs/research/**/*.mjs", "docs/research/**/*.mts", "server/tools/__fixtures__/**"]
 }
