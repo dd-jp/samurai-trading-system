@@ -1,0 +1,817 @@
+<!doctype html>
+<html lang="en" class="scroll-smooth">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Samurai — Codebase Design Review 2026-09-15</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({ startOnLoad: true, theme: 'dark', securityLevel: 'loose',
+    themeVariables: { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '12px' },
+    flowchart: { curve: 'basis', padding: 8 } });
+</script>
+<style>
+  :root { color-scheme: dark; }
+  body { background: #0b0f14; color: #d7dee7; }
+  .card { background: linear-gradient(180deg,#121821 0%,#0e141c 100%); border: 1px solid #1f2a37; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .badge-high { background:#3b0d0d; color:#ff9a9a; border:1px solid #7a1f1f; }
+  .badge-med  { background:#3a2a05; color:#ffd47a; border:1px solid #7a5a12; }
+  .badge-low  { background:#0d2a1e; color:#8fe3b9; border:1px solid #1f6b4a; }
+  .badge-ref  { background:#1a1f2b; color:#aab4c8; border:1px solid #303a4d; }
+  .before { border-left: 3px solid #d2503f; }
+  .after  { border-left: 3px solid #3fbf7f; }
+  pre.sig { background:#070a0e; border:1px solid #1f2a37; font-size: 11.5px; line-height: 1.45; overflow:auto; }
+  .mermaid { display:flex; justify-content:center; }
+  .mermaid svg { max-width: 100%; height: auto; }
+  /* duplicate-mass collapse animation (D4) */
+  .mass { transition: transform .5s ease, opacity .5s ease; transform-origin: left center; }
+  .mass-group:hover .mass.dup { transform: scaleX(0); opacity: 0; }
+  .mass-group:hover .mass.keep { box-shadow: 0 0 0 2px #3fbf7f inset; }
+  /* hypothetical seam socket (D5) */
+  .socket { border:2px dashed #d2503f; }
+  .socket.real { border-style: solid; border-color:#3fbf7f; }
+  .strata > div { transition: filter .3s; }
+  .strata:hover > div:not(:hover) { filter: brightness(.55); }
+  .field { font-size: 11px; padding: 2px 6px; border-radius: 4px; }
+  .field.read { background:#0d2a1e; color:#8fe3b9; }
+  .field.unread { background:#2b1414; color:#e59a9a; text-decoration: line-through; }
+  .field.above { background:#3a2a05; color:#ffd47a; }
+  .bar { height: 14px; border-radius: 3px; }
+  a { color:#7fb7ff; }
+  details summary { cursor: pointer; }
+</style>
+</head>
+<body class="antialiased">
+
+<header class="max-w-6xl mx-auto px-6 pt-10 pb-6">
+  <p class="mono text-xs text-slate-400">docs/reviews/codebase-design-2026-09-15 · HEAD f96bd9dc · design review only, nothing applied</p>
+  <h1 class="text-3xl font-semibold mt-2">Samurai — deep-module design review</h1>
+  <p class="mt-3 text-slate-300 max-w-3xl">Every module under <span class="mono">contracts/</span> and <span class="mono">server/</span> judged on one axis: is it <b>deep</b> (lots of behaviour behind a small interface), is its <b>seam</b> in the right place, and can it be tested through that interface? Five area reviewers, eight cross-cutting findings, every count re-measured by grep. Companion to the 2026-09-04 client review.</p>
+
+  <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mt-6">
+    <div class="card rounded-lg p-3"><div class="text-2xl font-semibold">121k</div><div class="text-xs text-slate-400">non-test TS lines reviewed</div></div>
+    <div class="card rounded-lg p-3"><div class="text-2xl font-semibold">8</div><div class="text-xs text-slate-400">cross-cutting findings (3 HIGH)</div></div>
+    <div class="card rounded-lg p-3"><div class="text-2xl font-semibold">14</div><div class="text-xs text-slate-400">modules already deep — keep</div></div>
+    <div class="card rounded-lg p-3"><div class="text-2xl font-semibold">19 / 18</div><div class="text-xs text-slate-400">tools→below / tools←apps imports (the cycle)</div></div>
+    <div class="card rounded-lg p-3"><div class="text-2xl font-semibold">8</div><div class="text-xs text-slate-400">prior review pins now stale</div></div>
+  </div>
+
+  <nav class="mt-6 flex flex-wrap gap-2 text-xs mono">
+    <a href="#keep" class="px-2 py-1 rounded bg-slate-800">keep-list</a>
+    <a href="#d1" class="px-2 py-1 rounded bg-slate-800">D1 inversion</a>
+    <a href="#d2" class="px-2 py-1 rounded bg-slate-800">D2 root</a>
+    <a href="#d3" class="px-2 py-1 rounded bg-slate-800">D3 stage seams</a>
+    <a href="#d4" class="px-2 py-1 rounded bg-slate-800">D4 duplicates</a>
+    <a href="#d5" class="px-2 py-1 rounded bg-slate-800">D5 hypothetical seams</a>
+    <a href="#d6" class="px-2 py-1 rounded bg-slate-800">D6 barrels</a>
+    <a href="#d7" class="px-2 py-1 rounded bg-slate-800">D7 contracts</a>
+    <a href="#d8" class="px-2 py-1 rounded bg-slate-800">D8 crypto residue</a>
+    <a href="#order" class="px-2 py-1 rounded bg-slate-800">order</a>
+    <a href="#stale" class="px-2 py-1 rounded bg-slate-800">stale pins</a>
+  </nav>
+</header>
+
+<main class="max-w-6xl mx-auto px-6 pb-20 space-y-10">
+
+<!-- ================= LAYER MAP ================= -->
+<section class="card rounded-xl p-6">
+  <h2 class="text-xl font-semibold">Where the repo is vs where it says it is</h2>
+  <p class="text-sm text-slate-400 mt-1">Intended layering (left) and the measured import graph (right). Red edges are the inversions D1 files.</p>
+  <div class="grid md:grid-cols-2 gap-6 mt-4">
+    <div class="after rounded p-3">
+      <div class="text-xs mono text-emerald-300 mb-2">INTENDED</div>
+      <pre class="mermaid">
+flowchart TB
+  apps["apps/ (orchestrator, service-api, supervisor)"] --> pipeline["pipeline/ (6 stages)"]
+  pipeline --> providers["providers/ (market data, MI, universe)"]
+  providers --> shared["shared/ (clock, store, llm, http)"]
+  shared --> contracts["contracts/ (wire model)"]
+  tools["tools/ (leaf: CLIs, backtest)"] -.-> apps
+  tools -.-> pipeline
+  tools -.-> shared
+  classDef ok fill:#0d2a1e,stroke:#3fbf7f,color:#d7dee7
+  class apps,pipeline,providers,shared,contracts,tools ok
+      </pre>
+    </div>
+    <div class="before rounded p-3">
+      <div class="text-xs mono text-red-300 mb-2">MEASURED @ f96bd9dc</div>
+      <pre class="mermaid">
+flowchart TB
+  apps["apps/orchestrator"] --> pipeline["pipeline/"]
+  pipeline --> providers["providers/"]
+  providers --> shared["shared/"]
+  tools["tools/backtest"] -- "18 sites" --> apps
+  pipeline -- "CostModel, MarketState, MetricsSuite, SAXO_COMMISSION_RATE" --> tools
+  apps -- "9 files" --> tools
+  risk["pipeline/risk-manager"] -- "LlmClient" --> debate["pipeline/debate-engine"]
+  providers -- "LlmClient, SpendCap, floorToBar" --> debate
+  shared -- "shared/types/records.ts:6" --> debate
+  trader["pipeline/trader"] -- "BookValuationError" --> risk
+  linkStyle 3,4,5,6,7,8,9 stroke:#d2503f,stroke-width:2px,color:#ff9a9a
+  classDef bad fill:#3b0d0d,stroke:#d2503f,color:#ffd7d7
+  classDef ok fill:#121821,stroke:#3a4a5e,color:#d7dee7
+  class tools,debate bad
+  class apps,pipeline,providers,shared,risk,trader ok
+      </pre>
+    </div>
+  </div>
+</section>
+
+<!-- ================= KEEP LIST ================= -->
+<section id="keep" class="card rounded-xl p-6">
+  <h2 class="text-xl font-semibold">Already deep — do not flatten</h2>
+  <p class="text-sm text-slate-400 mt-1">Small interface, large implementation, tests cross the same seam callers do. The largest risk of a review like this is a refactor that flattens one of these.</p>
+  <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-4 text-sm">
+    <div class="rounded border border-emerald-900 p-3"><div class="mono text-emerald-300">BrokerAdapter</div><div class="text-slate-400 text-xs mt-1">9 methods + capability flag · 3 real adapters (Alpaca/Saxo/Simulated) · callers never branch on venue</div></div>
+    <div class="rounded border border-emerald-900 p-3"><div class="mono text-emerald-300">DataSource</div><div class="text-slate-400 text-xs mt-1">≥7 adapters · service tests via FixtureDataSource + real SQLite, nothing mocks fetch</div></div>
+    <div class="rounded border border-emerald-900 p-3"><div class="mono text-emerald-300">SequentialTickRunner / TickSteps</div><div class="text-slate-400 text-xs mt-1">root binds six callables; runner owns ordering — the root never hand-sequences stages</div></div>
+    <div class="rounded border border-emerald-900 p-3"><div class="mono text-emerald-300">runTickPlan + TailSequencer</div><div class="text-slate-400 text-xs mt-1">phase split, crash rows, decision gate behind one call</div></div>
+    <div class="rounded border border-emerald-900 p-3"><div class="mono text-emerald-300">DashboardQueryStore</div><div class="text-slate-400 text-xs mt-1">17 bounded queries · Sqlite + InMemory adapters · buildSnapshot has zero SQL</div></div>
+    <div class="rounded border border-emerald-900 p-3"><div class="mono text-emerald-300">startSupervisor(effects)</div><div class="text-slate-400 text-xs mt-1">spawn/signal/exit-code policy behind one injected-effects seam</div></div>
+    <div class="rounded border border-emerald-900 p-3"><div class="mono text-emerald-300">AnthropicLlmClient.complete&lt;T&gt;</div><div class="text-slate-400 text-xs mt-1">retry/timeout/abort/classify/meter/prompt-safety · 44 tests through the wire fake</div></div>
+    <div class="rounded border border-emerald-900 p-3"><div class="mono text-emerald-300">enforceLatencyBudget</div><div class="text-slate-400 text-xs mt-1">race, cancellation, partial-state fallback · 776 test lines through the interface</div></div>
+    <div class="rounded border border-emerald-900 p-3"><div class="mono text-emerald-300">decideWithReason → TraderOutcome</div><div class="text-slate-400 text-xs mt-1">returns data, not side effects · decide.test.ts 3,218 lines, 0 mocks, 0 <span class="mono">as any</span></div></div>
+    <div class="rounded border border-emerald-900 p-3"><div class="mono text-emerald-300">RiskManager.evaluate + ENTRY_CAP_GATES</div><div class="text-slate-400 text-xs mt-1">gates non-exported; one RiskDecision leaves</div></div>
+    <div class="rounded border border-emerald-900 p-3"><div class="mono text-emerald-300">SharedStore role split</div><div class="text-slate-400 text-xs mt-1">LotJournal / FillJournal / FlattenJournal via Pick · writeAheadFlatten is the one atomic gate</div></div>
+    <div class="rounded border border-emerald-900 p-3"><div class="mono text-emerald-300">TokenBucket · guardedStore</div><div class="text-slate-400 text-xs mt-1">2 public methods over 236 lines · SQL parser fully hidden behind a Proxy</div></div>
+    <div class="rounded border border-emerald-900 p-3"><div class="mono text-emerald-300">NormalizingDataSource · FailoverDataSource</div><div class="text-slate-400 text-xs mt-1">one widen/session invariant every vendor rides · breaker behind DataSource</div></div>
+    <div class="rounded border border-emerald-900 p-3"><div class="mono text-emerald-300">held-quantity · logCaughtFailure · readProductionEnvironment</div><div class="text-slate-400 text-xs mt-1">single definitions three stages share · one call replacing a 5-line guard · typed env read once</div></div>
+  </div>
+  <details class="mt-4 text-sm text-slate-400"><summary>Falsified as shallow (kept)</summary>
+    <ul class="list-disc ml-5 mt-2 space-y-1">
+      <li><span class="mono">ExecutionImpl</span> — closes over ExecutionInput so the root sees 4 methods, not 13 fields.</li>
+      <li><span class="mono">shared/index.ts</span> — 95 names, but a union of ~20 documented modules; 398 importers is the load a barrel is for.</li>
+      <li><span class="mono">contracts/snapshot.ts</span> — 906 lines of types; the types <i>are</i> the interface.</li>
+      <li><span class="mono">AnthropicMessagesClient</span>, <span class="mono">PolymarketWireClient</span>, store ports — one production adapter, but the test fake is the second; that is the testability payoff.</li>
+    </ul>
+  </details>
+</section>
+
+<!-- ================= D1 ================= -->
+<section id="d1" class="card rounded-xl p-6">
+  <div class="flex items-start justify-between gap-4 flex-wrap">
+    <h2 class="text-xl font-semibold">D1 — Dependency graph inverted at two hubs</h2>
+    <span class="badge-high text-xs px-2 py-1 rounded mono">HIGH</span>
+  </div>
+  <div class="grid md:grid-cols-3 gap-4 mt-4 text-sm">
+    <div class="md:col-span-1">
+      <div class="text-xs mono text-slate-400 mb-1">FILES</div>
+      <ul class="mono text-xs space-y-1 text-slate-300">
+        <li>server/tools/backtest/index.ts (38 export lines)</li>
+        <li>pipeline/execution/types/execution.ts:13</li>
+        <li>pipeline/execution/execute.ts:20</li>
+        <li>pipeline/execution/adapters/saxo-adapter.ts:46</li>
+        <li>pipeline/feedback-loop/types/metrics.ts:8</li>
+        <li>apps/service-api/sqlite-query-store.ts:68</li>
+        <li>tools/backtest/trial-execution.ts:42 · types.ts:15</li>
+        <li>apps/orchestrator/index.ts:329-334</li>
+        <li>pipeline/debate-engine/llm/* · index.ts (120 exports)</li>
+        <li>pipeline/risk-manager/critic.ts:97</li>
+        <li>providers/market-intelligence/{mi-ingest-agent,scoring/item-scorer,index,gdelt-scoring-pass}.ts</li>
+        <li>shared/types/records.ts:6</li>
+        <li>pipeline/trader/decide.ts:51</li>
+      </ul>
+      <div class="text-xs mono text-slate-400 mt-3 mb-1">SOURCES</div>
+      <div class="text-xs text-slate-400">A3 · P1 · P8 · V4 · C3 · X2</div>
+    </div>
+    <div class="md:col-span-2">
+      <div class="text-xs mono text-slate-400 mb-1">PROBLEM</div>
+      <p class="text-slate-300">The money path's cost model and the feedback loop's metrics vocabulary are addressed under <span class="mono">tools/</span>; every stage or provider that makes a model call depends on the Debate barrel's 120-export graph. A Risk-stage module importing a Debate-stage barrel is a stage-order inversion. The <span class="mono">tools ⇄ apps</span> cycle is why <span class="mono">credentialRequirements()</span> had to become a lazy function.</p>
+      <div class="text-xs mono text-slate-400 mt-3 mb-1">DELETION TEST</div>
+      <p class="text-slate-300">Delete <span class="mono">tools/</span> → <span class="mono">production.ts</span> fails to compile. Delete <span class="mono">debate-engine/llm/</span> → Risk critic, MI scoring and the composition root fail. Neither folder is its owner's.</p>
+    </div>
+  </div>
+
+  <div class="grid md:grid-cols-2 gap-4 mt-5">
+    <div class="before rounded p-3">
+      <div class="text-xs mono text-red-300 mb-2">BEFORE — who imports the LLM port</div>
+      <pre class="mermaid">
+flowchart LR
+  D["pipeline/debate-engine<br/>(LlmClient, SpendCap, classifyFailureCause,<br/>unwrapFencedJson, floorToBar)"]
+  R["risk-manager/critic.ts"] --> D
+  M1["mi-ingest-agent.ts"] --> D
+  M2["scoring/item-scorer.ts"] --> D
+  M3["grok-agent.ts"] --> D
+  M4["market-intelligence/index.ts"] --> D
+  C["production/{config,defaults,<br/>debate-adapter,rate-limited-llm-client}"] --> D
+  S["shared/types/records.ts"] --> D
+  classDef bad fill:#3b0d0d,stroke:#d2503f,color:#ffd7d7
+  class D bad
+      </pre>
+    </div>
+    <div class="after rounded p-3">
+      <div class="text-xs mono text-emerald-300 mb-2">AFTER — moves only, zero behaviour change</div>
+      <pre class="mermaid">
+flowchart LR
+  L["shared/llm<br/>(LlmClient, SpendCap, Anthropic/Nous clients,<br/>classifyFailureCause, floorToBar)"]
+  K["shared/cost-model<br/>(CostModel, MarketState,<br/>MetricsSuite, SAXO_COMMISSION_RATE)"]
+  D["pipeline/debate-engine<br/>≤30 debate-only exports"] --> L
+  R["risk-manager"] --> L
+  P["providers/market-intelligence"] --> L
+  X["pipeline/execution"] --> K
+  F["pipeline/feedback-loop"] --> K
+  T["tools/backtest (leaf)"] --> K
+  T --> L
+  classDef ok fill:#0d2a1e,stroke:#3fbf7f,color:#d7dee7
+  class L,K ok
+      </pre>
+    </div>
+  </div>
+
+  <div class="mt-4">
+    <div class="text-xs mono text-slate-400 mb-1">PROPOSED INTERFACE</div>
+<pre class="sig rounded p-3 mono"><code>// server/shared/cost-model/index.ts   (from tools/backtest)
+export { CostModelImpl, type CostModel, type CostConfig, type CostVenue, type CostBreakdown,
+         type FillRequest, type MarketState, type MetricsSuite, SAXO_COMMISSION_RATE, SqliteStage2SelectionStore }
+
+// server/shared/llm/index.ts   (absorbs debate-engine/llm/*)
+export { type LlmClient, type LlmRequest, type LlmResponse, type LlmRequestContext, LLM_CONTEXT_FIELD_KIND,
+         AnthropicLlmClient, NousMessagesClient, MockLlmClient, type SpendCap, type LlmSpendSink, type RateLimiter,
+         classifyFailureCause, wrapUntrusted, unwrapFencedJson, BARE_JSON_INSTRUCTION, floorToBar, DEBATE_BAR_TIMEFRAME_MS }
+
+// shared/types/records.ts: declare AnalystContribution here; take Direction from contracts/.
+// shared/: BookValuationError (portfolio-view error, not a risk rule).</code></pre>
+    <div class="mt-2 text-xs text-slate-400"><b class="text-slate-300">Risk:</b> mechanical (~80 import sites, tsc catches every miss). Do the deferred <span class="mono">Anthropic*</span> rename (review 2026-08-06) in the same move.</div>
+  </div>
+</section>
+
+<!-- ================= D2 ================= -->
+<section id="d2" class="card rounded-xl p-6">
+  <div class="flex items-start justify-between gap-4 flex-wrap">
+    <h2 class="text-xl font-semibold">D2 — The composition root is three layers and one 4,383-line file</h2>
+    <span class="badge-high text-xs px-2 py-1 rounded mono">HIGH</span>
+  </div>
+  <div class="grid md:grid-cols-3 gap-4 mt-4 text-sm">
+    <div>
+      <div class="text-xs mono text-slate-400 mb-1">FILES</div>
+      <ul class="mono text-xs space-y-1 text-slate-300">
+        <li>apps/orchestrator/index.ts (1,286 · entry + barrel + wiring :692-961)</li>
+        <li>apps/orchestrator/production.ts (4,383)</li>
+        <li>&nbsp;&nbsp;buildProductionComponents :828-2379</li>
+        <li>&nbsp;&nbsp;buildProductionOrchestrator :3023-4383</li>
+        <li>apps/orchestrator/production/saxo-venue.ts:10-20</li>
+        <li>apps/orchestrator/production/config.ts:653-658</li>
+        <li>apps/service-api/index.ts (no main; :44,:65,:110,:290)</li>
+        <li>apps/service-api/fixture-server.ts:50-65</li>
+        <li>tools/place-soak-position.ts:241-250 (unguarded)</li>
+      </ul>
+      <div class="text-xs mono text-slate-400 mt-3 mb-1">SOURCES</div>
+      <div class="text-xs text-slate-400">A1 · A2 · A5 · A6 · A7</div>
+    </div>
+    <div class="md:col-span-2">
+      <div class="text-xs mono text-slate-400 mb-1">PROBLEM</div>
+      <p class="text-slate-300">Adapter selection happens in three places; the venue branch lives outside the module whose doc says it exists "without the composition root growing a broker-selection branch". Testability is achieved by widening <span class="mono">ProductionComponents</span> (23 fields) instead of by seams. The soak tool had to rebuild execution wiring by hand because there is no callable module, and did so without <span class="mono">guardedStore</span>.</p>
+      <div class="text-xs mono text-slate-400 mt-3 mb-1">MEASURED DUPLICATE CONSTRUCTIONS INSIDE THE ROOT (one DB)</div>
+      <div class="space-y-1 text-xs mono">
+        <div class="flex items-center gap-2"><span class="w-56 text-slate-300">SqliteClosedTradeStore</span><div class="bar bg-red-500" style="width:36%"></div><span class="text-red-300">×3 :1541 :2249 :3121</span></div>
+        <div class="flex items-center gap-2"><span class="w-56 text-slate-300">SqliteDebateLogStore</span><div class="bar bg-red-400" style="width:24%"></div><span class="text-red-300">×2 :1269 :3122</span></div>
+        <div class="flex items-center gap-2"><span class="w-56 text-slate-300">SqliteLlmSpendStore</span><div class="bar bg-red-400" style="width:24%"></div><span class="text-red-300">×2 :1759 :1795</span></div>
+        <div class="flex items-center gap-2"><span class="w-56 text-slate-300">SqliteAccountStateStore</span><div class="bar bg-red-400" style="width:24%"></div><span class="text-red-300">×2 :1528 :2216</span></div>
+        <div class="flex items-center gap-2"><span class="w-56 text-slate-300">config.logger ?? new JsonLogger()</span><div class="bar bg-amber-400" style="width:60%"></div><span class="text-amber-300">×5</span></div>
+      </div>
+      <p class="text-xs text-slate-400 mt-1">Each duplicate = a second write guard and a second prepared-statement cache on the same table.</p>
+    </div>
+  </div>
+
+  <div class="grid md:grid-cols-2 gap-4 mt-5">
+    <div class="before rounded p-3">
+      <div class="text-xs mono text-red-300 mb-2">BEFORE — cross-section: where <span class="mono">new X(</span> happens</div>
+      <div class="strata space-y-1 text-xs mono">
+        <div class="rounded p-2 bg-red-950/60 border border-red-900"><b>L1 · index.ts entry guard :1210-1285</b><div class="text-red-200/80">resolveBrokerVenue · startingProfileForMode</div></div>
+        <div class="rounded p-2 bg-red-950/60 border border-red-900"><b>L2 · startFromEnvironment :692-961</b><div class="text-red-200/80">new JsonLogger · openSharedStore · new MiArchiveStore · buildAlertChannels · new SystemClock · buildSaxoVenueClient · await buildSaxoBroker · new LseRegularHoursCalendar</div></div>
+        <div class="rounded p-2 bg-red-950/60 border border-red-900" style="min-height:120px"><b>L3 · production.ts (4,383 lines)</b><div class="text-red-200/80">buildProductionComponents ~50 × new X( · buildProductionOrchestrator: SequentialTickRunner, UniverseScheduler, Heartbeat, SqliteStage2SelectionStore, SqliteArmComparisonSource, DebateBarDecisionGate + runMetricsCheck + runArmComparison + runFeedbackCycle + scheduleFeedbackCycle + start() (530 lines)</div></div>
+        <div class="rounded p-2 bg-slate-800 border border-slate-700"><b>tools/place-soak-position.ts</b><div class="text-slate-300">own AlpacaBrokerAdapter + SqliteBrokerStateStore + SqliteExecutionStore · raw env · no guardedStore</div></div>
+      </div>
+    </div>
+    <div class="after rounded p-3">
+      <div class="text-xs mono text-emerald-300 mb-2">AFTER — env → config → components → orchestrator, one call each</div>
+      <pre class="mermaid">
+flowchart TB
+  E["readProductionEnvironment(env)"] --> C["composeFromEnvironment → ProductionConfig"]
+  C --> V["buildVenue(venue, deps) : Promise&lt;VenueBindings&gt;<br/>the ONE async step"]
+  C --> S["buildStores(db) : Stores<br/>each store once"]
+  V --> R["buildProductionOrchestrator(config)"]
+  S --> R
+  S --> J["buildDailyJobs(deps) : DailyJobs"]
+  S --> X["buildExecutionBindings(deps)"]
+  J --> R
+  X --> R
+  X --> T["tools/place-soak-position"]
+  M["orchestrator/main.ts (entry)"] --> E
+  B["orchestrator/index.ts (barrel only)"]
+  classDef ok fill:#0d2a1e,stroke:#3fbf7f,color:#d7dee7
+  class V,S,J,X,M,B ok
+      </pre>
+    </div>
+  </div>
+
+  <div class="mt-4">
+    <div class="text-xs mono text-slate-400 mb-1">PROPOSED INTERFACE</div>
+<pre class="sig rounded p-3 mono"><code>export interface VenueBindings { broker: BrokerAdapter; accountFunding?: AccountFundingSource; tradingCalendar: TradingCalendar }
+export function buildVenue(venue: BrokerVenue, deps: { mode; universe; db; logger; clock; alerts: AlertChannelSlots }): Promise&lt;VenueBindings&gt;;
+
+export interface Stores { closedTrades: SqliteClosedTradeStore; debateLog: SqliteDebateLogStore; llmSpend: SqliteLlmSpendStore; accountState: SqliteAccountStateStore }
+export function buildStores(db: StoreHandle): Stores;
+
+export interface DailyJobs { runMetricsCheck(now: Date): Promise&lt;void&gt;; runArmComparison(now: Date): Promise&lt;void&gt;; runFeedbackCycle(now: Date): Promise&lt;void&gt; }
+export function buildDailyJobs(deps: { stores: Stores; clock: Clock; logger: Logger; feedback: FeedbackCycleConfig; alerts: Pick&lt;AlertChannelSlots,'breachAlerts'|'loosenNotices'|'armDivergenceAlerts'&gt; }): DailyJobs;
+
+export function buildExecutionBindings(deps: { mode: 'paper'; db: StoreHandle; logger: Logger; clock: Clock; alerts: AlertChannelSlots }):
+  { broker: BrokerAdapter; store: SqliteExecutionStore; submit(intent: OrderIntent, trace_id: string): Promise&lt;ExecutionResult&gt; };
+
+// service-api
+export function readDashboardEnvironment(env = process.env): DashboardEnv;
+export function startDashboard(env: DashboardEnv, deps?: { db?: StoreHandle; providers?: ProviderStatusReader }): Promise&lt;DashboardServer&gt;;</code></pre>
+    <div class="mt-2 text-xs text-slate-400"><b class="text-slate-300">Deletion test:</b> delete <span class="mono">buildDailyJobs</span> and three ~100-line closures reappear inline — real complexity recovered. <b class="text-slate-300">Risk:</b> medium-high (money path); do it behind the existing smoke gate; ~10 wiring tests read <span class="mono">ProductionComponents</span> and shrink with it.</div>
+  </div>
+</section>
+
+<!-- ================= D3 ================= -->
+<section id="d3" class="card rounded-xl p-6">
+  <div class="flex items-start justify-between gap-4 flex-wrap">
+    <h2 class="text-xl font-semibold">D3 — Stage boundaries carry producer internals; the Debate stage has no module interface</h2>
+    <span class="badge-high text-xs px-2 py-1 rounded mono">HIGH</span>
+  </div>
+  <div class="grid md:grid-cols-3 gap-4 mt-4 text-sm">
+    <div>
+      <div class="text-xs mono text-slate-400 mb-1">FILES</div>
+      <ul class="mono text-xs space-y-1 text-slate-300">
+        <li>pipeline/debate-engine/types.ts:71-226 (DebateResult)</li>
+        <li>debate-engine/round-orchestrator.ts:62-64,101-103,172-188,222-238</li>
+        <li>debate-engine/latency-budget.ts:360-403</li>
+        <li>apps/orchestrator/production/debate-adapter.ts:220-266,532-553,656-677 (1,217 lines)</li>
+        <li>debate-engine/llm/anthropic-client.ts:296-300</li>
+        <li>pipeline/analysts/types.ts:126-180 (AnalystInput)</li>
+        <li>analysts/technical-analyst.test.ts:8-20,135-140</li>
+        <li>providers/market-intelligence/index.ts:135 (concrete class)</li>
+        <li>mi-ingest-agent.test.ts:75,:97 (casts)</li>
+        <li>pipeline/trader/types.ts:488-496 (Trader: 0 impls)</li>
+        <li>pipeline/execution/types/broker.ts:143-165 (NormalizedFill)</li>
+        <li>execution/flatten-attribution.ts:96-113 · simulated-adapter.ts:268</li>
+      </ul>
+      <div class="text-xs mono text-slate-400 mt-3 mb-1">SOURCES</div>
+      <div class="text-xs text-slate-400">P2 · P3 · P4 · P5 · V1 · X3</div>
+    </div>
+    <div class="md:col-span-2">
+      <div class="text-xs mono text-slate-400 mb-1">PROBLEM</div>
+      <p class="text-slate-300">The Debate stage is a bag of parts assembled in the orchestrator: its persona port has one adapter and that adapter drops <span class="mono">priorArguments</span>, so bull/bear prompts are byte-identical across rounds and stance evolution is unreachable through the only seam that exists. <span class="mono">DebateResult</span> has five hand-built producers and a <span class="mono">read</span> flag whose meaning needs the producer. Analysts take services, not data, so a pure indicator rule needs a real SQLite market-data service to test. The <span class="mono">Trader</span> port is dead. <span class="mono">NormalizedFill</span> mixes what the venue knows with what ingest attributes.</p>
+    </div>
+  </div>
+
+  <div class="grid md:grid-cols-2 gap-4 mt-5">
+    <div class="before rounded p-3">
+      <div class="text-xs mono text-red-300 mb-2">BEFORE — debate assembled outside its module</div>
+      <pre class="mermaid">
+flowchart LR
+  subgraph O["apps/orchestrator/production/debate-adapter.ts (1,217 lines)"]
+    A["buildDebateStep: memo · replay · spend cap · rate limit ·<br/>latency budget · weights · persistence · failure-rate guard"]
+    PA["buildDebatePersonas<br/>drops priorArguments · echoes view.direction as stance"]
+  end
+  subgraph D["pipeline/debate-engine"]
+    P1["runDebate"]; P2["enforceLatencyBudget"]; P3["computeConvictionScore"]; P4["detectDisagreements"]; P5["applyAnalystWeights"]; P6["buildDebateLog"]; P7["personas.ts ×3 fns"]
+    PORT["DebaterPersona / MediatorPersona<br/>(1 adapter)"]
+  end
+  A --> P1 & P2 & P3 & P4 & P5 & P6
+  PA --> PORT
+  PA --> P7
+  classDef bad fill:#3b0d0d,stroke:#d2503f,color:#ffd7d7
+  class PA,PORT bad
+      </pre>
+    </div>
+    <div class="after rounded p-3">
+      <div class="text-xs mono text-emerald-300 mb-2">AFTER — the stage as a module</div>
+      <pre class="mermaid">
+flowchart LR
+  R["orchestrator root"] -- "buildDebateEngine(deps)" --> DS["DebateStage.run(input, signal)<br/>: Promise&lt;DebateResult&gt;"]
+  subgraph D["pipeline/debate-engine (internal seams)"]
+    DS --> P1["rounds + one DebaterPersona<br/>taking RoundContext (priorArguments reach the prompt)"]
+    DS --> P2["latency budget · weights · conviction · disagreement"]
+    DS --> P6["debateResult(core, outcome) — single constructor"]
+  end
+  DS -- "TraderDebateInput (Pick + degraded)" --> T["Trader"]
+  classDef ok fill:#0d2a1e,stroke:#3fbf7f,color:#d7dee7
+  class DS,P6 ok
+      </pre>
+    </div>
+  </div>
+
+  <div class="grid md:grid-cols-2 gap-4 mt-4">
+    <div class="before rounded p-3">
+      <div class="text-xs mono text-red-300 mb-2">BEFORE — DebateResult's 16 fields as the Trader sees them</div>
+      <div class="flex flex-wrap gap-1 mono">
+        <span class="field read">debate_id</span><span class="field read">bar_timestamp</span><span class="field read">direction</span><span class="field read">confidence</span><span class="field read">converged</span><span class="field read">contributions[].final_position</span><span class="field read">read</span><span class="field read">timed_out</span><span class="field read">rate_limited</span>
+        <span class="field unread">synthesis</span><span class="field unread">position</span><span class="field unread">open_items</span><span class="field unread">disagreement_summary</span><span class="field unread">latency_ms</span><span class="field unread">rounds_completed</span>
+      </div>
+      <p class="text-xs text-slate-400 mt-2">green = read in <span class="mono">trader/</span>; struck = 0 reads. Three degraded flags whose meaning depends on the producer.</p>
+      <div class="text-xs mono text-red-300 mt-4 mb-2">BEFORE — NormalizedFill across the BrokerAdapter seam</div>
+      <div class="flex flex-wrap gap-1 mono">
+        <span class="field read">broker_fill_id</span><span class="field read">client_order_id</span><span class="field read">leg</span><span class="field read">qty</span><span class="field read">price</span><span class="field read">fee</span><span class="field read">timestamp</span><span class="field read">fx_*</span>
+        <span class="field above">exit_reason (set above seam)</span><span class="field above">flatten_idempotency_key (set above)</span><span class="field above">qty_is_cumulative (Alpaca-only)</span><span class="field above">cost_breakdown (Simulated-only)</span>
+      </div>
+    </div>
+    <div class="after rounded p-3">
+      <div class="text-xs mono text-emerald-300 mb-2">AFTER — narrowed contracts</div>
+<pre class="sig rounded p-3 mono"><code>export type TraderDebateInput =
+  Pick&lt;DebateResult,'debate_id'|'bar_timestamp'|'direction'|'confidence'|'converged'|'contributions'&gt;
+  &amp; { degraded: null | { kind: 'timed_out'|'rate_limited'|'not_read'; reason: string } };
+
+type VenueFill = Pick&lt;NormalizedFill,'broker_fill_id'|'client_order_id'|'leg'|'qty'|'price'|'fee'|
+  'timestamp'|'fee_currency'|'fx_rate_to_gbp'|'fx_rate_to_gbp_source'&gt; &amp; { qty_basis: 'increment'|'cumulative' };
+type AttributedFill = VenueFill &amp; { idempotency_key: string; exit_reason?: ExitReason;
+  flatten_idempotency_key?: string; cost_breakdown?: CostBreakdown };
+interface BrokerAdapter { fetchNewFills(since: Date): Promise&lt;VenueFill[]&gt; /* … */ }
+
+export interface AnalystReads { bars5m: Bar[]; bars1h: Bar[]; indicators: Record&lt;IndicatorKindKey, number | InsufficientBars&gt;;
+  mi: MarketContext; session: TradingCalendar }
+run(input: { trace_id; signal: Signal; bar: Date; asOf: Date; reads: AnalystReads }): AnalystView
+export interface MarketIntelligenceReader { getContext(assetClass, timeWindowMs, bar?, entity?): MarketContext }
+
+export interface Trader { decide(input: TraderInput): Promise&lt;TraderOutcome&gt;; checkExits(input: ExitCheckInput): Promise&lt;TraderOutcome&gt; }</code></pre>
+    </div>
+  </div>
+  <div class="mt-3 text-xs text-slate-400"><b class="text-slate-300">Deletion test:</b> delete <span class="mono">DebateResult.read</span> → 5 producers change; a Pick-typed Trader would not. Delete <span class="mono">MarketDataService</span> from <span class="mono">AnalystInput</span> → 3 analysts + 2 suites break; with data-shaped input only the reader would. <b class="text-slate-300">Risk:</b> P2 is a behavioural change if <span class="mono">priorArguments</span> starts rendering (prompt hash #1514 moves) — needs a spec line. Keep full <span class="mono">DebateResult</span> for the log and feedback attribution.</div>
+</section>
+
+<!-- ================= D4 ================= -->
+<section id="d4" class="card rounded-xl p-6">
+  <div class="flex items-start justify-between gap-4 flex-wrap">
+    <h2 class="text-xl font-semibold">D4 — Duplicated behaviour that is a module with no interface</h2>
+    <span class="badge-med text-xs px-2 py-1 rounded mono">MEDIUM · money path in X1</span>
+  </div>
+  <div class="grid md:grid-cols-3 gap-4 mt-4 text-sm">
+    <div>
+      <div class="text-xs mono text-slate-400 mb-1">FILES</div>
+      <ul class="mono text-xs space-y-1 text-slate-300">
+        <li>execution/execute.ts:729-1033 (executeExit) · :546-560 · :588 · :780</li>
+        <li>execution/residual-reflatten.ts:116-342 · :225 · :349-376</li>
+        <li>execution/reconcile.ts:180-211 (#516 hazard) · :519-539</li>
+        <li>execution/residual-protection.ts:500-525</li>
+        <li>execution/simulated-adapter.ts:343-364</li>
+        <li>adapters/saxo-adapter.ts:566 · alpaca-adapter.ts:996 · alpaca-crypto-emulation.ts:661</li>
+        <li>trader/decide.ts:1001 · tools/backtest/replay-driver.ts:612</li>
+        <li>shared/llm/nous-chat.ts:153-214 · nous-responses.ts:339-393 · nous-wire.ts:158</li>
+        <li>shared/http/response-errors.ts:41 · sanitize-log-text.ts:238</li>
+        <li>market-intelligence/sources/alpaca-news-client.ts:71 · tools/backtest/free-stack-aggregates-client.ts:105</li>
+        <li>alpaca-http-client.ts · polygon-bars-client.ts · polymarket-client.ts · gdelt-gkg-client.ts (V5)</li>
+        <li>analysts/analyst-response-collector.ts (0 callers) · analysts/orchestrator.ts:282-325,492-517</li>
+      </ul>
+      <div class="text-xs mono text-slate-400 mt-3 mb-1">SOURCES</div>
+      <div class="text-xs text-slate-400">X1 · X4 · X5 · C1 · C2 · V5 · P6</div>
+    </div>
+    <div class="md:col-span-2">
+      <div class="text-xs mono text-slate-400 mb-1">PROBLEM</div>
+      <p class="text-slate-300">Two flatten submitters implement the same walk (closing-side inversion, bounded <span class="mono">${key}:suffix-N</span> retry, <span class="mono">writeAheadFlatten → submitFlatten → resolveFlattenSubmitted</span>, the <span class="mono">UnresolvedFlattenForInstrumentError</span> catch). <span class="mono">residual-reflatten.ts:29-35</span> argues the split is deliberate — that justifies two <i>callers</i>, not two <i>implementations</i>. #516's double-sell hazard lives in exactly this code. The rest is plumbing copied per file: a Nous error can carry a lone high surrogate today; an Alpaca one cannot, because two of the four <span class="mono">truncateForError</span>s differ.</p>
+      <div class="text-xs mono text-slate-400 mt-3 mb-1">MASS DIAGRAM — hover to collapse duplicates into one implementation</div>
+      <div class="mass-group space-y-2 text-xs mono">
+        <div class="flex items-center gap-1"><span class="w-52 text-slate-300">closing-side inversion</span><div class="mass keep bar bg-red-500 w-6"></div><div class="mass dup bar bg-red-500 w-6"></div><div class="mass dup bar bg-red-500 w-6"></div><div class="mass dup bar bg-red-500 w-6"></div><div class="mass dup bar bg-red-500 w-6"></div><div class="mass dup bar bg-red-500 w-6"></div><div class="mass dup bar bg-red-500 w-6"></div><div class="mass dup bar bg-red-500 w-6"></div><span class="text-red-300 ml-1">×8</span></div>
+        <div class="flex items-center gap-1"><span class="w-52 text-slate-300">truncateForError</span><div class="mass keep bar bg-red-500 w-6"></div><div class="mass dup bar bg-red-500 w-6"></div><div class="mass dup bar bg-red-500 w-6"></div><div class="mass dup bar bg-red-500 w-6"></div><div class="mass dup bar bg-amber-400 w-6" title="maskAndCap"></div><span class="text-red-300 ml-1">×4 (+maskAndCap)</span></div>
+        <div class="flex items-center gap-1"><span class="w-52 text-slate-300">alert swallow posture</span><div class="mass keep bar bg-red-500 w-6"></div><div class="mass dup bar bg-red-500 w-6"></div><div class="mass dup bar bg-red-500 w-6"></div><span class="text-red-300 ml-1">×3 · 10 one-method *AlertChannel types</span></div>
+        <div class="flex items-center gap-1"><span class="w-52 text-slate-300">private default TokenBucket</span><div class="mass keep bar bg-red-500 w-6"></div><div class="mass dup bar bg-red-500 w-6"></div><div class="mass dup bar bg-red-500 w-6"></div><span class="text-red-300 ml-1">×3</span></div>
+        <div class="flex items-center gap-1"><span class="w-52 text-slate-300">flatten submit walk (305 + 227 lines)</span><div class="mass keep bar bg-red-500" style="width:96px"></div><div class="mass dup bar bg-red-500" style="width:72px"></div><span class="text-red-300 ml-1">×2 — #516 path</span></div>
+        <div class="flex items-center gap-1"><span class="w-52 text-slate-300">Nous HTTP transport (45 lines)</span><div class="mass keep bar bg-red-500 w-12"></div><div class="mass dup bar bg-red-500 w-12"></div><span class="text-red-300 ml-1">×2</span></div>
+        <div class="flex items-center gap-1"><span class="w-52 text-slate-300">MarketState assembly</span><div class="mass keep bar bg-red-500 w-6"></div><div class="mass dup bar bg-red-500 w-6"></div><span class="text-red-300 ml-1">×2</span></div>
+        <div class="flex items-center gap-1"><span class="w-52 text-slate-300">pagination · paced retry · JSON salvage</span><div class="mass keep bar bg-red-500 w-6"></div><div class="mass dup bar bg-red-500 w-6"></div><span class="text-red-300 ml-1">×2 each</span></div>
+        <div class="flex items-center gap-1"><span class="w-52 text-slate-300">analyst quorum + timeout</span><div class="mass keep bar bg-red-500 w-6"></div><div class="mass dup bar bg-slate-600 w-6" title="dead"></div><span class="text-red-300 ml-1">×2, one dead (0 callers)</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid md:grid-cols-2 gap-4 mt-5">
+    <div class="before rounded p-3">
+      <div class="text-xs mono text-red-300 mb-2">BEFORE — two flatten walks</div>
+      <pre class="mermaid">
+sequenceDiagram
+  participant EX as executeExit (execute.ts)
+  participant RR as reflattenResidual (residual-reflatten.ts)
+  participant S as SharedStore
+  participant B as BrokerAdapter
+  EX->>EX: closingSide, key:retry-N (max 3)
+  EX->>S: writeAheadFlatten
+  EX->>B: submitFlatten
+  EX->>S: resolveFlattenSubmitted / catch Unresolved…
+  RR->>RR: closingSide, key:residual-reflatten-N (max 3) + isOwnReflattenKey parser
+  RR->>S: writeAheadFlatten
+  RR->>B: submitFlatten
+  RR->>S: resolveFlattenSubmitted / catch Unresolved…
+  Note over EX,RR: reconcile.ts:180-211 — the two walks can re-arm each other (#516)
+      </pre>
+    </div>
+    <div class="after rounded p-3">
+      <div class="text-xs mono text-emerald-300 mb-2">AFTER — one submitter, two callers</div>
+      <pre class="mermaid">
+sequenceDiagram
+  participant EX as executeExit
+  participant RR as reflattenResidual
+  participant FS as FlattenSubmitter
+  participant S as SharedStore
+  participant B as BrokerAdapter
+  EX->>FS: submit({lotKeys, heldSide, keyScheme:{base,'retry',3}})
+  RR->>FS: submit({lotKeys, heldSide, keyScheme:{base,'residual-reflatten',3}})
+  FS->>FS: closingSide(heldSide) · bounded key walk
+  FS->>S: writeAheadFlatten
+  FS->>B: submitFlatten
+  FS->>S: resolveFlattenSubmitted
+  FS-->>EX: submitted | deduped | exhausted | failed
+  FS-->>RR: submitted | deduped | exhausted | failed
+      </pre>
+    </div>
+  </div>
+
+  <div class="mt-4">
+    <div class="text-xs mono text-slate-400 mb-1">PROPOSED INTERFACE</div>
+<pre class="sig rounded p-3 mono"><code>export interface FlattenSubmitter {
+  submit(req: { lotKeys: readonly string[]; instrument: string; heldSide: 'buy'|'sell'; size: number; exit_reason: ExitReason;
+                keyScheme: { base: string; suffix: string; maxAttempts: number }; modelled_cost_breakdown: CostBreakdown | null }, now: Date):
+    Promise&lt;{ kind: 'submitted'; key: string; ack: BrokerAck } | { kind: 'deduped'; key: string } | { kind: 'exhausted' } | { kind: 'failed'; error: unknown }&gt;;
+}
+export const closingSide = (held: 'buy'|'sell'): 'buy'|'sell' =&gt; held === 'buy' ? 'sell' : 'buy';
+
+export function nousPost(options: NousTransportOptions, path: '/chat/completions' | '/responses', body: unknown): Promise&lt;{ status: number; body: unknown; ttfb_ms: number }&gt;;
+export function truncateForError(text: string, maxChars = MAX_ERROR_BODY_CHARS): string;   // the surrogate-safe one
+export function pagedFetch&lt;T&gt;(first: () =&gt; Promise&lt;Page&lt;T&gt;&gt;, next: (token: string) =&gt; Promise&lt;Page&lt;T&gt;&gt;, opts: { maxPages: number; onExceeded(): never }): Promise&lt;T[]&gt;;
+export function withPacedRetry&lt;T&gt;(fn: () =&gt; Promise&lt;T&gt;, opts: { bucket: TokenBucket; retry: RetryConfig; isRetryable(e: unknown): boolean }): Promise&lt;T&gt;;
+export interface MarketStateSource { read(instrument: string, asset_class: AssetClass, asOf: Date): Promise&lt;MarketState&gt; }
+export interface ExecutionAlerts { post&lt;K extends keyof ExecutionAlertPayloads&gt;(kind: K, payload: ExecutionAlertPayloads[K]): Promise&lt;boolean&gt; }</code></pre>
+    <div class="mt-2 text-xs text-slate-400"><b class="text-slate-300">Deletion test:</b> delete <span class="mono">resolveReflattenKey</span> + the submit block in <span class="mono">reflattenResidual</span> → only that file breaks: a module with no interface. <b class="text-slate-300">Risk:</b> X1 medium (money path) but both copies have multi-thousand-line suites through <span class="mono">BrokerAdapter</span> + real SQLite; rest low.</div>
+  </div>
+</section>
+
+<!-- ================= D5 ================= -->
+<section id="d5" class="card rounded-xl p-6">
+  <div class="flex items-start justify-between gap-4 flex-wrap">
+    <h2 class="text-xl font-semibold">D5 — Hypothetical seams and dead ports</h2>
+    <span class="badge-med text-xs px-2 py-1 rounded mono">MEDIUM</span>
+  </div>
+  <div class="grid md:grid-cols-3 gap-4 mt-4 text-sm">
+    <div>
+      <div class="text-xs mono text-slate-400 mb-1">FILES</div>
+      <ul class="mono text-xs space-y-1 text-slate-300">
+        <li>providers/market-data-service/sources/lse-mark-source.ts:32-33,204-215,266-282,325-432</li>
+        <li>market-data-service/source-factory.ts:32-40</li>
+        <li>apps/orchestrator/production/defaults.ts:683-704</li>
+        <li>pipeline/verdict/types.ts:23-26 · verdict/index.ts:309-312 · execution/execute.ts:131</li>
+        <li>pipeline/trader/types.ts:488-496 · trader/decide.ts:1389-1391</li>
+        <li>pipeline/analysts/analyst-response-collector.ts</li>
+        <li>debate-engine/round-orchestrator.ts:62-64,101-103</li>
+        <li>shared/http/venue-pacing.ts:65,571-580</li>
+        <li>market-intelligence/worldmonitor-adapter/cii-consumer.ts:20-23 (parked, ref only)</li>
+      </ul>
+      <div class="text-xs mono text-slate-400 mt-3 mb-1">SOURCES</div>
+      <div class="text-xs text-slate-400">V3 · X6 · P4 · P6 · C9</div>
+    </div>
+    <div class="md:col-span-2">
+      <div class="text-xs mono text-slate-400 mb-1">PROBLEM</div>
+      <p class="text-slate-300">One adapter means a hypothetical seam; zero means a port carrying code nothing can reach. <span class="mono">LseMarkClient</span> has no concrete client, its factory arm is "UNREACHABLE in production", and boot <i>refuses</i> when it is absent — while the live venue is Saxo and a Saxo instrument resolver already exists. The real value in that file (book-currency conversion, the tradeable allow-list guard) is vendor-agnostic.</p>
+      <div class="text-xs mono text-slate-400 mt-3 mb-1">PORT × ADAPTER SOCKETS</div>
+      <div class="grid sm:grid-cols-2 gap-2 text-xs mono">
+        <div class="socket rounded p-2"><div class="text-red-300">LseMarkClient</div><div class="text-slate-400">adapters: <b class="text-red-300">0</b> · ~500 lines carried</div></div>
+        <div class="socket rounded p-2"><div class="text-red-300">Trader (types.ts:488)</div><div class="text-slate-400">implementations: <b class="text-red-300">0</b> · root binds decideWithReason</div></div>
+        <div class="socket rounded p-2"><div class="text-red-300">DebaterPersona / MediatorPersona</div><div class="text-slate-400">adapters: <b class="text-amber-300">1</b>, in the orchestrator (D3)</div></div>
+        <div class="socket rounded p-2"><div class="text-red-300">verdict.PositionStore</div><div class="text-slate-400">adapters: <b class="text-amber-300">1</b> · "identical to LotJournal.findByKey"; dedup run twice</div></div>
+        <div class="socket rounded p-2"><div class="text-red-300">analyst-response-collector</div><div class="text-slate-400">callers: <b class="text-red-300">0</b> · quorum re-implemented in orchestrator.ts</div></div>
+        <div class="socket rounded p-2"><div class="text-red-300">VENUE_KEYS ccxt | ibkr</div><div class="text-slate-400">live venues: 2 of 4 · malformed SAMURAI_PACING_CCXT_* still refuses boot</div></div>
+        <div class="socket real rounded p-2"><div class="text-emerald-300">BrokerAdapter · DataSource · LlmClient · SpendCap</div><div class="text-slate-400">≥2 production adapters — real seams, keep</div></div>
+        <div class="socket real rounded p-2"><div class="text-emerald-300">AnthropicMessagesClient · PolymarketWireClient · store ports</div><div class="text-slate-400">1 prod + test fake — real for testability, keep</div></div>
+      </div>
+    </div>
+  </div>
+  <div class="grid md:grid-cols-2 gap-4 mt-5">
+    <div class="before rounded p-3">
+      <div class="text-xs mono text-red-300 mb-2">BEFORE — LSE mark path</div>
+      <pre class="mermaid">
+flowchart LR
+  F["createDataSource('lse')"] --> L["LseMarkDataSource<br/>(toBookCurrency · allow-list guard · normalisation)"]
+  L --> P["LseMarkClient port"]
+  P -.->|"0 adapters"| N["∅"]
+  B["defaults.ts:683-704"] -- "refuses boot if absent" --> P
+  classDef bad fill:#3b0d0d,stroke:#d2503f,color:#ffd7d7
+  class P,N bad
+      </pre>
+    </div>
+    <div class="after rounded p-3">
+      <div class="text-xs mono text-emerald-300 mb-2">AFTER — decorator over the one real seam</div>
+      <pre class="mermaid">
+flowchart LR
+  S["SaxoMarkDataSource implements DataSource<br/>(or extends NormalizingDataSource)"] --> G["withLseTradeableGuard(inner, opts) : DataSource"]
+  G --> M["MarketDataServiceImpl"]
+  classDef ok fill:#0d2a1e,stroke:#3fbf7f,color:#d7dee7
+  class G ok
+      </pre>
+<pre class="sig rounded p-3 mono mt-2"><code>export function withLseTradeableGuard(inner: DataSource, opts: { tradeable: ReadonlySet&lt;string&gt;;
+  screeningInstruments: ReadonlySet&lt;string&gt;; declaredCurrencies: ReadonlyMap&lt;string,string&gt; }): DataSource;
+// verdict: delete PositionStore; field becomes Pick&lt;LotJournal,'findByKey'&gt;
+// trader: delete decide() projection + OrderIntent|null port (see D3)
+// analysts: delete analyst-response-collector.ts + analysts()
+export function resolveVenuePacing(env = process.env, venues: readonly VenueKey[] = LIVE_VENUE_KEYS): VenuePacingConfig;</code></pre>
+    </div>
+  </div>
+  <div class="mt-3 text-xs text-slate-400"><b class="text-slate-300">Deletion test:</b> delete <span class="mono">LseMarkClient</span> + <span class="mono">LseVendor*</span> → only <span class="mono">LseMarkDataSource</span> and the factory arm fall; zero production behaviour lost. <b class="text-slate-300">Risk:</b> low, except V3 (medium — coordinate with open #895).</div>
+</section>
+
+<!-- ================= D6 ================= -->
+<section id="d6" class="card rounded-xl p-6">
+  <div class="flex items-start justify-between gap-4 flex-wrap">
+    <h2 class="text-xl font-semibold">D6 — Barrels as god surfaces; test doubles and vendor shapes exported</h2>
+    <span class="badge-med text-xs px-2 py-1 rounded mono">MEDIUM</span>
+  </div>
+  <div class="grid md:grid-cols-3 gap-4 mt-4 text-sm">
+    <div>
+      <div class="text-xs mono text-slate-400 mb-1">FILES</div>
+      <ul class="mono text-xs space-y-1 text-slate-300">
+        <li>pipeline/debate-engine/index.ts (120 named exports)</li>
+        <li>pipeline/execution/index.ts (:84-160 ten *AlertChannel)</li>
+        <li>pipeline/feedback-loop/index.ts:27-34 (6 InMemory*) · fixture-stores.ts:1-10</li>
+        <li>providers/market-data-service/index.ts:56-70,88-103</li>
+        <li>apps/orchestrator/production/defaults.ts:744,800-810</li>
+        <li>shared/llm/index.ts (nousResponses absent) · x-search-client.ts:77</li>
+        <li>pipeline/risk-manager/index.ts (1,000 lines; evaluate :227-509)</li>
+        <li>pipeline/verdict/index.ts (538 lines; decide :176-432)</li>
+        <li>contracts/index.ts:45-46,61,69 vs shared/store/index.ts:6-7,26-27</li>
+        <li>apps/service-api/types.ts:38-59</li>
+      </ul>
+      <div class="text-xs mono text-slate-400 mt-3 mb-1">SOURCES</div>
+      <div class="text-xs text-slate-400">P7 · X5 · X8 · V7 · C4 · C7</div>
+    </div>
+    <div class="md:col-span-2">
+      <div class="text-xs mono text-slate-400 mb-1">PROBLEM</div>
+      <p class="text-slate-300">A barrel is the module's interface. Debate's carries the LLM port, wholesale pricing re-exports and seven symbols with zero external importers; feedback-loop's exports its own test doubles; market-data's exports Alpaca wire shapes so <span class="mono">ProductionConfig</span> is typed on a vendor client; Risk and Verdict define their 250-line implementations <i>inside</i> <span class="mono">index.ts</span>; the wire and store barrels export same-named, different-shaped <span class="mono">FillRow</span> / <span class="mono">ClosedTradeRow</span>.</p>
+      <div class="text-xs mono text-slate-400 mt-3 mb-1">BARREL WIDTH — named exports before → after</div>
+      <div class="space-y-2 text-xs mono">
+        <div><div class="flex justify-between text-slate-300"><span>debate-engine</span><span>120 → ≤30</span></div><div class="flex gap-1 mt-1"><div class="bar bg-red-500" style="width:100%"></div></div><div class="flex gap-1 mt-1"><div class="bar bg-emerald-500" style="width:25%"></div></div></div>
+        <div><div class="flex justify-between text-slate-300"><span>execution</span><span>~75 → ~40 (Execution port + SharedStore roles + typed errors)</span></div><div class="flex gap-1 mt-1"><div class="bar bg-red-500" style="width:62%"></div></div><div class="flex gap-1 mt-1"><div class="bar bg-emerald-500" style="width:33%"></div></div></div>
+        <div><div class="flex justify-between text-slate-300"><span>feedback-loop</span><span>~70 → ~15 (4 cycle fns, seed, Sqlite stores, types)</span></div><div class="flex gap-1 mt-1"><div class="bar bg-red-500" style="width:58%"></div></div><div class="flex gap-1 mt-1"><div class="bar bg-emerald-500" style="width:12%"></div></div></div>
+        <div><div class="flex justify-between text-slate-300"><span>market-data-service</span><span>~70 → ~50 (drop Alpaca*/LseVendor*)</span></div><div class="flex gap-1 mt-1"><div class="bar bg-red-500" style="width:58%"></div></div><div class="flex gap-1 mt-1"><div class="bar bg-emerald-500" style="width:42%"></div></div></div>
+        <div><div class="flex justify-between text-slate-300"><span>shared/llm</span><span>~30 → ~35 (add the missing Nous exports; 18 deep imports become barrel)</span></div><div class="flex gap-1 mt-1"><div class="bar bg-amber-400" style="width:25%"></div></div><div class="flex gap-1 mt-1"><div class="bar bg-emerald-500" style="width:29%"></div></div></div>
+      </div>
+    </div>
+  </div>
+  <div class="mt-4">
+    <div class="text-xs mono text-slate-400 mb-1">PROPOSED</div>
+<pre class="sig rounded p-3 mono"><code>// every module: index.ts = interface + production adapters; testing.ts = InMemory*/Fixture*/Mock* (imported by path from tests only)
+// debate-engine/index.ts: DebateStage, DebateResult, AnalystView, DebateLogStore, floorToBar … ≤30 names, nothing from shared/llm
+// production/config.ts
+dataSourceFor?: (assetClass: AssetClass) =&gt; DataSource;   // replaces alpacaDataClient
+// shared/store: FillDbRow, ClosedTradeDbRow (fromFillDbRow); stop re-exporting STORE_MODES
+// risk-manager/risk-manager.ts, verdict/verdict.ts: the Impl classes move out of index.ts</code></pre>
+    <div class="mt-2 text-xs text-slate-400"><b class="text-slate-300">Risk:</b> mechanical. Standards rule added: test doubles are not barrel exports (exception: doubles a production root binds on purpose — <span class="mono">UNCAPPED_SPEND</span>, <span class="mono">NULL_SPEND_SINK</span>, <span class="mono">UNGATED_LLM_IN_FLIGHT</span> are second adapters).</div>
+  </div>
+</section>
+
+<!-- ================= D7 ================= -->
+<section id="d7" class="card rounded-xl p-6">
+  <div class="flex items-start justify-between gap-4 flex-wrap">
+    <h2 class="text-xl font-semibold">D7 — Interface contracts keyed on prose, or mixed within one chain</h2>
+    <span class="badge-low text-xs px-2 py-1 rounded mono">LOW · but a live-alert seam</span>
+  </div>
+  <div class="grid md:grid-cols-3 gap-4 mt-4 text-sm">
+    <div>
+      <div class="text-xs mono text-slate-400 mb-1">FILES</div>
+      <ul class="mono text-xs space-y-1 text-slate-300">
+        <li>shared/threshold-bounds.ts:220,275-278,296-299</li>
+        <li>pipeline/risk-manager/index.ts:322-325,761,782,819,843,822-829,927-946</li>
+        <li>pipeline/risk-manager/types.ts:381,657,713 (17 venue-word hits)</li>
+        <li>apps/orchestrator/production/direct-bind.ts:60</li>
+        <li>shared/llm/nous-config.ts:120-123,134-164,154-161 (no test file)</li>
+        <li>apps/orchestrator/production.ts:1097,:1720 (env via helpers)</li>
+        <li>apps/service-api/index.ts:75,76,84,264 · fixture-server.ts:51,178,188</li>
+        <li>43 process.env reads / 18 non-test files (measured)</li>
+      </ul>
+      <div class="text-xs mono text-slate-400 mt-3 mb-1">SOURCES</div>
+      <div class="text-xs text-slate-400">C5 · C6 · X2 · X7 · A4</div>
+    </div>
+    <div class="md:col-span-2">
+      <div class="text-xs mono text-slate-400 mb-1">PROBLEM</div>
+      <p class="text-slate-300"><span class="mono">isThresholdBoundViolation</span> recognises the aggregate failure by <span class="mono">message.includes('in-code clamp')</span> — the alert seam is coupled to a constructor's wording. Two of seven Risk entry gates <i>throw</i> while five <i>return</i>; the orchestrator catches the class. Risk's error strings name <span class="mono">Alpaca GET /v2/account</span> and <span class="mono">Saxo GET /port/v1/balances/me</span> above the broker seam (review 2026-08-06 cleared "zero vendor leaks" — the decay is at Risk, not Execution; trader hits are all comments). <span class="mono">nous-config</span> reads <span class="mono">process.env</span> internally so its unpriced-model refusal, a spend-cap safety check, is untested at its own interface.</p>
+    </div>
+  </div>
+  <div class="grid md:grid-cols-2 gap-4 mt-5">
+    <div class="before rounded p-3">
+      <div class="text-xs mono text-red-300 mb-2">BEFORE — mixed gate contract</div>
+      <pre class="mermaid">
+flowchart LR
+  E["RiskManagerImpl.evaluate"] --> G1["5 gates → {name, allowedAdditional} | null"]
+  E --> G2["perSubclassDeploymentCap<br/>liveBookCeiling"]
+  G2 -- "throw PerSubclassCapUnresolvableError" --> O["direct-bind.ts:60 catch"]
+  G1 --> D["RiskDecision"]
+  T["assertThresholdsWithinBounds"] -- "throw new Error('… in-code clamp …')" --> I["isThresholdBoundViolation:<br/>message.includes('in-code clamp')"]
+  classDef bad fill:#3b0d0d,stroke:#d2503f,color:#ffd7d7
+  class G2,O,I bad
+      </pre>
+    </div>
+    <div class="after rounded p-3">
+      <div class="text-xs mono text-emerald-300 mb-2">AFTER — one gate shape, typed aggregate</div>
+      <pre class="mermaid">
+flowchart LR
+  E["RiskManagerImpl.evaluate"] --> G["7 gates → {name, allowedAdditional} | {name, unresolvable} | null"]
+  G --> D["RiskDecision status:'reject' + binding_constraint"]
+  T["assertThresholdsWithinBounds"] -- "throw ThresholdBoundViolationsError{violations[]}" --> I["isThresholdBoundViolation: instanceof"]
+  classDef ok fill:#0d2a1e,stroke:#3fbf7f,color:#d7dee7
+  class G,I ok
+      </pre>
+    </div>
+  </div>
+  <div class="mt-4">
+<pre class="sig rounded p-3 mono"><code>export class ThresholdBoundViolationsError extends Error { readonly violations: readonly ThresholdBoundViolationError[] }
+export function isThresholdBoundViolation(e: unknown): e is ThresholdBoundViolationError | ThresholdBoundViolationsError;
+
+type EntryCapGate = (ctx: GateContext) =&gt; { name: string; allowedAdditional: number } | { name: string; unresolvable: string } | null;
+// drop the next_breaker_state input→output echo (caller already holds it)
+
+// Risk consumes venue-neutral capability, supplied by the root:
+interface PortfolioView { equity_currency_verified: boolean; account_read_source: string /* free text */ }
+// long_only derived from Instrument.shortable === false
+
+export function nousCredentials(role: NousRole, env: NodeJS.ProcessEnv = process.env): NousCredentials;
+export interface ProductionEnvironment { /* … */ venuePacing: VenuePacingConfig; sentimentCredentials?: NousCredentials }</code></pre>
+    <div class="mt-2 text-xs text-slate-400"><b class="text-slate-300">Deletion test:</b> delete the thrown class → only <span class="mono">direct-bind.ts</span> breaks: an exception with one consumer is an interface. Remove the venue words → no behaviour changes: prose only. <b class="text-slate-300">Risk:</b> low.</div>
+  </div>
+</section>
+
+<!-- ================= D8 ================= -->
+<section id="d8" class="card rounded-xl p-6">
+  <div class="flex items-start justify-between gap-4 flex-wrap">
+    <h2 class="text-xl font-semibold">D8 — Crypto residue at the type level</h2>
+    <span class="badge-ref text-xs px-2 py-1 rounded mono">REFERENCE · extends #1179</span>
+  </div>
+  <div class="grid md:grid-cols-3 gap-4 mt-4 text-sm">
+    <div>
+      <div class="text-xs mono text-slate-400 mb-1">FILES</div>
+      <ul class="mono text-xs space-y-1 text-slate-300">
+        <li>market-data-service/types.ts:62-72 (Mark.asset_class)</li>
+        <li>sources/asset-class-routing… :72-83 (requires both)</li>
+        <li>apps/orchestrator/production/defaults.ts:153-154,765,812-815</li>
+        <li>apps/orchestrator/production.ts:327 (SMOKE universe BTC-USD)</li>
+        <li>execution/adapters/alpaca-adapter.ts:383-389,633,888</li>
+        <li>execution/adapters/alpaca-crypto-emulation.ts (839 lines)</li>
+        <li>market-intelligence/index.ts:56-59 · ohlcv-failover.ts:31-39</li>
+      </ul>
+      <div class="text-xs mono text-slate-400 mt-3 mb-1">SOURCES</div>
+      <div class="text-xs text-slate-400">V6 · X9</div>
+    </div>
+    <div class="md:col-span-2">
+      <div class="text-xs mono text-slate-400 mb-1">WHY IT IS LISTED</div>
+      <p class="text-slate-300">Not re-filed; recorded because it changes what D3/D6 cost. Crypto left scope 2026-08-16 but the <i>types</i> still require it: the routing source constructor demands both classes, an empty universe defaults to <span class="mono">'crypto'</span>, and an 839-line crypto leg emulation is constructed unconditionally. <b>The deletion is not free:</b> <span class="mono">yarn smoke</span> runs on BTC/ETH, so the crypto path is what the smoke gate exercises.</p>
+      <div class="grid sm:grid-cols-2 gap-3 mt-3">
+        <div class="before rounded p-3 text-xs mono">
+          <div class="text-red-300 mb-1">BEFORE</div>
+          <div>asset_class: <span class="field above">'crypto'</span> | <span class="field read">'stocks'</span></div>
+          <div class="mt-1">AssetClassRoutingDataSource(<span class="field above">crypto</span>, <span class="field read">stocks</span>) — both required</div>
+          <div class="mt-1">SMOKE_TEST_UNIVERSE = [<span class="field above">BTC-USD</span>, <span class="field above">ETH-USD</span>]</div>
+          <div class="mt-1">new AlpacaCryptoLegEmulation(…) — always</div>
+        </div>
+        <div class="after rounded p-3 text-xs mono">
+          <div class="text-emerald-300 mb-1">AFTER (gated on a smoke-universe ruling)</div>
+          <div>sources: Partial&lt;Record&lt;AssetClass, DataSource&gt;&gt; — throw on miss at route time</div>
+          <div class="mt-1">FailoverEvent.leg: 'equities'</div>
+          <div class="mt-1">SMOKE_TEST_UNIVERSE = LSE ETP fixtures (decision needed)</div>
+          <div class="mt-1">crypto emulation constructed only when a crypto instrument is in the universe</div>
+        </div>
+      </div>
+      <p class="text-xs text-slate-400 mt-2"><b class="text-slate-300">Next step:</b> a <span class="mono">wayfinder:grilling</span> ticket on the smoke universe, not a refactor.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= ORDER ================= -->
+<section id="order" class="card rounded-xl p-6">
+  <h2 class="text-xl font-semibold">Suggested order</h2>
+  <pre class="mermaid mt-3">
+flowchart LR
+  A["1 · D1 moves<br/>zero behaviour change"] --> B["2 · D6 barrel trims<br/>+ testing.ts relocation"]
+  B --> C["3 · D2 Stores → ExecutionBindings<br/>→ DailyJobs → entry/barrel split"]
+  C --> D["4 · D4 X1 FlattenSubmitter<br/>behind smoke"]
+  D --> E["5 · D3 P3/P4/X3 type narrowing<br/>→ P5/V1 → P2 (needs spec line)"]
+  E --> F["6 · D5, D7 as touched"]
+  F --> G["7 · D8 after smoke-universe grilling"]
+  classDef s fill:#121821,stroke:#3a4a5e,color:#d7dee7
+  class A,B,C,D,E,F,G s
+  </pre>
+  <p class="text-xs text-slate-400 mt-2">Filing is David's call. Suggested: one wayfinder map for D1+D6 (address moves), one for D2 (grill the async venue step), a <span class="mono">wayfinder:grilling</span> for D3/P2 (stance evolution is a product question), plain implementation tickets for the rest once maps resolve.</p>
+</section>
+
+<!-- ================= STALE PINS ================= -->
+<section id="stale" class="card rounded-xl p-6">
+  <h2 class="text-xl font-semibold">Prior review pins that no longer hold at f96bd9dc</h2>
+  <table class="w-full text-xs mt-3">
+    <thead class="text-slate-400 mono"><tr><th class="text-left py-1">Pin</th><th class="text-left">Source</th><th class="text-left">Now</th></tr></thead>
+    <tbody class="divide-y divide-slate-800">
+      <tr><td class="py-1 mono">createDataSource "zero call sites"</td><td>entire-app :38-48, #1151</td><td class="text-emerald-300">called at defaults.ts:706 ('lse') and :768 ('alpaca') — re-verify #1151</td></tr>
+      <tr><td class="py-1 mono">dead crypto candle clients</td><td>entire-app :69-71, #1157</td><td class="text-emerald-300">gone; ohlcv-failover.ts:6-8 records the removal</td></tr>
+      <tr><td class="py-1 mono">DiscordChannel / SignedApprovalChannel at verdict/index.ts:376,:409</td><td>entire-app reachability, #1153/#1154</td><td class="text-emerald-300">no longer exist in non-test server/ — re-verify</td></tr>
+      <tr><td class="py-1 mono">contracts/index.ts "nothing imports its barrel"</td><td>S1</td><td class="text-emerald-300">23 importers; one deep import survives</td></tr>
+      <tr><td class="py-1 mono">early-exit.ts:86 deep import</td><td>entire-app :111</td><td class="text-emerald-300">fixed — from '../analysts/index.js'</td></tr>
+      <tr><td class="py-1 mono">universe-pool has no barrel</td><td>S1 companion</td><td class="text-emerald-300">fixed 2026-09-05</td></tr>
+      <tr><td class="py-1 mono">LLM_SPEND_CAP_USD second constant</td><td>client F5</td><td class="text-emerald-300">closed — sqlite-query-store.ts:589-593 reads the armed cap</td></tr>
+      <tr><td class="py-1 mono">ENV_X_MAX_SEARCH_RESULTS mid-wiring read</td><td>entire-app S4</td><td class="text-emerald-300">fixed — environment.ts:111-119</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<footer class="text-xs text-slate-500 mono pt-4">
+  Source: <a href="codebase-design-2026-09-15.md">codebase-design-2026-09-15.md</a> (Appendices A–E carry per-area evidence). Method caveat: reviewers' shells were refused by the worktree hook; every count above was re-measured by the synthesiser with grep over non-test .ts.
+</footer>
+</main>
+</body>
+</html>

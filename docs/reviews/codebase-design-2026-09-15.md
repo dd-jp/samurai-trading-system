@@ -9,6 +9,8 @@ seam, two = real*. `client/` was reviewed on this axis 2026-09-04
 ([`client-module-design-2026-09-04.md`](client-module-design-2026-09-04.md)) and is not re-reviewed;
 its server-side pointer (F5, the second spend-cap constant) is confirmed closed in §6.
 
+**Visual companion:** [`codebase-design-2026-09-15.html`](codebase-design-2026-09-15.html) — one card per finding with files, before/after diagrams, proposed signatures (Tailwind + Mermaid via CDN; open in a browser).
+
 **This is a design review, not an implementation.** Standing Pipeline Rule 1 bars implementation
 without a resolved wayfinder map and a written spec. Every finding states a **proposed interface as
 a signature** so a map/spec can lift it. Nothing here was applied to code. The two standards rules
