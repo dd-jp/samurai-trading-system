@@ -155,12 +155,37 @@ export async function sweepWedgedZeroFillLots(
     try {
       const abandoned = await store.abandonWedgedZeroFillLot(position.idempotency_key, reason);
       if (!abandoned) {
-        // The worklist read above is already stale: a fill landed (or a
-        // different terminal transition happened) between that read and this
-        // write, which is exactly what `abandonWedgedZeroFillLot`'s own
-        // WHERE-guard exists to detect. The lot un-wedged itself — good news,
-        // not a divergence to report; the next `advanceLot`/reconcile pass
-        // already owns whatever state it is in now.
+        // `abandonWedgedZeroFillLot`'s SQL WHERE-guard (sqlite-shared-store.ts)
+        // restates this shape rather than sharing `isWedgedZeroFillLot` — a
+        // SQL string cannot import a TS predicate (#1601). A no-op UPDATE is
+        // ambiguous between two causes this re-check tells apart: a fresh
+        // read still matching `isWedgedZeroFillLot` means the SQL guard
+        // rejected a row the TS predicate still calls wedged — the two
+        // copies of this shape have diverged, not a race — while a fresh
+        // read that no longer matches (including the lot having gone
+        // terminal, so it drops out of `getOpenPositions()` entirely) means
+        // a fill landed (or some other terminal transition happened) between
+        // the worklist read and this write, exactly what the WHERE-guard
+        // exists to detect: the lot un-wedged itself, and the next
+        // `advanceLot`/reconcile pass already owns whatever state it is in
+        // now.
+        const stillWedged = (await store.getOpenPositions()).some(
+          (open) => open.idempotency_key === position.idempotency_key && isWedgedZeroFillLot(open),
+        );
+        if (stillWedged) {
+          divergences.push({
+            idempotency_key: position.idempotency_key,
+            instrument: position.instrument,
+            store_state: position.order_state,
+            broker_state: null,
+            action: 'undetermined',
+            kind: 'sweep',
+            reason:
+              `wedged-zero-fill shape mismatch: isWedgedZeroFillLot still matches ` +
+              `'${position.idempotency_key}' but abandonWedgedZeroFillLot's SQL guard did not ` +
+              '— the TS predicate and its SQL restatement have diverged (#1601)',
+          });
+        }
         continue;
       }
       divergences.push({

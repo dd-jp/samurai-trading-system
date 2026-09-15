@@ -69,6 +69,7 @@ import {
   totalQty,
   weightedAvgPrice,
 } from '../../shared/index.js';
+import { isWedgedZeroFillLot } from '../../shared/store/index.js';
 import { closedTrade } from './closed-trade.js';
 import { cumulativeIncrement } from './cumulative-feed.js';
 import {
@@ -1167,10 +1168,7 @@ async function advanceLot(
     // so an ANNOUNCED line still carries how long the condition has held —
     // both the one-time `warn` and every later low-cadence `info`
     // re-announcement while the lot stays wedged.
-    if (
-      (position.order_state === 'filled' || position.order_state === 'partially_filled') &&
-      position.filled_size === 0
-    ) {
+    if (isWedgedZeroFillLot(position)) {
       const { announce, consecutive } = input.filledZeroSizeThrottle.observe(
         position.idempotency_key,
         now,

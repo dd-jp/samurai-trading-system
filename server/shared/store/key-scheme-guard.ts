@@ -74,9 +74,12 @@ export const IN_FLIGHT_ORDER_STATES: readonly OrderState[] = ['pending', 'submit
  * caps until one of that sweep or a real fill resolves it (#1568).
  *
  * Lives here for the same reason `IN_FLIGHT_ORDER_STATES` does — no single
- * module owns this shape. `wedged-zero-fill-sweep.ts` and `portfolio-view.ts`
- * both now read this export (#1586); `ingest-fills.ts`'s `FILLED_WITH_ZERO_SIZE`
- * warning gate (#1087) still carries its own independent copy, unconverted.
+ * module owns this shape. `wedged-zero-fill-sweep.ts`, `portfolio-view.ts`
+ * and `ingest-fills.ts`'s `FILLED_WITH_ZERO_SIZE` warning gate (#1087) all
+ * read this export (#1586, #1601). `abandonWedgedZeroFillLot`'s SQL UPDATE
+ * guard (sqlite-shared-store.ts) restates the same shape and cannot import
+ * this function — a SQL string is structurally independent no matter how
+ * many TS call sites converge here (#1601).
  * `portfolio-view.ts`'s reservation is only safe because it shares a release
  * path with the sweep; that argument holds only while both read the SAME
  * check, so a second, independently written copy is exactly the

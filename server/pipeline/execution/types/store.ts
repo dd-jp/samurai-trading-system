@@ -486,8 +486,14 @@ export interface LotRetirement {
    * between (however unlikely for a lot this sweep only reaches once it has
    * been wedged for the whole bounded window) must not be overwritten by a
    * decision made off the stale read. A no-op WHERE-guard miss (0 rows
-   * changed) is the lot having genuinely un-wedged itself, not an error —
-   * mirrors `confirmResidualProtected`'s own idempotent-no-op posture.
+   * changed) is USUALLY the lot having genuinely un-wedged itself, not an
+   * error — mirrors `confirmResidualProtected`'s own idempotent-no-op
+   * posture — but this restates `isWedgedZeroFillLot` (key-scheme-guard.ts)
+   * in SQL rather than sharing it, so a miss is also what a divergence
+   * between the two copies looks like from here (#1601): the caller
+   * (`wedged-zero-fill-sweep.ts`) re-reads the row and checks
+   * `isWedgedZeroFillLot` against it to tell the two apart before treating a
+   * miss as benign.
    *
    * Returns whether the write actually landed, so the sweep can tell a
    * genuine abandonment from that race and log accordingly instead of
