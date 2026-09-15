@@ -1,0 +1,224 @@
+{
+  "asset_type": "Etn",
+  "captured_at": "2026-09-15T07:57:57Z",
+  "endpoint": "GET /ref/v1/instruments/details/{Uic}/{AssetType}",
+  "gateway": "https://gateway.saxobank.com/sim/openapi",
+  "responses": {
+    "29391797": {
+      "AffiliateInfoRequired": false,
+      "AmountDecimals": 0,
+      "AssetType": "Etn",
+      "CurrencyCode": "GBP",
+      "DefaultAmount": 0.0,
+      "DefaultSlippage": 0.0,
+      "DefaultSlippageType": "Ticks",
+      "Description": "WisdomTree NASDAQ 100 3x Daily Leveraged ETN",
+      "Exchange": {
+        "CountryCode": "GB",
+        "ExchangeId": "LSE_ETF",
+        "Name": "London Stock Exchange (ETFs)",
+        "TimeZoneId": "1"
+      },
+      "Format": {
+        "Decimals": 2,
+        "OrderDecimals": 2
+      },
+      "FractionalMinimumLotSize": 0.0,
+      "GroupId": 0,
+      "IncrementSize": 1.0,
+      "IsBailIn": false,
+      "IsBarrierEqualsStrike": false,
+      "IsComplex": true,
+      "IsExtendedTradingHoursEnabled": false,
+      "IsOcoOrderSupported": false,
+      "IsPEAEligible": false,
+      "IsPEASMEEligible": false,
+      "IsRedemptionByAmounts": false,
+      "IsSwitchBySameCurrency": false,
+      "IsSystematicInternaliser": false,
+      "IsTradable": true,
+      "LotSizeType": "OddLotsNotAllowed",
+      "MinimumLotSize": 1.0,
+      "MinimumTradeSize": 1.0,
+      "NonTradableReason": "None",
+      "OrderDistances": {
+        "EntryDefaultDistance": 0.25,
+        "EntryDefaultDistanceType": "Percentage",
+        "LimitDefaultDistance": 0.0,
+        "LimitDefaultDistanceType": "Percentage",
+        "StopLimitDefaultDistance": 5.0,
+        "StopLimitDefaultDistanceType": "Pips",
+        "StopLossDefaultDistance": 0.5,
+        "StopLossDefaultDistanceType": "Percentage",
+        "StopLossDefaultEnabled": false,
+        "StopLossDefaultOrderType": "Stop",
+        "TakeProfitDefaultDistance": 0.5,
+        "TakeProfitDefaultDistanceType": "Percentage",
+        "TakeProfitDefaultEnabled": false
+      },
+      "PriceCurrency": "GBX",
+      "PriceToContractFactor": 0.01,
+      "PrimaryListing": 29391797,
+      "StandardAmounts": [1.0, 10.0, 100.0, 500.0, 1000.0, 10000.0, 50000.0, 100000.0],
+      "SupportedOrderTriggerPriceTypes": ["LastTraded", "Open"],
+      "SupportedOrderTypes": [
+        "Market",
+        "Limit",
+        "StopIfTraded",
+        "TrailingStopIfTraded",
+        "StopLimit",
+        "TriggerLimit",
+        "TriggerBreakout",
+        "TriggerStop"
+      ],
+      "SupportedStrategies": [
+        "VWAP",
+        "With Volume",
+        "Iceberg",
+        "TWAP",
+        "Market on Close (MOC)",
+        "Dark",
+        "Liquidity Seeking",
+        "Limit on Close (LOC)",
+        "Target Close",
+        "Price Peg"
+      ],
+      "Symbol": "LQQ3:xlon",
+      "TickSizeScheme": {
+        "DefaultTickSize": 0.01,
+        "Elements": [
+          {
+            "HighPrice": 0.0995,
+            "TickSize": 0.0005
+          },
+          {
+            "HighPrice": 4.999,
+            "TickSize": 0.001
+          },
+          {
+            "HighPrice": 9.9975,
+            "TickSize": 0.0025
+          },
+          {
+            "HighPrice": 24.995,
+            "TickSize": 0.005
+          }
+        ]
+      },
+      "TradableAs": ["Etn"],
+      "TradableOn": ["22690838"],
+      "TradingSignals": "NotAllowed",
+      "TradingStatus": "Tradable",
+      "Uic": 29391797,
+      "UnderlyingTypeCategory": "Instrument"
+    },
+    "3347273": {
+      "AffiliateInfoRequired": false,
+      "AmountDecimals": 0,
+      "AssetType": "Etn",
+      "CurrencyCode": "USD",
+      "DefaultAmount": 0.0,
+      "DefaultSlippage": 0.0,
+      "DefaultSlippageType": "Ticks",
+      "Description": "WisdomTree S&P 500 3x Daily Leveraged ETN",
+      "Exchange": {
+        "CountryCode": "GB",
+        "ExchangeId": "LSE_ETF",
+        "Name": "London Stock Exchange (ETFs)",
+        "TimeZoneId": "1"
+      },
+      "Format": {
+        "Decimals": 2,
+        "OrderDecimals": 2
+      },
+      "FractionalMinimumLotSize": 0.0,
+      "GroupId": 0,
+      "IncrementSize": 1.0,
+      "IsBailIn": false,
+      "IsBarrierEqualsStrike": false,
+      "IsComplex": true,
+      "IsExtendedTradingHoursEnabled": false,
+      "IsOcoOrderSupported": false,
+      "IsPEAEligible": false,
+      "IsPEASMEEligible": false,
+      "IsRedemptionByAmounts": false,
+      "IsSwitchBySameCurrency": false,
+      "IsSystematicInternaliser": false,
+      "IsTradable": true,
+      "LotSizeType": "OddLotsNotAllowed",
+      "MinimumLotSize": 1.0,
+      "MinimumTradeSize": 1.0,
+      "NonTradableReason": "None",
+      "OrderDistances": {
+        "EntryDefaultDistance": 0.25,
+        "EntryDefaultDistanceType": "Percentage",
+        "LimitDefaultDistance": 0.0,
+        "LimitDefaultDistanceType": "Percentage",
+        "StopLimitDefaultDistance": 5.0,
+        "StopLimitDefaultDistanceType": "Pips",
+        "StopLossDefaultDistance": 0.5,
+        "StopLossDefaultDistanceType": "Percentage",
+        "StopLossDefaultEnabled": false,
+        "StopLossDefaultOrderType": "Stop",
+        "TakeProfitDefaultDistance": 0.5,
+        "TakeProfitDefaultDistanceType": "Percentage",
+        "TakeProfitDefaultEnabled": false
+      },
+      "PriceCurrency": "USD",
+      "PriceToContractFactor": 1.0,
+      "PrimaryListing": 3347273,
+      "StandardAmounts": [1.0, 10.0, 100.0, 500.0, 1000.0, 10000.0, 50000.0, 100000.0],
+      "SupportedOrderTriggerPriceTypes": ["LastTraded", "Open"],
+      "SupportedOrderTypes": [
+        "Market",
+        "Limit",
+        "StopIfTraded",
+        "TrailingStopIfTraded",
+        "StopLimit",
+        "TriggerLimit",
+        "TriggerBreakout",
+        "TriggerStop"
+      ],
+      "SupportedStrategies": [
+        "VWAP",
+        "With Volume",
+        "Iceberg",
+        "TWAP",
+        "Market on Close (MOC)",
+        "Dark",
+        "Liquidity Seeking",
+        "Limit on Close (LOC)",
+        "Target Close",
+        "Price Peg"
+      ],
+      "Symbol": "3USL:xlon",
+      "TickSizeScheme": {
+        "DefaultTickSize": 0.01,
+        "Elements": [
+          {
+            "HighPrice": 0.0995,
+            "TickSize": 0.0005
+          },
+          {
+            "HighPrice": 4.999,
+            "TickSize": 0.001
+          },
+          {
+            "HighPrice": 9.9975,
+            "TickSize": 0.0025
+          },
+          {
+            "HighPrice": 24.995,
+            "TickSize": 0.005
+          }
+        ]
+      },
+      "TradableAs": ["Etn"],
+      "TradableOn": ["22690838"],
+      "TradingSignals": "NotAllowed",
+      "TradingStatus": "Tradable",
+      "Uic": 3347273,
+      "UnderlyingTypeCategory": "Instrument"
+    }
+  }
+}
