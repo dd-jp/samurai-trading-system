@@ -715,14 +715,7 @@ export interface MarketDataFetchEvidence {
   traceIds: string[];
 }
 
-/**
- * Records every `market_data_fetch` line (#1082) to prove the telemetry
- * mechanism actually fires through the real composition root — not merely
- * that `MarketDataServiceImpl` was constructed with a `telemetry` argument
- * (#430's dominant defect: built, unit-tested, never wired). Matched by
- * `LogEntry.event` rather than message text, since the message itself is
- * instrument/timeframe-specific prose.
- */
+/** Records every `market_data_fetch` line (#1082), matched by `LogEntry.event` not message text. */
 export class MarketDataFetchRecorder implements Logger {
   private fetchCount = 0;
   private readonly traceIds = new Set<string>();
@@ -748,9 +741,7 @@ const marketDataFetchProbe: Probe<'marketDataFetch'> = {
   },
   verdict(evidence, { observations }) {
     const failures: string[] = [];
-    // The store starts cold (`:memory:`), so the first bar fetch is a
-    // guaranteed cache miss; zero lines means `telemetry` was dropped from
-    // production.ts's `MarketDataServiceImpl` construction (#1082).
+    // Store starts cold, so the first bar fetch is a guaranteed cache miss
     if (evidence.fetchCount === 0) {
       failures.push(
         'zero market_data_fetch lines were recorded over the run — the store starts cold, so at ' +
@@ -761,9 +752,7 @@ const marketDataFetchProbe: Probe<'marketDataFetch'> = {
       );
     }
 
-    // Deleting the `runWithTraceId` wrapper from `SequentialTickRunner`
-    // leaves every fetch byte-identical and every unit test green (each
-    // site's fallback is a legal return) — only this join can catch it.
+    // Deleting the runWithTraceId wrapper leaves every fetch byte-identical and green — only this join catches it
     const tickTraces = new Set(observations.ticks.map((tick) => tick.trace_id));
     const joined = evidence.traceIds.some((trace_id) => tickTraces.has(trace_id));
     if (tickTraces.size > 0 && evidence.fetchCount > 0 && !joined) {
@@ -785,17 +774,9 @@ function payloadError(payload: unknown): string {
 }
 
 /**
- * Decorates a real `SimulatedBrokerAdapter` for the exit-path harness (#576),
- * adding two things the real adapter can't: (1) `callSequence` records call
- * order so cancel-before-flatten (#516) can be asserted, since no store row
- * distinguishes the two orderings; (2) `truncateFlattenFill` produces a
- * genuinely partial fill (see `PARTIAL_FLATTEN_FRACTION`) by rewriting one
- * fill's `qty`/`fee` while preserving `broker_fill_id`, which `ingestFills()`
- * dedups on and `redistributeFlattenFills` derives a per-lot id from.
- *
- * `getOpenPositions()` passes straight through and is deliberately NOT
- * reconciled against the truncated feed — nothing in this harness reads it;
- * it exists only because `BrokerAdapter` requires it.
+ * Decorates a real `SimulatedBrokerAdapter` for the exit-path harness (#576): `callSequence`
+ * records call order so cancel-before-flatten (#516) can be asserted, and `truncateFlattenFill`
+ * produces a genuinely partial fill while preserving `broker_fill_id`, which `ingestFills()` dedups on.
  */
 class ExitPathBrokerAdapter implements BrokerAdapter {
   readonly callSequence: string[] = [];
@@ -803,11 +784,7 @@ class ExitPathBrokerAdapter implements BrokerAdapter {
   /** Lots whose next `rearmProtectiveLegs` call throws — scenario 5's one-shot failure (#549) */
   private readonly rearmFailuresOnce = new Set<string>();
 
-  /**
-   * Typed as the concrete `SimulatedBrokerAdapter`, not `BrokerAdapter`:
-   * `getProtectedQty` below isn't part of that interface, and
-   * `runExitPathScenarios` needs it to read back scenario 2's residual.
-   */
+  /** Concrete `SimulatedBrokerAdapter`, not `BrokerAdapter`: `getProtectedQty` isn't on that interface. */
   constructor(private readonly delegate: SimulatedBrokerAdapter) {}
 
   truncateFlattenFill(clientOrderId: string, fraction: number): void {
@@ -905,13 +882,7 @@ class ExitPathBrokerAdapter implements BrokerAdapter {
   }
 }
 
-/**
- * A minimal, internally-consistent `OrderIntent` for the exit-path harness.
- * Every field the Trader would normally compute (sizing rationale, cosine
- * precedent, conviction) is a fixed placeholder — `execute()`'s exit branch
- * reads none of them, and the entry branch only reads `entry`/`stop`/
- * `target` to expand the bracket, so any internally-consistent numbers serve.
- */
+/** A minimal `OrderIntent` for the exit-path harness — Trader-computed fields are fixed placeholders `execute()` never reads. */
 function exitPathOrder(
   instrument: string,
   idempotencyKey: string,
@@ -945,9 +916,7 @@ function exitPathOrder(
         cosine_multiplier: 1,
       },
       cosine_precedent: { neighbor_count: 0, weighted_mean_r: null, no_precedent: true },
-      // #793: `executeExit` refuses to write ahead without an exit_reason;
-      // this harness has no debate/trader run behind it, so a fixed
-      // 'flatten' stands in for whichever of the three reasons fired.
+      // #793: executeExit refuses to write ahead without an exit_reason
       ...(intentType === 'exit' ? { exit_reason: 'flatten' as const } : {}),
     },
   };
@@ -968,12 +937,9 @@ function approvedRiskDecision(order: OrderIntent): RiskDecision {
 }
 
 /**
- * Drives the exit-path harness through the REAL `VerdictImpl` (#894) instead
- * of a hand-built `go`, which could not be refused by a gate. Spread from
- * `buildStartingProfileConfigs` so a retune of the shipped profile can't
- * leave this harness silently testing a config nothing runs; the one
- * override (`max_mark_age`) exists because `FixtureDataSource` serves a
- * single fixed-timestamp mark while this harness advances its own clock.
+ * Drives the exit-path harness through the REAL `VerdictImpl` (#894), spread from
+ * `buildStartingProfileConfigs` so a profile retune can't leave this silently untested.
+ * `max_mark_age` is overridden since `FixtureDataSource` serves one fixed-timestamp mark.
  */
 const EXIT_PATH_VERDICT_CONFIG: VerdictConfig = {
   ...buildStartingProfileConfigs().verdictConfig,
