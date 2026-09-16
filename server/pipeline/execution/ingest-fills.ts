@@ -513,7 +513,7 @@ async function persistUnattributedSplits(
 
 /**
  * Pre-migration-0021 fallback split, blind to exits already recorded
- * against the lot (#571). Wind-down path only.
+ * against the lot. Wind-down path only.
  */
 async function entryTotalShares(
   store: FillIngestInput['store'],
@@ -643,7 +643,7 @@ async function handleLotWithNoNewFills(
 }
 
 /**
- * `flattenTargetedThisPoll` (#525) is true when a flatten named this lot and
+ * `flattenTargetedThisPoll` is true when a flatten named this lot and
  * resolved this poll, independent of whether `fills` is non-empty
  */
 async function advanceLot(
@@ -686,7 +686,7 @@ async function advanceLot(
   const filledSize = totalQty(entryFills);
   // No entry fill yet — persist the rows alone. Deliberately NOT `clear()`ed:
   // restarting the wedge streak here would re-arm a `warn` that should stay
-  // a quiet `info`-cadence wedge (#1087, #1383)
+  // a quiet `info`-cadence wedge
   if (filledSize === 0) {
     await store.applyLotAdvance({ idempotency_key: position.idempotency_key, fills: newFills });
     return;
@@ -807,16 +807,16 @@ async function cumulativeTopUp(
 }
 
 /**
- * Enumerates fields rather than spreading, to keep `qty_is_cumulative`
- * (#842) out of the persisted row. `modelledLotCosts` fallback CHARGES the
- * modelled commission via `max(fill.fee, fallbackCostBreakdown.commission)`
- * — a top-up, not an addition, since the venue's own fee is the same
- * commission once Saxo is the adapter (#1121).
+ * Enumerates fields rather than spreading, to keep `qty_is_cumulative` out
+ * of the persisted row. `modelledLotCosts` fallback CHARGES the modelled
+ * commission via `max(fill.fee, fallbackCostBreakdown.commission)` — a
+ * top-up, not an addition, since the venue's own fee is the same commission
+ * once Saxo is the adapter.
  */
 /**
- * Posts to `input.nonSterlingFeeAlerts` AFTER `safeLog`, never instead of it
- * (#1465). Second param is the two fields read, not an `OpenPosition` —
- * `persistUnattributedSplits` books against a lot with none to pass (#1550).
+ * Posts to `input.nonSterlingFeeAlerts` after `safeLog`, never instead of
+ * it. Second param is the two fields read, not an `OpenPosition` —
+ * `persistUnattributedSplits` books against a lot with none to pass.
  */
 async function warnOnNonSterlingFee(
   input: FillIngestInput,
@@ -840,8 +840,8 @@ async function warnOnNonSterlingFee(
     event: 'fee_currency_not_book_currency',
     level: 'error',
     message: FEE_CURRENCY_NOT_BOOK_CURRENCY,
-    // #1521: rides this existing line rather than a second one — a non-book
-    // fee currency and a missing conversion rate are the same fact
+    // Rides this existing line rather than a second one — a non-book fee
+    // currency and a missing conversion rate are the same fact
     payload: {
       ...alert,
       fx_rate_to_gbp: fill.fx_rate_to_gbp,
@@ -893,18 +893,17 @@ function toFill(
       : fallbackCostBreakdown !== undefined
         ? { cost_breakdown: fallbackCostBreakdown }
         : {}),
-    // #793: UNLIKE `qty_is_cumulative`, this one IS persisted (see
+    // Unlike `qty_is_cumulative`, this one IS persisted (see
     // `NormalizedFill.exit_reason`'s doc)
     ...(fill.exit_reason === undefined ? {} : { exit_reason: fill.exit_reason }),
-    // #1001: also persisted, unlike `qty_is_cumulative` — see
+    // Also persisted, unlike `qty_is_cumulative` — see
     // `Fill.flatten_idempotency_key`'s doc
     ...(fill.flatten_idempotency_key === undefined
       ? {}
       : { flatten_idempotency_key: fill.flatten_idempotency_key }),
-    // #1220: carried through verbatim, never converted — see
-    // `Fill.fee_currency`'s doc
+    // Carried through verbatim, never converted — see `Fill.fee_currency`'s doc
     ...(fill.fee_currency === undefined ? {} : { fee_currency: fill.fee_currency }),
-    // #1521: same posture as `fee_currency` above
+    // Same posture as `fee_currency` above
     ...(fill.fx_rate_to_gbp === undefined ? {} : { fx_rate_to_gbp: fill.fx_rate_to_gbp }),
     ...(fill.fx_rate_to_gbp_source === undefined
       ? {}

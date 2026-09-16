@@ -644,12 +644,9 @@ export class AlpacaCryptoLegEmulation {
           side: exitSide,
           qty: String(qty),
           stop_price: String(request.stop),
-          // The caller computes ONE stop level (`NativeBracketRequest.stop`);
-          // crypto has no plain stop type, so the required post-trigger limit
-          // is set AT the stop level. The honest cost: a market that gaps
-          // through the stop can leave this limit unfilled — the same
-          // trade-off any stop-limit carries, chosen over inventing a
-          // slippage allowance the caller never priced
+          // Crypto has no plain stop type, so the post-trigger limit is set
+          // AT the stop level — a gapping market can leave it unfilled, the
+          // trade-off any stop-limit carries.
           limit_price: String(request.stop),
           time_in_force: 'gtc',
           client_order_id: clientOrderId,

@@ -558,9 +558,9 @@ const DAILY_METRICS: MetricsSuite = {
  * it is the case a fixture set is most likely to omit and the one the UI most
  * needs to prove it renders, since a silently-dropped unpriced call is how a
  * spend total understates itself. `per_debate.unattributed_calls` is non-zero
- * for the same reason (#326) — it is the caveat that travels with the
- * percentiles, and a fixture that never exercises it lets the UI ship without
- * a place to show it.
+ * for the same reason — it is the caveat that travels with the percentiles,
+ * and a fixture that never exercises it lets the UI ship without a place to
+ * show it.
  *
  * p95 sits well above p50 in every window, deliberately: LLM latency is
  * long-tailed and a fixture set with p50 == p95 would let a percentile bug
@@ -603,7 +603,7 @@ const LLM_SPEND_7D = {
 };
 
 /**
- * Two Feedback Loop cycles' matched-control comparisons (#971), newest first.
+ * Two Feedback Loop cycles' matched-control comparisons, newest first.
  *
  * The live arm leads on both columns here — the healthy reading, and the one an
  * operator opening the dashboard for the first time should see. The divergent
@@ -612,11 +612,10 @@ const LLM_SPEND_7D = {
  * teach the reader that the alert state is normal.
  */
 /**
- * #981. The outside benchmarks over the SAME window as `ARM_COMPARISONS[0]` —
+ * The outside benchmarks over the SAME window as `ARM_COMPARISONS[0]` —
  * that match is the fixture's whole point, since the panel states it. Two
- * benchmarks per cycle, populated for `getArmComparisons`' reason: a fixture
- * store whose job is "the dashboard runs out of the box" must exercise the
- * populated branch or the panel ships never having been drawn.
+ * benchmarks per cycle, exercising the populated branch a fixture store
+ * whose job is "the dashboard runs out of the box" must not skip.
  *
  * The numbers are deliberately unremarkable and NOT chosen to make the live arm
  * look good: over this window SPY beat the live arm's 1.84%. That is a normal
@@ -662,8 +661,8 @@ const ARM_COMPARISONS: PersistedArmComparisonSample[] = [
         return_pct: 0.0184,
         max_drawdown_pct: 0.021,
         refused_pass_count: 0,
-        // #1546: the flatten class dropped where the protective one did not —
-        // the asymmetry this column exists to make visible, demoed rather than
+        // The flatten class dropped where the protective one did not — the
+        // asymmetry this column exists to make visible, demoed rather than
         // flattened to zeros
         cost_basis_drops: {
           protective: { kept: 15, dropped: 0 },
@@ -693,10 +692,10 @@ const ARM_COMPARISONS: PersistedArmComparisonSample[] = [
     },
   },
   {
-    // Predates migrations 0057 (#1483) and 0066 (#1546): `refused_pass_count`
-    // and `cost_basis_drops` are `null` on both arms, not `0`/all-zero — the
-    // fixture server's demo of the honest historical case a real pre-migration
-    // row reads back as
+    // Predates migrations 0057 and 0066: `refused_pass_count` and
+    // `cost_basis_drops` are `null` on both arms, not `0`/all-zero — the
+    // fixture server's demo of the honest historical case a real
+    // pre-migration row reads back as
     computed_at: new Date(NOW.getTime() - 24 * 3_600_000),
     comparison: {
       from: new Date(NOW.getTime() - 31 * 24 * 3_600_000),
@@ -730,16 +729,16 @@ const ARM_COMPARISONS: PersistedArmComparisonSample[] = [
 ];
 
 /**
- * #1140: the fixture server states a cap rather than sending `null`, so the
- * demo exercises the meter rather than its empty state. ADR-0008's paper
- * figure, which is what a fixture run stands in for.
+ * The fixture server states a cap rather than sending `null`, so the demo
+ * exercises the meter rather than its empty state. ADR-0008's paper figure,
+ * which is what a fixture run stands in for.
  */
 const FIXTURE_LLM_CAP_USD = 50;
 
 /**
- * #1196: a fixed, arbitrary past instant standing in for the real
- * orchestrator's arm-at-boot timestamp — armed, not absent, for the same
- * "demo exercises the real state" reason `FIXTURE_LLM_CAP_USD` exists
+ * A fixed, arbitrary past instant standing in for the real orchestrator's
+ * arm-at-boot timestamp — armed, not absent, for the same "demo exercises
+ * the real state" reason `FIXTURE_LLM_CAP_USD` exists
  */
 const FIXTURE_LLM_CAP_ARMED_AT = '2026-08-01T00:00:00.000Z';
 
@@ -762,7 +761,7 @@ const LLM_SPEND_ALL = {
 };
 
 /**
- * Pipeline-view fixtures (#411). One lane per instrument in `MARKS`, chosen so
+ * Pipeline-view fixtures. One lane per instrument in `MARKS`, chosen so
  * every cell state and every outcome the render layer has to draw appears at
  * least once without the developer having to run a tick:
  *
@@ -774,7 +773,7 @@ const LLM_SPEND_ALL = {
  *  - TSLA    — stopped at Analysts on `quorum_skip`.
  *  - SPY     — in flight at Debate, on the same trace as `TICK_STATUS` so the
  *              two views of the live tick agree.
- *  - QQQ     — no trace at all: the idle lane (#413).
+ *  - QQQ     — no trace at all: the idle lane.
  *
  * AAPL and TSLA are the deliberate ones: short-circuits that end before
  * Verdict, which the UI must draw and which the SQLite store now serves too
@@ -849,10 +848,10 @@ export class InMemoryQueryStore implements DashboardQueryStore {
   }
 
   /**
-   * #1592: `arm` accepted (so a subclass can override arm-aware, per-arm
-   * behavior — `server.test.ts`'s `TwoArmQueryStore`) but ignored here — this
-   * fixture's data has never varied by arm, and giving it a second, static
-   * "control" fixture set is out of scope for a dev/test seed store.
+   * `arm` accepted (so a subclass can override arm-aware, per-arm behavior —
+   * `server.test.ts`'s `TwoArmQueryStore`) but ignored here — this fixture's
+   * data has never varied by arm, and giving it a second, static "control"
+   * fixture set is out of scope for a dev/test seed store.
    *
    * Consequence for `fixture-server.ts` (the Playwright/e2e entry): the real
    * `server.ts` handler stamps the wire snapshot's `arm` field from the
@@ -860,9 +859,9 @@ export class InMemoryQueryStore implements DashboardQueryStore {
    * `?arm=control` against the fixture server yields these same live rows
    * mislabelled `arm: 'control'`. Arm-scoping IS proven at the HTTP layer —
    * `server.test.ts`'s `TwoArmQueryStore` covers it against the real server —
-   * but any Playwright/e2e test built against this fixture store (#1595)
-   * cannot use position/closed-trade content to tell the arms apart; it would
-   * pass vacuously against a regression that broke real cross-arm scoping.
+   * but any Playwright/e2e test built against this fixture store cannot use
+   * position/closed-trade content to tell the arms apart; it would pass
+   * vacuously against a regression that broke real cross-arm scoping.
    */
   getOpenPositions(_asOf: Date, _arm: TradingArm): OpenPosition[] {
     return OPEN_POSITIONS;
@@ -872,7 +871,7 @@ export class InMemoryQueryStore implements DashboardQueryStore {
     return CLOSED_TRADES.slice(0, limit);
   }
 
-  /** #1595: same arm-insensitive limitation as `getRecentClosedTrades` above — see its doc */
+  /** Same arm-insensitive limitation as `getRecentClosedTrades` above — see its doc */
   getAllClosedTrades(_asOf: Date, _arm: TradingArm): ClosedTrade[] {
     return CLOSED_TRADES;
   }
@@ -883,14 +882,14 @@ export class InMemoryQueryStore implements DashboardQueryStore {
     return FILLS.filter((fill) => keys.has(fill.idempotency_key));
   }
 
-  /** `arm` accepted and ignored — see `getOpenPositions`'s doc (#1592/#1594) */
+  /** `arm` accepted and ignored — see `getOpenPositions`'s doc */
   getVerdictHistory(limit: number, _asOf: Date, _arm: TradingArm): VerdictAuditEntry[] {
     return VERDICT_HISTORY.slice(0, limit);
   }
 
   /**
-   * #1066. `limit` is honoured for `getPipelineActivity`'s reason. `arm`
-   * accepted and ignored — see `getOpenPositions`'s doc (#1592/#1594).
+   * `limit` is honoured for `getPipelineActivity`'s reason. `arm` accepted
+   * and ignored — see `getOpenPositions`'s doc.
    */
   getRiskCritics(limit: number, _asOf: Date, _arm: TradingArm): RiskCriticRecord[] {
     return RISK_CRITICS.slice(0, limit).map((record) => ({ ...record }));
@@ -900,12 +899,12 @@ export class InMemoryQueryStore implements DashboardQueryStore {
     return { ...ANALYST_WEIGHTS };
   }
 
-  /** `arm` accepted and ignored — see `getOpenPositions`'s doc (#1592/#1594) */
+  /** `arm` accepted and ignored — see `getOpenPositions`'s doc */
   getAttribution(_asOf: Date, _arm: TradingArm): Record<string, AttributionSummary> {
     return { ...ATTRIBUTION };
   }
 
-  /** `arm` accepted and ignored — see `getOpenPositions`'s doc (#1592/#1594) */
+  /** `arm` accepted and ignored — see `getOpenPositions`'s doc */
   getDailyMetrics(_asOf: Date, _arm: TradingArm): MetricsSuite {
     return { ...DAILY_METRICS };
   }
@@ -924,7 +923,7 @@ export class InMemoryQueryStore implements DashboardQueryStore {
   }
 
   /**
-   * #971. One sample, not zero: an empty array is the honest "FL has computed
+   * One sample, not zero: an empty array is the honest "FL has computed
    * none yet" state and the panel renders it as those words — a fixture store
    * whose whole job is "the dashboard runs out of the box" must exercise the
    * populated branch instead, or the panel ships never having been drawn.
@@ -934,7 +933,7 @@ export class InMemoryQueryStore implements DashboardQueryStore {
     return ARM_COMPARISONS.slice(0, limit).map((sample) => ({ ...sample }));
   }
 
-  /** #981. `limit` counts rows, not cycles — see the port's doc. */
+  /** `limit` counts rows, not cycles — see the port's doc. */
   getOutsideBenchmarks(limit: number, _asOf: Date): OutsideBenchmarkSample[] {
     return OUTSIDE_BENCHMARKS.slice(0, limit).map((sample) => ({ ...sample }));
   }
@@ -954,10 +953,10 @@ export class InMemoryQueryStore implements DashboardQueryStore {
    * ignored its own bound would let the dashboard ship never having exercised
    * one); `lookbackMs` and `asOf` are not, for the same reason every method
    * above ignores `asOf` — the fixture data is static, so every trace is
-   * always "recent". `arm` accepted and ignored — see `getOpenPositions`'s doc
-   * (#1592/#1594); unlike `SqliteQueryStore`, there is no `current_tick`
-   * table here for `live` to vary by, so `arm: 'control'` returns the same
-   * `live` array as `arm: 'live'` rather than `[]`.
+   * always "recent". `arm` accepted and ignored — see `getOpenPositions`'s
+   * doc; unlike `SqliteQueryStore`, there is no `current_tick` table here for
+   * `live` to vary by, so `arm: 'control'` returns the same `live` array as
+   * `arm: 'live'` rather than `[]`.
    */
   getPipelineActivity(
     maxLanes: number,

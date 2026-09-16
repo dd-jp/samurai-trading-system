@@ -1,11 +1,11 @@
 /**
- * Primary -> fallback failover at the `DataSource` port (#562), for the LIVE
+ * Primary -> fallback failover at the `DataSource` port, for the LIVE
  * orchestrator's bar reads.
  *
  * ## Why a second wrapper rather than reusing `withOhlcvFailover` directly
  *
  * `withOhlcvFailover` (./ohlcv-failover.ts) wraps a `BarFetcher` — the shape
- * the #512 warm-start backfill script composes, because that script talks to
+ * the warm-start backfill script composes, because that script talks to
  * vendor clients directly and never constructs a `DataSource`. The live
  * composition root (`server/apps/orchestrator/production.ts`) injects a
  * `DataSource` into `MarketDataServiceImpl`, so failover has to arrive as a
