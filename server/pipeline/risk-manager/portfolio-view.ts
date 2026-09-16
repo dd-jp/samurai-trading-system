@@ -1,17 +1,17 @@
 /**
- * Portfolio-accounting view (#78) — computes `PortfolioView` from open
- * positions plus current marks from the Market Data Service. See
+ * Portfolio-accounting view — computes `PortfolioView` from open positions
+ * plus current marks from the Market Data Service. See
  * docs/specs/risk-manager-spec.md ("Module: State & Accounting").
  *
  * `cash`, `consecutive_losses` and the session-open basis for daily PnL are
  * taken here as pre-computed inputs rather than invented — they come from the
  * account layer, which owns the broker ledger and the durable snapshots.
  *
- * The daily-PnL *division* does happen here though (#332), and deliberately:
- * its unrealized term is a mark-to-market over open positions, and this
- * function has already fetched every mark it needs for the exposure math. Doing
- * it in the account provider instead would mean a second round of mark reads
- * for the same instruments at the same instant.
+ * The daily-PnL *division* does happen here though, and deliberately: its
+ * unrealized term is a mark-to-market over open positions, and this function
+ * has already fetched every mark it needs for the exposure math. Doing it in
+ * the account provider instead would mean a second round of mark reads for
+ * the same instruments at the same instant.
  */
 import {
   classifyMarkFreshness,
@@ -34,14 +34,13 @@ export interface PortfolioAccountingInput {
   asOf: Date;
   /**
    * Reads the instant the marks came back, which is when this view VALUES the
-   * book — the coordinate feed freshness is judged at (#1111).
+   * book — the coordinate feed freshness is judged at.
    *
    * Required rather than defaulted to `asOf`, and required rather than
    * optional: a caller that skips it is a caller measuring freshness from the
-   * tick's start instant again, and the whole defect #1111 fixes is that the
-   * gap between those two instants is unbounded — 145s in the 2026-09-04 paper
-   * session, against a 5000ms tolerance. A compile error at every call site is
-   * how that stays fixed.
+   * tick's start instant again, and the gap between those two instants is
+   * unbounded — measured at 145s in a paper session against a 5000ms
+   * tolerance. A compile error at every call site is how that stays fixed.
    *
    * Injected rather than read off `Date.now()` so backtest stays deterministic:
    * the replay driver advances its `SimulatedClock` to the bar BEFORE the tick
@@ -52,14 +51,14 @@ export interface PortfolioAccountingInput {
   cash: number;
   peak_equity: number;
   /**
-   * Per-class session-open equity and realized PnL since that open (#332).
+   * Per-class session-open equity and realized PnL since that open.
    * The unrealized half is added here, from the marks fetched below.
    */
   daily_basis: SessionBasisByClass;
-  /** Realized, from fills — not computed here (#83) */
+  /** Realized, from fills — not computed here */
   consecutive_losses: number;
   /**
-   * FEED staleness bound per asset class (#640): max `asOf -
+   * FEED staleness bound per asset class: max `asOf -
    * Mark.observed_at` for a mark used to value a held position.
    *
    * Required, not optional-with-a-default. This function's answer feeds every
@@ -76,8 +75,7 @@ export interface PortfolioAccountingInput {
    */
   max_mark_age: Record<AssetClass, number>;
   /**
-   * What to do with a held instrument whose mark cannot be read or is stale
-   * (#841).
+   * What to do with a held instrument whose mark cannot be read or is stale.
    *
    * - `'refuse'` (the default): throw, producing NO view at all. The ENTRY
    *   path's posture, unchanged — sizing an entry needs the whole book
@@ -104,9 +102,9 @@ type UnvaluableMarkPolicy = 'refuse' | 'exclude';
 
 /**
  * Base for every reason `computePortfolioView` refuses to value a held
- * instrument (#640, widened #1089) — the common type a caller narrows on to
- * catch "the book could not be valued" without matching on message text
- * (docs/coding-standards.md, "Typed errors only where a caller branches").
+ * instrument — the common type a caller narrows on to catch "the book could
+ * not be valued" without matching on message text (docs/coding-standards.md,
+ * "Typed errors only where a caller branches").
  *
  * `decide.ts`'s `buildBracket` is that caller: it converts a whole-book
  * valuation refusal into a named skip on the control arm while letting every
@@ -149,8 +147,7 @@ export class MarkReadError extends BookValuationError {
 }
 
 /**
- * Thrown when a held instrument's mark is too old to value the book with
- * (#640).
+ * Thrown when a held instrument's mark is too old to value the book with.
  *
  * A named type rather than a bare `Error` because the caller has to be able to
  * tell this apart from a transport failure without matching on message text:
@@ -163,18 +160,16 @@ export class StaleMarkError extends BookValuationError {
   constructor(
     readonly instrument: string,
     readonly observed_at: Date,
-    /** When the mark was RECEIVED — the coordinate freshness is judged at (#1111) */
+    /** When the mark was RECEIVED — the coordinate freshness is judged at */
     readonly readAt: Date,
     /** The tick's point-in-time coordinate, carried for the pass-duration it implies */
     readonly asOf: Date,
     readonly freshness: Exclude<MarkFreshness, { status: 'fresh' }>,
   ) {
-    // #1111: the two statuses are two different faults and each says only its
-    // own. `stale` is the market having gone quiet; `ahead` is our clock and
-    // the venue's disagreeing AFTER the mark was already in hand, which pass
-    // latency can no longer explain at any magnitude — the pre-#1111 wording
-    // asserted that disagreement for an offset that was only our own elapsed
-    // time between `asOf` and the read
+    // The two statuses are two different faults and each says only its own
+    // `stale` is the market having gone quiet; `ahead` is our clock and the
+    // venue's disagreeing AFTER the mark was already in hand, which pass
+    // latency can no longer explain at any magnitude
     const passMs = readAt.getTime() - asOf.getTime();
     const detail =
       freshness.status === 'stale'
@@ -232,8 +227,8 @@ export function unrealizedFor(position: OpenPosition, mark: number): number {
 }
 
 /**
- * The states whose unfilled remainder is RESERVED against the entry caps
- * (#1019) — see `PortfolioView.reserved_exposure_by_instrument` for what the
+ * The states whose unfilled remainder is RESERVED against the entry caps —
+ * see `PortfolioView.reserved_exposure_by_instrument` for what the
  * reservation is and why it excludes a `partially_filled` lot with real
  * progress.
  *
@@ -260,30 +255,24 @@ const RESERVABLE_ORDER_STATES: ReadonlySet<OpenPosition['order_state']> = new Se
  * hand the caps back headroom the book does not have — the one direction a
  * risk term must never move.
  *
- * `isWedgedZeroFillLot` (#1568) also reserves: a lot the ADAPTER adopted
- * `filled`/`partially_filled` at submit time (`saxo-adapter.ts`'s `adopt`, on
- * a lookup hit) with `filled_size` still 0 — `execute.ts` writes the ack's
- * `order_state` straight onto the write-ahead row without a quantity to
- * advance `filled_size` with. Neither `RESERVABLE_ORDER_STATES` above nor
- * `exposure_by_instrument` (valued at `filled_size`) sees this lot otherwise,
- * so a second instrument evaluated before the next `ingestFills()` poll would
- * net against nothing. Reserving it does not strand the reservation the way a
- * genuine `partially_filled` remainder would: `wedged-zero-fill-sweep.ts`
- * selects the SAME shape (#1586 — the two now share one predicate rather than
- * each defining it), so the same two outcomes that sweep relies on both
- * release it here too — `ingestFills()` advances `filled_size` off zero on a
- * real fill (this stops matching, ordinary exposure math takes over), or the
+ * `isWedgedZeroFillLot` also reserves: a lot the ADAPTER adopted
+ * `filled`/`partially_filled` at submit time with `filled_size` still 0 —
+ * `execute.ts` writes the ack's `order_state` straight onto the write-ahead
+ * row without a quantity to advance `filled_size` with. Neither
+ * `RESERVABLE_ORDER_STATES` above nor `exposure_by_instrument` (valued at
+ * `filled_size`) sees this lot otherwise, so a second instrument evaluated
+ * before the next `ingestFills()` poll would net against nothing. Reserving
+ * it does not strand the reservation the way a genuine `partially_filled`
+ * remainder would: `wedged-zero-fill-sweep.ts` selects the SAME shape, so the
+ * same two outcomes that sweep relies on both release it here too —
+ * `ingestFills()` advances `filled_size` off zero on a real fill, or the
  * sweep abandons the row into a terminal state after
- * `WEDGED_ZERO_FILL_ABANDON_AFTER_MS` if no fill ever lands (also stops
- * matching). Bounded at 24h in the pathological case — the same safe-direction
- * over-reservation `PortfolioView.reserved_exposure_by_instrument` already
- * accepts for a resting `submitted` order — PROVIDED the abandon actually
- * retires the row. `sqlite-shared-store.ts`'s abandon UPDATE restates this
- * predicate's shape in raw SQL rather than sharing it (a WHERE clause cannot
- * import a TS function), so a predicate widened here without a matching SQL
- * change leaves the row unretired and this reservation stranded past 24h
- * (#1601, which makes that divergence a loud `warn` instead of a silent
- * no-op — loud is not the same as bounded).
+ * `WEDGED_ZERO_FILL_ABANDON_AFTER_MS` if no fill ever lands. Bounded at 24h
+ * in the pathological case, PROVIDED the abandon actually retires the row —
+ * `sqlite-shared-store.ts`'s abandon UPDATE restates this predicate's shape
+ * in raw SQL rather than sharing it (a WHERE clause cannot import a TS
+ * function), so a predicate widened here without a matching SQL change
+ * leaves the row unretired and this reservation stranded past 24h.
  */
 function reservedNotional(position: OpenPosition, mark: number): number {
   if (!RESERVABLE_ORDER_STATES.has(position.order_state) && !isWedgedZeroFillLot(position)) {
@@ -301,11 +290,11 @@ function reservedNotional(position: OpenPosition, mark: number): number {
  *
  * The unrealized term is each open lot's *lifetime* gain, not its gain since
  * the session boundary: a mark at the boundary is not stored, so a position
- * held across the open contributes PnL it earned yesterday. #332 specifies this
- * figure explicitly and it is the conservative direction for a loss breaker (a
- * losing held position reads at least as bad as it truly is today), but it is
- * an approximation, not an identity — which is a further reason the three
- * per-class figures are not expected to reconcile against one another.
+ * held across the open contributes PnL it earned yesterday. This is the
+ * conservative direction for a loss breaker (a losing held position reads at
+ * least as bad as it truly is today), but it is an approximation, not an
+ * identity — which is a further reason the three per-class figures are not
+ * expected to reconcile against one another.
  */
 function dailyPnlFor(basis: SessionBasis, unrealized: number): DailyPnl {
   if (!basis.known) {
@@ -316,7 +305,7 @@ function dailyPnlFor(basis: SessionBasis, unrealized: number): DailyPnl {
 }
 
 /**
- * Every held instrument's mark, in ONE batch read, or nothing (#289 H8).
+ * Every held instrument's mark, in ONE batch read, or nothing.
  *
  * All-or-nothing is NOT new here — the `Promise.all` over N `getMark` calls
  * this replaces already rejected the whole view on any failed OR stale read.
@@ -324,22 +313,21 @@ function dailyPnlFor(basis: SessionBasis, unrealized: number): DailyPnl {
  * whichever lookup lost the race and discarded the rest, so a feed outage
  * across three names showed the operator one. `getMarks` returns every
  * instrument's outcome, and this folds the unreadable and the STALE ones
- * (#640, judged here because the per-class bound lives here and not in MDS)
- * into a single report naming all of them.
+ * (judged here because the per-class bound lives here and not in MDS) into a
+ * single report naming all of them.
  *
  * Keep the refusal total ON THE ENTRY PATH. A partial view is not a
  * conservative one there: every consumer of `exposure_by_instrument` reads an
- * absent key as ZERO exposure and is more permissive for it — enumerated on
- * `MarketDataService.getMarks` (providers/market-data-service/types.ts), not
- * re-derived here. That makes no order more likely to be placed on the ENTRY
- * path, which is where this refusal was reasoned about.
+ * absent key as ZERO exposure and is more permissive for it. That makes no
+ * order more likely to be placed on the ENTRY path, which is where this
+ * refusal was reasoned about.
  *
  * It was never true of the EXIT path, where refusing to value the book
  * SUPPRESSES a flatten and one dark name blocks the flatten of the whole
- * book. #841 split the two: `unvaluable_marks: 'exclude'` keeps the reads and
- * the report identical but returns the valued subset plus the names it could
- * not value, instead of throwing. Which policy applies is the CALLER's choice
- * and is made per intent type in the composition root — never inferred here,
+ * book. `unvaluable_marks: 'exclude'` keeps the reads and the report
+ * identical but returns the valued subset plus the names it could not value,
+ * instead of throwing. Which policy applies is the CALLER's choice and is
+ * made per intent type in the composition root — never inferred here,
  * because this function cannot see whether an order is being opened or closed.
  *
  * A single failure is thrown ON ITS OWN rather than inside an `AggregateError`
@@ -362,13 +350,12 @@ async function readMarks(
 ): Promise<{ marks: Map<string, number>; unvalued: readonly string[] }> {
   const instruments = [...classByInstrument.keys()];
   const reads = await marketData.getMarks(instruments, asOf);
-  // #1111: taken once, after the whole batch resolves, and applied to every
-  // mark in it. Not an approximation of a per-mark read instant — it is the
-  // instant this view VALUES the book, and a mark fetched early in a batch
-  // that took a minute genuinely is a minute old by the time its price reaches
-  // the exposure arithmetic. Judging each mark at its own arrival would call a
-  // price fresh that is not fresh any more at the moment it is used, which is
-  // the direction #640 exists to refuse
+  // Taken once, after the whole batch resolves, and applied to every mark in
+  // it. Not an approximation of a per-mark read instant — it is the instant
+  // this view VALUES the book, and a mark fetched early in a batch that took
+  // a minute genuinely is a minute old by the time its price reaches the
+  // exposure arithmetic. Judging each mark at its own arrival would call a
+  // price fresh that is not fresh any more at the moment it is used
   const readAt = clock.now();
 
   const marks = new Map<string, number>();
@@ -380,8 +367,8 @@ async function readMarks(
       // A service that answered the batch but omitted an instrument it was
       // asked for. Not distinguished from a read failure here: either way this
       // book has an unvalued position in it. Typed `MarkReadError`, not a
-      // bare `Error`, so a caller narrowing on `BookValuationError` (#1089)
-      // catches this shape too
+      // bare `Error`, so a caller narrowing on `BookValuationError` catches
+      // this shape too
       failures.push(
         new MarkReadError(
           instrument,
@@ -410,15 +397,12 @@ async function readMarks(
       continue;
     }
 
-    // #640: fail closed on a STALE mark, not merely on a missing one
+    // Fail closed on a STALE mark, not merely on a missing one
     //
     // A mark ARRIVING is not evidence the feed is alive — in live it may serve
     // from a TTL cache, and a halted or thin instrument keeps returning its
     // last trade indefinitely. Valuing the book off that price is the failure
-    // the Risk Manager exists to prevent: exposure, drawdown and daily PnL are
-    // all computed from these marks, so a frozen price silently freezes the
-    // drawdown breaker at whatever it read last and hands every cap a number
-    // that stopped being true
+    // the Risk Manager exists to prevent
     //
     // Collected rather than thrown on sight, so one stale name does not hide a
     // second dark one from the same report
@@ -434,12 +418,12 @@ async function readMarks(
 
   const unvalued = [...classByInstrument.keys()].filter((instrument) => !marks.has(instrument));
 
-  // #841: the EXIT path takes the valued subset and the list of names it
-  // could not value, rather than nothing at all. The reads, the staleness
-  // judgement and the per-instrument reasons above are IDENTICAL under both
-  // policies — the only difference is whether the report is thrown or
-  // returned. The caller is responsible for making the degradation audible;
-  // see `ExitValuationDegradedAlertChannel` (orchestrator/production)
+  // The EXIT path takes the valued subset and the list of names it could not
+  // value, rather than nothing at all. The reads, the staleness judgement and
+  // the per-instrument reasons above are IDENTICAL under both policies — the
+  // only difference is whether the report is thrown or returned. The caller
+  // is responsible for making the degradation audible; see
+  // `ExitValuationDegradedAlertChannel` (orchestrator/production)
   if (policy === 'exclude') {
     return { marks, unvalued };
   }
@@ -506,13 +490,13 @@ export async function computePortfolioView(
   const exposure_by_class = { crypto: 0, stocks: 0 };
   const reserved_exposure_by_instrument: Record<string, number> = {};
   const reserved_exposure_by_class = { crypto: 0, stocks: 0 };
-  // Same single pass as the exposure math, over the same `marks` map — #332
-  // requires the marks be fetched once, and this is what makes that true
+  // Same single pass as the exposure math, over the same `marks` map — the
+  // marks must be fetched once, and this is what makes that true
   const unrealized_by_class: Record<AssetClass, number> = { crypto: 0, stocks: 0 };
 
   for (const position of positions) {
-    // #841: a position the caller allowed to go unvalued contributes NOTHING
-    // to any figure — no exposure, no unrealized PnL. That is understated, not
+    // A position the caller allowed to go unvalued contributes NOTHING to any
+    // figure — no exposure, no unrealized PnL. That is understated, not
     // conservative, which is exactly why `unvalued_instruments` travels on the
     // view and why `RiskManagerImpl.evaluate` refuses an ENTRY that sees a
     // non-empty one. Under the default `'refuse'` policy this list is empty

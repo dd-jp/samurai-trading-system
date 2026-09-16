@@ -1,5 +1,5 @@
 /**
- * Backticked-path citation checker (#821, successor to #645).
+ * Backticked-path citation checker.
  *
  * Inline backticked path citations — `` `server/pipeline/verdict/index.ts:44` `` — are
  * load-bearing evidence in this repo's decision records: a reader who cannot resolve the
@@ -13,9 +13,9 @@
  *
  *  - **Noise.** It fires on citations that are correct-as-written, everyone learns to
  *    ignore the red, and the check gets deleted or `|| true`-d.
- *  - **Audit-trail falsification.** Someone "fixes" an ADR's path to satisfy it. The
- *    2026-08-16 triage established that rewriting a decision record to fix a path
- *    falsifies the record — the ADR said what it said, at the tree it said it about.
+ *  - **Audit-trail falsification.** Someone "fixes" an ADR's path to satisfy it. That
+ *    rewrites a decision record to fix a path, which falsifies the record — the ADR
+ *    said what it said, at the tree it said it about.
  *
  * So the rules are deliberately asymmetric, and the whole file errs toward false
  * negatives (a stale citation slipping through) over false positives (a correct citation
@@ -37,19 +37,18 @@
  * truth — the module ships, and a marker asserting the path does not exist yet stays on
  * a live citation forever. It is the one exemption that clears itself.
  *
- * ## The tree is the git index, never the working directory (#866)
+ * ## The tree is the git index, never the working directory
  *
  * Existence is resolved against `git ls-files --cached`, and the set of markdown files
  * scanned and the set of known top-level roots are derived from that same listing. The
  * working directory is read for exactly one thing: the CONTENT of an indexed file, to
  * count its lines.
  *
- * It used to `statSync` the working directory instead, and #866 measured what that cost.
- * A citation's root had to exist for the citation to be extracted at all, so on a clean
- * checkout the repo had 261 citations and 0 violations, and on a checkout carrying the
- * gitignored `data/` a paper run leaves behind it had 268 and 4. Same commit, two
- * answers. "0 violations" was not a fact about the repository but about which modes had
- * been run on one machine. Worse in the other direction: `data/samurai-paper.sqlite`
+ * It used to `statSync` the working directory instead: a citation's root had to exist
+ * for the citation to be extracted at all, so a clean checkout and a checkout carrying
+ * the gitignored `data/` a paper run leaves behind reported different violation counts
+ * for the same commit. "0 violations" was a fact about which modes had been run on one
+ * machine, not about the repository. Worse in the other direction: `data/samurai-paper.sqlite`
  * *resolved* on a machine that had run paper mode, so a citation to a runtime artefact
  * was judged by whether the artefact happened to have been produced.
  *
@@ -85,7 +84,7 @@
  * the surrounding prose would be a false-positive generator, which is the direction this
  * file is explicitly not allowed to err in.
  *
- * ## Code comments are scanned too, paths only (#1345)
+ * ## Code comments are scanned too, paths only
  *
  * A `.ts`/`.tsx` comment cites a path the same way a markdown sentence does, so this
  * checker scans both. The invariant: `parseCandidate` and the `cite-exempt` marker apply
@@ -99,9 +98,7 @@
  * `cite-exempt` or avoid the shape.
  *
  * Decision: extending to code comments was measured before shipping, not assumed — the
- * backlog it surfaced across the tree was small enough to fix in the same change. The
- * measurement and the PR that shipped it are recorded in #1345, not here — a doc comment
- * states the invariant a future edit must not break, not a rerunnable count.
+ * backlog it surfaced across the tree was small enough to fix in the same change.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -126,12 +123,12 @@ export const IMMUTABLE_RECORD_DIRS = [
 /**
  * Directory names excluded from the scanned file set and from the known roots.
  *
- * Every entry here is TRACKED — that is the only reason an entry is needed at all. The
- * listing is the git index, so `node_modules`, `dist`, `coverage`, `graphify-out`,
- * `.git` and `.vitest-reports` are structurally unreachable and were dropped from this
- * set when #866 moved resolution onto the index; verified with `git ls-files` that not
- * one of them has a tracked file. Do not re-add them: an entry that can never match is
- * an entry a reader has to disprove.
+ * Every entry here is TRACKED — that is the only reason an entry is needed at all.
+ * `node_modules`, `dist`, `coverage`, `graphify-out`, `.git` and `.vitest-reports` are
+ * structurally unreachable once resolution runs on the git index (verified with
+ * `git ls-files` that none of them has a tracked file), so they were dropped from this
+ * set. Do not re-add them: an entry that can never match is an entry a reader has to
+ * disprove.
  *
  * `.claude/` appears in `.gitignore` yet has tracked files under it —
  * an explicit `git add` beats an ignore rule — so it is still load-bearing here.
@@ -146,7 +143,7 @@ const SKIPPED_DIRS = new Set([
   '__fixtures__',
 ]);
 
-/** Legacy top-level source root, removed by #627. Kept so `src/…` citations stay in scope. */
+/** Legacy top-level source root, since removed. Kept so `src/…` citations stay in scope. */
 const LEGACY_ROOT = 'src';
 
 export const EXEMPT_REASONS = ['foreign', 'historical', 'planned', 'untracked'] as const;
@@ -205,9 +202,7 @@ export interface TreeResolver {
  * `-z` because a NUL-separated listing needs no unquoting and cannot be confused by a
  * path containing a quote or a newline. Deliberately not memoized: a module-level cache
  * would make the invariance test vacuous — it would pass by never re-listing rather than
- * because the property holds. One subprocess spawn per run in place of a full recursive
- * walk: timed three runs each way on this repo, both sit at 0.24s wall clock, so the
- * swap is not measurably slower — process startup dominates either way.
+ * because the property holds.
  */
 export function listIndexedPaths(root: string): readonly string[] {
   let stdout: string;
@@ -270,26 +265,19 @@ export function createIndexResolver(root: string, indexedPaths: readonly string[
 const MARKER = /<!--\s*cite-exempt:\s*([a-z]+)\s*(?:[—:-]\s*)?([^>]*?)\s*-->/;
 
 /**
- * Marker scope is exactly one line: the line the marker is written on.
- *
- * Line scope is the smallest scope that is still writable everywhere a citation can
- * appear. Prose in this repo is written one paragraph per line, so a paragraph is
- * covered by one marker; and a markdown table row is covered by appending the marker
- * after the row's final `|`, which GFM discards as an excess cell (a row with more cells
- * than the header row has the excess ignored) rather than rendering. A comment on its
- * own line inside a table body would end the table, so per-row is the only safe form
- * there — and per-row is what makes mixed tables work at all, where one row is `planned`
- * and the next cites a file that already exists.
- *
- * There is deliberately no file-scoped or block-scoped form. An exemption has to be
- * attached to the citation it excuses.
+ * Marker scope is exactly one line: the line the marker is written on. Line scope is
+ * the smallest scope that is still writable everywhere a citation can appear — prose
+ * here is one paragraph per line, and a markdown table row is covered by appending the
+ * marker after the row's final `|` (GFM discards the excess cell rather than rendering
+ * it; a comment on its own line would end the table instead). There is deliberately no
+ * file-scoped or block-scoped form — an exemption has to be attached to the citation it
+ * excuses.
  *
  * The known cost: a marker covers every citation on its line, so a correct citation
- * sharing a line with an exempt one stops being checked. On the tree at the time this
- * landed that was 4 citations out of 261 (~1.5%). Narrowing the marker to a single named
- * path would recover them, at the price of a marker that goes stale silently when the
- * prose around it is edited — a false-positive source, which is the direction this
- * checker is not allowed to err in.
+ * sharing a line with an exempt one stops being checked. Narrowing the marker to a
+ * single named path would recover that, at the price of a marker that goes stale
+ * silently when the prose around it is edited — a false-positive source, which is the
+ * direction this checker is not allowed to err in.
  *
  * Append the marker to the end of the cited line; never put it at the start. A comment
  * that opens a line opens a CommonMark HTML block, and the rest of that line stops being
@@ -327,21 +315,17 @@ function stripFencedBlocks(lines: readonly string[]): string[] {
 /**
  * Blanks out everything in a `.ts`/`.tsx` source that is not line- or block-comment
  * text, so a citation is only ever extracted from a comment — never from a string,
- * template literal, import specifier or type. Not a parser: strings and templates are
+ * template literal, import specifier or type. Not a parser: strings/templates are
  * tracked as "opened by this quote char, closed by the same one, backslash escapes",
- * which cannot see a `${...}` interpolation re-entering code inside a template literal.
- * That is a false-negative risk (a citation inside an interpolated expression goes
- * unseen), the direction this file is allowed to err in — no false positive short of a
- * regex literal containing `//`, of which this tree has none.
+ * which cannot see a `${...}` interpolation re-entering code inside a template literal —
+ * a false-negative risk this file is allowed to err in, since it means a citation goes
+ * unseen rather than a false positive being raised.
  *
  * Every open delimiter — `'`, `"`, and a template's backtick alike — resets at
  * end-of-line, unconditionally: none of the three can legitimately leave a real string
- * open past a line's end in valid TS (a template literal's continuation lines are real
- * source, but they carry no `//` or `/*` of their own, so resetting and re-scanning them
- * from a clean state blanks them harmlessly rather than protecting anything). Carrying a
- * delimiter across the loop was tried and measured worse: one dangling quote or backtick
- * upstream blanked every later comment in the file, including this function's own doc
- * comment.
+ * open past a line's end in valid TS. Carrying a delimiter across the loop was tried and
+ * measured worse: one dangling quote or backtick upstream blanked every later comment in
+ * the file, including this function's own doc comment.
  */
 function consumeBlockComment(
   line: string,
@@ -462,10 +446,10 @@ function parseCandidate(
 /**
  * Top-level directories that exist in the index, plus the legacy root.
  *
- * This is the half of the checker #866 measured the flip on: a `data/` produced by a
- * paper run made `data` a known root, which made seven previously-ignored tokens into
- * citations. Directories are known because the index lists a file beneath them, so no
- * amount of runtime output can add one.
+ * This is the half of the checker that used to flip on runtime state: a `data/`
+ * produced by a paper run made `data` a known root, turning previously-ignored tokens
+ * into citations. Directories are known because the index lists a file beneath them, so
+ * no amount of runtime output can add one.
  *
  * There is no dotfile rule any more. `.github/**` is tracked, so the listing supplies
  * that root the same way it supplies `server`; the one tracked dot-directory that is

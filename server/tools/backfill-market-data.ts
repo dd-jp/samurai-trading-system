@@ -1,134 +1,47 @@
 /**
- * Warm-start backfill (#512) — `npm run backfill-market-data`.
+ * Warm-start backfill — `npm run backfill-market-data`.
  *
- * Fills `SqliteMarketDataStore` for every `DEFAULT_UNIVERSE` instrument,
- * at the timeframes a first orchestrator tick actually requests, BEFORE
- * `npm run orchestrator` starts. Run once before a soak; safe to re-run any
- * time (idempotent — see `backfillMarketData` below).
+ * Fills `SqliteMarketDataStore` for every `DEFAULT_UNIVERSE` instrument, at
+ * the timeframes a first orchestrator tick actually requests, before
+ * `npm run orchestrator` starts. Idempotent — safe to re-run any time.
  *
- * ## Same database the orchestrator injects (#512 requirement 1)
+ * Resolves its database the same way `startFromEnvironment` does
+ * (`sharedStorePath()` then `openSharedStore(dbPath)`), not a parallel
+ * derivation of the filename, so both processes always agree on the same
+ * `SAMURAI_MODE`-keyed file.
  *
- * This script resolves its database exactly the way `startFromEnvironment`
- * does before handing `config.db` to the production composition root:
- * `sharedStorePath()` then `openSharedStore(dbPath)` — the same two
- * functions, not a parallel derivation of the filename, so both processes
- * always agree on the same `SAMURAI_MODE`-keyed file
- * (`data/samurai-{mode}.sqlite`). `resolveStoreMode` is left to throw on a
- * missing/invalid `SAMURAI_MODE` exactly as it does for the orchestrator;
- * this script does not add a second, backfill-only DB-path environment
- * variable. The exact call-site trail is in the #512 PR body.
+ * `WARM_START_WINDOWS` re-exports `FIRST_TICK_BAR_WINDOWS`
+ * (`bar-prefetch.ts`) rather than maintaining a second copy — two
+ * independently maintained lists of what a first tick needs drifted out of
+ * sync before (#1543).
  *
- * ## The derived timeframe list (#512 requirement 2)
+ * Equities source from `AlpacaHttpDataClient`, wrapped in `withOhlcvFailover`
+ * to `PolygonBarsClient` (`adjusted=false` to match Alpaca's raw
+ * convention). Polygon is a fallback only (ADR-0001/#487), tried only when
+ * the primary throws — `WARM_START_WINDOWS` asks for days of history, well
+ * under Polygon's free-tier 2-year window.
  *
- * `WARM_START_WINDOWS` below is not chosen — it is the max, per timeframe,
- * over every production call site that requests bars/indicators for a
- * `DEFAULT_UNIVERSE` instrument on a live/paper first tick. Since #1543 it is
- * `FIRST_TICK_BAR_WINDOWS`, defined in
- * `server/apps/orchestrator/production/bar-prefetch.ts` and re-exported below:
- * the orchestrator now warms the same list at boot, and two independently
- * maintained copies of a list whose whole job is not to go stale is the exact
- * failure #1543 found (this one was still at `WARMUP_5M` for `5m` two tickets
- * after #797 added a 936-bar `5m` consumer). The derivation, per line:
+ * A fallback bar is stamped `source: 'polygon'` and flagged via
+ * `CoverageRow.quarantined`: such bars are durably stored and usable for
+ * warm-starting a tick, but must never be treated as a clean source of
+ * record for a threshold or measurement that reaches an ADR (Massive
+ * Businesses ToS §6.1(j) forbids using "the Information" to build an
+ * "investment strategy"). A failover also posts to the same
+ * `dataFailoverAlerts` transport the live orchestrator uses.
  *
- *   - `5m`, lookback `RVOL_5M_LOOKBACK` (936) — #742 moved the technical
- *     analyst's `SMA_SPEC`/`RSI_SPEC` from `1h` to `5m` (RSI's own
- *     `recommendedWarmupFor` window is 57 5m bars; `WARMUP_5M` (260) is the
- *     shared, wider pre-warm those specs collapse onto), and #797 then added
- *     `computeRvol`'s WIDER 936-bar read on the same timeframe — so 936, not
- *     260, is the max this line is defined as. `bar-prefetch.ts` imports that
- *     constant rather than repeating its value, so this list cannot drift from
- *     the one that actually governs the fetch. Leaving this timeframe out would not
- *     fabricate anything — a cold `computeIndicator` call still throws
- *     `InsufficientBarsError` below its 15-bar floor rather than answering
- *     short — but it would make the warm start inert for the path that matters
- *     most: a first live/paper tick would fall through to a live
- *     `DataSource.fetchBars` call instead of reading the pre-filled store,
- *     defeating this script's whole purpose for the very analyst it was
- *     written to serve.
- *   - `1h`, lookback 57 — retained for what #742 left on `1h`: the technical
- *     analyst's own context-candle read (`CONTEXT_TIMEFRAME`, `key_points`
- *     prose only, never direction/confidence), the trader's ATR stop window
- *     and the volatility-breaker's ATR reading — #742 deliberately did not
- *     move `TraderConfig.atr_timeframe` or `DEFAULT_VOLATILITY_INDICATOR`, so
- *     both still read `1h`. Both of those used to ask for only 15 (the
- *     arity floor); #757 moved them onto `recommendedWarmupFor` too (57,
- *     `docs/reviews/indicator-characterisation-2026-08-16.md` F1), so this
- *     line is no longer "wider than any remaining `1h` consumer needs" — it
- *     is now exactly what the widest `1h` consumer asks for. The context
- *     read still only needs 20; kept at 57 rather than trimmed, since
- *     over-covering a lookback is free and under-covering silently degrades
- *     a real analyst input.
- *   - `1d`, lookback 30 — the Risk Manager's pairwise-correlation window,
- *     the only `1d` consumer that fires on a real (non-`SimulatedAdapter`)
- *     paper run. It dominates the simulated cost model's `adv_window`
- *     (`1d`/20, inert on the wired paper adapter), so backfilling `1d`/30
- *     covers both regardless of which adapter a future profile wires.
+ * The live equities leg fails over Alpaca -> Polygon independently, through
+ * `FailoverDataSource` (`orchestrator/production/data-failover.ts`); it
+ * fails over bars only, never marks or quotes.
  *
- * If any of those specs changes, `WARM_START_WINDOWS` needs re-deriving —
- * the full symbol-by-symbol derivation, with file:line citations, is in the
- * #512 PR body (and, for the `5m` line, the #742 PR body) rather than pinned
- * here as line numbers that would rot on the next edit to any of those files
- * (see `docs/coding-standards.md` "Comments state invariants, not
- * changelogs").
+ * Crypto is refused, not fetched: crypto left Samurai's scope 2026-08-16
+ * (ADR-0015's amendment), so any `asset_class: 'crypto'` row is always a
+ * SHORT row.
  *
- * ## Equities source, and failover (#496)
- *
- * Equities (`DEFAULT_UNIVERSE`) source from `AlpacaHttpDataClient` — the
- * same real client the production composition root constructs — paced
- * through `resolveVenuePacing().alpaca` / `TokenBucket.acquireBackground()`,
- * exactly as the live path already does.
- *
- * The equities leg is wrapped in `withOhlcvFailover` (`./ohlcv-failover.ts`):
- * Alpaca -> `PolygonBarsClient` (`./polygon-bars-client.ts`, `adjusted=false`
- * to match Alpaca's raw convention), named in ADR-0001 / #487 as a fallback
- * that must never become the backfill SOURCE OF FIRST RESORT — satisfied
- * here by trying the primary first on every call and only invoking the
- * fallback when the primary THROWS (see `./ohlcv-failover.ts`'s doc for
- * exactly what counts as a "failure"). This is the increment-only role
- * #487/#496's research describes: `WARM_START_WINDOWS` asks for days of
- * history, not years, which is what keeps Polygon's free-tier 2-year window
- * from ever being the binding constraint here.
- *
- * A fallback bar is stamped `source: 'polygon'` (`PolygonBarsClient`'s own
- * `Bar.source`) and persisted into `bars.source` by
- * `SqliteMarketDataStore.appendBars` exactly like every other bar — the
- * column has existed since `0001_init.sql`, so no migration was needed to
- * add provenance. `backfillMarketData`'s `CoverageRow.source` (below)
- * surfaces which source served each pair in the printed table itself, and
- * `CoverageRow.quarantined` (#791 AC2) flags a pair whose window contains a
- * `QUARANTINED_BAR_SOURCES` bar (`'polygon'` — see that constant's doc for
- * why); a failover additionally posts to the SAME `dataFailoverAlerts`
- * transport the live orchestrator uses, via `buildBackfillFailoverAlerter`
- * (#791 AC1) passed to `withOhlcvFailover` in `runFromEnvironment` below —
- * this used to be a bare `console.error` `FAILOVER:` line, which reached a
- * stream nobody watches unattended.
- *
- * **The residual gap this doc used to record is CLOSED for equities
- * (#562).** It read: this failover covers only this script's fetch path,
- * and the live orchestrator sources both legs from Alpaca alone with no
- * fallback. The live equities leg now fails over Alpaca -> Polygon through
- * `FailoverDataSource`, built by
- * `server/apps/orchestrator/production/data-failover.ts` and injected at
- * `production.ts`'s `config.dataSource` seam, alerting on the live
- * `SAMURAI_ALERTS` transport — the same one this script now uses instead of
- * its own stdout (#791). What remains true: the live path fails over BARS
- * only (never marks or quotes).
- *
- * **Crypto is refused, not fetched.** `backfillMarketData` below treats any
- * `asset_class: 'crypto'` row as refused outright — always a SHORT coverage
- * row, even when the store already holds a full window for it — because
- * crypto left Samurai's scope 2026-08-16 (ADR-0015's amendment). This script
- * has no crypto fetch leg.
- *
- * ## Resumable and idempotent
- *
- * For each (instrument, window) pair, a fetch is skipped when the store
- * ALREADY holds >= `window.lookback` rows at or before `asOf` — so a
- * re-run after an interrupted fill only fetches what is still missing, and
- * a full re-run after success makes zero network calls.
- * `SqliteMarketDataStore.appendBars` is itself `INSERT OR IGNORE` on the
- * `(instrument, timeframe, open_time)` primary key, so even a re-fetched
- * overlapping window can never double-write a bar.
+ * Resumable: a fetch is skipped when the store already holds
+ * `>= window.lookback` rows at or before `asOf`, and
+ * `SqliteMarketDataStore.appendBars` is `INSERT OR IGNORE` on
+ * `(instrument, timeframe, open_time)`, so a re-fetched overlapping window
+ * can never double-write a bar.
  */
 
 import type { Logger } from '../apps/orchestrator/index.js';
@@ -165,11 +78,9 @@ import {
 import { openSharedStore, sharedStorePath } from '../shared/store/index.js';
 
 /**
- * See the module doc "The derived timeframe list" above for the citation
- * trail, and `bar-prefetch.ts` for the definition this aliases — the
- * orchestrator's boot-time prefetch and this hand-run backfill warm the same
- * store for the same first tick and must not be able to disagree about which
- * windows that takes (#1543)
+ * Aliases `FIRST_TICK_BAR_WINDOWS` (`bar-prefetch.ts`) — the orchestrator's
+ * boot-time prefetch and this hand-run backfill must not be able to
+ * disagree about which windows a first tick needs (#1543)
  */
 export const WARM_START_WINDOWS: readonly BarWindow[] = FIRST_TICK_BAR_WINDOWS;
 
@@ -184,40 +95,26 @@ export interface CoverageRow {
   /** Set when the fetch for this pair threw — a thrown fetch is a SHORT row, not an aborted run */
   error: string | undefined;
   /**
-   * `Bar.source` of the most recently stored bar for this pair (#496) —
-   * `'alpaca'`/`'polygon'` (equities-only — crypto left Samurai's scope,
-   * ADR-0015's amendment), or a fixture/test source. Read
-   * off the store's own rows rather than tracked separately, so it can never
-   * disagree with what `bars.source` actually holds. `undefined` only when
-   * the pair has no bars at all — never fabricated. This is what lets an
-   * operator see a failover in the printed coverage table itself, not only
-   * in a stderr alert line that scrolled past.
+   * `Bar.source` of the most recently stored bar for this pair. Read off
+   * the store's own rows rather than tracked separately, so it can never
+   * disagree with what `bars.source` actually holds.
    */
   source: string | undefined;
   /**
-   * True when ANY bar in this pair's returned window carries a quarantined
-   * `Bar.source` (#791 AC2, implementing David's #612 disposition) — checked
-   * across every row `deps.store.readBars` returned for the pair, not just
-   * the most recent one (a mixed window with an alpaca bar last must not
-   * slip through by only sampling `rows.at(-1)`). Quarantined bars are still
-   * durably written — `PolygonBarsClient` stays in the failover chain, #612
-   * declined dropping it, and a warm-started tick still needs the rows — but
-   * this flag is what stops them being silently used as a clean SOURCE OF
-   * RECORD for a threshold or measurement that reaches an ADR (Massive
-   * Businesses ToS §6.1(j) forbids using "the Information" to build an
-   * "investment strategy"). `runFromEnvironment` below refuses to exit 0
-   * when any row is quarantined, precisely so an automated caller — not only
-   * a human reading the printed table — cannot miss it.
+   * True when any bar in this pair's returned window carries a quarantined
+   * `Bar.source` — checked across every returned row, not just the last, so
+   * a mixed window can't slip through by sampling only `rows.at(-1)`.
+   * Quarantined bars are still durably written (#612 declined dropping
+   * Polygon from the failover chain), but must never be treated as a clean
+   * source of record for a threshold or measurement that reaches an ADR.
    */
   quarantined: boolean;
 }
 
 /**
  * `Bar.source` values that must never be treated as a clean source of
- * record (#791/#612). Polygon-only, deliberately: `stage2-source.ts`'s own
- * direct `HttpPolygonClient` use is a separate, already-settled decision
- * (#612 (2)) this constant does not touch. Crypto is refused outright above
- * (never fetched), so there is no crypto source to quarantine.
+ * record. Polygon-only — `stage2-source.ts`'s own direct `HttpPolygonClient`
+ * use is a separate decision this constant does not touch.
  */
 const QUARANTINED_BAR_SOURCES: ReadonlySet<string> = new Set(['polygon']);
 
@@ -233,11 +130,9 @@ export interface BackfillMarketDataDeps {
 }
 
 /**
- * Resolves `rows`/`fetchError` for one (instrument, window) pair — the crypto
- * refusal, the "already warm" skip, and the fetch-then-reread-on-throw path.
- * Split out of `backfillMarketData` purely to keep that function's
- * cyclomatic complexity readable; same branches, same order, same catch
- * behavior.
+ * Resolves `rows`/`fetchError` for one (instrument, window) pair. Split out
+ * of `backfillMarketData` to keep that function's cyclomatic complexity
+ * readable.
  */
 async function resolvePairCoverage(
   deps: BackfillMarketDataDeps,
@@ -249,38 +144,29 @@ async function resolvePairCoverage(
   let rows = existing;
   let fetchError: string | undefined;
 
-  // Unconditional, checked before the "is the store already warm" branch
-  // below: stale bars from before #1157 must not satisfy a crypto row
+  // Checked before the "already warm" branch below — stale bars must never
+  // satisfy a crypto row
   if (isCrypto) {
     fetchError =
       "backfillMarketData: crypto backfill is not supported — crypto left Samurai's " +
       "scope 2026-08-16 (ADR-0015's amendment) and #1157 removed this script's " +
       'Coinbase/Bitstamp fetch leg';
   } else if (existing.length < window.lookback) {
-    // A thrown fetch (a rate-limit hiccup, a genuinely sparse window)
-    // must not abort the whole run — every OTHER pair, and every pair
-    // already fetched this run, has already durably persisted its bars
-    // via `appendBars` above, so aborting here would throw that progress
-    // away from the OPERATOR's view even though the store itself kept
-    // it. Caught here, turned into a SHORT row instead (AC: "so a short
-    // backfill is visible rather than silent") — never rethrown, so this
-    // catch cannot itself throw out of the loop
+    // A thrown fetch must not abort the whole run — other pairs have
+    // already durably persisted their bars via `appendBars`. Caught here
+    // and turned into a SHORT row instead of rethrown
     try {
       const fetched = await deps.fetchEquityBars(instrument.asset, window, deps.asOf);
       deps.store.appendBars(fetched);
       rows = deps.store.readBars(instrument.asset, window.timeframe, deps.asOf, window.lookback);
     } catch (error) {
       fetchError = describeThrownSafely(error);
-      // Re-read rather than falling back to `existing`. `appendBars` is
-      // `INSERT OR IGNORE` per bar, so a throw partway through leaves the
-      // bars it already wrote durably in the store — reporting the
-      // pre-fetch count would under-report real coverage and send the
-      // operator back to re-fetch bars that are already there
+      // Re-read rather than falling back to `existing`: `appendBars` is
+      // `INSERT OR IGNORE`, so a throw partway through still leaves the
+      // bars it already wrote durably in the store
       //
-      // Guarded, because this runs inside a catch: if the store read
-      // ALSO fails, keep the pre-fetch rows and say so, rather than
-      // throwing out of the handler and aborting every remaining pair —
-      // which is the abort this catch exists to prevent
+      // Guarded: if the re-read also fails, keep the pre-fetch rows rather
+      // than throwing out of the handler and aborting every remaining pair
       try {
         rows = deps.store.readBars(instrument.asset, window.timeframe, deps.asOf, window.lookback);
       } catch (readError) {
@@ -331,8 +217,7 @@ function formatCoverageLine(row: CoverageRow): string {
 
 /**
  * Fills `deps.store` for every (instrument, window) pair, skipping any pair
- * the store already covers, then returns a per-pair coverage report (AC:
- * "reports per-instrument coverage — first bar, last bar, row count")
+ * the store already covers, then returns a per-pair coverage report
  */
 export async function backfillMarketData(deps: BackfillMarketDataDeps): Promise<CoverageRow[]> {
   const universe = deps.universe ?? DEFAULT_UNIVERSE;
@@ -391,34 +276,18 @@ function alpacaBarToBar(
 }
 
 /**
- * Builds the `FailoverAlerter` `withOhlcvFailover` calls on the equities leg
- * (#791 AC1). Reaches the SAME `dataFailoverAlerts` transport the live orchestrator
- * uses (#818/`alert-transport.ts`) instead of `console.error` — a backfill
- * run unattended or from cron used to report a failover to a stream nobody
- * reads.
+ * Builds the `FailoverAlerter` `withOhlcvFailover` calls on the equities
+ * leg. Posts to the same `dataFailoverAlerts` transport the live
+ * orchestrator uses, instead of `console.error`, so an unattended/cron
+ * run's failover isn't silent.
  *
- * `FailoverAlerter` is synchronous by design (`(event) => void`) —
- * `withOhlcvFailover` calls it BEFORE attempting the fallback, so an
- * operator learns of a stall even when the fallback also fails, and that
- * ordering is preserved here for free: this function does not change WHEN
- * the alert fires, only WHERE it goes. `postDataFailoverAlert` is async
- * (it posts to Telegram), so the post is fire-and-forget with a logged
- * `.catch` — the same bridge `buildFailoverDataSource`
- * (`orchestrator/production/data-failover.ts`) uses for the live path.
- * Awaiting it here would block a bar fetch on a Telegram round trip, and a
- * failed POST must not turn "the fallback served the bars" into "the fetch
- * threw" — `withOhlcvFailover`'s own `safeAlert` guards a THROWING alerter,
- * not a REJECTING promise it kicked off and forgot, so the `.catch` below is
- * load-bearing: without it a rejected post would become an unhandled
- * rejection, which is strictly worse than the `console.error` this replaces
- * (#791 AC1's "making the alert louder must not make the backfill more
- * fragile").
+ * The post is fire-and-forget with a logged `.catch`: awaiting it would
+ * block a bar fetch on a Telegram round trip, and a rejected post must not
+ * become an unhandled rejection or turn "the fallback served the bars"
+ * into "the fetch threw".
  *
- * No throttle, unlike the live path's `DataFailoverAlertThrottle`: this is a
- * one-shot CLI run over `WARM_START_WINDOWS` (three windows) x
- * `DEFAULT_UNIVERSE` (20 instruments today), not a 14-day tick loop —
- * the alert volume a sustained live stall would produce never arises here,
- * so `suppressed_since_last` is always `0`.
+ * No throttle, unlike the live path: this is a one-shot CLI run, not a
+ * sustained tick loop, so `suppressed_since_last` is always `0`.
  */
 export function buildBackfillFailoverAlerter(deps: {
   alertChannel: DataFailoverAlertChannel;
@@ -450,12 +319,9 @@ export function buildBackfillFailoverAlerter(deps: {
 export async function runFromEnvironment(): Promise<void> {
   const logger: Logger = new JsonLogger();
 
-  // Resolved BEFORE the store is opened, mirroring `startFromEnvironment`
-  // (`orchestrator/index.ts`): a missing/unrecognised `SAMURAI_ALERTS` is a
-  // startup failure this run should not leave a freshly-created SQLite file
-  // behind for (#791 AC1 reuses the live path's compiler-enforced
-  // `AlertChannelSlots` mechanism rather than inventing a parallel one, and
-  // that mechanism has no silent default — see `alert-transport.ts`)
+  // Resolved before the store is opened, mirroring `startFromEnvironment`:
+  // a missing/unrecognised `SAMURAI_ALERTS` should not leave a
+  // freshly-created SQLite file behind
   const alertsMode = resolveAlertsMode({});
 
   const dbPath = sharedStorePath();
@@ -464,17 +330,15 @@ export async function runFromEnvironment(): Promise<void> {
   const asOf = new Date();
 
   // `buildAlertChannels` needs the store handle (its Telegram client
-  // audit-logs inbound allowlist rejections through it), so this comes after
-  // `openSharedStore` even though `alertsMode` was resolved before it
-  // `alertsMode` is never `undefined` here — this script injects nothing —
-  // but the ternary mirrors `startFromEnvironment`'s own shape rather than
-  // asserting it away
+  // audit-logs inbound allowlist rejections through it), so this comes
+  // after `openSharedStore` even though `alertsMode` was resolved before it
+  // `alertsMode` is never `undefined` here, but the ternary mirrors
+  // `startFromEnvironment`'s own shape rather than asserting it away
   const channels =
     alertsMode === undefined ? {} : buildAlertChannels({ alertsMode, injected: {}, db, logger });
-  // `log-only` mode returns no `dataFailoverAlerts` slot at all (see
-  // `buildAlertChannels`'s doc) — default to the SAME log-only stand-in
-  // `production.ts` defaults to for the live path (`production.ts:640`),
-  // rather than inventing a second one, so both paths degrade identically
+  // `log-only` mode returns no `dataFailoverAlerts` slot — default to the
+  // same log-only stand-in `production.ts` uses for the live path, so both
+  // paths degrade identically
   const dataFailoverAlertChannel: DataFailoverAlertChannel =
     channels.dataFailoverAlerts ?? loggingAlertChannel('dataFailoverAlerts', logger);
   const alertFailover = buildBackfillFailoverAlerter({
@@ -492,17 +356,11 @@ export async function runFromEnvironment(): Promise<void> {
     rateLimiter: alpacaBucket,
   });
 
-  // #496 fallback, constructed LAZILY (on first actual use, memoized) rather
-  // than up front. `PolygonBarsClient`'s constructor throws when
-  // `POLYGON_API_KEY` is unset (same fail-fast posture `HttpPolygonClient`
-  // already has) — constructing it eagerly here would make an UNSET Polygon
-  // key break the whole backfill run even on a day Alpaca never stalls,
-  // which would turn an optional fallback into a hard dependency nobody
-  // asked for. Lazy construction means the key is only required at the
-  // moment it is actually needed, and a missing key then surfaces as the
-  // fallback's own failure inside `withOhlcvFailover`'s combined error
-  // (still loud, just scoped to the pair that actually failed over) rather
-  // than as a startup crash
+  // Constructed lazily (on first use, memoized): `PolygonBarsClient`'s
+  // constructor throws when `POLYGON_API_KEY` is unset, and constructing it
+  // eagerly would make an unset key break the whole run even on a day
+  // Alpaca never stalls, turning an optional fallback into a hard
+  // dependency
   let polygonClient: PolygonBarsClient | undefined;
   const getPolygonClient = (): PolygonBarsClient => {
     polygonClient ??= new PolygonBarsClient({ rateLimiter: polygonBucket });
@@ -521,14 +379,11 @@ export async function runFromEnvironment(): Promise<void> {
     fallbackName: 'polygon',
     alert: alertFailover,
     primary: async (symbol, window, at) => {
-      // Default `partial: 'error'` (NOT 'allow') — deliberately: 'allow'
-      // skips `AlpacaHttpDataClient`'s own widen-and-retry (issue #292),
-      // which exists precisely to rescue a first read that came back short
-      // over too-narrow a window. Losing that here would trade a rescuable
-      // short read for a guaranteed one. A genuinely unrescuable throw is
-      // instead caught here by `withOhlcvFailover` (triggering the Polygon
-      // fallback) and, if THAT also fails, by `backfillMarketData`'s own
-      // per-pair try/catch, turned into a SHORT coverage row
+      // Default `partial: 'error'` (not 'allow') deliberately: 'allow'
+      // would skip `AlpacaHttpDataClient`'s own widen-and-retry, trading a
+      // rescuable short read for a guaranteed one. An unrescuable throw is
+      // instead caught by `withOhlcvFailover` (triggering the Polygon
+      // fallback) and, failing that, by the per-pair try/catch above
       const bars = await equityClient.getBars(symbol, window.timeframe, at, window.lookback);
       return bars.map((bar) => alpacaBarToBar(symbol, window.timeframe, bar));
     },
@@ -552,13 +407,10 @@ export async function runFromEnvironment(): Promise<void> {
     return;
   }
 
-  // #791 AC2: fail loudly, not warn. A quarantined pair still has its bars
-  // durably written (the next warm tick is still served — #612 declined
-  // dropping Polygon from the failover chain), but this run must not exit 0
-  // as if it were a clean run: a caller that greps for a non-zero exit code
-  // — cron, a CI step, an operator's own habit — is exactly who else must
-  // not miss a polygon-sourced fill, not only the human reading the
-  // QUARANTINED rows above
+  // Fail loudly, not warn: a quarantined pair's bars are durably written
+  // (#612 declined dropping Polygon from the failover chain), but this run
+  // must not exit 0 as if clean — an automated caller (cron, CI) must not
+  // miss a polygon-sourced fill
   const quarantined = coverage.filter((row) => row.quarantined);
   if (quarantined.length > 0) {
     console.error(
