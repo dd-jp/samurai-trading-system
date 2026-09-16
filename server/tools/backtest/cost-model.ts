@@ -49,6 +49,31 @@ function assertPositiveFloor(name: keyof CostFloors, value: number): void {
 }
 
 /**
+ * Validates one venue's override fields (the `assertValidVenueOverrides`
+ * inner loop, split out to keep that function's nesting flat).
+ *
+ * Unlike a floor, an `AssetClassCostConfig` rate (e.g. `commissionRate: 0`
+ * for Alpaca's commission-free US equities, `cost-model.test.ts`) is
+ * legitimately zero, so this only requires finite and `>= 0`, not `> 0`.
+ */
+function assertValidOverrideFields(
+  venue: CostVenue,
+  override: Partial<AssetClassCostConfig>,
+): void {
+  for (const [field, value] of Object.entries(override) as Array<
+    [keyof AssetClassCostConfig, number | undefined]
+  >) {
+    if (value === undefined) continue;
+    if (!(Number.isFinite(value) && value >= 0)) {
+      throw new Error(
+        `CostModelImpl: CostConfig.venues.${venue}.${field} must be a finite number >= 0 ` +
+          `(got ${value}).`,
+      );
+    }
+  }
+}
+
+/**
  * Validates every venue override field present in `CostConfig.venues` at
  * construction time (#1000), the same point `floors` is validated — a
  * malformed override (`NaN`/negative/`Infinity`) must fail loudly here
@@ -56,10 +81,6 @@ function assertPositiveFloor(name: keyof CostFloors, value: number): void {
  * corrupt `fill_price` via `Math.max(override, floor)`, exactly the failure
  * mode the floor validation above exists to prevent, just via a different
  * door.
- *
- * Unlike a floor, an `AssetClassCostConfig` rate (e.g. `commissionRate: 0`
- * for Alpaca's commission-free US equities, `cost-model.test.ts`) is
- * legitimately zero, so this only requires finite and `>= 0`, not `> 0`.
  */
 function assertValidVenueOverrides(venues: CostConfig['venues']): void {
   if (!venues) return;
@@ -67,17 +88,7 @@ function assertValidVenueOverrides(venues: CostConfig['venues']): void {
     [CostVenue, Partial<AssetClassCostConfig> | undefined]
   >) {
     if (!override) continue;
-    for (const [field, value] of Object.entries(override) as Array<
-      [keyof AssetClassCostConfig, number | undefined]
-    >) {
-      if (value === undefined) continue;
-      if (!(Number.isFinite(value) && value >= 0)) {
-        throw new Error(
-          `CostModelImpl: CostConfig.venues.${venue}.${field} must be a finite number >= 0 ` +
-            `(got ${value}).`,
-        );
-      }
-    }
+    assertValidOverrideFields(venue, override);
   }
 }
 

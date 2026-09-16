@@ -300,6 +300,7 @@ export class GrokAgent {
    * below). Market intelligence is an optional input either way: a provider
    * outage degrades the debate to `NO_DATA_MARKER`.
    */
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: one linear bucket-check/spend-cap/fetch-meter-evidence-archive-ingest sequence per the doc comment above; splitting the try/catch's steps apart would scatter one refresh's ordering guarantees (meter before evidence-gate, archive before ingest, mark bucket only after success) across several functions.
   async refresh(trace_id: string, instrument: string, assetClass: AssetClass): Promise<boolean> {
     const asOf = this.#deps.clock.now();
     const bucket = floorToRefreshBucket(asOf, this.#refreshMs).getTime();

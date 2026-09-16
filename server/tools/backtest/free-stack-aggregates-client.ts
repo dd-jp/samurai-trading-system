@@ -239,6 +239,48 @@ export class FreeStackAggregatesClient implements PolygonClient {
   }
 
   /**
+   * Fetches and validates one Coinbase chunk (the `fetchCoinbase` loop body,
+   * split out to keep that function's nesting flat). Returns the chunk's raw
+   * candle array, already checked against Coinbase's per-request cap.
+   */
+  private async fetchCoinbaseChunk(
+    symbol: string,
+    cursor: number,
+    chunkEnd: number,
+  ): Promise<unknown[]> {
+    const url =
+      `${this.coinbaseBaseUrl}/products/${encodeURIComponent(symbol)}/candles` +
+      `?granularity=86400&start=${new Date(cursor).toISOString()}` +
+      `&end=${new Date(chunkEnd).toISOString()}`;
+
+    await this.rateLimiter.acquire();
+    const response = await this.fetchImpl(url, {
+      headers: { 'User-Agent': 'samurai-stage2' },
+    });
+    if (!response.ok) {
+      throw new Error(
+        `FreeStackAggregatesClient: Coinbase returned HTTP ${response.status} ` +
+          `${response.statusText} for ${symbol}.`,
+      );
+    }
+    const parsed: unknown = await response.json();
+    if (!Array.isArray(parsed)) {
+      throw new Error(
+        `FreeStackAggregatesClient: malformed Coinbase response for ${symbol}: expected an ` +
+          `array, got ${truncateForError(JSON.stringify(parsed))}`,
+      );
+    }
+    if (parsed.length > COINBASE_MAX_CANDLES_PER_REQUEST) {
+      throw new Error(
+        `FreeStackAggregatesClient: Coinbase returned ${parsed.length} candles for ${symbol}, ` +
+          `above its documented ${COINBASE_MAX_CANDLES_PER_REQUEST} cap — the chunk walk ` +
+          'assumes that cap, so this response cannot be trusted to be complete.',
+      );
+    }
+    return parsed;
+  }
+
+  /**
    * Walks the window forward in ≤290-day chunks. Bars are collected into a
    * map keyed by open time so an overlapping chunk boundary yields one bar,
    * not two — Coinbase's `start`/`end` are inclusive at both ends.
@@ -276,35 +318,7 @@ export class FreeStackAggregatesClient implements PolygonClient {
         );
       }
       const chunkEnd = Math.min(cursor + COINBASE_CHUNK_DAYS * DAY_MS, endMs);
-      const url =
-        `${this.coinbaseBaseUrl}/products/${encodeURIComponent(symbol)}/candles` +
-        `?granularity=86400&start=${new Date(cursor).toISOString()}` +
-        `&end=${new Date(chunkEnd).toISOString()}`;
-
-      await this.rateLimiter.acquire();
-      const response = await this.fetchImpl(url, {
-        headers: { 'User-Agent': 'samurai-stage2' },
-      });
-      if (!response.ok) {
-        throw new Error(
-          `FreeStackAggregatesClient: Coinbase returned HTTP ${response.status} ` +
-            `${response.statusText} for ${symbol}.`,
-        );
-      }
-      const parsed: unknown = await response.json();
-      if (!Array.isArray(parsed)) {
-        throw new Error(
-          `FreeStackAggregatesClient: malformed Coinbase response for ${symbol}: expected an ` +
-            `array, got ${truncateForError(JSON.stringify(parsed))}`,
-        );
-      }
-      if (parsed.length > COINBASE_MAX_CANDLES_PER_REQUEST) {
-        throw new Error(
-          `FreeStackAggregatesClient: Coinbase returned ${parsed.length} candles for ${symbol}, ` +
-            `above its documented ${COINBASE_MAX_CANDLES_PER_REQUEST} cap — the chunk walk ` +
-            'assumes that cap, so this response cannot be trusted to be complete.',
-        );
-      }
+      const parsed = await this.fetchCoinbaseChunk(symbol, cursor, chunkEnd);
       for (const raw of parsed) {
         const bar = validateCoinbaseCandle(raw, symbol);
         byTime.set(bar.t, bar);
@@ -319,6 +333,63 @@ export class FreeStackAggregatesClient implements PolygonClient {
     // order is descending within a chunk. Deleting this sort returns
     // [300, 200, 100] for the first test's fixture — verified by mutation
     return [...byTime.values()].sort((a, b) => a.t - b.t);
+  }
+
+  /**
+   * Fetches and validates one Alpaca page (the `fetchAlpaca` loop body, split
+   * out to keep that function's nesting flat). Returns the page's raw bars
+   * array and the next page token, if any.
+   */
+  private async fetchAlpacaPage(
+    symbol: string,
+    alpacaTimeframe: string,
+    window: DateRange,
+    pageToken: string | undefined,
+  ): Promise<{ bars: unknown[]; next_page_token: string | undefined }> {
+    const params = new URLSearchParams({
+      symbols: symbol,
+      timeframe: alpacaTimeframe,
+      start: window.start.toISOString(),
+      end: window.end.toISOString(),
+      limit: String(ALPACA_PAGE_LIMIT),
+      sort: 'asc',
+    });
+    if (pageToken !== undefined) params.set('page_token', pageToken);
+
+    await this.rateLimiter.acquire();
+    const response = await this.fetchImpl(`${this.alpacaBaseUrl}/v2/stocks/bars?${params}`, {
+      headers: {
+        'APCA-API-KEY-ID': this.alpacaKeyId,
+        'APCA-API-SECRET-KEY': this.alpacaSecretKey,
+      },
+    });
+    if (!response.ok) {
+      throw new Error(
+        `FreeStackAggregatesClient: Alpaca returned HTTP ${response.status} ` +
+          `${response.statusText} for ${symbol}.`,
+      );
+    }
+    const parsed: unknown = await response.json();
+    if (typeof parsed !== 'object' || parsed === null) {
+      throw new Error(
+        `FreeStackAggregatesClient: malformed Alpaca response for ${symbol}: expected an ` +
+          `object, got ${truncateForError(JSON.stringify(parsed))}`,
+      );
+    }
+    const body = parsed as { bars?: Record<string, unknown>; next_page_token?: unknown };
+    const bars = body.bars?.[symbol];
+    if (bars !== undefined && !Array.isArray(bars)) {
+      throw new Error(
+        `FreeStackAggregatesClient: malformed 'bars.${symbol}' from Alpaca: expected an array`,
+      );
+    }
+    // A wrong-typed token degrades to "no more pages" rather than throwing,
+    // matching `HttpPolygonClient`: Stage 2 is offline tooling, and an early
+    // stop shows up as a short series in the printed bar count rather than
+    // silently corrupting one
+    const next_page_token =
+      typeof body.next_page_token === 'string' ? body.next_page_token : undefined;
+    return { bars: bars ?? [], next_page_token };
   }
 
   private async fetchAlpaca(
@@ -349,53 +420,12 @@ export class FreeStackAggregatesClient implements PolygonClient {
             'refusing to follow next_page_token further (malformed/cyclical pagination guard).',
         );
       }
-      const params = new URLSearchParams({
-        symbols: symbol,
-        timeframe: alpacaTimeframe,
-        start: window.start.toISOString(),
-        end: window.end.toISOString(),
-        limit: String(ALPACA_PAGE_LIMIT),
-        sort: 'asc',
-      });
-      if (pageToken !== undefined) params.set('page_token', pageToken);
-
-      await this.rateLimiter.acquire();
-      const response = await this.fetchImpl(`${this.alpacaBaseUrl}/v2/stocks/bars?${params}`, {
-        headers: {
-          'APCA-API-KEY-ID': this.alpacaKeyId,
-          'APCA-API-SECRET-KEY': this.alpacaSecretKey,
-        },
-      });
-      if (!response.ok) {
-        throw new Error(
-          `FreeStackAggregatesClient: Alpaca returned HTTP ${response.status} ` +
-            `${response.statusText} for ${symbol}.`,
-        );
-      }
-      const parsed: unknown = await response.json();
-      if (typeof parsed !== 'object' || parsed === null) {
-        throw new Error(
-          `FreeStackAggregatesClient: malformed Alpaca response for ${symbol}: expected an ` +
-            `object, got ${truncateForError(JSON.stringify(parsed))}`,
-        );
-      }
-      const body = parsed as { bars?: Record<string, unknown>; next_page_token?: unknown };
-      const bars = body.bars?.[symbol];
-      if (bars !== undefined && !Array.isArray(bars)) {
-        throw new Error(
-          `FreeStackAggregatesClient: malformed 'bars.${symbol}' from Alpaca: expected an array`,
-        );
-      }
-      for (const raw of bars ?? []) {
+      const page = await this.fetchAlpacaPage(symbol, alpacaTimeframe, window, pageToken);
+      for (const raw of page.bars) {
         const bar = validateAlpacaBar(raw, symbol);
         byTime.set(bar.t, bar);
       }
-
-      // A wrong-typed token degrades to "no more pages" rather than throwing,
-      // matching `HttpPolygonClient`: Stage 2 is offline tooling, and an early
-      // stop shows up as a short series in the printed bar count rather than
-      // silently corrupting one
-      pageToken = typeof body.next_page_token === 'string' ? body.next_page_token : undefined;
+      pageToken = page.next_page_token;
     } while (pageToken !== undefined);
 
     // Sorted for the same reason as the Coinbase leg: `sort=asc` is a request

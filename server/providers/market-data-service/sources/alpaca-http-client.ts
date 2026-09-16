@@ -581,6 +581,65 @@ export class AlpacaHttpDataClient implements AlpacaMarketDataClient {
     );
   }
 
+  private async fetchCryptoBarsPage(
+    symbol: string,
+    alpacaSymbol: string,
+    params: URLSearchParams,
+  ): Promise<{ bars: AlpacaBar[]; nextPageToken: string | undefined }> {
+    params.set('symbols', alpacaSymbol);
+    const body = requireResponseObject(
+      await this.requestJson(
+        `${this.baseUrl}/${ALPACA_CRYPTO_API_VERSION}/crypto/us/bars?${params.toString()}`,
+        'getBars',
+      ),
+      'getBars',
+    ) as CryptoBarsResponse;
+    // `?? undefined` folds an explicit `bars: null` into the same
+    // "no key" branch `lookupCryptoKey` already handles — it only guards
+    // `undefined`, and a malformed body sending `null` would otherwise
+    // throw an unclassified TypeError reading `byKey[alpacaSymbol]`
+    const rawBars = lookupCryptoKey(body.bars ?? undefined, alpacaSymbol, symbol);
+    const bars: AlpacaBar[] = [];
+    for (const raw of requireBarsArray(rawBars, symbol, 'getBars')) {
+      bars.push(toAlpacaBar(validateRawAlpacaBar(raw, symbol, 'getBars')));
+    }
+    // A wrong-typed `next_page_token` degrades to "no more pages" rather
+    // than throwing: an early stop here is exactly the short-read case
+    // `getBars`'s widen-and-retry (RETRY_WIDEN_FACTOR) already exists to
+    // recover, so it is caught by the existing sparse-data path instead
+    // of a second bespoke guard
+    const nextPageToken =
+      typeof body.next_page_token === 'string' ? body.next_page_token : undefined;
+    return { bars, nextPageToken };
+  }
+
+  private async fetchStocksBarsPage(
+    symbol: string,
+    params: URLSearchParams,
+  ): Promise<{ bars: AlpacaBar[]; nextPageToken: string | undefined }> {
+    // Stocks only — Alpaca's crypto endpoints take no `feed`. Without this
+    // every equity bars request 403s, because `end` is always `clock.now()`
+    // and a Basic subscription cannot read SIP data under 15 minutes old
+    // See `AlpacaDataFeed` for the live status codes
+    params.set('feed', this.equityFeed);
+    const body = requireResponseObject(
+      await this.requestJson(
+        `${this.baseUrl}/${ALPACA_STOCKS_API_VERSION}/stocks/${encodeURIComponent(
+          symbol,
+        )}/bars?${params.toString()}`,
+        'getBars',
+      ),
+      'getBars',
+    ) as StocksBarsResponse;
+    const bars: AlpacaBar[] = [];
+    for (const raw of requireBarsArray(body.bars, symbol, 'getBars')) {
+      bars.push(toAlpacaBar(validateRawAlpacaBar(raw, symbol, 'getBars')));
+    }
+    const nextPageToken =
+      typeof body.next_page_token === 'string' ? body.next_page_token : undefined;
+    return { bars, nextPageToken };
+  }
+
   /**
    * Ascending bars in `[asOf - windowMs, asOf]`, every page followed.
    * Returns everything the range holds — trimming to a caller's `limit` and
@@ -630,49 +689,12 @@ export class AlpacaHttpDataClient implements AlpacaMarketDataClient {
       });
       if (pageToken !== undefined) params.set('page_token', pageToken);
 
-      if (this.assetClass === 'crypto') {
-        params.set('symbols', alpacaSymbol);
-        const body = requireResponseObject(
-          await this.requestJson(
-            `${this.baseUrl}/${ALPACA_CRYPTO_API_VERSION}/crypto/us/bars?${params.toString()}`,
-            'getBars',
-          ),
-          'getBars',
-        ) as CryptoBarsResponse;
-        // `?? undefined` folds an explicit `bars: null` into the same
-        // "no key" branch `lookupCryptoKey` already handles — it only guards
-        // `undefined`, and a malformed body sending `null` would otherwise
-        // throw an unclassified TypeError reading `byKey[alpacaSymbol]`
-        const rawBars = lookupCryptoKey(body.bars ?? undefined, alpacaSymbol, symbol);
-        for (const raw of requireBarsArray(rawBars, symbol, 'getBars')) {
-          out.push(toAlpacaBar(validateRawAlpacaBar(raw, symbol, 'getBars')));
-        }
-        // A wrong-typed `next_page_token` degrades to "no more pages" rather
-        // than throwing: an early stop here is exactly the short-read case
-        // `getBars`'s widen-and-retry (RETRY_WIDEN_FACTOR) already exists to
-        // recover, so it is caught by the existing sparse-data path instead
-        // of a second bespoke guard
-        pageToken = typeof body.next_page_token === 'string' ? body.next_page_token : undefined;
-      } else {
-        // Stocks only — Alpaca's crypto endpoints take no `feed`. Without this
-        // every equity bars request 403s, because `end` is always `clock.now()`
-        // and a Basic subscription cannot read SIP data under 15 minutes old
-        // See `AlpacaDataFeed` for the live status codes
-        params.set('feed', this.equityFeed);
-        const body = requireResponseObject(
-          await this.requestJson(
-            `${this.baseUrl}/${ALPACA_STOCKS_API_VERSION}/stocks/${encodeURIComponent(
-              symbol,
-            )}/bars?${params.toString()}`,
-            'getBars',
-          ),
-          'getBars',
-        ) as StocksBarsResponse;
-        for (const raw of requireBarsArray(body.bars, symbol, 'getBars')) {
-          out.push(toAlpacaBar(validateRawAlpacaBar(raw, symbol, 'getBars')));
-        }
-        pageToken = typeof body.next_page_token === 'string' ? body.next_page_token : undefined;
-      }
+      const page =
+        this.assetClass === 'crypto'
+          ? await this.fetchCryptoBarsPage(symbol, alpacaSymbol, params)
+          : await this.fetchStocksBarsPage(symbol, params);
+      out.push(...page.bars);
+      pageToken = page.nextPageToken;
     } while (pageToken !== undefined);
 
     return out;

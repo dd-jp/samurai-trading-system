@@ -290,16 +290,12 @@ describe('inbound routing: nothing bypasses a barrel (#1158)', () => {
   const SKIP_DIRS = new Set(['node_modules', 'dist', 'coverage', '.turbo']);
 
   function walkSourceFiles(dir: string): string[] {
-    const out: string[] = [];
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (entry.isDirectory()) {
-        if (SKIP_DIRS.has(entry.name)) continue;
-        out.push(...walkSourceFiles(join(dir, entry.name)));
-      } else if (entry.isFile() && /\.tsx?$/.test(entry.name)) {
-        out.push(join(dir, entry.name));
-      }
-    }
-    return out;
+    const entries = readdirSync(dir, { withFileTypes: true });
+    const files = entries
+      .filter((entry) => entry.isFile() && /\.tsx?$/.test(entry.name))
+      .map((entry) => join(dir, entry.name));
+    const subdirs = entries.filter((entry) => entry.isDirectory() && !SKIP_DIRS.has(entry.name));
+    return [...files, ...subdirs.flatMap((entry) => walkSourceFiles(join(dir, entry.name)))];
   }
 
   const REPO_SOURCE_FILES = ['server', 'client', 'e2e']
@@ -343,21 +339,28 @@ describe('inbound routing: nothing bypasses a barrel (#1158)', () => {
    * real import path into a module graph nothing else pulls in — cannot
    * arise there, and the carve-out does not reach it
    */
+  function fileImportViolations(
+    file: string,
+    targetPattern: RegExp,
+    honourImportTypeCarveOut: boolean,
+  ): string[] {
+    const violations: string[] = [];
+    for (const { specifier, isBareImportType } of importStatementsOf(file)) {
+      if (!targetPattern.test(specifier)) continue;
+      if (honourImportTypeCarveOut && isBareImportType) continue;
+      violations.push(`${file}: imports "${specifier}" directly instead of through its barrel`);
+    }
+    return violations;
+  }
+
   function deepImportViolations(
     targetPattern: RegExp,
     isInternalToTarget: (absPath: string) => boolean,
     honourImportTypeCarveOut: boolean,
   ): string[] {
-    const violations: string[] = [];
-    for (const file of REPO_SOURCE_FILES) {
-      if (isInternalToTarget(file)) continue;
-      for (const { specifier, isBareImportType } of importStatementsOf(file)) {
-        if (!targetPattern.test(specifier)) continue;
-        if (honourImportTypeCarveOut && isBareImportType) continue;
-        violations.push(`${file}: imports "${specifier}" directly instead of through its barrel`);
-      }
-    }
-    return violations;
+    return REPO_SOURCE_FILES.filter((file) => !isInternalToTarget(file)).flatMap((file) =>
+      fileImportViolations(file, targetPattern, honourImportTypeCarveOut),
+    );
   }
 
   /**

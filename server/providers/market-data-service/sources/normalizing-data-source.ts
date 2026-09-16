@@ -380,6 +380,7 @@ export abstract class NormalizingDataSource implements DataSource {
    * means raw candles; `InSessionUnderfetchError.requested` means the caller's
    * completed in-session count.
    */
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the retry loop's guards share accumulated state (attempts, rawLimit, served) across iterations and are explicitly reasoned against each other in the comments above (raw scarcity vs session loss "must not be conflated"); splitting them into sub-functions would orphan that cross-guard reasoning.
   async fetchBars(instrument: string, window: BarWindow, asOf: Date): Promise<Bar[]> {
     const context = {
       instrument,

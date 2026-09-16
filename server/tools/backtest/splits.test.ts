@@ -15,6 +15,17 @@ function overlaps(a: DateRange, b: DateRange): boolean {
   return a.start.getTime() < b.end.getTime() && b.start.getTime() < a.end.getTime();
 }
 
+/**
+ * Train must sit wholly outside [test.start - embargo, test.end + embargo]:
+ * adjacent bars share label information with the test set, so leaving them
+ * in leaks it into training.
+ */
+function isClearOfEmbargo(train: DateRange, test: DateRange, embargoMs: number): boolean {
+  const clearBefore = train.end.getTime() <= test.start.getTime() - embargoMs;
+  const clearAfter = train.start.getTime() >= test.end.getTime() + embargoMs;
+  return clearBefore || clearAfter;
+}
+
 describe('generateSplits', () => {
   describe('walk_forward', () => {
     it('produces a distribution of folds, not a single train/test path', () => {
@@ -85,12 +96,7 @@ describe('generateSplits', () => {
       for (const split of generateSplits(WINDOW, 'cpcv', { embargo, barMs: DAY_MS })) {
         for (const test of split.test) {
           for (const train of split.train) {
-            // Train must sit wholly outside [test.start - embargo, test.end + embargo]:
-            // adjacent bars share label information with the test set, so
-            // leaving them in leaks it into training
-            const clearBefore = train.end.getTime() <= test.start.getTime() - embargoMs;
-            const clearAfter = train.start.getTime() >= test.end.getTime() + embargoMs;
-            expect(clearBefore || clearAfter).toBe(true);
+            expect(isClearOfEmbargo(train, test, embargoMs)).toBe(true);
           }
         }
       }

@@ -291,6 +291,44 @@ function verdictSummary(entry: LedgerEntry, verdict: VerdictRow | undefined): st
   return parts.join(' · ');
 }
 
+function VerdictLedgerRow(props: {
+  entry: LedgerEntry;
+  verdict: VerdictRow | undefined;
+  onOpenTrace: GlanceTabProps['onOpenTrace'];
+}) {
+  const { entry, verdict, onOpenTrace } = props;
+  const override = verdict?.hitl_override === true;
+  const summary = verdictSummary(entry, verdict);
+  const name = [
+    entry.instrument,
+    OUTCOME_WORD[entry.outcome],
+    ...(override ? ['human override'] : []),
+    ...(summary === '' ? [] : [summary]),
+  ].join(', ');
+  return (
+    <li key={entry.trace_id}>
+      <button
+        type="button"
+        className="verdict-row"
+        data-trace-id={entry.trace_id}
+        aria-label={name}
+        onClick={() => onOpenTrace({ instrument: entry.instrument, traceId: entry.trace_id })}
+      >
+        <Seal outcome={entry.outcome} />
+        <span className="mono muted">
+          {entry.settled_at === null ? UNKNOWN : formatClockUtc(entry.settled_at)}
+        </span>
+        <span className="display verdict-instrument">{entry.instrument}</span>
+        <span>
+          <b className={`outcome-${entry.outcome}`}>{OUTCOME_WORD[entry.outcome]}</b>
+          {override ? <span className="hitl">HITL</span> : null}
+          {summary === '' ? null : <span className="muted"> · {summary}</span>}
+        </span>
+      </button>
+    </li>
+  );
+}
+
 function VerdictsCard(props: Pick<GlanceTabProps, 'ledger' | 'verdictsByTrace' | 'onOpenTrace'>) {
   const { ledger, verdictsByTrace, onOpenTrace } = props;
   return (
@@ -303,41 +341,14 @@ function VerdictsCard(props: Pick<GlanceTabProps, 'ledger' | 'verdictsByTrace' |
         </p>
       ) : (
         <ul className="verdict-list">
-          {ledger.map((entry) => {
-            const verdict = verdictsByTrace.get(entry.trace_id);
-            const override = verdict?.hitl_override === true;
-            const summary = verdictSummary(entry, verdict);
-            const name = [
-              entry.instrument,
-              OUTCOME_WORD[entry.outcome],
-              ...(override ? ['human override'] : []),
-              ...(summary === '' ? [] : [summary]),
-            ].join(', ');
-            return (
-              <li key={entry.trace_id}>
-                <button
-                  type="button"
-                  className="verdict-row"
-                  data-trace-id={entry.trace_id}
-                  aria-label={name}
-                  onClick={() =>
-                    onOpenTrace({ instrument: entry.instrument, traceId: entry.trace_id })
-                  }
-                >
-                  <Seal outcome={entry.outcome} />
-                  <span className="mono muted">
-                    {entry.settled_at === null ? UNKNOWN : formatClockUtc(entry.settled_at)}
-                  </span>
-                  <span className="display verdict-instrument">{entry.instrument}</span>
-                  <span>
-                    <b className={`outcome-${entry.outcome}`}>{OUTCOME_WORD[entry.outcome]}</b>
-                    {override ? <span className="hitl">HITL</span> : null}
-                    {summary === '' ? null : <span className="muted"> · {summary}</span>}
-                  </span>
-                </button>
-              </li>
-            );
-          })}
+          {ledger.map((entry) => (
+            <VerdictLedgerRow
+              key={entry.trace_id}
+              entry={entry}
+              verdict={verdictsByTrace.get(entry.trace_id)}
+              onOpenTrace={onOpenTrace}
+            />
+          ))}
         </ul>
       )}
     </section>

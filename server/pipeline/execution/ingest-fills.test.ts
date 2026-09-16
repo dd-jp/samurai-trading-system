@@ -4239,6 +4239,51 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
    * level it.
    */
   it('#1546: a protective exit needs one successful capture, a flatten needs two', async () => {
+    // `modelled_cost_breakdown: null` is what `captureSubmitSnapshot`
+    // writes when its exit budget (#826) expires or the feed is dark
+    async function writeAheadFlattenFor(
+      store: TestExecutionStore,
+      capturedFlatten: boolean | undefined,
+    ): Promise<void> {
+      await store.writeAheadFlatten({
+        idempotency_key: 'flatten-1',
+        instrument: 'AAPL',
+        asset_class: 'stocks',
+        side: 'sell',
+        size: 10,
+        submitted_at: OPENED_AT,
+        lot_held_quantities: [{ idempotency_key: 'key-1', held: 10 }],
+        exit_reason: 'flatten',
+        decision_price: 110,
+        quote_bid: null,
+        quote_ask: null,
+        quote_mid: null,
+        quote_observed_at: null,
+        modelled_cost_breakdown: capturedFlatten === true ? modelledCostBreakdown : null,
+      });
+    }
+
+    function buildExitFill(exit: 'stop' | 'flatten') {
+      return exit === 'stop'
+        ? fill({
+            broker_fill_id: toBrokerFillId('s1'),
+            leg: 'stop',
+            qty: 10,
+            price: 95,
+            fee: 0,
+            timestamp: new Date('2026-07-20T15:30:00Z'),
+          })
+        : fill({
+            client_order_id: 'flatten-1',
+            broker_fill_id: toBrokerFillId('f1'),
+            leg: 'exit',
+            qty: 10,
+            price: 110,
+            fee: 0,
+            timestamp: new Date('2026-07-20T15:30:00Z'),
+          });
+    }
+
     async function closeOn(
       exit: 'stop' | 'flatten',
       captures: { entry: boolean; flatten?: boolean },
@@ -4264,52 +4309,10 @@ describe('ExecutionImpl.ingestFills — arm cost symmetry (#1121)', () => {
       });
       await new ExecutionImpl(makeInput(new ScriptedBroker([entryFill]), store)).ingestFills();
 
-      if (exit === 'flatten') {
-        // `modelled_cost_breakdown: null` is what `captureSubmitSnapshot`
-        // writes when its exit budget (#826) expires or the feed is dark
-        await store.writeAheadFlatten({
-          idempotency_key: 'flatten-1',
-          instrument: 'AAPL',
-          asset_class: 'stocks',
-          side: 'sell',
-          size: 10,
-          submitted_at: OPENED_AT,
-          lot_held_quantities: [{ idempotency_key: 'key-1', held: 10 }],
-          exit_reason: 'flatten',
-          decision_price: 110,
-          quote_bid: null,
-          quote_ask: null,
-          quote_mid: null,
-          quote_observed_at: null,
-          modelled_cost_breakdown: captures.flatten === true ? modelledCostBreakdown : null,
-        });
-      }
+      if (exit === 'flatten') await writeAheadFlattenFor(store, captures.flatten);
 
       await new ExecutionImpl(
-        makeInput(
-          new ScriptedBroker([
-            entryFill,
-            exit === 'stop'
-              ? fill({
-                  broker_fill_id: toBrokerFillId('s1'),
-                  leg: 'stop',
-                  qty: 10,
-                  price: 95,
-                  fee: 0,
-                  timestamp: new Date('2026-07-20T15:30:00Z'),
-                })
-              : fill({
-                  client_order_id: 'flatten-1',
-                  broker_fill_id: toBrokerFillId('f1'),
-                  leg: 'exit',
-                  qty: 10,
-                  price: 110,
-                  fee: 0,
-                  timestamp: new Date('2026-07-20T15:30:00Z'),
-                }),
-          ]),
-          store,
-        ),
+        makeInput(new ScriptedBroker([entryFill, buildExitFill(exit)]), store),
       ).ingestFills();
 
       const closed = (await store.getClosedTrades())[0];

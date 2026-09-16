@@ -146,6 +146,46 @@ export interface LatticePoint {
 }
 
 /**
+ * The innermost three axes of the lattice sweep (donchian/adx/squeeze),
+ * assessed for one fixed `lastClose`/`rsi`/`macd`/`participation` — split out
+ * of `enumerateTechnicalLattice` purely to keep that function's nesting
+ * shallow; the grid it sweeps is unchanged.
+ */
+function collectLatticePointsFor(
+  lastClose: number,
+  rsi: number,
+  macd: number | undefined,
+  participation: number | null | undefined,
+  seen: Map<string, LatticePoint>,
+): void {
+  const sma = 100;
+  const donchians: (number | undefined)[] = [undefined, 0.9, 0.5, 0.1];
+  const adxs: (number | undefined)[] = [undefined, 10, 30];
+  const squeezes: (number | undefined)[] = [undefined, 0.5, 1.5];
+
+  for (const donchian of donchians) {
+    for (const adx of adxs) {
+      for (const squeeze of squeezes) {
+        const assessment: AxisAssessment = assessAxes(
+          { lastClose, sma, rsi, atrPct: 1 },
+          { macd, adx, squeeze, donchian, participation },
+        );
+        const point: LatticePoint = {
+          direction: assessment.direction,
+          confidence: assessment.confidence,
+          availableAxes: assessment.availableAxes,
+          net: assessment.net,
+          capped: assessment.capReasons.length > 0,
+          keyPoints: assessment.readings.length + TECHNICAL_FIXED_KEY_POINTS,
+        };
+        const key = `${point.direction}|${point.confidence}|${point.availableAxes}|${point.capped}|${point.keyPoints}`;
+        if (!seen.has(key)) seen.set(key, point);
+      }
+    }
+  }
+}
+
+/**
  * Sweeps the REAL `assessAxes` over a grid that reaches every vote combination
  * and returns the distinct outputs.
  *
@@ -155,14 +195,10 @@ export interface LatticePoint {
  * would measure this file instead of the analyst.
  */
 export function enumerateTechnicalLattice(): LatticePoint[] {
-  const sma = 100;
   const closes = [101, 100, 99];
   const rsis = [5, 25, 45, 50, 55, 75, 95];
   const macds: (number | undefined)[] = [undefined, -1, 0, 1];
   const participations: (number | null | undefined)[] = [undefined, null, 0.9, 0.5, 0.1];
-  const donchians: (number | undefined)[] = [undefined, 0.9, 0.5, 0.1];
-  const adxs: (number | undefined)[] = [undefined, 10, 30];
-  const squeezes: (number | undefined)[] = [undefined, 0.5, 1.5];
 
   const seen = new Map<string, LatticePoint>();
 
@@ -170,26 +206,7 @@ export function enumerateTechnicalLattice(): LatticePoint[] {
     for (const rsi of rsis) {
       for (const macd of macds) {
         for (const participation of participations) {
-          for (const donchian of donchians) {
-            for (const adx of adxs) {
-              for (const squeeze of squeezes) {
-                const assessment: AxisAssessment = assessAxes(
-                  { lastClose, sma, rsi, atrPct: 1 },
-                  { macd, adx, squeeze, donchian, participation },
-                );
-                const point: LatticePoint = {
-                  direction: assessment.direction,
-                  confidence: assessment.confidence,
-                  availableAxes: assessment.availableAxes,
-                  net: assessment.net,
-                  capped: assessment.capReasons.length > 0,
-                  keyPoints: assessment.readings.length + TECHNICAL_FIXED_KEY_POINTS,
-                };
-                const key = `${point.direction}|${point.confidence}|${point.availableAxes}|${point.capped}|${point.keyPoints}`;
-                if (!seen.has(key)) seen.set(key, point);
-              }
-            }
-          }
+          collectLatticePointsFor(lastClose, rsi, macd, participation, seen);
         }
       }
     }
@@ -326,38 +343,12 @@ function format(value: number): string {
   return value.toFixed(4);
 }
 
-export function report(floor: number): string {
-  const samples = measureConvictionSamples(floor);
+/** The "Ceiling per desk shape and mediator stance" table's rows, plus the overall ceiling they reveal */
+function buildCeilingTable(
+  samples: readonly ConvictionSample[],
+  floor: number,
+): { lines: string[]; overallCeiling: number } {
   const lines: string[] = [];
-
-  lines.push('# Stocks conviction ceiling vs conviction_floor (#756 item 2)');
-  lines.push('');
-  lines.push(`conviction_floor (DEFAULT_TRADER_CONFIG): ${format(floor)}`);
-  lines.push(`LOW_CONVICTION_CAP (technical, gated tape): ${format(LOW_CONVICTION_CAP)}`);
-  lines.push(`#625 measured ceiling, pre-#625 formula / pre-#745 analyst: 0.5478`);
-  lines.push('');
-
-  const lattice = enumerateTechnicalLattice();
-  const confidences = [...new Set(lattice.map((point) => point.confidence))].sort((a, b) => a - b);
-  lines.push('## Technical confidence lattice (real `assessAxes`, exhaustive grid)');
-  lines.push('');
-  lines.push(`distinct outputs: ${lattice.length}`);
-  lines.push(`distinct confidences: ${confidences.map(format).join(', ')}`);
-  lines.push(
-    `available-axis counts: ${[...new Set(lattice.map((p) => p.availableAxes))].sort().join(', ')}`,
-  );
-  lines.push(
-    `key-point counts (saturation is 3): ${[...new Set(lattice.map((p) => p.keyPoints))].sort((a, b) => a - b).join(', ')}`,
-  );
-  lines.push('');
-
-  lines.push('## Ceiling per desk shape and mediator stance');
-  lines.push('');
-  lines.push(
-    '| desk shape | mediator | ceiling | clears 0.55? | min technical confidence clearing |',
-  );
-  lines.push('| --- | --- | --- | --- | --- |');
-
   let overallCeiling = 0;
   for (const shape of DESK_SHAPES) {
     for (const mediator of MEDIATOR_STANCES) {
@@ -377,10 +368,12 @@ export function report(floor: number): string {
       );
     }
   }
-  lines.push('');
+  return { lines, overallCeiling };
+}
 
-  lines.push('## Gated tape (`LOW_CONVICTION_CAP` = 0.4) — #756 item 3');
-  lines.push('');
+/** The "Gated tape" section's bullet lines — capped-tape ceiling per desk shape, mediator pinned to `agrees` */
+function buildGatedTapeSection(samples: readonly ConvictionSample[], floor: number): string[] {
+  const lines: string[] = [];
   for (const shape of DESK_SHAPES) {
     const capped = samples.filter(
       (sample) =>
@@ -395,10 +388,12 @@ export function report(floor: number): string {
         `${ceiling >= floor ? 'STILL CLEARS the floor' : 'below the floor'}`,
     );
   }
-  lines.push('');
+  return lines;
+}
 
-  lines.push('## Exact ties at the floor — what the strict `<` gate admits');
-  lines.push('');
+/** The "Exact ties at the floor" section — what the strict `<` gate admits */
+function buildTiesSection(samples: readonly ConvictionSample[], floor: number): string[] {
+  const lines: string[] = [];
   const ties = samples.filter(
     (sample) => sample.direction !== 'neutral' && sample.conviction === floor,
   );
@@ -431,21 +426,74 @@ export function report(floor: number): string {
         '(#756 item 1), not one #683 decided.',
     );
   }
+  return lines;
+}
+
+/** The pre-declared PASS/NEAR-HALT/TOTAL-HALT verdict — see the module doc comment's criterion */
+function computeVerdict(overallCeiling: number, floor: number, belowOneCount: number): string {
+  if (overallCeiling < floor) {
+    return 'TOTAL HALT — no stock can clear the floor at any signal strength';
+  }
+  if (belowOneCount === 0) {
+    return 'NEAR-HALT — only a unanimous, uncapped four-axis read clears';
+  }
+  return 'CAN TRADE — points below maximum technical confidence clear the floor';
+}
+
+export function report(floor: number): string {
+  const samples = measureConvictionSamples(floor);
+  const lines: string[] = [];
+
+  lines.push('# Stocks conviction ceiling vs conviction_floor (#756 item 2)');
+  lines.push('');
+  lines.push(`conviction_floor (DEFAULT_TRADER_CONFIG): ${format(floor)}`);
+  lines.push(`LOW_CONVICTION_CAP (technical, gated tape): ${format(LOW_CONVICTION_CAP)}`);
+  lines.push(`#625 measured ceiling, pre-#625 formula / pre-#745 analyst: 0.5478`);
+  lines.push('');
+
+  const lattice = enumerateTechnicalLattice();
+  const confidences = [...new Set(lattice.map((point) => point.confidence))].sort((a, b) => a - b);
+  lines.push('## Technical confidence lattice (real `assessAxes`, exhaustive grid)');
+  lines.push('');
+  lines.push(`distinct outputs: ${lattice.length}`);
+  lines.push(`distinct confidences: ${confidences.map(format).join(', ')}`);
+  lines.push(
+    `available-axis counts: ${[...new Set(lattice.map((p) => p.availableAxes))].sort().join(', ')}`,
+  );
+  lines.push(
+    `key-point counts (saturation is 3): ${[...new Set(lattice.map((p) => p.keyPoints))].sort((a, b) => a - b).join(', ')}`,
+  );
+  lines.push('');
+
+  lines.push('## Ceiling per desk shape and mediator stance');
+  lines.push('');
+  lines.push(
+    '| desk shape | mediator | ceiling | clears 0.55? | min technical confidence clearing |',
+  );
+  lines.push('| --- | --- | --- | --- | --- |');
+
+  const ceilingTable = buildCeilingTable(samples, floor);
+  lines.push(...ceilingTable.lines);
+  lines.push('');
+
+  lines.push('## Gated tape (`LOW_CONVICTION_CAP` = 0.4) — #756 item 3');
+  lines.push('');
+  lines.push(...buildGatedTapeSection(samples, floor));
+  lines.push('');
+
+  lines.push('## Exact ties at the floor — what the strict `<` gate admits');
+  lines.push('');
+  lines.push(...buildTiesSection(samples, floor));
   lines.push('');
 
   const belowOne = samples.filter(
     (sample) => sample.clears && sample.confidence < 1 && sample.direction !== 'neutral',
   );
-  const verdict =
-    overallCeiling < floor
-      ? 'TOTAL HALT — no stock can clear the floor at any signal strength'
-      : belowOne.length === 0
-        ? 'NEAR-HALT — only a unanimous, uncapped four-axis read clears'
-        : 'CAN TRADE — points below maximum technical confidence clear the floor';
+  const verdict = computeVerdict(ceilingTable.overallCeiling, floor, belowOne.length);
 
   lines.push('## Verdict against the pre-declared criterion');
   lines.push('');
-  lines.push(`overall ceiling: ${format(overallCeiling)} vs floor ${format(floor)}`);
+  lines.push(`overall ceiling: ${format(ceilingTable.overallCeiling)} vs floor ${format(floor)}`);
   lines.push(`clearing points with technical confidence < 1.0: ${belowOne.length}`);
   lines.push(`VERDICT: ${verdict}`);
   lines.push('');

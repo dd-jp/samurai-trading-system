@@ -384,6 +384,104 @@ export interface TrialGridRunDeps {
 }
 
 /**
+ * One (config, asset class) pair's walk-forward (and optional CSCV) scoring.
+ * Split out of `runTrialGrid` so the grid's two nested loops stay readable —
+ * this is the whole body of the inner one.
+ */
+async function runOneAssetClassTrial(
+  config: ProxyStrategyConfig,
+  config_hash: string,
+  assetClass: TrialGridAssetClass,
+  deps: TrialGridRunDeps,
+  makeEvaluator: (run: ReplayRunResult) => EvalExecutor,
+): Promise<TrialGridResult> {
+  let report: EvalReport;
+  let cscv: CscvOutcome | undefined;
+  try {
+    const runner = assetClass.makeRunner();
+    const run = await runner.run(config, deps.window);
+    const evaluator = makeEvaluator(run);
+
+    const evalOptions = {
+      window: deps.window,
+      averageCapital: deps.averageCapital,
+      periodsPerYear: assetClass.periodsPerYear,
+      embargo: EMBARGO_BARS,
+      barMs: DAY_MS,
+    };
+
+    report = await evaluator.evaluate({ ...evalOptions, scheme: 'walk_forward' });
+
+    if (deps.includeCscvPass === true) {
+      // Refuse rather than throw — see `CscvOutcome`. Scoped tightly to
+      // the second evaluate() so it cannot swallow a walk-forward or
+      // replay failure, both of which must still abort the grid
+      try {
+        cscv = { report: await evaluator.evaluate({ ...evalOptions, scheme: 'cscv' }) };
+      } catch (cause) {
+        cscv = { error: cause instanceof Error ? cause.message : String(cause) };
+      }
+    }
+  } catch (cause) {
+    // Deliberately fail-fast, not fail-soft: catching here and continuing
+    // to the next config would silently shrink the grid below 12
+    // configs/asset class, which #245 (Verdict) reads as the trial count
+    // N it deflates DSR/PBO/MinBTL by. A shrunk N understates deflation —
+    // an optimistic bias in the overfitting verdict — and a missing row
+    // breaks the configs×folds matrix PBO ranks configs against each
+    // other on (see this module's header). Swallowing `run()` failures
+    // would also swallow `LookaheadViolationError`, the one error this
+    // harness exists to surface, undermining the `lookahead_audit:
+    // 'passed'` attestation below (which is only honest because `run()`
+    // did not throw). What *is* a real gap in the thrown error — no
+    // config identity — is fixed here: rethrow with that context
+    // attached via `cause`, still aborting the whole grid
+    throw new Error(
+      `runTrialGrid: failed on config_hash=${config_hash} ` +
+        `(fastWindow=${config.fastWindow}, slowWindow=${config.slowWindow}, ` +
+        `atrStopMult=${config.atrStopMult}, atrTargetMult=${config.atrTargetMult}), ` +
+        `asset_class=${assetClass.asset_class} — aborting grid rather than ` +
+        `returning a partial/misleading result set.`,
+      { cause },
+    );
+  }
+
+  return {
+    config_hash,
+    config,
+    asset_class: assetClass.asset_class,
+    report,
+    // Spread rather than `cscv: cscv` — `exactOptionalPropertyTypes` makes
+    // an explicit `undefined` a different thing from an absent key, and
+    // "the pass was not requested" is absence
+    ...(cscv === undefined ? {} : { cscv }),
+  };
+}
+
+/**
+ * Logs `config_hash` in `ConfigTrialLog` — called exactly once per config,
+ * regardless of how many asset classes it is scored against (see this
+ * module's header, "12 configs, not 12 reports").
+ */
+function logTrial(configTrialLog: ConfigTrialLog, config_hash: string): void {
+  const backtestReport: BacktestReport = {
+    config_hash,
+    seed: TRIAL_SEED,
+    // No `TickOutcome`s: this path bypasses the Orchestrator's
+    // Scheduler/TickRunner entirely (replay-driver.ts), so there is no
+    // per-instrument-pass trace to carry. `ConfigTrialLog` only needs
+    // the report to identify the trial and attest the run's honesty —
+    // matching the log's own test fixture precedent
+    // (config-trial-log.test.ts)
+    tick_outcomes: [],
+    // An attestation the auditor earned by not throwing: `run()` above
+    // completed without a `LookaheadViolationError`
+    lookahead_audit: 'passed',
+  };
+  configTrialLog.recordTrial(config_hash, backtestReport);
+}
+
+/**
  * Runs the full 12-config grid across every supplied asset class, scoring
  * each via `EvalExecutorImpl.evaluate` with the spec's fixed 5-fold
  * walk-forward split, and logs each config exactly once in `ConfigTrialLog`.
@@ -414,87 +512,17 @@ export async function runTrialGrid(deps: TrialGridRunDeps): Promise<TrialGridRes
     let loggedForSelection = false;
 
     for (const assetClass of deps.assetClasses) {
-      let report: EvalReport;
-      let cscv: CscvOutcome | undefined;
-      try {
-        const runner = assetClass.makeRunner();
-        const run = await runner.run(config, deps.window);
-        const evaluator = makeEvaluator(run);
-
-        const evalOptions = {
-          window: deps.window,
-          averageCapital: deps.averageCapital,
-          periodsPerYear: assetClass.periodsPerYear,
-          embargo: EMBARGO_BARS,
-          barMs: DAY_MS,
-        };
-
-        report = await evaluator.evaluate({ ...evalOptions, scheme: 'walk_forward' });
-
-        if (deps.includeCscvPass === true) {
-          // Refuse rather than throw — see `CscvOutcome`. Scoped tightly to
-          // the second evaluate() so it cannot swallow a walk-forward or
-          // replay failure, both of which must still abort the grid
-          try {
-            cscv = { report: await evaluator.evaluate({ ...evalOptions, scheme: 'cscv' }) };
-          } catch (cause) {
-            cscv = { error: cause instanceof Error ? cause.message : String(cause) };
-          }
-        }
-      } catch (cause) {
-        // Deliberately fail-fast, not fail-soft: catching here and continuing
-        // to the next config would silently shrink the grid below 12
-        // configs/asset class, which #245 (Verdict) reads as the trial count
-        // N it deflates DSR/PBO/MinBTL by. A shrunk N understates deflation —
-        // an optimistic bias in the overfitting verdict — and a missing row
-        // breaks the configs×folds matrix PBO ranks configs against each
-        // other on (see this module's header). Swallowing `run()` failures
-        // would also swallow `LookaheadViolationError`, the one error this
-        // harness exists to surface, undermining the `lookahead_audit:
-        // 'passed'` attestation below (which is only honest because `run()`
-        // did not throw). What *is* a real gap in the thrown error — no
-        // config identity — is fixed here: rethrow with that context
-        // attached via `cause`, still aborting the whole grid
-        throw new Error(
-          `runTrialGrid: failed on config_hash=${config_hash} ` +
-            `(fastWindow=${config.fastWindow}, slowWindow=${config.slowWindow}, ` +
-            `atrStopMult=${config.atrStopMult}, atrTargetMult=${config.atrTargetMult}), ` +
-            `asset_class=${assetClass.asset_class} — aborting grid rather than ` +
-            `returning a partial/misleading result set.`,
-          { cause },
-        );
-      }
-
-      results.push({
-        config_hash,
+      const result = await runOneAssetClassTrial(
         config,
-        asset_class: assetClass.asset_class,
-        report,
-        // Spread rather than `cscv: cscv` — `exactOptionalPropertyTypes` makes
-        // an explicit `undefined` a different thing from an absent key, and
-        // "the pass was not requested" is absence
-        ...(cscv === undefined ? {} : { cscv }),
-      });
+        config_hash,
+        assetClass,
+        deps,
+        makeEvaluator,
+      );
+      results.push(result);
 
-      // Exactly once per config, regardless of how many asset classes it is
-      // scored against — see this module's header ("12 configs, not 12
-      // reports")
       if (!loggedForSelection) {
-        const backtestReport: BacktestReport = {
-          config_hash,
-          seed: TRIAL_SEED,
-          // No `TickOutcome`s: this path bypasses the Orchestrator's
-          // Scheduler/TickRunner entirely (replay-driver.ts), so there is no
-          // per-instrument-pass trace to carry. `ConfigTrialLog` only needs
-          // the report to identify the trial and attest the run's honesty —
-          // matching the log's own test fixture precedent
-          // (config-trial-log.test.ts)
-          tick_outcomes: [],
-          // An attestation the auditor earned by not throwing: `run()` above
-          // completed without a `LookaheadViolationError`
-          lookahead_audit: 'passed',
-        };
-        deps.configTrialLog.recordTrial(config_hash, backtestReport);
+        logTrial(deps.configTrialLog, config_hash);
         loggedForSelection = true;
       }
     }

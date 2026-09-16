@@ -34,6 +34,16 @@ import type {
  * class list, so no `as` is needed (#509) and a JSON object carrying an extra
  * or missing class is refused rather than half-read.
  */
+function parseExitClassEntry(parsed: object, exitClass: ExitClass): CostBasisDropCount | null {
+  if (!(exitClass in parsed)) return null;
+  const entry: unknown = Reflect.get(parsed, exitClass);
+  if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return null;
+  if (!('kept' in entry) || !('dropped' in entry)) return null;
+  const { kept, dropped } = entry;
+  if (!isCount(kept) || !isCount(dropped)) return null;
+  return { kept, dropped };
+}
+
 function parseCostBasisDropsColumn(raw: string | null): ExitClassDropCounts | null {
   if (raw === null) return null;
 
@@ -48,13 +58,9 @@ function parseCostBasisDropsColumn(raw: string | null): ExitClassDropCounts | nu
 
   const counts: Partial<Record<ExitClass, CostBasisDropCount>> = {};
   for (const exitClass of EXIT_CLASSES) {
-    if (!(exitClass in parsed)) return null;
-    const entry: unknown = Reflect.get(parsed, exitClass);
-    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return null;
-    if (!('kept' in entry) || !('dropped' in entry)) return null;
-    const { kept, dropped } = entry;
-    if (!isCount(kept) || !isCount(dropped)) return null;
-    counts[exitClass] = { kept, dropped };
+    const entry = parseExitClassEntry(parsed, exitClass);
+    if (entry === null) return null;
+    counts[exitClass] = entry;
   }
 
   return hasEveryExitClass(counts) ? counts : null;

@@ -714,6 +714,74 @@ function resolveSweepOptions(options: LogRetentionOptions): ResolvedSweepOptions
  * whole sweep) skipped rather than propagating. A boot must not fail because
  * housekeeping did.
  */
+function sweepOneEntry(
+  entry: Dirent,
+  result: LogRetentionResult,
+  ctx: {
+    root: string;
+    keepSet: ReadonlySet<string>;
+    protectedSet: ReadonlySet<string>;
+    truncateNameSet: ReadonlySet<string>;
+    bareTruncateBytes: number | undefined;
+    liveIdentities: readonly FileIdentity[];
+    cutoff: number;
+    remove: (path: string) => void;
+    truncate: (path: string) => void;
+  },
+): void {
+  // `isFile()` reports the type of the DIRECTORY ENTRY, never a symlink's
+  // target — so a symlink (even one pointing outside `directory`) is
+  // neither a file nor a directory here and is skipped rather than
+  // resolved and followed. This is what keeps the sweep inside `directory`
+  // with no path ever leaving it, structurally rather than by convention
+  if (!entry.isFile()) return;
+  if (ctx.keepSet.has(entry.name)) return;
+
+  const path = join(ctx.root, entry.name);
+  if (ctx.protectedSet.has(resolve(path))) return;
+
+  if (isArchivedLogName(entry.name)) {
+    const stat = safeStat(path);
+    if (stat === undefined) return; // Vanished between listing and stat — not this sweep's problem
+    const outcome = tryRemoveArchivedLogEntry(
+      path,
+      stat,
+      ctx.liveIdentities,
+      ctx.cutoff,
+      ctx.remove,
+    );
+    if (outcome.removed) {
+      result.filesRemoved += 1;
+      result.bytesReclaimed += outcome.bytesReclaimed;
+    }
+    return;
+  }
+
+  // Bare log-shaped name (#1206): no age or liveness gate — unlike the
+  // branch above, `truncate` never orphans a writer's descriptor, so disk
+  // allocation alone decides eligibility among ELIGIBLE names (below)
+  // `bareTruncateBytes === undefined` disables this path outright, matching
+  // every version of this sweep before #1206. `truncateNameSet` is the
+  // separate narrowing that keeps `isBareLogName`'s blast radius to files
+  // this process actually knows about (#1281 review, round 2) — `.log`/
+  // `.out` shape alone would match `install.log` as readily as
+  // `soak-boot.out`
+  if (
+    ctx.bareTruncateBytes === undefined ||
+    !isBareTruncateCandidateName(entry.name, ctx.truncateNameSet)
+  ) {
+    return;
+  }
+
+  const stat = safeStat(path);
+  if (stat === undefined) return; // Vanished between listing and stat — not this sweep's problem
+  const outcome = tryTruncateBareLogEntry(path, stat, ctx.bareTruncateBytes, ctx.truncate);
+  if (outcome.truncated) {
+    result.filesTruncated += 1;
+    result.bytesReclaimed += outcome.bytesReclaimed;
+  }
+}
+
 export function sweepStaleLogs(options: LogRetentionOptions): LogRetentionResult {
   const {
     directory,
@@ -753,54 +821,19 @@ export function sweepStaleLogs(options: LogRetentionOptions): LogRetentionResult
     return result; // Missing or unreadable logs/ — nothing to sweep
   }
 
+  const ctx = {
+    root,
+    keepSet,
+    protectedSet,
+    truncateNameSet,
+    bareTruncateBytes,
+    liveIdentities,
+    cutoff,
+    remove,
+    truncate,
+  };
   for (const entry of entries) {
-    // `isFile()` reports the type of the DIRECTORY ENTRY, never a symlink's
-    // target — so a symlink (even one pointing outside `directory`) is
-    // neither a file nor a directory here and is skipped rather than
-    // resolved and followed. This is what keeps the sweep inside `directory`
-    // with no path ever leaving it, structurally rather than by convention
-    if (!entry.isFile()) continue;
-    if (keepSet.has(entry.name)) continue;
-
-    const path = join(root, entry.name);
-    if (protectedSet.has(resolve(path))) continue;
-
-    if (isArchivedLogName(entry.name)) {
-      const stat = safeStat(path);
-      if (stat === undefined) continue; // Vanished between listing and stat — not this sweep's problem
-
-      const outcome = tryRemoveArchivedLogEntry(path, stat, liveIdentities, cutoff, remove);
-      if (outcome.removed) {
-        result.filesRemoved += 1;
-        result.bytesReclaimed += outcome.bytesReclaimed;
-      }
-      continue;
-    }
-
-    // Bare log-shaped name (#1206): no age or liveness gate — unlike the
-    // branch above, `truncate` never orphans a writer's descriptor, so disk
-    // allocation alone decides eligibility among ELIGIBLE names (below)
-    // `bareTruncateBytes === undefined` disables this path outright, matching
-    // every version of this sweep before #1206. `truncateNameSet` is the
-    // separate narrowing that keeps `isBareLogName`'s blast radius to files
-    // this process actually knows about (#1281 review, round 2) — `.log`/
-    // `.out` shape alone would match `install.log` as readily as
-    // `soak-boot.out`
-    if (
-      bareTruncateBytes === undefined ||
-      !isBareTruncateCandidateName(entry.name, truncateNameSet)
-    ) {
-      continue;
-    }
-
-    const stat = safeStat(path);
-    if (stat === undefined) continue; // Vanished between listing and stat — not this sweep's problem
-
-    const outcome = tryTruncateBareLogEntry(path, stat, bareTruncateBytes, truncate);
-    if (outcome.truncated) {
-      result.filesTruncated += 1;
-      result.bytesReclaimed += outcome.bytesReclaimed;
-    }
+    sweepOneEntry(entry, result, ctx);
   }
 
   return result;

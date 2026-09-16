@@ -244,6 +244,27 @@ function matchSameDay(
   return results;
 }
 
+/** One disposal's remainder against `acquisitions` strictly AFTER it within its 30-day window, earliest acquisition first (FIFO) */
+function matchDisposalWithinThirtyDayWindow(
+  instrument: string,
+  disp: DayLot,
+  acquisitions: readonly DayLot[],
+  windowEnd: Date,
+): MatchedDisposal[] {
+  const results: MatchedDisposal[] = [];
+  for (const acq of acquisitions) {
+    if (disp.remaining <= 0) break;
+    if (acq.remaining <= 0) continue;
+    if (acq.date.getTime() <= disp.date.getTime()) continue; // strictly AFTER — direction matters
+    if (acq.date.getTime() > windowEnd.getTime()) continue; // inclusive of the +30 boundary itself
+    const matchQty = Math.min(acq.remaining, disp.remaining);
+    const cost = take(acq, matchQty);
+    const proceeds = take(disp, matchQty);
+    results.push(buildMatch(instrument, disp.date, acq.date, matchQty, proceeds, cost, '30-day'));
+  }
+  return results;
+}
+
 /**
  * 30-day / bed-and-breakfast rule (CG51560/CG51570): each disposal's
  * remainder, earliest disposal first, against acquisitions strictly AFTER it
@@ -261,18 +282,54 @@ function matchThirtyDay(
   for (const disp of disposals) {
     if (disp.remaining <= 0) continue;
     const windowEnd = new Date(disp.date.getTime() + THIRTY_DAY_WINDOW_MS);
-    for (const acq of acquisitions) {
-      if (disp.remaining <= 0) break;
-      if (acq.remaining <= 0) continue;
-      if (acq.date.getTime() <= disp.date.getTime()) continue; // strictly AFTER — direction matters
-      if (acq.date.getTime() > windowEnd.getTime()) continue; // inclusive of the +30 boundary itself
-      const matchQty = Math.min(acq.remaining, disp.remaining);
-      const cost = take(acq, matchQty);
-      const proceeds = take(disp, matchQty);
-      results.push(buildMatch(instrument, disp.date, acq.date, matchQty, proceeds, cost, '30-day'));
-    }
+    results.push(...matchDisposalWithinThirtyDayWindow(instrument, disp, acquisitions, windowEnd));
   }
   return results;
+}
+
+interface Section104Pool {
+  qty: number;
+  cost: number;
+}
+
+/** Tops the pool up from one acquisition day-lot's full remaining quantity */
+function applyAcquisitionToPool(pool: Section104Pool, lot: DayLot): void {
+  const qty = lot.remaining;
+  if (qty <= 0) return;
+  const { amount, charges } = take(lot, qty);
+  pool.qty += qty;
+  pool.cost += amount + charges;
+}
+
+/** Draws one disposal day-lot's full remaining quantity from the pool at its running average cost */
+function applyDisposalToPool(
+  instrument: string,
+  pool: Section104Pool,
+  lot: DayLot,
+): MatchedDisposal | undefined {
+  const qty = lot.remaining;
+  if (qty <= 0) return undefined;
+  if (pool.qty + 1e-9 < qty) {
+    throw new Error(
+      `CGT: Section 104 pool for ${instrument} holds ${pool.qty} shares but a disposal on ` +
+        `${lot.date.toISOString().slice(0, 10)} needs ${qty} — the fill history under-records ` +
+        `acquisitions for this instrument (${HMRC_SECTION_104_CITATION}).`,
+    );
+  }
+  const avgCost = pool.cost / pool.qty;
+  const cost = avgCost * qty;
+  pool.qty -= qty;
+  pool.cost -= cost;
+  const proceeds = take(lot, qty);
+  return buildMatch(
+    instrument,
+    lot.date,
+    undefined,
+    qty,
+    proceeds,
+    { amount: cost, charges: 0 }, // `cost` is already the pooled average cost — no separate charges to add
+    'section-104',
+  );
 }
 
 /**
@@ -299,41 +356,13 @@ function matchSection104Pool(
       .map((lot) => ({ date: lot.date, kind: 'disposal' as const, lot })),
   ].sort((a, b) => a.date.getTime() - b.date.getTime());
 
-  let poolQty = 0;
-  let poolCost = 0;
+  const pool: Section104Pool = { qty: 0, cost: 0 };
   for (const event of events) {
     if (event.kind === 'acquisition') {
-      const qty = event.lot.remaining;
-      if (qty <= 0) continue;
-      const { amount, charges } = take(event.lot, qty);
-      poolQty += qty;
-      poolCost += amount + charges;
+      applyAcquisitionToPool(pool, event.lot);
     } else {
-      const qty = event.lot.remaining;
-      if (qty <= 0) continue;
-      if (poolQty + 1e-9 < qty) {
-        throw new Error(
-          `CGT: Section 104 pool for ${instrument} holds ${poolQty} shares but a disposal on ` +
-            `${event.lot.date.toISOString().slice(0, 10)} needs ${qty} — the fill history under-records ` +
-            `acquisitions for this instrument (${HMRC_SECTION_104_CITATION}).`,
-        );
-      }
-      const avgCost = poolCost / poolQty;
-      const cost = avgCost * qty;
-      poolQty -= qty;
-      poolCost -= cost;
-      const proceeds = take(event.lot, qty);
-      results.push(
-        buildMatch(
-          instrument,
-          event.lot.date,
-          undefined,
-          qty,
-          proceeds,
-          { amount: cost, charges: 0 }, // `cost` is already the pooled average cost — no separate charges to add
-          'section-104',
-        ),
-      );
+      const matched = applyDisposalToPool(instrument, pool, event.lot);
+      if (matched !== undefined) results.push(matched);
     }
   }
   return results;

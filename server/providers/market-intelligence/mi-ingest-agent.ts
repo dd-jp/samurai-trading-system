@@ -243,6 +243,7 @@ export class MiIngestAgent {
    * down a tick that would otherwise have traded on the technical analyst
    * alone.
    */
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: one linear resolve/fetch/archive-raw/filter-unscored/backoff-guard/spend-cap/score/archive-scored/ingest sequence per the doc comment above; splitting the steps apart would scatter one refresh's ordering guarantees (raws archived independent of scoring outcome, streak only cleared on an actual successful score) across several functions.
   async refresh(trace_id: string, instrument: string, asset_class: AssetClass): Promise<boolean> {
     // #914/#960: the ingestion-side half of the MI-wide rule. An LSE-listed
     // leveraged ETP generates no headlines of its own — resolve to the US

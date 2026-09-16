@@ -56,6 +56,45 @@ interface DebateLogRow {
   termination_cause: DebateTerminationCause | null;
 }
 
+/** The `debate_log` INSERT's positional params, in column order — see `SqliteDebateLogStore.writeLog`'s statement */
+function debateLogInsertParams(entry: DebateLog): unknown[] {
+  return [
+    entry.debate_id,
+    entry.instrument,
+    toStoredTimestamp(entry.bar_timestamp),
+    JSON.stringify(entry.contributions),
+    entry.direction,
+    entry.rounds,
+    toStoredTimestamp(entry.created_at),
+    // #426. Null rather than absent when the caller has no trace: the
+    // column is nullable precisely because pre-#426 rows have none, and
+    // a retried tick's fresh trace must not overwrite the one that
+    // actually ran the debate (the PK conflict below is what enforces
+    // that — first write wins)
+    entry.trace_id ?? null,
+    // #617 replay fields. Null when the caller supplies none, which keeps
+    // the pre-0026 callers (tests, backtest) writing valid rows; the
+    // replay path reads a null `confidence` as "cannot replay this" and
+    // re-runs the debate rather than trading on a reconstructed blank
+    entry.confidence ?? null,
+    entry.synthesis ?? null,
+    entry.position ?? null,
+    entry.disagreement_summary ?? null,
+    entry.open_items === undefined ? null : JSON.stringify(entry.open_items),
+    entry.converged === undefined ? null : entry.converged ? 1 : 0,
+    // #1081. Null when the caller supplies none, same convention as
+    // every other optional column here — a pre-0041 caller (tests, a
+    // fixture) still writes a valid row, and the column's own NULL is
+    // the honest "not recorded" rather than a guessed classification
+    entry.termination ?? null,
+    // #1380. Same convention as `termination` immediately above — a
+    // caller that supplies no cause (every pre-0051 caller, and a
+    // 'converged'/'non_converged' row that has none to give) writes
+    // NULL
+    entry.termination_cause ?? null,
+  ];
+}
+
 export class SqliteDebateLogStore implements DebateLogStore {
   constructor(private readonly db: StoreHandle) {}
 
@@ -69,41 +108,7 @@ export class SqliteDebateLogStore implements DebateLogStore {
              open_items_json, converged, termination, termination_cause
            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(
-          entry.debate_id,
-          entry.instrument,
-          toStoredTimestamp(entry.bar_timestamp),
-          JSON.stringify(entry.contributions),
-          entry.direction,
-          entry.rounds,
-          toStoredTimestamp(entry.created_at),
-          // #426. Null rather than absent when the caller has no trace: the
-          // column is nullable precisely because pre-#426 rows have none, and
-          // a retried tick's fresh trace must not overwrite the one that
-          // actually ran the debate (the PK conflict below is what enforces
-          // that — first write wins)
-          entry.trace_id ?? null,
-          // #617 replay fields. Null when the caller supplies none, which keeps
-          // the pre-0026 callers (tests, backtest) writing valid rows; the
-          // replay path reads a null `confidence` as "cannot replay this" and
-          // re-runs the debate rather than trading on a reconstructed blank
-          entry.confidence ?? null,
-          entry.synthesis ?? null,
-          entry.position ?? null,
-          entry.disagreement_summary ?? null,
-          entry.open_items === undefined ? null : JSON.stringify(entry.open_items),
-          entry.converged === undefined ? null : entry.converged ? 1 : 0,
-          // #1081. Null when the caller supplies none, same convention as
-          // every other optional column here — a pre-0041 caller (tests, a
-          // fixture) still writes a valid row, and the column's own NULL is
-          // the honest "not recorded" rather than a guessed classification
-          entry.termination ?? null,
-          // #1380. Same convention as `termination` immediately above — a
-          // caller that supplies no cause (every pre-0051 caller, and a
-          // 'converged'/'non_converged' row that has none to give) writes
-          // NULL
-          entry.termination_cause ?? null,
-        );
+        .run(...debateLogInsertParams(entry));
     } catch (cause) {
       if (isUniqueConstraintError(cause)) {
         throw new Error(

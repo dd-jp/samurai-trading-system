@@ -109,6 +109,47 @@ function retryAfterHintMs(error: unknown, config: RetryConfig): number | undefin
 }
 
 /**
+ * The catch-block half of one `withRetry` attempt: decides whether `error` is
+ * worth another attempt and, if so, reports it (`onRetry`) and sleeps the
+ * backoff. Rethrows `error` itself when it is not retryable or attempts are
+ * exhausted, which is what tells the loop in `withRetry` to stop.
+ *
+ * A throwing `onRetry` is contained rather than allowed to replace `error`:
+ * this loop is on the path of every LLM and HTTP call in the system, and a
+ * telemetry sink that fails must not convert a recoverable timeout into an
+ * unclassified crash (`withRetry`'s doc comment). It is silently swallowed
+ * here because the only sink is a logger, and a logger that cannot log has
+ * nowhere left to report to.
+ */
+async function retryOrRethrow(
+  error: unknown,
+  attempt: number,
+  startedAt: number,
+  config: RetryConfig,
+  isRetryable: (error: unknown) => boolean,
+  onRetry: RetryObserver | undefined,
+): Promise<void> {
+  if (!isRetryable(error) || attempt === config.maxAttempts) {
+    throw error;
+  }
+  const delay_ms = retryAfterHintMs(error, config) ?? backoffDelayMs(attempt, config);
+  if (onRetry !== undefined) {
+    try {
+      onRetry({
+        attempt,
+        maxAttempts: config.maxAttempts,
+        elapsed_ms: Date.now() - startedAt,
+        delay_ms,
+        error,
+      });
+    } catch {
+      // See this function's doc comment: telemetry must not mask the provider error
+    }
+  }
+  await delay(delay_ms);
+}
+
+/**
  * Runs `fn`, retrying up to `config.maxAttempts` total attempts on an error
  * `isRetryable` accepts, with jittered exponential backoff between attempts
  * (unless the error carries a `retryAfterMs` hint, which takes precedence for
@@ -122,13 +163,6 @@ function retryAfterHintMs(error: unknown, config: RetryConfig): number | undefin
  * error the caller sees and can log itself; the point is the attempts a caller
  * never learns about. Optional, so every existing call site is unchanged and
  * simply reports nothing.
- *
- * A throwing observer is contained rather than allowed to replace the
- * provider's error: this loop is on the path of every LLM and HTTP call in the
- * system, and a telemetry sink that fails must not convert a recoverable
- * timeout into an unclassified crash. It is silently swallowed here because
- * the only sink is a logger, and a logger that cannot log has nowhere left to
- * report to.
  */
 export async function withRetry<T>(
   fn: () => Promise<T>,
@@ -151,24 +185,7 @@ export async function withRetry<T>(
       return await fn();
     } catch (error) {
       lastError = error;
-      if (!isRetryable(error) || attempt === config.maxAttempts) {
-        throw error;
-      }
-      const delay_ms = retryAfterHintMs(error, config) ?? backoffDelayMs(attempt, config);
-      if (onRetry !== undefined) {
-        try {
-          onRetry({
-            attempt,
-            maxAttempts: config.maxAttempts,
-            elapsed_ms: Date.now() - startedAt,
-            delay_ms,
-            error,
-          });
-        } catch {
-          // See the doc comment: telemetry must not mask the provider error
-        }
-      }
-      await delay(delay_ms);
+      await retryOrRethrow(error, attempt, startedAt, config, isRetryable, onRetry);
     }
   }
 

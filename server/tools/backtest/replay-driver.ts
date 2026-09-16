@@ -401,13 +401,7 @@ export class ReplayDriver {
     // run's lots cannot leak into this one, and a cached bar cursor held on
     // the driver would leak the same way
     const auditor = new LookaheadAuditor(this.deps.clock);
-    const cursors = new Map<string, BarCursor>();
-    for (const instrument of this.deps.universe) {
-      cursors.set(
-        instrument.symbol,
-        new BarCursor(instrument.symbol, this.deps.barSource, window, auditor, this.deps.timeframe),
-      );
-    }
+    const cursors = this.buildCursors(auditor, window);
 
     const state: RunState = {
       config,
@@ -431,106 +425,12 @@ export class ReplayDriver {
       this.deps.clock.advanceTo(at);
 
       for (const instrument of this.deps.universe) {
-        const bars = (cursors.get(instrument.symbol) as BarCursor).visibleAt(at);
-        const bar = bars[bars.length - 1];
-
-        // This instrument has no bar closing at this timestamp (the timeline
-        // is the union across the universe), or is still inside its warmup —
-        // `computeIndicator` on a short window returns a wrong SMA/ATR rather
-        // than erroring, so a short slice is never evaluated
-        if (bar === undefined || bar.close_time.getTime() !== at.getTime()) continue;
-        if (bars.length < warmup) continue;
-
-        const signal = proxySignal(bars, config, this.deps.timeframe);
-        const lot = state.open.get(instrument.symbol);
-
-        // Where this bar sits in its session (#664). `null` on a daily replay
-        // and on a venue with no close, which is what keeps both of those
-        // paths byte-identical to their pre-#664 behaviour
-        const boundary = flattenBoundary(bar, this.deps.timeframe, this.deps.sessionCalendar);
-        // AT LEAST ONE BAR WIDE (#664). The live rule is wall-clock — flatten
-        // in the last five minutes before the close (trader/decide.ts). A
-        // replay cannot act inside a bar, so on any grid coarser than the
-        // window no bar's OPEN ever falls inside it: on the 15-minute cadence
-        // ADR-0008 §2 records, the last bar of the session opens at CLOSE−15m,
-        // the window never opens, the lot is held, and the carry assertion
-        // below aborts the run — blaming the calendar for what is really an
-        // arithmetic mismatch between the window and the bar size. Widening to
-        // one bar is the honest bar-replay reading of "be flat by close":
-        // flatten on the final bar of the session. `'1m'` and `'5m'` are
-        // unchanged (`max(5min, 1min) = 5min`)
-        const flattenBeforeCloseMs = Math.max(
-          this.deps.flattenBeforeCloseMs ?? DEFAULT_FLATTEN_BEFORE_CLOSE_MS,
-          timeframeToMs(this.deps.timeframe),
-        );
-        const withinFlattenWindow =
-          boundary !== null && boundary.remainingMs <= flattenBeforeCloseMs;
-
-        if (lot !== undefined) {
-          // The flat-by-close INVARIANT, asserted rather than assumed
-          //
-          // Reaching a bar in a LATER session with a lot still open means the
-          // flatten window never opened on the session that lot belongs to —
-          // and the known cause is a calendar that does not know the session's
-          // real close. `UsEquityRegularHoursCalendar`'s holiday and
-          // early-close tables are HAND-ENTERED and currently cover 2026-2027
-          // only, so a replay of, say, 25 November 2016 (a 13:00 half-day)
-          // gets a phantom 16:00 close, prints no bar inside [15:55, 16:00),
-          // and carries the position overnight
-          //
-          // Throwing is this repo's own posture for exactly this gap:
-          // `#closeMinutesFor` throws past its table rather than assuming a
-          // normal close. Silently carrying overnight would produce a
-          // flat-by-close backtest that is not flat by close, which is a
-          // wrong NUMBER rather than a failed run — the worse of the two
-          if (lot.session_end !== null && bar.open_time.getTime() >= lot.session_end.getTime()) {
-            throw new Error(
-              `ReplayDriver: ${instrument.symbol} carried a position from the session ending ` +
-                `${lot.session_end.toISOString()} into the bar opening ` +
-                `${bar.open_time.toISOString()}. ADR-0014 is flat-by-close, so this is either a ` +
-                'session whose real close the calendar does not know (its holiday/early-close ' +
-                'tables are hand-entered and cover 2026-2027 — see #684) or a bar series with ' +
-                'no bar inside the flatten window. Fix the calendar rather than reading the ' +
-                'result: an overnight carry here is not a modelling choice, it is a wrong number.',
-            );
-          }
-
-          // Bracket first, flatten second: a stop or target that the bar's
-          // range already went through happened INSIDE the bar, before the
-          // flatten window's clock ran out at its open. Flattening a lot the
-          // market had already stopped out would book an exit at the wrong
-          // price, in the flattering direction
-          const exit =
-            exitOf(lot, bar, signal) ?? (withinFlattenWindow ? flattenExit(bar) : undefined);
-          if (exit !== undefined) {
-            this.closeLot(state, instrument, lot, bar, bars, exit);
-            state.open.delete(instrument.symbol);
-          }
-          // No same-bar re-entry: the lot's exit is already priced at this
-          // bar, and re-entering on it would open a second lot against the
-          // same bar's information
-          continue;
-        }
-
-        if (signal.direction === 'flat') continue;
-
-        // Nothing new opens inside the flatten window — the live rule
-        // (`withinFlattenWindow` in trader/decide.ts) turns the same `true`
-        // into an entry skip. An entry here would be flattened on the next bar
-        // at best, and carried overnight at worst
-        if (withinFlattenWindow) continue;
-
-        state.open.set(
-          instrument.symbol,
-          this.openLot(
-            state,
-            instrument,
-            bar,
-            bars,
-            signal,
-            signal.direction,
-            boundary?.sessionEnd ?? null,
-          ),
+        this.stepInstrument(
+          state,
+          instrument,
+          cursors.get(instrument.symbol) as BarCursor,
+          at,
+          warmup,
         );
       }
     }
@@ -544,6 +444,139 @@ export class ReplayDriver {
     // round-trip-to-flat is a realized record (shared/types.ts), and marking
     // it out at the final close would invent an exit no cost model priced
     return { trades: state.records, timeline: new SteppedTimeline(stepped) };
+  }
+
+  private buildCursors(auditor: LookaheadAuditor, window: DateRange): Map<string, BarCursor> {
+    const cursors = new Map<string, BarCursor>();
+    for (const instrument of this.deps.universe) {
+      cursors.set(
+        instrument.symbol,
+        new BarCursor(instrument.symbol, this.deps.barSource, window, auditor, this.deps.timeframe),
+      );
+    }
+    return cursors;
+  }
+
+  /** One (instrument, timestamp) step of the replay loop — see `run`. */
+  private stepInstrument(
+    state: RunState,
+    instrument: ReplayInstrument,
+    cursor: BarCursor,
+    at: Date,
+    warmup: number,
+  ): void {
+    const bars = cursor.visibleAt(at);
+    const bar = bars[bars.length - 1];
+
+    // This instrument has no bar closing at this timestamp (the timeline
+    // is the union across the universe), or is still inside its warmup —
+    // `computeIndicator` on a short window returns a wrong SMA/ATR rather
+    // than erroring, so a short slice is never evaluated
+    if (bar === undefined || bar.close_time.getTime() !== at.getTime()) return;
+    if (bars.length < warmup) return;
+
+    const signal = proxySignal(bars, state.config, this.deps.timeframe);
+    const lot = state.open.get(instrument.symbol);
+
+    // Where this bar sits in its session (#664). `null` on a daily replay
+    // and on a venue with no close, which is what keeps both of those
+    // paths byte-identical to their pre-#664 behaviour
+    const boundary = flattenBoundary(bar, this.deps.timeframe, this.deps.sessionCalendar);
+    // AT LEAST ONE BAR WIDE (#664). The live rule is wall-clock — flatten
+    // in the last five minutes before the close (trader/decide.ts). A
+    // replay cannot act inside a bar, so on any grid coarser than the
+    // window no bar's OPEN ever falls inside it: on the 15-minute cadence
+    // ADR-0008 §2 records, the last bar of the session opens at CLOSE−15m,
+    // the window never opens, the lot is held, and the carry assertion
+    // below aborts the run — blaming the calendar for what is really an
+    // arithmetic mismatch between the window and the bar size. Widening to
+    // one bar is the honest bar-replay reading of "be flat by close":
+    // flatten on the final bar of the session. `'1m'` and `'5m'` are
+    // unchanged (`max(5min, 1min) = 5min`)
+    const flattenBeforeCloseMs = Math.max(
+      this.deps.flattenBeforeCloseMs ?? DEFAULT_FLATTEN_BEFORE_CLOSE_MS,
+      timeframeToMs(this.deps.timeframe),
+    );
+    const withinFlattenWindow = boundary !== null && boundary.remainingMs <= flattenBeforeCloseMs;
+
+    if (lot !== undefined) {
+      this.handleOpenLot(state, instrument, lot, bar, bars, signal, withinFlattenWindow);
+      // No same-bar re-entry: the lot's exit is already priced at this
+      // bar, and re-entering on it would open a second lot against the
+      // same bar's information
+      return;
+    }
+
+    if (signal.direction === 'flat') return;
+
+    // Nothing new opens inside the flatten window — the live rule
+    // (`withinFlattenWindow` in trader/decide.ts) turns the same `true`
+    // into an entry skip. An entry here would be flattened on the next bar
+    // at best, and carried overnight at worst
+    if (withinFlattenWindow) return;
+
+    state.open.set(
+      instrument.symbol,
+      this.openLot(
+        state,
+        instrument,
+        bar,
+        bars,
+        signal,
+        signal.direction,
+        boundary?.sessionEnd ?? null,
+      ),
+    );
+  }
+
+  /** An already-open lot's exit check for this bar — see `run`. */
+  private handleOpenLot(
+    state: RunState,
+    instrument: ReplayInstrument,
+    lot: OpenLot,
+    bar: Bar,
+    bars: readonly Bar[],
+    signal: ProxySignal,
+    withinFlattenWindow: boolean,
+  ): void {
+    // The flat-by-close INVARIANT, asserted rather than assumed
+    //
+    // Reaching a bar in a LATER session with a lot still open means the
+    // flatten window never opened on the session that lot belongs to —
+    // and the known cause is a calendar that does not know the session's
+    // real close. `UsEquityRegularHoursCalendar`'s holiday and
+    // early-close tables are HAND-ENTERED and currently cover 2026-2027
+    // only, so a replay of, say, 25 November 2016 (a 13:00 half-day)
+    // gets a phantom 16:00 close, prints no bar inside [15:55, 16:00),
+    // and carries the position overnight
+    //
+    // Throwing is this repo's own posture for exactly this gap:
+    // `#closeMinutesFor` throws past its table rather than assuming a
+    // normal close. Silently carrying overnight would produce a
+    // flat-by-close backtest that is not flat by close, which is a
+    // wrong NUMBER rather than a failed run — the worse of the two
+    if (lot.session_end !== null && bar.open_time.getTime() >= lot.session_end.getTime()) {
+      throw new Error(
+        `ReplayDriver: ${instrument.symbol} carried a position from the session ending ` +
+          `${lot.session_end.toISOString()} into the bar opening ` +
+          `${bar.open_time.toISOString()}. ADR-0014 is flat-by-close, so this is either a ` +
+          'session whose real close the calendar does not know (its holiday/early-close ' +
+          'tables are hand-entered and cover 2026-2027 — see #684) or a bar series with ' +
+          'no bar inside the flatten window. Fix the calendar rather than reading the ' +
+          'result: an overnight carry here is not a modelling choice, it is a wrong number.',
+      );
+    }
+
+    // Bracket first, flatten second: a stop or target that the bar's
+    // range already went through happened INSIDE the bar, before the
+    // flatten window's clock ran out at its open. Flattening a lot the
+    // market had already stopped out would book an exit at the wrong
+    // price, in the flattering direction
+    const exit = exitOf(lot, bar, signal) ?? (withinFlattenWindow ? flattenExit(bar) : undefined);
+    if (exit !== undefined) {
+      this.closeLot(state, instrument, lot, bar, bars, exit);
+      state.open.delete(instrument.symbol);
+    }
   }
 
   private openLot(
@@ -785,6 +818,38 @@ function flattenExit(bar: Bar): { reason: ReplayCloseReason; reference: number }
 }
 
 /**
+ * A long lot's bracket exit, if this bar produced one — stop checked before
+ * target (see `exitOf`). The reference is the bar's open when it already
+ * gapped through the level, otherwise the level itself.
+ */
+function longBracketExit(
+  lot: OpenLot,
+  bar: Bar,
+): { reason: ReplayCloseReason; reference: number } | undefined {
+  if (bar.low <= lot.stop) {
+    return { reason: 'stop', reference: bar.open < lot.stop ? bar.open : lot.stop };
+  }
+  if (bar.high >= lot.target) {
+    return { reason: 'target', reference: bar.open > lot.target ? bar.open : lot.target };
+  }
+  return undefined;
+}
+
+/** A short lot's bracket exit, if this bar produced one — mirrors `longBracketExit`. */
+function shortBracketExit(
+  lot: OpenLot,
+  bar: Bar,
+): { reason: ReplayCloseReason; reference: number } | undefined {
+  if (bar.high >= lot.stop) {
+    return { reason: 'stop', reference: bar.open > lot.stop ? bar.open : lot.stop };
+  }
+  if (bar.low <= lot.target) {
+    return { reason: 'target', reference: bar.open < lot.target ? bar.open : lot.target };
+  }
+  return undefined;
+}
+
+/**
  * Which exit, if any, this bar produces — and the reference price it is
  * priced against.
  *
@@ -801,21 +866,8 @@ function exitOf(
   bar: Bar,
   signal: ProxySignal,
 ): { reason: ReplayCloseReason; reference: number } | undefined {
-  if (lot.direction === 'long') {
-    if (bar.low <= lot.stop) {
-      return { reason: 'stop', reference: bar.open < lot.stop ? bar.open : lot.stop };
-    }
-    if (bar.high >= lot.target) {
-      return { reason: 'target', reference: bar.open > lot.target ? bar.open : lot.target };
-    }
-  } else {
-    if (bar.high >= lot.stop) {
-      return { reason: 'stop', reference: bar.open > lot.stop ? bar.open : lot.stop };
-    }
-    if (bar.low <= lot.target) {
-      return { reason: 'target', reference: bar.open < lot.target ? bar.open : lot.target };
-    }
-  }
+  const bracket = lot.direction === 'long' ? longBracketExit(lot, bar) : shortBracketExit(lot, bar);
+  if (bracket !== undefined) return bracket;
 
   // Signal exit: the trend no longer favors the side the lot is on. Priced at
   // the close — the bar on which the signal became knowable

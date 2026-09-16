@@ -174,6 +174,58 @@ export class HttpPolygonClient implements PolygonClient {
   }
 
   /**
+   * Fetches and validates one page of the aggregates endpoint (the
+   * `fetchAggregates` loop body, split out to keep that function's nesting
+   * flat). Returns the page's validated rows and the next page's URL, if any.
+   */
+  private async fetchPage(
+    url: string,
+    symbol: string,
+    ticker: string,
+  ): Promise<{ rows: PolygonAggregate[]; next_url: string | undefined }> {
+    // Proactive floor (#510): stop issuing the call that would earn a 429
+    // in the first place, rather than only reacting after the venue
+    // rejects it. A 429 that does slip through (e.g. another process
+    // sharing this key) still surfaces below via the generic `!response.ok`
+    // throw — this bucket is a floor, not a replacement for reacting to
+    // whatever the venue actually says
+    await this.rateLimiter.acquire();
+    const response = await this.fetchImpl(url, {
+      headers: { Authorization: `Bearer ${this.apiKey}` },
+    });
+
+    if (!response.ok) {
+      throw new Error(
+        `HttpPolygonClient.fetchAggregates: Polygon returned HTTP ${response.status} ` +
+          `${response.statusText} for ${symbol} (ticker ${ticker}).`,
+      );
+    }
+
+    const parsed: unknown = await response.json();
+    if (typeof parsed !== 'object' || parsed === null) {
+      throw new Error(
+        `HttpPolygonClient.fetchAggregates: malformed response body for ${symbol}: expected an ` +
+          `object, got ${truncateForError(JSON.stringify(parsed))}`,
+      );
+    }
+    const body = parsed as PolygonAggregatesResponse;
+    if (body.results !== undefined && !Array.isArray(body.results)) {
+      throw new Error(
+        `HttpPolygonClient.fetchAggregates: malformed 'results' for ${symbol}: expected an array`,
+      );
+    }
+    const rows = (body.results ?? []).map((bar) => validateRawPolygonAggregate(bar, symbol));
+
+    // A wrong-typed `next_url` degrades to "no more pages" rather than
+    // throwing — Stage 2 is offline tooling with no retry/underfetch
+    // machinery of its own, so an early stop here just returns a shorter
+    // series than the venue actually holds, which is visible in the row
+    // count rather than silent
+    const next_url = typeof body.next_url === 'string' ? body.next_url : undefined;
+    return { rows, next_url };
+  }
+
+  /**
    * DAILY ONLY, and it refuses rather than silently serving daily (#664).
    *
    * Polygon's aggregates endpoint does take a multiplier/timespan pair, so this
@@ -219,48 +271,10 @@ export class HttpPolygonClient implements PolygonClient {
         );
       }
 
-      // Proactive floor (#510): stop issuing the call that would earn a 429
-      // in the first place, rather than only reacting after the venue
-      // rejects it. A 429 that does slip through (e.g. another process
-      // sharing this key) still surfaces below via the generic `!response.ok`
-      // throw — this bucket is a floor, not a replacement for reacting to
-      // whatever the venue actually says
-      await this.rateLimiter.acquire();
-      const response = await this.fetchImpl(url, {
-        headers: { Authorization: `Bearer ${this.apiKey}` },
-      });
-
-      if (!response.ok) {
-        throw new Error(
-          `HttpPolygonClient.fetchAggregates: Polygon returned HTTP ${response.status} ` +
-            `${response.statusText} for ${symbol} (ticker ${ticker}).`,
-        );
-      }
-
-      const parsed: unknown = await response.json();
-      if (typeof parsed !== 'object' || parsed === null) {
-        throw new Error(
-          `HttpPolygonClient.fetchAggregates: malformed response body for ${symbol}: expected an ` +
-            `object, got ${truncateForError(JSON.stringify(parsed))}`,
-        );
-      }
-      const body = parsed as PolygonAggregatesResponse;
-      if (body.results !== undefined && !Array.isArray(body.results)) {
-        throw new Error(
-          `HttpPolygonClient.fetchAggregates: malformed 'results' for ${symbol}: expected an array`,
-        );
-      }
-      for (const bar of body.results ?? []) {
-        out.push(validateRawPolygonAggregate(bar, symbol));
-      }
-
-      // A wrong-typed `next_url` degrades to "no more pages" rather than
-      // throwing — Stage 2 is offline tooling with no retry/underfetch
-      // machinery of its own, so an early stop here just returns a shorter
-      // series than the venue actually holds, which is visible in the row
-      // count rather than silent
-      if (typeof body.next_url !== 'string') break;
-      url = body.next_url;
+      const page = await this.fetchPage(url, symbol, ticker);
+      out.push(...page.rows);
+      if (page.next_url === undefined) break;
+      url = page.next_url;
     }
 
     return out;

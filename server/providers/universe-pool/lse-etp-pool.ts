@@ -2186,6 +2186,7 @@ export const FALLBACK_DEFAULT_MAX_ROWS = 10;
  * has a sterling line of the same ISIN to move to, so they fall out with no
  * replacement.
  */
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: six independent fallback-list rules (each documented above as its own numbered rule), each with its own throw message; merging their loops or splitting them into sub-functions would change which rule's message fires first on a multi-violation pool, which lse-etp-pool.test.ts pins.
 export function assertValidFallbackSubset(pool: readonly LseEtpPoolRow[]): void {
   const fallback = pool.filter((row) => row.fallback_default);
   if (fallback.length === 0) {

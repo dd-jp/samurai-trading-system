@@ -145,6 +145,18 @@ export function laneDebate(
     : latestDebateFor(snapshot.debates, lane.instrument);
 }
 
+function laneAbsence(
+  lane: PipelineLane | undefined,
+  wrongInstrument: boolean,
+  traceId: string | null,
+): 'wrong_instrument' | 'none' | 'aged_out' | 'idle' | null {
+  if (lane === undefined) {
+    if (wrongInstrument) return 'wrong_instrument';
+    return traceId === null ? 'none' : 'aged_out';
+  }
+  return lane.trace_id === null ? 'idle' : null;
+}
+
 /** Every row the Live drawer shows for one selected lane or pinned trace */
 export function resolveTrace(snapshot: WireSnapshot, selection: Selection): TraceDetail {
   const { instrument } = selection;
@@ -195,18 +207,7 @@ export function resolveTrace(snapshot: WireSnapshot, selection: Selection): Trac
     fills: position === undefined ? [] : fillsFor(snapshot.fills, position.idempotency_key),
     settled: lane === undefined ? null : settledOutcome(lane.outcome),
     inFlight: lane?.outcome === 'in_flight',
-    absence: {
-      lane:
-        lane === undefined
-          ? wrongInstrument
-            ? 'wrong_instrument'
-            : traceId === null
-              ? 'none'
-              : 'aged_out'
-          : lane.trace_id === null
-            ? 'idle'
-            : null,
-    },
+    absence: { lane: laneAbsence(lane, wrongInstrument, traceId) },
   };
 }
 

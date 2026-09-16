@@ -91,6 +91,7 @@ interface RawArticle {
  * read, which is indistinguishable from the empty-store defect this whole
  * rework exists to fix. Loud is better.
  */
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: a flat sequence of independent per-field validations for one wire article; splitting them into sub-functions would scatter one record's validation contract across several places for no gain in readability.
 function validateArticle(raw: unknown): AlpacaNewsArticle {
   const bad = (): never => {
     throw new Error(
@@ -162,6 +163,58 @@ export class AlpacaNewsClient {
   }
 
   /**
+   * Fetches and validates one page of `/v1beta1/news`, rate-limited.
+   *
+   * Split out of `fetchNews` so the pagination loop there stays about the
+   * page count and the accumulated map; this owns one HTTP round trip's shape
+   * checks (non-2xx, non-JSON, non-object body) and per-article validation.
+   */
+  async #fetchNewsPage(
+    symbols: readonly string[],
+    start: Date,
+    end: Date,
+    pageToken: string | undefined,
+  ): Promise<{ articles: AlpacaNewsArticle[]; nextPageToken: string | undefined }> {
+    const params = new URLSearchParams({
+      symbols: symbols.join(','),
+      start: start.toISOString(),
+      end: end.toISOString(),
+      limit: String(PAGE_LIMIT),
+      sort: 'asc',
+    });
+    if (pageToken !== undefined) params.set('page_token', pageToken);
+
+    await this.rateLimiter.acquire();
+    const response = await this.fetchImpl(`${this.baseUrl}/v1beta1/news?${params}`, {
+      headers: {
+        'APCA-API-KEY-ID': this.apiKey,
+        'APCA-API-SECRET-KEY': this.apiSecret,
+      },
+    });
+    if (!response.ok) {
+      throw new Error(
+        `AlpacaNewsClient: Alpaca returned HTTP ${response.status} ${response.statusText}.`,
+      );
+    }
+
+    const parsed: unknown = await response.json();
+    if (typeof parsed !== 'object' || parsed === null) {
+      throw new Error(
+        `AlpacaNewsClient: malformed response: expected an object, got ` +
+          truncateForError(JSON.stringify(parsed)),
+      );
+    }
+    const body = parsed as { news?: unknown; next_page_token?: unknown };
+    const news = Array.isArray(body.news) ? body.news : [];
+    const articles = news.map((rawArticle) => validateArticle(rawArticle));
+    const nextPageToken =
+      typeof body.next_page_token === 'string' && body.next_page_token.length > 0
+        ? body.next_page_token
+        : undefined;
+    return { articles, nextPageToken };
+  }
+
+  /**
    * Articles for `symbols` published in `[start, end]`, oldest first.
    *
    * Keyed by `id` on the way out so a page boundary that repeats an article
@@ -189,46 +242,11 @@ export class AlpacaNewsClient {
         );
       }
 
-      const params = new URLSearchParams({
-        symbols: symbols.join(','),
-        start: start.toISOString(),
-        end: end.toISOString(),
-        limit: String(PAGE_LIMIT),
-        sort: 'asc',
-      });
-      if (pageToken !== undefined) params.set('page_token', pageToken);
-
-      await this.rateLimiter.acquire();
-      const response = await this.fetchImpl(`${this.baseUrl}/v1beta1/news?${params}`, {
-        headers: {
-          'APCA-API-KEY-ID': this.apiKey,
-          'APCA-API-SECRET-KEY': this.apiSecret,
-        },
-      });
-      if (!response.ok) {
-        throw new Error(
-          `AlpacaNewsClient: Alpaca returned HTTP ${response.status} ${response.statusText}.`,
-        );
-      }
-
-      const parsed: unknown = await response.json();
-      if (typeof parsed !== 'object' || parsed === null) {
-        throw new Error(
-          `AlpacaNewsClient: malformed response: expected an object, got ` +
-            truncateForError(JSON.stringify(parsed)),
-        );
-      }
-      const body = parsed as { news?: unknown; next_page_token?: unknown };
-      const news = Array.isArray(body.news) ? body.news : [];
-      for (const rawArticle of news) {
-        const article = validateArticle(rawArticle);
+      const page = await this.#fetchNewsPage(symbols, start, end, pageToken);
+      for (const article of page.articles) {
         byId.set(article.id, article);
       }
-
-      pageToken =
-        typeof body.next_page_token === 'string' && body.next_page_token.length > 0
-          ? body.next_page_token
-          : undefined;
+      pageToken = page.nextPageToken;
     } while (pageToken !== undefined);
 
     return [...byId.values()].sort((a, b) => a.created_at.getTime() - b.created_at.getTime());
