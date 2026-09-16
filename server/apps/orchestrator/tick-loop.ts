@@ -120,10 +120,9 @@ class TailSequencer {
   #granted = new Set<number>();
   /**
    * Indices that asked for a turn before it was theirs, holding BOTH the
-   * pending promise and its resolver. The promise is kept, not just the
-   * resolver, so a repeated `begin` before the grant hands back the SAME
-   * promise instead of overwriting the resolver and orphaning the first
-   * caller's await forever.
+   * pending promise and its resolver, so a repeated `begin` before the grant
+   * hands back the SAME promise instead of overwriting the resolver and
+   * orphaning the first caller's await forever.
    */
   #waiting = new Map<number, { promise: Promise<void>; resolve: () => void }>();
 

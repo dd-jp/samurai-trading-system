@@ -165,7 +165,7 @@ export class GdeltIngestAgent {
    * rejection in `production.ts`'s `void refresh(...)`. It does not change
    * what `poll`'s inner try/catch already handles: an aborted or failed fetch
    * is still caught there first and still logs "batch fetch failed" (see
-   * `whenIdle`) — this only catches what THAT catch does not.
+   * `whenIdle`).
    */
   async refresh(trace_id = 'gdelt-ingest'): Promise<boolean> {
     if (this.current !== undefined) return false;

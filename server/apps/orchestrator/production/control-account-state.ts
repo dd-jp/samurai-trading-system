@@ -173,8 +173,7 @@ export class ControlArmAccountStateProvider implements AccountStateProvider {
    * The anchor, resolved on first use and cached for the life of the process.
    *
    * Cached on the INSTANCE and not re-read even though the composition root's
-   * resolver is itself idempotent: the point is that a live-arm figure is read
-   * once, at boot, and never again on a decision path.
+   * resolver is itself idempotent.
    */
   private async book(asOf: Date): Promise<number> {
     if (this.#book === null) {
