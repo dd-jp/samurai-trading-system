@@ -54,9 +54,6 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.13",
-    "@fontsource/chakra-petch": "5.3.0",
-    "@fontsource/ibm-plex-mono": "5.3.0",
-    "@fontsource/ibm-plex-sans": "5.3.0",
     "@playwright/test": "1.62.1",
     "@stryker-mutator/api": "10.0.0",
     "@stryker-mutator/core": "10.0.0",
@@ -74,8 +71,6 @@
     "jsdom": "30.0.1",
     "knip": "6.35.1",
     "oxlint": "1.83.0",
-    "react": "19.2.8",
-    "react-dom": "19.2.8",
     "tsx": "4.23.11",
     "typescript": "7.0.2",
     "vite": "8.2.0",
@@ -83,6 +78,11 @@
   },
   "dependencies": {
     "@fontsource/shippori-mincho": "5.3.0",
+    "@fontsource/chakra-petch": "5.3.0",
+    "@fontsource/ibm-plex-mono": "5.3.0",
+    "@fontsource/ibm-plex-sans": "5.3.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
     "better-sqlite3": "13.0.1"
   },
   "packageManager": "npm@11.17.0",
