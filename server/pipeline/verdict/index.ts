@@ -173,6 +173,7 @@ function noGo(
 }
 
 export class VerdictImpl implements Verdict {
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: numbered gate sequence (1-6) with per-gate exemptions scoped by exact metadata flags (mandatory_flatten, unpriced_exit); extracting risks silently reordering a gate or widening an exemption's scope
   async decide(input: VerdictInput): Promise<VerdictDecision> {
     const {
       risk_decision,
