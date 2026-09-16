@@ -3413,20 +3413,10 @@ const sizingCeilingProbe: Probe<'sizingCeiling', 'armComparison'> = {
 };
 
 /**
- * #1140 — what the DASHBOARD would read as this run's LLM cap.
- *
- * Read through `SqliteQueryStore.getLlmSpend`, the shipped read that fills
- * `DashboardSnapshot.llm_spend`, rather than off `llm_spend_cap` directly:
- * the ticket's defect is a denominator that agrees with the enforcer by luck,
- * and only the whole path — composition root writes, dashboard's own query
- * reads — falsifies it. Dropping `publishedSpendCap.arm(...)` from
- * `production.ts`, or defaulting the field in the query layer, makes this
- * disagree with the run's own profile while every other check stays green.
- *
- * `capArmedAt` rides along for #1196: a real booted run always arms (either
- * branch of `production.ts`'s `if/else`), so a real smoke run reading `null`
- * here means the wire's "never armed" case leaked into a process that DID
- * boot — `armed_at` stopped being read on the path that fills the wire.
+ * #1140 — read through `SqliteQueryStore.getLlmSpend`, the shipped read that
+ * fills `DashboardSnapshot.llm_spend`, not off `llm_spend_cap` directly, so
+ * the whole path falsifies rather than the denominator agreeing by luck.
+ * `capArmedAt` rides along for #1196: a real booted run always arms.
  */
 function readPublishedLlmCap(db: StoreHandle): {
   capUsd: number | null;
@@ -3453,7 +3443,6 @@ const llmSpendCapProbe: Probe<'llmSpendCap'> = {
   },
   verdict(evidence) {
     const failures: string[] = [];
-    // #1140 — the meter's denominator on the wire is the enforcer's own budget
     if (evidence.publishedCapUsd !== (evidence.configuredBudgetUsd ?? null)) {
       failures.push(
         `the dashboard's LLM cap reads ${evidence.publishedCapUsd ?? 'null'} while this run ` +
@@ -3463,10 +3452,6 @@ const llmSpendCapProbe: Probe<'llmSpendCap'> = {
       );
     }
 
-    // #1196 — this process manifestly booted, so a null `cap_armed_at` here
-    // means `SqliteQueryStore.getLlmSpend` stopped reading `armed_at` off the
-    // row `SqliteLlmSpendCapStore.arm(...)` wrote, and the wire is telling the
-    // rail "never armed" while an enforcer is, in fact, live
     if (evidence.capArmedAt === null) {
       failures.push(
         "the dashboard's LLM cap reports `cap_armed_at: null` on a run that booted and armed its " +
@@ -3513,26 +3498,13 @@ export function runArmComparisonProbe(db: StoreHandle): ArmComparisonEvidence {
   };
 }
 
-/**
- * #971. Runs against the same store the observations are read from, after
- * `orchestrator.stop()`: the tape has to be complete before the comparison is
- * taken over it. The FL timer is 24h, so without this the whole path could be
- * deleted from `production.ts` and every unit test — and `npm run smoke` — would
- * stay green.
- */
+/** #971 — runs after `orchestrator.stop()`, so the tape is complete before the comparison is taken */
 const armComparisonProbe: Probe<'armComparison'> = {
   run({ db }) {
     return runArmComparisonProbe(db);
   },
   verdict(evidence) {
     const failures: string[] = [];
-    // #971 — falsifier arm 2's comparison reaches a surface, not just a report
-    //
-    // Stands alone rather than hanging off a tick having reached Execution: the comparison is
-    // computable over an empty window (a zero-trade sample is a real, honest
-    // measurement), so the properties below hold on every run. What they enforce
-    // is the WIRING — that the shipped cycle produces both arms, persists them,
-    // and alerts exactly when it says it diverged
     const arms = evidence;
     if (arms.live === null || arms.control === null) {
       failures.push(
@@ -3568,18 +3540,9 @@ const armComparisonProbe: Probe<'armComparison'> = {
 };
 
 /**
- * A deterministic, offline stand-in for the benchmark vendor (#981).
- *
- * The live source is `MarketDataBenchmarkSeriesSource` over the already-wired
- * Alpaca daily bars (SPY and AGG were verified obtainable there on 2026-09-01).
- * A smoke run makes no network call, so — exactly as it fabricates the Alpaca
- * wire everywhere else — it hands the shipped cycle a fixture series instead.
- *
- * The closes below are NOT a claim about SPY or AGG. They exist so the gate can
- * assert the WIRING: that the cycle computes, persists, round-trips both
- * columns, and inherits the arm comparison's window. Nothing downstream of the
- * gate reads these numbers, and nothing writes them anywhere a real benchmark
- * reading is served from.
+ * A deterministic, offline stand-in for the benchmark vendor (#981). The
+ * closes below are not a claim about SPY or AGG — they exist only to let the
+ * gate assert the wiring: compute, persist, round-trip, inherit the window.
  */
 const SMOKE_BENCHMARK_DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -3588,15 +3551,13 @@ class FixtureBenchmarkSeriesSource implements BenchmarkSeriesSource {
   private static readonly DRIFT: Record<string, number> = { SPY: 0.001, AGG: 0.0002 };
 
   async getDailyCloses(instrument: string, from: Date, to: Date): Promise<BenchmarkObservation[]> {
-    // Three days of pad before `from` so the anchor bar the computation
-    // requires exists — the same surplus the real source over-fetches for
+    // Three days of pad before `from` so the anchor bar the computation requires exists
     const start = from.getTime() - 3 * SMOKE_BENCHMARK_DAY_MS;
     const drift = FixtureBenchmarkSeriesSource.DRIFT[instrument] ?? 0.0005;
     const observations: BenchmarkObservation[] = [];
     let close = 100;
     for (let t = start; t <= to.getTime(); t += SMOKE_BENCHMARK_DAY_MS) {
-      // A single mid-series dip, so `max_drawdown_pct` is a real reading rather
-      // than the 0 a monotonic series would always produce
+      // A single mid-series dip, so max_drawdown_pct is a real reading, not always 0
       const step = observations.length === 7 ? -0.01 : drift;
       close *= 1 + step;
       observations.push({ close_time: new Date(t), close });
@@ -3638,11 +3599,7 @@ async function runOutsideBenchmarkProbe(
   };
 }
 
-/**
- * #981. Handed the arm comparison's own `ArmComparison`, which is the shipped
- * ordering: the benchmark's window is the matched control's, never one of its
- * own.
- */
+/** #981 — handed the arm comparison's own `ArmComparison`: the benchmark's window is the matched control's */
 const outsideBenchmarksProbe: Probe<'outsideBenchmarks', 'armComparison'> = {
   after: ['armComparison'],
   run({ db }, prior) {
@@ -3650,13 +3607,6 @@ const outsideBenchmarksProbe: Probe<'outsideBenchmarks', 'armComparison'> = {
   },
   verdict(evidence) {
     const failures: string[] = [];
-    // #981 — the risk-adjusted OUTSIDE benchmarks reach a surface too, and reach
-    // it over the arm comparison's own window
-    //
-    // Stands alone for `arms`' reason: a benchmark is computable regardless of
-    // what the tape did, so these properties hold on every run. They assert the
-    // WIRING and the two invariants that would rot silently — D4's paired columns
-    // and the inherited window
     const benchmarks = evidence;
     if (benchmarks.measured === 0) {
       failures.push(
@@ -3691,23 +3641,20 @@ const outsideBenchmarksProbe: Probe<'outsideBenchmarks', 'armComparison'> = {
   },
 };
 
-/** What `evaluateSmokeGate` needs from the OHLCV failover scenario (#562) */
 export interface DataFailoverEvidence {
-  /** `bars.source` values the store holds for the failed-over instrument, in `open_time` order */
+  /** In `open_time` order */
   storedSources: readonly string[];
-  /** `open_time`s the store holds, ISO — so an out-of-session row is visible, not merely counted */
+  /** ISO — so an out-of-session row is visible, not merely counted */
   storedOpenTimes: readonly string[];
-  /** Failover alerts that reached the injected channel */
   alerts: readonly DataFailoverAlert[];
   /** The primary's throw, if the read failed outright instead of failing over */
   readError: string | null;
 }
 
 /**
- * Regular-hours `1h` opens on the last trading session completed before
- * `SMOKE_RUN_INSTANT` (Tuesday 08:00 ET), plus one PRE-MARKET open the vendor
- * would also serve. The pre-market row is the negative half: the fallback must
- * drop it, because the primary's own `NormalizingDataSource` would have.
+ * Regular-hours `1h` opens plus one pre-market open the vendor would also
+ * serve. The pre-market row is the negative half: the fallback must drop it,
+ * because the primary's own `NormalizingDataSource` would have.
  */
 const FAILOVER_FIXTURE_OPEN_TIMES = [
   '2026-08-03T09:00:00.000Z',
@@ -3719,18 +3666,9 @@ export const FAILOVER_IN_SESSION_OPEN_TIMES: readonly string[] =
   FAILOVER_FIXTURE_OPEN_TIMES.slice(1);
 
 /**
- * The OHLCV failover's enforcement assertion (#562), per the standard that
- * wiring a mechanism means asserting it HERE (#430).
- *
- * Driven through `buildProductionOrchestrator` — the real composition root —
- * with a market-data client that cannot answer and a fallback fetcher that
- * can, against a COLD `:memory:` store so the read cannot be satisfied from
- * the Tier-2 cache. Deleting the root's `buildFailoverDataSource` call makes
- * this scenario record the primary's throw and the gate FAIL, which a unit
- * test of the wrapper cannot do by construction.
- *
- * It asserts the DURABLE effect, not construction: a `bars` row stamped
- * `polygon`, and no out-of-session row beside it.
+ * #562 — driven through `buildProductionOrchestrator` with a market-data
+ * client that cannot answer and a fallback fetcher that can, against a cold
+ * `:memory:` store so the read can't be satisfied from the Tier-2 cache.
  */
 async function runDataFailoverScenario(logger: Logger): Promise<DataFailoverEvidence> {
   const db = openSharedStore(':memory:');
