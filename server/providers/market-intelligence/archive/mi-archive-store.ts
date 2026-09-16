@@ -1,51 +1,37 @@
 /**
- * The Market Intelligence archive (#554/#558, map #552).
- *
- * ## Why this exists
+ * The Market Intelligence archive.
  *
  * `NousSentimentClient` hard-codes `retrievalEvidence: false` and
  * `GrokAgent.refresh` discards every item without evidence, so
  * `MarketIntelligenceStore` ingests `[]` on every refresh and the `sentiment`
- * and `fundamental` analysts report `NO_DATA_MARKER` on every production tick.
- *
- * [#625](https://github.com/dd-jp/samurai-trading-system/issues/625) measured
- * the cost exactly: the stocks conviction ceiling was **0.5478 against a 0.55
- * floor**, so a stock could never trade at any RSI, in any market. That ceiling
- * was caused by the muted analysts, NOT by the conviction formula — fixing the
- * formula's consensus term alone reproduces it to four decimal places. This
- * layer being empty is why the system could not trade stocks at all.
+ * and `fundamental` analysts report `NO_DATA_MARKER` on every production
+ * tick. That emptiness measurably capped the stocks conviction ceiling at
+ * 0.5478 against a 0.55 floor — a stock could never trade at any RSI, in any
+ * market — caused by the muted analysts, not by the conviction formula.
  *
  * The rework decouples retrieval from scoring: deterministic fetchers write
  * immutable bytes here, and scoring is a separate pass over text we already
  * hold. No model is asked to *retrieve* anything, which is what made the old
  * design fail closed.
  *
- * ## The two invariants worth not breaking
+ * Two invariants worth not breaking:
  *
- * **`ingested_at` is the visibility gate; `updated_at` is not.** `ingested_at`
- * is OUR knowledge time. `updated_at` is the VENDOR's revision stamp and can be
- * back-dated relative to when we received it, so filtering replay on
- * `updated_at` would admit a row we did not yet hold. `updated_at` only orders
- * revisions *within* what `ingested_at` has already admitted.
+ * `ingested_at` is the visibility gate; `updated_at` is not. `ingested_at`
+ * is OUR knowledge time. `updated_at` is the VENDOR's revision stamp and can
+ * be back-dated relative to when we received it, so filtering replay on
+ * `updated_at` would admit a row we did not yet hold.
  *
- * **Scores are stored, never recomputed at replay.** Per-item LLM scoring
- * (#555) is non-deterministic; re-scoring would make two runs of one backtest
- * disagree, which ADR-0003 §2 disqualifies exactly as it disqualifies a live
- * LLM call inside a replayed path. This does NOT mean every raw row has a
- * scored item behind it — GDELT's ingestion already wrote raws with no items
- * (`gdelt-ingest-agent.ts`'s scoring pass runs separately); #1392 widened
- * "raw archived, not yet scored" into a normal Alpaca-side transient too (a
- * batch that degrades archives its bytes but not a fabricated score) — so
- * `mi_archive_raw` and `mi_items` are allowed to disagree on which rows exist
- * for either source — `hasItem` vs. `hasScoredItem` is the two questions kept
- * separate.
+ * Scores are stored, never recomputed at replay: per-item LLM scoring is
+ * non-deterministic, and re-scoring would make two runs of one backtest
+ * disagree (ADR-0003 §2). This does not mean every raw row has a scored item
+ * behind it — a degraded scoring batch archives its bytes but not a
+ * fabricated score — so `mi_archive_raw` and `mi_items` are allowed to
+ * disagree on which rows exist; `hasItem` vs. `hasScoredItem` is the two
+ * questions kept separate.
  *
- * ## Exemption: raw `.toISOString()`/`new Date(...)` round-trips (#884)
- *
- * This file does NOT go through `shared/store/sqlite-utils.ts`'s
- * `toStoredTimestamp`/`fromStoredTimestamp` (#837 M7). #852 deliberately
- * declined to convert it — different DB, a separate migrations dir. That
- * deferral is still the right call.
+ * This file does not go through `shared/store/sqlite-utils.ts`'s
+ * `toStoredTimestamp`/`fromStoredTimestamp` — a deliberate deferral, since
+ * this is a different DB with a separate migrations dir.
  */
 
 import { mkdirSync } from 'node:fs';
