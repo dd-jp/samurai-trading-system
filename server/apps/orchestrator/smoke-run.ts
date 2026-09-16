@@ -5177,12 +5177,8 @@ const tickLoopProbe: Probe<'tickLoop'> = {
 };
 
 /**
- * #388. `RateLimiter.snapshot()` after the run — how many LLM calls the
- * process's limiter actually metered. An effect of the run that no table
- * records: #388 WAS a fully-implemented, fully-unit-tested component with no
- * production caller, and every one of 1800+ unit tests passed throughout —
- * the same shape as #364, whose `debate_log` assertion is the only check that
- * has ever caught it.
+ * #388 — `RateLimiter.snapshot()` after the run: an effect no table records, so this is the
+ * only check that would have caught the component being fully unit-tested with no production caller.
  */
 const llmRateLimiterSnapshotProbe: Probe<'llmRateLimiterSnapshot'> = {
   run({ llmRateLimiter }) {
@@ -5191,9 +5187,6 @@ const llmRateLimiterSnapshotProbe: Probe<'llmRateLimiterSnapshot'> = {
   verdict(evidence, { observations }) {
     const failures: string[] = [];
     const { debates } = observations;
-    // Requirement 3b (#388): the debate that produced that row went through the
-    // rate limiter. Hung off `debates.length` rather than standing alone so that
-    // a run which never debated fails on the check above, naming the real cause
     if (debates.length > 0) {
       const totals = Object.values(evidence);
       const llmCallsUsed = totals.reduce((sum, entry) => sum + entry.llmCallsUsed, 0);
@@ -5209,16 +5202,8 @@ const llmRateLimiterSnapshotProbe: Probe<'llmRateLimiterSnapshot'> = {
       }
     }
 
-    // #581 — the per-asset-class round cap is wired through the composition
-    // root. Each `debate_log` row is checked against ITS instrument's cap
-    // (looked up through `SMOKE_TEST_UNIVERSE`, so widening the smoke universe
-    // to stocks keeps healthy 3-round debates passing); a row above its cap
-    // means `buildDebateStep` stopped threading the cap into `runDebate`
-    // Paired with a per-class call-accounting bound that is TIGHT under the
-    // stub (a converged crypto debate spends exactly its worst case: 3 persona
-    // calls + 1 disagreement call), so one extra LLM call per debate — an
-    // unwired cap, a second disagreement pass — fails the gate rather than
-    // passing unseen
+    // #581 — each debate_log row checked against its instrument's round cap; a row above cap
+    // means buildDebateStep stopped threading the cap into runDebate
     const smokeAssetClass = new Map<string, AssetClass>(
       SMOKE_TEST_UNIVERSE.map((entry) => [entry.asset, entry.asset_class]),
     );
@@ -5234,9 +5219,8 @@ const llmRateLimiterSnapshotProbe: Probe<'llmRateLimiterSnapshot'> = {
           'on every tick',
       );
     }
-    // Iterated over the closed AssetClass set rather than Object.entries, so a
-    // malformed snapshot key can never produce an undefined cap (whose NaN
-    // bound would compare false everywhere and silently pass the gate)
+    // Closed AssetClass set, not Object.entries: a malformed snapshot key can't produce an
+    // undefined cap whose NaN bound would silently pass the gate
     for (const assetClass of ['crypto', 'stocks'] as const satisfies readonly AssetClass[]) {
       const entry = evidence[assetClass];
       if (entry === undefined) continue;
@@ -5294,11 +5278,7 @@ function everyProbeOnce<const Order extends readonly ProbeId[]>(
   return order;
 }
 
-/**
- * Side-effect order over the shared store and clock. The exit path and the
- * crypto emulation write the tape the arm comparison is then taken over; the
- * two recorders at the end count every line the probes before them logged.
- */
+/** Side-effect order over the shared store and clock: exitPath/cryptoEmulation write the tape armComparison reads. */
 const PROBE_RUN_ORDER = everyProbeOnce([
   'tickLoop',
   'exitPath',
@@ -5324,11 +5304,7 @@ const PROBE_RUN_ORDER = everyProbeOnce([
   'marketDataFetch',
 ]);
 
-/**
- * Readout order: cause before symptom, so a run that never debated is
- * reported as such before every check that hangs off a debate having
- * happened. The report prints failures in this order.
- */
+/** Readout order: cause before symptom, so a never-debated run is reported before checks that hang off a debate. */
 const PROBE_VERDICT_ORDER = everyProbeOnce([
   'tickLoop',
   'llmRateLimiterSnapshot',
@@ -5366,12 +5342,9 @@ async function runProbes(ctx: ProbeRunContext): Promise<SmokeEvidence> {
         );
       }
     }
-    // The loop above is what makes this narrowing sound for every key the
-    // probe declared; it reads nothing else
     gathered[id] = await probe.run(ctx, gathered as SmokeEvidence);
   };
   for (const id of PROBE_RUN_ORDER) await runOne(id);
-  // Sound because `everyProbeOnce` makes PROBE_RUN_ORDER exhaustive: every key is set above
   return gathered as SmokeEvidence;
 }
 
@@ -5391,11 +5364,7 @@ function probeReport<Id extends ProbeId>(
   return PROBES[id].report?.(evidence[id], observations) ?? [];
 }
 
-/**
- * The gate. Pure over observations and evidence, so every branch is
- * unit-testable without starting a process — a gate that passes when nothing
- * transacted is worse than no gate.
- */
+/** The gate. Pure over observations and evidence, so every branch is unit-testable without starting a process. */
 export function evaluateSmokeGate(
   observations: SmokeObservations,
   evidence: SmokeEvidence,
@@ -5404,11 +5373,7 @@ export function evaluateSmokeGate(
   return { passed: failures.length === 0, failures };
 }
 
-/**
- * The human-readable run report — the thing a person reads to believe the
- * pipeline transacted rather than skipped. Returned as lines so tests can
- * assert on it without capturing stdout.
- */
+/** The human-readable run report. Returned as lines so tests can assert on it without capturing stdout. */
 export function formatSmokeReport(
   observations: SmokeObservations,
   evidence: SmokeEvidence,
@@ -5439,24 +5404,14 @@ export interface SmokeRunOptions {
   /** How many ticks must complete before the run is allowed to stop. Default 3. */
   ticks?: number;
   /**
-   * Gap between ticks. Default 250ms — fast enough for a pre-commit gate, and
-   * `ticks * tickIntervalMs` must stay far below
-   * `verdictConfig.max_signal_age.crypto` (5 minutes), since the fixture mark's
-   * `observed_at` is frozen and Verdict's staleness gate measures against it.
-   * Raising either constant materially is what would silently start no-going
-   * the later ticks.
+   * Gap between ticks. Default 250ms — `ticks * tickIntervalMs` must stay far below
+   * `verdictConfig.max_signal_age.crypto` (5 min) since the fixture mark's `observed_at` is
+   * frozen; raising either constant materially would silently start no-going the later ticks.
    */
   tickIntervalMs?: number;
-  /**
-   * Gap between fill polls. Default 100ms — deliberately tighter than the tick
-   * interval, because the entry fill only lands when `ingestFills()` runs, and
-   * a run that stopped before the first poll would fail the gate spuriously.
-   */
+  /** Gap between fill polls. Default 100ms, tighter than the tick interval so ingestFills() runs before the gate checks. */
   fillPollIntervalMs?: number;
-  /**
-   * Heartbeat cadence. Default 100ms, so the dead-man's-switch timer actually
-   * fires several times inside a ~1s run rather than being wired but inert.
-   */
+  /** Heartbeat cadence. Default 100ms, so the dead-man's-switch timer fires several times inside a ~1s run. */
   heartbeatIntervalMs?: number;
   /**
    * Hard wall-clock ceiling. Default 30s. The run stops and reports whatever it
