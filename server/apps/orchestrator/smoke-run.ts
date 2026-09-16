@@ -2650,19 +2650,9 @@ function runEntrypointFaultGuardScenario(): EntrypointFaultGuardEvidence {
     const stdoutPipe = new NoListenerBreakablePipe();
     const stderrPipe = new NoListenerBreakablePipe();
     watchStdout(stdoutPipe, stderrPipe);
-    // A mutation that stops calling `watchStdoutErrors` on stdout inside
-    // `watchStdout` leaves nothing subscribed, so `breakPipe` throws —
-    // propagated rather than caught, aborting this run loudly, matching
-    // `runLoggerResilienceScenario`'s own `BreakablePipe.breakPipe` (#714)
-    // There is deliberately no boolean field recording this outcome: the
-    // throw itself is the enforcement, and a field that can only ever read
-    // `true` when reached is the vacuous-backstop shape #388 warns about
-    // above
+    // No boolean field records this outcome deliberately — the throw itself
+    // is the enforcement (a mutation that drops the subscription aborts the run).
     stdoutPipe.breakPipe(name, 'stdout');
-    // Same trick for stderr — a mutation that stops subscribing to stderr's
-    // own error event (the fix for the reporting-channel-shares-the-fd gap;
-    // see each fault-guard.ts's "Both streams, not just stdout") leaves
-    // nothing subscribed here too, so this throws just as loudly
     stderrPipe.breakPipe(name, 'stderr');
     const stdoutFaultLines = stderrPipe.lines;
 
@@ -2695,25 +2685,13 @@ function runEntrypointFaultGuardScenario(): EntrypointFaultGuardEvidence {
   };
 }
 
-/**
- * #764. #714 fixed the unguarded-stdout class for the orchestrator only;
- * nothing else drives the service-api and supervisor guards against the
- * actual async `'error'` event a destroyed pipe delivers.
- */
+/** #764 — nothing else drives the service-api/supervisor guards against a destroyed pipe's real async 'error' event */
 const entrypointFaultGuardsProbe: Probe<'entrypointFaultGuards'> = {
   run() {
     return runEntrypointFaultGuardScenario();
   },
   verdict(evidence) {
     const failures: string[] = [];
-    // #764 — the same stdout-write class #714 fixed for the orchestrator,
-    // decided separately for the service-api and supervisor entrypoints
-    // There is no `stdoutErrorHandled` field here to check: an entrypoint that
-    // stopped subscribing to stdout's error event makes
-    // `runEntrypointFaultGuardScenario`'s `pipe.breakPipe(name)` throw, which
-    // aborts this whole run (`GATE: FAIL`, exit 1) before this loop is ever
-    // reached — a boolean that could only ever read `true` on the path that
-    // reaches it would be the vacuous-backstop shape `SmokeEvidence` warns about
     for (const guard of evidence.entries) {
       if (guard.faultReportedOnStderr !== true) {
         failures.push(
@@ -2747,32 +2725,21 @@ interface SmokeTick {
 }
 
 /**
- * What the run observably did, read back from the shared store after the loop
- * has drained.
- *
- * Read with SQL against the same handle the process wrote through, rather than
- * from log strings: the gate has to assert on effects, and a log line is a
- * description of an effect. This is a read-only observer over the production
- * schema, not a second composition root.
+ * What the run observably did, read back from the shared store via SQL
+ * against the same handle the process wrote through — not from log strings,
+ * since a log line is a description of an effect, not the effect itself.
  */
 export interface SmokeObservations {
-  /** From `audit_log`, grouped by trace, ordered as the tick runner wrote them */
   ticks: SmokeTick[];
-  /**
-   * From `debate_log` — the row `feedback-loop/attribution.ts` joins on to
-   * credit analysts (#364). Observed here because a store with no caller is
-   * invisible to every other check in this file: the tick's `audit_log` line
-   * says `debate: bullish` whether or not a row was ever written.
-   */
+  /** From `debate_log` — observed since a store with no caller is otherwise invisible (#364) */
   debates: {
     debate_id: string;
     instrument: string;
     direction: string;
     rounds: number;
-    /** #1081. Null would mean `buildDebateLog` stopped setting it — see the gate below. */
+    /** #1081. Null would mean `buildDebateLog` stopped setting it. */
     termination: string | null;
   }[];
-  /** From `verdict_log` — the row `OrphanVerdictScanner` reads at restart */
   verdicts: {
     trace_id: string;
     instrument: string;
@@ -2782,7 +2749,6 @@ export interface SmokeObservations {
     no_go_detail_measured_ms: number | null;
     no_go_detail_bound_ms: number | null;
   }[];
-  /** From `open_positions` — written ahead by `ExecutionImpl` before the broker call */
   positions: {
     idempotency_key: string;
     instrument: string;
@@ -2821,89 +2787,26 @@ export interface SmokeObservations {
     /** #753 — see `positions.arm`. The column the comparison report groups on. */
     arm: TradingArm;
   }[];
-  /**
-   * From `flatten_submissions` (#508/#516 review, migration 0019) — the
-   * write-ahead journal `executeExit` writes BEFORE cancelling a held lot's
-   * bracket and BEFORE calling `submitFlatten`. A row here is the durable
-   * proof an exit reached that path at all; its `status` proves whether the
-   * broker call resolved (`'submitted'`) or was refused/left ambiguous.
-   */
+  /** From `flatten_submissions` — the write-ahead journal `executeExit` writes before cancel/submitFlatten (#508/#516) */
   flattenSubmissions: { idempotency_key: string; instrument: string; status: string }[];
-  /**
-   * Rows the GDELT macro layer archived (#556). Read from the MI archive, not
-   * `db` — MI lives in its own file (#554) — so it is passed in rather than
-   * queried here.
-   *
-   * Observed for the reason `debates` is: an ingestion path with no caller is
-   * invisible to every other check in this file. Nothing else in a smoke run
-   * changes whether or not this poller ever fired.
-   */
+  /** Rows the GDELT macro layer archived (#556); read from the MI archive since MI lives in its own file (#554) */
   gdeltRowsArchived: number;
-  /**
-   * Aggregates the GDELT scoring pass (#1086) put in front of the analysts.
-   *
-   * BOTH this and `gdeltRowsArchived`, for the reason the Polymarket pair
-   * below states: the archive count proves bytes were fetched, and only the
-   * store read proves anything derived from them reached the `intel` bucket
-   * an analyst queries (#1164: class-wide GDELT items route to `intel`, not
-   * `news`). #556 shipped the first half alone for a year, which is exactly
-   * the gap this number closes.
-   */
+  /** Aggregates the GDELT scoring pass (#1086); paired with the archive count since only this proves an item reached `intel` (#1164) */
   gdeltAggregateItems: number;
-  /**
-   * Rows the Polymarket macro layer archived, and the items it actually put in
-   * front of `fundamental` (#504).
-   *
-   * BOTH, deliberately. The archive row proves a fetch happened; only the
-   * store read proves the item reached the `intel` bucket the analyst queries
-   * (#1164: class-wide Polymarket items route to `intel`, not `news`) — and
-   * the gap between those two claims is where this repo's dominant defect (a
-   * mechanism nothing consumes) lives.
-   */
+  /** Paired with the item/intel counts below for the same reason as GDELT (#504, #1164) */
   polymarketRowsArchived: number;
   polymarketItemsArchived: number;
   polymarketIntelItems: number;
-  /**
-   * From `cosine_setups` — the row `Trader.decide` writes at decision time
-   * (#432). Observed here for `debates`' reason and from the same defect: the
-   * retrieval mechanism (#75) and the store (#198) both existed and `decide()`
-   * called neither, so every position took a permanent 0.75x haircut and the
-   * table stayed empty for the life of the process. Nothing else in this file
-   * can see that — the `audit_log` line reads `trader: intent` either way.
-   */
+  /** From `cosine_setups` — the row `Trader.decide` writes at decision time (#432) */
   cosineSetups: { debate_id: string; instrument: string }[];
-  /**
-   * From `risk_thresholds` — the dials the composition root seeds at startup
-   * and `RiskManagerImpl.evaluate` reads live (#433). An empty table means
-   * `autoTighten` has nothing to step from, so a kill-line breach tightens
-   * nothing: the defensive response writes a row nobody reads, which is the
-   * defect #433 closed.
-   */
+  /** From `risk_thresholds` — seeded at startup, read live by `RiskManagerImpl.evaluate` (#433) */
   riskThresholds: { name: string; value: number }[];
-  /**
-   * From `analyst_weights` — seeded at startup (#371) so the daily cycle has a
-   * row to step per analyst. Zero rows is the shape that let a soak "run
-   * cleanly" while attributing nothing.
-   */
+  /** From `analyst_weights` — seeded at startup so the daily cycle has a row to step per analyst (#371) */
   analystWeights: { analyst_id: string }[];
-  /**
-   * From `trader_log` / `risk_log` — the decision records (#328). Empty means
-   * the two stages that decide WHAT to trade and HOW BIG left nothing behind
-   * but an `audit_log` digest, so a soak's surprises are unreconstructable
-   * afterwards. Both write on a skip/rejection too, so a run that traded
-   * nothing must still produce rows: zero is always a wiring failure, never a
-   * quiet market.
-   */
+  /** From `trader_log`/`risk_log` — both write on skip/rejection too, so zero rows is always a wiring failure (#328) */
   traderDecisions: { trace_id: string; instrument: string; intent_type: string | null }[];
   riskDecisions: { trace_id: string; instrument: string; status: string }[];
-  /**
-   * From `breaker_state` — the sticky breakers' durable home (#203, review
-   * 2026-08-06 B1). Two rows (one per tier) exist only if the tick path's
-   * breaker evaluation persisted its state; an empty table means a tripped
-   * kill switch silently re-arms on restart — the exact gap the table was
-   * created to close and then sat unwritten behind for the life of the
-   * project.
-   */
+  /** From `breaker_state` (#203) — empty means a tripped kill switch silently re-arms on restart */
   breakerStates: { tier: string; tripped: number }[];
 }
 
