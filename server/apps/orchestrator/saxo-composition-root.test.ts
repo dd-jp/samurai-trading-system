@@ -409,8 +409,8 @@ describe('startFromEnvironment (broker venue selection, #1400)', () => {
    * calendar the Saxo run resolved without reaching into the scheduler's
    * private config.
    */
-  const LSE_FLATTEN_TAIL = new Date('2026-09-09T15:27:00.000Z'); // 16:27 London
-  const US_FLATTEN_TAIL = new Date('2026-09-09T19:57:00.000Z'); // 20:57 London
+  const LSE_FLATTEN_TAIL = new Date('2026-09-09T15:27:00.000Z');
+  const US_FLATTEN_TAIL = new Date('2026-09-09T19:57:00.000Z');
 
   /**
    * #1400 AC3's evidence requirement, and the reason it is a test rather than

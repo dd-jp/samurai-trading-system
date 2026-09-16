@@ -4,7 +4,7 @@ import type { CostConfig, FillRequest, MarketState } from './types.js';
 const PESSIMISTIC_CONFIG: CostConfig = {
   crypto: {
     spreadVolatilityCoefficient: 0.5,
-    commissionRate: 0.001, // 10 bps taker
+    commissionRate: 0.001,
     slippageCoefficient: 0.2,
     impactK: 0.1,
   },
@@ -78,7 +78,7 @@ describe('CostModelImpl.fill', () => {
     const state = marketState({ adv: 10_000 });
 
     const small = model.fill(fillRequest({ size: 10 }), state);
-    const large = model.fill(fillRequest({ size: 40 }), state); // 4x size
+    const large = model.fill(fillRequest({ size: 40 }), state);
 
     const smallImpact = small.cost_breakdown.market_impact;
     const largeImpact = large.cost_breakdown.market_impact;
@@ -265,7 +265,7 @@ describe('CostModelImpl venue keying (#1000)', () => {
 
     const notional = 10 * state.mid;
     expect(result.cost_breakdown.commission).toBeCloseTo(notional * 0.0008, 10);
-    expect(result.cost_breakdown.commission).toBeGreaterThan(notional * 0.0001); // above the floor
+    expect(result.cost_breakdown.commission).toBeGreaterThan(notional * 0.0001);
   });
 
   it('rejects a NaN venue override field at construction (Math.max(x, NaN) silently corrupts fill_price)', () => {

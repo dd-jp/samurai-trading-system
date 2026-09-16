@@ -38,7 +38,7 @@ describe('parseLatencyTruncatedDebateIds', () => {
   it('ignores malformed/non-JSON lines rather than throwing', () => {
     const lines = [
       'not json at all',
-      '{"truncated": tr', // torn line, e.g. a restart mid-write
+      '{"truncated": tr',
       JSON.stringify({ message: 'debate.timeout', payload: { debate_id: 'debate-1' } }),
       '',
       '   ',
@@ -104,7 +104,7 @@ describe('parseLogCoverage', () => {
     const lines = [
       otherLine('2026-09-03T13:00:00.000Z'),
       otherLine('2026-09-03T13:05:00.000Z'),
-      '{"timestamp": "2026-09-03T13:07', // torn line — a restart mid-write
+      '{"timestamp": "2026-09-03T13:07',
       otherLine('2026-09-03T13:20:00.000Z'),
       otherLine('2026-09-03T13:25:00.000Z'),
     ];
@@ -143,10 +143,7 @@ describe('parseLogCoverage', () => {
   });
 
   it('does not close the span for a gap that is well inside a healthy tick cadence', () => {
-    const lines = [
-      otherLine('2026-09-03T13:00:00.000Z'),
-      otherLine('2026-09-03T13:12:00.000Z'), // 12 minutes — under the 15-minute threshold
-    ];
+    const lines = [otherLine('2026-09-03T13:00:00.000Z'), otherLine('2026-09-03T13:12:00.000Z')];
 
     const coverage = parseLogCoverage(lines);
 
@@ -165,7 +162,7 @@ describe('parseLogCoverage', () => {
     const lines = [
       otherLine('2026-09-03T13:00:00.000Z'),
       otherLine('2026-09-03T13:01:00.000Z'),
-      bootLine('2026-09-03T13:01:30.000Z'), // crash + restart, 30s later
+      bootLine('2026-09-03T13:01:30.000Z'),
       otherLine('2026-09-03T13:02:00.000Z'),
     ];
 
@@ -192,7 +189,7 @@ describe('parseLogCoverage', () => {
   it('a line with no usable timestamp neither extends nor closes the current span', () => {
     const lines = [
       otherLine('2026-09-03T13:00:00.000Z'),
-      JSON.stringify({ message: 'debate.round', payload: {} }), // no timestamp field
+      JSON.stringify({ message: 'debate.round', payload: {} }),
       otherLine('2026-09-03T13:05:00.000Z'),
     ];
 
@@ -373,7 +370,7 @@ describe('classifyRows', () => {
   it('a timeout debate_id match overrides span coverage — direct evidence needs no span', () => {
     const coverage: LogCoverage = {
       timeoutIds: new Set(['debate-1']),
-      intervals: [], // no span coverage at all
+      intervals: [],
     };
 
     const result = classifyRows([makeRow()], coverage);
@@ -408,7 +405,7 @@ describe('classifyRows', () => {
   it('never proposes a value for a row that already carries a termination', () => {
     const result = classifyRows(
       [makeRow({ termination: 'converged' })],
-      fullCoverage(['debate-1']), // even a matching timeout id must not override it
+      fullCoverage(['debate-1']),
     );
 
     expect(result.classified).toEqual([]);

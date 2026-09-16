@@ -65,10 +65,10 @@ describe('normalizeBars', () => {
     // 13:30 UTC = 09:30 ET open (EDT). Pre-market, in-session, and after-close.
     const bars = normalizeBars(
       [
-        candle('2026-07-15T12:00:00Z', 1), // 08:00 ET — pre-market
-        candle('2026-07-15T14:00:00Z', 2), // 10:00 ET — in session
-        candle('2026-07-15T20:00:00Z', 3), // 16:00 ET — opens at the bell, closed
-        candle('2026-07-15T22:00:00Z', 4), // 18:00 ET — after hours
+        candle('2026-07-15T12:00:00Z', 1),
+        candle('2026-07-15T14:00:00Z', 2),
+        candle('2026-07-15T20:00:00Z', 3),
+        candle('2026-07-15T22:00:00Z', 4),
       ],
       STOCK_CONTEXT,
     );
@@ -107,9 +107,9 @@ describe('normalizeBars', () => {
 describe('completedBars', () => {
   const bars = normalizeBars(
     [
-      candle('2026-07-15T08:00:00Z', 100), // closes 09:00
-      candle('2026-07-15T09:00:00Z', 110), // closes 10:00 — exactly asOf
-      candle('2026-07-15T10:00:00Z', 120), // closes 11:00 — forming
+      candle('2026-07-15T08:00:00Z', 100),
+      candle('2026-07-15T09:00:00Z', 110),
+      candle('2026-07-15T10:00:00Z', 120),
     ],
     CRYPTO_CONTEXT,
   );

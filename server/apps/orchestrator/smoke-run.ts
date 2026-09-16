@@ -3280,7 +3280,7 @@ function runLogRetentionScenario(): LogRetentionEvidence {
     ]) {
       writeFileSync(path, 'line\n');
     }
-    writeFileSync(soakBootPath, 'x'.repeat(17 * 1024 * 1024)); // > 16 MiB
+    writeFileSync(soakBootPath, 'x'.repeat(17 * 1024 * 1024));
 
     const oldSeconds = (Date.now() - 40 * oneDayMs) / 1000;
     const recentSeconds = (Date.now() - oneDayMs) / 1000;
@@ -3922,7 +3922,7 @@ function makeExitProbeInput(overrides: Partial<OrderIntent> = {}) {
  * silently stopped enforcing anything at all.
  */
 function probeExitBypassesLiveClamp(riskConfig: RiskConfig): boolean {
-  const badThresholds = { getRiskThresholds: () => ({ max_pbo: 0.5 }) }; // bound: max 0.05
+  const badThresholds = { getRiskThresholds: () => ({ max_pbo: 0.5 }) };
   const manager = new RiskManagerImpl(riskConfig, badThresholds);
 
   let exitApproved = false;

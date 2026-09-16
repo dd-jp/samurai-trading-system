@@ -589,7 +589,7 @@ describe('sweepStaleLogs — bare-name truncation (#1206)', () => {
     // never shrinking the file, since the fd's offset was already 200
     expect(statSync(path).size).toBe(0);
 
-    writeSync(fd, Buffer.from('still-writing')); // 13 bytes, at the stale offset 200
+    writeSync(fd, Buffer.from('still-writing'));
     closeSync(fd);
 
     expect(statSync(path).size).toBe(213);
@@ -613,9 +613,9 @@ describe('sweepStaleLogs — bare-name truncation (#1206)', () => {
   // discriminate the fix from the bug either way
   it('does not re-truncate, and does not destroy new output, once disk usage is already reclaimed', () => {
     const path = join(dir, 'soak-boot.out');
-    const threshold = 1 * 1024 * 1024; // 1 MiB: comfortably above one block, below the initial write
+    const threshold = 1 * 1024 * 1024;
     const fd = openSync(path, 'w');
-    writeSync(fd, Buffer.from('x'.repeat(2 * 1024 * 1024))); // 2 MiB, no hole yet — genuinely oversized
+    writeSync(fd, Buffer.from('x'.repeat(2 * 1024 * 1024)));
 
     const boot1 = sweepStaleLogs({
       directory: dir,

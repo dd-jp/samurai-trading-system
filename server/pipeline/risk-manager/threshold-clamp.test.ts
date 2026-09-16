@@ -122,7 +122,7 @@ describe('CircuitBreakers — in-code threshold clamp at construction (#638)', (
       const portfolio: PortfolioView = {
         equity: 58_200,
         peak_equity: 100_000,
-        drawdown_pct: 0.418, // #729/#798's accepted single-stock envelope
+        drawdown_pct: 0.418,
         exposure_by_instrument: {},
         exposure_by_class: { crypto: 0, stocks: 0 },
         gross_exposure: 0,

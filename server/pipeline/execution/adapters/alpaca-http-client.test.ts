@@ -603,8 +603,8 @@ describe('AlpacaHttpBrokerClient', () => {
     });
 
     const promise = client.getOrder('alpaca-order-1');
-    await vi.advanceTimersByTimeAsync(500); // trips the fetchWithTimeout abort on attempt 1
-    await vi.advanceTimersByTimeAsync(1_000); // clears the retry backoff before attempt 2
+    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(1_000);
     const result = await promise;
 
     expect(result).toEqual(ORDER_RESPONSE);

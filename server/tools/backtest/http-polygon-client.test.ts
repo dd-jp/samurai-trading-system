@@ -363,7 +363,7 @@ describe('HttpPolygonClient free-tier pacing (#510)', () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ results: [] }));
     const client = new HttpPolygonClient({ apiKey: FAKE_KEY, fetchImpl });
 
-    const burst = 6; // > 5, the free-tier ceiling this bucket paces against
+    const burst = 6;
     const pending = Promise.all(
       Array.from({ length: burst }, (_, i) => client.fetchAggregates(`SYM${i}`, window, '1d')),
     );

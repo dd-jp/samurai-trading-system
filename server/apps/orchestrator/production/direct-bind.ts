@@ -1048,12 +1048,12 @@ function reportExitValuationDegraded(
       stage: seam,
       event: 'exit_valuation_degraded',
       level: 'error',
+      // #826: a different condition, so a different line — the 'trader' arm
+      // is not about the rest of the book, it is about the exited name
+      // having no price of its own
       message:
         seam === 'trader'
-          ? // #826: a different condition, so a different line — this one is
-            // not about the rest of the book, it is about the exited name
-            // having no price of its own
-            `mandatory flatten sent with NO mark: ${instrument} — the flat-by-close exit went ` +
+          ? `mandatory flatten sent with NO mark: ${instrument} — the flat-by-close exit went ` +
             'out unpriced rather than being missed (ADR-0014)'
           : `exit valued on a partly-valued book: ${instrument} — ` +
             `${degradation.unvalued_instruments.length} held instrument(s) could not be valued`,

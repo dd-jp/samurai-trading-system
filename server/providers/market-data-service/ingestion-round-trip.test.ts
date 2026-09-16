@@ -25,13 +25,13 @@ class ManualClock implements Clock {
   }
 }
 
-const ASOF = new Date('2026-07-15T18:00:00Z'); // Wednesday, 14:00 ET — mid-session
+const ASOF = new Date('2026-07-15T18:00:00Z');
 
 /** AAPL on Alpaca, including pre-market and after-hours bars */
 const ALPACA_ROWS: AlpacaBar[] = [
-  { t: '2026-07-15T12:00:00Z', o: 190, h: 191, l: 189, c: 190.5, v: 100 }, // 08:00 ET pre-market
-  { t: '2026-07-15T14:00:00Z', o: 190.5, h: 193, l: 190, c: 192, v: 900 }, // 10:00 ET in session
-  { t: '2026-07-15T22:00:00Z', o: 192, h: 194, l: 191, c: 193, v: 50 }, // 18:00 ET after hours
+  { t: '2026-07-15T12:00:00Z', o: 190, h: 191, l: 189, c: 190.5, v: 100 },
+  { t: '2026-07-15T14:00:00Z', o: 190.5, h: 193, l: 190, c: 192, v: 900 },
+  { t: '2026-07-15T22:00:00Z', o: 192, h: 194, l: 191, c: 193, v: 50 },
 ];
 
 const alpacaClient: AlpacaMarketDataClient = {
@@ -159,7 +159,7 @@ describe('swapping DataSource is a config change, not a code change', () => {
 });
 
 describe('cold start: first tick with an empty store (#362)', () => {
-  const COLD_ASOF = new Date('2026-07-15T18:30:00Z'); // mid-hour: current candle is forming
+  const COLD_ASOF = new Date('2026-07-15T18:30:00Z');
 
   it('produces a usable sma(14) on the very first tick, no "needs 14 but received 13"', async () => {
     // formingCandleClient: a cold, empty store has nothing else to fall back
@@ -169,7 +169,7 @@ describe('cold start: first tick with an empty store (#362)', () => {
       new AlpacaDataSource(formingCandleClient(COLD_ASOF), { asset_class: 'crypto' }),
       new ManualClock(COLD_ASOF),
       'live',
-      new SqliteMarketDataStore(openSharedStore(':memory:')), // empty store: genuine cold start
+      new SqliteMarketDataStore(openSharedStore(':memory:')),
     );
 
     const sma = await service.getIndicator(

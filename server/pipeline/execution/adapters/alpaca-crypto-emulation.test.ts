@@ -412,7 +412,7 @@ describe('AlpacaCryptoLegEmulation — crash-restart resumes from the journal', 
     expect(row?.request?.stop).toBe(57_000);
 
     const restarted = makeAdapter(venue, state);
-    await restarted.fetchNewFills(new Date(0)); // resolveSubmitting adopts the live order
+    await restarted.fetchNewFills(new Date(0));
     expect(journalRow(state)?.phase).toBe('pending_entry');
     expect(journalRow(state)?.entry_order_id).toBe(venue.venueId(LOT));
 

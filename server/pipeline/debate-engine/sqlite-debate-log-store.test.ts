@@ -555,10 +555,10 @@ describe('SqliteDebateLogStore.recordGateRefusal / getGateRefusalWindowCounts (#
   it("excludes rows outside the (from, to] window, matching debate_log's own boundary", () => {
     const db = openSharedStore(':memory:');
     const store = new SqliteDebateLogStore(db);
-    store.recordGateRefusal(new Date('2026-07-14T07:59:59Z')); // before `from`
-    store.recordGateRefusal(new Date('2026-07-14T08:00:00Z')); // exactly `from` — excluded, `>` not `>=`
-    store.recordGateRefusal(new Date('2026-07-14T09:00:00Z')); // in window
-    store.recordGateRefusal(new Date('2026-07-14T10:00:00Z')); // exactly `to` — included, `<=`
+    store.recordGateRefusal(new Date('2026-07-14T07:59:59Z'));
+    store.recordGateRefusal(new Date('2026-07-14T08:00:00Z'));
+    store.recordGateRefusal(new Date('2026-07-14T09:00:00Z'));
+    store.recordGateRefusal(new Date('2026-07-14T10:00:00Z'));
     store.writeLog(makeLog({ debate_id: 'd1', created_at: new Date('2026-07-14T10:00:01Z') }));
 
     expect(

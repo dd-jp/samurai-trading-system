@@ -129,7 +129,7 @@ describe('runDebate', () => {
     const result = await runDebate(makeInput(), {
       bull: stubDebater('bull', calls),
       bear: stubDebater('bear', calls),
-      mediator: stubMediator([], calls), // never converges
+      mediator: stubMediator([], calls),
       clock: new SimulatedClock(new Date('2026-07-14T09:00:00Z')),
     });
 
@@ -193,7 +193,7 @@ describe('runDebate', () => {
         {
           bull: stubDebater('bull', calls),
           bear: stubDebater('bear', calls),
-          mediator: stubMediator([], calls), // never converges
+          mediator: stubMediator([], calls),
           clock: new SimulatedClock(new Date('2026-07-14T09:00:00Z')),
         },
         { maxRounds: 1 },
@@ -275,7 +275,7 @@ describe('runDebate', () => {
     const result = await runDebate(makeInput(views), {
       bull: stubDebater('bull', []),
       bear: stubDebater('bear', []),
-      mediator: stubMediator([], []), // 3 rounds
+      mediator: stubMediator([], []),
       clock: new SimulatedClock(new Date('2026-07-14T09:00:00Z')),
     });
 

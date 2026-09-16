@@ -8,7 +8,7 @@ import { openReadOnlyCgtStore } from './open-readonly-cgt-store.js';
 function migratedTempDbPath(): string {
   const dir = mkdtempSync(join(tmpdir(), 'cgt-readonly-'));
   const dbPath = join(dir, 'store.sqlite');
-  openSharedStore(dbPath).close(); // creates the file and runs every migration
+  openSharedStore(dbPath).close();
   return dbPath;
 }
 

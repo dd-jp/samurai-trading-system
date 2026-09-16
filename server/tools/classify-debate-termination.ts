@@ -192,7 +192,8 @@ export function parseLogCoverage(lines: Iterable<string>): LogCoverage {
     try {
       parsed = JSON.parse(line);
     } catch {
-      closeSpan(); // torn line — coverage does not bridge across it
+      // torn line — coverage does not bridge across it
+      closeSpan();
       continue;
     }
 

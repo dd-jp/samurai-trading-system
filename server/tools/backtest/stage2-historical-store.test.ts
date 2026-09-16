@@ -377,7 +377,7 @@ describe('ingest reuses what is already stored instead of re-fetching (#495)', (
     const store = new Stage2HistoricalStore(client, { timeframe: '1d' });
 
     await store.ingest('SPY', { start: new Date(START), end: new Date(START + DAY_MS) });
-    close = 137; // the settled close
+    close = 137;
     await store.ingest('SPY', { start: new Date(START), end: new Date(START + 2 * DAY_MS) });
 
     const bars = store.bars('SPY', { start: new Date(START), end: new Date(START + 2 * DAY_MS) });

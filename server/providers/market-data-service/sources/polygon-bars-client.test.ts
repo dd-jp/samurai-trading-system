@@ -128,8 +128,8 @@ describe('PolygonBarsClient.getBars', () => {
       vi.fn().mockResolvedValue(
         jsonResponse({
           results: [
-            aggregate('2026-08-07T11:00:00Z', 100, 105, 99, 104), // closes exactly at ASOF
-            aggregate('2026-08-07T12:00:00Z', 104, 110, 104, 108), // closes after ASOF — forming
+            aggregate('2026-08-07T11:00:00Z', 100, 105, 99, 104),
+            aggregate('2026-08-07T12:00:00Z', 104, 110, 104, 108),
           ],
         }),
       ),

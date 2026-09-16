@@ -82,7 +82,7 @@ describe('computeCorrelationEstimate — pairwise correlation', () => {
       MSFT: makeBars(
         'MSFT',
         closes.map((c) => c * 2),
-      ), // same log returns, different scale
+      ),
     });
     const input = makeInput({ otherInstruments: ['MSFT'], marketData });
 
@@ -128,7 +128,7 @@ describe('computeCorrelationEstimate — warm-up fallback', () => {
   it('omits a pair whose overlapping return history is below min_bars', async () => {
     const marketData = makeMarketData({
       AAPL: makeBars('AAPL', [100, 101, 102, 103, 104, 105]),
-      MSFT: makeBars('MSFT', [50, 51]), // only 1 return — below min_bars
+      MSFT: makeBars('MSFT', [50, 51]),
     });
     const input = makeInput({
       otherInstruments: ['MSFT'],
@@ -164,7 +164,7 @@ describe('computeCorrelationEstimate — insufficient_history (#303)', () => {
   it('names an omitted pair in insufficient_history rather than only dropping it', async () => {
     const marketData = makeMarketData({
       AAPL: makeBars('AAPL', [100, 101, 102, 103, 104, 105]),
-      MSFT: makeBars('MSFT', [50, 51]), // only 1 return — below min_bars
+      MSFT: makeBars('MSFT', [50, 51]),
     });
     const input = makeInput({
       otherInstruments: ['MSFT'],
@@ -208,8 +208,8 @@ describe('computeCorrelationEstimate — insufficient_history (#303)', () => {
     const marketData = makeMarketData({
       AAPL: makeBars('AAPL', closes),
       MSFT: makeBars('MSFT', closes),
-      TSLA: makeBars('TSLA', [50, 51]), // thin — below min_bars
-      'ETH-USD': [], // newly listed — no bars at all
+      TSLA: makeBars('TSLA', [50, 51]),
+      'ETH-USD': [],
     });
     const input = makeInput({
       otherInstruments: ['MSFT', 'TSLA', 'ETH-USD'],
@@ -232,7 +232,7 @@ describe('computeCorrelationEstimate — insufficient_history (#303)', () => {
   it('reports all five peers of a six-instrument day-1 portfolio as uncovered', async () => {
     const universe = ['SPY', 'QQQ', 'AAPL', 'TSLA', 'BTC-USD', 'ETH-USD'];
     const marketData = makeMarketData(
-      Object.fromEntries(universe.map((i) => [i, makeBars(i, [100, 101])])), // 1 return each
+      Object.fromEntries(universe.map((i) => [i, makeBars(i, [100, 101])])),
     );
     const input = makeInput({
       instrument: 'SPY',

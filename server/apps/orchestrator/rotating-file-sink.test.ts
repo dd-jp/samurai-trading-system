@@ -95,7 +95,7 @@ describe('RotatingFileSink — rotation and retention', () => {
     const filePath = join(dir, 'orchestrator.log');
     const sink = new RotatingFileSink({ filePath, maxBytes: 10, maxRotatedFiles: 3 });
 
-    sink.write('aaaaaaaaa\n'); // 10 bytes — fills the active file exactly
+    sink.write('aaaaaaaaa\n');
     sink.write('bbbbbbbbb\n');
     sink.write('ccccccccc\n');
     sink.close();

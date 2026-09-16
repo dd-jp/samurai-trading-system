@@ -26,8 +26,10 @@ import type {
  * behaving exactly as it did before this ticket.
  */
 export const DEFAULT_COST_FLOORS: CostFloors = Object.freeze({
-  minHalfSpreadRate: 0.0001, // 1 bp of mid
-  minCommissionRate: 0.0001, // 1 bp of notional
+  // 1 bp of mid
+  minHalfSpreadRate: 0.0001,
+  // 1 bp of notional
+  minCommissionRate: 0.0001,
 });
 
 /**

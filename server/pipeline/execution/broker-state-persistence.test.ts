@@ -523,7 +523,7 @@ describe('InMemoryBrokerStateStore.loadUnpricedFills ordering (#1340)', () => {
     const tie = new Date('2026-09-05T09:00:00Z');
     store.recordUnpricedFill('alpaca', unpriced('lot-a', 'bf-a'), tie);
     store.recordUnpricedFill('alpaca', unpriced('lot-b', 'bf-b'), tie);
-    store.recordUnpricedFill('alpaca', unpriced('lot-a', 'bf-a'), tie); // re-observed, same seenAt
+    store.recordUnpricedFill('alpaca', unpriced('lot-a', 'bf-a'), tie);
 
     expect(store.loadUnpricedFills('alpaca').map((row) => row.client_order_id)).toEqual([
       'lot-a',

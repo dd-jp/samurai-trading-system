@@ -489,12 +489,12 @@ describe('RiskManagerImpl.evaluate — circuit-breaker gate', () => {
 describe('RiskManagerImpl.evaluate — trim steps', () => {
   it('trims to the per-trade size cap', () => {
     const manager = new RiskManagerImpl(makeConfig({ max_position_size_fraction_of_equity: 0.05 }));
-    const input = makeInput({ intent: makeIntent({ size: 100, entry: 100 }) }); // notional 10,000
+    const input = makeInput({ intent: makeIntent({ size: 100, entry: 100 }) });
 
     const decision = manager.evaluate(input);
 
     expect(decision.status).toBe('approved');
-    expect(decision.order_intent?.size).toBe(50); // 5,000 / 100
+    expect(decision.order_intent?.size).toBe(50);
     expect(decision.binding_constraint).toBe('per_trade_size_cap');
     expect(decision.modifications).toEqual({
       original_size: 100,
@@ -506,7 +506,7 @@ describe('RiskManagerImpl.evaluate — trim steps', () => {
   it('trims to the per-asset exposure cap, accounting for existing exposure', () => {
     const manager = new RiskManagerImpl(makeConfig({ per_asset_cap_fraction_of_equity: 0.12 }));
     const input = makeInput({
-      intent: makeIntent({ size: 100, entry: 100 }), // notional 10,000
+      intent: makeIntent({ size: 100, entry: 100 }),
       portfolio: makePortfolio({ exposure_by_instrument: { AAPL: 5_000 } }),
     });
 

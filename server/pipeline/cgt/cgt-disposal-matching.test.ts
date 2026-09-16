@@ -46,9 +46,9 @@ describe('matchDisposals — same-day rule (CG51560)', () => {
 
     expect(matched.rule).toBe('same-day');
     expect(matched.quantity).toBe(10);
-    expect(matched.proceeds).toBe(1198); // 1200 - 2
-    expect(matched.allowableCost).toBe(1001); // 1000 + 1
-    expect(matched.gain).toBe(197); // 1198 - 1001, == realized_pnl_net for a full round trip
+    expect(matched.proceeds).toBe(1198);
+    expect(matched.allowableCost).toBe(1001);
+    expect(matched.gain).toBe(197);
   });
 
   it('pools multiple same-day fills into one averaged same-day match before falling through', () => {
@@ -81,7 +81,7 @@ describe('matchDisposals — same-day rule (CG51560)', () => {
     expect(matched).toHaveLength(1);
     expect(matched[0].rule).toBe('same-day');
     expect(matched[0].quantity).toBe(10);
-    expect(matched[0].allowableCost).toBe(1021); // (500+520) + (0.5+0.5)
+    expect(matched[0].allowableCost).toBe(1021);
   });
 });
 
@@ -118,7 +118,7 @@ describe('matchDisposals — 30-day / bed-and-breakfast rule (CG51560/CG51570)',
 
     expect(matched).toHaveLength(1);
     expect(matched[0].rule).toBe('30-day');
-    expect(matched[0].allowableCost).toBe(901); // the 6/12 buyback, not the S104-pool origin
+    expect(matched[0].allowableCost).toBe(901);
     expect(matched[0].proceeds).toBe(1198);
   });
 
@@ -151,7 +151,7 @@ describe('matchDisposals — 30-day / bed-and-breakfast rule (CG51560/CG51570)',
 
     expect(matched).toHaveLength(1);
     expect(matched[0].rule).toBe('section-104');
-    expect(matched[0].allowableCost).toBe(500); // the Jan pool origin, not the July re-buy
+    expect(matched[0].allowableCost).toBe(500);
   });
 
   it('does NOT match against an acquisition before the disposal (direction matters)', () => {
@@ -259,7 +259,7 @@ describe('matchDisposals — 30-day window boundary', () => {
       }),
       leg({
         kind: 'acquisition',
-        date: new Date('2025-07-01T00:00:00Z'), // exactly +30 days
+        date: new Date('2025-07-01T00:00:00Z'),
         quantity: 10,
         grossAmount: 900,
         charges: 0,
@@ -293,7 +293,7 @@ describe('matchDisposals — 30-day window boundary', () => {
       }),
       leg({
         kind: 'acquisition',
-        date: new Date('2025-07-02T00:00:00Z'), // +31 days
+        date: new Date('2025-07-02T00:00:00Z'),
         quantity: 10,
         grossAmount: 900,
         charges: 0,
@@ -412,7 +412,7 @@ describe('matchDisposals — disposal ordering', () => {
 
     const matched = matchDisposals(fills);
     expect(matched).toHaveLength(2);
-    const [early, late] = matched; // matchDisposals sorts ascending by disposalDate
+    const [early, late] = matched;
 
     expect(early.rule).toBe('30-day');
     expect(late.rule).toBe('section-104');

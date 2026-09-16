@@ -264,8 +264,10 @@ function matchThirtyDay(
     for (const acq of acquisitions) {
       if (disp.remaining <= 0) break;
       if (acq.remaining <= 0) continue;
-      if (acq.date.getTime() <= disp.date.getTime()) continue; // strictly AFTER — direction matters
-      if (acq.date.getTime() > windowEnd.getTime()) continue; // inclusive of the +30 boundary itself
+      // strictly AFTER — direction matters
+      if (acq.date.getTime() <= disp.date.getTime()) continue;
+      // inclusive of the +30 boundary itself
+      if (acq.date.getTime() > windowEnd.getTime()) continue;
       const matchQty = Math.min(acq.remaining, disp.remaining);
       const cost = take(acq, matchQty);
       const proceeds = take(disp, matchQty);
@@ -330,7 +332,8 @@ function matchSection104Pool(
           undefined,
           qty,
           proceeds,
-          { amount: cost, charges: 0 }, // `cost` is already the pooled average cost — no separate charges to add
+          // `cost` is already the pooled average cost — no separate charges to add
+          { amount: cost, charges: 0 },
           'section-104',
         ),
       );

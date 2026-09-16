@@ -746,7 +746,7 @@ describe('reconcile — the terminal-row sweep (#1088)', () => {
       const before = await store.getOpenPositions();
 
       const report = await new ExecutionImpl(makeInput(store, broker)).reconcile();
-      expect(report.swept).toBe(1); // only key-term-old-rejected
+      expect(report.swept).toBe(1);
 
       // Recovery AFTER — same live set, by key and by order_state
       const after = await store.getOpenPositions();

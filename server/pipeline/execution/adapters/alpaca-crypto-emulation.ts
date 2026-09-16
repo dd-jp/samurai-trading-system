@@ -415,7 +415,8 @@ export class AlpacaCryptoLegEmulation {
       }
 
       const entryId = bracket.entryOrderId;
-      if (entryId === null) return false; // phase-machine bug; skipped like a malformed row
+      // phase-machine bug; skipped like a malformed row
+      if (entryId === null) return false;
       const key = bracket.request.client_order_id;
       const instrument = bracket.request.instrument;
 

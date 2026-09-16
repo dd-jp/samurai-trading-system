@@ -762,7 +762,7 @@ describe('SequentialTickRunner.runInstrument — risk warnings surfacing (#303)'
     const runner = new SequentialTickRunner(steps);
 
     await runner.runInstrument(SIGNAL, ctx);
-    warnings = ['correlation_warmup:TSLA', 'correlation_warmup:MSFT']; // same set, reordered
+    warnings = ['correlation_warmup:TSLA', 'correlation_warmup:MSFT'];
     await runner.runInstrument(SIGNAL, ctx);
 
     expect(warnEntries(ctx)).toHaveLength(1);
@@ -796,8 +796,8 @@ describe('SequentialTickRunner.runInstrument — risk warnings surfacing (#303)'
     const runner = new SequentialTickRunner(steps);
 
     await runner.runInstrument(SIGNAL, ctx);
-    await runner.runInstrument(SIGNAL, ctx); // unchanged — suppressed
-    warnings = ['correlation_warmup:MSFT']; // TSLA gained coverage
+    await runner.runInstrument(SIGNAL, ctx);
+    warnings = ['correlation_warmup:MSFT'];
     await runner.runInstrument(SIGNAL, ctx);
 
     const warns = warnEntries(ctx);
@@ -824,7 +824,7 @@ describe('SequentialTickRunner.runInstrument — risk warnings surfacing (#303)'
     warnings = [];
     await runner.runInstrument(SIGNAL, ctx);
 
-    expect(warnEntries(ctx)).toHaveLength(1); // no warn for the clear
+    expect(warnEntries(ctx)).toHaveLength(1);
     const log = ctx.logger.log as ReturnType<typeof vi.fn>;
     const cleared = log.mock.calls
       .map((call) => call[0])
