@@ -79,6 +79,9 @@
     "better-sqlite3": "13.0.1"
   },
   "packageManager": "npm@11.17.0",
+  "overrides": {
+    "qs": "6.16.0"
+  },
   "allowScripts": {
     "better-sqlite3@13.0.1": true,
     "esbuild@0.28.2": true,
