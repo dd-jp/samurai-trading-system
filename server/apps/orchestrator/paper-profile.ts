@@ -1815,157 +1815,55 @@ export function buildStartingProfileConfigs(
   };
 
   const breakerConfig: BreakerConfig = {
-    /**
-     * UNSOURCED — DERIVED from the drawdown limit below: a fifth of it, so
-     * five consecutive maximally-bad days reach the hard stop. Soft and
-     * stateless, so it auto-resets the moment the metric recovers
-     * (risk-manager-spec.md "soft breakers auto-reset").
-     *
-     * A FRACTION, not a percentage: `PortfolioView.daily_pnl.portfolio.pct` is
-     * `(realized + unrealized) / session-open equity` since 00:00 UTC (#332 —
-     * orchestrator/sqlite-session-equity-store.ts, risk-manager/portfolio-view.ts),
-     * and the comparison is `pct <= -daily_loss_pct`. A `5` here would mean
-     * 500% and never trip.
-     */
+    // UNSOURCED — DERIVED from the drawdown limit below: a fifth of it, so five
+    // consecutive maximally-bad days reach the hard stop. A FRACTION: PortfolioView.daily_pnl.portfolio.pct
+    // is (realized+unrealized)/session-open equity, compared as pct <= -daily_loss_pct
     daily_loss_pct: 0.05,
-    /**
-     * UNSOURCED — DERIVED from `daily_loss_pct` above: the same 5%, per class.
-     *
-     * Equal to the portfolio figure rather than a fraction of it, and that is
-     * the point of decision 4 (#329): all three daily figures share ONE
-     * denominator, portfolio equity, so a 5% per-class loss and a 5% portfolio
-     * loss are the same number of dollars. What differs is only which trades
-     * are counted and over which session. Setting the per-class tier lower
-     * would halt a class before the account-wide floor it is measured on the
-     * same scale as, which is a tuning choice this profile has no evidence for.
-     *
-     * The tier still bites first in the case it exists for: one class down 5%
-     * while the other is up 4% leaves the portfolio at −1% and trading, and
-     * halts only the class that is bleeding. Same fraction convention as above.
-     *
-     * Values are paper-trading tuning (risk-manager-spec.md, "Out of Scope:
-     * Exact limit values") — this is a starting point to be measured, not a
-     * derived constant.
-     */
+    // UNSOURCED — DERIVED from daily_loss_pct: same 5%, same equity denominator per decision 4 (#329),
+    // so a per-class and portfolio-wide loss are the same dollar figure; still bites first when one class bleeds
     daily_loss_pct_by_class: { crypto: 0.05, stocks: 0.05 },
     /**
-     * DERIVED — owner ruling on #634, sited against ADR-0018's measured
-     * drawdown envelope. At today's fixed-fraction sizing (~35% of the leg for
-     * index ETPs, ~25% for single-stock ETPs) ADR-0018 holds max drawdown at
-     * **26.2%** (index) and **41.8%** (single-stock), re-measured 2026-08-17
-     * by #729 at the neutral brackets D3 actually declares and accepted as
-     * the operative tolerance by David 2026-08-26 (#798) — this replaces the
-     * older 23.1%/26.2% pair, measured at the pre-neutral SLS grid. A breaker
-     * inside that band would fire on the strategy working as designed, so
-     * the trip sits ABOVE the envelope — it means "reality has exceeded what
-     * we sized for", not "we are having a bad week".
-     *
-     * **Re-sited 2026-08-31 (David's approval of #925) from 0.30 to 0.44.**
-     * 0.30 sat INSIDE the newly-accepted 41.8% single-stock tolerance — it
-     * would have fired on the single-stock leg operating exactly as #798 now
-     * says is normal, defeating the breaker's purpose. 0.44 sits 2.2
-     * percentage points above the 41.8% envelope (41.8% is a point estimate
-     * off a drift-removed simulation; a 1-2pp margin is inside that
-     * measurement's own noise, so the margin needed room) and 1 percentage
-     * point below the 0.45 hard ceiling (`threshold-bounds.ts`) — the
-     * ceiling and the trip are deliberately not equal, so the ceiling still
-     * functions as a bound rather than a restatement of this config. There
-     * is very little room between the accepted envelope and the ceiling
-     * David approved (3.2pp total); see the PR body for #925 for that
-     * tension flagged explicitly.
-     *
-     * This replaces the earlier 0.2, which read CONTEXT.md's "~20-25% target"
-     * as a breaker level. That range is a *design target for the envelope* —
-     * ADR-0018 §"Target state" says so explicitly ("what the 20-25% number
-     * means operationally") — and the two ends of a designed envelope cannot
-     * also be the halt line without halting on the design. The 20-25% figure
-     * still binds: it is now the RE-ARM edge (see `auto_rearm` below).
-     *
-     * A fraction — `drawdown_pct` is `(peak - equity) / peak`
-     * (risk-manager/portfolio-view.ts).
-     *
-     * Hard and sticky, but no longer human-cleared: ADR-0013 removed the
-     * operator, so `auto_rearm` clears it on recovery in every mode (#634).
+     * DERIVED — owner ruling on #634/#798/#925, sited against ADR-0018's
+     * measured drawdown envelope (26.2% index / 41.8% single-stock). Trip
+     * sits ABOVE the envelope (not inside it, which would fire on the
+     * strategy working as designed): 0.44 is 2.2pp above the 41.8% envelope
+     * and 1pp below the 0.45 hard ceiling (`threshold-bounds.ts`). Hard and
+     * sticky but no longer human-cleared — ADR-0013 removed the operator, so
+     * `auto_rearm` clears it on recovery (#634). `drawdown_pct` is
+     * `(peak - equity) / peak`.
      */
     max_drawdown_pct: 0.44,
-    /**
-     * UNSOURCED — spec story 15 names the breaker, not the count. 5 is a
-     * streak unlikely enough at any plausible win rate to be signal rather
-     * than noise, and it is soft/auto-resetting, so the cost of it being a
-     * little tight is a pause rather than a halt.
-     */
+    // UNSOURCED — spec story 15 names the breaker, not the count; 5 is unlikely
+    // enough at any plausible win rate to be signal, and it's soft/auto-resetting
     max_consecutive_losses: 5,
     volatility: {
-      // See UNCALIBRATED_VOLATILITY_BASELINE: absolute ATR price units, no
-      // observation to calibrate against yet, deliberately inert rather than
-      // deliberately trip-happy
+      // See UNCALIBRATED_VOLATILITY_BASELINE: deliberately inert, not deliberately trip-happy
       baseline: {
         crypto: UNCALIBRATED_VOLATILITY_BASELINE,
         stocks: UNCALIBRATED_VOLATILITY_BASELINE,
       },
-      /**
-       * UNSOURCED — risk-manager-spec.md asks the halt to fire when vol
-       * "spikes abnormally above a baseline". 3x a calibrated baseline is a
-       * defensible reading of "abnormally"; it means nothing until the
-       * baseline is real.
-       */
+      // UNSOURCED — 3x a calibrated baseline is a defensible "abnormal spike"; meaningless until the baseline is real
       multiplier: 3,
     },
     /**
-     * DERIVED — LIVE IN PAPER as of #634, where it used to be inert. ADR-0013
-     * removed the operator who would have called `reArm()`, so this is the
-     * only thing that can clear a trip outside backtest.
-     *
-     * `recovery_drawdown_pct: 0.2` is the owner ruling on #634 and the lower
-     * edge of the band whose upper edge is `max_drawdown_pct: 0.44` above. It
-     * is deliberately the top of CONTEXT.md's "~20-25%" design envelope: the
-     * book resumes taking entries once it is back inside the drawdown it was
-     * sized for, not merely once it has stopped falling.
-     *
-     * RECONSIDERED against the widened envelope, 2026-08-31 (#925), and left
-     * UNCHANGED. Unlike `max_drawdown_pct`, this value has no obligation to
-     * sit near the 41.8% envelope — the opposite: `threshold-bounds.ts`'s
-     * ceiling requires it to sit AT OR BELOW the envelope (a re-arm edge
-     * above it would resume trading while the book was still outside its own
-     * sizing assumption), and 0.2 clears that with room whether the envelope
-     * is 26.2% or 41.8%. Raising it toward the new envelope would re-arm at
-     * a larger residual drawdown, shortening the halt after a real trip —
-     * the LESS safe direction, so the widened envelope is no reason to
-     * raise it. Leaving it low keeps the halt in force longer, which is the
-     * safe direction (see `threshold-bounds.ts`'s `recovery_drawdown_pct`
-     * bound). CONTEXT.md's "~20-25%" design target is unrelated to the
-     * accepted-tolerance question #798 settled, so it still governs here.
-     * The band is now 24 points wide (0.44 − 0.2) rather than 10; the
-     * original 10-point band was sized so "a single mark cannot flip the
-     * breaker back and forth across it" — a wider band only strengthens that.
-     *
-     * `max_days_tripped: 5` is backtest-only by construction — see the field's
-     * docblock. Its job is stopping a multi-year replay from dead-ending on
-     * its first hit (spec story 21); in paper or live it would resume entries
-     * on elapsed time alone, having recovered nothing.
+     * DERIVED — LIVE IN PAPER as of #634: ADR-0013 removed the human operator
+     * who would have called `reArm()`, so this is the only thing that clears
+     * a trip outside backtest. `recovery_drawdown_pct: 0.2` is CONTEXT.md's
+     * "~20-25%" design envelope's top edge, unchanged since #925 — it must
+     * sit at or below the drawdown envelope, and raising it would shorten the
+     * halt after a real trip. `max_days_tripped: 5` is backtest-only (see the
+     * field's docblock) so a multi-year replay doesn't dead-end on its first hit.
      */
     auto_rearm: { recovery_drawdown_pct: 0.2, max_days_tripped: 5 },
   };
 
   const costConfig: CostConfig = {
-    // Inert in paper (Simulated adapter only), and every value is above
-    // `CostModelImpl`'s structural 1bp spread/commission floor — a config at
-    // or under the floor would be silently replaced by it (Principle 1: "no
-    // config can construct a frictionless fill")
+    // Inert in paper (Simulated adapter only); every value is above CostModelImpl's
+    // structural 1bp floor, which would silently replace anything at or under it
     crypto: {
-      /**
-       * UNSOURCED — cost-model-backtest-spec.md OPEN-GAP-A specifies the
-       * *mechanism* (`fallback_spread = volatility * coefficient`) and not the
-       * coefficient. Crypto is the wider of the two per story 4 ("crypto
-       * wider spreads / taker fees").
-       */
+      // UNSOURCED — cost-model-backtest-spec.md OPEN-GAP-A specifies the mechanism, not the coefficient; crypto is the wider per story 4
       spreadVolatilityCoefficient: 0.1,
-      /**
-       * SPEC-adjacent — spec story 4 names the crypto term as a "taker fee".
-       * 26bp is the venue-typical top-of-book taker rate (Kraken/Coinbase
-       * Advanced entry tier, the long-term crypto venues in CLAUDE.md's
-       * broker plan), and pessimistic against Alpaca's own crypto fee.
-       */
+      // SPEC-adjacent — story 4's "taker fee"; 26bp is the venue-typical top-of-book taker rate, pessimistic vs. Alpaca's own
       commissionRate: 0.0026,
       /** UNSOURCED — `slippage = volatility * coefficient` (spec §3, deterministic mode); crypto's API latency (~100-200ms per spec) is the wider of the two */
       slippageCoefficient: 0.05,

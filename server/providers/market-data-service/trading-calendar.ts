@@ -1,163 +1,28 @@
 /**
- * Trading calendar port (ticket #66).
- *
- * Deliberately minimal. The trading-calendar/session source is an Orchestrator-
- * owned dependency, explicitly NOT designed here: "Trading-calendar source is a
- * small injected dependency (holiday/session table), not designed in depth here"
- * (docs/specs/orchestrator-spec.md, Module: Scheduler; tracked as the LOW-severity
- * trading-calendar OPEN-GAP in docs/specs/cross-spec-contracts.md). This file
- * defines only the seam stock ingestion needs to satisfy #66's "never produces
- * bars outside trading hours"; the real holiday/session table implements this
- * same port later without touching the sources.
+ * Trading calendar port (#66) — deliberately minimal, defining only the seam
+ * stock ingestion needs so a real holiday/session table can implement it later.
  */
 
 export interface TradingCalendar {
-  /**
-   * Is `instant` inside a trading session? Half-open: the session close
-   * instant itself is NOT open, so a bar opening exactly at the close is
-   * out-of-session.
-   */
+  /** Is `instant` inside a trading session? Half-open: the close instant itself is NOT open. */
   isOpen(instant: Date): boolean;
   /**
-   * Does `instant` fall on a day that has a session at all? Whole-session
-   * (daily) bars are admitted on this rather than `isOpen`, since a daily
-   * bar's open timestamp sits at midnight — outside the intraday session.
+   * Does `instant` fall on a day that has a session at all? Daily bars are
+   * admitted on this rather than `isOpen`, since a daily bar's open timestamp
+   * sits at midnight — outside the intraday session.
    */
   isTradingDay(instant: Date): boolean;
   /**
-   * The instant the session containing `instant` began — the boundary that
-   * daily accounting (session PnL, kill-line metrics) resets on.
-   *
-   * This is the *accounting* session, a close-to-close window, NOT the
-   * 09:30–16:00 intraday window `isOpen` describes: for stocks the boundary is
-   * the previous 16:00 ET close, so an overnight gap falls inside the new
-   * session rather than being stranded at the end of the old one. Crypto,
-   * having no close, uses 00:00 UTC.
-   *
-   * Consistent with `isOpen`'s half-open convention: at exactly 16:00:00 ET the
-   * old session is over, so `sessionStart` returns that same 16:00 instant —
-   * the start of the new window, not the previous day's. The result is always
-   * at or before `instant`, and `sessionStart(sessionStart(t))` is idempotent.
-   *
-   * Holidays ARE modelled by both shipped implementations, so a holiday Monday
-   * no longer reports a session start for a session that never traded. That
-   * was true of `UsEquityRegularHoursCalendar` until #696; it was always the
-   * reason the boundary lives on the calendar rather than being duplicated in
-   * each consumer, and it is why fixing the table fixed every consumer at once.
-   *
-   * The tables are HAND-ENTERED and their coverage ENDS — see each
-   * implementation. Past the end of a table `isTradingDay`/`sessionStart`
-   * report an ordinary trading day, which is the safe direction for THIS
-   * predicate: a phantom trading day makes accounting reset on a boundary
-   * that never traded, not a position get stranded. That is not true of every
-   * boundary this file resolves — see `LSE_HALF_DAYS`'s doc for the case
-   * where past-coverage permissiveness is the DANGEROUS direction instead.
-   *
-   * THROWS on the same terms as `sessionEnd` — see its "cannot answer" note.
-   * There is no `null` here to confuse it with, since every venue has a session
-   * start, so exhausting the search means the calendar is broken outright.
+   * The instant the *accounting* session containing `instant` began
+   * (close-to-close), NOT the intraday `isOpen` window. Throws rather than
+   * returning `null` on an exhausted search — every venue has a session start.
    */
   sessionStart(instant: Date): Date;
   /**
    * The next session CLOSE strictly after `instant`, or `null` for a venue
-   * that never closes.
-   *
-   * Added for #668, whose subject is ADR-0014's "intraday, flat by market
-   * close, no overnight carry": the Trader flattens at `close − N` resolved
-   * through this method, so the rule is an OFFSET rather than a wall-clock
-   * constant and holds for a 16:00 ET paper venue and a 16:30 London live
-   * venue alike, half-days included.
-   *
-   * **`null` is a real answer, not a missing one.** Crypto has no close, and
-   * what flat-by-close should mean for the crypto leg is an open thesis
-   * amendment (#667) that is David's to make — so the type refuses to let an
-   * implementation quietly invent one. Callers must handle `null` by doing
-   * nothing rather than by substituting a boundary; `AlwaysOpenCalendar`
-   * returns it, and the flatten path skips instruments whose calendar does.
-   *
-   * Strictly after, not at-or-after, so that calling it AT a close returns the
-   * NEXT session's close rather than the one just passed. That keeps it a
-   * usable "when must I be flat by" question at every instant, and makes it the
-   * mirror of `sessionStart`'s at-or-before convention rather than an
-   * inconsistent twin.
-   *
-   * ## THROWS — `null` and "cannot answer" are different answers (#691)
-   *
-   * An implementation that searches a calendar MAY THROW when it cannot find a
-   * close at all, and both equity calendars here do, after
-   * `MAX_SESSION_SEARCH_DAYS`. Callers must be throw-safe as well as
-   * null-safe; the two mean opposite things and must not be collapsed:
-   *
-   * - `null` — "this venue has no close." A settled, correct answer. Do nothing.
-   * - throw — "this venue HAS a close and I could not find it." The calendar is
-   *   broken or its holiday table is wrong.
-   *
-   * The port previously documented only `Date | null` while the implementations
-   * threw, so a caller written against the contract handled `null` and was
-   * ambushed by the throw. Documenting the throw is the deliberate resolution;
-   * the alternative — returning `null` on exhaustion — was rejected because it
-   * makes a broken calendar indistinguishable from crypto, and the trader's
-   * response to `null` is to SKIP FLATTENING. That converts a loud data fault
-   * into an overnight carry against ADR-0014 with nothing logged, which is the
-   * same silent-non-flatten failure #670 exists to prevent.
-   *
-   * There are FOUR callers on the money path, they are caught in DIFFERENT
-   * places, and they leave different durable records. All were verified from
-   * the code, not assumed:
-   *
-   * - `withinFlattenWindow` (`server/pipeline/trader/decide.ts`) runs inside a
-   *   pipeline pass, so a throw lands in `runTickPlan`'s PER-INSTRUMENT `catch`
-   *   (`server/apps/orchestrator/tick-loop.ts`). That logs `instrument failed`
-   *   at `level: 'error'` AND writes an `audit_log` row with
-   *   `stage: 'tick-loop'`, `decision: 'crashed'` (#507). Only that instrument
-   *   is lost, and the fault is durable — it survives the process.
-   * - `withFlattenTail` (`server/apps/orchestrator/production/stocks-tick-window.ts`)
-   *   runs inside `UniverseScheduler.nextTick`, which is called during plan
-   *   construction — BEFORE `runTickPlan` and therefore outside that catch. It
-   *   is caught one level out, by `runOnce`'s `catch` in
-   *   `server/apps/orchestrator/production.ts` (the `trace_id: 'tick-loop'`
-   *   handler that logs `tick failed` at `level: 'error'`). That drops the
-   *   WHOLE tick — crypto included — and writes NO `audit_log` row. The log
-   *   line is the only record.
-   * - `postCloseFlattenTail` (same file as `withFlattenTail`, #1389) runs in
-   *   the same `nextTick` plan construction and is caught in the same place,
-   *   with the same whole-tick blast radius.
-   * - `findCarriedLots` (`server/apps/orchestrator/production/carried-lot-alert.ts`,
-   *   #1389) runs on the fill-sync poll, and `buildCarriedLotReporter` catches
-   *   its own throw: an exhausted walk there logs `carried_lot_check_failed` at
-   *   error and the poll continues. It is the only one of the four that cannot
-   *   take anything else down with it.
-   *
-   * None is a crash, and all are LOGGED at error level where the heartbeat and
-   * the operator can see them, which is the whole reason the throw is
-   * acceptable. The `nextTick` pair is the weaker: wider blast radius, no
-   * durable row.
-   *
-   * **#1389 narrowed the guarantee that made that pair tolerable, and did so on
-   * purpose.** This paragraph used to say `nextTick` consults `sessionEnd`
-   * exclusively when `isOpen(instant)` is already true, so an exhausted forward
-   * walk needed a calendar inconsistent with itself. That is still true of
-   * `withFlattenTail` and is now FALSE of the scheduler as a whole:
-   * `postCloseFlattenTail` is OR'd with the open-hours branch precisely so a
-   * tick can be planned after the bell, which means `sessionEnd` is now
-   * consulted overnight, at weekends and on holidays too.
-   *
-   * The consequence is bounded and was checked rather than assumed. Both equity
-   * implementations answer a date their table does not cover the same way they
-   * always did — `UsEquityRegularHoursCalendar` throws past
-   * `US_TABLE_COVERAGE_END`, `AlpacaEquitySessionCalendar` throws once the walk
-   * exhausts — and on a WEEKDAY past coverage `isOpen` already threw from
-   * `#closeMinutesFor` before this caller existed. What #1389 adds is the
-   * weekend and holiday instants of an already-past-coverage run, where the
-   * whole-tick drop is the same fault surfacing one day earlier rather than a
-   * new one. The live leg's cliff is refused at boot outright
-   * (`assertLseCalendarCoverage`, #1378).
-   *
-   * That is a CROSS-MODULE claim and this port cannot enforce it. It is named
-   * here rather than left implicit so the next reader can check it in one grep;
-   * if any handler ever stops catching, or drops to `warn`, this paragraph
-   * becomes wrong and the flatten path becomes a silent skip. Any new caller on
-   * the money path must state where its throw lands.
+   * that never closes (#668). `null` means "no close, do nothing"; a throw
+   * means the calendar couldn't find one and is broken — the two must not be
+   * collapsed, and any new caller on the money path must catch the throw.
    */
   sessionEnd(instant: Date): Date | null;
 }
@@ -180,60 +45,25 @@ export class AlwaysOpenCalendar implements TradingCalendar {
   }
 
   /**
-   * `null` — the venue never closes.
-   *
-   * Deliberately NOT the 00:00 UTC boundary `sessionStart` uses. That boundary
-   * is an ACCOUNTING anchor, chosen so the daily return series the Feedback
-   * Loop and kill-lines consume has a defined day. Reusing it here would turn
-   * an accounting convention into a TRADING instruction — a midnight-UTC
-   * flatten of the crypto book — which is one of the four options #667 is
-   * open on and is David's call, not this class's.
-   *
-   * Returning null means the flatten path skips crypto entirely until #667
-   * decides. That is the honest default: the risk flat-by-close exists to
-   * prevent is an unfillable stop in a closed market, and crypto's venue is
-   * open with its bracket leg live.
+   * `null` — the venue never closes. Deliberately not `sessionStart`'s
+   * midnight-UTC boundary: that's an accounting anchor, and reusing it here
+   * would smuggle in a crypto flatten policy #667 hasn't decided.
    */
   sessionEnd(_instant: Date): Date | null {
     return null;
   }
 }
 
-/**
- * Exported for `alpaca-session-calendar.ts` (#684): the Alpaca-backed
- * calendar needs the same DST-aware Eastern wall-clock arithmetic this file
- * already built for `UsEquityRegularHoursCalendar`, and re-deriving it there
- * would be a second, driftable copy of the `Intl` fixpoint below
- */
+/** Exported so other Eastern-time callers reuse this file's `Intl` fixpoint rather than re-deriving it */
 export const ET_ZONE = 'America/New_York';
-/**
- * #668 — the live equity leg is LSE-listed GBP ETFs/ETCs (#659, ADR-0015).
- *
- * Exported for `production/lse-calendar-coverage-guard.ts` (#1378), same
- * reason `ET_ZONE` is exported for `us-equity-session-source.ts`: the boot
- * guard has to ask "what civil date is it in London right now" to measure
- * the horizon to `LSE_TABLE_COVERAGE_END`, and reimplementing this fixpoint
- * there would be a second, driftable copy of it.
- *
- * Also exported (alongside `toCivilDate`, `nextCivilDay` and
- * `wallClockToInstant`) for `production/saxo-weekly-reminder-alert.ts`
- * (#1524): the weekly re-login reminder needs "next Sunday 18:00 London,
- * DST included" and this file already owns the only `Intl` fixpoint for it.
- */
+/** Exported so other London-time callers (boot guards, alert scheduling) reuse this file's `Intl` fixpoint */
 export const LONDON_ZONE = 'Europe/London';
 // 09:30 ET
 const SESSION_OPEN_MINUTES = 9 * 60 + 30;
 // 16:00 ET
 const SESSION_CLOSE_MINUTES = 16 * 60;
 
-/**
- * Formatters are built once per zone and cached.
- *
- * `Intl.DateTimeFormat` construction is the expensive part, and the session
- * boundary is now asked for on every tick of every instrument rather than
- * only during ingestion. Zone count is bounded by the venues in the
- * repo — two — so this never grows.
- */
+/** Formatters cached per zone — `Intl.DateTimeFormat` construction is the expensive part, and zone count is bounded (two venues). */
 const WALL_CLOCK_PARTS = new Map<string, Intl.DateTimeFormat>();
 const CIVIL_PARTS = new Map<string, Intl.DateTimeFormat>();
 
@@ -258,10 +88,7 @@ interface ZonedInstant {
   minutesSinceMidnight: number;
 }
 
-/**
- * Resolves an instant into a zone's wall-clock, DST included, via Intl.
- * Exported for `alpaca-session-calendar.ts` (#684) — see `ET_ZONE`'s doc.
- */
+/** Resolves an instant into a zone's wall-clock, DST included, via Intl. */
 export function toZonedTime(instant: Date, zone: string): ZonedInstant {
   const parts = wallClockParts(zone).formatToParts(instant);
   const lookup = (type: Intl.DateTimeFormatPartTypes): string =>
@@ -281,26 +108,15 @@ const WEEKEND = new Set(['Sat', 'Sun']);
 const MS_PER_MINUTE = 60_000;
 const MS_PER_DAY = 86_400_000;
 /**
- * How far the session walks search before giving up, in civil days.
- *
- * Widest weekday-only gap is a weekend (2 days); the margin is for the holiday
- * table to come. Comfortably clear of the LSE's 4-day Christmas and Easter
- * stretches — that headroom is the reason 10 rather than 3.
- *
- * Named for the SEARCH rather than a direction because it bounds both: the
- * backward walk in `sessionStart` and the forward walk in `sessionEnd` (#691).
- * It was `MAX_SESSION_LOOKBACK_DAYS`, which described half its uses and made
- * `sessionEnd`'s error read "lookback days after".
+ * How far the session walks search before giving up, in civil days —
+ * comfortably clear of the LSE's 4-day Christmas/Easter stretches. Bounds
+ * both the backward walk in `sessionStart` and the forward walk in `sessionEnd`.
  */
 export const MAX_SESSION_SEARCH_DAYS = 10;
 /** One pass computes the UTC offset, the second confirms it. 16:00 ET is never in a DST gap. */
 const MAX_OFFSET_PASSES = 3;
 
-/**
- * Full Eastern civil fields. Kept separate from `ET_PARTS` so the `isOpen` /
- * `isTradingDay` path is untouched; `hourCycle: 'h23'` renders midnight as 00
- * rather than the '24' that `hour12: false` produces.
- */
+/** Kept separate from the wall-clock formatter so `isOpen`/`isTradingDay` stay untouched; `hourCycle: 'h23'` renders midnight as 00, not '24'. */
 function civilParts(zone: string): Intl.DateTimeFormat {
   let formatter = CIVIL_PARTS.get(zone);
   if (formatter === undefined) {
@@ -334,11 +150,9 @@ interface ZonedCivilFields extends ZonedCivilDate {
 }
 
 /**
- * Every civil field of `instant` in `zone`, as numbers.
- *
- * Throws rather than defaulting a missing part: a silently-zeroed year would
- * put the session boundary in year 0 and be read as a plausible timestamp
- * downstream.
+ * Every civil field of `instant` in `zone`, as numbers. Throws rather than
+ * defaulting a missing part — a silently-zeroed year would read downstream
+ * as a plausible timestamp.
  */
 function zonedCivilFields(instant: Date, zone: string): ZonedCivilFields {
   const rendered: Record<string, number> = {};
@@ -409,17 +223,9 @@ export function civilDateKey({ year, month, day }: ZonedCivilDate): string {
 
 /**
  * The instant at which a given wall-clock time on `date` occurs in `zone`.
- *
- * Zone-neutral: it serves New York and London alike, which is why neither the
- * name nor the types mention Eastern any more (#668 gave these a `zone`
- * parameter but left the Eastern names behind).
- *
- * The offset is resolved from `Intl` by fixpoint rather than hard-coded: a
- * literal -4h/-5h is right for half the year and silently wrong for the other
- * half. The loop converges because every session close this calendar asks
- * about — 16:00 and 13:00 in New York, 16:30 and 12:30 in London — sits well
- * clear of either zone's DST transition hour, so it exists exactly once on
- * every day.
+ * Resolves the offset from `Intl` by fixpoint rather than a hard-coded
+ * -4h/-5h, which is wrong for half the year; converges because every session
+ * close this file asks about sits well clear of a DST transition hour.
  */
 export function wallClockToInstant(
   date: ZonedCivilDate,
@@ -444,38 +250,11 @@ export function wallClockToInstant(
 }
 
 /**
- * NYSE full-closure holidays (#696).
- *
- * Until #696 this calendar was weekday-only, so it reported Thanksgiving,
- * Christmas and every other full closure as an ordinary trading day. That was
- * documented as a deliberate, safe simplification — and the safety argument
- * was sound only while the calendar merely gated INGESTION. Since #668 it also
- * decides when the paper equity book must be flat, and once a calendar drives
- * the flatten a missing holiday stops being free: the orchestrator ticks a
- * dead market all day, the debate spends against a feed that is not updating,
- * and the flatten fires into a venue that cannot fill it.
- *
- * A TABLE, not a rule, for the same reason as `LSE_HOLIDAYS`: Good Friday is
- * lunar, and the observed-date rule shifts a weekend holiday to the adjacent
- * weekday (Saturday to the Friday before, Sunday to the Monday after), which
- * is derivable but easy to get wrong silently. Written out so a wrong date is
- * a visible diff. Every date below was checked against the NYSE published
- * calendar, not derived.
- *
- * COVERAGE ENDS 2027-12-24. Past that this reports a normal trading day, which
- * is the SAFE direction: the flatten still computes and fires on a shut day,
- * closing a position that does not exist. The DANGEROUS error is the opposite
- * — a wrongly-listed holiday, which makes a real trading day invisible, skips
- * the flatten and carries the position overnight, exactly what ADR-0014
- * forbids. So an entry added here must be right; an entry missing is merely
- * wasteful. Extend before 2028, or prefer `AlpacaEquitySessionCalendar`
- * (`alpaca-session-calendar.ts`, #684), which fetches the live table and does
- * not carry this cliff at all — this hand-entered table is what the paper
- * leg falls back to when that fetch fails
- * (`resolveUsEquitySessionCalendar`, `production/us-equity-session-source.ts`).
- *
- * NOT modelled: ad-hoc closures — national days of mourning, weather. Those
- * are announced, not scheduled, and no hand-entered table can carry them.
+ * NYSE full-closure holidays, hand-checked against the NYSE published
+ * calendar (not derived — Good Friday is lunar). Coverage ends 2027-12-24;
+ * past that this reports a normal trading day, the safe direction (flatten
+ * fires on a shut day, closing nothing) — a wrongly-listed holiday is the
+ * dangerous one, since it hides a real trading day and skips the flatten.
  */
 const US_HOLIDAYS = new Set([
   // 2026
@@ -523,30 +302,10 @@ const US_HOLIDAYS = new Set([
 ]);
 
 /**
- * Early closes: the session ends at 13:00 ET rather than 16:00.
- *
- * These are the more dangerous of the two tables, and were modelled first for
- * that reason. A holiday is a day with no session and nothing to flatten; an
- * unmodelled EARLY CLOSE is a REAL trading day whose close moves three hours
- * earlier, so the flatten is computed for 15:55 on a market that shut at 13:00
- * and the position sits unflattened — the overnight carry ADR-0014 forbids.
- * Same argument as `LSE_HALF_DAYS`.
- *
- * The two tables are DISJOINT and must stay so: a date here is a shortened
- * session, a date in `US_HOLIDAYS` has no session at all. `2027-12-24` used to
- * be listed here as "Christmas Eve, a Friday", which was wrong — Christmas
- * 2027 falls on a Saturday, so NYSE observes it with a FULL closure that
- * Friday and there is no 2027 Christmas Eve early close. It has moved to
- * `US_HOLIDAYS`. The mistake was invisible while holidays went unmodelled,
- * because both tables were read only for the close MINUTE and a full closure
- * had nowhere to be expressed.
- *
- * The day before Independence Day is absent for both years, and now has a
- * destination: 3 July 2026 is a full holiday in `US_HOLIDAYS`, and 4 July 2027
- * is a Sunday observed on Monday 5 July, which carries no Friday early close.
- *
- * Coverage and the `AlpacaEquitySessionCalendar` alternative (#684) are as
- * described on `US_HOLIDAYS`.
+ * Early closes: session ends at 13:00 ET rather than 16:00. More dangerous
+ * than a full holiday — an unmodelled early close leaves a real trading day's
+ * position unflattened past its actual close. Must stay disjoint from
+ * `US_HOLIDAYS` (a date is either a shortened session or no session at all).
  */
 // 13:00 ET
 const US_EARLY_CLOSE_MINUTES = 13 * 60;
@@ -560,51 +319,22 @@ const US_EARLY_CLOSE_DAYS = new Set([
 ]);
 
 /**
- * The last civil date `US_HOLIDAYS`/`US_EARLY_CLOSE_DAYS` were checked
- * against the NYSE published calendar for (#684). Lexicographic comparison
- * against `civilDateKey`'s `YYYY-MM-DD` is intentional — it sorts exactly
- * like the calendar for any date this table will ever hold.
- *
- * Past this date `#closeMinutesFor` THROWS instead of returning
- * `SESSION_CLOSE_MINUTES`. That is a deliberate reversal of `isTradingDay`'s
- * posture, not an oversight: `isTradingDay` stays permissive past its own
- * table (a phantom holiday closes nothing that is open, the safe direction),
- * but the close-MINUTE lookup cannot make the same bet — a real trading day
- * whose actual close is unknown must not be silently guessed at a normal
- * 16:00, because that is precisely the unmodelled-early-close failure
- * `AlpacaEquitySessionCalendar` (#684) avoids by fetching the real table
- * instead (see the module doc's "coverage stops at 2027" gap). The
- * throw propagates through `isOpen`/`sessionStart`/`sessionEnd` exactly the
- * way an exhausted `MAX_SESSION_SEARCH_DAYS` walk already does, so callers
- * that are throw-safe for one are throw-safe for the other.
+ * Last date `US_HOLIDAYS`/`US_EARLY_CLOSE_DAYS` were checked against the NYSE
+ * calendar. Past this, `#closeMinutesFor` THROWS rather than guessing a normal
+ * 16:00 close — unlike `isTradingDay`'s permissive posture, a wrong guess here
+ * would silently hide a real early close.
  */
 export const US_TABLE_COVERAGE_END = '2027-12-31';
 
 /**
  * US equity regular trading hours: Mon-Fri, 09:30-16:00 ET, with NYSE holidays
- * from `US_HOLIDAYS` and 13:00 early closes from `US_EARLY_CLOSE_DAYS`.
- *
- * Holidays and early closes are both modelled as of #696. Before that this
- * class was weekday-only and documented itself as permissive-on-holidays,
- * which was defensible while it only kept stock ingestion inside session
- * boundaries. It stopped being defensible at #668, when the same calendar
- * began deciding when the PAPER equity book must be flat — a money-path
- * question, where reporting a session on a day the exchange was shut means
- * ticking, debating and spending against a market that is not there.
- *
- * Still not the sole calendar: both tables are hand-entered and end after
- * 2027. `AlpacaEquitySessionCalendar` (#684) fetches the live table for the
- * paper leg instead and does not share this cliff; this class remains that
- * leg's fallback and the type any caller reaches for when it wants a static
- * table on purpose.
+ * and early closes from the tables above. Both tables are hand-entered and end
+ * after 2027; `AlpacaEquitySessionCalendar` fetches the live table for the
+ * paper leg instead, and this class is that leg's fallback.
  */
 export class UsEquityRegularHoursCalendar implements TradingCalendar {
   isOpen(instant: Date): boolean {
-    // Delegates rather than repeating the weekend check, so the holiday table
-    // reaches this predicate too. The two used to disagree: `isTradingDay`
-    // said Thanksgiving had no session while `isOpen` reported 09:30-16:00 on
-    // it — the same split-brain the `sessionStart`/`sessionEnd` walks avoid by
-    // asking `isTradingDay` rather than testing the weekend themselves
+    // Delegates rather than repeating the weekend check, so the holiday table reaches this predicate too
     if (!this.isTradingDay(instant)) {
       return false;
     }
@@ -647,20 +377,9 @@ export class UsEquityRegularHoursCalendar implements TradingCalendar {
   }
 
   /**
-   * The next regular or early close strictly after `instant` (#668).
-   *
-   * Not "the next 16:00 ET close", which is what this said before #691: on a
-   * half-day it returns 13:00, and the flatten offset must ride the early close
-   * rather than a constant.
-   *
-   * Walks FORWARD a civil day at a time, asking `isTradingDay` for the same
-   * reason `sessionStart` walks backward asking it: the holiday table backing
-   * that predicate must move this boundary with it rather than leaving the two
-   * to disagree. Since #696 that table is populated, so the walk now steps
-   * OVER holidays as well as weekends — a flatten scheduled on Christmas Eve
-   * 2026 resolves to the 28 December close, not the 25th's phantom one. That
-   * propagation is why #696 was a table plus a predicate and needed no change
-   * to either boundary walk.
+   * The next regular or early close strictly after `instant` — not a constant
+   * 16:00, since a half-day returns 13:00. Walks forward asking `isTradingDay`
+   * so the holiday table moves this boundary with it rather than disagreeing.
    */
   sessionEnd(instant: Date): Date | null {
     let civilDate = toCivilDate(instant, ET_ZONE);
@@ -679,18 +398,9 @@ export class UsEquityRegularHoursCalendar implements TradingCalendar {
   }
 
   /**
-   * The most recent regular or early close at or before `instant` (see the port
-   * doc for the half-open convention). Early closes for the same reason
-   * `sessionEnd` names them: the boundary is whatever `#closeMinutesFor` says,
-   * not a constant 16:00.
-   *
-   * Walks back a civil day at a time, asking `isTradingDay` — not a private
-   * weekend check — whether each candidate close happened, so the holiday table
-   * behind `isTradingDay` moves this boundary with it instead of leaving the
-   * two to disagree. Since #696 that matters in practice rather than in
-   * principle: session PnL and the kill-line metrics reset on this boundary,
-   * and before the table existed a holiday opened a fresh accounting window on
-   * a day with no trading.
+   * The most recent regular or early close at or before `instant` (half-open,
+   * per the port doc). Walks back asking `isTradingDay`, not a private weekend
+   * check, so the holiday table moves this boundary with it.
    */
   sessionStart(instant: Date): Date {
     let civilDate = toCivilDate(instant, ET_ZONE);
@@ -717,31 +427,11 @@ const LSE_CLOSE_MINUTES = 16 * 60 + 30;
 const LSE_HALF_DAY_CLOSE_MINUTES = 12 * 60 + 30;
 
 /**
- * London Stock Exchange non-trading days.
- *
- * A TABLE, not a rule, because UK bank holidays are not derivable: the early
- * and late May holidays move, Easter is lunar, and one-off royal holidays are
- * announced by proclamation. Written out so a wrong date is a visible diff
- * rather than an arithmetic bug, and so a soak's logs can be reconciled
- * against it by eye. Dates are sourced from the UK government's published
- * bank holiday list for England and Wales
- * (https://www.gov.uk/bank-holidays.json, `england-and-wales` division), not
- * derived.
- *
- * Checked through `LSE_HOLIDAYS_CHECKED_THROUGH`. Beyond that this table
- * reports a normal trading day, which IS the safe direction for
- * `isTradingDay`: it means the flatten window still computes and fires on a
- * day the market happens to be shut, where the position it would close does
- * not exist. The dangerous error is the opposite — treating a real trading
- * day as a holiday, skipping the flatten, and carrying a position overnight.
- * That asymmetry does NOT extend to `LSE_HALF_DAYS` below — see its doc.
- * Extend this table before the checked-through date; `isTradingDay` is the
- * single place that reads it.
- *
- * Exported directly (not through the barrel), same convention as `ET_ZONE`:
- * `trading-calendar.test.ts` reads this for the drift-protection test on
- * `LSE_HOLIDAYS_CHECKED_THROUGH`, and it is not otherwise part of this
- * package's public surface.
+ * UK bank holidays are not derivable (Easter is lunar, dates move by
+ * proclamation), so this is a hand-checked table sourced from
+ * https://www.gov.uk/bank-holidays.json (`england-and-wales`). Checked
+ * through `LSE_HOLIDAYS_CHECKED_THROUGH`; past that, reporting a normal
+ * trading day is the safe direction (unlike `LSE_HALF_DAYS` below).
  */
 export const LSE_HOLIDAYS = new Set([
   // 2026
@@ -794,56 +484,17 @@ export const LSE_HOLIDAYS = new Set([
 ]);
 
 /**
- * The last civil date `LSE_HOLIDAYS` was checked against the published UK
- * bank holiday calendar for. Lexicographic comparison against
- * `civilDateKey`'s `YYYY-MM-DD` is intentional, matching
- * `US_TABLE_COVERAGE_END`.
- *
- * This is `2028-12-31`, matching `LSE_HALF_DAYS_CHECKED_THROUGH`, not
- * `2028-12-26` (the table's own last entry) — the two tables were populated
- * from the same hand-entry pass over the same 2026-2028 window, so their
- * checked boundary is the same. The table's last entry stops short of that
- * boundary because there is no further UK bank holiday between Boxing Day
- * (26 Dec 2028) and year end: New Year's Eve (31 Dec 2028) is not itself a
- * bank holiday, and that year it is not a half-day either — 31 December 2028
- * falls on a Sunday, so `LSE_HALF_DAYS` gains no 2028 entries (see its doc).
- * An entry ending before the checked-through date is expected; an entry
- * AFTER it is what this constant guards against.
- *
- * `2028-12-31`, not `2029-12-31`, because the source this table is checked
- * against — https://www.gov.uk/bank-holidays.json's `england-and-wales`
- * division — publishes nothing past 2028-12-26 as of this check. That is a
- * property of the source, not a choice: extending past what it publishes
- * would mean inventing dates rather than sourcing them. Move this forward
- * once the source publishes 2029.
- *
- * A hand-checked literal, not derived from the table's own contents — see
- * `LSE_TABLE_COVERAGE_END`'s doc for why deriving it from the max key would
- * be the wrong direction. `trading-calendar.test.ts` asserts no key in
- * `LSE_HOLIDAYS` exceeds this constant, so an entry added past it fails
- * that test until this constant is deliberately moved too.
+ * Last date `LSE_HOLIDAYS` was checked against the source. `2028-12-31`, not
+ * `2029-12-31`, because gov.uk's `bank-holidays.json` publishes nothing past
+ * 2028-12-26 as of this check — move forward once the source publishes 2029.
  */
 export const LSE_HOLIDAYS_CHECKED_THROUGH = '2028-12-31';
 
 /**
- * Half-day closes: the session ends at 12:30 rather than 16:30.
- *
- * These matter more than ordinary holidays for #668's purpose. A holiday is a
- * day with no session and nothing to flatten; a half-day is a REAL trading day
- * whose close moves four hours earlier, so a calendar that did not model them
- * would compute a 16:25 flatten for a market that shut at 12:30 — and the
- * position would sit unflattened through the break, which is precisely the
- * overnight carry ADR-0014 forbids.
- *
- * Checked through `LSE_HALF_DAYS_CHECKED_THROUGH`, same convention as
- * `LSE_HOLIDAYS` — but past that end, this table's permissiveness is the
- * DANGEROUS direction, unlike `LSE_HOLIDAYS`'s: an unmodelled half-day reads
- * as an ordinary 16:30 close, so the flatten fires four hours late and the
- * position sits unflattened over the break — the exact carry ADR-0014
- * forbids, not the safe do-nothing failure a phantom holiday produces.
- * `#closeMinutesFor` stays total rather than throwing on this (see its doc);
- * the boot-time guard in `production/lse-calendar-coverage-guard.ts` is what
- * actually stops this from reaching a live position.
+ * Half-day closes: session ends at 12:30 rather than 16:30. Unlike
+ * `LSE_HOLIDAYS`, an unmodelled half-day is the DANGEROUS direction — it
+ * reads as an ordinary 16:30 close, so the flatten fires 4 hours late and the
+ * position carries over the break. `assertLseCalendarCoverage` guards this at boot.
  */
 export const LSE_HALF_DAYS = new Set([
   // Christmas Eve
@@ -856,52 +507,19 @@ export const LSE_HALF_DAYS = new Set([
   // neither qualifies (half-days apply only when the date is a weekday)
 ]);
 
-/**
- * The last civil date `LSE_HALF_DAYS` was checked against the published UK
- * bank holiday calendar for. Same convention as `LSE_HOLIDAYS_CHECKED_THROUGH`;
- * `trading-calendar.test.ts` asserts no key in `LSE_HALF_DAYS` exceeds this one.
- *
- * `2028-12-31`, not `2029-12-31` — see `LSE_HOLIDAYS_CHECKED_THROUGH`'s doc:
- * the source both tables are checked against does not yet publish 2029.
- */
+/** Last date `LSE_HALF_DAYS` was checked for — see `LSE_HOLIDAYS_CHECKED_THROUGH` for why it's 2028-12-31, not 2029. */
 export const LSE_HALF_DAYS_CHECKED_THROUGH = '2028-12-31';
 
-/**
- * The lexicographically earlier of two `YYYY-MM-DD` civil-date keys. Exported
- * so `trading-calendar.test.ts` can pin the min-not-max property against
- * unequal literal inputs, independent of whatever `LSE_HOLIDAYS_CHECKED_THROUGH`
- * and `LSE_HALF_DAYS_CHECKED_THROUGH` currently happen to equal.
- */
+/** The lexicographically earlier of two `YYYY-MM-DD` civil-date keys. */
 export function earlierOf(a: string, b: string): string {
   return a < b ? a : b;
 }
 
 /**
- * The binding LSE table-coverage cliff: the EARLIER of
- * `LSE_HOLIDAYS_CHECKED_THROUGH` and `LSE_HALF_DAYS_CHECKED_THROUGH`, not the
- * later. Whichever table's checked-through date comes first is unverified
- * first, regardless of how far the OTHER table happens to reach. Both are
- * `2028-12-31` today (one hand-entry pass checked both tables through the
- * same boundary), so this is currently their common value — but the two
- * are extended independently, and the day one moves ahead of the other
- * without the other following, `min()` is what keeps this constant pinned
- * to the LESS-covered table rather than silently trusting the more-covered
- * one.
- *
- * Computed via `earlierOf`, not a third hand-typed literal: the two inputs
- * are themselves hand-checked (see their own docs for why THEY are not
- * derived from table contents), so taking the earlier of two verified dates
- * carries no drift risk — unlike deriving straight from
- * `LSE_HOLIDAYS`/`LSE_HALF_DAYS`, which would let a stray table entry
- * silently move this forward.
- *
- * Unlike `US_TABLE_COVERAGE_END`, nothing throws on this from inside the
- * calendar — `#closeMinutesFor` below stays total. See its doc for why an
- * unconditional throw here would be the wrong shape of fix (it sits on the
- * flatten path, unlike the US throw, which is caught well clear of it).
- * `assertLseCalendarCoverage` (`production/lse-calendar-coverage-guard.ts`)
- * is where this constant is actually enforced, at boot, before a live
- * position can exist to be stranded.
+ * The binding LSE coverage cliff: the EARLIER of the two checked-through
+ * dates, so an under-covered table isn't masked by the other's reach. Unlike
+ * `US_TABLE_COVERAGE_END`, nothing throws on this internally — it's enforced
+ * once at boot by `assertLseCalendarCoverage`, before a live position exists.
  */
 export const LSE_TABLE_COVERAGE_END = earlierOf(
   LSE_HOLIDAYS_CHECKED_THROUGH,

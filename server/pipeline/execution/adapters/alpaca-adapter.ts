@@ -1,35 +1,7 @@
 /**
- * Alpaca BrokerAdapter (ticket #84) — see docs/specs/execution-spec.md
- * ("Module: Broker Abstraction"): the MVP paper/live-equities path. Alpaca's
- * native bracket order (`order_class: 'bracket'`) gives the atomic
- * entry + one-cancels-other stop/target guarantee natively — FOR EQUITIES.
- * Crypto rejects every advanced order class (verified live, #550), so the
- * crypto half of the universe is emulated instead (#586):
- * `AlpacaCryptoLegEmulation` (alpaca-crypto-emulation.ts) keeps the same
- * guarantee by hand, journalled in `broker_brackets`, invisible above the
- * `BrokerAdapter` seam.
- *
- * The Alpaca trading client is injected (`AlpacaBrokerClient`), mirroring the
- * injected-client pattern already used for market data
- * (server/providers/market-data-service/sources/alpaca-source.ts): connection/auth is an
- * ops concern (trade-only key, withdrawals disabled, IP-whitelisted per
- * CONTEXT.md invariant 3), not something this adapter constructs.
- *
- * `fetchNewFills` is not yet part of the `BrokerAdapter` interface (only
- * `submitBracket` is — see types.ts) but is exposed the same way
- * `SimulatedBrokerAdapter` exposes it: #83's `ingestFills()` is the future
- * caller. Alpaca's `getOrder` reports cumulative `filled_qty` /
- * `filled_avg_price` per order, not one event per partial fill, so a leg
- * that fills in two tranches between polls is normalized here as a single
- * fill carrying the cumulative filled quantity as of the poll that first
- * observes it — finer-grained partial-fill history requires Alpaca's trade
- * updates/activities stream, which is out of scope for this ticket.
- *
- * #287/#295 made the bracket index durable. Alpaca is the one venue where
- * that index is a CACHE rather than the truth — `getOrder` asks the venue
- * directly and the native bracket is the state machine — but the cache is
- * still load-bearing for `fetchNewFills`, which polls only what is in it. See
- * `state` on the input below for why the cache had to be persisted anyway.
+ * Alpaca BrokerAdapter — the paper/live-equities path (docs/specs/execution-spec.md).
+ * Native `order_class: 'bracket'` gives atomic entry + OCO stop/target for
+ * equities; crypto rejects it (#550) and is emulated instead via `AlpacaCryptoLegEmulation`.
  */
 import {
   type Clock,
@@ -60,9 +32,8 @@ import type {
 import type { UnpricedFillAlertChannel } from '../unpriced-fill-alert.js';
 import type { AlpacaBrokerClient, AlpacaOrder, AlpacaOrderLeg } from './alpaca-client.js';
 import { AlpacaCryptoLegEmulation } from './alpaca-crypto-emulation.js';
-// The shared normalization layer (PR #600 review): both this adapter and the
-// crypto emulation consume it, and neither imports the other's runtime code
-// back — the module split is what keeps that an acyclic graph
+// Shared by this adapter and the crypto emulation — the module split keeps
+// the import graph acyclic (PR #600 review).
 import {
   collectFill,
   fromAlpacaSymbol,
@@ -78,73 +49,39 @@ import {
 } from './us-equity-price-tick.js';
 
 /**
- * How long a fill may sit unpriced before it stops being "the venue is briefly
- * behind" and becomes "a lot is stuck and nobody knows" (#298).
- *
- * 15 minutes, against a 15-second fill poll (`DEFAULT_FILL_POLL_INTERVAL_MS`
- * in orchestrator/production.ts): ~60 consecutive polls, all reporting a
- * positive `filled_qty` with no `filled_avg_price`. That is far outside any
- * plausible settlement lag on a venue that prices market orders instantly, and
- * still short enough that an operator hears about it inside one trading hour
- * rather than at the end of an unattended 14-day soak (#238).
- *
- * A default, not a constant: `AlpacaBrokerAdapterInput.unpricedFillAgeOutMs`
- * overrides it, and `ProductionConfig.unpricedFillAgeOutMs` threads it from the
- * composition root.
+ * 15 minutes, against a 15-second fill poll (`DEFAULT_FILL_POLL_INTERVAL_MS`):
+ * ~60 consecutive unpriced polls before a stuck fill is escalated (#298).
+ * Overridable via `AlpacaBrokerAdapterInput.unpricedFillAgeOutMs`.
  */
 export const DEFAULT_UNPRICED_FILL_AGE_OUT_MS = 15 * 60_000;
 
 /**
- * `LogEntry.trace_id` for every `fetchNewFills` failure this adapter logs
- * (#609). This adapter receives no per-call trace id the way `ExecutionInput`
- * does (`trace_id` there is threaded from `FILL_SYNC_TRACE_ID`/
- * `RECONCILE_TRACE_ID` — see that field's doc) — `BrokerAdapter.fetchNewFills`
- * takes only `since`, and importing an orchestrator-level constant into this
- * adapter would invert the module layering. A fixed, adapter-owned id is the
- * cheaper answer: every line this adapter ever logs is already scoped to
- * "the Alpaca fill sweep" by construction, so there is no second axis worth
- * threading one for.
+ * Fixed trace id for every `fetchNewFills` failure (#609): this adapter gets no
+ * per-call trace id, and importing an orchestrator-level constant would invert
+ * module layering.
  */
 const ALPACA_FILL_SWEEP_TRACE_ID = 'alpaca-fetch-new-fills';
 
 /**
- * How many wire ids one lot's protective re-arms may consume before the adapter
- * refuses. Bounded for `MAX_EXIT_RETRY_ATTEMPTS`' reason (execute.ts): each step
- * costs a lookup, and an unbounded walk would silently absorb a runaway instead
- * of surfacing it.
- *
- * MEASURED 2026-09-15 against Alpaca paper (#1346, docs/research/43 round 3):
- * a `client_order_id` is consumed PERMANENTLY. Reuse is `422` while the prior
- * rests (`code 42210000`), `422` the instant after it goes `canceled`
- * (`code 40010001`), `422` 90 s later, and `422` against a 13-day-old canceled
- * row. So each re-arm that ends up cancelled burns its id for good, and a lot
- * that re-arms more than once needs a wire id it has not spent yet.
- *
- * A COUNT OF IDS, indexed from ZERO — `4` means attempts `0..3`, whose wire ids
- * are `:rearm`, `:rearm-1`, `:rearm-2`, `:rearm-3`. `MAX_EXIT_RETRY_ATTEMPTS`
- * (execute.ts) spells the SAME four-candidate budget as `3`, because its walk
- * counts the base key as attempt zero and the constant as the last SUFFIX.
- * Nothing derives one bound from the other; the two spellings are a naming
- * inconsistency, not an arithmetic difference.
+ * Wire ids a lot's re-arms may consume before refusing. MEASURED 2026-09-15
+ * (#1346, docs/research/43 round 3): Alpaca refuses a reused `client_order_id`
+ * PERMANENTLY, so each cancelled re-arm burns its id for good. Indexed from
+ * zero (`4` = attempts `0..3`).
  */
 const MAX_REARM_ATTEMPTS = 4;
 
 /**
- * Attempt 0 keeps the bare `:rearm` suffix — an OCO placed by a build from
- * before #1346 must still be found by the walks below rather than orphaned —
- * and later attempts index it the way `resolveExitRetryKey` indexes `:retry-N`.
- * One colon only: a second would invite a splitter somewhere to disagree about
+ * Attempt 0 keeps the bare `:rearm` suffix so an OCO placed before #1346 is
+ * still found by the walks below. One colon only, so no splitter mistakes
  * which half is the lot key.
  */
 const rearmWireId = (clientOrderId: string, attempt: number): string =>
   attempt === 0 ? `${clientOrderId}:rearm` : `${clientOrderId}:rearm-${attempt}`;
 
 /**
- * Which attempt a venue row's `client_order_id` belongs to for this lot, or
- * null if it is not one of this lot's re-arm ids. Exact match against the
- * generated ids rather than a `startsWith` prefix: a prefix also matches a
- * DIFFERENT lot whose own key happens to begin with this one, and the caller
- * uses the index to pick which order to cancel.
+ * Which attempt a venue row's `client_order_id` belongs to, or null. Exact
+ * match, not `startsWith`: a prefix can also match a different lot whose key
+ * begins with this one.
  */
 const rearmAttemptOf = (clientOrderId: string, wireId: string): number | null => {
   for (let attempt = 0; attempt < MAX_REARM_ATTEMPTS; attempt += 1) {
@@ -155,97 +92,33 @@ const rearmAttemptOf = (clientOrderId: string, wireId: string): number | null =>
 
 export interface AlpacaBrokerAdapterInput {
   client: AlpacaBrokerClient;
-  /**
-   * Optional so existing wiring (server/apps/orchestrator/production.ts) keeps
-   * working; when absent the adapter still paces itself rather than running
-   * unlimited — see the default below
-   */
+  /** Optional for backward compat; when absent the adapter paces itself — see default below. */
   rateLimiter?: TokenBucket;
   /**
-   * Durable home for the bracket index (#287). Optional for the same
-   * compatibility reason as `rateLimiter`, but the two defaults are not
-   * equivalent: that one is merely conservative, whereas the in-memory default
-   * here IS the #295 bug. server/apps/orchestrator/production.ts injects
-   * `SqliteBrokerStateStore`.
-   *
-   * Alpaca's index is a cache of a venue-authoritative lookup, so persisting
-   * it is a WARM-UP rather than a source of truth — unlike ccxt, where the
-   * persisted phase IS the truth. It is persisted anyway because the warm-up
-   * is what `fetchNewFills` iterates: `getOrder` repopulates the cache, but
-   * `reconcile()` only calls `getOrder` for lots that are still in-flight
-   * (`pending`/`submitted`), so a `partially_filled` lot whose exit legs have
-   * not filled yet is never re-cached and its fills are never polled again.
-   *
-   * The alternative considered and rejected: derive `fetchNewFills`' worklist
-   * from `open_positions`, which already carries `idempotency_key` and
-   * `broker_order_ids` and is arguably the more correct source. It would give
-   * this adapter a dependency on the `SharedStore` seam it currently has no
-   * business knowing about, and it changes MVP-path behaviour on a ticket
-   * whose own priority note says the Alpaca path is not the one it is fixing.
+   * Durable home for the bracket index (#287) — in-memory default IS the #295
+   * bug. Persisted because `reconcile()` only re-caches still-in-flight lots,
+   * so a `partially_filled` lot's exit legs would otherwise never be polled again.
    */
   state?: BrokerStateStore;
   /**
-   * Where a permanently-unpriced fill is escalated (#298). REQUIRED, unlike
-   * every other seam here, and the asymmetry is deliberate: this ticket's
-   * acceptance criterion is that such a fill "cannot leave a lot stuck with no
-   * operator-visible signal", and an optional channel is exactly how that
-   * signal goes missing. `state`'s optional in-memory default is the cautionary
-   * precedent — the comment above calls that default "the #295 bug" — so the
-   * one seam whose absence IS the failure mode does not get one.
-   *
-   * Log-only is a legitimate implementation (the catalogue's log line, the
-   * production default until a `TelegramClient` is wired at the composition
-   * root, #275); silence is not.
+   * Where a permanently-unpriced fill is escalated (#298). REQUIRED, not
+   * optional — an optional channel is exactly how the signal goes missing.
+   * Log-only is a legitimate implementation; silence is not.
    */
   unpricedFillAlerts: UnpricedFillAlertChannel;
   /**
    * Where an emulated crypto OCO whose protective legs BOTH filled is
-   * escalated (#586) — the double-fill window the owner accepted when
-   * choosing emulation over Alpaca's crypto-rejected native order classes.
-   * REQUIRED for `unpricedFillAlerts`' exact reason: the one seam whose
-   * absence IS the failure mode does not get an optional default. See
-   * oco-double-fill-alert.ts.
+   * escalated (#586). REQUIRED for the same reason as `unpricedFillAlerts`.
    */
   ocoDoubleFillAlerts: OcoDoubleFillAlertChannel;
-  /**
-   * How long a fill may stay unpriced before it is escalated. Defaults to
-   * `DEFAULT_UNPRICED_FILL_AGE_OUT_MS`.
-   */
+  /** How long a fill may stay unpriced before escalation. Defaults to `DEFAULT_UNPRICED_FILL_AGE_OUT_MS`. */
   unpricedFillAgeOutMs?: number;
-  /**
-   * Reads the age-out clock. Injected rather than `new Date()` so a test can
-   * age a fill without sleeping, and so the adapter measures time the same way
-   * the rest of the system does. Defaults to `SystemClock`.
-   */
+  /** Age-out clock, injected so tests can age a fill without sleeping. Defaults to `SystemClock`. */
   clock?: Clock;
   /**
-   * Where a `fetchNewFills` sweep failure becomes locally diagnosable (#609)
-   * — the same port-level decision #573 made on `ExecutionInput.logger`, and
-   * for the same reason: `fetchNewFills`'s per-source `failures` array
-   * (bracket/flatten/rearm broker errors, `recordUnpricedFill`/
-   * `clearUnpricedFill` journal-write failures, the unpriced-fill alert
-   * fallback's own delivery failure) was accumulated but had nowhere local to
-   * go, so it was silently dropped on EVERY poll where the same sweep also
-   * read a fill from another source — close to always on a live
-   * multi-instrument universe (see the throw gate's own comment in
-   * `fetchNewFills`).
-   *
-   * `AlpacaBrokerAdapterInput` is a DIFFERENT port from `ExecutionInput`
-   * (`ingestFills()` calls this adapter, not the reverse — #608's sibling
-   * enumeration recorded that as the reason this was filed as its own
-   * ticket rather than folded into #573), so this is a second, independent
-   * instance of the same decision, not a reuse of the field. It resolves the
-   * same way: REQUIRED, not optional. An omitted seam at a composition root
-   * is this repo's dominant defect class (`unpricedFillAlerts`/
-   * `ocoDoubleFillAlerts` above already refuse a silent default for the
-   * identical reason), and `production.ts` already builds one `logger` above
-   * this adapter's construction site and now passes it through rather than
-   * gaining a second, unrecorded one.
-   *
-   * Safe inside a catch, structurally: every call site here routes through
-   * `logCaughtFailure` (`shared/safe-log.ts`), never `logger.log` directly,
-   * so a throwing injected `Logger` cannot escape and re-open the very
-   * abort blast radius #569/#573 closed on the execution port.
+   * Where a `fetchNewFills` sweep failure becomes diagnosable (#609). REQUIRED:
+   * an optional default previously let failures drop silently. Routes through
+   * `logCaughtFailure`, so a throwing `Logger` cannot escape.
    */
   logger: Logger;
 }
@@ -257,168 +130,55 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   /** client_order_id -> the bracket parent's Alpaca order id */
   private readonly brackets = new Map<string, string>();
   /**
-   * client_order_id -> a local clock read taken before `submitBracket`'s POST.
-   * #1123: this adapter has no `SharedStore` access to the lot's own
-   * `opened_at`, so `fetchNewFills` uses this as a same-lot proxy bound to
-   * flag (never clamp) a fill dated earlier than it. The two are NOT equal:
-   * `execute.ts` reads `opened_at` BEFORE `captureSubmitSnapshot`
-   * (deliberately unbounded) and `writeAheadPosition`, both of which run
-   * before `submitBracket` is even called — so `opened_at <= bracketSubmittedAt`,
-   * never the reverse. The check this enables is therefore a SUPERSET test:
-   * it never misses a real violation on a bracket this process itself
-   * submitted (`filledAt < opened_at` implies `filledAt < bracketSubmittedAt`),
-   * but a BENIGN fill landing in `[opened_at, bracketSubmittedAt)` — no true
-   * violation — can still trip it (see `auditSinceFloorInvariant`'s doc for
-   * the likeliest real-world cause: host/venue clock skew). Reading the clock
-   * right before the POST, rather than after (next to `brackets.set` below),
-   * is still the tightest bound this adapter can offer without `opened_at`
-   * itself: it cannot narrow the gap above, only avoid widening it further by
-   * the request's own round trip.
-   * Populated only from `submitBracket` (first-write-wins) and, UNLIKE
-   * `brackets`, never deleted — not even by `cancel()`, which prunes
-   * `brackets` on a confirmed cancel but has no reason to touch this map.
-   * So after a cancel this key set is NOT a subset of `brackets`' CURRENT
-   * keys — it can hold an entry `brackets` has already dropped. It IS a
-   * subset of every `client_order_id` this process has ever itself
-   * submitted a bracket for, cumulative across cancels (`brackets` also
-   * gains entries from the constructor's `loadBrackets` restore and from
-   * `getOrder`'s recovery path, neither of which has a same-process clock
-   * read to offer, so those stay unaudited — see `auditSinceFloorInvariant`'s
-   * doc). This is a real, if slow, growth axis distinct from `brackets`':
-   * bounded by total distinct lots ever submitted over the process's life,
-   * not by however many are open now.
+   * client_order_id -> local clock read taken before `submitBracket`'s POST.
+   * Proxy for `opened_at` (unavailable here, #1123) — flags but never clamps a
+   * fill dated earlier. First-write-wins; unlike `brackets`, never deleted.
    */
   private readonly bracketSubmittedAt = new Map<string, Date>();
   /**
-   * `${client_order_id}:${leg}` -> already logged. #1123: the fill sweep
-   * never prunes `brackets`, so a genuinely violating, still-tracked bracket
-   * is re-polled every sweep and would otherwise warn every time — one
-   * bracket, unbounded log volume. This throttles to first sighting per
-   * LOT+LEG, same shape as ca8f2b9 (#1376)'s per-kind throttle.
-   *
-   * Keyed by lot+leg, not lot alone (round-2 review): the bracket loop
-   * (entry + its legs) and the re-arm loop share one `client_order_id` per
-   * lot, so a lot-only key let one leg's first warn (typically the entry,
-   * polled first) permanently suppress a genuine, DIFFERENT violation on
-   * another leg of the same lot — silently masking exactly the exit-leg
-   * violations #1087's wedge failure mode is about.
-   *
-   * Same non-pruning as `bracketSubmittedAt` above, for the same reason
-   * (nothing, including `cancel()`, has cause to prune it) and the same
-   * growth bound: total distinct (lot, leg) pairs ever warned about over the
-   * process's life, not however many lots are open now.
+   * `${client_order_id}:${leg}` -> already logged (#1123 throttle). Keyed by
+   * lot+leg, not lot alone: a lot-only key would let one leg's first warning
+   * permanently suppress a genuine violation on a different leg of the same lot.
    */
   private readonly warnedSinceFloorViolations = new Set<string>();
   /**
-   * client_order_id -> the flatten's own Alpaca order id (#517), tracked
-   * in-memory only — see `fetchNewFills`'s "flatten sweep" comment for the
-   * full rationale: why this is a SEPARATE map from `brackets`, and why
-   * (UNLIKE `brackets`) an entry here is pruned once its order goes
-   * terminal, rather than kept for the process lifetime.
-   *
-   * A restart still empties this map, same as before #519/#526 — what
-   * changed is that it is no longer the ONLY way an entry gets in: this
-   * process's OWN `submitFlatten` calls still populate it directly, and
-   * `resumeFlatten` (below) re-populates it for an entry a PRIOR process
-   * submitted, driven by `reconcile()`'s `flatten_submissions` sweep. The map
-   * itself stays in-memory-only by design (`resumeFlatten`'s doc) — durability
-   * lives in the journal, not in a second copy of this cache.
+   * client_order_id -> the flatten's own Alpaca order id (#517), in-memory only.
+   * Separate from `brackets`: pruned once terminal (a flatten never rests again),
+   * unlike a bracket which can keep mattering after its entry fills.
    */
   private readonly flattens = new Map<string, string>();
   /**
-   * client_order_id (the EXIT's own idempotency_key `submitFlatten`'s caller
-   * passes — NOT the lot's) -> a local clock read taken before
-   * `submitFlatten`'s POST. #1415: the flatten-sweep counterpart of
-   * `bracketSubmittedAt` above. The two cannot share one map the way
-   * `rearmedLegs` shares `bracketSubmittedAt`'s key space (#1123) — a
-   * flatten's client_order_id is a different value from its lot's, minted by
-   * `buildExitIntent` via `computeIdempotencyKey` (trader/decide.ts);
-   * `executeExit` only ever derives a `:retry-N` suffix from it
-   * (`resolveExitRetryKey`, execute.ts), it does not mint the base key.
-   * Same first-write-wins population (a retried/idempotent resubmission
-   * under the same client_order_id must not move the bound past a fill the
-   * true first submission already covers) and the same accepted gap:
-   * `resumeFlatten` (below) has no same-process clock read to offer, so a
-   * flatten resumed after a restart has no entry here and stays unaudited —
-   * the same asymmetry `bracketSubmittedAt`'s doc describes for a
-   * `getOrder`-restored bracket. Pruned alongside `flattens` (below) — once
-   * `flattens` drops a client_order_id on a terminal fill, this bound can
-   * never be read again, so keeping it around past that point would only be
-   * a leak.
+   * Exit's own client_order_id -> local clock read before `submitFlatten`'s
+   * POST — the flatten counterpart of `bracketSubmittedAt` (#1415), on a
+   * different key space since a flatten mints its own id. Pruned alongside `flattens`.
    */
   private readonly flattenSubmittedAt = new Map<string, Date>();
   /**
-   * lot's `idempotency_key` -> the re-armed OCO's Alpaca order id (#525).
-   * Keyed by the LOT, not by the OCO's own wire `client_order_id`
-   * (a derived `rearmWireId`) — `fetchNewFills`'s rearm sweep below tags fills
-   * under THIS key, so they land in `ingestFills()`'s ordinary per-position
-   * bucket with no routing of their own, the same way a bracket's own fills
-   * do. In-memory only, the same accepted gap `flattens` documents: a
-   * restart between a successful re-arm and its eventual fill loses
-   * visibility until reconcile learns about it (`rearmProtectiveLegs`'s doc
-   * comment).
+   * lot's `idempotency_key` -> the re-armed OCO's Alpaca order id (#525). Keyed
+   * by the LOT, not the OCO's own wire id, so fills land in `ingestFills()`'s
+   * ordinary bucket. In-memory only — a restart before the fill loses visibility.
    */
   private readonly rearmedLegs = new Map<string, string>();
   /**
-   * #299 moved the NUMBER out of this file into `DEFAULT_VENUE_PACING.alpaca`
-   * (shared/http/venue-pacing.ts), overridable per deployment via
-   * `SAMURAI_PACING_ALPACA_*` — a rate limit is a property of the account, not
-   * of this class, and two operators on different tiers cannot both be right
-   * about a literal compiled in here.
-   *
-   * **`DEFAULT_VENUE_PACING.alpaca` is a FALLBACK for direct construction, and
-   * it CHANGED in #299: 5 burst / 3.0 sustained -> 10 burst / 1.5 sustained.**
-   * The production composition root always passes `rateLimiter` explicitly
-   * (`production.ts`, from `resolveVenuePacing()`), so this default is not what
-   * a running system paces on — but a consumer constructing the adapter
-   * directly now gets twice the burst and half the sustained rate of the
-   * previous in-file literal, which is worth knowing before relying on either.
-   * Both in-repo callers inject their own limiter; nothing depends on this
-   * shape today.
-   *
-   * The two numbers moved in opposite directions on purpose, because they are
-   * set on different axes with different evidence:
-   *
-   * - SUSTAINED 1.5/s is 45% of Alpaca's documented 200 requests/minute PER
-   *   ACCOUNT ceiling (verified at alpaca.markets/support/usage-limit-api-calls
-   *   = 3.33/s), which `resolveVenuePacing` enforces as an upper bound on any
-   *   override. It is not just under the ceiling because the market-data client
-   *   draws on the same per-account budget and is paced by no bucket (#391).
-   * - BURST 10 has NO documented Alpaca figure behind it — none could be found
-   *   — so it is derived from our own workload instead: `fetchNewFills` issues
-   *   one `getOrder` per open bracket through this bucket, so a sweep of the
-   *   ADR-0001 universe plus a concurrent `submitBracket` is
-   *   `DEFAULT_UNIVERSE.length + 1`, which a test pins the capacity against.
-   *
-   * Why an unverified burst is a tolerable risk where an unverified sustained
-   * rate would not be: over-burst returns a 429, which `withRetry` handles and
-   * the bucket then paces, whereas a BAN comes from sustained abuse — the axis
-   * that has a verified ceiling and sits at 45% of it.
+   * Fallback for direct construction only — production always injects
+   * `rateLimiter` explicitly (#299, see `DEFAULT_VENUE_PACING.alpaca`).
    */
   private readonly rateLimiter: TokenBucket;
   private readonly state: BrokerStateStore;
   private readonly clock: Clock;
   private readonly unpricedFillAgeOutMs: number;
   /**
-   * The crypto path (#586): Alpaca rejects every advanced order class for
-   * crypto (verified live, #550), so crypto brackets are emulated — plain
-   * entry, plain protective legs armed on the entry fill, sibling cancelled
-   * by the sweep — with every transition journalled in the SAME
-   * `BrokerStateStore` this adapter's native index uses. The file-top claim
-   * that "this adapter does no OCO emulation of its own" is therefore now
-   * equities-only.
+   * Crypto path (#586): Alpaca rejects every advanced order class for crypto
+   * (#550), so brackets are emulated — journalled in the same `BrokerStateStore`
+   * the native index uses.
    */
   private readonly emulation: AlpacaCryptoLegEmulation;
   /** #609 — see `AlpacaBrokerAdapterInput.logger`'s doc for why this has no default */
   private readonly logger: Logger;
 
   constructor(private readonly input: AlpacaBrokerAdapterInput) {
-    // `{ logger, name: 'alpaca' }` (#1083): the production root always injects
-    // `rateLimiter` (`production.ts`'s shared `alpacaBucket`, wired the same
-    // way), so this default is a fallback for a caller that constructs the
-    // adapter standalone — a tool or a test with no injected bucket. Telemetry
-    // is wired here too so that path is not silently worse-observed than the
-    // production one
+    // Fallback for standalone construction (#1083); telemetry wired here too
+    // so that path isn't silently worse-observed than production's.
     this.rateLimiter =
       input.rateLimiter ??
       new TokenBucket(DEFAULT_VENUE_PACING.alpaca, undefined, {
@@ -438,13 +198,11 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       doubleFillAlerts: input.ocoDoubleFillAlerts,
     });
 
-    // Synchronous, in the constructor: the first `fetchNewFills` sweep after a
-    // restart iterates this map, and an empty one reports "no new fills" —
-    // indistinguishable, above the adapter, from a quiet market
+    // Synchronous: an empty map after restart reads as "no new fills," which
+    // is indistinguishable above the adapter from a quiet market.
     for (const record of this.state.loadBrackets('alpaca')) {
-      // Emulated crypto rows belong to the emulation, which rehydrated them
-      // in its own constructor above — polling them here too would sweep the
-      // same orders twice and drive no state machine
+      // Emulated crypto rows are rehydrated by the emulation's own constructor
+      // above — polling them here too would sweep the same orders twice.
       if (record.request?.asset_class === 'crypto') continue;
       if (record.entry_order_id === null) continue;
       this.brackets.set(record.client_order_id, record.entry_order_id);
@@ -452,11 +210,10 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   }
 
   /**
-   * The single door to the injected client: pacing before the call (C2),
-   * credential-safe error conversion after it (H1). Alpaca's REST errors quote
-   * the failed request — including the `APCA-API-KEY-ID` header on an auth
-   * failure — and `execute()` copies a thrown message straight into a logged
-   * `ExecutionResult.reason`.
+   * Single door to the injected client: paces, then converts errors.
+   * Alpaca's REST errors quote the failed request, including the
+   * `APCA-API-KEY-ID` header — `sanitizeBrokerError` strips that before it
+   * reaches a logged `ExecutionResult.reason`.
    */
   private async call<T>(operation: string, fn: () => Promise<T>): Promise<T> {
     await this.rateLimiter.acquire();
@@ -468,27 +225,9 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   }
 
   /**
-   * The flatten (#429) — a plain market order, never a bracket.
-   *
-   * `time_in_force: 'ioc'` is the one value Alpaca accepts for a MARKET order
-   * on both venues: equities take `day`/`ioc`/`fok` and crypto takes
-   * `gtc`/`ioc`, so `ioc` is the intersection and this adapter serves both.
-   * It is also the right semantics for an emergency exit — fill what the book
-   * offers now, leave nothing resting.
-   *
-   * The honest caveat: a thin book can leave the flatten PARTIAL, and a repeat
-   * call under the same `clientOrderId` is a venue-side no-op by design, so
-   * finishing the job needs a fresh key. That is the correct trade — the
-   * alternative is a resting order the operator has to remember to clean up.
-   *
-   * Not written to `this.state` (the DURABLE bracket index): a flatten has no
-   * legs to arm, resize or reconcile, and half-formed bracket-shaped state
-   * for one is exactly the wrong shape (migration 0019's comment). It IS
-   * tracked in the in-memory `flattens` map below (#517) — without that,
-   * `fetchNewFills` has no way to learn this order exists at all, since it
-   * only ever polls `brackets`/`flattens`, never the venue's full order list.
-   * See `fetchNewFills`'s "flatten sweep" comment for why in-memory is the
-   * right amount of durability here.
+   * Plain market order, never a bracket (#429). `ioc` is the one time_in_force
+   * Alpaca accepts for a market order on both equities and crypto. Tracked only
+   * in `flattens` (#517), not `this.state` — a flatten has no legs to arm.
    */
   async submitFlatten(
     instrument: string,
@@ -522,97 +261,43 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   }
 
   /**
-   * Cancels the order and, on a bracket, its attached legs with it — Alpaca
-   * cancels a parent's children as part of cancelling the parent. ALSO
-   * cancels a re-armed residual's protective OCO (#525 follow-up), which
-   * the lookup above cannot find on its own: `rearmProtectiveLegs` submits
-   * that order under a derived `rearmWireId`, a DIFFERENT client order id
-   * from the lot's own — so without this second half, a re-armed lot's OCO
-   * would stay live at the venue through every future call to this method,
-   * ready to fire into whatever flatten this cancel is clearing the way
-   * for and open a reverse position, exactly the #516 hazard this method
-   * exists to prevent, reintroduced one level down.
+   * Cancels the order, its bracket legs, and any re-armed residual OCO (#525) —
+   * the latter lives under a derived `rearmWireId`, a different client order
+   * id, so without this second lookup a re-armed OCO would stay live at the
+   * venue and fire into whatever this cancel is clearing the way for (#516).
    *
-   * Resolves rather than throwing when the venue has nothing under an id:
-   * `getOrderByClientOrderId` returning null means it was never placed or is
-   * long gone, and the transport treats `404`/`422` the same way. The caller
-   * cannot know the venue's state at the instant it calls, and a cancel that
-   * throws on "too late" fails precisely in the race it exists to handle.
-   * That posture does NOT extend to a genuine transport/auth failure on
-   * either half: `this.call()` lets that propagate uncaught, so a cancel
-   * that could not confirm either leg is gone throws — `executeExit`
-   * refuses the flatten rather than sending a market order while it is
-   * unknown whether the legs it was meant to clear are actually gone.
+   * Resolves rather than throwing when the venue has nothing under an id —
+   * "never placed" and "long gone" are indistinguishable to the caller, and a
+   * cancel that throws on "too late" fails in the exact race it must handle.
+   * A genuine transport/auth failure still propagates: `executeExit` must not
+   * send a flatten while it's unknown whether the legs it depends on are gone.
    *
-   * **ORDER IS LOAD-BEARING (#867). Every LOOKUP happens before ANY
-   * destructive call, and the re-arm is cancelled BEFORE the original
-   * bracket.** The fail-closed posture above is only sound while the
-   * refusal leaves the position no MORE exposed than it already was, and
-   * the shape this method had between #546 and #867 broke that: it
-   * cancelled the bracket first and only THEN issued the re-arm lookup —
-   * a lookup that runs for EVERY lot on EVERY exit, including the common
-   * lot that never had a re-arm at all. A degraded venue, an auth blip, or
-   * a timeout outliving the transport's retries therefore threw with the
-   * lot's stop and target ALREADY GONE; `executeExit` refused the flatten,
-   * and the lot sat open, naked, and un-alerted. Hoisting both lookups
-   * above both cancels makes a lookup failure abort with protection fully
-   * intact, which is the only state in which refusing the flatten is the
-   * safer answer.
+   * ORDER IS LOAD-BEARING (#867): every lookup happens before any destructive
+   * call, and the re-arm cancels before the original bracket — safe only
+   * because the two are never both live (`rearmProtectiveLegs` is only
+   * reached downstream of that bracket's own successful cancel). Anyone
+   * reordering these two cancels must re-check that precondition first.
    *
-   * Cancelling the re-arm FIRST then makes the ORIGINAL bracket's cancel
-   * the LAST destructive act, so a throw from this method leaves at most
-   * one unconfirmed cancel behind rather than one confirmed removal plus a
-   * failure. That ordering is safe because a bracket and its lot's re-arm
-   * are never BOTH live: `rearmProtectiveLegs` is only ever reached
-   * downstream of a successful `cancel()` of that bracket
-   * (`maybeRearmResidual` in residual-protection.ts, once a flatten fill lands,
-   * and `sweepResidualProtection`'s retry of a lot that path already
-   * marked) — so when a re-arm exists the original bracket is already
-   * terminal, and the bracket cancel below is a venue no-op that
-   * `cancelOrder` resolves on `404`/`422` rather than throwing
-   * (alpaca-http-client.ts). **Anyone reordering these two cancels back
-   * must re-check that precondition first.**
-   *
-   * The residual this does NOT close: a `cancelOrder` whose RESPONSE is
-   * lost may have cancelled at the venue anyway, so a throw from this
-   * method never PROVES protection survived — it only proves this adapter
-   * could not confirm it is gone. `executeExit`'s catch owns that residue;
-   * see its comment on the cancel loop.
-   *
-   * Resolves the ORIGINAL bracket's Alpaca id through the venue rather than
-   * the local `brackets` map, for `getOrder`'s reason: that map is
-   * populated only by `submitBracket` in this process, so after a restart
-   * it is empty. The re-armed OCO takes the CHEAP path first —
-   * `rearmedLegs` when this process is the one that placed it, no network
-   * round trip needed — and falls back to the SAME venue lookup, by the
-   * derived id, when the map has nothing: the only way to find a re-arm
-   * placed before a restart, since `rearmedLegs` is in-memory only. A null
-   * result there is the ordinary case (no re-arm ever happened for this
-   * lot) and is not an error.
+   * Resolves the bracket's id through the venue, not the local `brackets` map
+   * (empty after a restart — see `getOrder`). The re-armed OCO checks the
+   * cheap in-process `rearmedLegs` first, falling back to the same venue
+   * lookup by the derived id for one placed before a restart.
    */
   async cancel(clientOrderId: string, _instrument: string): Promise<void> {
-    // An emulated crypto bracket has no parent whose cancellation takes the
-    // legs with it — the legs are independent plain orders only the
-    // emulation's journal knows the ids of (#586). Delegated wholesale; the
-    // re-arm lookup below is the EQUITY OCO's naming scheme and does not
-    // apply (emulated re-arm legs are cancelled by the same journal walk)
+    // Emulated crypto legs are independent plain orders only the emulation's
+    // journal knows (#586) — delegated wholesale; the re-arm lookup below is
+    // the equity OCO's naming scheme and doesn't apply here.
     if (this.emulation.owns(clientOrderId)) {
       await this.emulation.cancelAll(clientOrderId);
       return;
     }
 
-    // --- LOOKUPS (non-destructive). #867: everything that can throw while
-    // the lot is still protected happens HERE, above the first cancel
     const { order, rearmedOrder } = await this.resolveCancelTargets(clientOrderId);
 
-    // --- CANCELS (destructive). Re-arm first, original bracket last — see
-    // the doc comment for why that ordering is both safe and required
     if (rearmedOrder !== null) {
       await this.call('cancel', () => this.input.client.cancelOrder(rearmedOrder));
-      // Deleted only now, after the cancel is confirmed — not before, and
-      // not merely on finding it: a `cancelOrder` throw above must leave
-      // the map (and the venue) exactly as they were, so a retried cancel
-      // finds the same order again rather than believing it already gone
+      // Deleted only after the cancel confirms — a throw above must leave
+      // this map matching the venue, so a retry finds the same order again.
       this.rearmedLegs.delete(clientOrderId);
     }
 
