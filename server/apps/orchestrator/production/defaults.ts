@@ -45,82 +45,36 @@ import { WORST_CASE_LLM_CALLS_PER_DEBATE } from './debate-adapter.js';
 
 export const DEFAULT_TICK_INTERVAL_MS = 60_000;
 /**
- * 15 minutes (#342), not the 60s this shipped with.
- *
- * The number is the **external watchdog's staleness threshold**, not a volume
- * target: the heartbeat's whole purpose is that something outside this process
- * notices its silence, so the cadence only has to be tight enough that "no beat
- * for 2 intervals" is still a timely alarm. Half an hour of undetected death on
- * an unattended paper soak (#238) is well inside a useful detection window, and
- * a tighter beat buys detection latency nobody is awake to use.
- *
- * What 60s cost, by contrast, was the alerting channel itself: ~20,000
- * heartbeats over the 14-day soak into the chat that also carries the orphaned
- * go verdict, the stuck unpriced lot and the kill-threshold breach — until the
- * operator mutes it. 15 minutes plus the separate destination
- * `TELEGRAM_HEARTBEAT_CHAT_ID` gives (alert-transport.ts) is the pair that fixes
- * that; neither alone is sufficient.
- *
- * Still a default, not a constant: `ProductionConfig.heartbeatIntervalMs`
- * overrides it, and the smoke gate (smoke-run.ts) sets its own 100ms so the
- * timer actually fires inside a one-second run.
+ * 15 minutes (#342), not the 60s this shipped with. This is the external
+ * watchdog's staleness threshold, not a volume target — 60s cost ~20,000
+ * heartbeats over a 14-day soak, into the same chat as real alerts, until muted.
  */
 export const DEFAULT_HEARTBEAT_INTERVAL_MS = 15 * 60_000;
 export const DEFAULT_FILL_POLL_INTERVAL_MS = 15_000;
 /**
- * GDELT publishes one GKG batch every 15 minutes, so polling faster buys
- * nothing but bandwidth — `GdeltIngestAgent`'s cursor would skip the repeat
- * anyway, having already paid for `lastupdate.txt`.
- *
- * Five minutes rather than fifteen so the poll and the publication cadence do
- * not have to stay in phase: at exactly 15 minutes a poller that drifts to just
- * before each publication lags a full batch forever. Three chances per batch
- * makes the phase irrelevant, and two of the three cost one 200-byte request.
+ * GDELT publishes one GKG batch per 15 min; polling faster buys nothing.
+ * 5 min (not 15) so poll and publish cadence don't stay in phase and drift
+ * into lagging a full batch forever.
  */
 export const DEFAULT_GDELT_POLL_INTERVAL_MS = 5 * 60_000;
 /**
- * How often the Polymarket poller is OFFERED a chance to run (#504).
- *
- * The cadence itself is `POLYMARKET_REFRESH_MS` (1h) and the agent's own
- * epoch-floored bucket enforces it: a poll inside a bucket already fetched
- * returns immediately, making no request at all. So this timer only decides
- * how promptly a bucket rollover is noticed. Fifteen minutes rather than a
- * matching hour for `DEFAULT_GDELT_POLL_INTERVAL_MS`'s phase argument — a
- * poller ticking at exactly the bucket width, started just after an hour
- * boundary, would lag every bucket by almost the full hour forever. The extra
- * polls are free: three of the four make no network call.
+ * How often the Polymarket poller is OFFERED a chance to run (#504) — the
+ * agent's own hourly epoch-floored bucket enforces the real cadence, so this
+ * only bounds how promptly a bucket rollover is noticed.
  */
 export const DEFAULT_POLYMARKET_POLL_INTERVAL_MS = 15 * 60_000;
 /**
- * ATR(14): the conventional realized-volatility read, and the same shape
- * `SimulatedAdapterConfig.volatility_indicator` carries for
- * `MarketState.volatility`. `'atr'` is one of the four indicators
- * `computeIndicator` dispatches on (indicators.ts) — an unrecognized name
- * would throw per instrument and leave the volatility breaker tier wired but
- * permanently reading its failure fallback, which is worse than leaving it a
- * required seam because it looks live.
- *
- * `lookback` sits on the CONVERGED warm-up (`recommendedWarmupFor` =
- * `4 x period + 1` = 57), not the `period + 1` = 15 arity floor (#757,
- * `docs/reviews/indicator-characterisation-2026-08-16.md` F1). At the floor
- * `atr`'s Wilder smoothing loop runs zero times and the value is a plain
- * mean of the 14 true ranges wearing Wilder's name — the same shape #722
- * fixed for `RSI_SPEC`. `getIndicator` builds its fetch window from this
- * field (service.ts), so this line alone is what makes the breaker's input
- * read the converged series rather than the seed.
- *
- * Measured before adopting (#757): relative shift floor-vs-converged over
- * `indicator-golden.json`'s ordinary region, median 3.0%, p90 6.9%, near-zero
- * signed bias (+0.46%) — cleared the declared gate (median <=15%, p90 <=30%).
- * `minimumBarsFor` (15) is unchanged: a cold instrument still gets a
- * (less-warm) ATR reading rather than a permanently `FAILURE_READING`
- * breaker.
+ * ATR(14). `lookback` sits on the CONVERGED warm-up (`recommendedWarmupFor`),
+ * not the `period + 1` arity floor (#757) — at the floor, ATR's Wilder
+ * smoothing loop runs zero times and the value is a plain mean wearing
+ * Wilder's name. Measured floor-vs-converged shift: median 3.0%, p90 6.9%
+ * (#757) — cleared the declared gate.
  */
 export const DEFAULT_VOLATILITY_INDICATOR: IndicatorSpec = {
   indicator: 'atr',
   params: { period: 14 },
-  // 1h, matching every other indicator in the live path. Explicit since #315:
-  // `getIndicator` used to hardcode this and now reads it from the spec
+  // 1h, matching every other indicator in the live path (#315 made this explicit
+  // rather than hardcoded in getIndicator).
   timeframe: '1h',
   lookback: recommendedWarmupFor({
     indicator: 'atr',
@@ -130,93 +84,37 @@ export const DEFAULT_VOLATILITY_INDICATOR: IndicatorSpec = {
   }),
 };
 /**
- * The Feedback Loop's cadence — "daily batch" (feedback-loop-spec.md § Cadence
- * & Scope).
- *
- * Exported since #366 so `paperStartingProfile` can express
- * `FeedbackConfig.attribution_window_ms` as a multiple of it rather than as an
- * unrelated literal. The two are coupled: a window shorter than the gap between
- * cycles drops the trades that closed in between, and nothing else in the
- * config records that relationship.
+ * The Feedback Loop's daily-batch cadence. Exported (#366) so `paperStartingProfile`
+ * can express `attribution_window_ms` as a multiple of it — a shorter window
+ * drops trades that closed in between.
  */
 export const DEFAULT_FEEDBACK_INTERVAL_MS = 24 * 60 * 60 * 1_000;
 
 const DEFAULT_LLM_RETRY = { maxAttempts: 2, baseDelayMs: 500, maxDelayMs: 2_000 } as const;
 
 /**
- * The wall-clock ceiling a WHOLE DEBATE may occupy (#1080), which is what the
- * per-attempt timeout below has to be shared out of.
- *
- * `LATENCY_BUDGET_MS.stocks`, not the crypto entry, because Samurai is an
- * equities system — crypto left scope 2026-08-16 (ADR-0015's amendment) and
- * `DEFAULT_UNIVERSE` is all-stocks, so no production tick runs the crypto
- * budget. The crypto branch is not dead code (`SMOKE_TEST_UNIVERSE` is BTC/ETH
- * and `MAX_ROUNDS_BY_ASSET_CLASS.crypto` is still read), so state the gap
- * plainly: against the 30s crypto budget this timeout is KNOWINGLY out of
- * bounds — one call alone is 93% of it, and a one-round crypto debate's four
- * calls are 373% — and the invariant test asserts the stocks budget alone.
- * That is not an oversight to be tightened later: solving the arithmetic below
- * for 30s admits a 7.5s per-attempt timeout, under the measured p50 of a debate
- * call (#1080, 2026-09-14: 19.0s). No schedule fits a 30s budget at this
- * model's latency. A crypto system re-entering scope inherits that as an open
- * problem, not as a constant to copy.
+ * The wall-clock ceiling a whole debate may occupy (#1080). `LATENCY_BUDGET_MS.stocks`,
+ * not crypto — Samurai is equities-only (crypto left scope, ADR-0015). Knowingly
+ * out of bounds against the crypto budget; a crypto system re-entering scope
+ * inherits that as an open problem, not a constant to copy.
  */
 const DEBATE_BUDGET_MS = LATENCY_BUDGET_MS.stocks;
 
 /**
- * The per-attempt timeout, DERIVED from the budget above rather than chosen —
- * the budget divided by the calls the debate spending it actually issues.
- *
- * The debate is what races the budget, and a debate is
- * `llmCallsPerDebate(maxRounds)` strictly sequential calls (three personas a
- * round plus one disagreement detection), so the constraint is per-debate, not
- * per-call. The invariant is `llmCallsPerDebate(MAX_ROUNDS_BY_ASSET_CLASS.stocks)
- * * timeoutMs <= DEBATE_BUDGET_MS`, pinned by a test — and that test is what
- * enforces it, not this expression. Substituting the budget's own definition
- * cancels the call count on both sides, so this division reduces to
- * `MEASURED_DEBATE_CALL_CEILING_MS` for ANY cap and the inequality can never
- * fail. What the derivation buys is that the two move together; what pins
- * their VALUES is three hand-maintained literals — the cap and the ceiling
- * in `latency-budget.ts`, and `production.test.ts`'s `timeoutMs` assertion.
- * Raising the cap without re-measuring the ceiling is what the cap-mutation
- * tests catch: seven fail.
- *
- * `maxAttempts` is not a factor here, and that is a deliberate reading of what
- * the budget bounds. `enforceLatencyBudget` races the WHOLE debate and aborts
- * at the budget, so a retry cannot overrun the tick — it can only cause the
- * budget to fire. What the budget must afford is therefore the clean path,
- * where every call returns: a retry is a degradation that may cost the debate
- * its remaining budget, not an addend the budget has to cover. `maxAttempts`
- * does bound one call's own worst case, which `production.test.ts` pins
- * separately.
- *
- * The resulting 28,000ms is doubly sourced: it is `112,000 / 4`, and it sits
- * just above the measured p95 of a returning debate call (#1080: 27,510ms over
- * 113 rows, p90 26,999ms). Those percentiles are right-censored by this very
- * timeout, so they are a lower bound on the tail — which is why the budget is
- * sized at the timeout rather than at the measured p95 itself. The censoring
- * is checkable rather than asserted: across the two sessions this timeout was
- * in force (the 2026-09-07 23:20Z session, which ran into 09-08, and
- * 2026-09-10) no `stage: 'debate'` row reaches 28,000ms at all. The 15 rows
- * above it elsewhere in the store are 2026-08-27 and 2026-09-03/04, taken
- * under the flat 30,000ms client default #1103 replaced with this derivation,
- * and they stop at 29,979ms — censored one level up, not uncensored.
+ * DERIVED from the budget above, not chosen — the invariant
+ * `llmCallsPerDebate(maxRounds) * timeoutMs <= DEBATE_BUDGET_MS` is pinned by a
+ * test, not by this expression. Resolves to 28,000ms, just above the measured
+ * p95 of a returning debate call (#1080: 27,510ms over 113 rows).
  */
 const DEFAULT_LLM_TIMEOUT_MS =
   DEBATE_BUDGET_MS / llmCallsPerDebate(MAX_ROUNDS_BY_ASSET_CLASS.stocks);
 
 /**
- * Debate/disagreement-detection's LLM knobs (max tokens, per-attempt
- * timeout, retry budget) are not yet exposed as their own `ProductionConfig`
- * field — no ticket has asked for them to be tuned independently of these
- * defaults, which are mirrored by `disagreement-detector.integration.test.ts`
- * so the one suite that talks to the real API exercises the shipped numbers.
- * That mirror is by hand: moving `timeoutMs` here means moving it there too
- * (#1080 moved both). `model` is the one knob threaded
- * from the environment (#274 AC), since a stale/rotated model id is the one
- * failure mode ops needs to fix without a redeploy.
+ * Debate/disagreement-detection's LLM knobs aren't yet exposed on `ProductionConfig` —
+ * mirrored by hand in `disagreement-detector.integration.test.ts`, so #1080 moved
+ * `timeoutMs` in both places.
  */
-/** Exported for `production.test.ts` — asserts the actual retry/timeout budget wired into the live default, not just the model threaded through the startup warn log (PR #284 review) */
+/** Exported for `production.test.ts` (PR #284 review) — asserts the actual retry/timeout budget, not just the startup warn log. */
 export const DEFAULT_LLM_CLIENT_CONFIG: Omit<AnthropicLlmClientConfig, 'model'> = {
   max_tokens: 1024,
   timeoutMs: DEFAULT_LLM_TIMEOUT_MS,
@@ -224,38 +122,20 @@ export const DEFAULT_LLM_CLIENT_CONFIG: Omit<AnthropicLlmClientConfig, 'model'> 
 };
 
 /**
- * The default `LlmClient`: `NousMessagesClient` (#274, real `fetch`-based
- * `AnthropicMessagesClient`, retargeted at Nous by ADR-0009) wrapped in the
- * pre-existing `AnthropicLlmClient` (retry/timeout/error-classification/
- * prompt-safety unchanged). Key, model and base URL come from
- * `nousCredentials('debate')`, which throws — naming the variable that would
- * fix it — when the key or base URL is absent, or when the model has no rate
- * in `MODEL_RATES`. That last one is not fussiness: an unpriced call records a
- * null `cost_usd`, and the spend cap sums nulls as zero, so an unrecognised
- * model would silently remove ADR-0008's ceiling.
- *
- * `NousMessagesClient` keeps its own default `fetchWithTimeout`
- * budget rather than being handed `config.timeoutMs` here: that value already
- * governs the outer race in `AnthropicLlmClient.callWithTimeout`, which starts
- * its timer strictly before `createMessage()` is even called, so it is the
- * one that actually decides a slow call's `LlmTimeoutError`. Threading the
- * same number into the inner `fetchWithTimeout` as well would invite exactly
- * that ambiguity — two timers racing on an identical deadline — for no
- * observable benefit; the inner timeout stays a wider, independent backstop
- * so an in-flight request is not left dangling after the outer race settles.
+ * `NousMessagesClient` (real fetch client, retargeted at Nous by ADR-0009) wrapped
+ * in `AnthropicLlmClient`. `nousCredentials('debate')` throws naming the missing
+ * var if the key/URL are absent or the model is unpriced — an unpriced call would
+ * silently remove ADR-0008's spend ceiling (null `cost_usd` sums as zero).
  */
-/** Exported for `production.test.ts` — lets the test assert the constructed client's actual shape (instance type, model, retry/timeout config) rather than only the startup warn log's side effect (PR #284 review) */
+/** Exported for `production.test.ts` (PR #284 review) — asserts the constructed client's actual shape, not just the startup warn log. */
 export function buildDefaultLlmClient(
   logger: Logger,
   gate: LlmInFlightGate,
   spendSink?: LlmSpendSink,
 ): LlmClient {
   const { apiKey, baseUrl, model } = nousCredentials('debate');
-  // Loud, not silent: omitting `ProductionConfig.llmClient` now means a real,
-  // billed API call per debate round rather than a required seam
-  // (kimi-3-review on #284) — this is the one signal that the live default
-  // was built instead of a test/mock override. The model is in the payload
-  // because it is the field that decides both the bill and the behaviour
+  // Loud, not silent: omitting `ProductionConfig.llmClient` means a real, billed
+  // API call per debate round, not a mock (kimi-3-review, #284).
   logger.log({
     trace_id: 'startup',
     stage: 'orchestrator',
@@ -267,18 +147,9 @@ export function buildDefaultLlmClient(
   const config: AnthropicLlmClientConfig = {
     ...DEFAULT_LLM_CLIENT_CONFIG,
     model,
-    // #1080. The only line a retried attempt produces anywhere — see
-    // `RetryAttemptReport` (shared/http/retry.ts) for why the loop was
-    // otherwise silent. `warn`, not `info`: a retried attempt is the system
-    // paying twice and halving the budget it had left, which an operator
-    // reading a soak log should see without filtering for it
-    // `logCaughtFailure`, not a bare `logger.log`: this runs inside the retry
-    // loop's own observer guard, and a throw from here — a hostile
-    // `toString` on the provider's rejection value, or an injected logger
-    // whose sink is gone — would be swallowed there, losing the line this
-    // whole mechanism exists to emit. The shared helper renders and
-    // sanitizes the thrown value behind its own try/catch, so the failure
-    // degrades to `[unrenderable error]` in the payload instead
+    // #1080: the only line a retried attempt produces (see RetryAttemptReport).
+    // logCaughtFailure, not logger.log, since a throw here runs inside the retry
+    // loop's own observer guard and would otherwise be swallowed.
     onRetryAttempt: (report) => {
       logCaughtFailure(
         logger,
@@ -304,20 +175,15 @@ export function buildDefaultLlmClient(
           delay_ms: Math.round(report.delay_ms),
           debate_id: report.debate_id,
           llm_stage: report.stage,
-          // #1394. `RetryAttemptReport.error` is `unknown`, so this line named
-          // the attempt and its cost but never what it was retrying — a
-          // rate limit and a malformed draw produced identical lines, and only
-          // the first is worth waiting out
+          // #1394: names what was retried — a rate limit and a malformed draw
+          // used to log identically.
           failure_cause: classifyFailureCause(report.error),
         },
       );
     },
-    // #1394. The terminal line: one per call the client gives up on, after the
-    // retry budget above is spent. `warn`, matching `llm_attempt_retried` —
-    // every caller downstream of this client either fails open (the risk
-    // critic, the disagreement detector, MI scoring) or re-renders the failure
-    // in its own words, so without this the only session-wide count of LLM
-    // failures by cause was unrecoverable from the log
+    // #1394: terminal per-call line after the retry budget is spent — every
+    // downstream caller fails open or re-renders in its own words, so this is
+    // the only session-wide failure-cause count.
     onCallFailed: (report) => {
       logCaughtFailure(
         logger,
@@ -342,44 +208,23 @@ export function buildDefaultLlmClient(
       );
     },
   };
-  // `gateBudgetMs` is `config.timeoutMs`, NOT `NousMessagesClient`'s own (wider)
-  // network backstop: the gate wait happens inside the outer race in
-  // `callWithTimeout`, whose timer starts before `createMessage` is called, so
-  // that is the clock a queue wait actually eats into (#1080)
-  //
-  // Equal to it, with no safety margin subtracted, because the gate's queue
-  // timer fires at `budgetMs - expectedCallMs` — a full expected call before
-  // the budget, and therefore unconditionally before the outer race — so
-  // `queue_deadline` is reachable by construction rather than by a constant
-  // An earlier revision subtracted a 1,000 ms `LLM_GATE_BUDGET_MARGIN_MS` to
-  // buy that reachability; the timer change made it dead weight
+  // `gateBudgetMs` = `config.timeoutMs`, not NousMessagesClient's own wider
+  // network backstop — the gate wait happens inside the outer race in
+  // `callWithTimeout`, which is the clock a queue wait actually eats into (#1080).
+  // Equal, no margin subtracted: the gate's own queue timer already fires a full
+  // expected call before the budget.
   const client = new NousMessagesClient({ apiKey, baseUrl, gate, gateBudgetMs: config.timeoutMs });
-  // `spendSink` is only ever supplied on this default path, and deliberately
-  // so: a `ProductionConfig.llmClient` override is a test double or another
-  // provider, and metering one against the Nous price table would produce a
-  // confidently wrong dollar figure. An overridden client
-  // meters nothing, and the dashboard's spend tile reads $0 — visibly empty
-  // rather than quietly fictional
+  // `spendSink` is only ever supplied here — an overridden client is a test
+  // double/other provider, and metering it against the Nous price table would
+  // show a confidently wrong dollar figure.
   return new AnthropicLlmClient(client, config, spendSink);
 }
 
 /**
- * The LLM budget used when `ProductionConfig.rateLimiterConfig` is omitted
- * (#388) — a backstop for a programmatic caller, NOT the soak's numbers.
- * `paperStartingProfile` supplies its own, sized against the real universe,
- * and that is what `npm run orchestrator` and `npm run smoke` run on.
- *
- * Deliberately generous rather than tight. This limiter is a CEILING that
- * catches a misconfiguration or a runaway loop, not a scheduler: a budget that
- * bites during normal operation would shed debates the operator wanted, and
- * the tick cadence is what paces ordinary spend. So the default is set well
- * above what a single-instrument process can reach in a minute (a 60s tick
- * chain cannot start more than a handful of debates per window) while still
- * being finite, which is the whole difference from today's `undefined`.
- *
- * `maxLlmCalls` is `maxDebates * WORST_CASE_LLM_CALLS_PER_DEBATE` exactly: any
- * less and the call budget, not the debate budget, becomes the binding
- * constraint, which would refuse debates while reporting the wrong reason.
+ * Backstop for a programmatic caller (#388) when `rateLimiterConfig` is omitted —
+ * not the soak's real numbers (`paperStartingProfile` supplies its own).
+ * Deliberately generous: a ceiling against misconfiguration, not a scheduler,
+ * so it sits well above what one tick can reach.
  */
 export const DEFAULT_LLM_RATE_LIMIT_CONFIG: RateLimiterConfig = {
   default: {
@@ -390,132 +235,32 @@ export const DEFAULT_LLM_RATE_LIMIT_CONFIG: RateLimiterConfig = {
 };
 
 /**
- * How many Nous calls this process may have in flight at once, across every
- * client (#1080). Default 1.
- *
- * MEASURED, on 2026-09-14, outside the orchestrator and against the same
- * account: `anthropic/claude-haiku-4.5` answers the same prompt in p50 5,764 ms
- * with one call in flight and p50 18,912 ms / max 25,687 ms in a burst of
- * four, with input and output token counts flat across the ladder. The soak
- * saw the same shape from the inside — 2 in flight -> 19.1 s, 4 in flight ->
- * 27.0 s — against a 28,000 ms per-call deadline, which is how 32 of that
- * session's 40 debates produced no synthesis at all. A follow-up spread one
- * burst across three separate Nous API keys and it was equal-or-worse than one
- * key, so the queue is per ACCOUNT and one process-wide number is the right
- * shape for it.
- *
- * 1 rather than 2 because the probe found no throughput gain from a second
- * concurrent call — two in flight measured 7,684 ms and 18,342 ms for the same
- * work one call does in ~5.8 s — so a second slot buys latency inflation and
- * nothing else.
- *
- * ## What this costs, stated honestly
- *
- * A stocks debate is 4 sequential LLM calls since #1080 capped the class at one
- * round, so a 20-name sweep is ~80 debate calls (plus a risk-critic call per
- * intent and an MI scoring call per refresh). At a cap of 1 and
- * `DEFAULT_EXPECTED_NOUS_CALL_MS`, running all 80 would take ~1,040 s against
- * a 120 s tick — about 8.7 ticks. A previous version of this comment said
- * "~24 calls ~= 139 s", which is one WAVE of `maxConcurrentInstruments: 6`,
- * not a sweep, and understated the serialized total by ~7.5x.
- *
- * That is why the cap ships WITH admission control rather than alone. The
- * sweep does not take 1,040 s: with `DEFAULT_EXPECTED_NOUS_CALL_MS` against
- * the debate client's 28,000 ms budget, the gate admits one call in flight
- * plus exactly ONE queued caller (13,000 + 13,000 < 28,000) and refuses every
- * further arrival on the spot (26,000 + 13,000 >= 28,000). So of the six
- * instruments a pass runs concurrently, two proceed and four are refused at
- * zero cost — no tokens, no burned deadline, an immediate `gate_refused`
- * result and a `no_trade` for that instrument's pass.
- *
- * A refused instrument costs ONE `warn` line (`debate_refused_gate`) and an
- * `audit_log` row reading `not_admitted`; no `debate_log` row, no error-level
- * line, no retry. That is `gateRefusedDebateResult` in `debate-adapter.ts`,
- * and it had to be built for the sentence above to be true: until review
- * round 2 of #1080 the refusal threw, so the four refused instruments each
- * produced two error-level lines, an `audit_log` row reading `crashed`, and a
- * rescind that retried the bar and re-billed every persona that had already
- * answered.
- *
- * **That is the design, not a side effect.** #1080's measurement is that a
- * fast pass producing zero synthesis is worth less than a slow one that
- * decides: the trade this number takes is instrument COVERAGE per tick for
- * debate COMPLETION on the instruments it does run, and a refusal is legible
- * (`gate_refused`) where a 28,000 ms provider timeout was not. Raising
- * coverage is a `maxInFlightLlmCalls` / `expectedLlmCallMs` decision for a
- * later measurement, not a reason to widen the deadline this gate protects.
+ * Default 1 (#1080) — measured 2026-09-14: p50 5,764ms uncontended vs p50
+ * 18,912ms/max 25,687ms at 4 in flight, no throughput gain from a second
+ * concurrent call. The queue is per ACCOUNT, not per key (a 3-key spread
+ * measured equal-or-worse than one key). Ships with admission control
+ * (`gateRefusedDebateResult`, debate-adapter.ts) rather than alone: a refused
+ * instrument costs one `warn` line and no retry, which is deliberately cheaper
+ * than a fast pass that produces zero synthesis.
  */
 export const DEFAULT_MAX_IN_FLIGHT_LLM_CALLS = 1;
 
 /**
- * Expected per-call wall time for a debate call, used ONLY to estimate a queue
- * wait and to charge a caller's own call against its budget in the gate's
- * admission check — never as a timeout.
- *
- * 13,000 ms, from the SOAK — the same process this gate ships into — not from
- * the out-of-process probe. The probe's uncontended p50 was 5,764 ms, and an
- * earlier revision of this constant used it; that figure is measured, but it
- * is measured on a machine doing nothing else, with prompts of 3,031-4,614
- * tokens, and it is contradicted by what the orchestrator actually sees. The
- * soak's own `llm_spend` rows for the pinned debate model at in-flight 1
- * centre on ~13 s. **n = 4** at that concurrency, so this is a small sample
- * and deliberately the pessimistic end of it: an over-estimate refuses a call
- * that might have squeaked through, an under-estimate admits one that burns a
- * full 28,000 ms deadline and produces nothing, and #1080 is the record of
- * which of those two mistakes is expensive.
- *
- * A knob, not a constant of nature: `ProductionConfig.expectedLlmCallMs`
- * overrides it, and re-measuring at a larger n is the obvious follow-up.
+ * Used only to estimate a queue wait in the gate's admission check, never as a
+ * timeout. 13,000ms, from the SOAK itself (not the out-of-process probe's
+ * uncontended 5,764ms p50, which doesn't match what the orchestrator sees) —
+ * the soak's own `llm_spend` rows center on ~13s at in-flight 1 (n=4).
+ * Deliberately the pessimistic end: an under-estimate burns a full 28,000ms
+ * deadline for nothing.
  */
 export const DEFAULT_EXPECTED_NOUS_CALL_MS = 13_000;
 
 /**
- * The default broker wire client, with the Alpaca environment DERIVED FROM
- * `mode` rather than left to `AlpacaHttpBrokerClient`'s own default (#293).
- *
- * The class defaults to paper, which is the safe direction, but a default is
- * still the wrong mechanism here: it means the single most consequential fact
- * about a running process — whether its orders spend real money — is decided
- * by a constant nobody passed rather than by the `mode` the operator
- * explicitly set. Deriving it makes `mode` the one control, and makes a
- * mismatch impossible rather than unlikely.
- *
- * `backtest` is paper too: that mode is meant to run against
- * `SimulatedBrokerAdapter`, so if it ever reaches a real client at all, the
- * harmless account is the one to reach.
- *
- * `ALPACA_BASE_URL` can still override the host, because a staging/mock
- * endpoint is a legitimate need — but naming Alpaca's live host from a
- * non-live mode throws rather than being honoured, and the reverse (a live
- * mode silently filling paper orders) is refused by the client. An override
- * that silently upgrades a paper process to real money is the exact accident
- * #293 exists to prevent.
- *
- * Host classification is `classifyAlpacaTradingHost` from the execution
- * barrel, not a local string comparison: the original `startsWith` check here
- * was case- and whitespace-sensitive, so `https://API.ALPACA.MARKETS` walked
- * straight past it. One classifier means one set of rules to be right about.
- *
- * ## Credentials follow the environment, and this function does not touch them (#511)
- *
- * Alpaca issues DIFFERENT key pairs for paper and live accounts. Until #511
- * this function selected the HOST from `mode` while the client underneath read
- * one pair from the environment, so flipping to live would have authenticated
- * against `api.alpaca.markets` with a paper key.
- *
- * The fix lives at the option site rather than here: `environment` now selects
- * the pair (`ALPACA_CREDENTIAL_ENV_VARS`, execution/adapters/alpaca-http-client.ts),
- * so this build function passes `environment` and reads no credential at all.
- * That keeps the rule in one place for every construction path — the dashboard
- * builds the same client off the same variable — and keeps composition code out
- * of `process.env` (coding-standards.md). The two properties it buys:
- *
- * - **Non-live modes never read the live pair.** The lookup is keyed by
- *   `environment`, so a garbage value in a live-only variable cannot fail a
- *   paper boot.
- * - **Live never falls back to the paper pair.** A missing live key is a
- *   refusal to construct, not a silent downgrade to credentials that would
- *   authenticate against the wrong account.
+ * Alpaca environment is DERIVED from `mode`, not left to the client's own
+ * default (#293) — `mode` is the one control an operator sets, so a mismatch
+ * (paper client trading live, or vice versa) becomes impossible rather than
+ * unlikely. Credentials follow environment too (#511): non-live never reads
+ * the live key pair, and live never falls back to paper's.
  */
 export function buildDefaultAlpacaBrokerClient(
   mode: ProductionConfig['mode'],
@@ -533,15 +278,9 @@ export function buildDefaultAlpacaBrokerClient(
     );
   }
 
-  // The mirror of the check above (#511). `AlpacaHttpBrokerClient`'s own
-  // `resolveBaseUrl` already refuses this pairing, so the client is the
-  // authority and this does not replace it — it names the ENVIRONMENT VARIABLE
-  // and the mode that disagree, which the client cannot, because by then the
-  // override is just a `baseUrl` argument. Both directions matter for the same
-  // reason: the operator's belief about which account they are trading and the
-  // account the orders land in must not be allowed to differ, and a live run
-  // silently filling into a paper account is a fortnight of fake fills that
-  // look real
+  // The mirror of the check above (#511). The client's own resolveBaseUrl
+  // already refuses this pairing, but by then the override is just a baseUrl
+  // argument, so only this can name which env var and mode disagree.
   if (overrideHost === 'paper' && mode === 'live') {
     throw new Error(
       `ALPACA_BASE_URL points at Alpaca's PAPER trading host ('${override}') but SAMURAI_MODE ` +
@@ -551,10 +290,9 @@ export function buildDefaultAlpacaBrokerClient(
     );
   }
 
-  // Constructed before the log line, not after: the client re-checks the
-  // environment/host agreement and can still throw, and a startup log naming a
-  // host the process never reached is worse than no log at all. `environment`
-  // is also what selects the credential pair (#511) — see the doc comment
+  // Constructed before the log line: the client re-checks environment/host
+  // agreement and can still throw, so a startup log naming an unreached host
+  // would be worse than no log at all.
   const client = new AlpacaHttpBrokerClient(
     override === undefined ? { environment } : { environment, baseUrl: override },
   );
@@ -575,18 +313,15 @@ export function buildDefaultAlpacaBrokerClient(
 }
 
 /**
- * The default market-data wire client. No mode branch: Alpaca serves market
- * data from one host for paper and live accounts alike, so there is no
- * money-safety decision to make here — only the asset-class path root, which
- * `AlpacaDataSource` needs fixed at construction.
+ * No mode branch: Alpaca serves market data from one host for paper and live
+ * alike, so there's no money-safety decision here.
  */
 export function buildDefaultAlpacaDataClient(
   assetClass: 'crypto' | 'stocks',
   /**
-   * The account's shared outbound bucket (#391). Optional so existing callers
-   * and tests keep working unpaced; the composition root always passes the
-   * same instance it gave the broker adapter, because Alpaca's 200 req/min is
-   * per ACCOUNT — two buckets would be two budgets against one limit.
+   * The account's shared outbound bucket (#391). Optional so existing callers/tests
+   * stay unpaced; the composition root passes the same instance it gave the broker
+   * adapter — Alpaca's 200 req/min is per ACCOUNT.
    */
   rateLimiter?: TokenBucket,
 ): AlpacaMarketDataClient {
@@ -594,13 +329,9 @@ export function buildDefaultAlpacaDataClient(
 }
 
 /**
- * The asset classes a universe actually spans, in a stable order.
- *
- * Derived rather than configured: `dataSourceAssetClass` used to be the
- * operator's answer to "which endpoint root?", defaulted to `'crypto'` to match
- * `SMOKE_TEST_UNIVERSE`, and had no way to say "both". Reading it off the
- * universe means the market-data wiring cannot disagree with the tick plan
- * about what is being traded — which is the disagreement #358 was.
+ * Derived rather than configured (#358) — `dataSourceAssetClass` used to
+ * default to `'crypto'` with no way to say "both"; reading it off the universe
+ * means market-data wiring can't disagree with the tick plan.
  */
 export function universeAssetClasses(universe: readonly UniverseInstrument[]): AssetClass[] {
   return (['crypto', 'stocks'] as const).filter((assetClass) =>
@@ -609,17 +340,10 @@ export function universeAssetClasses(universe: readonly UniverseInstrument[]): A
 }
 
 /**
- * The `lse_ticker` values the checked-in pool declares tradeable, and the
- * `screening_instrument` values that must never be marked in their place
- * (#734). Both derived from `lse-etp-pool.ts` rather than restated, so a row
- * added there reaches the mark path without a second edit.
- *
- * "Tradeable" here means ROUTABLE — which symbols this venue's mark source
- * owns — not #1220's sterling-only tradeable universe. Do NOT narrow this to
- * `tradeableUniverse()`: a held USD line would then fail as
- * `NonTradeableInstrumentError` ("not an LSE ETP"), which is a strictly less
- * informative failure than the `MarkCurrencyError` naming the currency that
- * `declaredCurrencies` below raises for exactly that case.
+ * Tradeable `lse_ticker`s and the `screening_instrument`s that must never be
+ * marked in their place (#734), derived from `lse-etp-pool.ts` so a new row
+ * needs no second edit. "Tradeable" means ROUTABLE, not #1220's sterling-only
+ * universe — do NOT narrow this to `tradeableUniverse()`.
  */
 export const LSE_TICKERS: ReadonlySet<string> = new Set(buildRoutingMap().keys());
 const LSE_SCREENING_INSTRUMENTS: ReadonlySet<string> = new Set(
@@ -627,36 +351,10 @@ const LSE_SCREENING_INSTRUMENTS: ReadonlySet<string> = new Set(
 );
 
 /**
- * The LSE mark source (#734), when — and only when — the configured universe
- * actually holds LSE ETPs.
- *
- * ## Why this is a boot-time decision
- *
- * Until #734 there was NO producer writing a `latest_mark` row keyed by
- * `lse_ticker`, so Verdict's `stale_feed` no-go (#641) and the Risk Manager's
- * valuation bound (#640) could never pass on the live equity leg. The fix has
- * two halves and only one of them is decidable in code: the source (this) and
- * the vendor (`ProductionConfig.lseMarkClient`, an open owner decision — see
- * `docs/research/34-lse-mark-source-options.md`).
- *
- * So an LSE universe with no vendor client REFUSES TO BOOT. The alternative is
- * the failure this repo has already had twice (#358, and the missing-producer
- * hole #734 itself describes): every tick reaching a source that cannot serve
- * the symbol, 404-ing, and surfacing as an instrument that simply never found a
- * setup. A startup error naming the missing seam is the same posture
- * `AssetClassRoutingDataSource` takes for a missing asset class.
- *
- * ## Why a MIXED venue universe is refused rather than routed
- *
- * `AssetClassRoutingDataSource` cannot split this one: an LSE ETP and SPY are
- * both `asset_class: 'stocks'`, so there is no class to route on. A per-venue
- * router is real work with a real design question behind it (which vendor
- * fails over to which), and #751 — the ticket that actually puts LSE tickers
- * into a running universe — has not landed, so no caller needs it yet.
- * Refusing loudly is honest; silently sending `3USL` to Alpaca is not.
- *
- * Returns `undefined` when the universe holds no LSE ticker, which is every
- * shipped profile today.
+ * The LSE mark source (#734), only when the universe actually holds LSE ETPs —
+ * refuses to boot on a mixed venue or a missing vendor client rather than let a
+ * tick silently 404 or mis-price. Full rationale is carried in this function's
+ * own thrown Error messages.
  */
 function buildLseMarkSourceIfNeeded(
   config: Pick<ProductionConfig, 'lseMarkClient'>,
@@ -708,10 +406,8 @@ function buildLseMarkSourceIfNeeded(
     client: config.lseMarkClient,
     tradeable: LSE_TICKERS,
     screeningInstruments: LSE_SCREENING_INSTRUMENTS,
-    // Only the HELD lines, not the whole pool: a USD-quoted row nobody is
-    // trading is a fact about the pool, whereas a USD-quoted row in this
-    // universe is an instrument the orchestrator is about to be asked to mark
-    // and cannot. The first must not block a boot; the second must.
+    // Only the HELD lines: a USD-quoted pool row nobody trades is fine; one in
+    // this universe is a mark the orchestrator must produce and can't.
     declaredCurrencies: new Map(
       LSE_ETP_POOL.filter((row) => lseHeld.some((held) => held.asset === row.lse_ticker)).map(
         (row) => [row.lse_ticker, row.currency],
@@ -721,24 +417,10 @@ function buildLseMarkSourceIfNeeded(
 }
 
 /**
- * The market-data source for `universe`, which is one `AlpacaDataSource` per
- * asset class the universe holds — routed per instrument when it holds both
- * (#381) — or the LSE mark source (#734) when the universe is the live equity
- * leg's LSE leveraged ETPs.
- *
- * A single source cannot serve a mixed universe: `AlpacaDataSource` fixes its
- * asset class and calendar at construction, and `AlpacaHttpDataClient` fixes
- * the API path root there too (`/v2/stocks/...` vs `/v1beta3/crypto/us/...`).
- * See `AssetClassRoutingDataSource` for the full rationale and for why an
- * unroutable instrument throws instead of defaulting.
- *
- * `config.alpacaDataClient` is refused for a mixed universe rather than
- * silently applied to both halves. It is a single-asset-class wire client by
- * construction, so honouring it would mean sending four equities to whichever
- * root that one client was built with — the exact silent-404 shape this
- * function exists to prevent. A caller wanting full control over a mixed
- * universe injects `config.dataSource` instead, which is checked first and
- * never reaches here.
+ * One `AlpacaDataSource` per asset class held (#381), routed per instrument, or
+ * the LSE mark source (#734) for the live equity leg. A single source can't
+ * serve a mixed universe since `AlpacaHttpDataClient` fixes its API path root
+ * at construction.
  */
 export function buildAlpacaDataSource(
   config: Pick<ProductionConfig, 'alpacaDataClient' | 'dataSourceAssetClass' | 'lseMarkClient'>,
@@ -747,13 +429,9 @@ export function buildAlpacaDataSource(
   /** The account's shared outbound bucket (#391) — see `buildDefaultAlpacaDataClient` */
   rateLimiter?: TokenBucket,
 ): DataSource {
-  // #734, and it runs FIRST because it is a venue question, not an asset-class
-  // one. An LSE leveraged ETP is `asset_class: 'stocks'` exactly like SPY, so
-  // every check below this point would happily hand it to Alpaca — which does
-  // not list it. Re-probed with this project's own keys on 2026-08-18:
-  // `/v2/stocks/bars?symbols=3USL` answers `{"message":"invalid symbol: 3USL"}`
-  // and Polygon's exchange list contains no `XLON`. See
-  // `docs/research/34-lse-mark-source-options.md`
+  // #734, runs FIRST — an LSE ETP is asset_class 'stocks' exactly like SPY, so
+  // every check below would happily hand it to Alpaca, which doesn't list it
+  // (verified 2026-08-18).
   const lseSource = buildLseMarkSourceIfNeeded(config, universe);
   if (lseSource !== undefined) return lseSource;
 

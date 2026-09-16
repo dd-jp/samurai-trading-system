@@ -2146,12 +2146,7 @@ export interface CryptoEmulationEvidence {
 
 const CRYPTO_EMULATION_LOT_KEY = 'smoke-crypto-emulated-lot';
 
-/**
- * Drives one emulated crypto bracket end to end against the scripted venue:
- * submit (must NOT be an advanced order class — the script 422s that), fill
- * the entry, sweep (arms the legs), fill the stop, sweep (cancels the
- * sibling), then read the journal back off the SAME db the gate reads
- */
+/** Drives one emulated crypto bracket end to end: submit, fill entry, sweep (arms legs), fill stop, sweep (cancels sibling) */
 async function runCryptoEmulationScenario(
   db: StoreHandle,
   logger: Logger,
@@ -2164,12 +2159,9 @@ async function runCryptoEmulationScenario(
     unpricedFillAlerts: {
       postUnpricedFillAlert: async () => {},
     },
-    // #609: the SAME logger `runSmoke` built above, not a second instance —
-    // matches the composition-root convention `production.ts` follows
     logger,
-    // A double fill is impossible in this script (the target is cancelled
-    // before it could ever fill), so an alert here is itself a defect —
-    // thrown rather than swallowed, failing the run loudly
+    // A double fill is impossible here (the target is cancelled before it
+    // could ever fill), so an alert here is itself a defect.
     ocoDoubleFillAlerts: {
       postOcoDoubleFillAlert: async (alert) => {
         throw new Error(
@@ -2201,8 +2193,6 @@ async function runCryptoEmulationScenario(
   client.fillByClientOrderId(CRYPTO_EMULATION_LOT_KEY, 60_000, '2026-01-02T00:00:00Z');
   const armSweep = await adapter.fetchNewFills(new Date(0));
 
-  // The emulation's deterministic first-episode leg id (#586) — the stop
-  // firing is the OCO edge under test
   client.fillByClientOrderId(`${CRYPTO_EMULATION_LOT_KEY}:stop`, 57_000, '2026-01-02T00:01:00Z');
   const exitSweep = await adapter.fetchNewFills(new Date(0));
 
@@ -2227,24 +2217,13 @@ async function runCryptoEmulationScenario(
   };
 }
 
-/**
- * #586. The REAL AlpacaBrokerAdapter over the same db, on its own lot key and
- * its own scripted client — the six-stage run and the exit-path harness both
- * override the broker with `SimulatedBrokerAdapter`, so nothing else here can
- * see the emulation at all.
- */
+/** #586. The real AlpacaBrokerAdapter — the six-stage run and exit-path harness both override the broker instead */
 const cryptoEmulationProbe: Probe<'cryptoEmulation'> = {
   run({ db, logger }) {
     return runCryptoEmulationScenario(db, logger);
   },
   verdict(evidence) {
     const failures: string[] = [];
-    // #586 — the emulated crypto protective legs, unconditional for #430's
-    // reason: `runCryptoEmulationScenario` always runs, the smoke universe is
-    // crypto, and no other check in this gate can see the emulation at all
-    // (the six-stage run and the exit-path harness both override the broker
-    // with `SimulatedBrokerAdapter`). Each check names a different way the
-    // mechanism can silently stop being wired
     const emulation = evidence;
     if (emulation.journalRow === undefined || emulation.journalRow.asset_class !== 'crypto') {
       failures.push(
@@ -2297,37 +2276,22 @@ const cryptoEmulationProbe: Probe<'cryptoEmulation'> = {
   },
 };
 
-/**
- * What the logging-fault scenario (#714) observed. Every field is an EFFECT —
- * a line on disk, a chosen exit code — not "an object was constructed".
- */
 export interface LoggerResilienceEvidence {
-  /** Stdout was retired rather than retried after the pipe died */
   stdoutRetired: boolean;
-  /** The degradation notice reached the durable file — the failure was not lost */
   degradationRecordedInFile: boolean;
-  /** Lines that reached the file AFTER stdout died: the run kept its trace */
   linesAfterStdoutDeath: number;
-  /** A logger with nowhere to record the failure threw instead of continuing blind */
   escalatedWhenNothingCouldRecord: boolean;
-  /**
-   * That same logger still left the line on stderr. The throw alone is not
-   * enough: inside a tick it is swallowed by `safeLog` (#573), so stderr is the
-   * only trace that ordering produces.
-   */
+  /** The throw alone isn't enough — inside a tick it's swallowed by `safeLog` (#573) */
   lastResortTraceOnStderr: boolean;
-  /** The fault handler's record of an unhandled fault reached the durable file */
   fatalRecordedInFile: boolean;
-  /** The exit code the fault handler chose. Null if it never called `exit`. */
+  /** Null if the fault handler never called `exit` */
   fatalExitCode: number | null;
 }
 
 /** A stdout that can be killed the way a real pipe dies: asynchronously */
 class BreakablePipe implements StdoutStream {
   private listener?: (error: Error) => void;
-  /** Set to make `write` throw, modelling synchronous (file/TTY) stdio */
   throwOn?: Error;
-  /** Lines that reached it while it was alive */
   readonly lines: string[] = [];
 
   write(line: string): boolean {

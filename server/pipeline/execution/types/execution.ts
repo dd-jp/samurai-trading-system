@@ -1,8 +1,3 @@
-/**
- * The Execution stage itself (#308): its config, its inputs and results, and
- * the reconcile report. See `broker.ts` for the venue seam underneath and
- * `store.ts` for what it persists through.
- */
 import type {
   BarWindow,
   IndicatorSpec,
@@ -33,43 +28,31 @@ import type {
 } from './store.js';
 
 /**
- * Cadence/retry/throttle knobs from the spec's full `ExecutionConfig` are
- * absent: they belong to polling, reconciliation and resilience, none of
- * which #82 performs. The Simulated adapter raises no transient errors, so
- * there is no backoff for `execute()` to read.
+ * Deliberately omits the spec's cadence/retry/throttle knobs: the Simulated
+ * adapter raises no transient errors, so `execute()` has nothing to back off from.
  */
 export interface ExecutionConfig {
-  /** Market context the Simulated adapter prices fills against */
   simulated: SimulatedAdapterConfig;
 }
 
-/**
- * How the Simulated adapter sources the two `MarketState` fields that aren't
- * a plain mark lookup. Config, not constants — exact values are tuned in
- * paper trading (execution-spec.md "Out of Scope: Exact values").
- */
+/** Config, not hardcoded constants — exact values are tuned in paper trading. */
 export interface SimulatedAdapterConfig {
   /** Indicator read for `MarketState.volatility` (e.g. ATR at the bar). */
   volatility_indicator: IndicatorSpec;
   /** Bars window aggregated into `MarketState.adv` (the liquidity proxy) */
   adv_window: BarWindow;
   /**
-   * Stamped onto every `MarketState` built from this config so
-   * `CostConfig.venues[venue]` binds (#1032 item 2). Omitted = plain
-   * asset-class pricing. Set to `'saxo'` where the modelled leg is the live
-   * Saxo book (ADR-0015's 2026-08-30 amendment).
+   * Stamped onto every `MarketState` so `CostConfig.venues[venue]` binds.
+   * Omitted = plain asset-class pricing; `'saxo'` for the live book (ADR-0015, 2026-08-30).
    */
   venue?: CostVenue;
 }
 
 /**
- * Every dependency any Execution surface reads — the one bag a composition
- * root builds (`buildExecutionStep`/`buildExecutionSurface`,
- * orchestrator/production/direct-bind.ts) and hands to `ExecutionImpl`, which
- * serves all five surfaces off it. Each surface's own signature names the
- * `Pick` of this it actually reads (`SubmitInput` et al. below), so a field
- * only one surface consumes cannot be read by another without widening that
- * surface's type first.
+ * The one dependency bag every Execution surface reads from. Each surface's own
+ * signature names the `Pick` of this it actually consumes (`SubmitInput` et al.
+ * below), so a field only one surface uses can't be read by another without
+ * widening that surface's type first.
  */
 export interface ExecutionInput {
   /** Cross-cutting correlation ID threaded from the Orchestrator's tick — not business data */
@@ -80,10 +63,8 @@ export interface ExecutionInput {
   /** Execution is the sole writer of positions/fills/closed-trades */
   store: SharedStore;
   /**
-   * Read only by `execute()`'s submit-time snapshot (#1001, `readSubmitSnapshot`,
-   * execute.ts), which prices the modelled cost breakdown the same way the
-   * Simulated adapter prices a fill. The adapter itself holds its own handles
-   * (`SimulatedBrokerAdapterInput`), not these.
+   * Read only by `execute()`'s submit-time snapshot (#1001) to price the same way
+   * the Simulated adapter prices a fill; the adapter itself holds its own handles, not this.
    */
   costModel: CostModel;
   /** Same single reader as `costModel`: the quote and `MarketState` inputs of the submit snapshot */
@@ -91,158 +72,69 @@ export interface ExecutionInput {
   /** `config.simulated` feeds the submit snapshot's `MarketState`, alongside `marketData` */
   config: ExecutionConfig;
   /**
-   * The #525 fallback — posted only when `ingestFills()` fails to re-arm a
-   * partially-flattened lot's protective legs. Required, not optional: an
-   * omitted channel is exactly the silent-degradation-by-omission bug #322
-   * fixed for the other operator escalations, so every caller (production
-   * and test) must say explicitly where this goes rather than have it
-   * default away.
+   * Posted when `ingestFills()` fails to re-arm a partially-flattened lot's
+   * protective legs (#525). Required, not optional — an omitted channel
+   * reintroduces the silent-degradation bug #322 fixed.
    */
   residualExposureAlerts: ResidualExposureAlertChannel;
   /**
-   * #527: a genuine over-fill on a flatten's attribution split — the excess
-   * past its named lots' journalled share, which is always dropped rather
-   * than guessed onto a lot (see `redistributeOneFlatten`, ingest-fills.ts).
-   * Required for the same "no silent default" reason `residualExposureAlerts`
-   * above is: an omitted channel would make that drop invisible again, which
-   * is the exact defect this ticket exists to close.
+   * A flatten's over-fill past its lots' journalled share, always dropped rather
+   * than guessed onto a lot (#527, see `redistributeOneFlatten`). Required for the
+   * same no-silent-default reason as `residualExposureAlerts`.
    */
   flattenOverfillAlerts: FlattenOverfillAlertChannel;
   /**
-   * #519: where a `flatten_submissions` row `reconcile()`'s sweep could not
-   * settle is escalated — genuine ignorance (the adapter could not answer)
-   * or a venue contradiction on an already-acked row (see `reconcileFlatten`,
-   * reconcile.ts, for both paths). Required, for the same "no silent default"
-   * reason `residualExposureAlerts`/`flattenOverfillAlerts` above are: an
-   * unresolved flatten is a lot stuck in genuine ambiguity about whether it
-   * is still held, and an omitted channel would make that invisible again.
+   * A `flatten_submissions` row `reconcile()`'s sweep could not settle (#519) —
+   * see `reconcileFlatten`. Required for the same no-silent-default reason.
    */
   flattenReconcileAlerts: FlattenReconcileAlertChannel;
   /**
-   * #1550: where a position the VENUE holds and no open lot in the store
-   * explains is escalated — `findUnrecordedVenuePositions` (reconcile.ts).
-   *
-   * Required, for the same "no silent default" reason the three channels above
-   * are, and with a sharper case than any of them: this is the one exposure
-   * the Risk Manager structurally cannot see (it computes exposure from the
-   * store, and the store has no row), and until this field existed the
-   * condition reached a `warn` LOG line in a different module and nothing
-   * else. Absent would mean the same silence again.
+   * A venue-held position no open lot explains (#1550, `findUnrecordedVenuePositions`).
+   * Required — this is the one exposure the Risk Manager structurally cannot see,
+   * since it computes exposure from the store and the store has no row for it.
    */
   unrecordedVenuePositionAlerts: UnrecordedVenuePositionAlertChannel;
   /**
-   * #1550's per-instrument page throttle
-   * (unrecorded-venue-position-throttle.ts) — required for the same reason
-   * `filledZeroSizeThrottle` below is, and for a condition that needs it more:
-   * the unrecorded shape is a STATE re-derived from a fresh venue read on
-   * every 15s reconcile pass, so an omitted throttle is ~240 pages an hour
-   * until someone acts. One instance per composition root, constructed once
-   * and threaded here, not a module-level singleton — see the class doc.
+   * Per-instrument page throttle for the above (#1550). The unrecorded shape
+   * re-derives fresh every 15s reconcile pass, so omitting this means ~240
+   * pages/hour until someone acts.
    */
   unrecordedVenuePositionThrottle: UnrecordedVenuePositionThrottle;
   /**
-   * #573's recorded decision: the execution port DOES carry a `Logger`, for
-   * a LOCAL diagnostic trace — "what actually failed" — that is distinct
-   * from every alert channel above.
-   *
-   * The three `*AlertChannel` fields are OUTBOUND capabilities the domain
-   * already reasons about (broker, store, alerts) and each carries a
-   * CREDENTIALS boundary that forbids a caught error's own text in its
-   * payload (`ResidualExposureAlert`'s doc). A `Logger` is a different kind
-   * of dependency — it has no domain meaning and no such boundary — but the
-   * alternative the ticket raised, a typed field on the alert (or a
-   * dedicated diagnostic channel per failure kind), was rejected: that adds
-   * a channel per NEW failure kind forever, where a `Logger` this module can
-   * already reach handles every kind uniformly, including ones with no alert
-   * of their own at all (`markFlattenFillsSwept`'s catch, ingest-fills.ts,
-   * is exactly this — a best-effort store write with no channel to escalate
-   * through, which is why it "resolved quietly" before this ticket).
-   *
-   * Required, not optional: an omitted dependency dropped at a composition
-   * root is this repo's dominant defect class (#322 fixed the same hole for
-   * `residualExposureAlerts` et al. above), and making this field required
-   * turns a dropped wiring into a `tsc` error at every composition root
-   * rather than a silent gap discovered during an unattended soak.
-   *
-   * `LogEntry.trace_id` needs no new plumbing: `ExecutionInput.trace_id`
-   * above is already the per-surface synthetic id
-   * (`buildExecutionSurface`'s `FILL_SYNC_TRACE_ID`/`RECONCILE_TRACE_ID`,
-   * production/direct-bind.ts) or the per-order `idempotency_key` on the
-   * `execute()` path — every call site already has the right trace_id in
-   * hand.
-   *
-   * SAFE INSIDE A CATCH is the hard requirement, not a nicety:
-   * `JsonLogger.log` survives a failing sink but still throws in one case —
-   * when NO sink is left that could record the failure (#714,
-   * orchestrator/logger.ts), and any foreign `Logger` may throw for any
-   * reason — so every call site on this
-   * field goes through `shared/safe-log.ts`'s `safeLog`/`logCaughtFailure`
-   * (the same helper orchestrator/tick-loop.ts's `safeLog` was extracted
-   * from, #573) — never `logger.log` directly — so a throwing logger can
-   * never turn a handled failure into an unhandled one.
+   * LOCAL diagnostic trace, distinct from the alert channels above (#573).
+   * Required so a dropped wiring is a `tsc` error, not a silent gap. Every call
+   * site must go through `shared/safe-log.ts`'s `safeLog`, never `logger.log`
+   * directly, since a foreign `Logger` may throw.
    */
   logger: Logger;
   /**
-   * #1087's `FILLED_WITH_ZERO_SIZE` per-lot throttle (filled-zero-size-
-   * throttle.ts) — required for the same "no silent default" reason
-   * `residualExposureAlerts` et al. above are: an omitted throttle would
-   * mean either no warning ever fires (silently, if the caller guarded on
-   * its presence) or an unthrottled flood (if it did not) — both are the
-   * defect this ticket exists to close, not an acceptable default. One
-   * instance per composition root, constructed once and threaded here, not
-   * a module-level singleton — see the class doc for why.
+   * Per-lot throttle for `FILLED_WITH_ZERO_SIZE` warnings (#1087). Required for
+   * the same no-silent-default reason as the alert channels above.
    */
   filledZeroSizeThrottle: FilledZeroSizeThrottle;
   /**
-   * #1214: the same calendar pair the Trader resolves its flatten window
-   * against (`TraderInput.sessionCalendars`), so the residual re-flatten
-   * (residual-reflatten.ts) cannot fire a market order into a shut venue —
-   * the decision's own second constraint, and the reason it is a calendar
-   * rather than a boolean: "is this venue open now" is a per-asset-class,
-   * per-holiday, half-day-aware question that already has exactly one owner.
-   *
-   * Required, not optional, for the reason `residualExposureAlerts` et al.
-   * above are — with one extra edge: an optional calendar dropped at a
-   * composition root would leave the re-flatten permanently stood down and
-   * the residual permanently naked, which looks IDENTICAL in the logs to a
-   * venue that is simply shut. Making it required turns that into a `tsc`
-   * error at every composition root instead.
+   * Same calendar pair the Trader uses (#1214), so residual-reflatten never fires
+   * a market order into a shut venue. Required — an optional calendar dropped
+   * silently would look identical in logs to a venue that's simply shut.
    */
   sessionCalendars: Record<AssetClass, TradingCalendar>;
   /**
-   * #1465: where a fill fee reported outside book currency is escalated —
-   * `warnOnNonSterlingFee` (ingest-fills.ts) posts here after writing its own
-   * `error`-level `safeLog` line. OPTIONAL, unlike `residualExposureAlerts`
-   * et al. above, and deliberately with no log-only default: that
-   * `safeLog` line already carries this alert's fields at `error`, so a
-   * logging implementation behind this port would emit every trip twice —
-   * the same reasoning `ThresholdClampAlertChannel`/
-   * `TraderDiagnosticAlertChannel` document for their own absence of one.
-   * Absent means "no second, audible copy", never "silent": the durable
-   * record is the log line and the `fee_currency` column on the booked fill.
+   * A fee reported outside book currency (#1465, `warnOnNonSterlingFee`). Optional
+   * with deliberately no log-only default — the `safeLog` line already carries
+   * this at `error`, so a default would double-log.
    */
   nonSterlingFeeAlerts?: NonSterlingFeeAlertChannel;
   /**
-   * #1506: where a flatten split booked against an already-closed named lot is
-   * escalated — `redistributeOneFlatten` (ingest-fills.ts) posts here after
-   * persisting the fill and writing its own `error`-level `safeLog` line.
-   * OPTIONAL with no log-only default, for the reason `nonSterlingFeeAlerts`
-   * above documents: absent means "no second, audible copy", never "silent" —
-   * the durable record is the log line and the booked `fills` row itself.
+   * A flatten split booked against an already-closed lot (#1506, `redistributeOneFlatten`).
+   * Optional for the same reason as `nonSterlingFeeAlerts`.
    */
   unattributedFlattenFillAlerts?: UnattributedFlattenFillAlertChannel;
 }
 
 /**
- * `execute()` (execute.ts): the submit path — dedup, write-ahead, bracket or
- * flatten submission, plus the #1001 submit-time snapshot that reads
- * `marketData`/`costModel`/`config`. A refused flatten marks lots through
- * `markResidualsUnprotected` (store/logger/trace_id); nothing on this path
- * posts to an alert channel or touches the fill throttle.
- *
- * Each surface's `store` names only the roles (types/store.ts) its own file
- * and the helpers it calls read, so a method one surface persists through
- * cannot be reached by another without widening its type here.
+ * `execute()`'s submit path — dedup, write-ahead, bracket/flatten submission,
+ * plus the #1001 pricing snapshot. Nothing on this path posts to an alert
+ * channel or touches the fill throttle.
  */
 export type SubmitInput = Pick<
   ExecutionInput,
@@ -252,16 +144,9 @@ export type SubmitInput = Pick<
 };
 
 /**
- * `reflattenResidual()` (residual-reflatten.ts): #1214's close-the-residual
- * remedy for a venue that cannot arm entry-less legs. It is the ONLY surface
- * that reads `sessionCalendars` — the calendar gate standing in front of the
- * one venue call it makes, `broker.submitFlatten` — and it journals through
- * `FlattenJournal` while walking its bounded key with `LotJournal.findByKey`.
- *
- * Not a top-level surface of its own: every caller reaches it through one of
- * the surfaces below (`maybeRearmResidual` from `FillIngestInput` and
- * `ReconcileInput`, the #549 sweep from `ResidualSweepInput`), which is why
- * those three intersect this and `SubmitInput`/`WedgedSweepInput` do not.
+ * `reflattenResidual()`'s #1214 remedy for a venue that can't arm entry-less
+ * legs — the only surface that reads `sessionCalendars`. Not a top-level surface
+ * of its own; reached only through `FillIngestInput`/`ReconcileInput`/`ResidualSweepInput`.
  */
 export type ResidualReflattenInput = Pick<
   ExecutionInput,
@@ -271,10 +156,8 @@ export type ResidualReflattenInput = Pick<
 };
 
 /**
- * `ingestFills()` (ingest-fills.ts): the fill poll and everything it re-arms
- * through `maybeRearmResidual` (residual-protection.ts), which is where
- * `residualExposureAlerts` is read — and, on a venue that cannot re-arm at
- * all, where `reflattenResidual` is reached (`ResidualReflattenInput`)
+ * `ingestFills()`'s fill poll and everything `maybeRearmResidual` re-arms through,
+ * including `reflattenResidual` when a venue can't re-arm at all.
  */
 export type FillIngestInput = Pick<
   ExecutionInput,
@@ -293,11 +176,8 @@ export type FillIngestInput = Pick<
   };
 
 /**
- * `reconcile()` (reconcile.ts): the startup/periodic settle, which also runs
- * both sweeps below inside its pass — so this is the union of their inputs
- * plus its own `flattenReconcileAlerts`. Likewise its `store`: its own
- * `PositionReader & LotJournal & FlattenJournal & LotRetirement`, plus the
- * two sweeps' roles.
+ * `reconcile()`'s startup/periodic settle, which also runs both sweeps below
+ * inside its pass — this is the union of their inputs plus its own `flattenReconcileAlerts`.
  */
 export type ReconcileInput = Pick<
   ExecutionInput,
@@ -320,10 +200,8 @@ export type ReconcileInput = Pick<
   };
 
 /**
- * `sweepResidualProtection()` (residual-protection-sweep.ts): the #549 re-arm
- * retry, and — when the venue cannot re-arm at all — #1214's re-flatten
- * (`ResidualReflattenInput`, which is what puts `sessionCalendars` and the
- * flatten journal on this surface)
+ * `sweepResidualProtection()`'s #549 re-arm retry, plus #1214's re-flatten when
+ * the venue can't re-arm at all.
  */
 export type ResidualSweepInput = Pick<
   ExecutionInput,
@@ -333,11 +211,7 @@ export type ResidualSweepInput = Pick<
     store: FillReader & ResidualMarkers;
   };
 
-/**
- * `sweepWedgedZeroFillLots()` (wedged-zero-fill-sweep.ts): store evidence
- * only — no `broker` here is the type-level form of that file's "no venue
- * call, ever" rule
- */
+/** `sweepWedgedZeroFillLots()`: no `broker` here is the type-level form of "no venue call, ever". */
 export type WedgedSweepInput = Pick<ExecutionInput, 'trace_id' | 'clock' | 'logger'> & {
   store: PositionReader & LotRetirement;
 };
@@ -348,12 +222,9 @@ export interface ExecutionResult {
   /** Entry + attached legs; null when nothing reached the broker */
   broker_order_ids: string[] | null;
   /**
-   * State of the lot after `execute()` returns — usually 'submitted'. Null
-   * when this call wrote no record and so has no state to report: a dedup
-   * (the prior call owns the lot), a non-`go`, or an exit whose
-   * `submitFlatten` call errored (an exit writes no record either way, so
-   * there is no 'pending' to fall back on the way the bracket path's error
-   * branch does). Reporting a state here would be fabricating one.
+   * State after `execute()` returns, usually 'submitted'. Null when this call
+   * wrote no record — a dedup, a non-`go`, or an exit whose `submitFlatten`
+   * errored — never fabricated.
    */
   order_state: OrderState | null;
   /** Rejection / error / dedup detail */
@@ -362,68 +233,17 @@ export interface ExecutionResult {
 }
 
 /**
- * What reconcile did about one in-flight lot whose store state did not match
- * the broker's — the structured record of the spec's "log/alert the
- * divergence" (#86). Emitted only on divergence: a lot the broker agrees
- * with produces no entry.
- *
- * **WIDENED, not a sibling type, to also carry a `flatten_submissions` row's
- * divergence (#519's shape decision).** Reused verbatim rather than a second
- * `FlattenReconcileDivergence` type: the fields already fit — a flatten row
- * has its own `idempotency_key`/`instrument`, its `status` maps onto
- * `OrderState` cleanly (`'submitting'` -> `'pending'`, the same "written
- * ahead, not yet confirmed" meaning `pending` already carries for a bracket;
- * `'submitted'` passes through as-is), and the same four `action` values
- * mean the same thing for either row shape (see below). A sibling type would
- * fork both of `ReconcileReport.divergences`' consumers
- * (`orchestrator/fill-sync.ts`'s per-divergence log, and `reconcile()`'s own
- * `corrected` tally) for zero new information — each already treats `action`
- * generically. **This no longer holds for `fill-sync.ts`'s per-divergence
- * log** (#1122 review round 3): `reconcileDivergenceLevel()` branches on
- * `kind` to decide whether a bracket adopt demotes to `debug` (see `kind`
- * below), so that consumer now IS kind-aware — `reconcile()`'s own
- * `corrected` tally is the one that stays generic. The `idempotency_key`
- * heuristic below is superseded by `kind` wherever `kind` is present; it
- * remains true only as a fallback for code written before `kind` existed.
- * A reader that needs to tell rows apart can: a flatten's `idempotency_key`
- * never matches an `open_positions` row (exits write no `OpenPosition` —
- * `OrderIntent`'s own "exits close a lot; they never create one"), the same
- * distinguishing convention `unrecorded`'s `idempotency_key: ''` already
- * uses below.
+ * Widened rather than forked into a sibling type to also carry a
+ * `flatten_submissions` row's divergence (#519) — the fields already fit
+ * (a flatten's `status` maps onto `OrderState` cleanly), so a second type
+ * would add nothing.
  */
 
 /**
- * The specific escalation event behind a `ReconcileDivergence.escalation`
- * (#1577, widened #1585, #1609) — see that field's doc for why a named event
- * replaced a bare boolean. `wedge_cancelled` is the one label
- * `cancelWedgedFlatten`'s branch sets regardless of which of its own three
- * outcomes (throttled, cancel-failed, cancel-issued) produced it — those
- * three stay collapsed under one name, unlike the three below, which each
- * get their own; those three are `cancelNeverConfirmedFlatten`'s
- * (reconcile.ts), in the order that function tries them. The last two are
- * `sweepWedgedZeroFillLots`'s (wedged-zero-fill-sweep.ts, #1609): both share
- * `action: 'undetermined'` and `kind: 'sweep'`, which without a distinguishing
- * `escalation` collided under `reconcileDedupState` (fill-sync.ts) — a lot
- * that alternates between the two across polls would have logged only the
- * first. `sweep_shape_mismatch` is `abandonWedgedZeroFillLot`'s SQL guard
- * having drifted from `isWedgedZeroFillLot` (#1601); `sweep_abandon_failed` is
- * the pre-existing store-write failure this sweep's `catch` block reports.
- * #1615 added the `residual_sweep_*` group for `sweepResidualProtection`'s
- * (residual-protection-sweep.ts) six `action: 'undetermined'` push sites,
- * every one of which shares `kind: 'sweep'` too — the bare `sweep_` prefix
- * was already spoken for by `sweepWedgedZeroFillLots` above, so this group
- * gets its own to stay distinguishable at a glance. `residual_sweep_rearm_unsupported`
- * and `residual_sweep_rearm_retry_failed` back what is structurally ONE push
- * site (`sweepOne`'s final `catch`, one `return`) rather than two: its
- * `reason` already branches on `isProtectiveRearmUnsupported`, and a failing
- * Alpaca lot's own lifecycle walks retry -> retry -> ... -> unsupported (the
- * file doc's `MAX_REARM_ATTEMPTS` section) once its wire-id budget is spent —
- * exactly the false-to-true transition a single shared value would dedup away
- * as "same state" the pass it happens, which is #1615's bug class inside the
- * fix for #1615's bug class. `alertResidualExposureOnce` already treats the
- * two as separate escalation channels (`rearm_unsupported_alerted_at` vs
- * `alerted_at` on the same `flags.rearmUnsupported`), so this mirrors an
- * existing distinction rather than inventing one.
+ * Named escalation events behind `ReconcileDivergence.escalation` (#1577/#1585/#1609) —
+ * a bare boolean collided distinct outcomes that share the same `action`/`kind`
+ * (e.g. two sweep failure modes both `undetermined`/`sweep`) under the same dedup
+ * key (`reconcileDedupState`, fill-sync.ts).
  */
 export type ReconcileEscalation =
   | 'wedge_cancelled'
@@ -446,103 +266,37 @@ export interface ReconcileDivergence {
   /** What the store believed before reconcile ran */
   store_state: OrderState;
   /**
-   * What the venue says. Null in the two cases where the venue named no
-   * state: `rejected` (the venue has no such order) and `undetermined` (the
-   * adapter could not answer).
+   * What the venue says. Null when it named no state: `rejected` (no such order)
+   * or `undetermined` (adapter couldn't answer).
    */
   broker_state: OrderState | null;
   /**
-   * - `adopted` — the venue has the order in a different state; the store now
-   *   matches it. For a flatten row, this also covers a fresher (but still
-   *   non-terminal) venue answer on an already-`'submitted'` row — see
-   *   `reconcileFlatten` (reconcile.ts).
-   * - `rejected` — the venue authoritatively has no such order, so the
-   *   write-ahead never landed and the lot is marked `rejected` (or, for a
-   *   flatten still at `'submitting'`, the journal row is resolved `'error'`
-   *   the same way).
-   * - `undetermined` — the adapter could not answer, OR (flatten-specific)
-   *   answered null for a row the venue had ALREADY acked once. The record
-   *   is left EXACTLY as it was and reported for operator attention (also
-   *   posted to `flattenReconcileAlerts` for a flatten row — #519): guessing
-   *   here either buries a live position or resurrects a dead one.
-   * - `unrecorded` — the VENUE holds a position the store has no open lot for
-   *   (#429): a write-ahead that died before persisting, or an order placed by
-   *   hand. Nothing is written; see `reconcile()` for why adoption is not
-   *   automatic. Until an operator acts, this exposure is invisible to Risk's
-   *   caps, which is the whole reason it is reported — and why
-   *   `reconcileDivergenceLevel()` (fill-sync.ts) logs it at `warn`
-   *   alongside `undetermined` rather than at `info` (#1506): having no
-   *   backstop detector is the argument for raising the level, not for
-   *   leaving it quiet. Since #1550 it also PAGES, through
-   *   `unrecordedVenuePositionAlerts` raised by
-   *   `findUnrecordedVenuePositions` itself — a log level escalates to
-   *   nothing, and this is the one exposure Risk structurally cannot see.
+   * `undetermined` leaves the record untouched — never guess, since that could
+   * bury a live position or resurrect a dead one (#519). `unrecorded` means the
+   * venue holds a position no open lot explains (#429) — the one exposure invisible
+   * to Risk's caps until an operator acts.
    */
   action: 'adopted' | 'rejected' | 'undetermined' | 'unrecorded';
   /** Operator-facing detail — the adapter's error on `undetermined` */
   reason: string;
   /**
-   * Which escalation produced this row, when one did — #1577 named
-   * `wedge_cancelled` (a `reconcileFlatten` benign adopt shares
-   * `action: 'adopted'` with `cancelWedgedFlatten`'s cancel-issued adopt one
-   * branch below it), #1585 added the other three: `cancelNeverConfirmedFlatten`
-   * shares `action: 'undetermined'` with the row's own prior-pass state on
-   * every one of its blocking outcomes (reconcile.ts). Naming the event rather
-   * than a bare `escalated: true` boolean is what lets `runPoll`'s dedup
-   * (fill-sync.ts) tell these apart from the benign action they share AND from
-   * each other — a row cancelled once, still short of coverage, is a different
-   * fact than the same row still throttled from an earlier cancel, even though
-   * both are `action: 'undetermined'`. #1609 added the last two:
-   * `sweepWedgedZeroFillLots` (wedged-zero-fill-sweep.ts) has two independent
-   * push sites that share `action: 'undetermined'` AND `kind: 'sweep'` — the
-   * SQL-guard shape mismatch (`sweep_shape_mismatch`) and the store-write
-   * `catch` block (`sweep_abandon_failed`) — which collided under the same
-   * dedup before this field told them apart. #1615 tagged
-   * `sweepResidualProtection`'s (residual-protection-sweep.ts) push sites the
-   * same way, and widened `lastSweepAction` (fill-sync.ts) — a SEPARATE dedup
-   * keyed off this same field — to read it too; see `ReconcileEscalation`'s
-   * doc above for the site count and the `rearm_unsupported`/
-   * `rearm_retry_failed` split.
+   * Which escalation produced this row, when one did. Naming the event (rather
+   * than a bare `escalated: true`) is what lets `runPoll`'s dedup (fill-sync.ts)
+   * tell rows apart that share the same `action`/`kind` but mean different things.
    */
   escalation?: ReconcileEscalation;
   /**
-   * `'bracket'` for a `reconcileLot` row, keyed to an `OpenPosition`.
-   * `'flatten'` for a `reconcileFlatten` row. `'unrecorded'` for
-   * `findUnrecordedVenuePositions`'s rows — a venue position the store never
-   * wrote. `'sweep'` for `residual-protection-sweep.ts`'s (#549) and
-   * `wedged-zero-fill-sweep.ts`'s (#1186) rows — DIFFERENT reconciliation
-   * passes that happen to read (and, for #1186, also write) the same
-   * `OpenPosition` row shape `reconcileLot` does. Sweep rows DO reach
-   * `reconcileDivergenceLevel()`: `reconcile()` merges them into
-   * `report.divergences` (reconcile.ts), and both `runPoll` and
-   * `runStartupReconcile` (fill-sync.ts) map every entry of that array
-   * through it. What never happens is a sweep row *demoting* — the
-   * predicate requires `kind === 'bracket'` AND a non-null `broker_state`,
-   * and a sweep row is `kind: 'sweep'` with `broker_state: null`, so it
-   * always falls to the `info` branch. Kept distinct from `'bracket'` so
-   * that stays true by construction rather than by every sweep site
-   * happening to leave `broker_state` unset (#1122 review round 1, doc
-   * corrected review round 3).
-   * Required, not optional: every construction site must declare one, so a
-   * future site that forgets is a `tsc` error, not a silently-missing
-   * classification (#1122 review round 1).
-   *
-   * Needed by #1122's noise reduction: only a bracket lot's `adopted` lands
-   * on the `OpenPosition` that `FilledZeroSizeThrottle`
-   * (filled-zero-size-throttle.ts, #1087) watches, so only that case has an
-   * independent backstop a consumer can safely quiet against — a flatten
-   * adopt writes no such row, so there is nothing else watching it.
+   * Required on every construction site so a future one that forgets is a `tsc`
+   * error, not a silent misclassification (#1122). Only `kind: 'bracket'` rows
+   * with a non-null `broker_state` ever demote to `info` in `reconcileDivergenceLevel()` —
+   * kept distinct from `'sweep'` so that holds by construction.
    */
   kind: 'bracket' | 'flatten' | 'unrecorded' | 'sweep';
 }
 
 /**
- * One #549 residual-protection sweep pass's outcome — see
- * residual-protection-sweep.ts for the mechanism. `checked` counts markers
- * examined (the same meaning `ReconcileReport.checked` gives its rows);
- * `divergences` reuses `ReconcileDivergence` for the widening reason that
- * type's own doc records — `adopted` means protection was confirmed and the
- * marker cleared, `undetermined` means it could not be and the marker stays.
+ * One #549 residual-protection sweep pass's outcome. `divergences` reuses
+ * `ReconcileDivergence` — `adopted` means the marker cleared, `undetermined` means it stays.
  */
 export interface ResidualProtectionSweepResult {
   checked: number;
@@ -552,12 +306,8 @@ export interface ResidualProtectionSweepResult {
 /** What one `reconcile()` pass examined and corrected */
 export interface ReconcileReport {
   /**
-   * In-flight (`pending`/`submitted`) lots PLUS unresolved `flatten_submissions`
-   * rows (`SharedStore.getUnresolvedFlattens()`) examined this pass — both
-   * counted here (#519's `checked`/`corrected` decision) rather than only
-   * the former: a startup log reading "checked 0, corrected 3" because three
-   * flatten divergences landed uncounted would misstate what the pass
-   * actually visited
+   * Includes unresolved `flatten_submissions` rows alongside in-flight lots (#519) —
+   * otherwise a startup log could read "checked 0" while divergences landed uncounted.
    */
   checked: number;
   /** Lots and flatten rows whose store record reconcile wrote to */
@@ -565,12 +315,8 @@ export interface ReconcileReport {
   /** One entry per lot or flatten row where store and broker disagreed */
   divergences: ReconcileDivergence[];
   /**
-   * #1088: terminal, size-0 `open_positions` rows (`rejected`/`cancelled`/
-   * `expired`, old enough — see `sweepTerminalPositions`, types/store.ts)
-   * deleted this pass. Counted separately from `checked`/`corrected`: a
-   * sweep is neither an in-flight lot examined nor a store/broker
-   * divergence corrected, and folding it into either would misstate what
-   * those two already mean (see `ReconcileReport.checked`'s own doc).
+   * Terminal, size-0 `open_positions` rows deleted this pass (#1088). Counted
+   * separately since it's neither an examined lot nor a corrected divergence.
    */
   swept: number;
   timestamp: Date;
@@ -584,53 +330,22 @@ export interface Execution {
   /** Acts only on a `go`; records the submission, does not block until filled */
   execute(verdict: VerdictDecision): Promise<ExecutionResult>;
   /**
-   * Advance every live lot on the fills that have landed since it opened:
-   * persist each new `Fill`, resize the protective legs to cumulative filled
-   * quantity, and emit a `ClosedTrade` on round-trip-to-flat. Idempotent —
-   * polling it twice ingests each fill once and closes each lot once.
-   *
-   * A failure confined to one unit of work — one flatten's journal row, one
-   * lot's advance — is contained to that unit (#575): every OTHER lot in the
-   * poll is still advanced, and the pass then rejects with an
-   * `AggregateError` naming the records it could not resolve. So a rejection
-   * here means "some of this poll did not land", never "none of it did", and
-   * the caller's job is to log it and poll again rather than to stop.
-   *
-   * One exception (#519/#526): a failure to mark a flatten's fills swept
-   * (`SharedStore.markFlattenFillsSwept`, the bound on `reconcile()`'s own
-   * rescan) does NOT reject this promise when it is the only thing that
-   * failed — every lot still advanced correctly, and the row's own
-   * unresolved state is its designed recovery, not data this call lost.
+   * Advances every live lot on new fills; idempotent. A failure confined to one
+   * lot/row (#575) doesn't block the rest — rejects with an `AggregateError`
+   * naming what failed. One exception: a failed `markFlattenFillsSwept` alone
+   * (#519) does not reject, since the row's unresolved state is its own recovery.
    */
   ingestFills(): Promise<void>;
   /**
-   * Settle every in-flight (`pending`/`submitted`) lot against the venue,
-   * which is the tie-break authority: adopt its state, or mark the lot
-   * `rejected` where it authoritatively never received the order. This is
-   * what makes a crash between write-ahead and broker-ack recoverable.
-   *
-   * Also settles every unresolved `flatten_submissions` row the same way
-   * (#519, #526) — see `reconcileFlatten` (reconcile.ts) — which is
-   * what re-populates a live adapter's process-local flatten-sweep worklist
-   * (`AlpacaBrokerAdapter.flattens`) across a restart, via
-   * `BrokerAdapter.resumeFlatten`'s side effect.
-   *
-   * Run on startup. Idempotent — a second pass over a store reconcile has
-   * already corrected finds nothing left to disagree about. No recurring
-   * cadence exists in this codebase today (orchestrator/fill-sync.ts's file
-   * doc); this method behaves correctly under one if it is ever added, but
-   * none is added by #519/#526 — see reconcile.ts's file doc.
+   * Settles every in-flight lot and unresolved `flatten_submissions` row against
+   * the venue (the tie-break authority) — adopt its state, or mark `rejected`
+   * where it never received the order. Run on startup; idempotent.
    */
   reconcile(): Promise<ReconcileReport>;
   /**
-   * One pass of the #549 residual-protection sweep on its own — see
-   * residual-protection-sweep.ts. `reconcile()` above already runs it as
-   * part of its pass (so startup is covered without a second wiring); this
-   * standalone surface exists for the WITHIN-PROCESS cadence: `startFillSync`
-   * (orchestrator/fill-sync.ts) calls it after every fill poll, because no
-   * recurring `reconcile()` schedule exists and a re-arm failure the process
-   * survives must not wait for the next restart to be retried. Idempotent
-   * and cheap when healthy — an empty marker worklist makes no broker call.
+   * One pass of the #549 residual-protection sweep. `reconcile()` already runs it
+   * at startup; this exists for the within-process cadence after each fill poll
+   * (fill-sync.ts). Idempotent and cheap when healthy.
    */
   sweepResidualProtection(): Promise<ResidualProtectionSweepResult>;
 }
