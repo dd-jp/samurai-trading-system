@@ -1868,12 +1868,9 @@ async function enterCrashRestartLotAheadOfResidualSweep(
 }
 
 /**
- * Scenario 5 (#549): a partial flatten whose observing-poll re-arm FAILS
- * (scripted, one-shot). The inline #525 alert fires once and the durable
- * marker (migration 0024) is written; nothing in the poll path ever retries.
- * The restarted `reconcile()`'s residual-protection sweep is what re-arms
- * the residual and clears the marker — evidence read after the restart, by
- * the caller.
+ * Scenario 5 (#549): a partial flatten whose observing-poll re-arm fails
+ * (scripted, one-shot). The restarted `reconcile()`'s residual-protection
+ * sweep is what re-arms the residual and clears the marker.
  */
 async function runResidualSweepScenario(
   ctx: ExitPathScenarioContext,
@@ -1905,12 +1902,8 @@ async function runResidualSweepScenario(
     ),
     'scenario 5 exit',
   );
-  // The observing poll: the partial fill lands, the re-arm throws once, the
-  // lot's residual is left naked with only the marker pointing at it
   await ctx.execution.ingestFills();
   const exitFillQty = EXIT_PATH_LOT_SIZE * PARTIAL_FLATTEN_FRACTION;
-  // Same `filledSize - exitQty` expression as `heldQuantityFromFills` — scenario 2's
-  // own float-identity reasoning, unchanged
   const expectedResidual = EXIT_PATH_LOT_SIZE - exitFillQty;
 
   return { lotKey: lot5, expectedResidual };
@@ -1919,8 +1912,7 @@ async function runResidualSweepScenario(
 /**
  * Scenario 4's exit (#519/#526): a flatten that acks but is never swept for
  * fills before a "restart" — `reconcile()`'s flatten-journal sweep, not
- * `ingestFills()` alone, is what recovers it. Its entry was opened and
- * ingested by `enterCrashRestartLotAheadOfResidualSweep`, before scenario 5.
+ * `ingestFills()` alone, is what recovers it.
  */
 async function exitCrashRestartLotWithoutSweep(
   ctx: PostSweepScenarioContext,
@@ -1937,23 +1929,14 @@ async function exitCrashRestartLotWithoutSweep(
     ),
     'scenario 4 exit',
   );
-  // Deliberately NO `execution.ingestFills()` here — the flatten's journal
-  // row is acked ('submitted') but its fill has not been redistributed, so
-  // `fills_swept_at` is still NULL: exactly the row
-  // `SharedStore.getUnresolvedFlattens()` exists to find, and exactly what a
-  // restart would otherwise strand if a live adapter's process-local
-  // `flattens` map (`AlpacaBrokerAdapter`) were the only record of it
+  // Deliberately no ingestFills() here — the flatten acks but its fill is
+  // never swept, exactly the row SharedStore.getUnresolvedFlattens() exists to find.
 }
 
 /**
- * Scenario 6 (#1088): the terminal-row sweep. Seeded directly via the store
- * port, never through `submit()` — the point is a row that already IS
- * terminal and old enough for `sweepTerminalPositions` to act on, not one
- * this harness drives there through a live broker round-trip. The clock has
- * only advanced by a handful of `tick()` seconds since `SMOKE_RUN_INSTANT`,
- * so `decision_timestamp` is set the full `TERMINAL_SWEEP_AGE_MS` (+ margin)
- * behind `clock.now()` directly, rather than relying on the smoke clock ever
- * running that far forward.
+ * Scenario 6 (#1088): seeded directly via the store port, never through
+ * `submit()` — `decision_timestamp` is set the full `TERMINAL_SWEEP_AGE_MS`
+ * behind `clock.now()` directly rather than relying on the clock advancing that far.
  */
 async function seedTerminalSweepRow(ctx: PostSweepScenarioContext): Promise<string> {
   const terminalSweepKey = 'smoke-terminal-sweep-target';
@@ -1983,11 +1966,7 @@ async function seedTerminalSweepRow(ctx: PostSweepScenarioContext): Promise<stri
   return terminalSweepKey;
 }
 
-/**
- * The restart: a SECOND `Execution` over the SAME store + SAME broker,
- * `buildExecutionSurface` (the real composition-root binding function)
- * called again — `reconcile.test.ts`'s own definition of "a restart"
- */
+/** A second `Execution` over the same store + broker — `reconcile.test.ts`'s own definition of "a restart" */
 async function restartExecutionAndReconcile(ctx: PostSweepScenarioContext): Promise<{
   restarted: ReturnType<typeof buildExecutionSurface>;
   restartReconcile: ReconcileReport;
@@ -2007,9 +1986,8 @@ async function restartExecutionAndReconcile(ctx: PostSweepScenarioContext): Prom
       unrecordedVenuePositionAlerts: { postUnrecordedVenuePositionAlert: async () => {} },
       unrecordedVenuePositionThrottle: new UnrecordedVenuePositionThrottle(),
       logger: ctx.logger,
-      // Fresh, not the pre-restart `execution`'s instance — a real restart's
-      // process is gone too, and `FilledZeroSizeThrottle` is documented
-      // restart-clean by design (filled-zero-size-throttle.ts)
+      // Fresh instance — a real restart's process is gone too, and
+      // FilledZeroSizeThrottle is documented restart-clean by design.
       filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
     },
     'smoke-exit-path-restart',
@@ -2020,29 +1998,18 @@ async function restartExecutionAndReconcile(ctx: PostSweepScenarioContext): Prom
 }
 
 /**
- * The crypto-emulation scenario (#586) — the pre-soak gate's third leg,
- * beside the six-stage entry run and the exit-path harness.
- *
- * Alpaca rejects every advanced order class for crypto (verified live, #550:
- * `422` code `42210000`), so `AlpacaBrokerAdapter` emulates the protective
- * pair for crypto: plain entry, plain stop_limit/limit legs armed by the
- * fill sweep, sibling cancelled by hand, every transition journalled in
- * `broker_brackets`. None of that is reachable by the six-stage run (it
- * overrides the broker with `SimulatedBrokerAdapter`) or by the exit-path
- * harness (same), and the smoke universe is crypto — so a soak's entire
- * bracket path runs on this mechanism while nothing else in this gate can
- * see it. Wiring a new mechanism means adding its enforcement assertion
- * here (#430), so this scenario composes the REAL `AlpacaBrokerAdapter`
- * over a REAL `SqliteBrokerStateStore` on the shared `:memory:` store, with
- * only the wire client scripted — and the script mirrors the verified venue
- * posture: any advanced order class for crypto is refused, exactly as the
- * live API does, so a regression back to `order_class: 'bracket'` fails
- * this run the same way it would fail the soak.
+ * The crypto-emulation scenario (#586): Alpaca rejects every advanced order
+ * class for crypto (verified live, #550: 422 code 42210000), so
+ * `AlpacaBrokerAdapter` emulates the protective pair instead. Neither the
+ * six-stage run nor the exit-path harness reaches this path (both override
+ * the broker with `SimulatedBrokerAdapter`), so this composes the real
+ * `AlpacaBrokerAdapter` with only the wire client scripted, mirroring the
+ * verified venue posture — a regression back to `order_class: 'bracket'`
+ * fails here the same way it would fail the soak.
  */
 class CryptoEmulationScenarioClient implements AlpacaBrokerClient {
   private readonly orders = new Map<string, AlpacaOrder>();
   private readonly idsByClientOrderId = new Map<string, string>();
-  /** Every venue order id a cancel reached — the sibling-cancel evidence */
   readonly cancelledOrderIds: string[] = [];
   private nextId = 1;
 
@@ -2052,8 +2019,7 @@ class CryptoEmulationScenarioClient implements AlpacaBrokerClient {
     qty: string;
     client_order_id: string;
   }): AlpacaOrder {
-    // #585/#588: the adapter boundary must have converted to slash form
-    // before the wire — the live venue 422s dash form as "asset not found"
+    // #585/#588: the live venue 422s dash form as "asset not found"
     if (!request.symbol.endsWith('/USD')) {
       throw new Error(
         `smoke crypto-emulation scenario: order for '${request.symbol}' reached the wire in ` +
@@ -2078,7 +2044,6 @@ class CryptoEmulationScenarioClient implements AlpacaBrokerClient {
     return { ...order };
   }
 
-  /** The #550-verified posture, scripted: crypto + advanced order class = 422 */
   private rejectAdvancedOrderClass(method: string): never {
     throw new Error(
       `smoke crypto-emulation scenario: ${method} sent an advanced order_class for crypto — ` +
@@ -2141,7 +2106,6 @@ class CryptoEmulationScenarioClient implements AlpacaBrokerClient {
     throw new Error('smoke crypto-emulation scenario: getAccount is not scripted here');
   }
 
-  /** The scripted market: marks an order fully filled at `price` */
   fillByClientOrderId(clientOrderId: string, price: number, filledAt: string): void {
     const id = this.idsByClientOrderId.get(clientOrderId);
     const order = id === undefined ? undefined : this.orders.get(id);
