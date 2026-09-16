@@ -238,55 +238,67 @@ export function buildCarriedLotReporter(deps: CarriedLotReporterDeps): () => Pro
 
     for (const lot of carried) {
       if (!throttle.shouldAlert(lot.instrument, lot.missedClose, now)) continue;
-
-      const diagnostic: TraderDiagnostic = {
-        kind: 'lot_carried_past_session_close',
-        asset_class: lot.asset_class,
-        detail:
-          `${lot.instrument}: ${lot.held} still held after the ${lot.missedClose.toISOString()} ` +
-          `session close, past the ${deps.flattenAfterCloseMs}ms flatten grace ` +
-          `(now ${now.toISOString()})`,
-      };
-      const alert: TraderDiagnosticAlert = {
-        instrument: lot.instrument,
-        diagnostic,
-        arm: deps.arm,
-        // The unit here is a REPORT, not a tick — see the file docblock. One
-        // alert per repeat interval, so the count would be a poll number that
-        // means nothing to an operator; the interval is the severity signal
-        consecutive_ticks: 1,
-        reported_at: now,
-      };
-
-      // Durable first, audible second — `TraderDiagnosticAlertChannel`'s port
-      // doc, and the #710 correction that the log must not sit behind the
-      // throttle that gates the channel
-      deps.logger.log({
-        trace_id: deps.traceId,
-        stage: 'execution',
-        event: 'lot_carried_past_session_close',
-        level: 'error',
-        message: 'flat-by-close missed: lot carried past the session close',
-        payload: {
-          instrument: lot.instrument,
-          arm: deps.arm,
-          held: lot.held,
-          session_close: lot.missedClose.toISOString(),
-        },
-      });
-
-      try {
-        await deps.alerts?.postTraderDiagnosticAlert(alert);
-      } catch (error) {
-        deps.logger.log({
-          trace_id: deps.traceId,
-          stage: 'execution',
-          event: 'carried_lot_alert_failed',
-          level: 'error',
-          message: 'carried-lot alert could not be delivered',
-          payload: { error: error instanceof Error ? error.message : String(error) },
-        });
-      }
+      await reportCarriedLot(deps, lot, now);
     }
   };
+}
+
+// Split out of `buildCarriedLotReporter`'s returned closure purely to keep
+// its cognitive complexity down. "Durable first, audible second" —
+// `TraderDiagnosticAlertChannel`'s port doc, and the #710 correction that the
+// log must not sit behind the throttle that gates the channel — stays intact
+// because the log call is still the first statement in this function's body.
+async function reportCarriedLot(
+  deps: Pick<
+    CarriedLotReporterDeps,
+    'traceId' | 'logger' | 'arm' | 'alerts' | 'flattenAfterCloseMs'
+  >,
+  lot: CarriedLot,
+  now: Date,
+): Promise<void> {
+  const diagnostic: TraderDiagnostic = {
+    kind: 'lot_carried_past_session_close',
+    asset_class: lot.asset_class,
+    detail:
+      `${lot.instrument}: ${lot.held} still held after the ${lot.missedClose.toISOString()} ` +
+      `session close, past the ${deps.flattenAfterCloseMs}ms flatten grace ` +
+      `(now ${now.toISOString()})`,
+  };
+  const alert: TraderDiagnosticAlert = {
+    instrument: lot.instrument,
+    diagnostic,
+    arm: deps.arm,
+    // The unit here is a REPORT, not a tick — see the file docblock. One
+    // alert per repeat interval, so the count would be a poll number that
+    // means nothing to an operator; the interval is the severity signal
+    consecutive_ticks: 1,
+    reported_at: now,
+  };
+
+  deps.logger.log({
+    trace_id: deps.traceId,
+    stage: 'execution',
+    event: 'lot_carried_past_session_close',
+    level: 'error',
+    message: 'flat-by-close missed: lot carried past the session close',
+    payload: {
+      instrument: lot.instrument,
+      arm: deps.arm,
+      held: lot.held,
+      session_close: lot.missedClose.toISOString(),
+    },
+  });
+
+  try {
+    await deps.alerts?.postTraderDiagnosticAlert(alert);
+  } catch (error) {
+    deps.logger.log({
+      trace_id: deps.traceId,
+      stage: 'execution',
+      event: 'carried_lot_alert_failed',
+      level: 'error',
+      message: 'carried-lot alert could not be delivered',
+      payload: { error: error instanceof Error ? error.message : String(error) },
+    });
+  }
 }
