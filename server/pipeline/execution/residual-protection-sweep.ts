@@ -323,24 +323,21 @@ async function sweepOne(
           `be closed either — see the residual_reflatten_* log line for which gate stood the ` +
           `re-flatten down: ${describeThrownSafely(error)}`
         : `re-arm retry failed for residual ${residual}: ${describeThrownSafely(error)}`,
-      // Two escalation values for one push site, not one: `unsupported` is
-      // `sweepOne`'s own permanent-vs-retryable distinction (this file's
-      // "no pass can ever re-arm" doc), and a failing lot's ordinary retries
-      // exhaust its re-arm budget and land here `unsupported` on a LATER
-      // pass — a shared value would dedup that transition away as "same
-      // state" (#1615), collapsing a page-worthy permanent gap into the
-      // retryable line a prior pass already logged
+      // Two escalation values for one push site, not one: a failing lot's
+      // ordinary retries can exhaust its re-arm budget and land here
+      // `unsupported` on a LATER pass — a shared value would dedup that
+      // transition away as "same state", collapsing a page-worthy permanent
+      // gap into the retryable line a prior pass already logged.
       escalation: unsupported
         ? 'residual_sweep_rearm_unsupported'
         : 'residual_sweep_rearm_retry_failed',
     };
   }
 
-  // CONFIRMED — the broker call resolved (venue-acked or adopted), which is
-  // the only thing that may clear the marker. Runs OUTSIDE the try above so
-  // a confirm-write failure is the outer containment's `undetermined` (and
-  // the next pass's idempotent re-verify), never mistaken for a re-arm
-  // failure
+  // CONFIRMED — the broker call resolved, which is the only thing that may
+  // clear the marker. Runs OUTSIDE the try above so a confirm-write failure
+  // is the outer containment's `undetermined`, never mistaken for a re-arm
+  // failure.
   await store.confirmResidualProtected(key);
   return {
     idempotency_key: key,
@@ -356,46 +353,30 @@ async function sweepOne(
 }
 
 /**
- * The once-per-episode escalation — posts `ResidualExposureAlertChannel`
- * (through `alertResidualExposure`'s swallow/CREDENTIALS posture, unchanged)
- * only when this episode has never alerted, then records the dedup durably.
- * A suppressed duplicate is not silent: every suppressing pass still emits
- * its `undetermined` divergence, which both callers log.
+ * The once-per-episode escalation — posts `ResidualExposureAlertChannel` only
+ * when this episode has never alerted, then records the dedup durably. A
+ * suppressed duplicate is not silent: every suppressing pass still emits its
+ * `undetermined` divergence, which both callers log.
  *
- * The dedup is recorded ONLY when the channel accepted the delivery (#549
- * review — `alertResidualExposure`'s boolean): a swallowed transport outage
- * must leave the episode un-alerted, so the NEXT pass pages again instead of
- * the one failed attempt permanently silencing the only page for a
- * still-naked residual.
+ * The dedup is recorded ONLY when the channel accepted the delivery: a
+ * swallowed transport outage must leave the episode un-alerted, so the NEXT
+ * pass pages again instead of one failed attempt permanently silencing the
+ * only page for a still-naked residual.
  *
- * ORDERING (#549 review, cycle 2; dedup split #1447): TWO independent
- * durable dedups back this function — `row.alerted_at` /
- * `markResidualAlerted` (`residual_rearm_alerted_at`) for every pre-attempt
- * or ordinary-retry page (store-read failure, non-finite residual, an
- * ordinary retryable re-arm failure), and `row.rearm_unsupported_alerted_at`
- * / `markResidualRearmUnsupportedAlerted` (`residual_rearm_unsupported_alerted_at`)
- * for the TRUTHFUL permanent-gap page — a CONFIRMED venue refusal
- * (`flags.rearmUnsupported: true`, only ever set by the caller in `sweepOne`
- * right after `isProtectiveRearmUnsupported` returned true). `flags.rearmUnsupported`
- * below picks which pair `dedup` reads from and writes to; the two never
- * cross, which is what stops a pre-attempt page from ever consuming the one
- * page a permanent gap needs — the defect #1447 was filed against.
+ * TWO independent durable dedups back this function: `row.alerted_at` for
+ * every pre-attempt or ordinary-retry page, and
+ * `row.rearm_unsupported_alerted_at` for the TRUTHFUL permanent-gap page (a
+ * CONFIRMED venue refusal). `flags.rearmUnsupported` picks which pair `dedup`
+ * reads from and writes to; the two never cross, so a pre-attempt page can
+ * never consume the one page a permanent gap needs.
  *
- * Each pair reads the pass-start worklist snapshot (`row.alerted_at` /
- * `row.rearm_unsupported_alerted_at`), and each `mark*` write is CONDITIONAL
- * (first-writer-wins on its own column `IS NULL`, reporting whether this
- * call won), so each durable dedup holds regardless of which alert surface
- * runs first or in what order. The two surfaces cannot actually interleave
- * in-process today — `runStartupReconcile` is awaited before `startFillSync`
- * ever arms its first timer (production.ts `start()`), and within the
- * fill-sync loop `runPoll` awaits `ingestFills` (the inline alert path)
- * before the sweep, under an `inFlight` guard that serializes passes — so a
- * lost race is a composition change away, not a live behaviour; the
- * conditional write is the durable backstop that keeps each record
- * single-writer even then. In the worst interleave the page itself could go
- * out twice (delivery precedes the claim, deliberately — claim-first would
- * re-create the suppressed-page bug the delivery gate above closes); the
- * RECORD never does.
+ * Each `mark*` write is CONDITIONAL (first-writer-wins on its own column
+ * `IS NULL`), so the dedup holds regardless of which alert surface runs first
+ * — the two cannot interleave in-process today, but the conditional write is
+ * the durable backstop if that ever changes. In the worst interleave the page
+ * itself could go out twice (delivery precedes the claim, deliberately —
+ * claim-first would re-create the suppressed-page bug the delivery gate above
+ * closes); the RECORD never does.
  */
 async function alertResidualExposureOnce(
   input: ResidualSweepInput,
@@ -427,8 +408,8 @@ async function alertResidualExposureOnce(
     const recorded = await dedup.record(row.position.idempotency_key, now);
     if (!recorded) {
       // Another surface recorded the episode's page between this pass's
-      // worklist snapshot and now — the durable dedup already held, this
-      // pass's page was the (worst-case) duplicate the doc above accepts
+      // worklist snapshot and now — this pass's page was the (worst-case)
+      // duplicate the doc above accepts.
       safeLog(input.logger, {
         trace_id: input.trace_id,
         stage: 'execution',

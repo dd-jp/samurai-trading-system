@@ -1,24 +1,17 @@
 /**
- * Analyst Orchestrator (ticket #71) — see docs/specs/analysts-spec.md
- * "Module: Analyst Orchestrator". Fans a Signal out across every applicable
- * persona (Technical + Fundamental + Sentiment for the equities Samurai runs
- * — crypto left scope entirely on 2026-08-16, ADR-0015's amendment — per
+ * Analyst Orchestrator — fans a Signal out across every applicable persona
+ * (Technical + Fundamental + Sentiment; equities only, per
  * `Analyst.applies_to`) and enforces the role-dependent quorum: a mandatory
- * persona failing blocks the whole tick (analysts-spec.md story 21, "no stale
- * fallback"), an optional persona failing just shrinks the set (story 22).
+ * persona failing blocks the whole tick ("no stale fallback"), an optional
+ * persona failing just shrinks the set.
  *
- * Retry-on-failure is built here as of #431 (analysts-spec.md "Module:
- * Failure Handling", story 19): one bounded retry with a short timeout for
- * any failing persona, regardless of role. The other half of that module —
- * the 2-consecutive-skip alert (story 25) — lives one level up in
- * `buildAnalystsStep`, which is where the tick boundary and the alert
- * transport both are.
+ * One bounded retry with a short timeout applies to any failing persona,
+ * regardless of role. The 2-consecutive-skip alert lives one level up in
+ * `buildAnalystsStep`, which owns the tick boundary and the alert transport.
  *
- * `analysts()` is the exact `TickSteps.analysts` shape (orchestrator/types.ts:
- * `(input: { trace_id, signal, clock }) => Promise<AnalystView[]>`), so an
- * instance can be bound directly into the tick chain once Market Data /
- * Market Intelligence instances exist at composition time. An empty array is
- * how the tick runner already recognizes a quorum skip (tick-runner.ts).
+ * `analysts()` is the exact `TickSteps.analysts` shape (orchestrator/types.ts),
+ * so an instance can be bound directly into the tick chain. An empty array
+ * is how the tick runner recognizes a quorum skip (tick-runner.ts).
  */
 
 import {

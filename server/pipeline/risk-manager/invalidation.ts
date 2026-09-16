@@ -1,39 +1,27 @@
 /**
  * The invalidation half of check-pipeline step 7 — the DETERMINISTIC half.
+ * `docs/specs/risk-manager-spec.md`, "Module: Risk Critic — the invalidation
+ * fold", is the spec this file implements.
  *
- * `devils-advocate-spec.md` designed a standalone `invalidation` stage; David
- * declined it as a stage on 2026-09-02 (*"fold this to risk critic"*) and
- * [#997](https://github.com/dd-jp/samurai-trading-system/issues/997) fixed how
- * the mechanism folds in. `docs/specs/risk-manager-spec.md`, "Module: Risk
- * Critic — the invalidation fold", is the spec this file implements.
+ * Separate from `critic.ts` because only condition EMISSION is LLM work:
+ * `critic.ts` owns the single model call (prose and raw conditions come back
+ * from the same pass, so this seam accumulates no second LLM pass). Everything
+ * here — the validator, the tri-state evaluator, the reason lines `evaluate()`
+ * records — is deterministic code, unit-testable in isolation.
  *
- * ## Why this is a separate module from `critic.ts`
- *
- * #997 Q1: only condition EMISSION is LLM work. `critic.ts` owns the single
- * model call (prose and raw conditions come back from the same pass, so the
- * step-7 seam accumulates no second LLM pass and the ~$1/yr envelope holds).
- * Everything here — the validator, the tri-state evaluator, the reason lines
- * `evaluate()` records — is deterministic code, unit-testable in isolation and
- * deliberately outside the module the spec defines as the qualitative pass.
- *
- * ## The load-bearing rule
- *
- * **The LLM names what to check; deterministic code does the checking, so a
- * model cannot produce a breach — only propose a condition.** That is enforced
- * by the TYPES, not by a prompt instruction: `RawCondition` below has no
- * `state` field for a model to fill in, so a response containing
+ * The load-bearing rule: the LLM names what to check; deterministic code does
+ * the checking, so a model cannot produce a breach — only propose a condition.
+ * That is enforced by the TYPES, not a prompt instruction — `RawCondition`
+ * below has no `state` field for a model to fill in, so a response containing
  * `"state":"breached"` is read as an unknown property and discarded. Every
- * `EvaluatedCondition.state` in this system is produced by `evaluateConditions`
- * from a measured read.
+ * `EvaluatedCondition.state` is produced by `evaluateConditions` from a
+ * measured read.
  *
- * ## Failure posture
- *
- * Partial-tolerant (#997 Q2a). Nothing in this file can void the prose verdict:
- * a conditions half that is absent, unreadable, or emptied by the drop rules
- * yields an empty list, which reports `no_conditions` and enforces nothing.
- * `unevaluable` likewise has no enforcement effect — a data gap must never
- * block a trade. Only a MEASURED `breached` has teeth, and the authority to act
- * on it lives in `evaluate()` (#997 Q2b), not here.
+ * Failure posture is partial-tolerant: nothing in this file can void the
+ * prose verdict. A conditions half that is absent, unreadable, or emptied by
+ * the drop rules yields an empty list, which reports `no_conditions` and
+ * enforces nothing; `unevaluable` likewise has no enforcement effect, since a
+ * data gap must never block a trade. Only a MEASURED `breached` has teeth.
  */
 
 import {
@@ -79,11 +67,11 @@ export const MAX_INVALIDATION_CONDITIONS = 5;
 export const MAX_INSPECTED_CONDITIONS = 16;
 
 /**
- * The ceiling on `lookback` for an indicator spec or a bars window (#994
- * review, PR #1067) — otherwise a model emission of `lookback: 1_000_000`
- * validates and triggers a huge `getBars`/indicator read on the path an order
- * is waiting on (`withinDeadline` races the read against the budget but does
- * not cancel it, so an unbounded fetch is an unbounded wait either way).
+ * The ceiling on `lookback` for an indicator spec or a bars window — otherwise
+ * a model emission of `lookback: 1_000_000` validates and triggers a huge
+ * `getBars`/indicator read on the path an order is waiting on (`withinDeadline`
+ * races the read against the budget but does not cancel it, so an unbounded
+ * fetch is an unbounded wait either way).
  *
  * Sized off the largest lookback any real caller in this codebase asks the
  * Market Data Service for on the indicator/bars path: `technical-analyst.ts`'s
@@ -94,7 +82,7 @@ export const MAX_INSPECTED_CONDITIONS = 16;
  */
 export const MAX_INVALIDATION_LOOKBACK = 1000;
 
-/** `binding_constraint` for a hard-reject on a measured breach. DISTINCT from `risk_critic:reject` (#997 Q2b). */
+/** `binding_constraint` for a hard-reject on a measured breach. DISTINCT from `risk_critic:reject`. */
 export const INVALIDATED_BINDING_CONSTRAINT = 'risk_critic:invalidated';
 
 /** Cap on any single audit string kept from the model's output */
@@ -217,8 +205,8 @@ export interface ValidatedConditions {
  * on an array yields its elements, which would otherwise pass this check and
  * then get cast to `Record<string, number>` downstream. Shared by
  * `readIndicatorSpec` (known `kind`) and `isObservable`'s retired-`kind`
- * branch (#1068), so the two never drift on what counts as a well-formed
- * `params` map.
+ * branch, so the two never drift on what counts as a well-formed `params`
+ * map.
  */
 function isWellFormedParams(value: unknown): value is Record<string, number> | undefined {
   if (value === undefined) return true;
@@ -294,9 +282,9 @@ function readObservable(
     return { kind: 'bars', window, measure: 'volume_ratio' };
   }
 
-  // Anything else — including the 2026-08-05 proposal's `mi_context`, which
-  // this fold deliberately does not carry — binds to no service the Risk step
-  // can read at decision time
+  // Anything else — including the earlier proposal's `mi_context`, which this
+  // fold deliberately does not carry — binds to no service the Risk step can
+  // read at decision time
   return 'unknown_observable';
 }
 
@@ -449,39 +437,36 @@ export function validateConditions(raw: unknown, side: OrderIntent['side']): Val
 }
 
 /**
- * ## Reading a PERSISTED conditions half back (#994 review, tightened #1068)
- *
- * `risk_critic_log.conditions_json` is a TEXT column: its contents are
- * whatever a past process wrote, plus whatever a hand-edit or a partial write
- * left behind. A cast alone (`parsed as EvaluatedCondition[]`) buys nothing —
- * `[{}]` then reaches `evaluate()` and throws reading `.observable`, and
- * `[{"state":"breached"}]` reaches a HARD REJECT with no measurement behind
- * it, which is exactly the "a model cannot produce a breach" rule defeated by
- * the storage layer.
+ * Reading a PERSISTED conditions half back. `risk_critic_log.conditions_json`
+ * is a TEXT column: its contents are whatever a past process wrote, plus
+ * whatever a hand-edit or a partial write left behind. A cast alone (`parsed
+ * as EvaluatedCondition[]`) buys nothing — `[{}]` then reaches `evaluate()`
+ * and throws reading `.observable`, and `[{"state":"breached"}]` reaches a
+ * HARD REJECT with no measurement behind it, defeating the "a model cannot
+ * produce a breach" rule via the storage layer.
  *
  * So the FULL shape is checked on read (`risk-manager-spec.md`, "persistence &
  * replay"): finite `observed` on a measured state, `observed: null` on
  * `unevaluable`, a well-formed `window` on a `bars` observable, and an
  * indicator's `lookback` (at or under `MAX_INVALIDATION_LOOKBACK`),
- * `timeframe`, and `params` — all three are re-checked independently of
- * whether the indicator `kind` itself is still recognized, so a retired
- * `kind` cannot smuggle an oversized lookback, a missing timeframe, or a
- * malformed params map past the registry-drift leniency below.
+ * `timeframe`, and `params` — re-checked independently of whether the
+ * indicator `kind` itself is still recognized, so a retired `kind` cannot
+ * smuggle a malformed field past the registry-drift leniency below.
  *
  * Per-element, not whole-list: a malformed element is DROPPED from the
  * replayed list rather than collapsing the whole row. If nothing survives,
- * the row reports `no_conditions` — the same marker a pre-fold row produces
- * (#997 Q3) — never a hard reject and never a silent accept of a breach.
- * `readPersistedDroppedConditions` (the drop-audit column) is unaffected and
- * keeps its original all-or-nothing rule: that column has zero enforcement
- * effect either way, so there is no safety reason to touch it here.
+ * the row reports `no_conditions`, the same marker a pre-fold row produces —
+ * never a hard reject and never a silent accept of a breach.
+ * `readPersistedDroppedConditions` (the drop-audit column) keeps its original
+ * all-or-nothing rule, since that column has zero enforcement effect either
+ * way.
  *
- * One deliberate exception survives the tightening: an indicator `kind` that
- * has since left `INDICATOR_KINDS` is still accepted when everything else
- * about it is well-formed, so a historical row replays to the decision it
- * produced when the state was actually measured. Dropping it on registry
- * drift would silently change a historical verdict for a reason that has
- * nothing to do with what happened at the time.
+ * One deliberate exception: an indicator `kind` that has since left
+ * `INDICATOR_KINDS` is still accepted when everything else about it is
+ * well-formed, so a historical row replays to the decision it produced when
+ * the state was actually measured — dropping it on registry drift would
+ * silently change a historical verdict for a reason unrelated to what
+ * happened at the time.
  */
 function isObservable(value: unknown): value is InvalidationObservable {
   if (typeof value !== 'object' || value === null) return false;

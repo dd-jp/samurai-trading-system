@@ -215,29 +215,21 @@ export interface BrokerAdapter {
    */
   getOrder(clientOrderId: string, instrument: string): Promise<NormalizedOrder | null>;
   /**
-   * The flatten-sweep counterpart of `getOrder` (#519, #526) —
-   * `reconcile()`'s ONLY caller, for every `flatten_submissions` row its
-   * `getUnresolvedFlattens()` worklist names. Same null/throw contract as
-   * `getOrder` verbatim: null is the venue AUTHORITATIVELY reporting no such
-   * order (what lets `reconcile()` settle a write-ahead whose broker call
-   * never landed), and an adapter that merely cannot answer MUST throw —
-   * `getOrder`'s own doc explains why returning null on ignorance would bury
-   * a live position, and the same reasoning applies here to a flatten that
-   * genuinely filled and closed a lot.
+   * The flatten-sweep counterpart of `getOrder` — `reconcile()`'s ONLY
+   * caller, for every `flatten_submissions` row its `getUnresolvedFlattens()`
+   * worklist names. Same null/throw contract as `getOrder` verbatim: null is
+   * the venue AUTHORITATIVELY reporting no such order, and an adapter that
+   * merely cannot answer MUST throw.
    *
-   * The re-populating SIDE EFFECT is the point, exactly as `getOrder`'s own
-   * doc says of `brackets`: a live adapter's flatten-sweep worklist
-   * (`AlpacaBrokerAdapter.flattens`) is process-local and empty after a
-   * restart, so without this call `fetchNewFills` polls nothing for a
+   * The re-populating SIDE EFFECT is the point, exactly as with `getOrder`:
+   * a live adapter's flatten-sweep worklist is process-local and empty after
+   * a restart, so without this call `fetchNewFills` polls nothing for a
    * flatten a crash stranded between `submitFlatten` returning and the next
-   * sweep — the exact gap #526 names. Deliberately a SEPARATE method from
-   * `getOrder` rather than a second call into it: `getOrder`'s own
-   * implementation re-populates `brackets`, which is never pruned once an
-   * entry lands there (a bracket can go on mattering after its entry fills),
-   * so routing a flatten through it would leak that flatten into the bracket
-   * sweep for the rest of the process's life — worse than the bounded gap
-   * this method exists to close. See `AlpacaBrokerAdapter.resumeFlatten` for
-   * the concrete side effect.
+   * sweep. Deliberately a SEPARATE method from `getOrder` rather than a
+   * second call into it: `getOrder`'s own implementation re-populates
+   * `brackets`, which is never pruned once an entry lands there, so routing
+   * a flatten through it would leak that flatten into the bracket sweep for
+   * the rest of the process's life.
    */
   resumeFlatten(clientOrderId: string, instrument: string): Promise<NormalizedOrder | null>;
   /**
@@ -271,41 +263,33 @@ export interface BrokerAdapter {
   resizeProtectiveLegs(clientOrderId: string, filledQty: number): Promise<void>;
   /**
    * Re-arms protective legs on a residual position whose legs were CANCELLED
-   * outright, not merely under-sized (#525) — the case `resizeProtectiveLegs`
-   * does not cover, because a cancelled bracket has no legs left for that
-   * method to resize. `executeExit` (execute.ts) cancels a held lot's legs
-   * before every flatten (#516's ordering fix); when the flatten fills only
-   * partially, this is what re-establishes protection on what is still held.
+   * outright, not merely under-sized — the case `resizeProtectiveLegs` does
+   * not cover, because a cancelled bracket has no legs left for that method
+   * to resize. `executeExit` cancels a held lot's legs before every flatten;
+   * when the flatten fills only partially, this re-establishes protection on
+   * what is still held.
    *
-   * `qty` is the RESIDUAL still open, not the original lot size — the caller
-   * has already subtracted whatever the flatten closed. `stop`/`target` are
-   * the lot's own, unchanged price levels (absolute prices are invariant
-   * under a resize; only the quantity they protect changes), never
-   * re-derived from the original intent's sizing math.
+   * `qty` is the RESIDUAL still open, not the original lot size. `stop`/
+   * `target` are the lot's own, unchanged price levels — absolute prices are
+   * invariant under a resize, only the quantity they protect changes.
    *
-   * `clientOrderId` is the lot's OWN `idempotency_key` — corrected (#569):
-   * the only caller (`ingestFills`, ingest-fills.ts) passes it straight
-   * through, unchanged, and both implementations depend on that. A fresh id
-   * is still needed at the venue (that original id already named the
+   * `clientOrderId` is the lot's OWN `idempotency_key`, passed straight
+   * through unchanged by the only caller (`ingestFills`). A fresh id is
+   * still needed at the venue (the original id already named the
    * now-cancelled bracket, and Alpaca refuses a reused client order id
-   * permanently — measured, #1346) — deriving it is the ADAPTER's job, not
-   * the caller's: `AlpacaBrokerAdapter` suffixes it (`rearmWireId`, indexed
-   * per attempt because each suffix it spends is spent for good) before
-   * calling the venue, and `SimulatedBrokerAdapter` keys `protectedQty` on
-   * the id AS PASSED, with no suffixing at all. A future adapter that
-   * generated a fresh id itself, per this comment's old wording, would break
-   * `fetchNewFills`'s lot-keyed sweep — that sweep tags fills under THIS
-   * `clientOrderId` so `ingestFills`' ordinary per-position routing can find
-   * them with no knowledge a re-arm was ever involved. `side` is the lot's
-   * HELD side (mirrors `resizeProtectiveLegs`' lot-scoped framing); an
-   * adapter closing the position derives the closing side the same way
-   * `executeExit` does.
+   * permanently) — deriving it is the ADAPTER's job, not the caller's:
+   * `AlpacaBrokerAdapter` suffixes it before calling the venue, while
+   * `SimulatedBrokerAdapter` keys on the id AS PASSED with no suffixing. A
+   * future adapter that generated a fresh id itself would break
+   * `fetchNewFills`'s lot-keyed sweep, which tags fills under THIS
+   * `clientOrderId` so `ingestFills`'s ordinary per-position routing can
+   * find them. `side` is the lot's HELD side, mirroring
+   * `resizeProtectiveLegs`'s framing.
    *
-   * Throws on failure rather than swallowing it — the caller (`ingestFills`)
-   * is what turns a thrown error into the #525 fallback alert. An adapter
-   * that cannot express this (no native OCO/entry-less protective order for
-   * this asset class) throws too; it must never silently no-op, which would
-   * report success for a residual that is still naked.
+   * Throws on failure rather than swallowing it — the caller turns a thrown
+   * error into a fallback alert. An adapter that cannot express this must
+   * throw too; it must never silently no-op, which would report success for
+   * a residual that is still naked.
    */
   rearmProtectiveLegs(
     clientOrderId: string,
@@ -316,8 +300,8 @@ export interface BrokerAdapter {
     target: number,
   ): Promise<void>;
   /**
-   * Flattens exposure with a plain market order — the intervention path
-   * (#429). `side` is the CLOSING side, so a long is flattened with `sell`.
+   * Flattens exposure with a plain market order — the intervention path.
+   * `side` is the CLOSING side, so a long is flattened with `sell`.
    *
    * Deliberately not a bracket: a flatten has no stop and no target, and
    * arming protective legs on an order whose whole purpose is to reach zero
@@ -360,16 +344,14 @@ export interface BrokerAdapter {
   getOpenPositions(): Promise<NormalizedPosition[]>;
   /**
    * True when this adapter prices its OWN fills through a `CostModel` and
-   * therefore reports a `cost_breakdown` on every fill it emits (#1014
-   * finding 1, on #1001's submit-time snapshot).
+   * therefore reports a `cost_breakdown` on every fill it emits.
    *
    * `captureSubmitSnapshot` normally runs `CostModel.fill` itself to store the
    * modelled cost the realised fill is later compared against. Against an
    * adapter that declares this flag that would be a SECOND, independent draw
-   * of the same model for the same order — two writers for one number, free to
-   * disagree under any non-determinism, and #1001's acceptance query would
-   * report the invented gap as realised divergence. So the snapshot skips its
-   * own pricing here and lets the adapter's breakdown stand as the single
+   * of the same model for the same order — two writers for one number, free
+   * to disagree under any non-determinism. So the snapshot skips its own
+   * pricing here and lets the adapter's breakdown stand as the single
    * source; nothing is lost, because `toFill`/`redistributeOneFlatten` only
    * fall back to the snapshot when `fill.cost_breakdown === undefined`, which
    * such an adapter never leaves unset.
