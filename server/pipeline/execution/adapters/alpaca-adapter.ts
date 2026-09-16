@@ -1598,6 +1598,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     failures: unknown[],
   ): Promise<number> {
     let bracketFailures = 0;
+    // oxlint-disable-next-line unicorn/no-useless-spread -- the snapshot is the point: a bracket submitted mid-pass must not join THIS pass's worklist (PR #290 review)
     for (const [clientOrderId, entryOrderId] of [...this.brackets]) {
       try {
         const entry = await this.call('fetchNewFills', () =>
@@ -1745,6 +1746,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     failures: unknown[],
   ): Promise<number> {
     let flattenFailures = 0;
+    // oxlint-disable-next-line unicorn/no-useless-spread -- the snapshot is the point: a flatten submitted mid-pass must not join THIS pass's worklist (PR #290 review)
     for (const [clientOrderId, orderId] of [...this.flattens]) {
       try {
         const order = await this.call('fetchNewFills', () => this.input.client.getOrder(orderId));
@@ -1817,6 +1819,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     failures: unknown[],
   ): Promise<number> {
     let rearmFailures = 0;
+    // oxlint-disable-next-line unicorn/no-useless-spread -- the snapshot is the point: a rearm submitted mid-pass must not join THIS pass's worklist (PR #290 review)
     for (const [lotKey, orderId] of [...this.rearmedLegs]) {
       try {
         const order = await this.call('fetchNewFills', () => this.input.client.getOrder(orderId));

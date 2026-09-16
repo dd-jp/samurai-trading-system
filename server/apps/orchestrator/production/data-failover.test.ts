@@ -412,6 +412,7 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
     const acquireBackgroundSpy = vi
       .spyOn(TokenBucket.prototype, 'acquireBackground')
       .mockImplementation(async function (this: { config: unknown }) {
+        // oxlint-disable-next-line typescript/no-this-alias -- needs the mock's call-site `this`; an arrow function would close over the wrong one
         capturedBucket = this;
       });
 
@@ -563,6 +564,7 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
     vi.spyOn(TokenBucket.prototype, 'acquireBackground').mockImplementation(async function (this: {
       config: unknown;
     }) {
+      // oxlint-disable-next-line typescript/no-this-alias -- needs the mock's call-site `this`; an arrow function would close over the wrong one
       capturedBucket = this;
     });
 
@@ -792,6 +794,7 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
     vi.spyOn(TokenBucket.prototype, 'acquireBackground').mockImplementation(async function (this: {
       config: unknown;
     }) {
+      // oxlint-disable-next-line typescript/no-this-alias -- needs the mock's call-site `this`; an arrow function would close over the wrong one
       capturedBucket = this;
     });
 

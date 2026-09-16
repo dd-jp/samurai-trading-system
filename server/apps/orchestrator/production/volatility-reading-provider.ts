@@ -269,7 +269,7 @@ async function settleWithConcurrency<T, R>(
   limit: number,
   fn: (item: T) => Promise<R>,
 ): Promise<PromiseSettledResult<R>[]> {
-  const results: PromiseSettledResult<R>[] = new Array(items.length);
+  const results = Array.from<PromiseSettledResult<R>>({ length: items.length });
   let nextIndex = 0;
 
   async function worker(): Promise<void> {

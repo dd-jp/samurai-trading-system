@@ -180,7 +180,7 @@ export async function runTickPlan(
   config: TickLoopConfig,
 ): Promise<TickOutcome[]> {
   const newTraceId = config.newTraceId ?? randomUUID;
-  const outcomes: TickOutcome[] = new Array(plan.instruments.length);
+  const outcomes = Array.from<TickOutcome>({ length: plan.instruments.length });
 
   // Shared cursor over the plan: each worker claims the next index until the
   // plan is exhausted, so a slow instrument never holds up the queue behind

@@ -487,6 +487,7 @@ async function redistributeFlattenFills(
   // check right below and falls through to the `getFlattenAttribution` lookup
   // instead — see that lookup's own comment for what happens to it from
   // there, and why it is safe
+  // oxlint-disable-next-line unicorn/no-useless-spread -- the copy itself is the point, see comment above
   for (const clientOrderId of [...byLot.keys()]) {
     // a lot's own bucket — the existing path
     if (positionKeys.has(clientOrderId)) continue;

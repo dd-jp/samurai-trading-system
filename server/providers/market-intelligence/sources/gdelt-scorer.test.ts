@@ -28,7 +28,7 @@ const BUCKETS = DEFAULT_GDELT_WINDOWS.baselineWindowMs / SIGNAL_MS;
 const BASELINE_START = WINDOW_END.getTime() - SIGNAL_MS - DEFAULT_GDELT_WINDOWS.baselineWindowMs;
 
 function projectedPayload(themes: readonly string[], tone: number): string {
-  const columns = new Array<string>(27).fill('');
+  const columns = Array.from({ length: 27 }, () => '');
   columns[0] = 'record-1';
   columns[1] = '20260903120000';
   columns[3] = 'fixture.test';
