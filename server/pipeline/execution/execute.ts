@@ -83,6 +83,7 @@ export class ExecutionImpl implements Execution {
 }
 
 /** Acts only on a `go`; records the submission, does not block until filled */
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the dedup gate, write-ahead-before-broker-call, and exit-retry walk are each ordered for a race/double-submit hazard named above; extracting a helper would relocate an early `return` uncaught by the compiler, silently changing what short-circuits the order path
 export async function executeVerdict(
   input: SubmitInput,
   verdict: VerdictDecision,
@@ -460,6 +461,7 @@ function decisionPriceFor(order: OrderIntent): number | null {
 }
 
 /** The unbounded body of `captureSubmitSnapshot` — see there for the contract */
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the `prices_own_fills` early return sits inside the quote-read branch and must return the FULL snapshot, not just a cost-model result — splitting quote and cost-model reads into helpers would strand that early return with no clean way to still short-circuit the whole function from inside it
 async function readSubmitSnapshot(
   input: SubmitInput,
   order: OrderIntent,
@@ -733,6 +735,7 @@ async function resolveExitRetryKey(
  *    unprotected so the #549 sweep re-arms them.
  * 4. **Submit, then resolve the journal row.**
  */
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the four numbered steps above are ordered specifically to avoid the reverse-position hazard named above (cancel-before-flatten); splitting into helpers risks a cancel-then-submit reorder the compiler cannot tell apart from the safe version
 async function executeExit(
   input: SubmitInput,
   order: OrderIntent,
