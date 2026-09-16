@@ -1,78 +1,9 @@
 /**
- * SQLite-backed `SharedStore` (server/pipeline/execution/types.ts) over `open_positions`,
- * `fills` and `closed_trades` (#193) — the real store behind Execution's
- * write-ahead port. See docs/specs/shared-sqlite-store-spec.md ("Execution"
- * schema section) and docs/specs/execution-spec.md ("Module: Idempotency &
- * Crash-Restart").
- *
- * Execution is these three tables' sole writer (cross-spec §4), so every
- * method here is a direct, un-negotiated read/write against them — no
- * business logic lives here, only the port-to-schema translation. `better-sqlite3`
- * is synchronous; the `Promise`-returning methods are the port's shape
- * (`SharedStore`), not evidence of async I/O.
- *
- * Two conventions carried from `SqliteSetupStore` (server/pipeline/trader/sqlite-setup-store.ts):
- *
- * 1. **Timestamps are ISO-8601 UTC TEXT**, written through
- *    `toStoredTimestamp` and read back through `fromStoredTimestamp`
- *    (`shared/store/sqlite-utils.ts`, #837 M7). Those helpers are where the
- *    fixed-width form is held, and `ORDER BY opened_at` below is a TEXT sort
- *    that is chronological only because of it. The store tests here do NOT
- *    catch a uniform format regression — every write and bound parameter
- *    flows through the same helper, so rows stay mutually consistent even if
- *    the format drifts. The write-side `STORED_TIMESTAMP` regex inside
- *    `toStoredTimestamp` is the actual enforcement point (#884); don't relax
- *    it on the strength of these tests staying green.
- * 2. **JSON columns** (`broker_order_ids`, `cost_breakdown_json`) round-trip
- *    through `JSON.stringify`/`JSON.parse` at this boundary only — the port
- *    never sees the serialized form.
- *
- * ## `open_positions` row lifecycle (#1088)
- *
- * A row is write-ahead INSERTed at `pending` by `writeAheadPosition`, before
- * the broker call — so a crash in that gap always leaves a recoverable
- * record (`reconcile()`, #86). From there it moves through exactly one of
- * two paths:
- *
- * - **Never lands**: `pending` → `rejected` when `reconcile()` asks the
- *   venue and the venue authoritatively has no such order (the write-ahead
- *   died, or was cancelled before ack). Also reachable directly from
- *   `pending`/`submitted` as `cancelled` or `expired` when the venue reports
- *   one of those states instead. None of these ever advance again — no code
- *   path resubmits a terminal lot under its own key (a NEW decision, if one
- *   is made, gets a NEW `idempotency_key`, per `computeIdempotencyKey`'s
- *   `(instrument, bar, side, arm)` hash).
- * - **Lands and fills**: `pending` → `submitted` → `partially_filled` →
- *   `filled` (`ingestFills`, driven by persisted `Fill` rows, never by this
- *   store's own state) → `closed` on round-trip-to-flat, atomically with a
- *   `closed_trades` row (`applyLotAdvance`'s single transaction). `closed`
- *   is therefore the one terminal state that is never reached with
- *   `filled_size = 0`.
- *
- * `getOpenPositions()` (below) excludes all five terminal states from every
- * live read — crash recovery, Risk's exposure caps, the dashboard — so a
- * terminal row sitting in the table is inert to every reader; it does not
- * corrupt anything downstream. Before #1088, though, nothing ever removed
- * one: the table was an unbounded, growing journal, and a `rejected` row
- * accumulated indefinitely (observed: 10 terminal rows to 1 live row, one
- * `rejected` row eight days old). That is a RETENTION defect, not a
- * correctness one — the fix (`sweepTerminalPositions`, called from
- * `reconcile()`) deletes what is provably safe to lose and leaves the rest:
- *
- * - `rejected`/`cancelled`/`expired` rows with `filled_size = 0` were never
- *   real positions — no fill, no `closed_trades` row, ever. Their
- *   originating decision is separately, durably logged (`debate_log`,
- *   `verdict_log`), so nothing HMRC/CGT-relevant is lost. Age-gated (see
- *   `sweepTerminalPositions`'s own doc, types/store.ts) so a hard-delete
- *   cannot free an `idempotency_key` a still-plausible crash-restart replay
- *   would reuse.
- * - `closed` rows are RETAINED, not swept — see `sweepTerminalPositions`'s
- *   doc for why (the #1001 submit-time snapshot columns have no
- *   `closed_trades` counterpart, and CLAUDE.md's HMRC/CGT "track everything"
- *   retention requirement makes deleting them a separate decision).
- * - A terminal row with `filled_size > 0` that never reached `closed` (this
- *   should not occur; nothing in this file writes one) is left untouched
- *   rather than guessed at.
+ * SQLite-backed `SharedStore` over `open_positions`, `fills` and
+ * `closed_trades` (#193) — Execution's sole writer; no business logic here,
+ * only schema translation. Timestamps are ISO-8601 UTC TEXT via
+ * `toStoredTimestamp`/`fromStoredTimestamp` (sorts correctly as TEXT). JSON
+ * columns round-trip via stringify/parse at this boundary only.
  */
 
 import type {
@@ -107,32 +38,18 @@ import type {
 } from './types.js';
 
 /**
- * The subset of `TERMINAL_ORDER_STATES` `sweepTerminalPositions` deletes —
- * `TERMINAL_ORDER_STATES` minus `closed` and `abandoned` (#1088, amended
- * #1186). See that method's doc (types/store.ts) and this file's "row
- * lifecycle" section above for why `closed` is excluded.
- *
- * `abandoned` must stay excluded too: this sweep's own age gate
- * (`decision_timestamp < cutoff`, `TERMINAL_SWEEP_AGE_MS` in reconcile.ts) is
- * the SAME 24h window `wedged-zero-fill-sweep.ts` uses to decide a lot is
- * wedged — so an abandoned row's `decision_timestamp` is already past that
- * cutoff the moment it is written, and `filled_size = 0` already matches
- * this sweep's other predicate. Leaving `abandoned` sweepable would delete
- * `abandon_reason` (the record #1186 exists to keep) on the very next
- * reconcile pass.
+ * `TERMINAL_ORDER_STATES` minus `closed` and `abandoned` (#1088, #1186) —
+ * sweeping `abandoned` would delete `abandon_reason` on the very next
+ * reconcile pass, since its age gate is already past cutoff when written
  */
 const SWEEPABLE_TERMINAL_STATES: readonly OrderState[] = TERMINAL_ORDER_STATES.filter(
   (state) => state !== 'closed' && state !== 'abandoned',
 );
 
 /**
- * The only two leg predicates `fillSizesByLeg` will put in its SQL, chosen by
- * name rather than passed in as text (#568 review). Frozen so the lookup
- * cannot be mutated into a third value at runtime either.
- *
- * `'exit'` is `leg != 'entry'` rather than an enumeration of the closing
- * legs, so it stays the SQL spelling of `ingest-fills.ts`'s `isExitFill` and
- * cannot drift from it if a fourth leg is ever added.
+ * Frozen so `fillSizesByLeg`'s SQL predicate can't be mutated at runtime
+ * (#568). `'exit'` is `leg != 'entry'` so it can't drift from
+ * `ingest-fills.ts`'s `isExitFill` if a fourth leg is added.
  */
 const LEG_PREDICATES = Object.freeze({
   entry: "leg = 'entry'",
@@ -141,13 +58,8 @@ const LEG_PREDICATES = Object.freeze({
 
 /**
  * Thrown when the write-ahead INSERT loses a race for an idempotency key.
- *
- * A named type rather than a message prefix because `execute()` has to
- * DISCRIMINATE on it: a duplicate key means another caller already acted on
- * this decision (answer `deduped`), while any other failure means the
- * write-ahead did not happen and must not be mistaken for one. String-matching
- * that distinction would make the message load-bearing, and the first person to
- * reword it would silently turn real store failures into dedup responses.
+ * A named type, not a message prefix, so `execute()` can discriminate a
+ * dedup (`deduped`) from a genuine store failure without string-matching.
  */
 export class DuplicatePositionError extends Error {
   constructor(readonly idempotency_key: string) {
@@ -173,16 +85,10 @@ class DuplicateFlattenSubmissionError extends Error {
 }
 
 /**
- * #1214 review — a flatten was refused because ANOTHER flatten on the same
- * instrument is still unresolved, so submitting this one would put two market
- * orders on the same held quantity (the #516 reverse-position hazard).
- *
- * Named, like `DuplicateFlattenSubmissionError`, because both callers have to
- * DISCRIMINATE on it: this is not a store failure but a deliberate refusal, and
- * the right answer to it is to stand down quietly (`executeExit` → `deduped`,
- * `reflattenResidual` → `flatten_in_flight`) rather than to report a broken
- * journal. `blocking_key` names the row that stood this one down, so a log line
- * says which flatten reconcile must settle before the instrument moves again.
+ * Thrown when a flatten is refused because another flatten on the same
+ * instrument is unresolved (#1214) — two live flattens could reverse the
+ * position (#516). Callers discriminate on this to stand down quietly rather
+ * than report a broken journal.
  */
 export class UnresolvedFlattenForInstrumentError extends Error {
   constructor(
@@ -201,63 +107,17 @@ export class UnresolvedFlattenForInstrumentError extends Error {
 
 export class SqliteExecutionStore implements SharedStore {
   /**
-   * Which arm's book this instance reads and writes (#753).
-   *
-   * **One class, two instances — never two classes.** #753's acceptance
-   * criterion is that both arms share the same exit rule and the same stop
-   * *asserted, not configured twice*, and the same argument applies one layer
-   * down: a second store implementation for the control arm would be a second
-   * place for the two arms' persistence to drift. So the arm is a CONSTRUCTOR
-   * ARGUMENT to the one store, and every behaviour below is literally the same
-   * code for both arms.
-   *
-   * It does exactly two things. It is stamped onto the tables that make up
-   * the trade record (`open_positions`, `closed_trades`, and — migration
-   * 0050, #1124 — `flatten_submissions`), and it filters the three SCAN
-   * queries built over them — `getOpenPositions()`, `getUnprotectedResidualLots()`
-   * and `getUnresolvedFlattens()`. Those scans are what feed the live arm's
-   * exposure caps, its whole-book valuation, its residual-protection sweep
-   * and its flatten-reconcile sweep, so filtering them is what keeps the
-   * control arm from consuming the live arm's headroom, tripping its
-   * breakers, or having ITS OWN broker asked about the OTHER arm's order
-   * (#1124: unfiltered, this scan let the live arm's `reconcile()` ask the
-   * real venue about a control-arm `client_order_id` it never received —
-   * genuinely, correctly "no such order" from the WRONG adapter, not a race
-   * in `SimulatedBrokerAdapter`'s own book). The arms share a tape; they
-   * must not share a book.
-   *
-   * Key-based reads and writes are deliberately unfiltered — `arm` is a hash
-   * input to `idempotency_key` (#753, `computeIdempotencyKey`), so the two arms
-   * occupy disjoint key spaces and a key lookup cannot cross arms.
-   *
-   * Defaults to `'live'`, so every existing construction keeps exactly the
-   * behaviour it had.
+   * Which arm's book this instance reads/writes (#753). One class, two
+   * instances — never two classes, so persistence can't drift between arms.
+   * Stamped on every row and filters the SCAN queries; key-based reads/writes
+   * are unfiltered since `arm` is already hashed into `idempotency_key`.
    */
   private readonly arm: TradingArm;
 
   /**
-   * The declared ceiling `sizingEquity` (direct-bind.ts) clamped THIS arm's
-   * asks against, stamped onto every row this instance writes — #1112 AC5,
-   * migration 0045.
-   *
-   * Same reasoning as `arm` immediately above: the writer's identity is the
-   * fact being recorded, not a field carried on the `OpenPosition`/
-   * `ClosedTrade` object, so a caller cannot mislabel a row by constructing
-   * one with the wrong value. `undefined` (stored as `NULL`) means no
-   * ceiling was declared when this instance was built — the true state of
-   * every construction before #1112 and of every non-paper, non-live
-   * construction since (backtest, `smoke-run.ts`, `place-soak-position.ts`),
-   * which is exactly why it defaults to `undefined` rather than to a
-   * sentinel number.
-   *
-   * Carries whatever value `ProductionConfig.capitalCeilingUsd` held: a
-   * declared USD figure on a live run, and since #1180 a CONVERTED one on a
-   * paper run (`LIVE_BOOK_SIZING_USD`, the GBP book times
-   * `SIZING_USD_PER_GBP`) where it used to be the raw GBP book. Migration
-   * 0052 normalized the rows stamped before that conversion, so equality over
-   * the column still holds across the change. The column
-   * (`sizing_capital_ceiling`) is named without a currency suffix because it
-   * records the declared ceiling's value, not a claim about its unit.
+   * The declared ceiling this instance's asks were clamped against, stamped
+   * on every row it writes (#1112 AC5). `undefined` means no ceiling was
+   * declared (pre-#1112, or a non-paper/non-live construction).
    */
   private readonly sizingCapitalCeiling: number | undefined;
 
@@ -271,14 +131,9 @@ export class SqliteExecutionStore implements SharedStore {
   }
 
   /**
-   * True if an order already exists under this key. Two tables, because two
-   * write-ahead paths use this one key space: `open_positions` for entry/
-   * scale_in (a `Fill` never exists without the `OpenPosition` row
-   * `execute()` write-aheads first, so an existing fill implies an existing,
-   * still-present position row) and `flatten_submissions` for exit (#508
-   * review, PR #516) — an exit has no bracket and writes no `OpenPosition`,
-   * so without this second check a replayed exit would sail past this gate
-   * every time.
+   * True if an order already exists under this key. Checks both
+   * `open_positions` (entry/scale_in) and `flatten_submissions` (exit, #508)
+   * — an exit writes no `OpenPosition`, so only the second table catches a replay.
    */
   async findByKey(idempotency_key: string): Promise<boolean> {
     const positionRow = this.db
@@ -294,12 +149,8 @@ export class SqliteExecutionStore implements SharedStore {
 
   /**
    * Write-ahead: INSERT before the broker call, so a crash in the gap leaves
-   * a recoverable `pending` row (#86 reconciles it). A duplicate key surfaces
-   * as `DuplicatePositionError` rather than being silently upserted: the row
-   * that won the race is another caller's in-flight order, and overwriting it
-   * would erase the broker ids reconciliation needs. `execute()`'s `findByKey`
-   * gate normally prevents this; the PK is the backstop for two callers that
-   * both pass that gate before either has written.
+   * a recoverable `pending` row (#86 reconciles it). A duplicate key throws
+   * `DuplicatePositionError` rather than upserting, to avoid erasing broker ids.
    */
   async writeAheadPosition(position: OpenPosition): Promise<void> {
     try {
@@ -333,13 +184,9 @@ export class SqliteExecutionStore implements SharedStore {
           toStoredTimestamp(position.decision_timestamp),
           position.conviction,
           position.converged ? 1 : 0,
-          // #753: this INSTANCE's arm, not a field off the position — the
-          // writer's identity is the fact being recorded, and reading it off
-          // the row would let a mislabelled `OpenPosition` file a control lot
-          // into the live arm's book
+          // #753: this instance's arm — see the `arm` field's doc above
           this.arm,
-          // #1001, migration 0037 — best-effort submit-time snapshot; see
-          // `OpenPosition`'s own field docs (records.ts) for what each is
+          // #1001 — best-effort submit-time snapshot, see `OpenPosition`'s field docs
           position.decision_price ?? null,
           position.quote_bid ?? null,
           position.quote_ask ?? null,
@@ -350,12 +197,11 @@ export class SqliteExecutionStore implements SharedStore {
           position.modelled_cost_breakdown === undefined
             ? null
             : JSON.stringify(position.modelled_cost_breakdown),
-          // #1301, migration 0061 — the protective legs' own estimate, from the
-          // same capture pass
+          // #1301 — the protective legs' own cost estimate, same capture pass
           position.modelled_protective_exit_cost_breakdown === undefined
             ? null
             : JSON.stringify(position.modelled_protective_exit_cost_breakdown),
-          // #1112 AC5, migration 0045 — see `sizingCapitalCeiling`'s own doc
+          // #1112 AC5 — see `sizingCapitalCeiling`'s own doc
           this.sizingCapitalCeiling ?? null,
         );
     } catch (cause) {
@@ -389,11 +235,8 @@ export class SqliteExecutionStore implements SharedStore {
     const placeholders = TERMINAL_ORDER_STATES.map(() => '?').join(', ');
     const rows = this.db
       .prepare(
-        // #753: arm-scoped. This is the read the Trader's position awareness,
-        // `computePortfolioView` and every Risk exposure cap run on, so an
-        // unfiltered scan here would put the control arm's lots into the live
-        // arm's book — halving its headroom and letting a control drawdown
-        // move a live breaker
+        // #753: arm-scoped — an unfiltered scan would put the control arm's
+        // lots into the live arm's book
         `SELECT * FROM open_positions
           WHERE arm = ? AND order_state NOT IN (${placeholders})
           ORDER BY opened_at`,
@@ -407,9 +250,7 @@ export class SqliteExecutionStore implements SharedStore {
     const placeholders = SWEEPABLE_TERMINAL_STATES.map(() => '?').join(', ');
     const result = this.db
       .prepare(
-        // #753: arm-scoped, same reason as every other scan in this class —
-        // a control-arm row must never be swept (or left unswept) by the
-        // live arm's cadence, or vice-versa
+        // #753: arm-scoped, same reason as every other scan in this class
         `DELETE FROM open_positions
           WHERE arm = ? AND order_state IN (${placeholders})
             AND filled_size = 0 AND decision_timestamp < ?`,
@@ -422,19 +263,10 @@ export class SqliteExecutionStore implements SharedStore {
   async abandonWedgedZeroFillLot(idempotency_key: string, reason: string): Promise<boolean> {
     const result = this.db
       .prepare(
-        // #753: arm-scoped like every other write in this class, though in
-        // practice a wedge can occur on either arm — the control arm runs
-        // `ingestFills()` too. WHERE-guarded on the exact wedge shape rather
-        // than trusting the caller's worklist read: see this method's own
-        // doc (types/store.ts) for why a race must not overwrite a lot that
-        // un-wedged itself between read and write
-        //
-        // `order_state IN (...) AND filled_size = 0` restates
-        // `isWedgedZeroFillLot` (key-scheme-guard.ts) in SQL — a WHERE clause
-        // cannot import a TS predicate. Widen one without the other and this
-        // guard silently rejects rows the TS predicate still calls wedged;
-        // the caller (wedged-zero-fill-sweep.ts) re-checks after a no-op to
-        // catch exactly that divergence (#1601)
+        // #753: arm-scoped, though a wedge can occur on either arm
+        // WHERE-guarded on the exact wedge shape so a race can't overwrite a
+        // lot that un-wedged itself between read and write; mirrors
+        // `isWedgedZeroFillLot` (key-scheme-guard.ts) in SQL — keep in sync (#1601)
         `UPDATE open_positions
             SET order_state = 'abandoned', abandon_reason = ?
           WHERE arm = ? AND idempotency_key = ?
@@ -445,25 +277,9 @@ export class SqliteExecutionStore implements SharedStore {
   }
 
   /**
-   * Dedup gate for the fill feed's re-offered fills. Matched on the FULL
-   * `fills` primary key — `(idempotency_key, broker_fill_id)` — not on
-   * `broker_fill_id` alone (#1320), for the reason #313's observed-fill
-   * prune matched the full key on this same table before it was retired
-   * (#1059): `fills` has no venue column
-   * and `broker_fill_id` is venue-assigned, so two venues (or, short of a
-   * second live venue, two lots sharing one id string — see the flatten
-   * split's `:${lotKey}` suffix in `ingest-fills.ts`) could otherwise let
-   * one lot's ingested fill be misread as covering another's.
-   *
-   * Takes one object rather than two positional strings (#1328): the old
-   * two-argument form no longer compiles, closing a POSITIONAL swap. A
-   * mislabeled object (both fields swapped under the correct key names) is
-   * now also caught at compile time (#1334): `broker_fill_id` is branded
-   * `BrokerFillId`, so a plain-`string` `idempotency_key` cannot land in the
-   * `broker_fill_id` field. Declared via `SharedStore['hasFill']`'s own
-   * parameter type rather than restated inline: `implements` checks method
-   * parameters bivariantly, so an inline `string` here would still compile
-   * and silently drop the brand.
+   * Dedup gate matched on the full `fills` PK — `(idempotency_key,
+   * broker_fill_id)`, not `broker_fill_id` alone (#1320) — since
+   * `broker_fill_id` is venue-assigned and not unique across lots
    */
   async hasFill({
     idempotency_key,
@@ -477,8 +293,7 @@ export class SqliteExecutionStore implements SharedStore {
 
   /**
    * One row per (partial) fill. `(idempotency_key, broker_fill_id)` is the
-   * table's PK, so a duplicate write — which `hasFill` is meant to prevent —
-   * surfaces as a constraint violation rather than silently double-counting.
+   * PK, so a duplicate write surfaces as a constraint violation, not double-counting.
    */
   private insertFill(fill: Fill): void {
     try {
@@ -518,10 +333,9 @@ export class SqliteExecutionStore implements SharedStore {
   }
 
   /**
-   * Every fill for a lot, in ingestion order — `rowid` (SQLite's implicit
-   * insertion-order column) breaks ties that same-millisecond timestamps
-   * cannot, which is what lets `ingestFills()` reconstruct realized size and
-   * avg price deterministically rather than trusting a running total
+   * Every fill for a lot, in ingestion order — `rowid` breaks ties
+   * same-millisecond timestamps can't, so `ingestFills()` can reconstruct
+   * state deterministically
    */
   async getFills(idempotency_key: string): Promise<Fill[]> {
     const rows = this.db
@@ -531,45 +345,23 @@ export class SqliteExecutionStore implements SharedStore {
   }
 
   /**
-   * #517's batch read: one `SUM(qty) ... GROUP BY` query for every named lot
-   * rather than N `getFills` round-trips. Shape follows
-   * `SqliteQueryStore.getMarks`' precedent (dashboard/sqlite-query-store.ts)
-   * — the placeholder list is built from `idempotency_keys.length`, never
-   * from the strings themselves, so the values stay bound parameters; a key
-   * with no persisted entry fill has no `GROUP BY` row and is therefore
-   * simply absent from the returned `Map`.
+   * #517: one `SUM(qty) ... GROUP BY` query for every named lot rather than
+   * N `getFills` round-trips. A key with no persisted entry fill is absent
+   * from the returned map.
    */
   async getEntryFillSizes(idempotency_keys: readonly string[]): Promise<Map<string, number>> {
     return this.fillSizesByLeg(idempotency_keys, 'entry');
   }
 
-  /**
-   * #568's mirror of the above over the CLOSING legs — the quantity to
-   * subtract from `filled_size` to get what a lot still holds (see
-   * `shared/held-quantity.ts`). `leg != 'entry'` rather than an enumeration of
-   * the three closing legs, so it stays the SQL spelling of
-   * `ingest-fills.ts`'s `isExitFill` and cannot drift from it if a fourth leg
-   * is ever added.
-   */
+  /** #568's mirror of `getEntryFillSizes` over the closing legs (see `shared/held-quantity.ts`) */
   async getExitFillSizes(idempotency_keys: readonly string[]): Promise<Map<string, number>> {
     return this.fillSizesByLeg(idempotency_keys, 'exit');
   }
 
   /**
-   * The batch read both of the above are.
-   *
-   * The caller names a SIDE (`'entry' | 'exit'`), and the SQL fragment is
-   * chosen from a frozen table here (#568 review). It used to take the
-   * fragment itself as a two-literal union, which was safe in practice — the
-   * method is private and both call sites are above — but rested on a type
-   * that does not exist at runtime: one `as` cast, or a plain-JS caller after
-   * a build step, and an arbitrary string reaches the SQL text of a
-   * live-money store. A lookup cannot be talked into a value that is not in
-   * the table, whatever the type says.
-   *
-   * The idempotency keys were never interpolated and still are not — they
-   * stay bound parameters, with the placeholder list built from `length`
-   * alone.
+   * The shared batch read behind both methods above. The SQL fragment is
+   * chosen from a frozen table (#568), never taken as a literal, so an
+   * `as`-cast caller can't reach arbitrary SQL text on a live-money store.
    */
   private async fillSizesByLeg(
     idempotency_keys: readonly string[],
@@ -610,9 +402,7 @@ export class SqliteExecutionStore implements SharedStore {
 
   /**
    * The realized record, written once on round-trip-to-flat. `idempotency_key`
-   * is the table's PK, so a second write for the same lot — which would mean
-   * `ingestFills()` closed it twice — surfaces as a constraint violation
-   * rather than a silent overwrite.
+   * is the PK, so a second write for the same lot is a constraint violation.
    */
   private insertClosedTrade(trade: ClosedTrade): void {
     try {
@@ -639,23 +429,12 @@ export class SqliteExecutionStore implements SharedStore {
           toStoredTimestamp(trade.opened_at),
           toStoredTimestamp(trade.closed_at),
           trade.close_reason,
-          // #753 — this instance's arm, for the reason `writeAheadPosition`
-          // states. THIS is the column `SELECT ... WHERE arm = 'control'` reads
-          // and the one the arm comparison report groups on, which is what makes
-          // "the control arm's trades are distinguishable in the trade record" a
-          // queryable property rather than an inference
+          // #753 — this instance's arm; what makes arm comparison queryable
           this.arm,
-          // #1112 AC5, migration 0045 — see `sizingCapitalCeiling`'s own doc
-          // A window that mixes NULL and non-NULL (or two different non-NULL)
-          // values here mixes two sizing regimes into one `return_pct`
+          // #1112 AC5 — see `sizingCapitalCeiling`'s own doc
           this.sizingCapitalCeiling ?? null,
-          // #1121 AC5, migration 0049 — what actually happened to THIS lot's
-          // fills, computed at close time by `closedTrade()` in
-          // `ingest-fills.ts`, never a literal. Going through `toFill`'s #1121
-          // path is not the same as being charged by it: the modelled snapshot
-          // it spends is nullable (pre-migration-0037 lot, or a failed
-          // `captureSubmitSnapshot`), and a `1` stamped on such a row would
-          // certify a cost basis the row is not on
+          // #1121 AC5 — what actually happened to this lot's fills, computed
+          // at close time by `closedTrade()`; nullable pre-migration-0037
           trade.modelled_cost_charged ? 1 : 0,
         );
     } catch (cause) {
@@ -672,13 +451,8 @@ export class SqliteExecutionStore implements SharedStore {
   }
 
   /**
-   * One poll's advance of a lot, in a single transaction — the fills, the
-   * recomputed lot state, and (on round-trip-to-flat) the `ClosedTrade`
-   * commit together or not at all. A crash mid-advance rolls back cleanly,
-   * so the next poll's `hasFill` gate sees none of it and re-ingests the
-   * re-offered fills; the un-transacted version of this left a lot whose
-   * persisted fills said one thing and whose `filled_size` said another,
-   * forever (`hasFill` skipped the repair).
+   * One poll's advance of a lot, in a single transaction — fills, lot state,
+   * and (on round-trip-to-flat) the `ClosedTrade` commit together or not at all
    */
   async applyLotAdvance(advance: LotAdvance): Promise<void> {
     this.db.transaction(() => {
@@ -695,27 +469,10 @@ export class SqliteExecutionStore implements SharedStore {
   }
 
   /**
-   * Write-ahead: INSERT at `'submitting'` before `broker.submitFlatten` is
-   * called — `writeAheadPosition`'s reasoning applies unchanged, only the
-   * table differs. A duplicate key surfaces as `DuplicateFlattenSubmissionError`
-   * for the same reason `writeAheadPosition` distinguishes it: `execute()`'s
-   * `findByKey` gate normally prevents this, so a collision here means a
-   * concurrent caller won the same race, not a generic write failure.
-   *
-   * #1214 review — the one-flatten-per-instrument invariant is enforced HERE,
-   * in the same synchronous better-sqlite3 transaction as the INSERT, rather
-   * than by each caller reading `getUnresolvedFlattens()` first. Two submitters
-   * exist (`executeExit`'s flatten window and `reflattenResidual`'s residual
-   * walk) on two independent timers, so a caller-side read leaves a real window
-   * between "no flatten is in flight" and "my row exists" in which the other
-   * caller can journal and submit. Inside the transaction there is no such
-   * window: better-sqlite3 is synchronous and neither caller can interleave
-   * with it, so the check and the row that answers it commit together.
-   *
-   * The predicate is `getUnresolvedFlattens`' own, arm filter included — the
-   * two must agree, or a row invisible to reconcile could block a flatten
-   * nothing will ever unblock, or (arm dropped) the control arm's rows could
-   * stand the live arm's mandatory flat-by-close down.
+   * Write-ahead: INSERT at `'submitting'` before `broker.submitFlatten`
+   * (mirrors `writeAheadPosition`). The one-flatten-per-instrument check
+   * (#1214) runs in the SAME transaction as the INSERT — a caller-side read
+   * first would leave a race window between two concurrent submitters.
    */
   async writeAheadFlatten(submission: FlattenSubmissionWriteAhead): Promise<void> {
     try {
@@ -767,14 +524,12 @@ export class SqliteExecutionStore implements SharedStore {
         submission.side,
         submission.size,
         toStoredTimestamp(submission.submitted_at),
-        // Both columns projected from the SAME array in the same statement,
-        // so the pairing they encode positionally cannot be wrong here
-        // `getFlattenAttribution` re-establishes it on the way out
+        // Both columns projected from the same array — the positional
+        // pairing is re-established by `getFlattenAttribution`
         JSON.stringify(submission.lot_held_quantities.map((lot) => lot.idempotency_key)),
         JSON.stringify(submission.lot_held_quantities.map((lot) => lot.held)),
         submission.exit_reason,
-        // #1001, migration 0037 — see `FlattenSubmissionWriteAhead`'s own
-        // field docs (types/store.ts)
+        // #1001 — see `FlattenSubmissionWriteAhead`'s field docs
         submission.decision_price,
         submission.quote_bid,
         submission.quote_ask,
@@ -785,10 +540,7 @@ export class SqliteExecutionStore implements SharedStore {
         submission.modelled_cost_breakdown === null
           ? null
           : JSON.stringify(submission.modelled_cost_breakdown),
-        // #1124, migration 0050 — this INSTANCE's arm, the same posture
-        // `writeAheadPosition`/`insertClosedTrade` already take: the
-        // writer's identity is the fact being recorded, not a field the
-        // caller can mislabel via `FlattenSubmissionWriteAhead`
+        // #1124 — this instance's arm, same posture as `writeAheadPosition`
         this.arm,
       );
   }
@@ -841,13 +593,8 @@ export class SqliteExecutionStore implements SharedStore {
   }
 
   /**
-   * Pure read — see `SharedStore.isRetryableFlattenError` for the invariant
-   * this backs (a fresh retry key is only safe over a row PROVABLY dead at
-   * the venue, which since #1214's review is either "never landed" or "the
-   * venue terminally refused it having filled nothing"). A key naming no row
-   * at all is `false`, same as a
-   * `'submitting'`/`'submitted'` row: only `'error'` clears the walk in
-   * `execute.ts`'s `resolveExitRetryKey` to try this exact candidate again.
+   * Pure read backing the invariant that a retry key is only safe over a row
+   * provably dead at the venue (#1214) — only `'error'` clears the retry walk
    */
   async isRetryableFlattenError(idempotency_key: string): Promise<boolean> {
     const row = this.db
@@ -857,17 +604,8 @@ export class SqliteExecutionStore implements SharedStore {
   }
 
   /**
-   * #517's read, widened by #571: which lot(s) a flatten submission was
-   * journalled to close, and what each of them HELD when it was submitted.
-   * `null` covers both "no such flatten" and "a flatten row written before
-   * migration 0020" — `ingestFills()` treats them identically (cannot
-   * attribute), so this does not distinguish them further.
-   *
-   * `lot_held_quantities` reads `null` on its own for a row written before
-   * migration 0021 — attributable, but only by the pre-#571 entry-total
-   * split. Both columns come back in ONE query: the length agreement between
-   * them is an invariant of the row, so the one place that can check it is
-   * the one place that reads it.
+   * #517/#571: which lot(s) a flatten closed, and what each held when
+   * submitted. `null` covers "no such flatten" and pre-migration rows alike.
    */
   async getFlattenAttribution(idempotency_key: string): Promise<FlattenAttribution | null> {
     const row = this.db
@@ -889,32 +627,15 @@ export class SqliteExecutionStore implements SharedStore {
       | undefined;
     if (row === undefined || row.lot_idempotency_keys === null) return null;
 
-    // #1001, migration 0037 — the flatten's own submit-time modelled cost
-    // breakdown, prorated and attached to each named lot's split exit fill
-    // by `redistributeOneFlatten` (ingest-fills.ts). `null` for a flatten row
-    // written before this migration, or whose submit-time capture failed
-    //
-    // #1014 review, finding 4: VALIDATED, not cast — the same defect class
-    // #509 closed repo-wide, and the same one the `lot_idempotency_keys`
-    // block below already guards against. See
-    // `parseModelledCostBreakdownColumn` for why this one degrades to `null`
-    // where those two throw
+    // #1001 — the flatten's own submit-time cost breakdown, prorated per lot
+    // by `redistributeOneFlatten`. Validated not cast (#1014 finding 4, #509).
     const modelledCostBreakdown = parseModelledCostBreakdownColumn(
       row.modelled_cost_breakdown_json,
     );
 
-    // Validated, not cast — the same defect class #509 closed repo-wide
-    // (a value cast to a type with no runtime check, failing far from the
-    // cause). An unvalidated `as string[]` here would let a corrupted row —
-    // or a future migration that writes a different JSON shape into this
-    // column — blow up deep inside `ingestFills()`'s allocation loop with no
-    // indication of which `flatten_submissions` row was the cause. Every
-    // failure message names `idempotency_key` (this method's own argument,
-    // generated by this codebase's own content-hash, never venue- or
-    // user-supplied text) and deliberately does NOT include the raw column
-    // value: since #507, an uncaught throw here is durably recorded to
-    // `audit_log`, and the raw content is exactly the kind of untrusted
-    // payload that record must not carry
+    // Validated, not cast (#509) — an unvalidated `as string[]` would blow up
+    // deep inside `ingestFills()`'s allocation loop with no clear cause. The
+    // raw value is withheld from the error since it reaches `audit_log` (#507)
     const keys = parseJsonColumn(idempotency_key, 'lot_idempotency_keys', row.lot_idempotency_keys);
     if (!Array.isArray(keys) || !keys.every((entry) => typeof entry === 'string')) {
       throw new Error(
@@ -936,10 +657,8 @@ export class SqliteExecutionStore implements SharedStore {
     }
 
     const held = parseJsonColumn(idempotency_key, 'lot_held_quantities', row.lot_held_quantities);
-    // The two columns encode their pairing positionally, so a length
-    // disagreement would attribute a lot's quantity to a DIFFERENT lot —
-    // silently, and on the money path. Checked before anything is paired, so
-    // what this returns needs no re-checking by its caller
+    // The two columns encode pairing positionally — a length mismatch would
+    // attribute a lot's quantity to a different lot
     if (!Array.isArray(held) || held.length !== keys.length) {
       throw new Error(
         `SqliteExecutionStore.getFlattenAttribution: flatten_submissions.lot_held_quantities for ` +
@@ -948,13 +667,8 @@ export class SqliteExecutionStore implements SharedStore {
       );
     }
 
-    // Non-negative as well as finite, because this is a quantity the split
-    // hands to the money path: `executeExit` refuses an over-exited lot BEFORE
-    // writing this row, so a negative here is a corrupted record, not a state
-    // the system can reach. Refusing it (fail closed) is the same posture
-    // `executeExit` takes rather than clamping it to something
-    // plausible-looking — a share silently skipped as "nothing to allocate"
-    // would strand that lot's quantity with no signal at all
+    // Non-negative and finite: `executeExit` refuses an over-exited lot
+    // before writing this row, so anything else is a corrupted record
     const paired: LotHeldQuantity[] = [];
     for (const [index, key] of keys.entries()) {
       const quantity: unknown = held[index];
@@ -979,28 +693,10 @@ export class SqliteExecutionStore implements SharedStore {
   }
 
   /**
-   * `reconcile()`'s worklist (#519, #526) — see `SharedStore.getUnresolvedFlattens`
-   * for the bound this query implements: `'submitting'` outright, or
-   * `'submitted'` rows not yet confirmed swept (`fills_swept_at IS NULL`).
-   * `'error'` rows are excluded by the `status` clause itself. That status is
-   * not "provably dead at the venue" — some routes into it are proof, others
-   * are `reconcile()` deciding on bounded evidence that the row may stop
-   * blocking (see `resolveFlattenError`'s callers). What it always means is
-   * SETTLED: this flatten has had its answer, and asking the venue again
-   * changes nothing.
-   *
-   * `writeAheadFlatten`'s one-flatten-per-instrument guard runs this SAME
-   * predicate — see its doc. A change here is a change to what may be
-   * submitted, not only to what reconcile looks at.
-   *
-   * `arm`-scoped since migration 0050 (#1124) — this is a SCAN, not a
-   * key-based lookup, and this class's own arm-scoping doc (above) is
-   * explicit that only key-based reads/writes may skip the filter. Left
-   * unfiltered, this call handed EACH arm's periodic `reconcile()` the
-   * OTHER arm's still-unresolved rows, so it asked its own broker about a
-   * `client_order_id` that broker never received — see the migration's own
-   * doc for the exact failure this produced (#1124's "undetermined, then
-   * adopted 7-8s later" observation).
+   * `reconcile()`'s worklist (#519, #526): `'submitting'`, or `'submitted'`
+   * not yet swept. `arm`-scoped since #1124 — unfiltered, each arm's
+   * reconcile asked its own broker about the OTHER arm's `client_order_id`.
+   * `writeAheadFlatten`'s one-flatten-per-instrument guard runs this same predicate.
    */
   async getUnresolvedFlattens(): Promise<UnresolvedFlattenSubmission[]> {
     const rows = this.db
@@ -1036,9 +732,8 @@ export class SqliteExecutionStore implements SharedStore {
   }
 
   /**
-   * A fresher venue answer on an ALREADY-`'submitted'` row — see the doc on
-   * `SharedStore.recordFlattenOrderStateObserved` for why this must not
-   * touch `resolved_at`/`status` the way `resolveFlattenSubmitted` does
+   * A fresher venue answer on an already-`'submitted'` row — must not touch
+   * `resolved_at`/`status` the way `resolveFlattenSubmitted` does
    */
   async recordFlattenOrderStateObserved(
     idempotency_key: string,
@@ -1108,12 +803,8 @@ export class SqliteExecutionStore implements SharedStore {
   }
 
   /**
-   * #549's durable marker — see `SharedStore.markResidualUnprotected`.
-   * COALESCE keeps the FIRST observation time, so a re-mark of an already
-   * open episode changes nothing (and never resets the alert dedup either).
-   * Throws when no such lot exists: a marker written against a key
-   * `open_positions` does not hold protects nothing, and silently succeeding
-   * would let the caller believe it is covered by the sweep.
+   * #549's durable marker. COALESCE keeps the first observation time. Throws
+   * on an unknown lot — silently succeeding would falsely imply sweep coverage.
    */
   async markResidualUnprotected(idempotency_key: string, observed_at: Date): Promise<void> {
     const result = this.db
@@ -1133,10 +824,8 @@ export class SqliteExecutionStore implements SharedStore {
   }
 
   /**
-   * Clears the #549 marker AND its alert-dedup timestamp together — see
-   * `SharedStore.confirmResidualProtected` for why this is the only clear
-   * path and why it is a no-op on an unmarked/unknown lot (unlike
-   * `markResidualUnprotected` above, which must not silently succeed)
+   * Clears the #549 marker and its alert-dedup timestamp together. A no-op
+   * on an unmarked/unknown lot, unlike `markResidualUnprotected` above.
    */
   async confirmResidualProtected(idempotency_key: string): Promise<void> {
     this.db
@@ -1151,10 +840,8 @@ export class SqliteExecutionStore implements SharedStore {
   }
 
   /**
-   * The #549 once-per-episode alert dedup — see `SharedStore.markResidualAlerted`
-   * for the first-writer-wins contract this WHERE clause implements: the
-   * write lands only while the episode is still un-alerted, and `changes`
-   * reports whether THIS call was the one that landed it
+   * #549's once-per-episode alert dedup — first-writer-wins: the write lands
+   * only while the episode is un-alerted; `changes` reports who won
    */
   async markResidualAlerted(idempotency_key: string, alerted_at: Date): Promise<boolean> {
     const result = this.db
@@ -1169,11 +856,8 @@ export class SqliteExecutionStore implements SharedStore {
   }
 
   /**
-   * The TRUTHFUL permanent-gap page's own dedup — see
-   * `SharedStore.markResidualRearmUnsupportedAlerted`. Same first-writer-wins
-   * WHERE-guard shape as `markResidualAlerted`, over its own column, so a
-   * pre-attempt page (which never calls this method) cannot block it and it
-   * cannot block a pre-attempt page.
+   * Same first-writer-wins dedup as `markResidualAlerted`, over its own
+   * column — a pre-attempt page can't block this, and vice versa
    */
   async markResidualRearmUnsupportedAlerted(
     idempotency_key: string,
@@ -1191,11 +875,8 @@ export class SqliteExecutionStore implements SharedStore {
   }
 
   /**
-   * Point-read of `residual_rearm_unsupported_alerted_at` — see
-   * `SharedStore.getResidualRearmUnsupportedAlertedAt`. A lot the query
-   * matches no row for reads the same as one that was never alerted (null):
-   * both mean "nothing on record says this episode already paged", which is
-   * the caller's actual question.
+   * Point-read of `residual_rearm_unsupported_alerted_at`. No matching row
+   * reads the same as `null` — both mean "never alerted".
    */
   async getResidualRearmUnsupportedAlertedAt(idempotency_key: string): Promise<Date | null> {
     const row = this.db
@@ -1210,18 +891,12 @@ export class SqliteExecutionStore implements SharedStore {
       : fromStoredTimestampOrNull(row.residual_rearm_unsupported_alerted_at);
   }
 
-  /**
-   * The #549 sweep's worklist — non-terminal lots still marked unprotected,
-   * in `opened_at` order for the same determinism `getOpenPositions()` gives
-   * its own iterating callers
-   */
+  /** The #549 sweep's worklist — non-terminal lots still marked unprotected */
   async getUnprotectedResidualLots(): Promise<UnprotectedResidualLot[]> {
     const placeholders = TERMINAL_ORDER_STATES.map(() => '?').join(', ');
     const rows = this.db
       .prepare(
-        // #753: arm-scoped, for the reason `getOpenPositions()` is — the #549
-        // sweep re-arms protection on THIS arm's lots, and an arm's sweep must
-        // not act on the other arm's book
+        // #753: arm-scoped, same reason as `getOpenPositions()`
         `SELECT * FROM open_positions
           WHERE arm = ?
             AND residual_unprotected_since IS NOT NULL
@@ -1231,11 +906,8 @@ export class SqliteExecutionStore implements SharedStore {
       .all(this.arm, ...TERMINAL_ORDER_STATES) as OpenPositionRow[];
 
     return rows.map((row) => {
-      // Non-null by the WHERE clause — a null here means the row (or the
-      // query) is corrupted, and mapping it to some default would hand the
-      // sweep a fabricated observation time. Fail loudly instead (#549
-      // review); the sweep's caller treats an unreadable worklist as "no
-      // pass", which is the honest answer
+      // Non-null by the WHERE clause — fail loudly on a corrupted row rather
+      // than fabricate an observation time (#549 review)
       if (row.residual_unprotected_since === null) {
         throw new Error(
           `SqliteExecutionStore.getUnprotectedResidualLots: row '${row.idempotency_key}' ` +
@@ -1255,9 +927,8 @@ export class SqliteExecutionStore implements SharedStore {
 }
 
 /**
- * `JSON.parse` for one `flatten_submissions` column, failing with the row and
- * column named and the raw value withheld — see `getFlattenAttribution` for
- * why the value never appears in the message
+ * `JSON.parse` for one `flatten_submissions` column; the raw value is
+ * withheld from the error — see `getFlattenAttribution`
  */
 function parseJsonColumn(idempotency_key: string, column: string, raw: string): unknown {
   try {

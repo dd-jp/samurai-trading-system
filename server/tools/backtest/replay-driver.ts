@@ -787,14 +787,10 @@ export class ReplayDriver {
 }
 
 /**
- * #793: this proxy replay models exactly three exits — a bracket hit
- * ('stop'/'target') or the signal turning ('exit', the pre-#748 shape). It
- * has no `flatten_submissions` journal and no `OrderIntent.metadata` to read
- * an `ExitReason` from, so it never produces 'flatten' | 'signal_decay' |
- * 'direction_flip' — a narrower type than `ClosedTrade['close_reason']`
- * (which now also carries those three) rather than reusing it, so a fill's
- * `leg` (unaffected by migration 0031 — `fills.leg` keeps its original four
- * values) can still be assigned `exit.reason` directly.
+ * Narrower than `ClosedTrade['close_reason']`: never 'signal_decay' or
+ * 'direction_flip', which need an `OrderIntent.metadata` this path never
+ * builds. `Fill.leg` (migration 0031, #793) keeps its original four values,
+ * so `exit.reason` maps onto it directly.
  */
 type ReplayCloseReason = 'stop' | 'target' | 'exit' | 'flatten';
 
