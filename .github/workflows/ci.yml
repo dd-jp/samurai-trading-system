@@ -55,9 +55,19 @@ jobs:
       # invariant ("neither runtime imports the other; both import contracts/").
       # Zero violations at the time this gate was added, so it starts strict rather
       # than as a backlog someone has to triage first.
+      #
+      # auto-changed-since is off on every fallow step below: its default (true)
+      # would scope findings to this PR's diff, but these gates are whole-repo by
+      # design (see the advisory comment below) — a diff-scoped boundaries check
+      # would miss a violation introduced by editing the imported side, not the
+      # importer.
       - name: Fallow architecture boundaries
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: npm run fallow:boundaries -- --format github-annotations --quiet
+        uses: fallow-rs/fallow@4f3bd9720ca6b22c8547adb7f1d225f57fc502d4 # v3
+        with:
+          command: dead-code
+          args: --boundary-violations
+          auto-changed-since: false
 
       # Advisory: dead code, duplication, and design-system drift findings across
       # the whole repo, not just this PR's diff. continue-on-error keeps these off
@@ -66,17 +76,27 @@ jobs:
       - name: Fallow dead code (advisory)
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         continue-on-error: true
-        run: npm run fallow:dead-code -- --format github-annotations --quiet
+        uses: fallow-rs/fallow@4f3bd9720ca6b22c8547adb7f1d225f57fc502d4 # v3
+        with:
+          command: dead-code
+          auto-changed-since: false
 
       - name: Fallow duplication (advisory)
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         continue-on-error: true
-        run: npm run fallow:dupes -- --format github-annotations --quiet
+        uses: fallow-rs/fallow@4f3bd9720ca6b22c8547adb7f1d225f57fc502d4 # v3
+        with:
+          command: dupes
+          auto-changed-since: false
 
       - name: Fallow design-system drift (advisory)
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         continue-on-error: true
-        run: npm run fallow:css -- --format github-annotations --quiet
+        uses: fallow-rs/fallow@4f3bd9720ca6b22c8547adb7f1d225f57fc502d4 # v3
+        with:
+          command: health
+          args: --css
+          auto-changed-since: false
 
       - name: Typecheck
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
