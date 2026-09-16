@@ -342,8 +342,6 @@ export function effectiveWindow(
   return { start, end };
 }
 
-/** One asset class's fixed symbol/periodsPerYear pairing this script drives */
-
 /** Resolves every `RunStage2Deps` optional field to its default, in one place */
 function resolveRunStage2Config(deps: RunStage2Deps): {
   window: DateRange;
@@ -515,15 +513,10 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
 
   await ingestUniverse(store, symbols, window, timeframe, print);
 
-  // The window the data can actually support, which is NOT always the window
-  // asked for: a Polygon plan serves a bounded history, and replaying the
-  // requested window against a shorter one produces an opaque
-  // `toReturnSeries: no bars in the sample` failure inside the first fold
-  //
-  // So the effective window is INTERSECTED across symbols and everything
-  // downstream — replay, folds, and MinBTL — runs on it. MinBTL's trial cap
-  // is a function of sample length, so computing it over an uncovered window
-  // would overstate how many configs the sample can support
+  // Intersected across symbols, since a Polygon plan serves a bounded
+  // history: replaying the requested window against a shorter one produces an
+  // opaque `toReturnSeries: no bars in the sample` failure inside the first
+  // fold. Everything downstream (replay, folds, MinBTL) runs on this window.
   const effective = effectiveWindow(store, window, symbols);
   warnIfWindowNarrowed(window, effective, print);
 
@@ -533,22 +526,16 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
 
   const assetClasses = buildAssetClasses(ctx, timeframe);
 
-  // State the sizing POSITIVELY, before the run, rather than reporting
-  // `exceeded: true` after 12 trials have already been spent. The cap exists
-  // to constrain the search; a reader should see what it constrained it to
+  // Sizing is stated POSITIVELY before the run, not as `exceeded: true` after
+  // trials are already spent — a reader should see what the cap constrained.
   const results = await runTrialGrid({
     assetClasses,
     window: effective,
     averageCapital,
     configTrialLog,
-    // Printed from INSIDE the run, off the sizing it actually used, rather
-    // than a second `sizeTrialGridToSample` call here — a verdict's audit
-    // trail should report what ran, not something computed alongside it
-    //
-    // N is `selected.length`, NOT `limit`: they differ whenever the cap
-    // does not bind, e.g. a 5-year window supporting ~45 trials against a
-    // 12-config cross-product, where printing `limit` would announce a
-    // 45-config grid and then run 12
+    // Reports the sizing actually used (`selected.length`), not `limit` —
+    // they differ whenever the cap doesn't bind, so printing `limit` could
+    // announce a bigger grid than what ran
     announceSizing: (sizing) =>
       print(
         `Stage 2: grid sized to N=${sizing.selected.length} from a ` +
@@ -556,9 +543,8 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
           `for ${sizing.requested}; MinBTL supports ${sizing.limit}). ` +
           'Running across stocks + crypto...',
       ),
-    // The gate run is the one caller that needs the CSCV pass: without it
-    // PBO has no configs x folds matrix to rank across and the verdict can
-    // only refuse. Costs a second evaluate() per pair over the same replay.
+    // The gate run needs the CSCV pass — without it PBO has no configs x
+    // folds matrix to rank across
     includeCscvPass: true,
   });
 
@@ -672,14 +658,12 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     `Stage 2 source: ${label} at ${runTimeframe} over ${runWindow.start.toISOString()} .. ` +
       `${runWindow.end.toISOString()}`,
   );
-  // Stated explicitly at the entrypoint rather than by changing `runStage2`'s
-  // own default, so every existing caller and test keeps the cost config it
-  // was written against and only a direct run picks up the calibrated one
-  // The SHARED store, not the scratch `dbPath` this script opens for bars:
-  // the Feedback Loop reads the frozen selection at runtime, and a verdict
-  // written to a research scratch file is a verdict nobody can act on. A
-  // direct run is the only caller that freezes; `runStage2`'s own tests pass
-  // no store and stay a dry run
+  // costConfig/dbPath/selections are all supplied here rather than by
+  // changing `runStage2`'s own defaults, so every existing caller/test keeps
+  // what it was written against and only a direct run picks up the
+  // calibrated cost config, a persisted bars store, and the SHARED selections
+  // store the Feedback Loop reads at runtime (a verdict frozen to research
+  // scratch would be unactionable).
   const shared = openSharedStore(sharedStorePath());
   runStage2({
     polygonClient,
@@ -688,9 +672,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     costConfig: costConfigFor(runTimeframe),
     window: runWindow,
     timeframe: runTimeframe,
-    // Stated here rather than by changing `runStage2`'s `:memory:` default,
-    // so only a direct run persists bars and every existing caller and test
-    // keeps the isolated in-memory store it was written against
     dbPath: STAGE2_SCRATCH_DB_PATH,
     selections: new SqliteStage2SelectionStore(shared),
   }).catch((error: unknown) => {

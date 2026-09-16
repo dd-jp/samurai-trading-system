@@ -44,11 +44,6 @@ export interface OrderIntent {
 }
 
 /**
- * `debate_id`: non-optional at every hop (OrderIntent.metadata ->
- * VerdictDecision -> every Execution record -> setup store, registry #1).
- * Deterministic hash(instrument + bar + AnalystView set).
- */
-/**
  * Closed union of exit causes (not free text) so they're greppable/countable.
  * A bracket hit (stop/target) is deliberately NOT a member — it produces no
  * OrderIntent, and is named separately in `ClosedTrade.close_reason`.
@@ -66,6 +61,7 @@ export type ExitReason =
   | 'direction_flip';
 
 export interface OrderIntentMetadata {
+  /** Deterministic hash(instrument + bar + AnalystView set); non-optional at every hop (registry #1) */
   debate_id: string;
   /**
    * `'live'` (default, optional=absent) or `'control'` (falsifier arm 2, no

@@ -3,102 +3,50 @@
  *
  * Inline backticked path citations — `` `server/pipeline/verdict/index.ts:44` `` — are
  * load-bearing evidence in this repo's decision records: a reader who cannot resolve the
- * path cannot check the reasoning. Nothing validated them before this file, and markdown
- * link checkers structurally cannot, because these are not links.
+ * path cannot check the reasoning. Markdown link checkers cannot catch a stale one because
+ * these are not links.
  *
- * ## The central risk, and the design that answers it
+ * The design errs one-directional, toward false negatives over false positives, because
+ * the two failure modes here are asymmetric: noise trains everyone to ignore red and gets
+ * the check deleted or `|| true`-d, while a "fix" that edits an ADR's path to satisfy the
+ * checker falsifies the record — the ADR said what it said, at the tree it said it about.
+ * Concretely: `IMMUTABLE_RECORD_DIRS` (four directories, listed once) is the only blanket
+ * suppression, so no contributor is ever handed a red run whose cheapest fix is editing a
+ * decision record; everything else silences per citation via an inline
+ * `<!-- cite-exempt: ... -->` marker carrying a reason and a written justification, so an
+ * exemption is a visible line in a diff with a sentence attached, never a directory quietly
+ * added to a list; and extraction is narrow by construction (`parseCandidate`) — a token
+ * must look unambiguously like a repo-relative path before it counts as a citation at all.
+ * The `planned` reason inverts and self-clears: it FAILS once its path starts resolving, so
+ * the widest exemption can't silently outlive its own truth once the module ships.
  *
- * A checker like this fails in one of two directions, and both are worse than having no
- * checker at all:
+ * Existence resolves against `git ls-files --cached` — not the working directory, which is
+ * read for exactly one thing, an indexed file's CONTENT, to count its lines. It used to
+ * `statSync` the working tree, so a clean checkout and one carrying gitignored `data/`
+ * reported different violation counts for the same commit, and a citation to a runtime
+ * artefact resolved only on a machine that happened to have produced it. `--cached` alone
+ * (deliberately not `--others --exclude-standard`) fixes that by construction: the index
+ * has no gitignored path and no runtime output, so the report is a pure function of the
+ * index plus file content, with no list of runtime directories to keep current. Two
+ * accepted costs follow from that choice, both in the safe (false-negative) direction: a
+ * file cited in the same change that creates it reads unresolved until `git add`-ed, and a
+ * new unstaged `.md` isn't scanned at all until staged. Outside a git checkout (a tarball
+ * export, a vendored copy) the checker throws rather than falling back to the filesystem,
+ * which would silently restore the working-tree dependence this design removed.
  *
- *  - **Noise.** It fires on citations that are correct-as-written, everyone learns to
- *    ignore the red, and the check gets deleted or `|| true`-d.
- *  - **Audit-trail falsification.** Someone "fixes" an ADR's path to satisfy it. That
- *    rewrites a decision record to fix a path, which falsifies the record — the ADR
- *    said what it said, at the tree it said it about.
+ * Line validation is end-of-file only: `path:44` fails if the file has fewer than 44
+ * lines, but nothing verifies line 44 still holds the cited *symbol* — the citation carries
+ * no symbol name, and a heuristic scraping one out of surrounding prose would be a
+ * false-positive generator, the direction this file must not err in.
  *
- * So the rules are deliberately asymmetric, and the whole file errs toward false
- * negatives (a stale citation slipping through) over false positives (a correct citation
- * flagged). Concretely:
- *
- *  1. `IMMUTABLE_RECORD_DIRS` are not parsed at all. Four directories, listed once, and
- *     that list is the only blanket suppression in the design. It exists precisely so
- *     that no future contributor is ever handed a red CI run whose cheapest fix is to
- *     edit a decision record.
- *  2. Everything else silences per citation, via an inline `<!-- cite-exempt: ... -->`
- *     marker carrying a reason and a written justification. An exemption is therefore a
- *     visible line in a diff with a sentence attached, not a directory quietly added to
- *     a list.
- *  3. Extraction is narrow by construction (see `parseCandidate`). A token has to look
- *     unambiguously like a repo-relative path before it is a citation at all.
- *
- * The `planned` reason inverts: a `planned` citation FAILS once its path starts
- * resolving. Without that, the widest exemption in the set would silently outlive its own
- * truth — the module ships, and a marker asserting the path does not exist yet stays on
- * a live citation forever. It is the one exemption that clears itself.
- *
- * ## The tree is the git index, never the working directory
- *
- * Existence is resolved against `git ls-files --cached`, and the set of markdown files
- * scanned and the set of known top-level roots are derived from that same listing. The
- * working directory is read for exactly one thing: the CONTENT of an indexed file, to
- * count its lines.
- *
- * It used to `statSync` the working directory instead: a citation's root had to exist
- * for the citation to be extracted at all, so a clean checkout and a checkout carrying
- * the gitignored `data/` a paper run leaves behind reported different violation counts
- * for the same commit. "0 violations" was a fact about which modes had been run on one
- * machine, not about the repository. Worse in the other direction: `data/samurai-paper.sqlite`
- * *resolved* on a machine that had run paper mode, so a citation to a runtime artefact
- * was judged by whether the artefact happened to have been produced.
- *
- * The index fixes that by construction rather than by enumeration: it contains no
- * gitignored path and no runtime output, so the report is a pure function of the index
- * plus the content of the files it lists. No list of runtime directories to keep current,
- * and no gitignore parser.
- *
- * `--cached` alone, deliberately — NOT `--others --exclude-standard`. Untracked-but-not-
- * ignored files are still runtime state as far as this checker is concerned, and letting
- * them in would re-open the same hole through the `planned` rule: scaffold the not-yet-built
- * `server/pipeline/universe-selector/index.ts` (docs/specs/universe-selector-spec.md) locally without staging it, and every <!-- cite-exempt: planned — illustrative; the module is specced and not built -->
- * `planned` marker on that path turns into a `stale-planned-exemption` — green on a clean
- * checkout, red on a machine where work has happened, which is exactly the bug being
- * fixed here.
- *
- * Two accepted costs, both in the direction this file is allowed to err:
- *
- *  - A file created and cited in the same change reads as unresolved until it is
- *    `git add`-ed. A transient false positive with a one-word fix, and the only one.
- *  - A new, unstaged `.md` is not scanned at all — a false negative, which is the safe
- *    direction, and it clears itself the moment the file is staged.
- *
- * And one real narrowing: the checker now REQUIRES a git checkout and fails loudly
- * outside one (a tarball export, a vendored copy). Falling back to the filesystem there
- * would silently restore the flip, so it throws instead.
- *
- * ## Known, deliberate gap
- *
- * Line validation is end-of-file validation: a `path:44` citation fails if the file has
- * fewer than 44 lines. It does NOT verify that line 44 still holds the cited *symbol* —
- * the citation does not carry a symbol name, and any heuristic that scraped one out of
- * the surrounding prose would be a false-positive generator, which is the direction this
- * file is explicitly not allowed to err in.
- *
- * ## Code comments are scanned too, paths only
- *
- * A `.ts`/`.tsx` comment cites a path the same way a markdown sentence does, so this
- * checker scans both. The invariant: `parseCandidate` and the `cite-exempt` marker apply
- * identically in a line or block code comment as in markdown — same path-shape rules,
- * same four exempt reasons, no separate machinery. A symbol citation (a bare name with no
- * `/`, e.g. a function name) is rejected before path-checking begins and stays out of
- * scope for the reason directly above: verifying a symbol needs the line-content check
- * this file deliberately does not do. A fenced ``` code block inside a doc comment is
- * NOT stripped the way markdown fencing is (see `stripFencedBlocks`) — a path-shaped
- * backtick inside a comment's own code example reads as a real citation, so mark it
+ * A `.ts`/`.tsx` comment cites a path the same way a markdown sentence does, so both are
+ * scanned under identical rules: `parseCandidate` and the `cite-exempt` marker apply the
+ * same in a line or block comment, with the same four exempt reasons. A bare symbol name
+ * (no `/`) is rejected before path-checking for the reason above — verifying a symbol needs
+ * the line-content check this file deliberately doesn't do. A fenced ``` block inside a doc
+ * comment is NOT stripped the way markdown fencing is (`stripFencedBlocks`) — a path-shaped
+ * backtick in a comment's own code example reads as a real citation, so mark it
  * `cite-exempt` or avoid the shape.
- *
- * Decision: extending to code comments was measured before shipping, not assumed — the
- * backlog it surfaced across the tree was small enough to fix in the same change.
  */
 
 import { execFileSync } from 'node:child_process';
