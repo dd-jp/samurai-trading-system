@@ -20,10 +20,75 @@ import type {
 import type { StoreHandle } from './open-shared-store.js';
 import { toStoredTimestamp } from './sqlite-utils.js';
 
+/** `reason_detail_compared_value, reason_detail_threshold` column values */
+function reasonDetailColumns(
+  record: TraderDecisionRecord,
+): readonly [compared_value: number | null, threshold: number | null] {
+  return [record.reason_detail?.compared_value ?? null, record.reason_detail?.threshold ?? null];
+}
+
+/**
+ * `base_risk_fraction, conviction_multiplier, vol_floor_factor,
+ * non_converged_haircut, cosine_multiplier` column values
+ */
+function sizingColumns(
+  record: TraderDecisionRecord,
+): readonly [
+  base_risk_fraction: number | null,
+  conviction_multiplier: number | null,
+  vol_floor_factor: number | null,
+  non_converged_haircut: number | null,
+  cosine_multiplier: number | null,
+] {
+  return [
+    record.sizing?.base_risk_fraction ?? null,
+    record.sizing?.conviction_multiplier ?? null,
+    record.sizing?.vol_floor_factor ?? null,
+    record.sizing?.non_converged_haircut ?? null,
+    record.sizing?.cosine_multiplier ?? null,
+  ];
+}
+
+/**
+ * `no_precedent` is a real tri-state here: 1, 0, or NULL for "the retrieval
+ * never ran". Coercing the third to 0 would claim precedent was found and
+ * simply not recorded.
+ */
+function noPrecedentColumn(
+  cosine_precedent: TraderDecisionRecord['cosine_precedent'],
+): 0 | 1 | null {
+  return cosine_precedent === null ? null : cosine_precedent.no_precedent ? 1 : 0;
+}
+
+/** `neighbor_count, weighted_mean_r, no_precedent` column values */
+function cosinePrecedentColumns(
+  record: TraderDecisionRecord,
+): readonly [
+  neighbor_count: number | null,
+  weighted_mean_r: number | null,
+  no_precedent: 0 | 1 | null,
+] {
+  return [
+    record.cosine_precedent?.neighbor_count ?? null,
+    record.cosine_precedent?.weighted_mean_r ?? null,
+    noPrecedentColumn(record.cosine_precedent),
+  ];
+}
+
 export class SqliteTraderLogStore implements TraderLogStore {
   constructor(private readonly db: StoreHandle) {}
 
   write(record: TraderDecisionRecord): void {
+    const [reason_detail_compared_value, reason_detail_threshold] = reasonDetailColumns(record);
+    const [
+      base_risk_fraction,
+      conviction_multiplier,
+      vol_floor_factor,
+      non_converged_haircut,
+      cosine_multiplier,
+    ] = sizingColumns(record);
+    const [neighbor_count, weighted_mean_r, no_precedent] = cosinePrecedentColumns(record);
+
     this.db
       .prepare(
         `INSERT INTO trader_log (
@@ -44,19 +109,16 @@ export class SqliteTraderLogStore implements TraderLogStore {
         record.exit_reason,
         record.skip_reason,
         record.decision_class,
-        record.reason_detail?.compared_value ?? null,
-        record.reason_detail?.threshold ?? null,
-        record.sizing?.base_risk_fraction ?? null,
-        record.sizing?.conviction_multiplier ?? null,
-        record.sizing?.vol_floor_factor ?? null,
-        record.sizing?.non_converged_haircut ?? null,
-        record.sizing?.cosine_multiplier ?? null,
-        record.cosine_precedent?.neighbor_count ?? null,
-        record.cosine_precedent?.weighted_mean_r ?? null,
-        // `no_precedent` is a real tri-state here: 1, 0, or NULL for "the
-        // retrieval never ran". Coercing the third to 0 would claim precedent
-        // was found and simply not recorded
-        record.cosine_precedent === null ? null : record.cosine_precedent.no_precedent ? 1 : 0,
+        reason_detail_compared_value,
+        reason_detail_threshold,
+        base_risk_fraction,
+        conviction_multiplier,
+        vol_floor_factor,
+        non_converged_haircut,
+        cosine_multiplier,
+        neighbor_count,
+        weighted_mean_r,
+        no_precedent,
         record.atr,
         record.entry,
         record.stop,

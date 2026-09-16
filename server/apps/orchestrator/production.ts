@@ -832,9 +832,22 @@ export function resolveApprovalsChannel(
  * instance over the same account would silently lose bracket-leg lookups for
  * orders the first one placed.
  */
-export function buildProductionComponents(config: ProductionConfig): ProductionComponents {
-  const clock = config.clock;
-
+/**
+ * The boot-time refusal family (#434/#691/#670/#1389/#638/#569/#989/#1378) —
+ * every gate that must run before a store handle is open or a wire client
+ * exists, plus the config values they resolve along the way. Order matches
+ * `buildProductionComponents`'s original sequence exactly: each gate's
+ * reasoning lives beside it below, unchanged from before this was split out.
+ */
+function resolveProductionBootConfig(
+  config: ProductionConfig,
+  clock: Clock,
+): {
+  ceiling: ReturnType<typeof toCapitalCeilingUsd> | undefined;
+  environment: ProductionEnvironment;
+  universe: readonly UniverseInstrument[];
+  tradingCalendar: TradingCalendar;
+} {
   // Before anything is built, for the same reason the LLM budget below is:
   // refuse a bad config while nothing is half-constructed. This one rejects an
   // `automation_level` that engages the HITL gate — unsound since ADR-0007
@@ -989,123 +1002,650 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     });
   }
 
-  // FIRST, ahead of every store, socket and wire client below (PR #390
-  // review). The LLM budget is constructed here rather than beside the debate
-  // step it feeds because `RateLimiter`'s constructor VALIDATES its config, and
-  // a malformed budget should be refused before this function has opened a
-  // SQLite handle or built an Alpaca client — a throw from the middle of the
-  // wiring would leave a half-built root behind. Same placement reasoning as
-  // #376 moving seeding ahead of the tick loops so a rejected `start()` cannot
-  // leave live timers running
+  return { ceiling, environment, universe, tradingCalendar };
+}
+
+/**
+ * The LLM client, the in-flight/spend metering it shares with the sentiment
+ * agent, and the whole market-intelligence writer set (news/social/GDELT
+ * macro/Polymarket). Self-contained: nothing here is read by
+ * `buildProductionComponents` again after this returns except the six fields
+ * below — see that function's call site for why each one is threaded through.
+ */
+function buildLlmAndMarketIntelligenceLayer(deps: {
+  config: ProductionConfig;
+  clock: Clock;
+  logger: Logger;
+  environment: ProductionEnvironment;
+  marketIntelligence: MarketIntelligenceStore;
+  spendCap: SpendCap;
+  universe: readonly UniverseInstrument[];
+}): {
+  llmInFlightGate: LlmInFlightGate;
+  llmClient: LlmClient;
+  marketIntelligenceRefresh: MiRefreshQueue | undefined;
+  gdeltIngestAgent: GdeltIngestAgent | undefined;
+  gdeltScoringPass: GdeltScoringPass | undefined;
+  polymarketAgent: PolymarketAgent;
+} {
+  const { config, clock, logger, environment, marketIntelligence, spendCap, universe } = deps;
+
+  // #464, retargeted at Nous by ADR-0009. The off switch used to be the
+  // absence of XAI_API_KEY; under a single provider that no longer works,
+  // because the key this agent would use is the same one the debate requires
+  // So the switch is explicit: SAMURAI_SENTIMENT=off. Anything else runs it.
   //
-  // One instance for the process, shared by every instrument's debate: a
-  // limiter per debate or per instrument would count each window separately and
-  // enforce nothing across the universe — the shape the incidental
-  // `maxConcurrentInstruments: 1` throttle already had
+  // Off is an honest state rather than a silent no-op — the analysts keep
+  // reporting NO_DATA_MARKER (#463), which says "never had an input" rather
+  // than presenting the absence as a neutral read
   //
-  // It takes THIS root's `clock`, which is what advances its fixed window
-  // `startFromEnvironment` supplies `SystemClock`, so a live or paper process
-  // rolls the window on real time. A caller that injects a FROZEN clock (the
-  // offline smoke run does) gets one window for the whole run and must keep its
-  // debate count under `maxDebates` — true today at 3 ticks against 20, and the
-  // reason that gate asserts on the limiter rather than ignoring it
-  const llmRateLimiter =
-    config.llmRateLimiter ??
-    new RateLimiter(clock, config.rateLimiterConfig ?? DEFAULT_LLM_RATE_LIMIT_CONFIG);
+  // Metering is what makes this affordable to leave on: the agent records
+  // every call into `llm_spend` under `stage: 'market_intelligence'`, so
+  // ADR-0008's cap covers this stage too, and it checks that cap BEFORE
+  // calling
+  const sentimentEnabled = environment.sentimentEnabled;
 
-  // `tradingCalendar` is computed above, ahead of the precutover collision
-  // guard, which needs its RESOLVED value rather than re-deriving `mode`
-  // itself (#989 review). Reused here rather than recomputed.
-  /**
-   * ONE calendar pair, shared by every consumer that needs to know when a
-   * venue is open — the daily-PnL boundary (#331/#332) and the volatility
-   * reading (#386). Built once rather than per call site: two literals would
-   * be two `AlwaysOpenCalendar` instances and, worse, two places for a future
-   * override to be applied to only one of them, which is exactly the silent
-   * disagreement `TradingCalendar`'s doc comment exists to prevent.
-   */
-  const sessionCalendars: Record<AssetClass, TradingCalendar> = {
-    crypto: new AlwaysOpenCalendar(),
-    stocks: tradingCalendar,
-  };
+  // #1035. Passed down from the one read, so both spend sinks agree and
+  // neither reads the environment for itself — the same rule the file sink
+  // follows (`buildEntrypointLogger`)
+  const captureLlmText = environment.captureLlmText;
 
   /**
-   * Hoisted above the analysts (#745), which now take a telemetry sink built on
-   * it, above the market-data wiring by #562, which logs a malformed
-   * fallback-pacing override through it at boot, and above `alpacaBucket`
-   * below by #1083, which wires it through for wait telemetry. It depends on
-   * nothing but `config`, so all three moves are free — the same reasoning
-   * that hoisted `breachAlerts` below.
+   * #1045. The row ceiling is APPLIED here, at boot, and again on the
+   * daily timer below — two call sites, both at this composition root.
+   *
+   * Both, not one. Startup alone would fire once and then never again for the
+   * length of an unattended run, which is precisely the run the ceiling exists
+   * to bound; the daily sweep alone would leave a restart-heavy dev loop
+   * pruning nothing until 24h of uptime accumulated. Neither is a hot path:
+   * the statement is a no-op below the ceiling and the table has one writer.
+   *
+   * Wired here rather than inside `SqliteLlmSpendStore` on purpose. The store
+   * writes rows; deciding how many the SYSTEM keeps is a deployment policy,
+   * and burying it in the writer is how #313's observed-fill prune came to
+   * exist, be tested, and never be called from anything that ships — dead
+   * code its whole life, retired by #1059.
    */
-  const logger = config.logger ?? new JsonLogger();
+  const { llmCallLogMaxRows, miArchiveRetentionDays, alertDeliveryFailureRetentionDays } =
+    environment;
+  pruneLlmCallLogWithLog(config.db, llmCallLogMaxRows, logger, 'startup');
 
-  // #1180 — which rate produced which ceiling, on the stream a soak keeps
-  // The ceiling is a DERIVED figure on a paper run (a GBP book times a
-  // configured rate) and a declared one on a live run, and the two are
-  // indistinguishable from the number alone. `derived_by_conversion` is the
-  // field that separates them: a live ceiling stamped with a rate it was
-  // never converted at would misattribute the figure
-  if (ceiling !== undefined) {
+  /**
+   * #1060. The specced 90-day MI archive purge, read and applied here at
+   * boot and again on the daily timer below — same two-call-site shape as
+   * the row ceiling immediately above, and for the same reason: startup
+   * alone never fires again during an unattended run, and the daily sweep
+   * alone leaves a restart-heavy dev loop pruning nothing.
+   *
+   * Wired here rather than inside `MiArchiveStore.write` on purpose, for the
+   * same reason as above: the store persists rows, deciding how long the
+   * SYSTEM keeps them is a deployment policy, and burying it in the writer
+   * is exactly how the MI archive's purge went unimplemented in the first
+   * place (#1060's own gap) and how #313's observed-fill prune shipped
+   * uncalled, and was eventually retired unused (#1059).
+   */
+  pruneMiArchiveWithLog(config.miArchive, miArchiveRetentionDays, clock, logger, 'startup');
+  /**
+   * #1131. Same two-call-site shape as the MI archive purge immediately
+   * above and for the same reason — see `pruneAlertDeliveryFailuresWithLog`
+   * for why this table needs its own retention sweep at all (the Rail tile's
+   * count was previously all-time with no lower bound, and the table itself
+   * had no pruning).
+   */
+  pruneAlertDeliveryFailuresWithLog(
+    config.db,
+    alertDeliveryFailureRetentionDays,
+    clock,
+    logger,
+    'startup',
+  );
+  // `tryNousCredentials` rather than `nousCredentials`: an unconfigured Nous
+  // environment degrades this optional stage to no-agent instead of failing
+  // the boot, which is how the absent `XAI_API_KEY` behaved before ADR-0009
+  // and what every test injecting its own `llmClient` relies on. An UNPRICED
+  // model still throws from in there — that is a hole in the spend cap, not a
+  // configuration gap
+  const sentimentCredentials = sentimentEnabled ? tryNousCredentials('sentiment') : undefined;
+  /**
+   * ONE `LlmClient` for the whole root. The debate stage and #552's MI scoring
+   * pass both bill through it, so there is one spend meter and one config
+   * rather than two clients disagreeing about either.
+   */
+  const promptTierAlerts =
+    config.promptTierAlerts ?? loggingAlertChannel('promptTierAlerts', logger);
+  /**
+   * ONE throttle for the whole root, for the same reason as `promptTierAlerts`
+   * above: `NOUS_MODEL` alone can route BOTH the debate stage's default
+   * client and the sentiment `GrokAgent` below through the same tiered model
+   * (nous-config.ts's `nousCredentials` falls back through `NOUS_MODEL` for
+   * either role, and the startup guard only rejects a model missing from
+   * `MODEL_RATES`), and a throttle instance per `SqliteLlmSpendStore` would
+   * then count that model's consecutive crossings twice — up to two "first
+   * crossing" alerts and roughly double the repeat cadence against a
+   * one-then-every-8 contract (#1155)
+   */
+  const promptTierThrottle = new PromptTierCrossingThrottle();
+  /**
+   * ONE in-flight gate for the whole root (#1080), for a reason stronger than
+   * the two above: Nous queues per ACCOUNT, not per key or per client, so a
+   * second gate would cap two populations of the same queue independently and
+   * cap neither. Every Nous-speaking client built below takes THIS instance —
+   * the debate client, the sentiment client and the X retrieval client — and
+   * `nousChat`/`nousResponses` cannot be called without one, so a client added
+   * later cannot quietly opt out.
+   */
+  const llmInFlightGate = new NousAccountInFlightGate({
+    maxInFlight: config.maxInFlightLlmCalls ?? DEFAULT_MAX_IN_FLIGHT_LLM_CALLS,
+    expectedCallMs: config.expectedLlmCallMs ?? DEFAULT_EXPECTED_NOUS_CALL_MS,
+    logger,
+  });
+  const llmClient =
+    config.llmClient ??
+    buildDefaultLlmClient(
+      logger,
+      llmInFlightGate,
+      new SqliteLlmSpendStore(
+        guardedStore(config.db, 'debate-engine'),
+        logger,
+        captureLlmText,
+        promptTierAlerts,
+        promptTierThrottle,
+      ),
+    );
+
+  const { sentimentRetrieval, xMaxSearchResults } = environment;
+
+  const grokAgent =
+    sentimentCredentials === undefined
+      ? undefined
+      : new GrokAgent({
+          // The ONE construction-time difference between a sentiment stage
+          // that fills `social` and one that has never filled it. Everything
+          // downstream — the spend gate, the evidence guard, the bucket cache
+          // — is identical, which is the property `grok-agent.ts` claimed and
+          // this line is the test of
+          client: sentimentRetrieval
+            ? new XSearchClient({
+                ...sentimentCredentials,
+                gate: llmInFlightGate,
+                // The credentials' model is the PINNED `x-ai/grok-4.5`, on
+                // which `x_search` 400s ("supported only on OpenRouter-routed
+                // models"). The routed alias is not a preference here, it is
+                // the only thing that works — see `X_SEARCH_MODEL`
+                model: X_SEARCH_MODEL,
+                maxSearchResults: xMaxSearchResults,
+                windowMs: GROK_REFRESH_MS,
+                logger,
+              })
+            : new NousSentimentClient({ ...sentimentCredentials, logger, gate: llmInFlightGate }),
+          store: marketIntelligence,
+          spendCap,
+          spendSink: new SqliteLlmSpendStore(
+            guardedStore(config.db, 'debate-engine'),
+            logger,
+            captureLlmText,
+            promptTierAlerts,
+            promptTierThrottle,
+          ),
+          clock,
+          logger,
+          // Absent on runs with no archive, which is a working configuration:
+          // it costs replay and the post-hoc bot-share check, not correctness
+          archive: config.miArchive,
+        });
+
+  if (sentimentRetrieval && sentimentCredentials === undefined) {
     logger.log({
-      trace_id: 'startup',
-      stage: 'orchestrator',
-      event: 'sizing_capital_ceiling_resolved',
-      level: 'info',
+      trace_id: 'boot',
+      stage: 'market_intelligence',
+      event: 'sentiment_credentials_absent',
+      level: 'warn',
       message:
-        config.capitalCeilingUsdPerGbp === undefined
-          ? `sizing ceiling ${ceiling}, declared in the account currency — no FX conversion applied`
-          : `sizing ceiling ${ceiling}, converted from a GBP book at ` +
-            `${config.capitalCeilingUsdPerGbp} USD/GBP (SIZING_USD_PER_GBP, a configured ` +
-            'constant — not a live rate feed)',
-      payload: {
-        capital_ceiling_usd: ceiling,
-        derived_by_conversion: config.capitalCeilingUsdPerGbp !== undefined,
-        ...(config.capitalCeilingUsdPerGbp === undefined
-          ? {}
-          : {
-              usd_per_gbp: config.capitalCeilingUsdPerGbp,
-              usd_per_gbp_provenance: 'SIZING_USD_PER_GBP (paper-profile.ts), configured constant',
-            }),
-      },
+        'SAMURAI_SENTIMENT_RETRIEVAL=on but no sentiment credentials are configured, so no ' +
+        'sentiment agent was built at all. `social` will be empty for this run and the ' +
+        'analysts will report NO DATA — the retrieval switch is doing nothing.',
     });
   }
 
-  // One broker wire client for the whole root: the order adapter and the
-  // account-state provider both talk to Alpaca's Trading API, and two clients
-  // would mean two token budgets against one account's shared rate limit
-  //
-  // LAZY since #1400, and memoized so "one client" still holds. It used to be
-  // built unconditionally, on the reasoning that the account-state provider
-  // needs it even when `config.broker` is overridden — true, but only while
-  // `config.accountState` is also defaulted. A run that supplies BOTH — or,
-  // since #1509, a Saxo run that supplies `config.accountFunding` instead of
-  // an `accountState`, so the account ledger comes from
-  // `GET /port/v1/balances/me` — reaches neither call
-  // site, and constructing the client anyway made such a run demand
-  // `ALPACA_API_KEY` for a transport it never uses
-  let alpacaBrokerClient: AlpacaBrokerClient | undefined;
-  const brokerClient = (): AlpacaBrokerClient =>
-    (alpacaBrokerClient ??=
-      config.alpacaBrokerClient ?? buildDefaultAlpacaBrokerClient(config.mode, logger));
-
-  // Outbound pacing per venue, from ops config rather than a literal here
-  // (#299). Hoisted above the market-data wiring by #391: ONE Alpaca bucket
-  // for the whole root, shared by the broker adapter and the market-data
-  // client, because the 200 req/min limit is per ACCOUNT and two buckets would
-  // be two budgets against one limit. The broker takes `acquire()`; market
-  // data takes `acquireBackground()` and leaves `reserveForPriority` tokens
-  // it may not spend, so a bar sweep cannot park an order behind the refill
-  //
-  // `{ logger, name: 'alpaca' }` (#1083) makes a wait on THIS shared bucket
-  // observable — the bucket this repo's own analysis names as the plausible
-  // starvation source once the 20-instrument universe drains it, and which
-  // was completely silent before. Pacing itself is unchanged; see
-  // `TokenBucketTelemetry`
-  const venuePacing = config.venuePacing ?? resolveVenuePacing();
-  const alpacaBucket = new TokenBucket(venuePacing.alpaca, undefined, {
+  /**
+   * The deterministic news path (map #552) — the writer that actually fills
+   * `MarketIntelligenceStore`.
+   *
+   * PREFERRED OVER `grokAgent` when it can be built, and the reason is not
+   * preference. `NousSentimentClient` hard-codes `retrievalEvidence: false` and
+   * `GrokAgent.refresh` discards every item without evidence, so that path
+   * ingests `[]` on every refresh BY CONSTRUCTION — its own spec section says
+   * "the expected steady state of this stage is an empty item list". #625 then
+   * measured the cost: with `sentiment` and `fundamental` both pinned at
+   * confidence 0.05, the stocks conviction ceiling was 0.5478 against a 0.55
+   * floor, so a stock could never trade at any RSI.
+   *
+   * This agent needs the same Nous credentials (for SCORING, not retrieval) and
+   * Alpaca keys it already holds for bars, so it is available exactly when the
+   * old path was — and when it is not, the fallback is the old agent rather
+   * than nothing.
+   */
+  const miIngestAgent = buildMiIngestAgent({
+    archive: config.miArchive,
+    hasScoringCredentials: sentimentCredentials !== undefined,
+    store: marketIntelligence,
+    llmClient,
+    spendCap,
+    clock,
     logger,
-    name: 'alpaca',
+    assetClasses: universeAssetClasses(universe),
   });
+
+  /**
+   * The MI writers, composed and then taken OFF the analyst stage's critical
+   * path (#1085).
+   *
+   * BOTH agents, not one (#969): they write DIFFERENT buckets — `MiIngestAgent`
+   * fills `news`, `GrokAgent` fills `social` — so picking one leaves the other
+   * empty by construction.
+   *
+   * Both agents now read `spendCap` themselves before their own metered call
+   * (#1106), so the array order below is no longer load-bearing — either agent
+   * refuses on a breach whichever one the queue's single pre-pass check admits
+   * second. That check stays as a cheap outer bound on the whole composed pass,
+   * not the only ceiling the news-scoring path has.
+   *
+   * `undefined` when neither agent could be built (SAMURAI_SENTIMENT=off, or
+   * no Nous credentials): no queue, no calls, and the analysts keep reporting
+   * NO_DATA_MARKER (#463), which is the honest default rather than a silent
+   * no-op refresher that would read as a working one.
+   *
+   * The queue is what makes the analysts step non-blocking and what serialises
+   * every metered MI call behind one check — see `mi-refresh-queue.ts` for why
+   * neither property held before, cross-instrument concurrency included.
+   */
+  const marketIntelligenceRefresh = ((): MiRefreshQueue | undefined => {
+    const composed = composeMarketIntelligence([miIngestAgent, grokAgent]);
+    return composed === undefined
+      ? undefined
+      : new MiRefreshQueue({ refresher: composed, spendCap, logger });
+  })();
+
+  /**
+   * The GDELT macro layer (#556). Runs whenever an archive exists — no
+   * credentials to check, because GDELT is open data, and no LLM either: this
+   * half only writes bytes.
+   *
+   * Independent of `miIngestAgent` on purpose. That path is the ticker layer
+   * and its own header records the measured hole it cannot fill — the Benzinga
+   * wire returns **zero** items for 3USL/3LDE/SGLN, the LSE ETPs ADR-0016
+   * actually trades. Whether Alpaca credentials are present has no bearing on
+   * whether the macro layer should run.
+   */
+  const gdeltIngestAgent =
+    config.miArchive === undefined
+      ? undefined
+      : new GdeltIngestAgent({
+          archive: config.miArchive,
+          client: config.gdeltClient ?? new GdeltGkgClient({}),
+          clock,
+          logger,
+        });
+
+  /**
+   * The other half of #556 (#1086): what turns those archived bytes into an
+   * `IntelligenceItem` an analyst can read.
+   *
+   * Built beside the archiver and driven from the SAME timer, after each poll
+   * — see `start()`. It reads the archive and writes the store; it makes no
+   * network call, no LLM call, and no `mi_items` write, because the aggregate
+   * is derived at read every time (`gdelt-scoring-pass.ts` has the argument).
+   *
+   * The asset classes come from the UNIVERSE, not from every class the type
+   * admits. Deriving a crypto aggregate on an equities-only book would spend
+   * a read and log a refusal every poll for a leg no instrument belongs to —
+   * and crypto left Samurai's scope on 2026-08-16 (ADR-0015's amendment).
+   */
+  const gdeltScoringPass =
+    config.miArchive === undefined
+      ? undefined
+      : new GdeltScoringPass({
+          archive: config.miArchive,
+          store: marketIntelligence,
+          clock,
+          assetClasses: [...new Set(universe.map((instrument) => instrument.asset_class))],
+          logger,
+        });
+
+  /**
+   * The Polymarket macro/event layer (#504) — an `intel` writer (#1164).
+   *
+   * Built unconditionally: no credentials to check (the read APIs are keyless),
+   * no LLM call in the path, and its product is the store write, so unlike the
+   * GDELT archiver it is useful even on a run with no MI archive. The archive
+   * is passed when one exists, for the raw bytes replay needs.
+   *
+   * Its items reach the same analyst `miIngestAgent`'s `news` does —
+   * `fundamental-analyst.ts` folds `news` + `intel` together (#1164) — and
+   * that is the point rather than a duplication: the Benzinga wire returns
+   * ZERO items for 3USL/3LDE/SGLN, the LSE ETPs ADR-0016 actually trades, and
+   * a 3x FTSE ETP has no company news to return. Macro is what moves it. Note
+   * plainly what this does NOT do: these items are filed under macro series
+   * names, never tickers, so `MiCoverageMonitor` — which matches `entity ===
+   * instrument` — will still report those three as uncovered. Filing them
+   * under tickers would quiet the counter without telling the analysts
+   * anything about the ticker.
+   */
+  const polymarketAgent = new PolymarketAgent({
+    client: config.polymarketClient ?? new PolymarketClient(),
+    store: marketIntelligence,
+    clock,
+    logger,
+    ...(config.miArchive === undefined ? {} : { archive: config.miArchive }),
+  });
+
+  if (grokAgent === undefined) {
+    logger.log({
+      trace_id: 'startup',
+      stage: 'market_intelligence',
+      event: 'mi_agent_absent',
+      level: 'warn',
+      message:
+        (sentimentEnabled
+          ? 'Nous is not configured for the sentiment role, so no market-intelligence agent is running. '
+          : 'SAMURAI_SENTIMENT=off, so no market-intelligence agent is running. ') +
+        '`sentiment` and `fundamental` will report NO DATA on every tick — crypto debates run ' +
+        '1 real analyst of 2 and equity debates 1 of 3. See #436/#464.',
+      payload: {},
+    });
+  }
+
+  return {
+    llmInFlightGate,
+    llmClient,
+    marketIntelligenceRefresh,
+    gdeltIngestAgent,
+    gdeltScoringPass,
+    polymarketAgent,
+  };
+}
+
+function buildExecutionAndRiskInfra(deps: {
+  config: ProductionConfig;
+  clock: Clock;
+  logger: Logger;
+  setupStore: SqliteSetupStore;
+  brokerClient: () => AlpacaBrokerClient;
+  alpacaBucket: TokenBucket;
+  marketData: MarketDataService;
+  universe: readonly UniverseInstrument[];
+  sessionCalendars: Record<AssetClass, TradingCalendar>;
+}) {
+  const {
+    config,
+    clock,
+    logger,
+    setupStore,
+    brokerClient,
+    alpacaBucket,
+    marketData,
+    universe,
+    sessionCalendars,
+  } = deps;
+  // Hooked once, shared everywhere below (see `ProductionComponents.executionStore`'s
+  // doc): `getOpenPositions`, Verdict's `positionStore` and Execution's
+  // `store` all read/write through this same instance, so `onTradeClose`
+  // fires no matter which of them eventually calls `writeClosedTrade`
+  const executionStore = withOnTradeClose(
+    // #1112 AC5 (migration 0045): `config.capitalCeilingUsd` is the same
+    // ceiling `sizingEquity` (direct-bind.ts) clamps this arm's sizing
+    // against, stamped onto every row this instance writes so a later
+    // `arm_comparison_samples`/`closed_trades` window can tell whether it
+    // mixes rows sized under two different regimes
+    new SqliteExecutionStore(
+      guardedStore(config.db, 'execution'),
+      'live',
+      config.capitalCeilingUsd,
+    ),
+    { setup_store: setupStore },
+    logger,
+  );
+  // `resolveVenuePacing` starts from `DEFAULT_VENUE_PACING` — which carries
+  // each value's provenance and, where the venue publishes one, a documented
+  // ceiling it refuses to let an override exceed — and applies any
+  // `SAMURAI_PACING_ALPACA_*` the deployment set. A rate limit is a property
+  // of the account, so it belongs beside the credentials, not in the code
+  // The bucket itself is built once, above the market-data wiring (#391)
+  const broker =
+    config.broker ??
+    new AlpacaBrokerAdapter({
+      client: brokerClient(),
+      rateLimiter: alpacaBucket,
+      // #287: without a durable bracket index the adapter starts every run
+      // blind, and `fetchNewFills` polls nothing for lots that were already
+      // filling when the process died. The in-memory default is only ever
+      // right for a test
+      state: new SqliteBrokerStateStore(guardedStore(config.db, 'execution')),
+      // #298: the same store carries the age-out clock for a fill the venue
+      // will not price, which is why it must be the durable one here — a
+      // restart that reset the clock would age nothing out across a soak
+      unpricedFillAlerts:
+        config.unpricedFillAlerts ?? loggingAlertChannel('unpricedFillAlerts', logger),
+      // #586: the emulated crypto OCO's accepted-risk escalation — required
+      // on `AlpacaBrokerAdapterInput` for the same "no silent default"
+      // reason `unpricedFillAlerts` is
+      ocoDoubleFillAlerts:
+        config.ocoDoubleFillAlerts ?? loggingAlertChannel('ocoDoubleFillAlerts', logger),
+      // #609: `AlpacaBrokerAdapterInput.logger`, required for the same reason
+      // `ExecutionInput.logger` is (#573) — a dropped wiring here is now a
+      // `tsc` error at every composition root instead of a silent gap a soak
+      // would have to surface. This is the same `logger` already built above
+      // for the rest of this composition root, not a second instance
+      logger,
+      ...(config.unpricedFillAgeOutMs === undefined
+        ? {}
+        : { unpricedFillAgeOutMs: config.unpricedFillAgeOutMs }),
+      clock,
+    });
+  // The sticky breakers' durable home (#203, review 2026-08-06 B1): loaded
+  // here so a trip survives restart, written by every breaker evaluation on
+  // the tick path (direct-bind.ts `computeCurrentPortfolioAndBreakers`)
+  const breakerStateStore = new SqliteBreakerStateStore(guardedStore(config.db, 'risk'));
+  const circuitBreakers = new CircuitBreakers(
+    config.breakerConfig,
+    config.initialBreakerState ?? breakerStateStore.load(),
+  );
+  // Parked by default (ADR-0002): the live WorldMonitor feed costs money per
+  // call and the geopolitical tier is not what the first paper run tests
+  // `null` is already a documented answer on this port
+  const ciiConsumer = new CiiConsumer(
+    config.ciiScoreProvider ?? new ParkedCiiScoreProvider(),
+    clock,
+    config.ciiConsumerConfig,
+  );
+
+  // Shared by the trader/risk/verdict binds: all three derive the current
+  // portfolio + breaker state from the same sources, fetched fresh at their
+  // own call time (#234)
+  const breakerStateDeps = {
+    marketData,
+    circuitBreakers,
+    // #640: the valuation-freshness bound, read from the RISK config rather
+    // than the verdict one. The two bounds are deliberately separate fields
+    // (see `RiskConfig.max_mark_age`): declining one trade on a stale tick and
+    // refusing to value the entire book are different-weight actions
+    maxMarkAge: config.riskConfig.max_mark_age,
+    breakerState: breakerStateStore,
+    // One portfolio observation per tick, shared by the trader/risk binds (B4)
+    portfolioSnapshots: new Map<string, PortfolioSnapshot>(),
+    // #841: BOTH the risk and verdict binds degrade an exit's valuation
+    // rather than suppress the flatten, and both must be able to say so
+    // Spread here rather than onto each bind separately for exactly that
+    // reason — a channel wired into one seam only would leave the other
+    // silent. Conditional spread under `exactOptionalPropertyTypes`.
+    ...(config.exitValuationAlerts === undefined
+      ? {}
+      : { exitValuationAlerts: config.exitValuationAlerts }),
+    // The `error`-level line both seams write before reaching the channel
+    // above, and #726's sink for a failed `riskLog.write`
+    logger,
+    // Defaulted, not required (#276): the three sources this needs — Alpaca's
+    // account ledger, the durable `account_state` table, and the existing
+    // ClosedTrade store — all exist in-repo now, so an injected seam would be
+    // asking the caller to build what this module can compose
+    accountState:
+      config.accountState ??
+      new BrokerAccountStateProvider({
+        // #1509: the venue's own ledger, injected when the run is not Alpaca's
+        // (`saxoFunding`, built at the entrypoint from the one Saxo client)
+        // Everything below this line is venue-neutral and shared
+        funding: config.accountFunding ?? alpacaFunding(brokerClient()),
+        store: new SqliteAccountStateStore(guardedStore(config.db, 'orchestrator')),
+        // Per-class session-open equity snapshots (#332) — the local
+        // replacement for Alpaca's blended `last_equity` (GAP-8)
+        sessionEquity: new SqliteSessionEquityStore(guardedStore(config.db, 'orchestrator')),
+        // The append-only daily equity series (#345). Wired unconditionally,
+        // and on the same boundary as the snapshot above, because a return
+        // series cannot be backfilled: equity not sampled on the day is gone
+        // Capture starts from the first tick of the first run; whether it is
+        // ever EVALUATED is a separate, gated decision that lives in
+        // `SqliteDailyEquityMetricsSource`
+        dailyEquity: new SqliteDailyEquityStore(guardedStore(config.db, 'orchestrator')),
+        // The existing ClosedTrade reader, per spec story 25 — no new
+        // realized-PnL ledger is built when one already exists
+        closedTrades: new SqliteClosedTradeStore(guardedStore(config.db, 'feedback-loop')),
+        // Two calendars: crypto resets at 00:00 UTC, stocks at the prior 16:00
+        // ET close. `tradingCalendar` is the equity one (it gates market-hours
+        // scheduling), so only it is overridable here — a crypto session has no
+        // holidays or half-days for a config to express
+        //
+        // SHARING `tradingCalendar` WITH THE SCHEDULER IS DELIBERATE, not an
+        // oversight, and it is why this is typed `TradingCalendar` rather than
+        // narrowed to `UsEquityRegularHoursCalendar`. #331 put `sessionStart` on
+        // the port precisely so the accounting boundary and the session gating
+        // move together: "the boundary lives on the calendar rather than being
+        // duplicated in each consumer" (trading-calendar.ts). The default models
+        // NYSE holidays as of #696, so it no longer reports a session start for
+        // a holiday Monday that never traded — and that fix reached the daily-PnL
+        // boundary without touching this file, which is the whole point of the
+        // arrangement. The authoritative session table (#684, Alpaca's
+        // `GET /v2/calendar`) is injected HERE, through this same field, when it
+        // lands. Narrowing the type would pin this consumer to the built-in
+        // implementation and guarantee the two silently disagree on every
+        // holiday — the divergence the port exists to prevent
+        //
+        // The cost is that an override is authoritative for BOTH. That is the
+        // contract: `sessionStart` is a required member, so a substitute cannot
+        // omit it by accident, and any calendar answering it is by definition
+        // asserting when this account's stock sessions begin
+        calendars: sessionCalendars,
+        mode: config.mode,
+        // Composition happens at startup, so "now" here IS the process start
+        // It decides whether a session boundary was crossed under a running
+        // process (a real open) or had already passed when this one came up
+        // (a mid-session base) — #332's two cold-start cases
+        startedAt: config.clock.now(),
+        logger: config.logger ?? new JsonLogger(),
+      }),
+    // #277's provider, wired by default now that AccountStateProvider (#276)
+    // exists — the only reason direct-bind.ts left it a required seam
+    volatility:
+      config.volatility ??
+      new MarketDataVolatilityReadingProvider({
+        marketData,
+        universe,
+        volatility_indicator: config.volatilityIndicator ?? DEFAULT_VOLATILITY_INDICATOR,
+        // Literally the same objects the scheduler gates its tick plan on and
+        // the daily-PnL boundary resets on, for the same reason (#386): a
+        // second session opinion here would arm `volatility_halt:stocks`
+        // overnight for a class the tick plan had already excluded
+        calendars: sessionCalendars,
+        logger: config.logger ?? new JsonLogger(),
+      }),
+    getOpenPositions: () => executionStore.getOpenPositions(),
+    mode: config.mode,
+  };
+
+  // Hoisted, not inlined into `buildExecutionStep`: the fill-sync loop binds
+  // `reconcile()`/`ingestFills()` from this same object, so Execution cannot
+  // gain a dependency on the tick path and silently miss it on the poll path
+  const executionDeps: ExecutionStepDeps = {
+    clock,
+    broker,
+    // #1214: the same pair the flatten window and the daily-PnL boundary
+    // resolve against, for the reason this object exists at all (above)
+    sessionCalendars,
+    store: executionStore,
+    costModel: new CostModelImpl(config.costConfig),
+    marketData,
+    config: config.executionConfig,
+    // #525: the fallback alert for a residual `ingestFills()` failed to
+    // re-arm after a partial flatten. Required on `ExecutionInput`, for the
+    // same "no silent default" reason `unpricedFillAlerts` above is
+    // required on `AlpacaBrokerAdapterInput` (#298) — an omitted channel is
+    // the #322 bug re-created for a fifth escalation
+    residualExposureAlerts:
+      config.residualExposureAlerts ?? loggingAlertChannel('residualExposureAlerts', logger),
+    // #527: diagnostic-only for now (see `LoggingFlattenOverfillAlertChannel`'s
+    // doc) — no `SAMURAI_ALERTS`/config override yet, unlike the escalations
+    // above. A phone-reaching transport is a later ticket if this ever fires.
+    flattenOverfillAlerts: new LoggingFlattenOverfillAlertChannel(logger),
+    // #519: where `reconcile()`'s flatten sweep escalates a row it could not
+    // settle. Required on `ExecutionInput` for the same "no silent default"
+    // reason `residualExposureAlerts` above is — an omitted channel would
+    // make an unresolved flatten's ambiguity invisible again
+    flattenReconcileAlerts:
+      config.flattenReconcileAlerts ?? loggingAlertChannel('flattenReconcileAlerts', logger),
+    // #1550: where `findUnrecordedVenuePositions` escalates a venue position no
+    // open lot explains. Required, with a `loggingAlertChannel` default rather
+    // than an optional slot, for the reason `AlertChannelSlots`'s own field doc
+    // gives: nothing else writes an `error` line for this condition
+    unrecordedVenuePositionAlerts:
+      config.unrecordedVenuePositionAlerts ??
+      loggingAlertChannel('unrecordedVenuePositionAlerts', logger),
+    // #1550: one throttle per arm, shared by `fillSyncExecution`/
+    // `reconcileExecution` below for the reason `filledZeroSizeThrottle` gives
+    // — and load-bearing here, since only `reconcileExecution` scans but the
+    // page cadence is a property of the process, not of the surface
+    unrecordedVenuePositionThrottle: new UnrecordedVenuePositionThrottle(),
+    // #573: the execution port's own local diagnostic trace — see
+    // `ExecutionInput.logger`'s decision doc. Required, so a composition
+    // root that forgets it is a `tsc` error rather than a silent gap
+    logger,
+    // #1087: one throttle for this arm's whole process lifetime, shared by
+    // `fillSyncExecution`/`reconcileExecution` below (both close over this
+    // same `executionDeps` object) — only the former ever calls
+    // `ingestFills()`, but the throttle is process-scoped, not
+    // surface-scoped, so sharing the reference is correct, not incidental
+    filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
+    // #1465: optional, unlike the required channels above — no `Logging…`
+    // default, see `ExecutionInput.nonSterlingFeeAlerts`'s doc for why
+    ...(config.nonSterlingFeeAlerts === undefined
+      ? {}
+      : { nonSterlingFeeAlerts: config.nonSterlingFeeAlerts }),
+    // #1506: optional for the same reason as `nonSterlingFeeAlerts` above
+    ...(config.unattributedFlattenFillAlerts === undefined
+      ? {}
+      : { unattributedFlattenFillAlerts: config.unattributedFlattenFillAlerts }),
+  };
+
+  return { executionStore, broker, circuitBreakers, ciiConsumer, breakerStateDeps, executionDeps };
+}
+function buildMarketDataAndSpendLayer(deps: {
+  config: ProductionConfig;
+  clock: Clock;
+  universe: readonly UniverseInstrument[];
+  tradingCalendar: TradingCalendar;
+  alpacaBucket: TokenBucket;
+  logger: Logger;
+  venuePacing: ReturnType<typeof resolveVenuePacing>;
+  sessionCalendars: Record<AssetClass, TradingCalendar>;
+}) {
+  const {
+    config,
+    clock,
+    universe,
+    tradingCalendar,
+    alpacaBucket,
+    logger,
+    venuePacing,
+    sessionCalendars,
+  } = deps;
 
   /**
    * #562: the live orchestrator's bars now fail over, per leg, instead of
@@ -1469,242 +2009,186 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       },
     });
   }
-  // Hooked once, shared everywhere below (see `ProductionComponents.executionStore`'s
-  // doc): `getOpenPositions`, Verdict's `positionStore` and Execution's
-  // `store` all read/write through this same instance, so `onTradeClose`
-  // fires no matter which of them eventually calls `writeClosedTrade`
-  const executionStore = withOnTradeClose(
-    // #1112 AC5 (migration 0045): `config.capitalCeilingUsd` is the same
-    // ceiling `sizingEquity` (direct-bind.ts) clamps this arm's sizing
-    // against, stamped onto every row this instance writes so a later
-    // `arm_comparison_samples`/`closed_trades` window can tell whether it
-    // mixes rows sized under two different regimes
-    new SqliteExecutionStore(
-      guardedStore(config.db, 'execution'),
-      'live',
-      config.capitalCeilingUsd,
-    ),
-    { setup_store: setupStore },
-    logger,
+
+  return {
+    marketData,
+    benchmarkSeries,
+    marketIntelligence,
+    miCoverageMonitor,
+    llmFailureRateMonitor,
+    gateRefusalRateMonitor,
+    debateLogStore,
+    analysts,
+    setupStore,
+    tuningStore,
+    breachAlerts,
+    armDivergenceAlerts,
+    spendCap,
+  };
+}
+
+export function buildProductionComponents(config: ProductionConfig): ProductionComponents {
+  const clock = config.clock;
+
+  const { ceiling, environment, universe, tradingCalendar } = resolveProductionBootConfig(
+    config,
+    clock,
   );
-  // `resolveVenuePacing` starts from `DEFAULT_VENUE_PACING` — which carries
-  // each value's provenance and, where the venue publishes one, a documented
-  // ceiling it refuses to let an override exceed — and applies any
-  // `SAMURAI_PACING_ALPACA_*` the deployment set. A rate limit is a property
-  // of the account, so it belongs beside the credentials, not in the code
-  // The bucket itself is built once, above the market-data wiring (#391)
-  const broker =
-    config.broker ??
-    new AlpacaBrokerAdapter({
-      client: brokerClient(),
-      rateLimiter: alpacaBucket,
-      // #287: without a durable bracket index the adapter starts every run
-      // blind, and `fetchNewFills` polls nothing for lots that were already
-      // filling when the process died. The in-memory default is only ever
-      // right for a test
-      state: new SqliteBrokerStateStore(guardedStore(config.db, 'execution')),
-      // #298: the same store carries the age-out clock for a fill the venue
-      // will not price, which is why it must be the durable one here — a
-      // restart that reset the clock would age nothing out across a soak
-      unpricedFillAlerts:
-        config.unpricedFillAlerts ?? loggingAlertChannel('unpricedFillAlerts', logger),
-      // #586: the emulated crypto OCO's accepted-risk escalation — required
-      // on `AlpacaBrokerAdapterInput` for the same "no silent default"
-      // reason `unpricedFillAlerts` is
-      ocoDoubleFillAlerts:
-        config.ocoDoubleFillAlerts ?? loggingAlertChannel('ocoDoubleFillAlerts', logger),
-      // #609: `AlpacaBrokerAdapterInput.logger`, required for the same reason
-      // `ExecutionInput.logger` is (#573) — a dropped wiring here is now a
-      // `tsc` error at every composition root instead of a silent gap a soak
-      // would have to surface. This is the same `logger` already built above
-      // for the rest of this composition root, not a second instance
-      logger,
-      ...(config.unpricedFillAgeOutMs === undefined
-        ? {}
-        : { unpricedFillAgeOutMs: config.unpricedFillAgeOutMs }),
-      clock,
+
+  // FIRST, ahead of every store, socket and wire client below (PR #390
+  // review). The LLM budget is constructed here rather than beside the debate
+  // step it feeds because `RateLimiter`'s constructor VALIDATES its config, and
+  // a malformed budget should be refused before this function has opened a
+  // SQLite handle or built an Alpaca client — a throw from the middle of the
+  // wiring would leave a half-built root behind. Same placement reasoning as
+  // #376 moving seeding ahead of the tick loops so a rejected `start()` cannot
+  // leave live timers running
+  //
+  // One instance for the process, shared by every instrument's debate: a
+  // limiter per debate or per instrument would count each window separately and
+  // enforce nothing across the universe — the shape the incidental
+  // `maxConcurrentInstruments: 1` throttle already had
+  //
+  // It takes THIS root's `clock`, which is what advances its fixed window
+  // `startFromEnvironment` supplies `SystemClock`, so a live or paper process
+  // rolls the window on real time. A caller that injects a FROZEN clock (the
+  // offline smoke run does) gets one window for the whole run and must keep its
+  // debate count under `maxDebates` — true today at 3 ticks against 20, and the
+  // reason that gate asserts on the limiter rather than ignoring it
+  const llmRateLimiter =
+    config.llmRateLimiter ??
+    new RateLimiter(clock, config.rateLimiterConfig ?? DEFAULT_LLM_RATE_LIMIT_CONFIG);
+
+  // `tradingCalendar` is computed above, ahead of the precutover collision
+  // guard, which needs its RESOLVED value rather than re-deriving `mode`
+  // itself (#989 review). Reused here rather than recomputed.
+  /**
+   * ONE calendar pair, shared by every consumer that needs to know when a
+   * venue is open — the daily-PnL boundary (#331/#332) and the volatility
+   * reading (#386). Built once rather than per call site: two literals would
+   * be two `AlwaysOpenCalendar` instances and, worse, two places for a future
+   * override to be applied to only one of them, which is exactly the silent
+   * disagreement `TradingCalendar`'s doc comment exists to prevent.
+   */
+  const sessionCalendars: Record<AssetClass, TradingCalendar> = {
+    crypto: new AlwaysOpenCalendar(),
+    stocks: tradingCalendar,
+  };
+
+  /**
+   * Hoisted above the analysts (#745), which now take a telemetry sink built on
+   * it, above the market-data wiring by #562, which logs a malformed
+   * fallback-pacing override through it at boot, and above `alpacaBucket`
+   * below by #1083, which wires it through for wait telemetry. It depends on
+   * nothing but `config`, so all three moves are free — the same reasoning
+   * that hoisted `breachAlerts` below.
+   */
+  const logger = config.logger ?? new JsonLogger();
+
+  // #1180 — which rate produced which ceiling, on the stream a soak keeps
+  // The ceiling is a DERIVED figure on a paper run (a GBP book times a
+  // configured rate) and a declared one on a live run, and the two are
+  // indistinguishable from the number alone. `derived_by_conversion` is the
+  // field that separates them: a live ceiling stamped with a rate it was
+  // never converted at would misattribute the figure
+  if (ceiling !== undefined) {
+    logger.log({
+      trace_id: 'startup',
+      stage: 'orchestrator',
+      event: 'sizing_capital_ceiling_resolved',
+      level: 'info',
+      message:
+        config.capitalCeilingUsdPerGbp === undefined
+          ? `sizing ceiling ${ceiling}, declared in the account currency — no FX conversion applied`
+          : `sizing ceiling ${ceiling}, converted from a GBP book at ` +
+            `${config.capitalCeilingUsdPerGbp} USD/GBP (SIZING_USD_PER_GBP, a configured ` +
+            'constant — not a live rate feed)',
+      payload: {
+        capital_ceiling_usd: ceiling,
+        derived_by_conversion: config.capitalCeilingUsdPerGbp !== undefined,
+        ...(config.capitalCeilingUsdPerGbp === undefined
+          ? {}
+          : {
+              usd_per_gbp: config.capitalCeilingUsdPerGbp,
+              usd_per_gbp_provenance: 'SIZING_USD_PER_GBP (paper-profile.ts), configured constant',
+            }),
+      },
     });
-  // The sticky breakers' durable home (#203, review 2026-08-06 B1): loaded
-  // here so a trip survives restart, written by every breaker evaluation on
-  // the tick path (direct-bind.ts `computeCurrentPortfolioAndBreakers`)
-  const breakerStateStore = new SqliteBreakerStateStore(guardedStore(config.db, 'risk'));
-  const circuitBreakers = new CircuitBreakers(
-    config.breakerConfig,
-    config.initialBreakerState ?? breakerStateStore.load(),
-  );
-  // Parked by default (ADR-0002): the live WorldMonitor feed costs money per
-  // call and the geopolitical tier is not what the first paper run tests
-  // `null` is already a documented answer on this port
-  const ciiConsumer = new CiiConsumer(
-    config.ciiScoreProvider ?? new ParkedCiiScoreProvider(),
-    clock,
-    config.ciiConsumerConfig,
-  );
+  }
 
-  // Shared by the trader/risk/verdict binds: all three derive the current
-  // portfolio + breaker state from the same sources, fetched fresh at their
-  // own call time (#234)
-  const breakerStateDeps = {
-    marketData,
-    circuitBreakers,
-    // #640: the valuation-freshness bound, read from the RISK config rather
-    // than the verdict one. The two bounds are deliberately separate fields
-    // (see `RiskConfig.max_mark_age`): declining one trade on a stale tick and
-    // refusing to value the entire book are different-weight actions
-    maxMarkAge: config.riskConfig.max_mark_age,
-    breakerState: breakerStateStore,
-    // One portfolio observation per tick, shared by the trader/risk binds (B4)
-    portfolioSnapshots: new Map<string, PortfolioSnapshot>(),
-    // #841: BOTH the risk and verdict binds degrade an exit's valuation
-    // rather than suppress the flatten, and both must be able to say so
-    // Spread here rather than onto each bind separately for exactly that
-    // reason — a channel wired into one seam only would leave the other
-    // silent. Conditional spread under `exactOptionalPropertyTypes`.
-    ...(config.exitValuationAlerts === undefined
-      ? {}
-      : { exitValuationAlerts: config.exitValuationAlerts }),
-    // The `error`-level line both seams write before reaching the channel
-    // above, and #726's sink for a failed `riskLog.write`
+  // One broker wire client for the whole root: the order adapter and the
+  // account-state provider both talk to Alpaca's Trading API, and two clients
+  // would mean two token budgets against one account's shared rate limit
+  //
+  // LAZY since #1400, and memoized so "one client" still holds. It used to be
+  // built unconditionally, on the reasoning that the account-state provider
+  // needs it even when `config.broker` is overridden — true, but only while
+  // `config.accountState` is also defaulted. A run that supplies BOTH — or,
+  // since #1509, a Saxo run that supplies `config.accountFunding` instead of
+  // an `accountState`, so the account ledger comes from
+  // `GET /port/v1/balances/me` — reaches neither call
+  // site, and constructing the client anyway made such a run demand
+  // `ALPACA_API_KEY` for a transport it never uses
+  let alpacaBrokerClient: AlpacaBrokerClient | undefined;
+  const brokerClient = (): AlpacaBrokerClient =>
+    (alpacaBrokerClient ??=
+      config.alpacaBrokerClient ?? buildDefaultAlpacaBrokerClient(config.mode, logger));
+
+  // Outbound pacing per venue, from ops config rather than a literal here
+  // (#299). Hoisted above the market-data wiring by #391: ONE Alpaca bucket
+  // for the whole root, shared by the broker adapter and the market-data
+  // client, because the 200 req/min limit is per ACCOUNT and two buckets would
+  // be two budgets against one limit. The broker takes `acquire()`; market
+  // data takes `acquireBackground()` and leaves `reserveForPriority` tokens
+  // it may not spend, so a bar sweep cannot park an order behind the refill
+  //
+  // `{ logger, name: 'alpaca' }` (#1083) makes a wait on THIS shared bucket
+  // observable — the bucket this repo's own analysis names as the plausible
+  // starvation source once the 20-instrument universe drains it, and which
+  // was completely silent before. Pacing itself is unchanged; see
+  // `TokenBucketTelemetry`
+  const venuePacing = config.venuePacing ?? resolveVenuePacing();
+  const alpacaBucket = new TokenBucket(venuePacing.alpaca, undefined, {
     logger,
-    // Defaulted, not required (#276): the three sources this needs — Alpaca's
-    // account ledger, the durable `account_state` table, and the existing
-    // ClosedTrade store — all exist in-repo now, so an injected seam would be
-    // asking the caller to build what this module can compose
-    accountState:
-      config.accountState ??
-      new BrokerAccountStateProvider({
-        // #1509: the venue's own ledger, injected when the run is not Alpaca's
-        // (`saxoFunding`, built at the entrypoint from the one Saxo client)
-        // Everything below this line is venue-neutral and shared
-        funding: config.accountFunding ?? alpacaFunding(brokerClient()),
-        store: new SqliteAccountStateStore(guardedStore(config.db, 'orchestrator')),
-        // Per-class session-open equity snapshots (#332) — the local
-        // replacement for Alpaca's blended `last_equity` (GAP-8)
-        sessionEquity: new SqliteSessionEquityStore(guardedStore(config.db, 'orchestrator')),
-        // The append-only daily equity series (#345). Wired unconditionally,
-        // and on the same boundary as the snapshot above, because a return
-        // series cannot be backfilled: equity not sampled on the day is gone
-        // Capture starts from the first tick of the first run; whether it is
-        // ever EVALUATED is a separate, gated decision that lives in
-        // `SqliteDailyEquityMetricsSource`
-        dailyEquity: new SqliteDailyEquityStore(guardedStore(config.db, 'orchestrator')),
-        // The existing ClosedTrade reader, per spec story 25 — no new
-        // realized-PnL ledger is built when one already exists
-        closedTrades: new SqliteClosedTradeStore(guardedStore(config.db, 'feedback-loop')),
-        // Two calendars: crypto resets at 00:00 UTC, stocks at the prior 16:00
-        // ET close. `tradingCalendar` is the equity one (it gates market-hours
-        // scheduling), so only it is overridable here — a crypto session has no
-        // holidays or half-days for a config to express
-        //
-        // SHARING `tradingCalendar` WITH THE SCHEDULER IS DELIBERATE, not an
-        // oversight, and it is why this is typed `TradingCalendar` rather than
-        // narrowed to `UsEquityRegularHoursCalendar`. #331 put `sessionStart` on
-        // the port precisely so the accounting boundary and the session gating
-        // move together: "the boundary lives on the calendar rather than being
-        // duplicated in each consumer" (trading-calendar.ts). The default models
-        // NYSE holidays as of #696, so it no longer reports a session start for
-        // a holiday Monday that never traded — and that fix reached the daily-PnL
-        // boundary without touching this file, which is the whole point of the
-        // arrangement. The authoritative session table (#684, Alpaca's
-        // `GET /v2/calendar`) is injected HERE, through this same field, when it
-        // lands. Narrowing the type would pin this consumer to the built-in
-        // implementation and guarantee the two silently disagree on every
-        // holiday — the divergence the port exists to prevent
-        //
-        // The cost is that an override is authoritative for BOTH. That is the
-        // contract: `sessionStart` is a required member, so a substitute cannot
-        // omit it by accident, and any calendar answering it is by definition
-        // asserting when this account's stock sessions begin
-        calendars: sessionCalendars,
-        mode: config.mode,
-        // Composition happens at startup, so "now" here IS the process start
-        // It decides whether a session boundary was crossed under a running
-        // process (a real open) or had already passed when this one came up
-        // (a mid-session base) — #332's two cold-start cases
-        startedAt: config.clock.now(),
-        logger: config.logger ?? new JsonLogger(),
-      }),
-    // #277's provider, wired by default now that AccountStateProvider (#276)
-    // exists — the only reason direct-bind.ts left it a required seam
-    volatility:
-      config.volatility ??
-      new MarketDataVolatilityReadingProvider({
-        marketData,
-        universe,
-        volatility_indicator: config.volatilityIndicator ?? DEFAULT_VOLATILITY_INDICATOR,
-        // Literally the same objects the scheduler gates its tick plan on and
-        // the daily-PnL boundary resets on, for the same reason (#386): a
-        // second session opinion here would arm `volatility_halt:stocks`
-        // overnight for a class the tick plan had already excluded
-        calendars: sessionCalendars,
-        logger: config.logger ?? new JsonLogger(),
-      }),
-    getOpenPositions: () => executionStore.getOpenPositions(),
-    mode: config.mode,
-  };
+    name: 'alpaca',
+  });
 
-  // Hoisted, not inlined into `buildExecutionStep`: the fill-sync loop binds
-  // `reconcile()`/`ingestFills()` from this same object, so Execution cannot
-  // gain a dependency on the tick path and silently miss it on the poll path
-  const executionDeps: ExecutionStepDeps = {
+  const {
+    marketData,
+    benchmarkSeries,
+    marketIntelligence,
+    miCoverageMonitor,
+    llmFailureRateMonitor,
+    gateRefusalRateMonitor,
+    debateLogStore,
+    analysts,
+    setupStore,
+    tuningStore,
+    breachAlerts,
+    armDivergenceAlerts,
+    spendCap,
+  } = buildMarketDataAndSpendLayer({
+    config,
     clock,
-    broker,
-    // #1214: the same pair the flatten window and the daily-PnL boundary
-    // resolve against, for the reason this object exists at all (above)
+    universe,
+    tradingCalendar,
+    alpacaBucket,
+    logger,
+    venuePacing,
     sessionCalendars,
-    store: executionStore,
-    costModel: new CostModelImpl(config.costConfig),
-    marketData,
-    config: config.executionConfig,
-    // #525: the fallback alert for a residual `ingestFills()` failed to
-    // re-arm after a partial flatten. Required on `ExecutionInput`, for the
-    // same "no silent default" reason `unpricedFillAlerts` above is
-    // required on `AlpacaBrokerAdapterInput` (#298) — an omitted channel is
-    // the #322 bug re-created for a fifth escalation
-    residualExposureAlerts:
-      config.residualExposureAlerts ?? loggingAlertChannel('residualExposureAlerts', logger),
-    // #527: diagnostic-only for now (see `LoggingFlattenOverfillAlertChannel`'s
-    // doc) — no `SAMURAI_ALERTS`/config override yet, unlike the escalations
-    // above. A phone-reaching transport is a later ticket if this ever fires.
-    flattenOverfillAlerts: new LoggingFlattenOverfillAlertChannel(logger),
-    // #519: where `reconcile()`'s flatten sweep escalates a row it could not
-    // settle. Required on `ExecutionInput` for the same "no silent default"
-    // reason `residualExposureAlerts` above is — an omitted channel would
-    // make an unresolved flatten's ambiguity invisible again
-    flattenReconcileAlerts:
-      config.flattenReconcileAlerts ?? loggingAlertChannel('flattenReconcileAlerts', logger),
-    // #1550: where `findUnrecordedVenuePositions` escalates a venue position no
-    // open lot explains. Required, with a `loggingAlertChannel` default rather
-    // than an optional slot, for the reason `AlertChannelSlots`'s own field doc
-    // gives: nothing else writes an `error` line for this condition
-    unrecordedVenuePositionAlerts:
-      config.unrecordedVenuePositionAlerts ??
-      loggingAlertChannel('unrecordedVenuePositionAlerts', logger),
-    // #1550: one throttle per arm, shared by `fillSyncExecution`/
-    // `reconcileExecution` below for the reason `filledZeroSizeThrottle` gives
-    // — and load-bearing here, since only `reconcileExecution` scans but the
-    // page cadence is a property of the process, not of the surface
-    unrecordedVenuePositionThrottle: new UnrecordedVenuePositionThrottle(),
-    // #573: the execution port's own local diagnostic trace — see
-    // `ExecutionInput.logger`'s decision doc. Required, so a composition
-    // root that forgets it is a `tsc` error rather than a silent gap
-    logger,
-    // #1087: one throttle for this arm's whole process lifetime, shared by
-    // `fillSyncExecution`/`reconcileExecution` below (both close over this
-    // same `executionDeps` object) — only the former ever calls
-    // `ingestFills()`, but the throttle is process-scoped, not
-    // surface-scoped, so sharing the reference is correct, not incidental
-    filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
-    // #1465: optional, unlike the required channels above — no `Logging…`
-    // default, see `ExecutionInput.nonSterlingFeeAlerts`'s doc for why
-    ...(config.nonSterlingFeeAlerts === undefined
-      ? {}
-      : { nonSterlingFeeAlerts: config.nonSterlingFeeAlerts }),
-    // #1506: optional for the same reason as `nonSterlingFeeAlerts` above
-    ...(config.unattributedFlattenFillAlerts === undefined
-      ? {}
-      : { unattributedFlattenFillAlerts: config.unattributedFlattenFillAlerts }),
-  };
+  });
+  const { executionStore, broker, circuitBreakers, ciiConsumer, breakerStateDeps, executionDeps } =
+    buildExecutionAndRiskInfra({
+      config,
+      clock,
+      logger,
+      setupStore,
+      brokerClient,
+      alpacaBucket,
+      marketData,
+      universe,
+      sessionCalendars,
+    });
 
   // #464, retargeted at Nous by ADR-0009. The off switch used to be the
   // absence of XAI_API_KEY; under a single provider that no longer works,
@@ -1719,317 +2203,22 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // every call into `llm_spend` under `stage: 'market_intelligence'`, so
   // ADR-0008's cap covers this stage too, and it checks that cap BEFORE
   // calling
-  const sentimentEnabled = environment.sentimentEnabled;
-
-  // #1035. Passed down from the one read, so both spend sinks agree and
-  // neither reads the environment for itself — the same rule the file sink
-  // follows (`buildEntrypointLogger`)
-  const captureLlmText = environment.captureLlmText;
-
-  /**
-   * #1045. The row ceiling is APPLIED here, at boot, and again on the
-   * daily timer below — two call sites, both at this composition root.
-   *
-   * Both, not one. Startup alone would fire once and then never again for the
-   * length of an unattended run, which is precisely the run the ceiling exists
-   * to bound; the daily sweep alone would leave a restart-heavy dev loop
-   * pruning nothing until 24h of uptime accumulated. Neither is a hot path:
-   * the statement is a no-op below the ceiling and the table has one writer.
-   *
-   * Wired here rather than inside `SqliteLlmSpendStore` on purpose. The store
-   * writes rows; deciding how many the SYSTEM keeps is a deployment policy,
-   * and burying it in the writer is how #313's observed-fill prune came to
-   * exist, be tested, and never be called from anything that ships — dead
-   * code its whole life, retired by #1059.
-   */
-  const { llmCallLogMaxRows, miArchiveRetentionDays, alertDeliveryFailureRetentionDays } =
-    environment;
-  pruneLlmCallLogWithLog(config.db, llmCallLogMaxRows, logger, 'startup');
-
-  /**
-   * #1060. The specced 90-day MI archive purge, read and applied here at
-   * boot and again on the daily timer below — same two-call-site shape as
-   * the row ceiling immediately above, and for the same reason: startup
-   * alone never fires again during an unattended run, and the daily sweep
-   * alone leaves a restart-heavy dev loop pruning nothing.
-   *
-   * Wired here rather than inside `MiArchiveStore.write` on purpose, for the
-   * same reason as above: the store persists rows, deciding how long the
-   * SYSTEM keeps them is a deployment policy, and burying it in the writer
-   * is exactly how the MI archive's purge went unimplemented in the first
-   * place (#1060's own gap) and how #313's observed-fill prune shipped
-   * uncalled, and was eventually retired unused (#1059).
-   */
-  pruneMiArchiveWithLog(config.miArchive, miArchiveRetentionDays, clock, logger, 'startup');
-  /**
-   * #1131. Same two-call-site shape as the MI archive purge immediately
-   * above and for the same reason — see `pruneAlertDeliveryFailuresWithLog`
-   * for why this table needs its own retention sweep at all (the Rail tile's
-   * count was previously all-time with no lower bound, and the table itself
-   * had no pruning).
-   */
-  pruneAlertDeliveryFailuresWithLog(
-    config.db,
-    alertDeliveryFailureRetentionDays,
-    clock,
-    logger,
-    'startup',
-  );
-  // `tryNousCredentials` rather than `nousCredentials`: an unconfigured Nous
-  // environment degrades this optional stage to no-agent instead of failing
-  // the boot, which is how the absent `XAI_API_KEY` behaved before ADR-0009
-  // and what every test injecting its own `llmClient` relies on. An UNPRICED
-  // model still throws from in there — that is a hole in the spend cap, not a
-  // configuration gap
-  const sentimentCredentials = sentimentEnabled ? tryNousCredentials('sentiment') : undefined;
-  /**
-   * ONE `LlmClient` for the whole root. The debate stage and #552's MI scoring
-   * pass both bill through it, so there is one spend meter and one config
-   * rather than two clients disagreeing about either.
-   */
-  const promptTierAlerts =
-    config.promptTierAlerts ?? loggingAlertChannel('promptTierAlerts', logger);
-  /**
-   * ONE throttle for the whole root, for the same reason as `promptTierAlerts`
-   * above: `NOUS_MODEL` alone can route BOTH the debate stage's default
-   * client and the sentiment `GrokAgent` below through the same tiered model
-   * (nous-config.ts's `nousCredentials` falls back through `NOUS_MODEL` for
-   * either role, and the startup guard only rejects a model missing from
-   * `MODEL_RATES`), and a throttle instance per `SqliteLlmSpendStore` would
-   * then count that model's consecutive crossings twice — up to two "first
-   * crossing" alerts and roughly double the repeat cadence against a
-   * one-then-every-8 contract (#1155)
-   */
-  const promptTierThrottle = new PromptTierCrossingThrottle();
-  /**
-   * ONE in-flight gate for the whole root (#1080), for a reason stronger than
-   * the two above: Nous queues per ACCOUNT, not per key or per client, so a
-   * second gate would cap two populations of the same queue independently and
-   * cap neither. Every Nous-speaking client built below takes THIS instance —
-   * the debate client, the sentiment client and the X retrieval client — and
-   * `nousChat`/`nousResponses` cannot be called without one, so a client added
-   * later cannot quietly opt out.
-   */
-  const llmInFlightGate = new NousAccountInFlightGate({
-    maxInFlight: config.maxInFlightLlmCalls ?? DEFAULT_MAX_IN_FLIGHT_LLM_CALLS,
-    expectedCallMs: config.expectedLlmCallMs ?? DEFAULT_EXPECTED_NOUS_CALL_MS,
-    logger,
-  });
-  const llmClient =
-    config.llmClient ??
-    buildDefaultLlmClient(
-      logger,
-      llmInFlightGate,
-      new SqliteLlmSpendStore(
-        guardedStore(config.db, 'debate-engine'),
-        logger,
-        captureLlmText,
-        promptTierAlerts,
-        promptTierThrottle,
-      ),
-    );
-
-  const { sentimentRetrieval, xMaxSearchResults } = environment;
-
-  const grokAgent =
-    sentimentCredentials === undefined
-      ? undefined
-      : new GrokAgent({
-          // The ONE construction-time difference between a sentiment stage
-          // that fills `social` and one that has never filled it. Everything
-          // downstream — the spend gate, the evidence guard, the bucket cache
-          // — is identical, which is the property `grok-agent.ts` claimed and
-          // this line is the test of
-          client: sentimentRetrieval
-            ? new XSearchClient({
-                ...sentimentCredentials,
-                gate: llmInFlightGate,
-                // The credentials' model is the PINNED `x-ai/grok-4.5`, on
-                // which `x_search` 400s ("supported only on OpenRouter-routed
-                // models"). The routed alias is not a preference here, it is
-                // the only thing that works — see `X_SEARCH_MODEL`
-                model: X_SEARCH_MODEL,
-                maxSearchResults: xMaxSearchResults,
-                windowMs: GROK_REFRESH_MS,
-                logger,
-              })
-            : new NousSentimentClient({ ...sentimentCredentials, logger, gate: llmInFlightGate }),
-          store: marketIntelligence,
-          spendCap,
-          spendSink: new SqliteLlmSpendStore(
-            guardedStore(config.db, 'debate-engine'),
-            logger,
-            captureLlmText,
-            promptTierAlerts,
-            promptTierThrottle,
-          ),
-          clock,
-          logger,
-          // Absent on runs with no archive, which is a working configuration:
-          // it costs replay and the post-hoc bot-share check, not correctness
-          archive: config.miArchive,
-        });
-
-  if (sentimentRetrieval && sentimentCredentials === undefined) {
-    logger.log({
-      trace_id: 'boot',
-      stage: 'market_intelligence',
-      event: 'sentiment_credentials_absent',
-      level: 'warn',
-      message:
-        'SAMURAI_SENTIMENT_RETRIEVAL=on but no sentiment credentials are configured, so no ' +
-        'sentiment agent was built at all. `social` will be empty for this run and the ' +
-        'analysts will report NO DATA — the retrieval switch is doing nothing.',
-    });
-  }
-
-  /**
-   * The deterministic news path (map #552) — the writer that actually fills
-   * `MarketIntelligenceStore`.
-   *
-   * PREFERRED OVER `grokAgent` when it can be built, and the reason is not
-   * preference. `NousSentimentClient` hard-codes `retrievalEvidence: false` and
-   * `GrokAgent.refresh` discards every item without evidence, so that path
-   * ingests `[]` on every refresh BY CONSTRUCTION — its own spec section says
-   * "the expected steady state of this stage is an empty item list". #625 then
-   * measured the cost: with `sentiment` and `fundamental` both pinned at
-   * confidence 0.05, the stocks conviction ceiling was 0.5478 against a 0.55
-   * floor, so a stock could never trade at any RSI.
-   *
-   * This agent needs the same Nous credentials (for SCORING, not retrieval) and
-   * Alpaca keys it already holds for bars, so it is available exactly when the
-   * old path was — and when it is not, the fallback is the old agent rather
-   * than nothing.
-   */
-  const miIngestAgent = buildMiIngestAgent({
-    archive: config.miArchive,
-    hasScoringCredentials: sentimentCredentials !== undefined,
-    store: marketIntelligence,
+  const {
+    llmInFlightGate,
     llmClient,
+    marketIntelligenceRefresh,
+    gdeltIngestAgent,
+    gdeltScoringPass,
+    polymarketAgent,
+  } = buildLlmAndMarketIntelligenceLayer({
+    config,
+    clock,
+    logger,
+    environment,
+    marketIntelligence,
     spendCap,
-    clock,
-    logger,
-    assetClasses: universeAssetClasses(universe),
+    universe,
   });
-
-  /**
-   * The MI writers, composed and then taken OFF the analyst stage's critical
-   * path (#1085).
-   *
-   * BOTH agents, not one (#969): they write DIFFERENT buckets — `MiIngestAgent`
-   * fills `news`, `GrokAgent` fills `social` — so picking one leaves the other
-   * empty by construction.
-   *
-   * Both agents now read `spendCap` themselves before their own metered call
-   * (#1106), so the array order below is no longer load-bearing — either agent
-   * refuses on a breach whichever one the queue's single pre-pass check admits
-   * second. That check stays as a cheap outer bound on the whole composed pass,
-   * not the only ceiling the news-scoring path has.
-   *
-   * `undefined` when neither agent could be built (SAMURAI_SENTIMENT=off, or
-   * no Nous credentials): no queue, no calls, and the analysts keep reporting
-   * NO_DATA_MARKER (#463), which is the honest default rather than a silent
-   * no-op refresher that would read as a working one.
-   *
-   * The queue is what makes the analysts step non-blocking and what serialises
-   * every metered MI call behind one check — see `mi-refresh-queue.ts` for why
-   * neither property held before, cross-instrument concurrency included.
-   */
-  const marketIntelligenceRefresh = ((): MiRefreshQueue | undefined => {
-    const composed = composeMarketIntelligence([miIngestAgent, grokAgent]);
-    return composed === undefined
-      ? undefined
-      : new MiRefreshQueue({ refresher: composed, spendCap, logger });
-  })();
-
-  /**
-   * The GDELT macro layer (#556). Runs whenever an archive exists — no
-   * credentials to check, because GDELT is open data, and no LLM either: this
-   * half only writes bytes.
-   *
-   * Independent of `miIngestAgent` on purpose. That path is the ticker layer
-   * and its own header records the measured hole it cannot fill — the Benzinga
-   * wire returns **zero** items for 3USL/3LDE/SGLN, the LSE ETPs ADR-0016
-   * actually trades. Whether Alpaca credentials are present has no bearing on
-   * whether the macro layer should run.
-   */
-  const gdeltIngestAgent =
-    config.miArchive === undefined
-      ? undefined
-      : new GdeltIngestAgent({
-          archive: config.miArchive,
-          client: config.gdeltClient ?? new GdeltGkgClient({}),
-          clock,
-          logger,
-        });
-
-  /**
-   * The other half of #556 (#1086): what turns those archived bytes into an
-   * `IntelligenceItem` an analyst can read.
-   *
-   * Built beside the archiver and driven from the SAME timer, after each poll
-   * — see `start()`. It reads the archive and writes the store; it makes no
-   * network call, no LLM call, and no `mi_items` write, because the aggregate
-   * is derived at read every time (`gdelt-scoring-pass.ts` has the argument).
-   *
-   * The asset classes come from the UNIVERSE, not from every class the type
-   * admits. Deriving a crypto aggregate on an equities-only book would spend
-   * a read and log a refusal every poll for a leg no instrument belongs to —
-   * and crypto left Samurai's scope on 2026-08-16 (ADR-0015's amendment).
-   */
-  const gdeltScoringPass =
-    config.miArchive === undefined
-      ? undefined
-      : new GdeltScoringPass({
-          archive: config.miArchive,
-          store: marketIntelligence,
-          clock,
-          assetClasses: [...new Set(universe.map((instrument) => instrument.asset_class))],
-          logger,
-        });
-
-  /**
-   * The Polymarket macro/event layer (#504) — an `intel` writer (#1164).
-   *
-   * Built unconditionally: no credentials to check (the read APIs are keyless),
-   * no LLM call in the path, and its product is the store write, so unlike the
-   * GDELT archiver it is useful even on a run with no MI archive. The archive
-   * is passed when one exists, for the raw bytes replay needs.
-   *
-   * Its items reach the same analyst `miIngestAgent`'s `news` does —
-   * `fundamental-analyst.ts` folds `news` + `intel` together (#1164) — and
-   * that is the point rather than a duplication: the Benzinga wire returns
-   * ZERO items for 3USL/3LDE/SGLN, the LSE ETPs ADR-0016 actually trades, and
-   * a 3x FTSE ETP has no company news to return. Macro is what moves it. Note
-   * plainly what this does NOT do: these items are filed under macro series
-   * names, never tickers, so `MiCoverageMonitor` — which matches `entity ===
-   * instrument` — will still report those three as uncovered. Filing them
-   * under tickers would quiet the counter without telling the analysts
-   * anything about the ticker.
-   */
-  const polymarketAgent = new PolymarketAgent({
-    client: config.polymarketClient ?? new PolymarketClient(),
-    store: marketIntelligence,
-    clock,
-    logger,
-    ...(config.miArchive === undefined ? {} : { archive: config.miArchive }),
-  });
-
-  if (grokAgent === undefined) {
-    logger.log({
-      trace_id: 'startup',
-      stage: 'market_intelligence',
-      event: 'mi_agent_absent',
-      level: 'warn',
-      message:
-        (sentimentEnabled
-          ? 'Nous is not configured for the sentiment role, so no market-intelligence agent is running. '
-          : 'SAMURAI_SENTIMENT=off, so no market-intelligence agent is running. ') +
-        '`sentiment` and `fundamental` will report NO DATA on every tick — crypto debates run ' +
-        '1 real analyst of 2 and equity debates 1 of 3. See #436/#464.',
-      payload: {},
-    });
-  }
 
   // The Trader's two entry points, built together so the tick path's exit
   // check and the decision path's full decision share one dependency set and
@@ -4185,251 +4374,254 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         heldAssets: buildHeldAssetsReader(components),
       });
 
-      // #327: both of these degraded modes were previously reached by pure
-      // omission — no warn, no log line, no trace. An operator who forgot the
-      // config got a system that looked healthy and never learned anything
-      // Warned at STARTUP, not at first use: the first daily cycle is up to
-      // 24h away, and "silent for a day" is indistinguishable from "broken"
-      const feedback = config.feedback;
-      if (feedback === undefined) {
-        logger.log({
-          trace_id: 'startup',
-          stage: 'feedback-loop',
-          event: 'feedback_cycle_unconfigured',
-          level: 'warn',
-          message:
-            'ProductionConfig.feedback is not set — the daily feedback cycle will NEVER run. ' +
-            'No analyst weight is attributed, no dial is tuned, and no kill-line ' +
-            '(pbo_over_max, oos_sharpe_under_min, dsr_insignificant, ' +
-            'live_backtest_divergence_over_max) is ever evaluated. The run will look healthy ' +
-            'and learn nothing.',
-          payload: { feedback_cycle: 'not_started' },
-        });
-      } else {
-        // The weight rows this cycle will step were seeded above, before any
-        // of the loops started (#371)
-        if (feedback.metrics === undefined) {
+      function runFeedbackCycleStartup(): void {
+        // #327: both of these degraded modes were previously reached by pure
+        // omission — no warn, no log line, no trace. An operator who forgot the
+        // config got a system that looked healthy and never learned anything
+        // Warned at STARTUP, not at first use: the first daily cycle is up to
+        // 24h away, and "silent for a day" is indistinguishable from "broken"
+        const feedback = config.feedback;
+        if (feedback === undefined) {
           logger.log({
             trace_id: 'startup',
             stage: 'feedback-loop',
-            event: 'feedback_metrics_unconfigured',
+            event: 'feedback_cycle_unconfigured',
             level: 'warn',
             message:
-              'FeedbackCycleConfig.metrics is not set — the daily cycle will tune dials but ' +
-              'computeMetrics will NEVER run, so all four kill-lines stay unevaluated. A ' +
-              'MetricsSuite CAN be produced in-repo since #345: supply ' +
-              'SqliteDailyEquityMetricsSource over the daily_equity series this process is ' +
-              'already recording every tick (ADR-0006). It self-gates below 60 observations, ' +
-              'so arming it during a short soak evaluates nothing rather than acting on noise.',
-            payload: { kill_lines: 'not_evaluated' },
+              'ProductionConfig.feedback is not set — the daily feedback cycle will NEVER run. ' +
+              'No analyst weight is attributed, no dial is tuned, and no kill-line ' +
+              '(pbo_over_max, oos_sharpe_under_min, dsr_insignificant, ' +
+              'live_backtest_divergence_over_max) is ever evaluated. The run will look healthy ' +
+              'and learn nothing.',
+            payload: { feedback_cycle: 'not_started' },
           });
         } else {
-          /**
-           * #379 — the wired case, announced for the same reason the unwired
-           * one is, and in the same place: at startup, once, before anything
-           * has run. A detector that will not produce a suite for a calendar
-           * quarter (the 60-observation gate, ADR-0006 §5) is not the same
-           * thing as a detector that ran and found nothing, and the first daily
-           * cycle is up to 24h away from here.
-           *
-           * `info`, not `warn`: this line says the wiring exists. What is
-           * *inert* despite the wiring is warned about immediately below —
-           * because removing the "metrics is not set" warn removed the only
-           * startup statement that the kill-lines were unevaluated, and
-           * replacing one silence with another is the thing #379 must not do.
-           */
-          logger.log({
-            trace_id: 'startup',
-            stage: 'feedback-loop',
-            level: 'info',
-            message:
-              'FeedbackCycleConfig.metrics is wired — computeMetrics runs on every daily cycle. ' +
-              'The source gates itself below its minimum observation count (ADR-0006 §5), so ' +
-              'early cycles report "no daily MetricsSuite" with the count rather than acting on ' +
-              'a Sharpe made of noise. Which kill-lines that suite can actually answer is ' +
-              'reported per cycle in `not_evaluated`, and at startup by the warns that follow.',
-            payload: { metrics_source: 'wired' },
-          });
-
-          /**
-           * The three revalidation-gated lines, stated at startup because
-           * nothing else does until a suite exists.
-           *
-           * `pbo_over_max`, `oos_sharpe_under_min` and `dsr_insignificant` are
-           * computed only from `DailyMetricsSample.revalidation`.
-           * `SqliteDailyEquityMetricsSource.revalidation()` produces that
-           * snapshot (#384) from the frozen Stage 2 selection, so the honest
-           * startup statement is CONDITIONAL on the store (#579).
-           *
-           * The decision itself is `usableRevalidationSelections` — the SAME
-           * predicate the metrics source applies — read over the same store,
-           * so this line cannot drift from the decision it reports. Stated at
-           * startup rather than on the first suite because the first suite is
-           * ~60 sessions out (ADR-0006 §5) and a warn that arrives then is a
-           * warn nobody reads at the time it matters.
-           */
-          const revalidationSelections = selectionStore.getLatestPerAssetClass();
-          const usableSelections = usableRevalidationSelections(
-            revalidationSelections,
-            clock.now(),
-          );
-          const revalidationGatedKillLines = [
-            'pbo_over_max',
-            'oos_sharpe_under_min',
-            'dsr_insignificant',
-          ];
-          if (usableSelections.length === 0) {
+          // The weight rows this cycle will step were seeded above, before any
+          // of the loops started (#371)
+          if (feedback.metrics === undefined) {
             logger.log({
               trace_id: 'startup',
               stage: 'feedback-loop',
-              event: 'revalidation_selection_absent',
+              event: 'feedback_metrics_unconfigured',
               level: 'warn',
               message:
-                'pbo_over_max, oos_sharpe_under_min and dsr_insignificant are evaluated ONLY ' +
-                'from a revalidation snapshot (DailyMetricsSample.revalidation), and no usable ' +
-                'frozen Stage 2 selection exists — none persisted, all older than ' +
-                `${DEFAULT_STAGE2_MAX_AGE_DAYS} days, or PBO/DSR refused. Expect these three in ` +
-                '`not_evaluated` on every cycle (un-run, NOT passed) until a direct Stage 2 run ' +
-                '(`node dist/server/tools/run-stage2.js`) freezes a fresh selection (#384, #579).',
-              payload: {
-                kill_lines_gated_on_revalidation: revalidationGatedKillLines,
-                persisted_selections: revalidationSelections.length,
-              },
+                'FeedbackCycleConfig.metrics is not set — the daily cycle will tune dials but ' +
+                'computeMetrics will NEVER run, so all four kill-lines stay unevaluated. A ' +
+                'MetricsSuite CAN be produced in-repo since #345: supply ' +
+                'SqliteDailyEquityMetricsSource over the daily_equity series this process is ' +
+                'already recording every tick (ADR-0006). It self-gates below 60 observations, ' +
+                'so arming it during a short soak evaluates nothing rather than acting on noise.',
+              payload: { kill_lines: 'not_evaluated' },
             });
           } else {
+            /**
+             * #379 — the wired case, announced for the same reason the unwired
+             * one is, and in the same place: at startup, once, before anything
+             * has run. A detector that will not produce a suite for a calendar
+             * quarter (the 60-observation gate, ADR-0006 §5) is not the same
+             * thing as a detector that ran and found nothing, and the first daily
+             * cycle is up to 24h away from here.
+             *
+             * `info`, not `warn`: this line says the wiring exists. What is
+             * *inert* despite the wiring is warned about immediately below —
+             * because removing the "metrics is not set" warn removed the only
+             * startup statement that the kill-lines were unevaluated, and
+             * replacing one silence with another is the thing #379 must not do.
+             */
             logger.log({
               trace_id: 'startup',
               stage: 'feedback-loop',
               level: 'info',
               message:
-                'pbo_over_max, oos_sharpe_under_min and dsr_insignificant are ARMED by the ' +
-                'frozen Stage 2 selection (#384): the metrics source reports the worse-PBO ' +
-                'snapshot once the daily suite clears its observation gate (ADR-0006 §5, ' +
-                '~60 sessions). Until then they read `not_evaluated`; after a selection ages ' +
-                `past ${DEFAULT_STAGE2_MAX_AGE_DAYS} days they go inert again until Stage 2 ` +
-                'is re-run (#579).',
-              payload: {
-                kill_lines_gated_on_revalidation: revalidationGatedKillLines,
-                selections: usableSelections.map((selection) => ({
-                  asset_class: selection.asset_class,
-                  selected_at: selection.selected_at.toISOString(),
-                  pbo: selection.pbo,
-                  dsr: selection.dsr,
-                })),
-              },
+                'FeedbackCycleConfig.metrics is wired — computeMetrics runs on every daily cycle. ' +
+                'The source gates itself below its minimum observation count (ADR-0006 §5), so ' +
+                'early cycles report "no daily MetricsSuite" with the count rather than acting on ' +
+                'a Sharpe made of noise. Which kill-lines that suite can actually answer is ' +
+                'reported per cycle in `not_evaluated`, and at startup by the warns that follow.',
+              payload: { metrics_source: 'wired' },
             });
-          }
 
-          /**
-           * #375, kept visible where an operator will actually see it.
-           *
-           * This used to be announced on the first computed suite. With
-           * `metrics` unwired that was equivalent — the blanket "all four
-           * kill-lines stay unevaluated" warn above covered it — but wiring the
-           * source (#379) removes that warn while the gate keeps the first
-           * suite ~60 sessions away, so the divergence line's inertness would
-           * have gone unannounced for the whole soak. Stated here instead: once
-           * per process by construction, since `start()` runs once and the
-           * value is frozen config rather than a property of the day.
-           */
-          if (feedback.metrics.backtest_reference_sharpe <= 0) {
+            /**
+             * The three revalidation-gated lines, stated at startup because
+             * nothing else does until a suite exists.
+             *
+             * `pbo_over_max`, `oos_sharpe_under_min` and `dsr_insignificant` are
+             * computed only from `DailyMetricsSample.revalidation`.
+             * `SqliteDailyEquityMetricsSource.revalidation()` produces that
+             * snapshot (#384) from the frozen Stage 2 selection, so the honest
+             * startup statement is CONDITIONAL on the store (#579).
+             *
+             * The decision itself is `usableRevalidationSelections` — the SAME
+             * predicate the metrics source applies — read over the same store,
+             * so this line cannot drift from the decision it reports. Stated at
+             * startup rather than on the first suite because the first suite is
+             * ~60 sessions out (ADR-0006 §5) and a warn that arrives then is a
+             * warn nobody reads at the time it matters.
+             */
+            const revalidationSelections = selectionStore.getLatestPerAssetClass();
+            const usableSelections = usableRevalidationSelections(
+              revalidationSelections,
+              clock.now(),
+            );
+            const revalidationGatedKillLines = [
+              'pbo_over_max',
+              'oos_sharpe_under_min',
+              'dsr_insignificant',
+            ];
+            if (usableSelections.length === 0) {
+              logger.log({
+                trace_id: 'startup',
+                stage: 'feedback-loop',
+                event: 'revalidation_selection_absent',
+                level: 'warn',
+                message:
+                  'pbo_over_max, oos_sharpe_under_min and dsr_insignificant are evaluated ONLY ' +
+                  'from a revalidation snapshot (DailyMetricsSample.revalidation), and no usable ' +
+                  'frozen Stage 2 selection exists — none persisted, all older than ' +
+                  `${DEFAULT_STAGE2_MAX_AGE_DAYS} days, or PBO/DSR refused. Expect these three in ` +
+                  '`not_evaluated` on every cycle (un-run, NOT passed) until a direct Stage 2 run ' +
+                  '(`node dist/server/tools/run-stage2.js`) freezes a fresh selection (#384, #579).',
+                payload: {
+                  kill_lines_gated_on_revalidation: revalidationGatedKillLines,
+                  persisted_selections: revalidationSelections.length,
+                },
+              });
+            } else {
+              logger.log({
+                trace_id: 'startup',
+                stage: 'feedback-loop',
+                level: 'info',
+                message:
+                  'pbo_over_max, oos_sharpe_under_min and dsr_insignificant are ARMED by the ' +
+                  'frozen Stage 2 selection (#384): the metrics source reports the worse-PBO ' +
+                  'snapshot once the daily suite clears its observation gate (ADR-0006 §5, ' +
+                  '~60 sessions). Until then they read `not_evaluated`; after a selection ages ' +
+                  `past ${DEFAULT_STAGE2_MAX_AGE_DAYS} days they go inert again until Stage 2 ` +
+                  'is re-run (#579).',
+                payload: {
+                  kill_lines_gated_on_revalidation: revalidationGatedKillLines,
+                  selections: usableSelections.map((selection) => ({
+                    asset_class: selection.asset_class,
+                    selected_at: selection.selected_at.toISOString(),
+                    pbo: selection.pbo,
+                    dsr: selection.dsr,
+                  })),
+                },
+              });
+            }
+
+            /**
+             * #375, kept visible where an operator will actually see it.
+             *
+             * This used to be announced on the first computed suite. With
+             * `metrics` unwired that was equivalent — the blanket "all four
+             * kill-lines stay unevaluated" warn above covered it — but wiring the
+             * source (#379) removes that warn while the gate keeps the first
+             * suite ~60 sessions away, so the divergence line's inertness would
+             * have gone unannounced for the whole soak. Stated here instead: once
+             * per process by construction, since `start()` runs once and the
+             * value is frozen config rather than a property of the day.
+             */
+            if (feedback.metrics.backtest_reference_sharpe <= 0) {
+              logger.log({
+                trace_id: 'startup',
+                stage: 'feedback-loop',
+                event: 'backtest_reference_sharpe_inert',
+                level: 'warn',
+                message:
+                  'backtest_reference_sharpe <= 0 — live_backtest_divergence_over_max is INERT and ' +
+                  'can never breach. A non-positive reference has no meaningful relative drop, so ' +
+                  'the check returns 0 by design; set ' +
+                  'FeedbackCycleConfig.metrics.backtest_reference_sharpe to the frozen selected ' +
+                  "config's backtest Sharpe to arm it (#375). Warned once per process.",
+                payload: {
+                  backtest_reference_sharpe: feedback.metrics.backtest_reference_sharpe,
+                  kill_line: 'live_backtest_divergence_over_max',
+                },
+              });
+            }
+          }
+          // #1110: state the schedule at startup rather than leaving an operator
+          // to infer it — read BEFORE `scheduleFeedbackCycle` below runs its
+          // first check, so this reports what was true when the process came
+          // up, not the post-catch-up state
+          // `new Date()`, matching `scheduleFeedbackCycle`'s own boundary math
+          // (DESIGN DECISION 1) — not `clock.now()`
+          const feedbackIntervalMs = feedback.intervalMs ?? DEFAULT_FEEDBACK_INTERVAL_MS;
+          // Named validation, not a bare `currentBoundary` throw (pass-2
+          // finding 3): `FeedbackCycleConfig.intervalMs` is unvalidated
+          // anywhere else, so a non-positive value (e.g. `0`) would otherwise
+          // fail here with `cycle-schedule.ts`'s generic "intervalMs must be
+          // positive" message and no mention of which config field caused it
+          // This is deliberately still a boot crash, not a caught-and-logged
+          // path: the old `setInterval(fn, 0)` this schedule replaced would
+          // have hot-looped on the same bad config, so failing loudly at boot
+          // is strictly better, not a regression to soften. `Number.isFinite`
+          // also rejects `NaN`/`Infinity`: both pass
+          // `<= 0`, and without this check `currentBoundary` below yields an
+          // Invalid Date that dies at `.toISOString()` with a bare, unattributed
+          // `RangeError` instead of this named message
+          if (!Number.isFinite(feedbackIntervalMs) || feedbackIntervalMs <= 0) {
+            throw new Error(
+              `FeedbackCycleConfig.intervalMs must be positive, got ${feedbackIntervalMs}`,
+            );
+          }
+          const feedbackBoundaryNow = currentBoundary(new Date(), feedbackIntervalMs);
+          // #1110 gap: an unreadable schedule store is not on the order path —
+          // it must not stop the process that manages open positions from
+          // booting, and `runIfDue` below already swallows the identical
+          // failure, so letting this diagnostic read crash boot would be
+          // incoherent with it
+          let feedbackStoredBoundary: Date | null = null;
+          let feedbackScheduleReadFailed = false;
+          try {
+            feedbackStoredBoundary = feedbackScheduleStore.lastBoundary();
+          } catch (error) {
+            feedbackScheduleReadFailed = true;
             logger.log({
               trace_id: 'startup',
               stage: 'feedback-loop',
-              event: 'backtest_reference_sharpe_inert',
-              level: 'warn',
+              event: 'feedback_schedule_read_failed',
+              level: 'error',
               message:
-                'backtest_reference_sharpe <= 0 — live_backtest_divergence_over_max is INERT and ' +
-                'can never breach. A non-positive reference has no meaningful relative drop, so ' +
-                'the check returns 0 by design; set ' +
-                'FeedbackCycleConfig.metrics.backtest_reference_sharpe to the frozen selected ' +
-                "config's backtest Sharpe to arm it (#375). Warned once per process.",
-              payload: {
-                backtest_reference_sharpe: feedback.metrics.backtest_reference_sharpe,
-                kill_line: 'live_backtest_divergence_over_max',
-              },
+                'could not read the feedback cycle schedule store at startup — proceeding with ' +
+                "boot; runIfDue's own guarded read (below) will retry it on the first pass (#1110)",
+              payload: { error: error instanceof Error ? error.message : String(error) },
             });
           }
-        }
-        // #1110: state the schedule at startup rather than leaving an operator
-        // to infer it — read BEFORE `scheduleFeedbackCycle` below runs its
-        // first check, so this reports what was true when the process came
-        // up, not the post-catch-up state
-        // `new Date()`, matching `scheduleFeedbackCycle`'s own boundary math
-        // (DESIGN DECISION 1) — not `clock.now()`
-        const feedbackIntervalMs = feedback.intervalMs ?? DEFAULT_FEEDBACK_INTERVAL_MS;
-        // Named validation, not a bare `currentBoundary` throw (pass-2
-        // finding 3): `FeedbackCycleConfig.intervalMs` is unvalidated
-        // anywhere else, so a non-positive value (e.g. `0`) would otherwise
-        // fail here with `cycle-schedule.ts`'s generic "intervalMs must be
-        // positive" message and no mention of which config field caused it
-        // This is deliberately still a boot crash, not a caught-and-logged
-        // path: the old `setInterval(fn, 0)` this schedule replaced would
-        // have hot-looped on the same bad config, so failing loudly at boot
-        // is strictly better, not a regression to soften. `Number.isFinite`
-        // also rejects `NaN`/`Infinity`: both pass
-        // `<= 0`, and without this check `currentBoundary` below yields an
-        // Invalid Date that dies at `.toISOString()` with a bare, unattributed
-        // `RangeError` instead of this named message
-        if (!Number.isFinite(feedbackIntervalMs) || feedbackIntervalMs <= 0) {
-          throw new Error(
-            `FeedbackCycleConfig.intervalMs must be positive, got ${feedbackIntervalMs}`,
-          );
-        }
-        const feedbackBoundaryNow = currentBoundary(new Date(), feedbackIntervalMs);
-        // #1110 gap: an unreadable schedule store is not on the order path —
-        // it must not stop the process that manages open positions from
-        // booting, and `runIfDue` below already swallows the identical
-        // failure, so letting this diagnostic read crash boot would be
-        // incoherent with it
-        let feedbackStoredBoundary: Date | null = null;
-        let feedbackScheduleReadFailed = false;
-        try {
-          feedbackStoredBoundary = feedbackScheduleStore.lastBoundary();
-        } catch (error) {
-          feedbackScheduleReadFailed = true;
+          const feedbackDueNow = isBoundaryDue(feedbackBoundaryNow, feedbackStoredBoundary);
+          // Computed once and carried structurally on BOTH branches' payload
+          // (#1110): the due-now branch is a fresh deploy or a restart after an
+          // outage — exactly the case an operator most needs the
+          // next-scheduled instant for, since "catching up" alone doesn't say
+          // when the normal cadence resumes
+          const feedbackNextDue = nextBoundary(new Date(), feedbackIntervalMs);
           logger.log({
             trace_id: 'startup',
             stage: 'feedback-loop',
-            event: 'feedback_schedule_read_failed',
-            level: 'error',
-            message:
-              'could not read the feedback cycle schedule store at startup — proceeding with ' +
-              "boot; runIfDue's own guarded read (below) will retry it on the first pass (#1110)",
-            payload: { error: error instanceof Error ? error.message : String(error) },
+            level: 'info',
+            message: feedbackScheduleReadFailed
+              ? 'daily feedback cycle schedule is UNKNOWN — the store could not be read at ' +
+                "startup, so no catch-up decision was made here; runIfDue's own guarded read " +
+                `decides on its first pass, next boundary at ${feedbackNextDue.toISOString()} (#1110)`
+              : feedbackDueNow
+                ? 'daily feedback cycle is due now — catching up on the current boundary, then ' +
+                  `resuming the normal schedule, next due at ${feedbackNextDue.toISOString()} (#1110)`
+                : 'daily feedback cycle already ran for the current boundary — next due at ' +
+                  `${feedbackNextDue.toISOString()}`,
+            payload: {
+              boundary: feedbackBoundaryNow.toISOString(),
+              interval_ms: feedbackIntervalMs,
+              stored_boundary: feedbackStoredBoundary?.toISOString() ?? null,
+              stored_boundary_read_failed: feedbackScheduleReadFailed,
+              next_due: feedbackNextDue.toISOString(),
+            },
           });
-        }
-        const feedbackDueNow = isBoundaryDue(feedbackBoundaryNow, feedbackStoredBoundary);
-        // Computed once and carried structurally on BOTH branches' payload
-        // (#1110): the due-now branch is a fresh deploy or a restart after an
-        // outage — exactly the case an operator most needs the
-        // next-scheduled instant for, since "catching up" alone doesn't say
-        // when the normal cadence resumes
-        const feedbackNextDue = nextBoundary(new Date(), feedbackIntervalMs);
-        logger.log({
-          trace_id: 'startup',
-          stage: 'feedback-loop',
-          level: 'info',
-          message: feedbackScheduleReadFailed
-            ? 'daily feedback cycle schedule is UNKNOWN — the store could not be read at ' +
-              "startup, so no catch-up decision was made here; runIfDue's own guarded read " +
-              `decides on its first pass, next boundary at ${feedbackNextDue.toISOString()} (#1110)`
-            : feedbackDueNow
-              ? 'daily feedback cycle is due now — catching up on the current boundary, then ' +
-                `resuming the normal schedule, next due at ${feedbackNextDue.toISOString()} (#1110)`
-              : 'daily feedback cycle already ran for the current boundary — next due at ' +
-                `${feedbackNextDue.toISOString()}`,
-          payload: {
-            boundary: feedbackBoundaryNow.toISOString(),
-            interval_ms: feedbackIntervalMs,
-            stored_boundary: feedbackStoredBoundary?.toISOString() ?? null,
-            stored_boundary_read_failed: feedbackScheduleReadFailed,
-            next_due: feedbackNextDue.toISOString(),
-          },
-        });
 
-        scheduleFeedbackCycle(feedback, feedbackIntervalMs);
+          scheduleFeedbackCycle(feedback, feedbackIntervalMs);
+        }
       }
+      runFeedbackCycleStartup();
 
       return orphans;
     },

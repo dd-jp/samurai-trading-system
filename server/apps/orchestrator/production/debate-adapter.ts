@@ -935,23 +935,30 @@ export function buildDebateStep(
     // persisted row is the answer regardless of what freshly-computed views
     // would hash to. Falls through when the remembered row is not replayable
     // (pre-0026 rows), exactly as the content gate does
-    const resolved = resolvedBarByInstrument.get(instrument);
-    if (resolved !== undefined && resolved.barMs === bar.getTime()) {
-      const remembered = debateLog.getByDebateId(resolved.debate_id);
-      if (isReplayable(remembered)) {
-        logger?.log({
-          trace_id,
-          stage: 'debate',
-          level: 'info',
-          message:
-            `debate: ${instrument} replayed from debate_log for debate_id ` +
-            `${resolved.debate_id} — this bar already resolved to a debate this process ran, ` +
-            'so a fresh run would hand the Trader a second confidence sample for the same bar ' +
-            '(#617/#781). No LLM call was made.',
-          payload: { instrument, asset_class, debate_id: resolved.debate_id, replayed: true },
-        });
-        return replayedDebateResult(remembered);
+    function replayFromSameBarMemo(): DebateResult | undefined {
+      const resolved = resolvedBarByInstrument.get(instrument);
+      if (resolved !== undefined && resolved.barMs === bar.getTime()) {
+        const remembered = debateLog.getByDebateId(resolved.debate_id);
+        if (isReplayable(remembered)) {
+          logger?.log({
+            trace_id,
+            stage: 'debate',
+            level: 'info',
+            message:
+              `debate: ${instrument} replayed from debate_log for debate_id ` +
+              `${resolved.debate_id} — this bar already resolved to a debate this process ran, ` +
+              'so a fresh run would hand the Trader a second confidence sample for the same bar ' +
+              '(#617/#781). No LLM call was made.',
+            payload: { instrument, asset_class, debate_id: resolved.debate_id, replayed: true },
+          });
+          return replayedDebateResult(remembered);
+        }
       }
+      return undefined;
+    }
+    const memoReplay = replayFromSameBarMemo();
+    if (memoReplay !== undefined) {
+      return memoReplay;
     }
 
     // SAME-BAR SHORT-CIRCUIT (#617), before the spend cap, the rate limiter and
@@ -994,23 +1001,30 @@ export function buildDebateStep(
     // trading on a reconstructed blank. `isReplayable` demands all six rather
     // than confidence alone, because they are independently optional and a
     // partial row would otherwise replay as a fabricated empty debate
-    const persisted = debateLog.getByDebateId(debate_id);
-    if (isReplayable(persisted)) {
-      // The bar resolved to this id (a restart's first tick landing on a row a
-      // previous process wrote) — remember it, so subsequent same-bar entries
-      // stop depending on the views hashing identically (#743)
-      resolvedBarByInstrument.set(instrument, { barMs: bar.getTime(), debate_id });
-      logger?.log({
-        trace_id,
-        stage: 'debate',
-        level: 'info',
-        message:
-          `debate: ${instrument} replayed from debate_log for debate_id ${debate_id} — this ` +
-          'tick shares a 1h bar with an earlier one and every debate input is bar-keyed, so a ' +
-          'fresh debate would re-sample an identical question. No LLM call was made.',
-        payload: { instrument, asset_class, debate_id, replayed: true },
-      });
-      return replayedDebateResult(persisted);
+    function replayFromDebateLog(): DebateResult | undefined {
+      const persisted = debateLog.getByDebateId(debate_id);
+      if (isReplayable(persisted)) {
+        // The bar resolved to this id (a restart's first tick landing on a row a
+        // previous process wrote) — remember it, so subsequent same-bar entries
+        // stop depending on the views hashing identically (#743)
+        resolvedBarByInstrument.set(instrument, { barMs: bar.getTime(), debate_id });
+        logger?.log({
+          trace_id,
+          stage: 'debate',
+          level: 'info',
+          message:
+            `debate: ${instrument} replayed from debate_log for debate_id ${debate_id} — this ` +
+            'tick shares a 1h bar with an earlier one and every debate input is bar-keyed, so a ' +
+            'fresh debate would re-sample an identical question. No LLM call was made.',
+          payload: { instrument, asset_class, debate_id, replayed: true },
+        });
+        return replayedDebateResult(persisted);
+      }
+      return undefined;
+    }
+    const persistedReplay = replayFromDebateLog();
+    if (persistedReplay !== undefined) {
+      return persistedReplay;
     }
 
     // ADMISSION, once, before anything is spent (#388). `reserve` is
@@ -1066,49 +1080,63 @@ export function buildDebateStep(
     // repo's history says that was a deliberate trade against building one,
     // so read this as "the exposure this design has", not as a decision
     // someone weighed and accepted at the time
-    const spend = spendCap.check();
-    if (!spend.admitted) {
-      logger?.log({
-        trace_id,
-        stage: 'debate',
-        event: 'debate_refused_spend_cap',
-        level: 'error',
-        message:
-          `debate: ${instrument} not started — ${sanitizeLogText(spend.reason ?? 'spend cap')}. ` +
-          'No LLM call was made and no debate_log row is written; the tick will short-circuit ' +
-          `at Trader with no_trade. ${spendCapRefusalRemedy(spend.kind)} Open ` +
-          'positions are unaffected — their bracket legs remain live venue-side, and ' +
-          'Execution, reconcile and fill ingestion all keep running.',
-        payload: {
-          instrument,
-          asset_class,
-          debate_id,
-          spent_usd: spend.spent_usd,
-          budget_usd: spend.budget_usd,
-          kind: spend.kind,
-        },
-      });
-      return spendCappedDebateResult(debate_id, bar, spend.reason ?? 'spend cap reached');
+    function checkSpendCap(): DebateResult | undefined {
+      const spend = spendCap.check();
+      if (!spend.admitted) {
+        logger?.log({
+          trace_id,
+          stage: 'debate',
+          event: 'debate_refused_spend_cap',
+          level: 'error',
+          message:
+            `debate: ${instrument} not started — ${sanitizeLogText(spend.reason ?? 'spend cap')}. ` +
+            'No LLM call was made and no debate_log row is written; the tick will short-circuit ' +
+            `at Trader with no_trade. ${spendCapRefusalRemedy(spend.kind)} Open ` +
+            'positions are unaffected — their bracket legs remain live venue-side, and ' +
+            'Execution, reconcile and fill ingestion all keep running.',
+          payload: {
+            instrument,
+            asset_class,
+            debate_id,
+            spent_usd: spend.spent_usd,
+            budget_usd: spend.budget_usd,
+            kind: spend.kind,
+          },
+        });
+        return spendCappedDebateResult(debate_id, bar, spend.reason ?? 'spend cap reached');
+      }
+      return undefined;
+    }
+    const spendRefusal = checkSpendCap();
+    if (spendRefusal !== undefined) {
+      return spendRefusal;
     }
 
-    const reservation = rateLimiter.reserve(
-      asset_class,
-      worstCaseLlmCallsForAssetClass(asset_class),
-    );
-    if (!reservation.granted) {
-      logger?.log({
-        trace_id,
-        stage: 'debate',
-        event: 'debate_refused_rate_limit',
-        level: 'warn',
-        message:
-          `debate: ${instrument} not started — ${sanitizeLogText(reservation.reason)}. No LLM ` +
-          'call was made and no debate_log row is written; the tick will short-circuit at ' +
-          'Trader with no_trade. Persistent refusals mean rateLimiterConfig is sized under the ' +
-          "universe's real debate rate, not that the market is quiet.",
-        payload: { instrument, asset_class, debate_id },
-      });
-      return rateLimitedDebateResult(debate_id, bar, reservation.reason);
+    function checkRateLimit(): DebateResult | undefined {
+      const reservation = rateLimiter.reserve(
+        asset_class,
+        worstCaseLlmCallsForAssetClass(asset_class),
+      );
+      if (!reservation.granted) {
+        logger?.log({
+          trace_id,
+          stage: 'debate',
+          event: 'debate_refused_rate_limit',
+          level: 'warn',
+          message:
+            `debate: ${instrument} not started — ${sanitizeLogText(reservation.reason)}. No LLM ` +
+            'call was made and no debate_log row is written; the tick will short-circuit at ' +
+            'Trader with no_trade. Persistent refusals mean rateLimiterConfig is sized under the ' +
+            "universe's real debate rate, not that the market is quiet.",
+          payload: { instrument, asset_class, debate_id },
+        });
+        return rateLimitedDebateResult(debate_id, bar, reservation.reason);
+      }
+      return undefined;
+    }
+    const rateLimitRefusal = checkRateLimit();
+    if (rateLimitRefusal !== undefined) {
+      return rateLimitRefusal;
     }
 
     // METERING, per call, for the debate just admitted. Wrapped here rather
@@ -1173,11 +1201,19 @@ export function buildDebateStep(
         logger: new JsonDebateLogger(logger ?? { log: () => {} }),
       });
     } catch (cause) {
-      // The gate refused this debate a permit (#1080). Degrade, do not fault —
-      // see `gateRefusedDebateResult`. Returning here also skips
-      // `resolvedBarByInstrument.set` below, exactly as the rate-limiter
-      // refusal above does: no debate ran, so the bar stays unresolved and a
-      // later pass may still run a real one
+      const handled = handleDebateFailure(cause);
+      if (handled !== undefined) {
+        return handled;
+      }
+      throw cause;
+    }
+
+    // The gate refused this debate a permit (#1080). Degrade, do not fault —
+    // see `gateRefusedDebateResult`. Returning here also skips
+    // `resolvedBarByInstrument.set` below, exactly as the rate-limiter
+    // refusal above does: no debate ran, so the bar stays unresolved and a
+    // later pass may still run a real one
+    function handleDebateFailure(cause: unknown): DebateResult | undefined {
       if (cause instanceof LlmAdmissionRefusedError) {
         logger?.log({
           trace_id,
@@ -1227,7 +1263,7 @@ export function buildDebateStep(
         return gateRefusedDebateResult(debate_id, bar, cause.message);
       }
       logDebateFailure({ logger, trace_id, instrument, bar, views, cause });
-      throw cause;
+      return undefined;
     }
 
     // #435 part 2 — the Debate Engine reads `analyst_weights`, David's

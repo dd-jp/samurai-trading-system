@@ -40,6 +40,7 @@ import {
   type Stage2Selection,
   type Stage2Verdict,
   selectionsFrom,
+  type TrialGridAssetClass,
   type TrialGridResult,
 } from './backtest/index.js';
 import { resolveStage2Source } from './stage2-source.js';
@@ -400,27 +401,35 @@ export function effectiveWindow(
 
 /** One asset class's fixed symbol/periodsPerYear pairing this script drives */
 
-/**
- * Ingests the full MVP universe, runs the 12-config grid across stocks and
- * crypto, and renders the Stage 2 verdict. Returns the verdict (and prints
- * the full metrics suite per config plus the pass/kill decision via
- * `deps.print`) so a caller/test can assert on the structured result without
- * scraping stdout.
- */
-export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
-  const window = deps.window ?? defaultFiveYearWindow();
-  const print = deps.print ?? console.log;
-  const capitalPerTrade = deps.capitalPerTrade ?? DEFAULT_CAPITAL_PER_TRADE;
-  const averageCapital = deps.averageCapital ?? DEFAULT_AVERAGE_CAPITAL;
-
-  const timeframe = deps.timeframe ?? DEFAULT_STAGE2_TIMEFRAME;
-  const symbols = universeFor(timeframe);
-
-  const store = new Stage2HistoricalStore(deps.polygonClient, {
-    timeframe,
+/** Resolves every `RunStage2Deps` optional field to its default, in one place */
+function resolveRunStage2Config(deps: RunStage2Deps): {
+  window: DateRange;
+  print: (line: string) => void;
+  capitalPerTrade: number;
+  averageCapital: number;
+  timeframe: string;
+  dbPath: string;
+  costConfig: CostConfig;
+} {
+  return {
+    window: deps.window ?? defaultFiveYearWindow(),
+    print: deps.print ?? console.log,
+    capitalPerTrade: deps.capitalPerTrade ?? DEFAULT_CAPITAL_PER_TRADE,
+    averageCapital: deps.averageCapital ?? DEFAULT_AVERAGE_CAPITAL,
+    timeframe: deps.timeframe ?? DEFAULT_STAGE2_TIMEFRAME,
     dbPath: deps.dbPath ?? ':memory:',
-  });
+    costConfig: deps.costConfig ?? PESSIMISTIC_COST_CONFIG,
+  };
+}
 
+/** Ingests every MVP-universe symbol at `timeframe` over `window`, printing per-symbol progress */
+async function ingestUniverse(
+  store: Stage2HistoricalStore,
+  symbols: readonly string[],
+  window: DateRange,
+  timeframe: string,
+  print: (line: string) => void,
+): Promise<void> {
   print(
     `Stage 2: ingesting ${symbols.length} MVP-universe symbols at ${timeframe} ` +
       `over ${window.start.toISOString()} .. ${window.end.toISOString()}`,
@@ -444,6 +453,125 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
     const barCount = store.bars(symbol, window).length;
     print(`  ingested ${symbol}: ${barCount} bars`);
   }
+}
+
+/**
+ * Warn when EITHER boundary moved, naming which. A provider whose history
+ * lags the request narrows the END instead of the start (stale or partial
+ * vendor data), and warning only on the start would let that shrink the
+ * sample invisibly — the run output would read as a full-window run
+ */
+function warnIfWindowNarrowed(
+  requested: DateRange,
+  effective: DateRange,
+  print: (line: string) => void,
+): void {
+  const narrowedStart = effective.start.getTime() > requested.start.getTime();
+  const narrowedEnd = effective.end.getTime() < requested.end.getTime();
+  if (narrowedStart || narrowedEnd) {
+    const narrowing: string[] = [];
+    if (narrowedStart) {
+      narrowing.push(
+        `requested a start of ${requested.start.toISOString().slice(0, 10)} but the data starts ` +
+          `${effective.start.toISOString().slice(0, 10)}`,
+      );
+    }
+    if (narrowedEnd) {
+      narrowing.push(
+        `requested an end of ${requested.end.toISOString().slice(0, 10)} but the data ends ` +
+          `${effective.end.toISOString().slice(0, 10)}`,
+      );
+    }
+    print('');
+    print(
+      `Stage 2: WARNING — ${narrowing.join('; ')}. Running on the ` +
+        `${((effective.end.getTime() - effective.start.getTime()) / (365 * 86_400_000)).toFixed(2)}` +
+        '-year sample the provider actually served. MinBTL below is computed on THAT window, so ' +
+        'a tighter trial cap here is a real constraint of the sample, not a spec change.',
+    );
+    print('');
+  }
+}
+
+/**
+ * `periodsPerYearFor`, not the daily constants (#664): `periodsPerYear` is
+ * the annualization base for every Sharpe in the suite, so a 1-minute replay
+ * annualized off 252 understates it by ~sqrt(390)
+ *
+ * An intraday run is the LSE-ETP universe replayed on its US proxy
+ * (ADR-0016) and its live venue is Saxo, so its stocks legs price at
+ * `CALIBRATED_INTRADAY_COST_CONFIG.venues.saxo` (#1032 item 2). Daily
+ * runs stay Alpaca-priced: `CALIBRATED_COST_CONFIG` carries no `venues`
+ * and the pinned daily results must not move
+ */
+function buildAssetClasses(ctx: ReplayContext, timeframe: string): TrialGridAssetClass[] {
+  const stocks = makeAssetClass(
+    ctx,
+    'stocks',
+    STOCK_SYMBOLS,
+    periodsPerYearFor('stocks', timeframe),
+    isDailyTimeframe(timeframe) ? undefined : 'saxo',
+  );
+  return isDailyTimeframe(timeframe)
+    ? [
+        stocks,
+        makeAssetClass(ctx, 'crypto', CRYPTO_SYMBOLS, periodsPerYearFor('crypto', timeframe)),
+      ]
+    : [stocks];
+}
+
+/**
+ * Freeze the selection (#375, #384).
+ *
+ * Without this the run is a printout: the trial log was in-memory, so
+ * nothing survived the process that computed it, and the Feedback Loop had
+ * neither a backtest Sharpe to measure divergence against nor a
+ * `revalidation` snapshot to evaluate PBO/OOS-Sharpe/DSR with. Four
+ * kill-lines out of four were unevaluable for exactly that reason.
+ *
+ * Optional, and absent in the unit tests: a caller that supplies no store is
+ * doing a dry run, and writing to a database it did not ask for would be the
+ * surprising behaviour.
+ */
+function freezeSelections(
+  deps: RunStage2Deps,
+  verdict: Stage2Verdict,
+  results: readonly TrialGridResult[],
+  effective: DateRange,
+  print: (line: string) => void,
+): void {
+  if (deps.selections !== undefined) {
+    const frozen = selectionsFrom({
+      verdict,
+      results,
+      window: effective,
+      selectedAt: deps.now?.() ?? new Date(),
+    });
+    for (const selection of frozen) deps.selections.record(selection);
+    print(
+      frozen.length === 0
+        ? 'Stage 2: nothing to freeze — no config was evaluated, so the kill-lines stay inert.'
+        : `Stage 2: froze ${frozen.length} selection(s) — the Feedback Loop can now evaluate ` +
+            'the divergence and revalidation kill-lines against this run.',
+    );
+  }
+}
+
+/**
+ * Ingests the full MVP universe, runs the 12-config grid across stocks and
+ * crypto, and renders the Stage 2 verdict. Returns the verdict (and prints
+ * the full metrics suite per config plus the pass/kill decision via
+ * `deps.print`) so a caller/test can assert on the structured result without
+ * scraping stdout.
+ */
+export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
+  const { window, print, capitalPerTrade, averageCapital, timeframe, dbPath, costConfig } =
+    resolveRunStage2Config(deps);
+  const symbols = universeFor(timeframe);
+
+  const store = new Stage2HistoricalStore(deps.polygonClient, { timeframe, dbPath });
+
+  await ingestUniverse(store, symbols, window, timeframe, print);
 
   // The window the data can actually support, which is NOT always the window
   // asked for: a Polygon plan serves a bounded history, and the first real run
@@ -458,62 +586,14 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
   // the data does not cover would overstate how many configs the sample can
   // support, which is the one number in this verdict that exists to prevent
   // exactly that kind of overfitting
-  // Warn when EITHER boundary moved, naming which. A provider whose history
-  // lags the request narrows the END instead of the start (stale or partial
-  // vendor data), and warning only on the start would let that shrink the
-  // sample invisibly — the run output would read as a full-window run
   const effective = effectiveWindow(store, window, symbols);
-  const narrowedStart = effective.start.getTime() > window.start.getTime();
-  const narrowedEnd = effective.end.getTime() < window.end.getTime();
-  if (narrowedStart || narrowedEnd) {
-    const narrowing: string[] = [];
-    if (narrowedStart) {
-      narrowing.push(
-        `requested a start of ${window.start.toISOString().slice(0, 10)} but the data starts ` +
-          `${effective.start.toISOString().slice(0, 10)}`,
-      );
-    }
-    if (narrowedEnd) {
-      narrowing.push(
-        `requested an end of ${window.end.toISOString().slice(0, 10)} but the data ends ` +
-          `${effective.end.toISOString().slice(0, 10)}`,
-      );
-    }
-    print('');
-    print(
-      `Stage 2: WARNING — ${narrowing.join('; ')}. Running on the ` +
-        `${((effective.end.getTime() - effective.start.getTime()) / (365 * 86_400_000)).toFixed(2)}` +
-        '-year sample the provider actually served. MinBTL below is computed on THAT window, so ' +
-        'a tighter trial cap here is a real constraint of the sample, not a spec change.',
-    );
-    print('');
-  }
+  warnIfWindowNarrowed(window, effective, print);
 
-  const costModel = new CostModelImpl(deps.costConfig ?? PESSIMISTIC_COST_CONFIG);
+  const costModel = new CostModelImpl(costConfig);
   const configTrialLog = new InMemoryConfigTrialLog();
   const ctx: ReplayContext = { store, costModel, window: effective, capitalPerTrade };
 
-  // `periodsPerYearFor`, not the daily constants (#664): `periodsPerYear` is
-  // the annualization base for every Sharpe in the suite, so a 1-minute replay
-  // annualized off 252 understates it by ~sqrt(390)
-  // An intraday run is the LSE-ETP universe replayed on its US proxy
-  // (ADR-0016) and its live venue is Saxo, so its stocks legs price at
-  // `CALIBRATED_INTRADAY_COST_CONFIG.venues.saxo` (#1032 item 2). Daily
-  // runs stay Alpaca-priced: `CALIBRATED_COST_CONFIG` carries no `venues`
-  // and the pinned daily results must not move
-  const stocks = makeAssetClass(
-    ctx,
-    'stocks',
-    STOCK_SYMBOLS,
-    periodsPerYearFor('stocks', timeframe),
-    isDailyTimeframe(timeframe) ? undefined : 'saxo',
-  );
-  const assetClasses = isDailyTimeframe(timeframe)
-    ? [
-        stocks,
-        makeAssetClass(ctx, 'crypto', CRYPTO_SYMBOLS, periodsPerYearFor('crypto', timeframe)),
-      ]
-    : [stocks];
+  const assetClasses = buildAssetClasses(ctx, timeframe);
 
   // #405: state the sizing POSITIVELY, before the run, rather than reporting
   // `exceeded: true` after 12 trials have already been spent. The cap exists
@@ -554,34 +634,7 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
 
   printReport(results, verdict, print);
 
-  /**
-   * Freeze the selection (#375, #384).
-   *
-   * Without this the run is a printout: the trial log was in-memory, so
-   * nothing survived the process that computed it, and the Feedback Loop had
-   * neither a backtest Sharpe to measure divergence against nor a
-   * `revalidation` snapshot to evaluate PBO/OOS-Sharpe/DSR with. Four
-   * kill-lines out of four were unevaluable for exactly that reason.
-   *
-   * Optional, and absent in the unit tests: a caller that supplies no store is
-   * doing a dry run, and writing to a database it did not ask for would be the
-   * surprising behaviour.
-   */
-  if (deps.selections !== undefined) {
-    const frozen = selectionsFrom({
-      verdict,
-      results,
-      window: effective,
-      selectedAt: deps.now?.() ?? new Date(),
-    });
-    for (const selection of frozen) deps.selections.record(selection);
-    print(
-      frozen.length === 0
-        ? 'Stage 2: nothing to freeze — no config was evaluated, so the kill-lines stay inert.'
-        : `Stage 2: froze ${frozen.length} selection(s) — the Feedback Loop can now evaluate ` +
-            'the divergence and revalidation kill-lines against this run.',
-    );
-  }
+  freezeSelections(deps, verdict, results, effective, print);
 
   return verdict;
 }

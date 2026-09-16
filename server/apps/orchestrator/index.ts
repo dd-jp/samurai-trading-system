@@ -62,6 +62,7 @@ import { logCaughtFailure, SystemClock } from '../../shared/index.js';
 import {
   assertNoStaleKeyScheme,
   openSharedStore,
+  type StoreHandle,
   sharedStorePath,
 } from '../../shared/store/index.js';
 import { loggingAlertChannel } from './alert-catalogue.js';
@@ -87,6 +88,7 @@ import { LSE_TICKERS } from './production/defaults.js';
 import {
   armSameCurrencyCeilings,
   assertSameCurrencyFunding,
+  type SameCurrencyVerdict,
   saxoFunding,
   verifySameCurrency,
 } from './production/saxo-funding.js';
@@ -712,6 +714,249 @@ export function assertStorePathMatchesMode(deps: {
   );
 }
 
+function buildSaxoSessionWiring(deps: {
+  injected: Partial<ProductionConfig>;
+  venue: BrokerVenue;
+  logger: Logger;
+  clock: ProductionConfig['clock'];
+  alertChannels: ReturnType<typeof buildAlertChannels>;
+}): {
+  saxoTokenSource: SaxoTokenSource | undefined;
+  saxoWeeklyReminder: SaxoWeeklyReminder | undefined;
+  saxoClient: ReturnType<typeof buildSaxoVenueClient> | undefined;
+} {
+  const { injected, venue, logger, clock, alertChannels } = deps;
+
+  // #1400 — the Saxo venue, built HERE rather than inside the composition
+  // root because `saxoInstrumentResolverFromVenue` reads the venue's own
+  // instrument details per line (#1302) and is therefore async, while
+  // `buildProductionOrchestrator` is synchronous by design. It arrives
+  // through `ProductionConfig.broker`, the seam whose own doc comment says a
+  // non-Alpaca adapter binds there "without the composition root growing a
+  // broker-selection branch" — so this is the branch, at the one level that
+  // already reads the environment
+  //
+  // `injected.broker` wins: a caller that passed its own adapter (the smoke
+  // gate's `SimulatedBrokerAdapter`, a test's) has already chosen, and
+  // overriding that from an environment variable would make the seam
+  // unfalsifiable
+  //
+  // ONE Saxo client per run (#1509): the broker and the funding read share it,
+  // because the venue's pacing budget belongs to the account and two clients
+  // would be two budgets against one limit. Built only when neither an adapter
+  // nor a client was injected — a caller that passed either has already chosen
+  // its transport, and the funding read must not open a second one behind it
+  // The bearer the client reads PER REQUEST (#1523), built beside the client
+  // for the same reason the client is built once: the refresher owns the saved
+  // session file, and two of them would rotate the same refresh token against
+  // each other. Whoever builds the client builds this.
+  const saxoIsOwnedHere =
+    venue === 'saxo' && injected.broker === undefined && injected.saxoBrokerClient === undefined;
+
+  // #1524. No forced log-only default (unlike `legResizeAlerts` etc. below):
+  // `saxoSessionLostAlerts` has no log-only form — `lose()`'s own
+  // `saxo_session_lost` line already covers that mode — so an absent channel
+  // here is the correct `log-only` posture, not a gap
+  const saxoSessionLostAlerts =
+    injected.saxoSessionLostAlerts ?? alertChannels.saxoSessionLostAlerts;
+
+  const saxoTokenSource = saxoIsOwnedHere
+    ? buildSaxoTokenSource(
+        'sim',
+        logger,
+        saxoSessionLostAlerts === undefined ? {} : { sessionLostAlerts: saxoSessionLostAlerts },
+      )
+    : undefined;
+
+  const saxoClient =
+    saxoTokenSource === undefined ? undefined : buildSaxoVenueClient(logger, saxoTokenSource);
+
+  // #1524's other half — the weekly reminder. Scoped to the same condition as
+  // `saxoTokenSource` above: a caller that injected its own broker/client has
+  // already chosen its Saxo wiring, and this nudge belongs to the token file
+  // this process itself owns, not to one it never reads
+  const saxoWeeklyReminder = saxoIsOwnedHere
+    ? new SaxoWeeklyReminder({
+        environment: 'sim',
+        tokenPath: tokenFilePath('sim'),
+        channel:
+          injected.saxoWeeklyReminderAlerts ??
+          alertChannels.saxoWeeklyReminderAlerts ??
+          loggingAlertChannel('saxoWeeklyReminderAlerts', logger),
+        logger,
+        clock,
+      })
+    : undefined;
+
+  return { saxoTokenSource, saxoWeeklyReminder, saxoClient };
+}
+
+async function buildSaxoBrokerWiring(deps: {
+  injected: Partial<ProductionConfig>;
+  venue: BrokerVenue;
+  mode: ProductionConfig['mode'];
+  db: StoreHandle;
+  logger: Logger;
+  clock: ProductionConfig['clock'];
+  alertChannels: ReturnType<typeof buildAlertChannels>;
+  saxoClient: ReturnType<typeof buildSaxoVenueClient> | undefined;
+}): Promise<{
+  saxoBroker: ProductionConfig['broker'];
+  accountFunding: ProductionConfig['accountFunding'];
+  saxoCalendar: ProductionConfig['tradingCalendar'];
+}> {
+  const { injected, venue, mode, db, logger, clock, alertChannels, saxoClient } = deps;
+
+  // The GBP-native funding read. Skipped when the caller supplied a whole
+  // `accountState` or its own funding source, so this never fires under a test
+  // that already stubbed the account — and, with `saxoClient` above, never
+  // under one that injected a broker or a wire client either
+  const saxoAccountFunding =
+    saxoClient !== undefined && saxoFundingWillBeBuilt(injected, venue)
+      ? saxoFunding(saxoClient)
+      : undefined;
+  const accountFunding = injected.accountFunding ?? saxoAccountFunding;
+  const saxoWireClient = injected.saxoBrokerClient ?? saxoClient;
+
+  const saxoBroker =
+    venue === 'saxo' && injected.broker === undefined
+      ? await buildSaxoBroker({
+          mode,
+          universe: injected.universe ?? [],
+          accountState: injected.accountState,
+          ...(accountFunding === undefined ? {} : { accountFunding }),
+          db,
+          logger,
+          clock,
+          // The alert channels the adapter REQUIRES and has no default for
+          // Resolved the same way the composition root resolves its own:
+          // caller first, then `SAMURAI_ALERTS`' transport, then the log-only
+          // stand-in — so a `telegram` run pages a phone and a `log-only` one
+          // is explicitly attended, never silent by omission
+          legResizeAlerts:
+            injected.legResizeAlerts ??
+            alertChannels.legResizeAlerts ??
+            loggingAlertChannel('legResizeAlerts', logger),
+          dormantLegsAlerts:
+            injected.dormantLegsAlerts ??
+            alertChannels.dormantLegsAlerts ??
+            loggingAlertChannel('dormantLegsAlerts', logger),
+          priceUnitAlerts:
+            injected.priceUnitAlerts ??
+            alertChannels.priceUnitAlerts ??
+            loggingAlertChannel('priceUnitAlerts', logger),
+          ...(saxoWireClient === undefined ? {} : { client: saxoWireClient }),
+        })
+      : undefined;
+
+  // #1400 round 1 — the venue picks the CALENDAR too, not just the adapter
+  // `equityCalendarFor` resolves `UsEquityRegularHoursCalendar` for every
+  // non-`live` mode, and `live` is the one mode the Saxo venue refuses. Left
+  // unset, a Saxo run would gate entries on New York and take its flatten
+  // tail from the 21:00 London US close — 4.5 hours of overnight-style carry
+  // (#668) on a book that closed at 16:30 — while `LseMarkDataSource`
+  // normalised its bars against London, and #1378's table-coverage guard,
+  // which only arms on an `LseRegularHoursCalendar`, would never run
+  //
+  // `injected` wins, for `broker`'s reason: a caller that chose a calendar
+  // has chosen, and an environment variable must not override it
+  const saxoCalendar =
+    venue === 'saxo' && injected.tradingCalendar === undefined
+      ? new LseRegularHoursCalendar()
+      : undefined;
+
+  return { saxoBroker, accountFunding, saxoCalendar };
+}
+
+async function buildSaxoIntegration(deps: {
+  injected: Partial<ProductionConfig>;
+  venue: BrokerVenue;
+  mode: ProductionConfig['mode'];
+  db: StoreHandle;
+  logger: Logger;
+  clock: ProductionConfig['clock'];
+  alertChannels: ReturnType<typeof buildAlertChannels>;
+}): Promise<{
+  saxoTokenSource: SaxoTokenSource | undefined;
+  saxoWeeklyReminder: SaxoWeeklyReminder | undefined;
+  saxoBroker: ProductionConfig['broker'];
+  accountFunding: ProductionConfig['accountFunding'];
+  saxoCalendar: ProductionConfig['tradingCalendar'];
+}> {
+  const { injected, venue, mode, db, logger, clock, alertChannels } = deps;
+
+  const { saxoTokenSource, saxoWeeklyReminder, saxoClient } = buildSaxoSessionWiring({
+    injected,
+    venue,
+    logger,
+    clock,
+    alertChannels,
+  });
+
+  const { saxoBroker, accountFunding, saxoCalendar } = await buildSaxoBrokerWiring({
+    injected,
+    venue,
+    mode,
+    db,
+    logger,
+    clock,
+    alertChannels,
+    saxoClient,
+  });
+
+  return { saxoTokenSource, saxoWeeklyReminder, saxoBroker, accountFunding, saxoCalendar };
+}
+
+async function verifyFundingCurrency(
+  venue: BrokerVenue,
+  accountFunding: ProductionConfig['accountFunding'],
+  logger: Logger,
+): Promise<SameCurrencyVerdict | undefined> {
+  // #949's guard, armed from the real read or not at all (#1509)
+  //
+  // The read runs on every boot that uses the Saxo funding source, NOT only
+  // when there is a ceiling to arm: `getAccountState` sizes every tick against
+  // this source's `equity`, so an account in another currency is a defect
+  // whether or not a ceiling happens to be declared. `assertSameCurrencyFunding`
+  // refuses the boot on a mismatch — the refusal `assertSaxoVenueBootable` used
+  // to get by demanding a deliberate account read, kept rather than traded away
+  // for the read itself
+  //
+  // Scoped by VENUE, not by who built the source. `assertSaxoVenueBootable`
+  // accepts an `accountFunding` in place of a whole `accountState`, so an
+  // injected one reaches the same per-tick sizing the entrypoint's own does —
+  // exempting it would leave the refusal true only of the path that needed it
+  // least. `venue === 'saxo'` is what makes `LIVE_BOOK_CURRENCY` the right
+  // book to compare against (ADR-0015: the Saxo leg is the GBP LSE one); a
+  // non-Saxo run's injected funding is not GBP-denominated and is not checked
+  // here
+  //
+  // Out of reach either way: a caller that composes `buildProductionOrchestrator`
+  // or `buildSaxoBroker` itself, as `production.ts` documents for every other
+  // entrypoint-level guard
+  //
+  // Arming is the narrower step: `armSameCurrencyCeilings` writes only the
+  // ceilings the profile declares, so a profile that declares none is left
+  // alone. The SIM trial account answers EUR (doc 44 §6.3), so today the
+  // refusal above is what a Saxo boot reaches
+  const fundingToVerify = venue === 'saxo' ? accountFunding : undefined;
+  if (fundingToVerify === undefined) return undefined;
+
+  const sameCurrency = verifySameCurrency(await fundingToVerify.readFunding());
+  logger.log({
+    trace_id: 'startup',
+    stage: 'orchestrator',
+    event: 'same_currency_verified',
+    level: sameCurrency.verified ? 'info' : 'warn',
+    message: sameCurrency.verified
+      ? 'account currency matches the declared book'
+      : 'account currency does not match the declared book; refusing to start',
+    payload: { ...sameCurrency },
+  });
+  assertSameCurrencyFunding(sameCurrency);
+  return sameCurrency;
+}
+
 /**
  * Assembles a `ProductionConfig` from the environment plus `injected`, builds
  * the composition root, and starts it (orphan scan once, then the tick loop
@@ -843,171 +1088,11 @@ export async function startFromEnvironment(
 
   const clock = injected.clock ?? new SystemClock();
 
-  // #1400 — the Saxo venue, built HERE rather than inside the composition
-  // root because `saxoInstrumentResolverFromVenue` reads the venue's own
-  // instrument details per line (#1302) and is therefore async, while
-  // `buildProductionOrchestrator` is synchronous by design. It arrives
-  // through `ProductionConfig.broker`, the seam whose own doc comment says a
-  // non-Alpaca adapter binds there "without the composition root growing a
-  // broker-selection branch" — so this is the branch, at the one level that
-  // already reads the environment
-  //
-  // `injected.broker` wins: a caller that passed its own adapter (the smoke
-  // gate's `SimulatedBrokerAdapter`, a test's) has already chosen, and
-  // overriding that from an environment variable would make the seam
-  // unfalsifiable
-  //
-  // ONE Saxo client per run (#1509): the broker and the funding read share it,
-  // because the venue's pacing budget belongs to the account and two clients
-  // would be two budgets against one limit. Built only when neither an adapter
-  // nor a client was injected — a caller that passed either has already chosen
-  // its transport, and the funding read must not open a second one behind it
-  // The bearer the client reads PER REQUEST (#1523), built beside the client
-  // for the same reason the client is built once: the refresher owns the saved
-  // session file, and two of them would rotate the same refresh token against
-  // each other. Whoever builds the client builds this.
-  const saxoIsOwnedHere =
-    venue === 'saxo' && injected.broker === undefined && injected.saxoBrokerClient === undefined;
+  const { saxoTokenSource, saxoWeeklyReminder, saxoBroker, accountFunding, saxoCalendar } =
+    await buildSaxoIntegration({ injected, venue, mode, db, logger, clock, alertChannels });
 
-  // #1524. No forced log-only default (unlike `legResizeAlerts` etc. below):
-  // `saxoSessionLostAlerts` has no log-only form — `lose()`'s own
-  // `saxo_session_lost` line already covers that mode — so an absent channel
-  // here is the correct `log-only` posture, not a gap
-  const saxoSessionLostAlerts =
-    injected.saxoSessionLostAlerts ?? alertChannels.saxoSessionLostAlerts;
-
-  const saxoTokenSource = saxoIsOwnedHere
-    ? buildSaxoTokenSource(
-        'sim',
-        logger,
-        saxoSessionLostAlerts === undefined ? {} : { sessionLostAlerts: saxoSessionLostAlerts },
-      )
-    : undefined;
-
-  const saxoClient =
-    saxoTokenSource === undefined ? undefined : buildSaxoVenueClient(logger, saxoTokenSource);
-
-  // #1524's other half — the weekly reminder. Scoped to the same condition as
-  // `saxoTokenSource` above: a caller that injected its own broker/client has
-  // already chosen its Saxo wiring, and this nudge belongs to the token file
-  // this process itself owns, not to one it never reads
-  const saxoWeeklyReminder = saxoIsOwnedHere
-    ? new SaxoWeeklyReminder({
-        environment: 'sim',
-        tokenPath: tokenFilePath('sim'),
-        channel:
-          injected.saxoWeeklyReminderAlerts ??
-          alertChannels.saxoWeeklyReminderAlerts ??
-          loggingAlertChannel('saxoWeeklyReminderAlerts', logger),
-        logger,
-        clock,
-      })
-    : undefined;
-
-  // The GBP-native funding read. Skipped when the caller supplied a whole
-  // `accountState` or its own funding source, so this never fires under a test
-  // that already stubbed the account — and, with `saxoClient` above, never
-  // under one that injected a broker or a wire client either
-  const saxoAccountFunding =
-    saxoClient !== undefined && saxoFundingWillBeBuilt(injected, venue)
-      ? saxoFunding(saxoClient)
-      : undefined;
-  const accountFunding = injected.accountFunding ?? saxoAccountFunding;
-  const saxoWireClient = injected.saxoBrokerClient ?? saxoClient;
-
-  const saxoBroker =
-    venue === 'saxo' && injected.broker === undefined
-      ? await buildSaxoBroker({
-          mode,
-          universe: injected.universe ?? [],
-          accountState: injected.accountState,
-          ...(accountFunding === undefined ? {} : { accountFunding }),
-          db,
-          logger,
-          clock,
-          // The alert channels the adapter REQUIRES and has no default for
-          // Resolved the same way the composition root resolves its own:
-          // caller first, then `SAMURAI_ALERTS`' transport, then the log-only
-          // stand-in — so a `telegram` run pages a phone and a `log-only` one
-          // is explicitly attended, never silent by omission
-          legResizeAlerts:
-            injected.legResizeAlerts ??
-            alertChannels.legResizeAlerts ??
-            loggingAlertChannel('legResizeAlerts', logger),
-          dormantLegsAlerts:
-            injected.dormantLegsAlerts ??
-            alertChannels.dormantLegsAlerts ??
-            loggingAlertChannel('dormantLegsAlerts', logger),
-          priceUnitAlerts:
-            injected.priceUnitAlerts ??
-            alertChannels.priceUnitAlerts ??
-            loggingAlertChannel('priceUnitAlerts', logger),
-          ...(saxoWireClient === undefined ? {} : { client: saxoWireClient }),
-        })
-      : undefined;
-
-  // #1400 round 1 — the venue picks the CALENDAR too, not just the adapter
-  // `equityCalendarFor` resolves `UsEquityRegularHoursCalendar` for every
-  // non-`live` mode, and `live` is the one mode the Saxo venue refuses. Left
-  // unset, a Saxo run would gate entries on New York and take its flatten
-  // tail from the 21:00 London US close — 4.5 hours of overnight-style carry
-  // (#668) on a book that closed at 16:30 — while `LseMarkDataSource`
-  // normalised its bars against London, and #1378's table-coverage guard,
-  // which only arms on an `LseRegularHoursCalendar`, would never run
-  //
-  // `injected` wins, for `broker`'s reason: a caller that chose a calendar
-  // has chosen, and an environment variable must not override it
-  const saxoCalendar =
-    venue === 'saxo' && injected.tradingCalendar === undefined
-      ? new LseRegularHoursCalendar()
-      : undefined;
-
-  // #949's guard, armed from the real read or not at all (#1509)
-  //
-  // The read runs on every boot that uses the Saxo funding source, NOT only
-  // when there is a ceiling to arm: `getAccountState` sizes every tick against
-  // this source's `equity`, so an account in another currency is a defect
-  // whether or not a ceiling happens to be declared. `assertSameCurrencyFunding`
-  // refuses the boot on a mismatch — the refusal `assertSaxoVenueBootable` used
-  // to get by demanding a deliberate account read, kept rather than traded away
-  // for the read itself
-  //
-  // Scoped by VENUE, not by who built the source. `assertSaxoVenueBootable`
-  // accepts an `accountFunding` in place of a whole `accountState`, so an
-  // injected one reaches the same per-tick sizing the entrypoint's own does —
-  // exempting it would leave the refusal true only of the path that needed it
-  // least. `venue === 'saxo'` is what makes `LIVE_BOOK_CURRENCY` the right
-  // book to compare against (ADR-0015: the Saxo leg is the GBP LSE one); a
-  // non-Saxo run's injected funding is not GBP-denominated and is not checked
-  // here
-  //
-  // Out of reach either way: a caller that composes `buildProductionOrchestrator`
-  // or `buildSaxoBroker` itself, as `production.ts` documents for every other
-  // entrypoint-level guard
-  //
-  // Arming is the narrower step: `armSameCurrencyCeilings` writes only the
-  // ceilings the profile declares, so a profile that declares none is left
-  // alone. The SIM trial account answers EUR (doc 44 §6.3), so today the
-  // refusal above is what a Saxo boot reaches
   const declaredRiskConfig = injected.riskConfig;
-  const fundingToVerify = venue === 'saxo' ? accountFunding : undefined;
-  const sameCurrency =
-    fundingToVerify === undefined
-      ? undefined
-      : verifySameCurrency(await fundingToVerify.readFunding());
-  if (sameCurrency !== undefined) {
-    logger.log({
-      trace_id: 'startup',
-      stage: 'orchestrator',
-      event: 'same_currency_verified',
-      level: sameCurrency.verified ? 'info' : 'warn',
-      message: sameCurrency.verified
-        ? 'account currency matches the declared book'
-        : 'account currency does not match the declared book; refusing to start',
-      payload: { ...sameCurrency },
-    });
-    assertSameCurrencyFunding(sameCurrency);
-  }
+  const sameCurrency = await verifyFundingCurrency(venue, accountFunding, logger);
 
   const orchestrator = buildProductionOrchestrator({
     ...alertChannels,

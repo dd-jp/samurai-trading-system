@@ -297,41 +297,95 @@ function healthyCryptoEmulation(
   };
 }
 
-/** `evaluateSmokeGate`'s options for a fully healthy run — the base every test below mutates */
-function healthyGateOptions(
-  overrides: {
-    minTicks?: number;
-    alpacaWireClientReached?: boolean;
-    exitPath?: ExitPathEvidence;
-    cryptoEmulation?: CryptoEmulationEvidence;
-    loggerResilience?: LoggerResilienceEvidence;
-    logRetention?: LogRetentionEvidence;
-    entrypointFaultGuards?: EntrypointFaultGuardEvidence;
-    thresholdClamp?: ThresholdClampEvidence;
-    approvalFallback?: ApprovalFallbackEvidence;
-    dataFailover?: DataFailoverEvidence;
-    dataSourceFactory?: DataSourceFactoryEvidence;
-    riskCritic?: RiskCriticEvidence;
-    promptTierWarning?: PromptTierWarningEvidence;
-    analystFailureCause?: AnalystFailureCauseEvidence;
-    filledZeroSizeWedge?: FilledZeroSizeWedgeEvidence;
-    armComparison?: ArmComparisonEvidence;
-    outsideBenchmarks?: OutsideBenchmarkEvidence;
-    feedbackCycleScheduleWritten?: boolean;
-    sizingCeiling?: Partial<SizingCeilingEvidence>;
-    fillSync?: FillSyncFailureEvidence;
-    marketDataFetch?: MarketDataFetchEvidence;
-    publishedLlmCapUsd?: number | null;
-    configuredLlmBudgetUsd?: number | undefined;
-    publishedLlmCapArmedAt?: string | null;
-  } = {},
-): SmokeEvidence {
+/** `healthyGateOptions`'s own overrides shape — named so the group helpers below can share it */
+interface HealthyGateOptionOverrides {
+  minTicks?: number;
+  alpacaWireClientReached?: boolean;
+  exitPath?: ExitPathEvidence;
+  cryptoEmulation?: CryptoEmulationEvidence;
+  loggerResilience?: LoggerResilienceEvidence;
+  logRetention?: LogRetentionEvidence;
+  entrypointFaultGuards?: EntrypointFaultGuardEvidence;
+  thresholdClamp?: ThresholdClampEvidence;
+  approvalFallback?: ApprovalFallbackEvidence;
+  dataFailover?: DataFailoverEvidence;
+  dataSourceFactory?: DataSourceFactoryEvidence;
+  riskCritic?: RiskCriticEvidence;
+  promptTierWarning?: PromptTierWarningEvidence;
+  analystFailureCause?: AnalystFailureCauseEvidence;
+  filledZeroSizeWedge?: FilledZeroSizeWedgeEvidence;
+  armComparison?: ArmComparisonEvidence;
+  outsideBenchmarks?: OutsideBenchmarkEvidence;
+  feedbackCycleScheduleWritten?: boolean;
+  sizingCeiling?: Partial<SizingCeilingEvidence>;
+  fillSync?: FillSyncFailureEvidence;
+  marketDataFetch?: MarketDataFetchEvidence;
+  publishedLlmCapUsd?: number | null;
+  configuredLlmBudgetUsd?: number | undefined;
+  publishedLlmCapArmedAt?: string | null;
+}
+
+/** The arm-comparison/benchmark/spend-cadence slice of `healthyGateOptions`'s defaults */
+function healthyGateOptionsGroupA(overrides: HealthyGateOptionOverrides) {
   return {
     fillSync: overrides.fillSync ?? healthyFillSync(),
     marketDataFetch: overrides.marketDataFetch ?? healthyMarketDataFetch(),
     armComparison: overrides.armComparison ?? healthyArmComparison(),
     outsideBenchmarks: overrides.outsideBenchmarks ?? healthyOutsideBenchmarks(),
     feedbackCycleScheduleWritten: overrides.feedbackCycleScheduleWritten ?? true,
+  };
+}
+
+/** The exit-path/crypto-emulation/resilience slice of `healthyGateOptions`'s defaults */
+function healthyGateOptionsGroupB(overrides: HealthyGateOptionOverrides) {
+  return {
+    exitPath: overrides.exitPath ?? healthyExitPath(),
+    cryptoEmulation: overrides.cryptoEmulation ?? healthyCryptoEmulation(),
+    loggerResilience: overrides.loggerResilience ?? healthyLoggerResilience(),
+    logRetention: overrides.logRetention ?? healthyLogRetention(),
+    entrypointFaultGuards: overrides.entrypointFaultGuards ?? healthyEntrypointFaultGuards(),
+    thresholdClamp: overrides.thresholdClamp ?? healthyThresholdClamp(),
+    approvalFallback: overrides.approvalFallback ?? healthyApprovalFallback(),
+  };
+}
+
+/** The data-source/risk-critic/failure-cause slice of `healthyGateOptions`'s defaults */
+function healthyGateOptionsGroupC(overrides: HealthyGateOptionOverrides) {
+  return {
+    dataFailover: overrides.dataFailover ?? healthyDataFailover(),
+    dataSourceFactory: overrides.dataSourceFactory ?? healthyDataSourceFactory(),
+    riskCritic: overrides.riskCritic ?? healthyRiskCritic(),
+    promptTierWarning: overrides.promptTierWarning ?? healthyPromptTierWarning(),
+    analystFailureCause: overrides.analystFailureCause ?? healthyAnalystFailureCause(),
+    filledZeroSizeWedge: overrides.filledZeroSizeWedge ?? healthyFilledZeroSizeWedge(),
+  };
+}
+
+/**
+ * `SmokeEvidence.llmSpendCap` for a healthy run. Each field uses `'key' in
+ * overrides` rather than `??`, deliberately: it distinguishes an override
+ * that is explicitly `undefined`/`null` from one that was never passed, which
+ * a `??` fallback cannot (#1140/#1196).
+ */
+function healthyLlmSpendCap(overrides: HealthyGateOptionOverrides): SmokeEvidence['llmSpendCap'] {
+  return {
+    // #1140: healthy means the published cap IS the run's configured budget
+    publishedCapUsd:
+      'publishedLlmCapUsd' in overrides ? (overrides.publishedLlmCapUsd ?? null) : 50,
+    configuredBudgetUsd:
+      'configuredLlmBudgetUsd' in overrides ? overrides.configuredLlmBudgetUsd : 50,
+    // #1196: healthy means a real run armed, so `armed_at` is non-null
+    capArmedAt:
+      'publishedLlmCapArmedAt' in overrides
+        ? (overrides.publishedLlmCapArmedAt ?? null)
+        : '2026-08-05T14:00:00.000Z',
+  };
+}
+
+/** `evaluateSmokeGate`'s options for a fully healthy run — the base every test below mutates */
+function healthyGateOptions(overrides: HealthyGateOptionOverrides = {}): SmokeEvidence {
+  return {
+    ...healthyGateOptionsGroupA(overrides),
     sizingCeiling: {
       configuredCeiling: LIVE_BOOK_SIZING_USD,
       rows: 1,
@@ -343,31 +397,9 @@ function healthyGateOptions(
       alpacaWireClientReached: overrides.alpacaWireClientReached ?? false,
     },
     llmRateLimiterSnapshot: meteredSnapshot(),
-    exitPath: overrides.exitPath ?? healthyExitPath(),
-    cryptoEmulation: overrides.cryptoEmulation ?? healthyCryptoEmulation(),
-    loggerResilience: overrides.loggerResilience ?? healthyLoggerResilience(),
-    logRetention: overrides.logRetention ?? healthyLogRetention(),
-    entrypointFaultGuards: overrides.entrypointFaultGuards ?? healthyEntrypointFaultGuards(),
-    thresholdClamp: overrides.thresholdClamp ?? healthyThresholdClamp(),
-    approvalFallback: overrides.approvalFallback ?? healthyApprovalFallback(),
-    dataFailover: overrides.dataFailover ?? healthyDataFailover(),
-    dataSourceFactory: overrides.dataSourceFactory ?? healthyDataSourceFactory(),
-    riskCritic: overrides.riskCritic ?? healthyRiskCritic(),
-    promptTierWarning: overrides.promptTierWarning ?? healthyPromptTierWarning(),
-    analystFailureCause: overrides.analystFailureCause ?? healthyAnalystFailureCause(),
-    filledZeroSizeWedge: overrides.filledZeroSizeWedge ?? healthyFilledZeroSizeWedge(),
-    llmSpendCap: {
-      // #1140: healthy means the published cap IS the run's configured budget
-      publishedCapUsd:
-        'publishedLlmCapUsd' in overrides ? (overrides.publishedLlmCapUsd ?? null) : 50,
-      configuredBudgetUsd:
-        'configuredLlmBudgetUsd' in overrides ? overrides.configuredLlmBudgetUsd : 50,
-      // #1196: healthy means a real run armed, so `armed_at` is non-null
-      capArmedAt:
-        'publishedLlmCapArmedAt' in overrides
-          ? (overrides.publishedLlmCapArmedAt ?? null)
-          : '2026-08-05T14:00:00.000Z',
-    },
+    ...healthyGateOptionsGroupB(overrides),
+    ...healthyGateOptionsGroupC(overrides),
+    llmSpendCap: healthyLlmSpendCap(overrides),
   };
 }
 

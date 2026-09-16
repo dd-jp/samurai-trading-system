@@ -389,76 +389,92 @@ export class AlpacaCryptoLegEmulation {
     // in this adapter snapshots
     for (const bracket of [...this.brackets.values()]) {
       if (bracket.donePolling) continue;
-      try {
-        if (bracket.phase === 'submitting') {
-          await this.resolveSubmitting(bracket);
-          continue;
-        }
-
-        const entryId = bracket.entryOrderId;
-        if (entryId === null) continue; // phase-machine bug; skipped like a malformed row
-        const key = bracket.request.client_order_id;
-        const instrument = bracket.request.instrument;
-
-        const entry = await this.deps.call('fetchNewFills', () =>
-          this.deps.client.getOrder(entryId),
-        );
-        collectFill(entry, 'entry', key, instrument, since, observedAt, fills);
-
-        const stopId = bracket.stopOrderId;
-        const targetId = bracket.targetOrderId;
-        const stopOrder =
-          stopId === null
-            ? null
-            : await this.deps.call('fetchNewFills', () => this.deps.client.getOrder(stopId));
-        if (stopOrder !== null)
-          collectFill(stopOrder, 'stop', key, instrument, since, observedAt, fills);
-        const targetOrder =
-          targetId === null
-            ? null
-            : await this.deps.call('fetchNewFills', () => this.deps.client.getOrder(targetId));
-        if (targetOrder !== null)
-          collectFill(targetOrder, 'target', key, instrument, since, observedAt, fills);
-
-        await this.watchDoubleFill(bracket, stopOrder, targetOrder, failures);
-
-        if (bracket.phase === 'pending_entry') {
-          await this.advanceEntry(bracket, entry);
-        } else if (bracket.phase === 'arming') {
-          await this.resumeArming(bracket);
-        } else if (bracket.phase === 'armed') {
-          await this.advanceExits(bracket, stopOrder, targetOrder);
-        } else if (bracket.phase === 'cancelling_sibling') {
-          await this.finishSiblingCancel(bracket, stopOrder, targetOrder);
-        } else if (
-          bracket.phase === 'resolved' &&
-          isTerminal(entry) &&
-          (stopOrder === null || isTerminal(stopOrder)) &&
-          (targetOrder === null || isTerminal(targetOrder))
-        ) {
-          // Everything terminal and its fills just (re-)offered: nothing
-          // left to observe until a restart re-derives once more
-          bracket.donePolling = true;
-        }
-      } catch (error) {
-        // Same isolation, same UnpricedFillError bookkeeping (guarded journal
-        // write, expected-condition-not-a-failure) as the adapter's bracket/
-        // flatten/re-arm sweeps — see their comments
-        if (error instanceof UnpricedFillError) {
-          try {
-            this.deps.state.recordUnpricedFill('alpaca', error.observation, this.deps.clock.now());
-          } catch (stateError) {
-            failures.push(stateError);
-            failed += 1;
-          }
-        } else {
-          failures.push(error);
-          failed += 1;
-        }
-      }
+      if (await this.sweepOneBracket(bracket, since, observedAt, fills, failures)) failed += 1;
     }
 
     return failed;
+  }
+
+  /**
+   * One bracket's slice of a `sweep()` pass — poll, offer fills, advance the
+   * phase machine, or record the same UnpricedFillError/failure bookkeeping
+   * the outer loop used to do inline. Returns whether this bracket counts as
+   * a failure for the caller's aggregate.
+   */
+  private async sweepOneBracket(
+    bracket: EmulatedBracket,
+    since: Date,
+    observedAt: Date,
+    fills: NormalizedFill[],
+    failures: unknown[],
+  ): Promise<boolean> {
+    try {
+      if (bracket.phase === 'submitting') {
+        await this.resolveSubmitting(bracket);
+        return false;
+      }
+
+      const entryId = bracket.entryOrderId;
+      if (entryId === null) return false; // phase-machine bug; skipped like a malformed row
+      const key = bracket.request.client_order_id;
+      const instrument = bracket.request.instrument;
+
+      const entry = await this.deps.call('fetchNewFills', () => this.deps.client.getOrder(entryId));
+      collectFill(entry, 'entry', key, instrument, since, observedAt, fills);
+
+      const stopId = bracket.stopOrderId;
+      const targetId = bracket.targetOrderId;
+      const stopOrder =
+        stopId === null
+          ? null
+          : await this.deps.call('fetchNewFills', () => this.deps.client.getOrder(stopId));
+      if (stopOrder !== null)
+        collectFill(stopOrder, 'stop', key, instrument, since, observedAt, fills);
+      const targetOrder =
+        targetId === null
+          ? null
+          : await this.deps.call('fetchNewFills', () => this.deps.client.getOrder(targetId));
+      if (targetOrder !== null)
+        collectFill(targetOrder, 'target', key, instrument, since, observedAt, fills);
+
+      await this.watchDoubleFill(bracket, stopOrder, targetOrder, failures);
+
+      if (bracket.phase === 'pending_entry') {
+        await this.advanceEntry(bracket, entry);
+      } else if (bracket.phase === 'arming') {
+        await this.resumeArming(bracket);
+      } else if (bracket.phase === 'armed') {
+        await this.advanceExits(bracket, stopOrder, targetOrder);
+      } else if (bracket.phase === 'cancelling_sibling') {
+        await this.finishSiblingCancel(bracket, stopOrder, targetOrder);
+      } else if (
+        bracket.phase === 'resolved' &&
+        isTerminal(entry) &&
+        (stopOrder === null || isTerminal(stopOrder)) &&
+        (targetOrder === null || isTerminal(targetOrder))
+      ) {
+        // Everything terminal and its fills just (re-)offered: nothing
+        // left to observe until a restart re-derives once more
+        bracket.donePolling = true;
+      }
+      return false;
+    } catch (error) {
+      // Same isolation, same UnpricedFillError bookkeeping (guarded journal
+      // write, expected-condition-not-a-failure) as the adapter's bracket/
+      // flatten/re-arm sweeps — see their comments
+      if (error instanceof UnpricedFillError) {
+        try {
+          this.deps.state.recordUnpricedFill('alpaca', error.observation, this.deps.clock.now());
+          return false;
+        } catch (stateError) {
+          failures.push(stateError);
+          return true;
+        }
+      } else {
+        failures.push(error);
+        return true;
+      }
+    }
   }
 
   /**

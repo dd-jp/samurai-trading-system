@@ -381,20 +381,9 @@ export class XSearchClient implements GrokSentimentClient {
   ): IntelligenceItem[] {
     if (content.trim() === '') return [];
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(content);
-    } catch {
-      // Recover a fenced or prose-wrapped object before giving up — the same
-      // salvage `NousSentimentClient` does, for the same reason
-      const match = content.match(/\{[\s\S]*\}/);
-      if (match === null) return this.#unreadable(context.instrument);
-      try {
-        parsed = JSON.parse(match[0]);
-      } catch {
-        return this.#unreadable(context.instrument);
-      }
-    }
+    const parseResult = this.#parseJsonContent(content);
+    if (!parseResult.ok) return this.#unreadable(context.instrument);
+    const parsed = parseResult.value;
 
     // `JSON.parse` succeeding does NOT mean an object came back: the literal
     // `null` parses fine, and reading `.items` off it throws a TypeError that
@@ -409,9 +398,45 @@ export class XSearchClient implements GrokSentimentClient {
     const items_ = (parsed as { items?: unknown }).items;
     if (!Array.isArray(items_)) return this.#unreadable(context.instrument);
 
-    // Keyed by status id, not by raw URL string: the same post cited as
-    // `x.com/u/status/1` and `www.x.com/u/status/1?s=20` is one post, and a
-    // string-keyed set would let the second slip past as a different citation
+    const cited = this.#buildCitedMap(citations);
+    const { items, unevidenced, stale, unreadableItems } = this.#collectItems(
+      items_,
+      cited,
+      context,
+    );
+
+    if (unevidenced > 0 || stale > 0) {
+      this.#logDroppedItems(context, unevidenced, stale, unreadableItems, items.length, cited.size);
+    }
+
+    return items;
+  }
+
+  /**
+   * Parses `content` as JSON, recovering a fenced or prose-wrapped object
+   * before giving up — the same salvage `NousSentimentClient` does, for the
+   * same reason
+   */
+  #parseJsonContent(content: string): { ok: true; value: unknown } | { ok: false } {
+    try {
+      return { ok: true, value: JSON.parse(content) };
+    } catch {
+      const match = content.match(/\{[\s\S]*\}/);
+      if (match === null) return { ok: false };
+      try {
+        return { ok: true, value: JSON.parse(match[0]) };
+      } catch {
+        return { ok: false };
+      }
+    }
+  }
+
+  /**
+   * Keyed by status id, not by raw URL string: the same post cited as
+   * `x.com/u/status/1` and `www.x.com/u/status/1?s=20` is one post, and a
+   * string-keyed set would let the second slip past as a different citation
+   */
+  #buildCitedMap(citations: readonly NousCitation[]): Map<string, string> {
     const cited = new Map<string, string>();
     for (const citation of citations) {
       const parsedUrl = parseStatusUrl(citation.url);
@@ -422,7 +447,14 @@ export class XSearchClient implements GrokSentimentClient {
         );
       }
     }
+    return cited;
+  }
 
+  #collectItems(
+    items_: unknown[],
+    cited: ReadonlyMap<string, string>,
+    context: { instrument: string; windowStart: Date; responseAt: Date },
+  ): { items: IntelligenceItem[]; unevidenced: number; stale: number; unreadableItems: number } {
     const items: IntelligenceItem[] = [];
     const seen = new Set<string>();
     let unevidenced = 0;
@@ -457,31 +489,38 @@ export class XSearchClient implements GrokSentimentClient {
       items.push(outcome);
     }
 
-    if (unevidenced > 0 || stale > 0) {
-      this.#logger?.log({
-        trace_id: 'grok',
-        stage: 'market_intelligence',
-        event: 'x_search_items_dropped',
-        level: 'warn',
-        message:
-          `x_search: dropped ${unevidenced + stale} item(s) for ${context.instrument} — ` +
-          `${unevidenced} cited no retrieved post (model recall, not retrieval) and ` +
-          `${stale} fell outside the ${Math.round(this.#windowMs / 60_000)}-minute window. ` +
-          'Kept ' +
-          `${items.length}. The x_search date filter is day-granular, so out-of-window ` +
-          'results are expected, not a fault.',
-        payload: {
-          instrument: context.instrument,
-          unevidenced,
-          stale,
-          unreadable_items: unreadableItems,
-          kept: items.length,
-          citations: cited.size,
-        },
-      });
-    }
+    return { items, unevidenced, stale, unreadableItems };
+  }
 
-    return items;
+  #logDroppedItems(
+    context: { instrument: string; windowStart: Date; responseAt: Date },
+    unevidenced: number,
+    stale: number,
+    unreadableItems: number,
+    keptCount: number,
+    citedCount: number,
+  ): void {
+    this.#logger?.log({
+      trace_id: 'grok',
+      stage: 'market_intelligence',
+      event: 'x_search_items_dropped',
+      level: 'warn',
+      message:
+        `x_search: dropped ${unevidenced + stale} item(s) for ${context.instrument} — ` +
+        `${unevidenced} cited no retrieved post (model recall, not retrieval) and ` +
+        `${stale} fell outside the ${Math.round(this.#windowMs / 60_000)}-minute window. ` +
+        'Kept ' +
+        `${keptCount}. The x_search date filter is day-granular, so out-of-window ` +
+        'results are expected, not a fault.',
+      payload: {
+        instrument: context.instrument,
+        unevidenced,
+        stale,
+        unreadable_items: unreadableItems,
+        kept: keptCount,
+        citations: citedCount,
+      },
+    });
   }
 
   /**

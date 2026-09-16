@@ -1487,264 +1487,10 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
      * pass cannot be ordered against each other by clock jitter alone.
      */
     const observedAt = this.clock.now();
-    /**
-     * Counted apart from `failures.length`, which now also collects journal and
-     * alert-delivery failures (#298). Reporting those as "brackets failed"
-     * would send an operator reading the soak log to the venue to investigate
-     * orders that were never the problem.
-     */
-    let bracketFailures = 0;
 
-    // Snapshot, as #297 already did for `CcxtBrokerAdapter.syncBrackets` (M3):
-    // the `getOrder` below awaits inside this loop, and a Map iterator DOES
-    // visit entries inserted mid-iteration — so a bracket submitted during the
-    // sweep would be drained by a pass whose `since` window predates it, and
-    // its fills silently dropped. The snapshot fixes each pass's worklist at
-    // entry (PR #290 review, deepseek)
-    for (const [clientOrderId, entryOrderId] of [...this.brackets]) {
-      try {
-        const entry = await this.call('fetchNewFills', () =>
-          this.input.client.getOrder(entryOrderId),
-        );
-
-        const instrument = fromAlpacaSymbol(symbolOf(entry));
-        const submittedAt = this.bracketSubmittedAt.get(clientOrderId);
-        this.auditSinceFloorInvariant(
-          entry,
-          'entry',
-          clientOrderId,
-          instrument,
-          observedAt,
-          submittedAt,
-        );
-        collectFill(entry, 'entry', clientOrderId, instrument, since, observedAt, fills);
-        for (const leg of entry.legs ?? []) {
-          this.auditSinceFloorInvariant(
-            leg,
-            legName(leg),
-            clientOrderId,
-            instrument,
-            observedAt,
-            submittedAt,
-          );
-          collectFill(leg, legName(leg), clientOrderId, instrument, since, observedAt, fills);
-        }
-      } catch (error) {
-        // Skipped, not swallowed: this bracket contributes nothing to THIS
-        // sweep and is retried on the next one. That is the same shape as an
-        // order the venue has not reported yet, and `ingestFills()` dedups on
-        // `broker_fill_id`, so re-polling costs nothing
-        if (error instanceof UnpricedFillError) {
-          // Durable, and stamped with the FIRST sighting: this is the clock the
-          // age-out runs on, and it has to survive the restart that a 14-day
-          // unattended soak will contain several of
-          //
-          // Guarded, because this runs INSIDE the per-bracket catch: a throw
-          // from the journal here would escape the isolation entirely and abort
-          // the account's whole sweep — turning one venue anomaly into the
-          // stop-outs-for-everyone starvation this loop exists to prevent
-          //
-          // NEITHER `failures.push(error)` NOR `bracketFailures += 1` runs for
-          // an UnpricedFillError itself (#524 review, deepseek) — it is a
-          // MODELLED, EXPECTED condition (#298's whole reason for existing:
-          // the age-out clock just above, and the eventual alert through
-          // `escalateAgedUnpricedFills` -> the `unpricedFillAlerts` port), not a
-          // failure, which is exactly what this catch's OWN first comment
-          // already says ("skipped, not swallowed... retried on the next
-          // one"). Counting it here contradicted that: `failures.length > 0`
-          // below is what decides whether a `fills`-less call THROWS, so one
-          // unpriced fill — on a poll where nothing else happened to produce
-          // a fill — silently caused the exact "stop-outs-for-everyone"
-          // abort this isolation exists to prevent, for EVERY bracket in the
-          // sweep, not just the unpriced one. A journal-write failure
-          // (`stateError`, below) is a genuinely different, new failure and
-          // still counts
-          try {
-            this.state.recordUnpricedFill('alpaca', error.observation, this.clock.now());
-          } catch (stateError) {
-            failures.push(stateError);
-            bracketFailures += 1;
-          }
-        } else {
-          failures.push(error);
-          bracketFailures += 1;
-        }
-      }
-    }
-
-    // The flatten sweep (#517) — structurally the bracket loop above with
-    // `entry.legs` dropped (a flatten has none) and `leg: 'exit'` fixed
-    // rather than derived per-leg. Kept as its own loop, over its own
-    // `flattens` map, rather than folded into the one above: a flatten is
-    // never a bracket (`submitFlatten`'s own docstring), and merging the
-    // maps would make the loop above fetch `entry.legs` for an order that
-    // has none
-    //
-    // `flattens` IS IN-MEMORY ONLY, unlike `brackets` (which the constructor
-    // warms from `this.state.loadBrackets('alpaca')`, because a bracket can
-    // legitimately still be waiting on a stop/target fill days after a
-    // restart). A flatten is a plain IOC market order: by the time this
-    // process could poll it again, the venue has already resolved it one way
-    // or another, so the ONLY window not surviving a restart costs is the
-    // narrow one between `submitFlatten` returning and this sweep next
-    // running
-    //
-    // THAT WINDOW IS NOW CLOSED, not by this map becoming durable, but by
-    // `reconcile()` learning about `flatten_submissions` rows (#519/#526):
-    // on startup (and whenever `reconcile()` next runs), it reads every
-    // unresolved journal row and calls `resumeFlatten` for each, which
-    // re-populates THIS map from the venue's own record of the order —
-    // see `resumeFlatten`'s doc above. A crash inside the window still
-    // empties this map exactly as before; what changed is that the map is no
-    // longer the only place that memory lived
-    //
-    // Entries ARE removed once their order reaches a terminal state (#524
-    // review, deepseek: "the flatten poll set grows monotonically for the
-    // whole [14-day soak] run" against a ~200 req/min account-wide budget
-    // `alpaca-http-client.ts` warns can starve LIVE ORDER PLACEMENT if
-    // exhausted — a resource leak that degrades the soak itself, not a
-    // tidiness item). Deliberately ASYMMETRIC with `brackets`, which is
-    // still never pruned: a bracket can go on mattering after its entry
-    // fills (`resizeProtectiveLegs`, the stop/target legs), so "terminal"
-    // has no single moment for it. A flatten is a one-shot IOC market
-    // order — once it stops being `'submitted'` it will NEVER change again,
-    // including `'partially_filled'`: whatever did not fill immediately was
-    // cancelled by the venue, not left resting, so there is no later fill
-    // this entry could still deliver. Pruning happens below, INSIDE the
-    // `try`, only once `collectFill` has already run for this poll — the
-    // no-lookahead-preserving reason `advanceLot`'s own filter lives where
-    // it does in ingest-fills.ts applies here too: pruning first and
-    // collecting second would silently drop the terminal fill this exact
-    // ticket exists to stop dropping
-    //
-    // What this does NOT wait for: confirmation that `ingestFills()`
-    // actually PERSISTED the fill this call handed it. This adapter has no
-    // `SharedStore` access to confirm that (`AlpacaBrokerAdapterInput.state`
-    // above documents that boundary as deliberate), so there is a narrow
-    // residual window — if `ingestFills()` goes on to fail, this poll, for a
-    // reason unrelated to this flatten, AFTER this fill was handed off but
-    // BEFORE its target lot's own advance is durably written — where the
-    // fill is not re-offered on the next poll, because this entry is
-    // already gone
-    //
-    // #519/#526 close this ACROSS A RESTART: `flatten_submissions`'s
-    // `fills_swept_at` (migration 0023) is deliberately NOT set by
-    // `ingestFills()` merely because a raw fill was observed — only once
-    // every lot the flatten named has durably applied its share — so THIS
-    // exact failure leaves the journal row unresolved, and the next
-    // `reconcile()` pass's `resumeFlatten` call re-adds the order here for
-    // another attempt. What stays open is the WITHIN-PROCESS gap: this
-    // codebase has no recurring `reconcile()` cadence today (it runs at
-    // startup only — see orchestrator/fill-sync.ts's file doc), so a fill
-    // lost this way is not re-offered until the next restart, not the next
-    // poll. Adding a cadence is a scheduling decision out of scope for
-    // either ticket; the mechanism here is ready for one whenever it exists
-    let flattenFailures = 0;
-    for (const [clientOrderId, orderId] of [...this.flattens]) {
-      try {
-        const order = await this.call('fetchNewFills', () => this.input.client.getOrder(orderId));
-        const instrument = fromAlpacaSymbol(symbolOf(order));
-        // #1415: `flattens` is keyed by the EXIT's own idempotency_key, a
-        // different key space from `bracketSubmittedAt` — see
-        // `flattenSubmittedAt`'s doc for why this needs its own map
-        this.auditSinceFloorInvariant(
-          order,
-          'exit',
-          clientOrderId,
-          instrument,
-          observedAt,
-          this.flattenSubmittedAt.get(clientOrderId),
-        );
-        collectFill(order, 'exit', clientOrderId, instrument, since, observedAt, fills);
-        if (mapOrderState(order.status) !== 'submitted') {
-          this.flattens.delete(clientOrderId);
-          this.flattenSubmittedAt.delete(clientOrderId);
-        }
-      } catch (error) {
-        // Same isolation, same UnpricedFillError bookkeeping, and (#524
-        // review, deepseek) the SAME non-counting of an UnpricedFillError
-        // itself as a failure, as the bracket loop above — see its comments
-        // for the full reasoning, which applies unchanged here. Getting this
-        // right matters at least as much here as there: an unpriced flatten
-        // fill on a poll where no bracket produced one either would
-        // otherwise abort the WHOLE sweep, brackets included, not just the
-        // flatten. Note what this means for the prune above: a fill this
-        // catch reaches for is, by construction, one `collectFill` never
-        // finished normalizing, so the `mapOrderState`/`delete` line is never
-        // reached for it — an unpriced flatten is retried next poll, same as
-        // an unpriced bracket, never pruned mid-unpriced
-        if (error instanceof UnpricedFillError) {
-          try {
-            this.state.recordUnpricedFill('alpaca', error.observation, this.clock.now());
-          } catch (stateError) {
-            failures.push(stateError);
-            flattenFailures += 1;
-          }
-        } else {
-          failures.push(error);
-          flattenFailures += 1;
-        }
-      }
-    }
-
-    // The re-arm sweep (#525) — structurally the flatten loop above, with
-    // two differences: keyed by the LOT's own `idempotency_key` (not the
-    // OCO's wire id, so a fill lands in `ingestFills()`'s ordinary
-    // per-position bucket with no routing of its own — see `rearmedLegs`'
-    // doc), and the top-level order is tagged `'target'` rather than
-    // `'exit'`/`'entry'`: an OCO's parent order IS the take-profit leg
-    // (Alpaca's own shape, `rearmProtectiveLegs`'s doc), not a market order
-    // with nothing attached. Its one child leg (the stop-loss) is tagged via
-    // `legName`, same as a bracket's legs above. Both satisfy
-    // `isExitFill`/`Fill.leg !== 'entry'` in ingest-fills.ts, so a rearmed
-    // leg firing correctly reduces the lot and can close it
-    //
-    // Pruned once terminal, same asymmetry with `brackets` as `flattens`
-    // documents and for the same reason: an OCO here protects a residual
-    // that is either still open (worth polling again) or done (a single
-    // fire-or-cancel event, never resting again after that)
-    let rearmFailures = 0;
-    for (const [lotKey, orderId] of [...this.rearmedLegs]) {
-      try {
-        const order = await this.call('fetchNewFills', () => this.input.client.getOrder(orderId));
-        const instrument = fromAlpacaSymbol(symbolOf(order));
-        // #1123: `rearmedLegs` is keyed by the LOT's own `idempotency_key`
-        // (see its doc above) — the same key space `bracketSubmittedAt` uses,
-        // so the original bracket's submission-time bound still applies here
-        // with no new map
-        const submittedAt = this.bracketSubmittedAt.get(lotKey);
-        this.auditSinceFloorInvariant(order, 'target', lotKey, instrument, observedAt, submittedAt);
-        collectFill(order, 'target', lotKey, instrument, since, observedAt, fills);
-        for (const leg of order.legs ?? []) {
-          this.auditSinceFloorInvariant(
-            leg,
-            legName(leg),
-            lotKey,
-            instrument,
-            observedAt,
-            submittedAt,
-          );
-          collectFill(leg, legName(leg), lotKey, instrument, since, observedAt, fills);
-        }
-        if (mapOrderState(order.status) !== 'submitted') {
-          this.rearmedLegs.delete(lotKey);
-        }
-      } catch (error) {
-        // Same isolation and UnpricedFillError bookkeeping as the bracket
-        // and flatten loops above
-        if (error instanceof UnpricedFillError) {
-          try {
-            this.state.recordUnpricedFill('alpaca', error.observation, this.clock.now());
-          } catch (stateError) {
-            failures.push(stateError);
-            rearmFailures += 1;
-          }
-        } else {
-          failures.push(error);
-          rearmFailures += 1;
-        }
-      }
-    }
+    const bracketFailures = await this.sweepBrackets(since, observedAt, fills, failures);
+    const flattenFailures = await this.sweepFlattens(since, observedAt, fills, failures);
+    const rearmFailures = await this.sweepRearmedLegs(since, observedAt, fills, failures);
 
     // The emulated-crypto sweep (#586) — polls each emulated bracket's plain
     // entry/stop/target orders, offers their fills (tagged 'entry'/'stop'/
@@ -1830,6 +1576,289 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     }
 
     return fills;
+  }
+
+  /**
+   * The bracket half of `fetchNewFills`'s sweep. Snapshot, as #297 already
+   * did for `CcxtBrokerAdapter.syncBrackets` (M3): the `getOrder` below
+   * awaits inside this loop, and a Map iterator DOES visit entries inserted
+   * mid-iteration — so a bracket submitted during the sweep would be drained
+   * by a pass whose `since` window predates it, and its fills silently
+   * dropped. The snapshot fixes each pass's worklist at entry (PR #290
+   * review, deepseek). Returns the count of brackets that failed — counted
+   * apart from `failures.length`, which now also collects journal and
+   * alert-delivery failures (#298); reporting those as "brackets failed"
+   * would send an operator reading the soak log to the venue to investigate
+   * orders that were never the problem.
+   */
+  private async sweepBrackets(
+    since: Date,
+    observedAt: Date,
+    fills: NormalizedFill[],
+    failures: unknown[],
+  ): Promise<number> {
+    let bracketFailures = 0;
+    for (const [clientOrderId, entryOrderId] of [...this.brackets]) {
+      try {
+        const entry = await this.call('fetchNewFills', () =>
+          this.input.client.getOrder(entryOrderId),
+        );
+
+        const instrument = fromAlpacaSymbol(symbolOf(entry));
+        const submittedAt = this.bracketSubmittedAt.get(clientOrderId);
+        this.auditSinceFloorInvariant(
+          entry,
+          'entry',
+          clientOrderId,
+          instrument,
+          observedAt,
+          submittedAt,
+        );
+        collectFill(entry, 'entry', clientOrderId, instrument, since, observedAt, fills);
+        for (const leg of entry.legs ?? []) {
+          this.auditSinceFloorInvariant(
+            leg,
+            legName(leg),
+            clientOrderId,
+            instrument,
+            observedAt,
+            submittedAt,
+          );
+          collectFill(leg, legName(leg), clientOrderId, instrument, since, observedAt, fills);
+        }
+      } catch (error) {
+        // Skipped, not swallowed: this bracket contributes nothing to THIS
+        // sweep and is retried on the next one. That is the same shape as an
+        // order the venue has not reported yet, and `ingestFills()` dedups on
+        // `broker_fill_id`, so re-polling costs nothing
+        if (error instanceof UnpricedFillError) {
+          // Durable, and stamped with the FIRST sighting: this is the clock the
+          // age-out runs on, and it has to survive the restart that a 14-day
+          // unattended soak will contain several of
+          //
+          // Guarded, because this runs INSIDE the per-bracket catch: a throw
+          // from the journal here would escape the isolation entirely and abort
+          // the account's whole sweep — turning one venue anomaly into the
+          // stop-outs-for-everyone starvation this loop exists to prevent
+          //
+          // NEITHER `failures.push(error)` NOR `bracketFailures += 1` runs for
+          // an UnpricedFillError itself (#524 review, deepseek) — it is a
+          // MODELLED, EXPECTED condition (#298's whole reason for existing:
+          // the age-out clock just above, and the eventual alert through
+          // `escalateAgedUnpricedFills` -> the `unpricedFillAlerts` port), not a
+          // failure, which is exactly what this catch's OWN first comment
+          // already says ("skipped, not swallowed... retried on the next
+          // one"). Counting it here contradicted that: `failures.length > 0`
+          // below is what decides whether a `fills`-less call THROWS, so one
+          // unpriced fill — on a poll where nothing else happened to produce
+          // a fill — silently caused the exact "stop-outs-for-everyone"
+          // abort this isolation exists to prevent, for EVERY bracket in the
+          // sweep, not just the unpriced one. A journal-write failure
+          // (`stateError`, below) is a genuinely different, new failure and
+          // still counts
+          try {
+            this.state.recordUnpricedFill('alpaca', error.observation, this.clock.now());
+          } catch (stateError) {
+            failures.push(stateError);
+            bracketFailures += 1;
+          }
+        } else {
+          failures.push(error);
+          bracketFailures += 1;
+        }
+      }
+    }
+    return bracketFailures;
+  }
+
+  // The flatten sweep (#517) — structurally the bracket loop above with
+  // `entry.legs` dropped (a flatten has none) and `leg: 'exit'` fixed
+  // rather than derived per-leg. Kept as its own loop, over its own
+  // `flattens` map, rather than folded into the one above: a flatten is
+  // never a bracket (`submitFlatten`'s own docstring), and merging the
+  // maps would make the loop above fetch `entry.legs` for an order that
+  // has none
+  //
+  // `flattens` IS IN-MEMORY ONLY, unlike `brackets` (which the constructor
+  // warms from `this.state.loadBrackets('alpaca')`, because a bracket can
+  // legitimately still be waiting on a stop/target fill days after a
+  // restart). A flatten is a plain IOC market order: by the time this
+  // process could poll it again, the venue has already resolved it one way
+  // or another, so the ONLY window not surviving a restart costs is the
+  // narrow one between `submitFlatten` returning and this sweep next
+  // running
+  //
+  // THAT WINDOW IS NOW CLOSED, not by this map becoming durable, but by
+  // `reconcile()` learning about `flatten_submissions` rows (#519/#526):
+  // on startup (and whenever `reconcile()` next runs), it reads every
+  // unresolved journal row and calls `resumeFlatten` for each, which
+  // re-populates THIS map from the venue's own record of the order —
+  // see `resumeFlatten`'s doc above. A crash inside the window still
+  // empties this map exactly as before; what changed is that the map is no
+  // longer the only place that memory lived
+  //
+  // Entries ARE removed once their order reaches a terminal state (#524
+  // review, deepseek: "the flatten poll set grows monotonically for the
+  // whole [14-day soak] run" against a ~200 req/min account-wide budget
+  // `alpaca-http-client.ts` warns can starve LIVE ORDER PLACEMENT if
+  // exhausted — a resource leak that degrades the soak itself, not a
+  // tidiness item). Deliberately ASYMMETRIC with `brackets`, which is
+  // still never pruned: a bracket can go on mattering after its entry
+  // fills (`resizeProtectiveLegs`, the stop/target legs), so "terminal"
+  // has no single moment for it. A flatten is a one-shot IOC market
+  // order — once it stops being `'submitted'` it will NEVER change again,
+  // including `'partially_filled'`: whatever did not fill immediately was
+  // cancelled by the venue, not left resting, so there is no later fill
+  // this entry could still deliver. Pruning happens below, INSIDE the
+  // `try`, only once `collectFill` has already run for this poll — the
+  // no-lookahead-preserving reason `advanceLot`'s own filter lives where
+  // it does in ingest-fills.ts applies here too: pruning first and
+  // collecting second would silently drop the terminal fill this exact
+  // ticket exists to stop dropping
+  //
+  // What this does NOT wait for: confirmation that `ingestFills()`
+  // actually PERSISTED the fill this call handed it. This adapter has no
+  // `SharedStore` access to confirm that (`AlpacaBrokerAdapterInput.state`
+  // above documents that boundary as deliberate), so there is a narrow
+  // residual window — if `ingestFills()` goes on to fail, this poll, for a
+  // reason unrelated to this flatten, AFTER this fill was handed off but
+  // BEFORE its target lot's own advance is durably written — where the
+  // fill is not re-offered on the next poll, because this entry is
+  // already gone
+  //
+  // #519/#526 close this ACROSS A RESTART: `flatten_submissions`'s
+  // `fills_swept_at` (migration 0023) is deliberately NOT set by
+  // `ingestFills()` merely because a raw fill was observed — only once
+  // every lot the flatten named has durably applied its share — so THIS
+  // exact failure leaves the journal row unresolved, and the next
+  // `reconcile()` pass's `resumeFlatten` call re-adds the order here for
+  // another attempt. What stays open is the WITHIN-PROCESS gap: this
+  // codebase has no recurring `reconcile()` cadence today (it runs at
+  // startup only — see orchestrator/fill-sync.ts's file doc), so a fill
+  // lost this way is not re-offered until the next restart, not the next
+  // poll. Adding a cadence is a scheduling decision out of scope for
+  // either ticket; the mechanism here is ready for one whenever it exists
+  private async sweepFlattens(
+    since: Date,
+    observedAt: Date,
+    fills: NormalizedFill[],
+    failures: unknown[],
+  ): Promise<number> {
+    let flattenFailures = 0;
+    for (const [clientOrderId, orderId] of [...this.flattens]) {
+      try {
+        const order = await this.call('fetchNewFills', () => this.input.client.getOrder(orderId));
+        const instrument = fromAlpacaSymbol(symbolOf(order));
+        // #1415: `flattens` is keyed by the EXIT's own idempotency_key, a
+        // different key space from `bracketSubmittedAt` — see
+        // `flattenSubmittedAt`'s doc for why this needs its own map
+        this.auditSinceFloorInvariant(
+          order,
+          'exit',
+          clientOrderId,
+          instrument,
+          observedAt,
+          this.flattenSubmittedAt.get(clientOrderId),
+        );
+        collectFill(order, 'exit', clientOrderId, instrument, since, observedAt, fills);
+        if (mapOrderState(order.status) !== 'submitted') {
+          this.flattens.delete(clientOrderId);
+          this.flattenSubmittedAt.delete(clientOrderId);
+        }
+      } catch (error) {
+        // Same isolation, same UnpricedFillError bookkeeping, and (#524
+        // review, deepseek) the SAME non-counting of an UnpricedFillError
+        // itself as a failure, as the bracket loop above — see its comments
+        // for the full reasoning, which applies unchanged here. Getting this
+        // right matters at least as much here as there: an unpriced flatten
+        // fill on a poll where no bracket produced one either would
+        // otherwise abort the WHOLE sweep, brackets included, not just the
+        // flatten. Note what this means for the prune above: a fill this
+        // catch reaches for is, by construction, one `collectFill` never
+        // finished normalizing, so the `mapOrderState`/`delete` line is never
+        // reached for it — an unpriced flatten is retried next poll, same as
+        // an unpriced bracket, never pruned mid-unpriced
+        if (error instanceof UnpricedFillError) {
+          try {
+            this.state.recordUnpricedFill('alpaca', error.observation, this.clock.now());
+          } catch (stateError) {
+            failures.push(stateError);
+            flattenFailures += 1;
+          }
+        } else {
+          failures.push(error);
+          flattenFailures += 1;
+        }
+      }
+    }
+    return flattenFailures;
+  }
+
+  // The re-arm sweep (#525) — structurally the flatten loop above, with
+  // two differences: keyed by the LOT's own `idempotency_key` (not the
+  // OCO's wire id, so a fill lands in `ingestFills()`'s ordinary
+  // per-position bucket with no routing of its own — see `rearmedLegs`'
+  // doc), and the top-level order is tagged `'target'` rather than
+  // `'exit'`/`'entry'`: an OCO's parent order IS the take-profit leg
+  // (Alpaca's own shape, `rearmProtectiveLegs`'s doc), not a market order
+  // with nothing attached. Its one child leg (the stop-loss) is tagged via
+  // `legName`, same as a bracket's legs above. Both satisfy
+  // `isExitFill`/`Fill.leg !== 'entry'` in ingest-fills.ts, so a rearmed
+  // leg firing correctly reduces the lot and can close it
+  //
+  // Pruned once terminal, same asymmetry with `brackets` as `flattens`
+  // documents and for the same reason: an OCO here protects a residual
+  // that is either still open (worth polling again) or done (a single
+  // fire-or-cancel event, never resting again after that)
+  private async sweepRearmedLegs(
+    since: Date,
+    observedAt: Date,
+    fills: NormalizedFill[],
+    failures: unknown[],
+  ): Promise<number> {
+    let rearmFailures = 0;
+    for (const [lotKey, orderId] of [...this.rearmedLegs]) {
+      try {
+        const order = await this.call('fetchNewFills', () => this.input.client.getOrder(orderId));
+        const instrument = fromAlpacaSymbol(symbolOf(order));
+        // #1123: `rearmedLegs` is keyed by the LOT's own `idempotency_key`
+        // (see its doc above) — the same key space `bracketSubmittedAt` uses,
+        // so the original bracket's submission-time bound still applies here
+        // with no new map
+        const submittedAt = this.bracketSubmittedAt.get(lotKey);
+        this.auditSinceFloorInvariant(order, 'target', lotKey, instrument, observedAt, submittedAt);
+        collectFill(order, 'target', lotKey, instrument, since, observedAt, fills);
+        for (const leg of order.legs ?? []) {
+          this.auditSinceFloorInvariant(
+            leg,
+            legName(leg),
+            lotKey,
+            instrument,
+            observedAt,
+            submittedAt,
+          );
+          collectFill(leg, legName(leg), lotKey, instrument, since, observedAt, fills);
+        }
+        if (mapOrderState(order.status) !== 'submitted') {
+          this.rearmedLegs.delete(lotKey);
+        }
+      } catch (error) {
+        // Same isolation and UnpricedFillError bookkeeping as the bracket
+        // and flatten loops above
+        if (error instanceof UnpricedFillError) {
+          try {
+            this.state.recordUnpricedFill('alpaca', error.observation, this.clock.now());
+          } catch (stateError) {
+            failures.push(stateError);
+            rearmFailures += 1;
+          }
+        } else {
+          failures.push(error);
+          rearmFailures += 1;
+        }
+      }
+    }
+    return rearmFailures;
   }
 
   /**

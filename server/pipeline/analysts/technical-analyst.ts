@@ -763,6 +763,104 @@ interface EnrichmentReads {
   participation: number | null | undefined;
 }
 
+/** The `trend` axis reading — close vs. SMA */
+function trendReading(core: CoreReads): AxisReading {
+  const trend = trendVote(core.lastClose, core.sma);
+  return {
+    axis: 'trend',
+    vote: trend,
+    band: trend > 0 ? 'above' : trend < 0 ? 'below' : 'at',
+    line:
+      `Trend (${INDICATOR_TIMEFRAME}): ${directionOf(trend)} — close ${core.lastClose} ` +
+      `${trend > 0 ? 'above' : trend < 0 ? 'below' : 'at'} SMA(${INDICATOR_LOOKBACK}) ${core.sma}`,
+  };
+}
+
+/** The `momentum` axis reading — RSI, with MACD folded in when readable */
+function momentumReading(core: CoreReads, macd: number | undefined): AxisReading {
+  const momentum = momentumVote(core.rsi, macd);
+  const rsiBand =
+    core.rsi >= RSI_OVERBOUGHT
+      ? 'overbought'
+      : core.rsi <= RSI_OVERSOLD
+        ? 'oversold'
+        : core.rsi > 50
+          ? 'above midline'
+          : core.rsi < 50
+            ? 'below midline'
+            : 'at midline';
+  const macdPart =
+    macd === undefined
+      ? ''
+      : `; MACD(${MACD_FAST},${MACD_SLOW},${MACD_SIGNAL}) histogram ${macd} ` +
+        `${macd > 0 ? 'above' : macd < 0 ? 'below' : 'at'} signal`;
+  return {
+    axis: 'momentum',
+    vote: momentum,
+    band: rsiBand,
+    line:
+      `Momentum (${INDICATOR_TIMEFRAME}): ${directionOf(momentum)} — ` +
+      `RSI(${INDICATOR_LOOKBACK}) ${core.rsi} ${rsiBand}${macdPart}`,
+  };
+}
+
+/** The `participation` axis reading — only built when `enrichment.participation` is readable */
+function participationReading(share: number | null): AxisReading {
+  const vote = participationVote(share);
+  const band =
+    share === null
+      ? 'no participating volume'
+      : vote > 0
+        ? 'buyers'
+        : vote < 0
+          ? 'sellers'
+          : 'balanced';
+  return {
+    axis: 'participation',
+    vote,
+    band,
+    line:
+      `Participation (${INDICATOR_TIMEFRAME}): ${directionOf(vote)} — ${band}` +
+      (share === null
+        ? ` over the last ${PARTICIPATION_LOOKBACK} bars`
+        : `, ${round4(share * 100)}% of the last ${PARTICIPATION_LOOKBACK} bars' volume on up bars`),
+  };
+}
+
+/** The `structure` axis reading — only built when `enrichment.donchian` is readable */
+function structureReading(donchian: number): AxisReading {
+  const vote = structureVote(donchian);
+  const band = vote > 0 ? 'upper third of range' : vote < 0 ? 'lower third of range' : 'mid range';
+  return {
+    axis: 'structure',
+    vote,
+    band,
+    line:
+      `Structure (${INDICATOR_TIMEFRAME}): ${directionOf(vote)} — close in the ${band} ` +
+      `of the ${DONCHIAN_PERIOD}-bar Donchian channel (position ${donchian})`,
+  };
+}
+
+/** The volatility-gate cap reasons — ADX below the trend floor, or BB/KC squeeze on */
+function capReasonsFor(enrichment: EnrichmentReads): string[] {
+  const capReasons: string[] = [];
+  if (enrichment.adx !== undefined && enrichment.adx < ADX_TREND_FLOOR) {
+    capReasons.push(`ADX(${INDICATOR_LOOKBACK}) ${enrichment.adx} below ${ADX_TREND_FLOOR}`);
+  }
+  if (enrichment.squeeze !== undefined && enrichment.squeeze < SQUEEZE_ON_BELOW) {
+    capReasons.push(`BB/KC ${enrichment.squeeze} below ${SQUEEZE_ON_BELOW} (squeeze on)`);
+  }
+  return capReasons;
+}
+
+function confidenceFor(net: number, availableAxes: number, capReasons: string[]): number {
+  // `availableAxes` is never 0: trend and momentum are core, so both are always
+  // present by the time this runs. Guarded anyway rather than divided blindly —
+  // a NaN confidence would reach a live sizing multiplier
+  const raw = availableAxes === 0 ? 0 : Math.abs(net) / availableAxes;
+  return round4(capReasons.length > 0 ? Math.min(raw, LOW_CONVICTION_CAP) : raw);
+}
+
 /**
  * Turns the reads into votes, a direction and a confidence — the whole decision
  * rule, as a pure function so the tests can drive it directly instead of
@@ -786,95 +884,23 @@ interface EnrichmentReads {
 export function assessAxes(core: CoreReads, enrichment: EnrichmentReads): AxisAssessment {
   const readings: AxisReading[] = [];
 
-  const trend = trendVote(core.lastClose, core.sma);
-  readings.push({
-    axis: 'trend',
-    vote: trend,
-    band: trend > 0 ? 'above' : trend < 0 ? 'below' : 'at',
-    line:
-      `Trend (${INDICATOR_TIMEFRAME}): ${directionOf(trend)} — close ${core.lastClose} ` +
-      `${trend > 0 ? 'above' : trend < 0 ? 'below' : 'at'} SMA(${INDICATOR_LOOKBACK}) ${core.sma}`,
-  });
-
-  const momentum = momentumVote(core.rsi, enrichment.macd);
-  const rsiBand =
-    core.rsi >= RSI_OVERBOUGHT
-      ? 'overbought'
-      : core.rsi <= RSI_OVERSOLD
-        ? 'oversold'
-        : core.rsi > 50
-          ? 'above midline'
-          : core.rsi < 50
-            ? 'below midline'
-            : 'at midline';
-  const macdPart =
-    enrichment.macd === undefined
-      ? ''
-      : `; MACD(${MACD_FAST},${MACD_SLOW},${MACD_SIGNAL}) histogram ${enrichment.macd} ` +
-        `${enrichment.macd > 0 ? 'above' : enrichment.macd < 0 ? 'below' : 'at'} signal`;
-  readings.push({
-    axis: 'momentum',
-    vote: momentum,
-    band: rsiBand,
-    line:
-      `Momentum (${INDICATOR_TIMEFRAME}): ${directionOf(momentum)} — ` +
-      `RSI(${INDICATOR_LOOKBACK}) ${core.rsi} ${rsiBand}${macdPart}`,
-  });
+  readings.push(trendReading(core));
+  readings.push(momentumReading(core, enrichment.macd));
 
   if (enrichment.participation !== undefined) {
-    const share = enrichment.participation;
-    const vote = participationVote(share);
-    const band =
-      share === null
-        ? 'no participating volume'
-        : vote > 0
-          ? 'buyers'
-          : vote < 0
-            ? 'sellers'
-            : 'balanced';
-    readings.push({
-      axis: 'participation',
-      vote,
-      band,
-      line:
-        `Participation (${INDICATOR_TIMEFRAME}): ${directionOf(vote)} — ${band}` +
-        (share === null
-          ? ` over the last ${PARTICIPATION_LOOKBACK} bars`
-          : `, ${round4(share * 100)}% of the last ${PARTICIPATION_LOOKBACK} bars' volume on up bars`),
-    });
+    readings.push(participationReading(enrichment.participation));
   }
 
   if (enrichment.donchian !== undefined) {
-    const vote = structureVote(enrichment.donchian);
-    const band =
-      vote > 0 ? 'upper third of range' : vote < 0 ? 'lower third of range' : 'mid range';
-    readings.push({
-      axis: 'structure',
-      vote,
-      band,
-      line:
-        `Structure (${INDICATOR_TIMEFRAME}): ${directionOf(vote)} — close in the ${band} ` +
-        `of the ${DONCHIAN_PERIOD}-bar Donchian channel (position ${enrichment.donchian})`,
-    });
+    readings.push(structureReading(enrichment.donchian));
   }
 
   const voting = readings.filter((reading) => VOTING_AXES.includes(reading.axis));
   const net = voting.reduce((sum, reading) => sum + AXIS_WEIGHTS[reading.axis] * reading.vote, 0);
   const availableAxes = voting.reduce((sum, reading) => sum + AXIS_WEIGHTS[reading.axis], 0);
 
-  const capReasons: string[] = [];
-  if (enrichment.adx !== undefined && enrichment.adx < ADX_TREND_FLOOR) {
-    capReasons.push(`ADX(${INDICATOR_LOOKBACK}) ${enrichment.adx} below ${ADX_TREND_FLOOR}`);
-  }
-  if (enrichment.squeeze !== undefined && enrichment.squeeze < SQUEEZE_ON_BELOW) {
-    capReasons.push(`BB/KC ${enrichment.squeeze} below ${SQUEEZE_ON_BELOW} (squeeze on)`);
-  }
-
-  // `availableAxes` is never 0: trend and momentum are core, so both are always
-  // present by the time this runs. Guarded anyway rather than divided blindly —
-  // a NaN confidence would reach a live sizing multiplier
-  const raw = availableAxes === 0 ? 0 : Math.abs(net) / availableAxes;
-  const confidence = round4(capReasons.length > 0 ? Math.min(raw, LOW_CONVICTION_CAP) : raw);
+  const capReasons = capReasonsFor(enrichment);
+  const confidence = confidenceFor(net, availableAxes, capReasons);
 
   return {
     readings,
