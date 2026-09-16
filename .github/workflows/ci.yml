@@ -59,15 +59,18 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: npm run fallow:boundaries -- --format github-annotations --quiet
 
-      # Advisory: dead code, duplication, and design-system drift findings across
-      # the whole repo, not just this PR's diff. continue-on-error keeps these off
-      # the merge gate until the existing backlog (22 circular deps, 16 unused
-      # type exports, ...) is triaged; the annotations still surface on the PR.
-      - name: Fallow dead code (advisory)
+      # Blocking, whole repo (not just this PR's diff): the existing backlog at the
+      # time this gate was flipped on was 5 unused exports, 16 unused type exports,
+      # 13 unused class members, 5 devDependencies used in production, 22 circular
+      # dependencies, and 1 unused component prop. That backlog must be cleared
+      # before this step passes on any PR.
+      - name: Fallow dead code
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        continue-on-error: true
         run: npm run fallow:dead-code -- --format github-annotations --quiet
 
+      # Advisory: duplication and design-system drift findings across the whole
+      # repo, not just this PR's diff. continue-on-error keeps these off the merge
+      # gate; the annotations still surface on the PR.
       - name: Fallow duplication (advisory)
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         continue-on-error: true
