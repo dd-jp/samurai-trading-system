@@ -176,7 +176,7 @@ export interface AnthropicMessagesClient {
  * holds, so a log line can name which model, which trace and which debate paid
  * for the attempt that vanished
  */
-export interface LlmRetryAttemptReport extends RetryAttemptReport {
+interface LlmRetryAttemptReport extends RetryAttemptReport {
   model: string;
   trace_id: string | undefined;
   stage: string | undefined;

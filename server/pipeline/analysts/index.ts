@@ -14,10 +14,8 @@ export { fundamentalAnalyst } from './fundamental-analyst.js';
 export {
   ANALYST_STAGE_WALL_CLOCK_MS,
   AnalystOrchestrator,
-  type AnalystOrchestratorDeps,
   DEFAULT_ANALYST_TIMEOUT_MS,
 } from './orchestrator.js';
-export { sentimentAnalyst } from './sentiment-analyst.js';
 export type { AxisAssessment } from './technical-analyst.js';
 export {
   type AxisVote,
@@ -27,14 +25,10 @@ export {
   momentumVote,
   RSI_SPEC,
   RVOL_5M_LOOKBACK,
-  technicalAnalyst,
 } from './technical-analyst.js';
 export type {
-  Analyst,
   AnalystFailure,
   AnalystFailureKind,
-  AnalystInput,
-  AnalystRunResult,
   AnalystTelemetry,
   AssetClass,
   IndicatorUnavailableEvent,

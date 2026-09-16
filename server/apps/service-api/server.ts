@@ -195,7 +195,7 @@ function parseArmParam(
  * the built CSS references it 36 times, so the ticket's five-entry map would
  * have 404'd every font on a browser without woff2 support.
  */
-export const BUNDLE_CONTENT_TYPES: Readonly<Record<string, string>> = {
+const BUNDLE_CONTENT_TYPES: Readonly<Record<string, string>> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',

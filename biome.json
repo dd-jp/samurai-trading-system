@@ -21,6 +21,10 @@
       "correctness": {
         "noUnusedVariables": "off"
       },
+      "suspicious": {
+        "noExplicitAny": "error",
+        "noMisplacedAssertion": "error"
+      },
       "complexity": {
         "noExcessiveCognitiveComplexity": {
           "level": "warn",

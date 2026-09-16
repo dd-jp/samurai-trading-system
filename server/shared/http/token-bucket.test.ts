@@ -497,7 +497,7 @@ describe('TokenBucket wait telemetry repeat window (#1435)', () => {
     // Let the bucket sit idle past the repeat window (tokens simply refill to
     // capacity and cap there), then force one more threshold-crossing wait
     await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS);
-    await bucket.acquire(); // instant: the idle capacity-1 bucket refilled
+    await bucket.acquire();
     const third = bucket.acquire();
     await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS);
     await third;
@@ -567,7 +567,7 @@ describe('TokenBucket wait telemetry repeat window (#1435)', () => {
     // Past the window: force one more threshold-crossing wait so the fold
     // rides on this next announcement
     await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS);
-    await bucket.acquire(); // instant: the idle capacity-1 bucket refilled
+    await bucket.acquire();
     const fourth = bucket.acquire();
     await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS);
     await fourth;
@@ -676,7 +676,7 @@ describe('TokenBucket wait telemetry repeat window (#1435)', () => {
     // proves callers 2..N were counted, not silently dropped, and that none
     // of them (including the one at the priority bound) ever bypassed
     await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_REPEAT_WINDOW_MS);
-    await bucket.acquireBackground(); // instant: the idle capacity-1 bucket refilled
+    await bucket.acquireBackground();
     const trailing = bucket.acquireBackground();
     await vi.advanceTimersByTimeAsync(TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS);
     await trailing;

@@ -40,7 +40,7 @@ export interface Stage2ReplayContext {
  * no assertion, and therefore no new crypto behaviour, which is what ADR-0015's
  * 2026-08-16 amendment (crypto out of scope) requires.
  */
-export function calendarFor(asset_class: 'stocks' | 'crypto'): TradingCalendar {
+function calendarFor(asset_class: 'stocks' | 'crypto'): TradingCalendar {
   return asset_class === 'stocks' ? new UsEquityRegularHoursCalendar() : new AlwaysOpenCalendar();
 }
 

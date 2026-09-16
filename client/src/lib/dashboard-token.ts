@@ -23,7 +23,7 @@
  */
 
 /** Query param an operator's link carries the token in */
-export const DASHBOARD_TOKEN_QUERY_PARAM = 'token';
+const DASHBOARD_TOKEN_QUERY_PARAM = 'token';
 
 /** `sessionStorage` key the token is persisted under after capture */
 export const DASHBOARD_TOKEN_STORAGE_KEY = 'samurai-dashboard-token';

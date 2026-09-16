@@ -221,8 +221,10 @@ export const ET_ZONE = 'America/New_York';
  * DST included" and this file already owns the only `Intl` fixpoint for it.
  */
 export const LONDON_ZONE = 'Europe/London';
-const SESSION_OPEN_MINUTES = 9 * 60 + 30; // 09:30 ET
-const SESSION_CLOSE_MINUTES = 16 * 60; // 16:00 ET
+// 09:30 ET
+const SESSION_OPEN_MINUTES = 9 * 60 + 30;
+// 16:00 ET
+const SESSION_CLOSE_MINUTES = 16 * 60;
 
 /**
  * Formatters are built once per zone and cached.
@@ -477,27 +479,47 @@ export function wallClockToInstant(
  */
 const US_HOLIDAYS = new Set([
   // 2026
-  '2026-01-01', // New Year's Day (Thursday)
-  '2026-01-19', // Martin Luther King, Jr. Day
-  '2026-02-16', // Washington's Birthday
-  '2026-04-03', // Good Friday
-  '2026-05-25', // Memorial Day
-  '2026-06-19', // Juneteenth (Friday)
-  '2026-07-03', // Independence Day observed — 4 July 2026 is a Saturday
-  '2026-09-07', // Labor Day
-  '2026-11-26', // Thanksgiving
-  '2026-12-25', // Christmas Day (Friday)
+  // New Year's Day (Thursday)
+  '2026-01-01',
+  // Martin Luther King, Jr. Day
+  '2026-01-19',
+  // Washington's Birthday
+  '2026-02-16',
+  // Good Friday
+  '2026-04-03',
+  // Memorial Day
+  '2026-05-25',
+  // Juneteenth (Friday)
+  '2026-06-19',
+  // Independence Day observed — 4 July 2026 is a Saturday
+  '2026-07-03',
+  // Labor Day
+  '2026-09-07',
+  // Thanksgiving
+  '2026-11-26',
+  // Christmas Day (Friday)
+  '2026-12-25',
   // 2027
-  '2027-01-01', // New Year's Day (Friday)
-  '2027-01-18', // Martin Luther King, Jr. Day
-  '2027-02-15', // Washington's Birthday
-  '2027-03-26', // Good Friday
-  '2027-05-31', // Memorial Day
-  '2027-06-18', // Juneteenth observed — 19 June 2027 is a Saturday
-  '2027-07-05', // Independence Day observed — 4 July 2027 is a Sunday
-  '2027-09-06', // Labor Day
-  '2027-11-25', // Thanksgiving
-  '2027-12-24', // Christmas Day observed — 25 December 2027 is a Saturday
+  // New Year's Day (Friday)
+  '2027-01-01',
+  // Martin Luther King, Jr. Day
+  '2027-01-18',
+  // Washington's Birthday
+  '2027-02-15',
+  // Good Friday
+  '2027-03-26',
+  // Memorial Day
+  '2027-05-31',
+  // Juneteenth observed — 19 June 2027 is a Saturday
+  '2027-06-18',
+  // Independence Day observed — 4 July 2027 is a Sunday
+  '2027-07-05',
+  // Labor Day
+  '2027-09-06',
+  // Thanksgiving
+  '2027-11-25',
+  // Christmas Day observed — 25 December 2027 is a Saturday
+  '2027-12-24',
 ]);
 
 /**
@@ -526,11 +548,15 @@ const US_HOLIDAYS = new Set([
  * Coverage and the `AlpacaEquitySessionCalendar` alternative (#684) are as
  * described on `US_HOLIDAYS`.
  */
-const US_EARLY_CLOSE_MINUTES = 13 * 60; // 13:00 ET
+// 13:00 ET
+const US_EARLY_CLOSE_MINUTES = 13 * 60;
 const US_EARLY_CLOSE_DAYS = new Set([
-  '2026-11-27', // Friday after Thanksgiving (Thanksgiving is 26 Nov 2026)
-  '2026-12-24', // Christmas Eve, a Thursday
-  '2027-11-26', // Friday after Thanksgiving (Thanksgiving is 25 Nov 2027)
+  // Friday after Thanksgiving (Thanksgiving is 26 Nov 2026)
+  '2026-11-27',
+  // Christmas Eve, a Thursday
+  '2026-12-24',
+  // Friday after Thanksgiving (Thanksgiving is 25 Nov 2027)
+  '2027-11-26',
 ]);
 
 /**
@@ -683,8 +709,10 @@ export class UsEquityRegularHoursCalendar implements TradingCalendar {
   }
 }
 
-const LSE_OPEN_MINUTES = 8 * 60; // 08:00 London
-const LSE_CLOSE_MINUTES = 16 * 60 + 30; // 16:30 London
+// 08:00 London
+const LSE_OPEN_MINUTES = 8 * 60;
+// 16:30 London
+const LSE_CLOSE_MINUTES = 16 * 60 + 30;
 /** Christmas Eve and New Year's Eve close early; the auction ends 12:30 */
 const LSE_HALF_DAY_CLOSE_MINUTES = 12 * 60 + 30;
 
@@ -717,32 +745,52 @@ const LSE_HALF_DAY_CLOSE_MINUTES = 12 * 60 + 30;
  */
 export const LSE_HOLIDAYS = new Set([
   // 2026
-  '2026-01-01', // New Year's Day
-  '2026-04-03', // Good Friday
-  '2026-04-06', // Easter Monday
-  '2026-05-04', // Early May bank holiday
-  '2026-05-25', // Spring bank holiday
-  '2026-08-31', // Summer bank holiday
-  '2026-12-25', // Christmas Day
-  '2026-12-28', // Boxing Day (substitute — 26th is a Saturday)
+  // New Year's Day
+  '2026-01-01',
+  // Good Friday
+  '2026-04-03',
+  // Easter Monday
+  '2026-04-06',
+  // Early May bank holiday
+  '2026-05-04',
+  // Spring bank holiday
+  '2026-05-25',
+  // Summer bank holiday
+  '2026-08-31',
+  // Christmas Day
+  '2026-12-25',
+  // Boxing Day (substitute — 26th is a Saturday)
+  '2026-12-28',
   // 2027
   '2027-01-01',
-  '2027-03-26', // Good Friday
-  '2027-03-29', // Easter Monday
+  // Good Friday
+  '2027-03-26',
+  // Easter Monday
+  '2027-03-29',
   '2027-05-03',
   '2027-05-31',
   '2027-08-30',
-  '2027-12-27', // Christmas Day substitute (25th is a Saturday)
-  '2027-12-28', // Boxing Day substitute
+  // Christmas Day substitute (25th is a Saturday)
+  '2027-12-27',
+  // Boxing Day substitute
+  '2027-12-28',
   // 2028
-  '2028-01-03', // New Year's Day substitute (1 January 2028 is a Saturday)
-  '2028-04-14', // Good Friday
-  '2028-04-17', // Easter Monday
-  '2028-05-01', // Early May bank holiday
-  '2028-05-29', // Spring bank holiday
-  '2028-08-28', // Summer bank holiday
-  '2028-12-25', // Christmas Day
-  '2028-12-26', // Boxing Day
+  // New Year's Day substitute (1 January 2028 is a Saturday)
+  '2028-01-03',
+  // Good Friday
+  '2028-04-14',
+  // Easter Monday
+  '2028-04-17',
+  // Early May bank holiday
+  '2028-05-01',
+  // Spring bank holiday
+  '2028-05-29',
+  // Summer bank holiday
+  '2028-08-28',
+  // Christmas Day
+  '2028-12-25',
+  // Boxing Day
+  '2028-12-26',
 ]);
 
 /**
@@ -798,8 +846,10 @@ export const LSE_HOLIDAYS_CHECKED_THROUGH = '2028-12-31';
  * actually stops this from reaching a live position.
  */
 export const LSE_HALF_DAYS = new Set([
-  '2026-12-24', // Christmas Eve
-  '2026-12-31', // New Year's Eve
+  // Christmas Eve
+  '2026-12-24',
+  // New Year's Eve
+  '2026-12-31',
   '2027-12-24',
   '2027-12-31',
   // 2028: no entries — 24 and 31 December 2028 both fall on a Sunday, so
@@ -996,9 +1046,9 @@ export class LseRegularHoursCalendar implements TradingCalendar {
 const MINUTES_PER_DAY = 24 * 60;
 
 /** 14:30 London — the US cash open, and the start of the overlap (#706) */
-export const OVERLAP_WINDOW_OPEN_MINUTES = 14 * 60 + 30;
+const OVERLAP_WINDOW_OPEN_MINUTES = 14 * 60 + 30;
 /** 15:45 London — last entry, leaving 40 minutes to the 16:25 flatten (#706) */
-export const OVERLAP_WINDOW_LAST_ENTRY_MINUTES = 15 * 60 + 45;
+const OVERLAP_WINDOW_LAST_ENTRY_MINUTES = 15 * 60 + 45;
 
 /**
  * A London wall-clock predicate for `SchedulerConfig.stocksTradingWindow`.

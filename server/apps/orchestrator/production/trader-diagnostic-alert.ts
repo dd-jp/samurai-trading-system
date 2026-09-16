@@ -113,7 +113,7 @@ export interface ObservedTraderDiagnostic {
  * calendar that cannot answer a question it exists to answer — and waiting for a
  * second one buys nothing except a later alert.
  */
-export const ALERT_AFTER_CONSECUTIVE_DIAGNOSTICS = 1;
+const ALERT_AFTER_CONSECUTIVE_DIAGNOSTICS = 1;
 
 /**
  * How often the alert repeats while the condition persists, counted in further
@@ -143,7 +143,7 @@ const DIAGNOSTIC_CADENCE = {
   every: ALERT_REPEAT_EVERY_DIAGNOSTICS,
 };
 
-export function shouldAlertAtDiagnosticCount(consecutive: number): boolean {
+function shouldAlertAtDiagnosticCount(consecutive: number): boolean {
   return escalatesAt(consecutive, DIAGNOSTIC_CADENCE);
 }
 

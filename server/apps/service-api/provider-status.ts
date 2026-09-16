@@ -54,12 +54,10 @@ import { fetchWithTimeout } from '../../shared/index.js';
  * into the client's TypeScript program — the opposite of the point.
  */
 export type {
-  AlpacaBalanceWire,
   AlpacaTile,
   PolygonTile,
   ProviderState,
   ProviderStatusPanel,
-  ProviderTile,
 } from '../../../contracts/index.js';
 
 // Imported as well as re-exported above: `export … from` publishes a name
@@ -110,7 +108,7 @@ export const NULL_PROVIDER_STATUS: ProviderStatusReader = {
  * tier's 5-requests/minute budget the moment anything ran alongside it, all
  * to answer a reachability tile whose answer changes approximately never.
  */
-export const DEFAULT_POLL_INTERVAL_MS = 15 * 60_000;
+const DEFAULT_POLL_INTERVAL_MS = 15 * 60_000;
 
 /** Per-probe network timeout. Well under the poll interval so probes cannot overlap. */
 const PROBE_TIMEOUT_MS = 10_000;

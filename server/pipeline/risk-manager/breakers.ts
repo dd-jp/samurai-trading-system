@@ -18,7 +18,7 @@ import { assertThresholdsWithinBounds } from '../../shared/index.js';
 import type { BreakerState, PersistedBreakerState, PortfolioView } from './types.js';
 
 /** Config for the per-asset-class volatility halt */
-export interface VolatilityBreakerConfig {
+interface VolatilityBreakerConfig {
   /** Baseline realized-vol reading per asset class, tuned in paper trading */
   baseline: { crypto: number; stocks: number };
   /** Current reading trips the halt once it exceeds baseline * multiplier */
@@ -31,7 +31,7 @@ export interface VolatilityBreakerConfig {
  * removed the human who used to call `reArm()` in live and paper, so a
  * recovery condition is the only thing that can clear a trip there.
  */
-export interface AutoReArmPolicy {
+interface AutoReArmPolicy {
   /**
    * Re-arm once drawdown_pct recovers back below this threshold. Must be
    * strictly below `BreakerConfig.max_drawdown_pct` — the constructor

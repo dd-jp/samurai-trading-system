@@ -100,7 +100,7 @@ export interface PortfolioAccountingInput {
 }
 
 /** See `PortfolioAccountingInput.unvaluable_marks` */
-export type UnvaluableMarkPolicy = 'refuse' | 'exclude';
+type UnvaluableMarkPolicy = 'refuse' | 'exclude';
 
 /**
  * Base for every reason `computePortfolioView` refuses to value a held

@@ -894,7 +894,7 @@ async function computeCurrentPortfolioAndBreakers(deps: BreakerStateDeps, clock:
 }
 
 /** One tick's exit valuation, and what it had to leave out to produce one (#841) */
-export interface ExitValuationDegradation {
+interface ExitValuationDegradation {
   /** The held instruments left unvalued — never empty when this object exists */
   unvalued_instruments: readonly string[];
   /** The strict refusal's own message, naming each dark instrument and why */
@@ -1048,12 +1048,12 @@ function reportExitValuationDegraded(
       stage: seam,
       event: 'exit_valuation_degraded',
       level: 'error',
+      // #826: a different condition, so a different line — the 'trader' arm
+      // is not about the rest of the book, it is about the exited name
+      // having no price of its own
       message:
         seam === 'trader'
-          ? // #826: a different condition, so a different line — this one is
-            // not about the rest of the book, it is about the exited name
-            // having no price of its own
-            `mandatory flatten sent with NO mark: ${instrument} — the flat-by-close exit went ` +
+          ? `mandatory flatten sent with NO mark: ${instrument} — the flat-by-close exit went ` +
             'out unpriced rather than being missed (ADR-0014)'
           : `exit valued on a partly-valued book: ${instrument} — ` +
             `${degradation.unvalued_instruments.length} held instrument(s) could not be valued`,
@@ -1100,7 +1100,7 @@ function reportExitValuationDegraded(
  * provider. `Pick` rather than a fresh interface so a change to the class's
  * signature still propagates here instead of quietly diverging.
  */
-export type CiiScoreSource = Pick<CiiConsumer, 'getScores'>;
+type CiiScoreSource = Pick<CiiConsumer, 'getScores'>;
 
 export interface RiskStepDeps extends BreakerStateDeps {
   config: RiskConfig;

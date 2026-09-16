@@ -1271,7 +1271,7 @@ describe('AlpacaBrokerAdapter since-floor invariant audit (#1123)', () => {
     const submitOcoOrder = vi
       .fn()
       .mockResolvedValue({ ...acceptedOrder(), id: 'rearm-venue-id', legs: [] });
-    const getOrderByClientOrderId = vi.fn().mockResolvedValue(null); // no prior to adopt
+    const getOrderByClientOrderId = vi.fn().mockResolvedValue(null);
     const violatingFill = {
       status: 'filled' as const,
       filled_qty: '100',
@@ -1504,7 +1504,7 @@ describe('AlpacaBrokerAdapter flatten sweep since-floor invariant audit (#1415)'
       getOrder: vi.fn().mockResolvedValue(
         acceptedOrder({
           id: 'flatten-1',
-          status: 'accepted', // stays 'submitted' so `flattens` is never pruned
+          status: 'accepted',
           filled_qty: '12',
           filled_avg_price: '99.50',
           filled_at: '2026-07-20T15:59:00Z',
@@ -2184,7 +2184,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
         filled_qty: '12',
         filled_avg_price: '99.50',
         filled_at: filledAt,
-        legs: [], // a flatten is a plain market order — no attached legs
+        legs: [],
       }),
     );
     const adapter = adapterWith(makeClient({ submitMarketOrder, getOrder }));
@@ -2572,7 +2572,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       // The re-arm happened in THIS process, so `rearmedLegs` already has
       // it — the fast, no-network-round-trip path
       await adapter.rearmProtectiveLegs('key-1', 'AAPL', 'buy', 6, 95, 110);
-      cancelOrder.mockClear(); // the rearm's own submit isn't a cancel call
+      cancelOrder.mockClear();
 
       await adapter.cancel('key-1', 'AAPL');
 
@@ -4030,7 +4030,7 @@ describe('AlpacaBrokerAdapter — flatten entry pruning (#524 review)', () => {
 
     await execution.execute(goDecision(aaplEntry));
     await execution.execute(goDecision(tslaEntry));
-    await execution.ingestFills(); // fills both entries — nothing to prune yet
+    await execution.ingestFills();
 
     const exitResult = await execution.execute(
       goDecision(

@@ -377,8 +377,11 @@ async function runLot(args: {
   await execution.ingestFills();
 
   const closed = await store.getClosedTrades();
-  expect(closed).toHaveLength(1);
-  return closed[0] as ClosedTrade;
+  const [trade] = closed;
+  if (closed.length !== 1 || trade === undefined) {
+    throw new Error(`runLot expected exactly one closed trade, got ${closed.length}`);
+  }
+  return trade;
 }
 
 /** The exact ClosedTrade the same tranches imply, in fixed-point */

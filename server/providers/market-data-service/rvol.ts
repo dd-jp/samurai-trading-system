@@ -100,7 +100,7 @@ import type { Bar } from './types.js';
 export const RVOL_SESSION_WINDOW = 10;
 
 /** Why `computeRvol` returned `null` instead of a ratio */
-export type RvolDegradedReason =
+type RvolDegradedReason =
   /** `calendar.sessionEnd(asOf) === null` — the venue has no session to anchor to (crypto) */
   | 'no_session_anchor'
   /** No bar in `bars` falls inside the current session yet */

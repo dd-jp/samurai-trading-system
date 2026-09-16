@@ -119,25 +119,14 @@
  * a follow-up manual/ops step (#245's still-open AC2/4/5).
  */
 
-export type { ConfigTrialLog } from './config-trial-log.js';
 export { InMemoryConfigTrialLog } from './config-trial-log.js';
-export type { RunCostAttribution, TradeCostAttribution } from './cost-attribution.js';
+export type { RunCostAttribution } from './cost-attribution.js';
 export {
   attributeRunCosts,
-  attributeTradeCost,
   GrossOfCostsTradeSource,
 } from './cost-attribution.js';
-export { CostModelImpl, DEFAULT_COST_FLOORS, SAXO_COMMISSION_RATE } from './cost-model.js';
-export type { EvalExecutorDeps } from './eval-executor.js';
+export { CostModelImpl, SAXO_COMMISSION_RATE } from './cost-model.js';
 export { EvalExecutorImpl } from './eval-executor.js';
-export type {
-  EvalExecutor,
-  EvalOptions,
-  EvalReport,
-  ReplayTradeSource,
-  SplitEval,
-} from './eval-types.js';
-export type { FreeStackAggregatesClientOptions } from './free-stack-aggregates-client.js';
 // `maxAlpacaPagesFor` is deliberately NOT re-exported for the same reason
 // `isCryptoSymbol` is not: it has no consumer outside its module
 // `isCryptoSymbol` is deliberately NOT re-exported: nothing outside this
@@ -145,82 +134,42 @@ export type { FreeStackAggregatesClientOptions } from './free-stack-aggregates-c
 // with no external consumer is dead surface. It stays exported from its own
 // file for its unit test, which is an in-module import
 export { FreeStackAggregatesClient } from './free-stack-aggregates-client.js';
-export type { HttpPolygonClientOptions } from './http-polygon-client.js';
-export { HttpPolygonClient, toPolygonTicker } from './http-polygon-client.js';
-export type { HttpTiingoClientOptions } from './http-tiingo-client.js';
-export { HttpTiingoClient, toTiingoCryptoTicker } from './http-tiingo-client.js';
-export type { LookaheadViolation } from './lookahead.js';
-export { LookaheadAuditor, LookaheadViolationError } from './lookahead.js';
+export { HttpPolygonClient } from './http-polygon-client.js';
+export { HttpTiingoClient } from './http-tiingo-client.js';
 export { computeMetrics } from './metrics.js';
-export { deflatedSharpe, minbtl, minbtlGuard, pbo } from './overfitting.js';
-export type { ProxySignal, ProxyStrategyConfig } from './proxy-strategy.js';
-export { proxySignal } from './proxy-strategy.js';
-export type {
-  ReplayBarSource,
-  ReplayDriverDeps,
-  ReplayInstrument,
-  ReplayRunResult,
-} from './replay-driver.js';
-export { DEFAULT_FLATTEN_BEFORE_CLOSE_MS, ReplayDriver } from './replay-driver.js';
-export type { SplitOptions, SplitScheme } from './splits.js';
-export { generateSplits } from './splits.js';
+export { minbtl } from './overfitting.js';
+export type { ReplayRunResult } from './replay-driver.js';
+export { ReplayDriver } from './replay-driver.js';
 export { SqliteStage2SelectionStore } from './sqlite-stage2-selection-store.js';
 export type {
   PolygonAggregate,
   PolygonClient,
-  Stage2HistoricalStoreOptions,
 } from './stage2-historical-store.js';
 export { DEFAULT_STAGE2_TIMEFRAME, Stage2HistoricalStore } from './stage2-historical-store.js';
 export { type Stage2Selection, selectionsFrom } from './stage2-selection.js';
+export type { Stage2Verdict } from './stage2-verdict.js';
+export { killLineChecks, renderStage2Verdict } from './stage2-verdict.js';
 export type {
-  ConfigKillLineCheck,
-  DsrOutcome,
-  DsrResult,
-  NotComputableReason,
-  PboOutcome,
-  Stage2Verdict,
-} from './stage2-verdict.js';
-export { KILL_LINE, killLineChecks, renderStage2Verdict } from './stage2-verdict.js';
-export type { SeriesOptions } from './trade-derivation.js';
-export { assertCostModelPriced, toReturnSeries, toTradeSeries } from './trade-derivation.js';
-export type {
-  CscvOutcome,
-  ReplayRunner,
   TrialGridAssetClass,
-  TrialGridEntry,
   TrialGridResult,
-  TrialGridRunDeps,
 } from './trial-execution.js';
 export {
-  buildTrialGrid,
   CRYPTO_PERIODS_PER_YEAR,
   periodsPerYearFor,
   runTrialGrid,
   STOCK_PERIODS_PER_YEAR,
-  sizeTrialGridToSample,
-  type TrialGridSizing,
 } from './trial-execution.js';
 export type {
-  AssetClassCostConfig,
-  BacktestReport,
   CostBreakdown,
   CostConfig,
-  CostFloors,
   CostModel,
-  CostModelResult,
   CostVenue,
   FillRequest,
   MarketState,
-  ReplayTimeline,
 } from './types.js';
-export type { DateRange, InstrumentListing, InstrumentRegistry } from './universe.js';
-export { assertSurvivorshipFree, SurvivorshipViolationError } from './universe.js';
+export type { DateRange } from './universe.js';
 export type {
   MetricsSuite,
-  MinBtlVerdict,
-  PboVerdict,
   ReturnSeries,
-  Split,
-  Trade,
   TradeSeries,
 } from './validation-types.js';

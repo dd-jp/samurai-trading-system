@@ -36,7 +36,7 @@ import { createServer } from 'node:net';
  * Node's own `EADDRINUSE` error naming the port, not as an unexplained e2e
  * test failure — exactly the confusion #1298 exists to remove.
  */
-export function acquireFreePort(host: string): Promise<number> {
+function acquireFreePort(host: string): Promise<number> {
   return new Promise((resolve, reject) => {
     const probe = createServer();
     probe.once('error', reject);

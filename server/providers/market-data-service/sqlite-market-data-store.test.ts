@@ -62,7 +62,7 @@ describe('SqliteMarketDataStore.readBars', () => {
       bar('2026-07-15T08:00:00Z', 90),
       bar('2026-07-15T09:00:00Z', 100),
       bar('2026-07-15T10:00:00Z', 110),
-      bar('2026-07-15T11:00:00Z', 120), // after asOf — excluded
+      bar('2026-07-15T11:00:00Z', 120),
     ]);
 
     const bars = store.readBars(INSTRUMENT, TIMEFRAME, new Date('2026-07-15T10:00:00Z'), 2);

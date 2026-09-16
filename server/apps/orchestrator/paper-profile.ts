@@ -349,8 +349,8 @@ export const PAPER_PROFILE_PROVENANCE = {
  * the cap this profile ships. See `capDial` for why the ceiling is the shipped
  * value and the floor is not zero.
  */
-export const PAPER_RISK_THRESHOLD_FLOOR_FRACTION = 0.25;
-export const PAPER_RISK_THRESHOLD_STEP_FRACTION = 0.1;
+const PAPER_RISK_THRESHOLD_FLOOR_FRACTION = 0.25;
+const PAPER_RISK_THRESHOLD_STEP_FRACTION = 0.1;
 
 /**
  * The six notional caps, as FRACTIONS OF EQUITY (#886) — resolved against
@@ -489,7 +489,7 @@ export const LIVE_BOOK_SIZING_USD = LIVE_BOOK_GBP * SIZING_USD_PER_GBP;
  * may drift from a number the operator declared, not a risk parameter the
  * loop has any business tuning.
  */
-export const D5_BOOK_REFUSE_ABOVE_TOLERANCE = 0.05;
+const D5_BOOK_REFUSE_ABOVE_TOLERANCE = 0.05;
 
 /**
  * ADR-0018 D5 — max deployment per subclass, as a fraction of the EQUITY LEG.

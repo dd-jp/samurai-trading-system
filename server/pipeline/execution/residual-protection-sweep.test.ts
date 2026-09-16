@@ -324,7 +324,7 @@ describe('residual-protection sweep (#549)', () => {
     await store.markResidualUnprotected(LOT, NOW);
 
     const restartedStore = new TestExecutionStore(db);
-    const broker = new SweepBroker(); // resolves = adopted-or-placed, either way confirmed
+    const broker = new SweepBroker();
     const execution = new ExecutionImpl(makeInput(broker, restartedStore));
     const result = await execution.sweepResidualProtection();
 

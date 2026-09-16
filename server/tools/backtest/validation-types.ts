@@ -41,7 +41,7 @@ export interface ReturnSeries {
 }
 
 /** One closed round-trip. The trade record the trade-derived metrics read. */
-export interface Trade {
+interface Trade {
   instrument: string;
   /**
    * Realized PnL in account currency, **net of costs** — the cost model has

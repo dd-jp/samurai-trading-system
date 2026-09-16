@@ -305,11 +305,11 @@ export class SqliteDailyEquityMetricsSource implements DailyMetricsSource {
       const anyFresh = selections.some(
         (selection) => now.getTime() - selection.selected_at.getTime() <= this.stage2MaxAgeMs,
       );
+      // Both statistics are required: the snapshot's shape has no room for
+      // "PBO was refused", and a zero would read as a perfect result
       this.noteInert(
         anyFresh
-          ? // Both statistics are required: the snapshot's shape has no room for
-            // "PBO was refused", and a zero would read as a perfect result
-            'the persisted Stage 2 selection refused to compute PBO or DSR, so no honest ' +
+          ? 'the persisted Stage 2 selection refused to compute PBO or DSR, so no honest ' +
               'revalidation snapshot exists'
           : `every persisted Stage 2 selection is older than ${
               this.stage2MaxAgeMs / MS_PER_DAY

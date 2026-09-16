@@ -87,7 +87,7 @@ describe('computeSessionVwap', () => {
     expect(sessionStart.toISOString()).toBe('2026-07-14T20:00:00.000Z');
 
     const priorSessionBar = bar(new Date('2026-07-14T19:55:00Z'), {
-      close: 999, // before sessionStart — would blow up the average if wrongly included
+      close: 999,
       volume: 1_000_000,
     });
     const inSessionBars = [
@@ -105,8 +105,8 @@ describe('computeSessionVwap', () => {
 
   it('returns null when no bar in the window falls inside the current session yet', () => {
     const calendar = new LseRegularHoursCalendar();
-    const asOf = new Date('2026-07-15T08:05:00Z'); // just after 08:00 London open
-    const staleBars = [bar(new Date('2026-07-14T15:00:00Z'))]; // yesterday's session
+    const asOf = new Date('2026-07-15T08:05:00Z');
+    const staleBars = [bar(new Date('2026-07-14T15:00:00Z'))];
 
     const result = computeSessionVwap(staleBars, calendar, asOf);
 

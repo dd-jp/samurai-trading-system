@@ -22,7 +22,7 @@ import type {
 } from '../../contracts/index.ts';
 
 /** Recorded gap between the settled stages below — arbitrary but deterministic */
-export const STAGE_GAP_MS = 20_000;
+const STAGE_GAP_MS = 20_000;
 
 /**
  * The settled trace this suite replays: recorded rows for five of the six

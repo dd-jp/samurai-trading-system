@@ -5,7 +5,6 @@
  */
 import type {
   Clock,
-  ClosedTrade,
   ClosedTradeStore,
   DebateLogStore,
   SetupStore,
@@ -79,17 +78,4 @@ export interface DailyCycleResult {
 export interface OnTradeCloseInput {
   /** The cosine setup store FL owns and labels on trade close */
   setup_store: SetupStore;
-}
-
-/** Single test seam. Deterministic given its clock-scoped inputs. */
-export interface FeedbackLoop {
-  runDailyCycle(input: DailyCycleInput): DailyCycleResult;
-  /**
-   * Event-driven R-labelling of the setup store (#92). `trace_id` is the
-   * correlation id of the tick that produced this trade close (spec's Key
-   * Interfaces note: this is the one FL entry point tied to a single trace,
-   * unlike the daily-batch methods) — threaded for future audit-log wiring,
-   * not consumed by the labelling logic itself.
-   */
-  onTradeClose(trade: ClosedTrade, trace_id: string, input: OnTradeCloseInput): void;
 }

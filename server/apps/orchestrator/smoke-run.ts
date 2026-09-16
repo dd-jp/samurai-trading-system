@@ -400,7 +400,7 @@ export const SMOKE_GDELT_EXPECTED_ROWS = SMOKE_GDELT_SEEDED_ROWS + 1;
  * calendar gate and a stock leg would make the whole gate hostage to US
  * market hours.
  */
-export const SMOKE_GDELT_ASSET_CLASSES: readonly AssetClass[] = [
+const SMOKE_GDELT_ASSET_CLASSES: readonly AssetClass[] = [
   ...new Set(SMOKE_TEST_UNIVERSE.map((instrument) => instrument.asset_class)),
 ];
 
@@ -1008,7 +1008,7 @@ const EXIT_PATH_SESSION_CALENDARS: Record<AssetClass, TradingCalendar> = {
  * broker, should therefore produce zero of these, ever — see
  * `evaluateSmokeGate`'s check for the reasoning this feeds.
  */
-export class RecordingResidualExposureAlertChannel implements ResidualExposureAlertChannel {
+class RecordingResidualExposureAlertChannel implements ResidualExposureAlertChannel {
   readonly alerts: ResidualExposureAlert[] = [];
 
   constructor(private readonly inner?: ResidualExposureAlertChannel) {}
@@ -1026,7 +1026,7 @@ export class RecordingResidualExposureAlertChannel implements ResidualExposureAl
  * shape `RecordingResidualExposureAlertChannel` above already establishes for
  * a different escalation
  */
-export class RecordingFlattenReconcileAlertChannel implements FlattenReconcileAlertChannel {
+class RecordingFlattenReconcileAlertChannel implements FlattenReconcileAlertChannel {
   readonly alerts: FlattenReconcileAlert[] = [];
 
   async postFlattenReconcileAlert(alert: FlattenReconcileAlert): Promise<void> {
@@ -1049,7 +1049,7 @@ const FILL_SYNC_FAILURE_MESSAGES = [
   FILL_SYNC_SWEEP_FAILED,
 ] as const;
 
-export type FillSyncFailureMessage = (typeof FILL_SYNC_FAILURE_MESSAGES)[number];
+type FillSyncFailureMessage = (typeof FILL_SYNC_FAILURE_MESSAGES)[number];
 
 function isFillSyncFailureMessage(message: string): message is FillSyncFailureMessage {
   return (FILL_SYNC_FAILURE_MESSAGES as readonly string[]).includes(message);
@@ -1080,7 +1080,7 @@ export interface FillSyncFailureEvidence {
  * a poll rejection. A future scripted fault that DOES reject a poll gets
  * named here, by its identifier, rather than lifting the gate's count.
  */
-export const TOLERATED_FILL_SYNC_FAILURES: readonly string[] = [];
+const TOLERATED_FILL_SYNC_FAILURES: readonly string[] = [];
 
 /**
  * The rejections the gate fails on: every recorded failure whose `error`
@@ -1285,7 +1285,7 @@ function payloadError(payload: unknown): string {
  * fixture, not a general-purpose adapter; a caller with a different need
  * must not assume this method is trustworthy here.
  */
-export class ExitPathBrokerAdapter implements BrokerAdapter {
+class ExitPathBrokerAdapter implements BrokerAdapter {
   /** Every `cancel`/`submitBracket`/`submitFlatten`/`rearmProtectiveLegs` call, in call order */
   readonly callSequence: string[] = [];
   private readonly partialFlattenFraction = new Map<string, number>();
@@ -3280,7 +3280,7 @@ function runLogRetentionScenario(): LogRetentionEvidence {
     ]) {
       writeFileSync(path, 'line\n');
     }
-    writeFileSync(soakBootPath, 'x'.repeat(17 * 1024 * 1024)); // > 16 MiB
+    writeFileSync(soakBootPath, 'x'.repeat(17 * 1024 * 1024));
 
     const oldSeconds = (Date.now() - 40 * oneDayMs) / 1000;
     const recentSeconds = (Date.now() - oneDayMs) / 1000;
@@ -3538,7 +3538,7 @@ function readLogLines(filePath: string): { message: string; payload?: unknown }[
 }
 
 /** One tick's audit trail: the stages it reached and what each decided */
-export interface SmokeTick {
+interface SmokeTick {
   trace_id: string;
   stages: { stage: string; decision: string }[];
 }
@@ -3705,7 +3705,7 @@ export interface SmokeObservations {
 }
 
 /** Reads everything the gate and the report need, in one pass over the store */
-export function readSmokeObservations(
+function readSmokeObservations(
   db: StoreHandle,
   miArchive?: MiArchiveStore,
   marketIntelligence?: MarketIntelligenceStore,
@@ -3922,7 +3922,7 @@ function makeExitProbeInput(overrides: Partial<OrderIntent> = {}) {
  * silently stopped enforcing anything at all.
  */
 function probeExitBypassesLiveClamp(riskConfig: RiskConfig): boolean {
-  const badThresholds = { getRiskThresholds: () => ({ max_pbo: 0.5 }) }; // bound: max 0.05
+  const badThresholds = { getRiskThresholds: () => ({ max_pbo: 0.5 }) };
   const manager = new RiskManagerImpl(riskConfig, badThresholds);
 
   let exitApproved = false;
@@ -5597,7 +5597,7 @@ export interface RiskCriticEvidence {
  * state; the state is measured from the same fixture feed the rest of the run
  * uses.
  */
-export class SmokeLlmClient implements LlmClient {
+class SmokeLlmClient implements LlmClient {
   readonly #debate = new ConstantResponseLlmClient();
 
   get calls(): number {
@@ -5919,13 +5919,13 @@ function readSmokeConditionStates(stored: string | null): string[] {
 }
 
 /** What the six-stage run was asked to do, and whether it stayed offline while doing it */
-export interface TickLoopEvidence {
+interface TickLoopEvidence {
   minTicks: number;
   alpacaWireClientReached: boolean;
 }
 
 /** #1140 / #1196 — the LLM cap as the dashboard reads it, beside the budget this run armed */
-export interface LlmSpendCapEvidence {
+interface LlmSpendCapEvidence {
   publishedCapUsd: number | null;
   configuredBudgetUsd: number | undefined;
   capArmedAt: string | null;
@@ -5978,10 +5978,10 @@ export interface SmokeEvidence {
   marketDataFetch: MarketDataFetchEvidence;
 }
 
-export type ProbeId = keyof SmokeEvidence;
+type ProbeId = keyof SmokeEvidence;
 
 /** What `runSmoke` has in hand once the tick loop has stopped and drained */
-export interface ProbeRunContext {
+interface ProbeRunContext {
   db: StoreHandle;
   clock: SimulatedClock;
   profile: ReturnType<typeof paperStartingProfile>;
@@ -5995,7 +5995,7 @@ export interface ProbeRunContext {
   marketDataFetch: MarketDataFetchRecorder;
 }
 
-export interface VerdictContext<After extends ProbeId> {
+interface VerdictContext<After extends ProbeId> {
   /** The six-stage run's readback — the substrate every probe's verdict may read against */
   observations: SmokeObservations;
   prior: Pick<SmokeEvidence, After>;
@@ -6015,7 +6015,7 @@ export interface VerdictContext<After extends ProbeId> {
  * `verdict`; they must precede it in `PROBE_RUN_ORDER`, which `runProbes`
  * checks before calling `run`.
  */
-export interface Probe<Id extends ProbeId, After extends ProbeId = never> {
+interface Probe<Id extends ProbeId, After extends ProbeId = never> {
   after?: readonly After[];
   run(
     ctx: ProbeRunContext,

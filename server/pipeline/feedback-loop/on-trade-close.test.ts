@@ -83,7 +83,7 @@ describe.each(STORE_IMPLEMENTATIONS)('onTradeClose (%s)', (_name, makeStore) => 
       entry: 100,
       stop: 90,
       filled_size: 10,
-      realized_pnl_net: 200, // R = 2
+      realized_pnl_net: 200,
       closed_at: new Date('2026-07-02T10:00:00Z'),
     });
     const secondLot = makeTrade({
@@ -92,7 +92,7 @@ describe.each(STORE_IMPLEMENTATIONS)('onTradeClose (%s)', (_name, makeStore) => 
       entry: 105,
       stop: 95,
       filled_size: 5,
-      realized_pnl_net: -25, // initial risk = 50, R = -0.5
+      realized_pnl_net: -25,
       closed_at: new Date('2026-07-02T11:00:00Z'),
     });
 

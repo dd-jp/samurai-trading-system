@@ -31,7 +31,7 @@ export interface FlattenSplitInput {
 }
 
 /** What one raw fill became — the dedup ids it attributed and the quantity it could not place */
-export interface RawFillOutcome {
+interface RawFillOutcome {
   rawFill: NormalizedFill;
   attributed: readonly { idempotency_key: string; broker_fill_id: BrokerFillId }[];
   /** `> 0` means the venue filled more than the named lots held when the flatten was submitted */

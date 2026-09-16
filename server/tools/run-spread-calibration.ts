@@ -98,7 +98,7 @@ interface AlpacaQuote {
 }
 
 /** One symbol's fitted result */
-export interface SymbolSpreadStats {
+interface SymbolSpreadStats {
   symbol: string;
   asset_class: 'crypto' | 'stocks';
   days_sampled: number;
@@ -114,7 +114,7 @@ export interface SymbolSpreadStats {
   p90_spread_over_atr: number;
 }
 
-export interface SpreadCalibration {
+interface SpreadCalibration {
   symbols: SymbolSpreadStats[];
   /** Fitted `spreadVolatilityCoefficient`, per asset class, from the medians */
   fitted: { stocks: number; crypto: number };
@@ -248,7 +248,7 @@ function atrAt(bars: readonly Bar[], at: Date, timeframe: string): number | unde
   return value > 0 ? value : undefined;
 }
 
-export interface SpreadCalibrationDeps {
+interface SpreadCalibrationDeps {
   window?: DateRange;
   sampleDays?: number;
   dbPath?: string;
@@ -391,7 +391,7 @@ function printFittedCoefficients(
   print(`  crypto: ${fitted.crypto.toFixed(4)}   (fixture: 0.5)`);
 }
 
-export async function runSpreadCalibration(
+async function runSpreadCalibration(
   deps: SpreadCalibrationDeps = {},
 ): Promise<SpreadCalibration> {
   const print = deps.print ?? console.log;
@@ -445,7 +445,7 @@ export async function runSpreadCalibration(
  * The INTRADAY resolution this calibration fits, and the one an intraday
  * Stage 2 run replays (`STAGE2_TIMEFRAME=1m STAGE2_SOURCE=free-stack`)
  */
-export const INTRADAY_CALIBRATION_TIMEFRAME = '1m';
+const INTRADAY_CALIBRATION_TIMEFRAME = '1m';
 
 /**
  * The window the intraday fit samples across — the same one an intraday Stage 2
@@ -481,7 +481,7 @@ export const SESSION_BUCKETS = [
   { name: 'close', minutesAfterOpen: 385 },
 ] as const;
 
-export type SessionBucketName = (typeof SESSION_BUCKETS)[number]['name'];
+type SessionBucketName = (typeof SESSION_BUCKETS)[number]['name'];
 
 /** Length of the US equity regular session */
 const SESSION_MINUTES = 390;
@@ -501,7 +501,7 @@ export function bucketSampleEnd(date: Date, minutesAfterOpen: number): Date {
 }
 
 /** One (symbol, bucket) cell of the intraday fit */
-export interface IntradayBucketStats {
+interface IntradayBucketStats {
   bucket: SessionBucketName;
   samples: number;
   quotes_sampled: number;
@@ -510,7 +510,7 @@ export interface IntradayBucketStats {
   p90_spread_over_atr: number;
 }
 
-export interface IntradaySymbolStats {
+interface IntradaySymbolStats {
   symbol: string;
   buckets: IntradayBucketStats[];
   /** Pooled across buckets — the per-symbol figure the fit is taken from */
@@ -521,7 +521,7 @@ export interface IntradaySymbolStats {
   samples: number;
 }
 
-export interface IntradaySpreadCalibration {
+interface IntradaySpreadCalibration {
   timeframe: string;
   symbols: IntradaySymbolStats[];
   /**
@@ -535,7 +535,7 @@ export interface IntradaySpreadCalibration {
   p90_stocks: number;
 }
 
-export interface IntradaySpreadCalibrationDeps {
+interface IntradaySpreadCalibrationDeps {
   window?: DateRange;
   sampleDays?: number;
   print?: (line: string) => void;
@@ -758,7 +758,7 @@ function printIntradayFitted(
   );
 }
 
-export async function runIntradaySpreadCalibration(
+async function runIntradaySpreadCalibration(
   deps: IntradaySpreadCalibrationDeps = {},
 ): Promise<IntradaySpreadCalibration> {
   const print = deps.print ?? console.log;

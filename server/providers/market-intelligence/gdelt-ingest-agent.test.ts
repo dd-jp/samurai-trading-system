@@ -182,8 +182,9 @@ describe('GdeltIngestAgent', () => {
       'store (#713 item 5)',
     async () => {
       const archive = new MiArchiveStore();
-      archive.close(); // Simulates shutdown racing a stray poll: the store is
-      // already closed by the time `effectiveCursor()` reads it
+      // Simulates shutdown racing a stray poll: the store is already closed
+      // by the time `effectiveCursor()` reads it
+      archive.close();
       const logger = collectingLogger();
       const client = stubClient({});
       const agent = new GdeltIngestAgent({ archive, client, clock, logger });

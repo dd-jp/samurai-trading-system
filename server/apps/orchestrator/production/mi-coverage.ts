@@ -69,7 +69,7 @@ export function subclassFor(
  * separately-tunable number a coverage check and the analysts could disagree
  * about
  */
-export const COVERAGE_WINDOW_MS = 24 * 60 * 60 * 1000;
+const COVERAGE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /** The counter name behind every `MiCoverageTelemetry.noDataObserved` call, keyed by instrument */
 export const MI_NO_DATA_BY_NAME_COUNTER = 'mi_no_data_by_name';
@@ -139,7 +139,7 @@ export function hasCoverageFor(context: MarketContext, instrument: string): bool
 }
 
 /** Alert on the first miss, like `TraderDiagnosticThrottle` (#698) — every kind here is a gap that should not persist */
-export const ALERT_AFTER_CONSECUTIVE_NO_DATA = 1;
+const ALERT_AFTER_CONSECUTIVE_NO_DATA = 1;
 
 /**
  * How often the alert repeats while the gap persists, counted in further
@@ -147,7 +147,7 @@ export const ALERT_AFTER_CONSECUTIVE_NO_DATA = 1;
  * as `ALERT_REPEAT_EVERY_SKIPS`/`ALERT_REPEAT_EVERY_DIAGNOSTICS`: loud once,
  * not flooding the escalation chat every tick
  */
-export const ALERT_REPEAT_EVERY_NO_DATA = 8;
+const ALERT_REPEAT_EVERY_NO_DATA = 8;
 
 const NO_DATA_CADENCE = {
   after: ALERT_AFTER_CONSECUTIVE_NO_DATA,

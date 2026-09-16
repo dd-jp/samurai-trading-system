@@ -266,7 +266,7 @@ function arOne(phi: number, length: number): number[] {
   };
 
   for (let t = 0; t < length; t++) {
-    const noise = 0.004 * (rand() - 0.5); // zero-mean, bounded
+    const noise = 0.004 * (rand() - 0.5);
     const value = phi * previous + noise;
     returns.push(value);
     previous = value;

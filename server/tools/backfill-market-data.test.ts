@@ -211,10 +211,10 @@ describe('backfillMarketData', () => {
   it('never double-writes a bar on re-run — appendBars is INSERT OR IGNORE on the PK', async () => {
     const { deps, store } = buildDeps();
     await backfillMarketData(deps);
-    await backfillMarketData(deps); // re-run, should be a no-op fetch-wise (idempotent test above) and a no-op write-wise here
+    await backfillMarketData(deps);
 
     const rows = store.readBars('QQQ', '1h', ASOF, 1000);
-    expect(rows).toHaveLength(HOURLY_WARM_START); // not twice that
+    expect(rows).toHaveLength(HOURLY_WARM_START);
   });
 
   it('reports first bar / last bar / row count per (instrument, timeframe)', async () => {
@@ -244,7 +244,7 @@ describe('backfillMarketData', () => {
       universe: [{ asset: 'SPY', asset_class: 'stocks' }] satisfies UniverseInstrument[],
       windows: [{ timeframe: '1h', lookback: 20 }],
       asOf: ASOF,
-      fetchEquityBars: async (symbol, window, at) => generateBars(symbol, window.timeframe, at, 5), // short
+      fetchEquityBars: async (symbol, window, at) => generateBars(symbol, window.timeframe, at, 5),
       print: () => {},
     });
 
@@ -409,7 +409,7 @@ describe('backfillMarketData', () => {
   });
 
   it("reports the source of the most recently stored bar per pair (#496) — 'surface which one served'", async () => {
-    const { deps } = buildDeps(); // generateBars stamps source: 'fixture'
+    const { deps } = buildDeps();
     const coverage = await backfillMarketData(deps);
 
     const qqq1h = coverage.find((row) => row.instrument === 'QQQ' && row.timeframe === '1h');

@@ -1159,7 +1159,7 @@ async function buildFlattenExit(
  * `null` on any outcome that is not a skip: an emitted order has nothing to
  * classify.
  */
-export type TraderDecisionClass = 'declined_on_signal' | 'could_not_decide' | 'input_unusable';
+type TraderDecisionClass = 'declined_on_signal' | 'could_not_decide' | 'input_unusable';
 
 /**
  * The BASELINE classification for every `TraderSkipReason`, before
@@ -1199,7 +1199,8 @@ const SKIP_REASON_CLASS: Record<TraderSkipReason, TraderDecisionClass> = {
   flatten_in_flight: 'declined_on_signal',
   early_exit_signal_unavailable: 'input_unusable',
   no_position_side: 'input_unusable',
-  atr_insufficient_bars: 'input_unusable', // benign warm-up, not corruption — see the class doc above
+  // benign warm-up, not corruption — see the class doc above
+  atr_insufficient_bars: 'input_unusable',
   atr_not_finite: 'input_unusable',
   mark_not_finite: 'input_unusable',
   stop_distance_not_positive: 'input_unusable',

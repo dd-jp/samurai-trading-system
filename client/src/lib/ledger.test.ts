@@ -21,14 +21,14 @@ describe('updateLedger — first-paint seeding', () => {
       }),
     ]);
     const state = updateLedger(createLedger(), next);
-    expect(state.entries.map((e) => e.trace_id)).toEqual(['stop-1', 'go-1']); // newest first
+    expect(state.entries.map((e) => e.trace_id)).toEqual(['stop-1', 'go-1']);
     expect(state.entries[0]).toMatchObject({
       instrument: 'ETH-USD',
       outcome: 'stopped',
       final_stage: 'risk',
       settled_at: at(13_000),
     });
-    expect(state.entries[1]?.settled_at).toBe(at(6_000)); // execution's recorded_at
+    expect(state.entries[1]?.settled_at).toBe(at(6_000));
   });
 
   it('does not seed in-flight or idle lanes', () => {

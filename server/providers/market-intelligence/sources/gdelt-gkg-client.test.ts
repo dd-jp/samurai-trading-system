@@ -287,7 +287,7 @@ describe('GdeltGkgClient — batch decoding', () => {
     // line averages 14.9KB, almost all of it V2ENHANCED* columns nothing reads
     // — ~4.0GB across a 14-day soak. The projection is ~1.1KB a row.
     const wide = STOCK_ROW.split('\t');
-    wide[20] = 'x'.repeat(4096); // a V2ENHANCED* column, the bulk of a real row
+    wide[20] = 'x'.repeat(4096);
     const client = new GdeltGkgClient({
       fetchImpl: stubFetch({ lastupdate: LASTUPDATE, archive: zipOf(wide.join('\t')) }),
     });
@@ -323,7 +323,7 @@ describe('GdeltGkgClient — batch decoding', () => {
 
   it('refuses an unsupported compression method rather than emitting garbage', async () => {
     const zip = zipOf(STOCK_ROW);
-    zip.writeUInt16LE(12, 8); // bzip2
+    zip.writeUInt16LE(12, 8);
     const client = new GdeltGkgClient({
       fetchImpl: stubFetch({ lastupdate: LASTUPDATE, archive: zip }),
     });
@@ -359,8 +359,8 @@ describe('GdeltGkgClient — batch decoding', () => {
     const header = Buffer.alloc(30);
     header.writeUInt32LE(0x04034b50, 0);
     header.writeUInt16LE(20, 4);
-    header.writeUInt16LE(0, 8); // stored
-    header.writeUInt32LE(body.length + 5_000, 18); // declares more than is present
+    header.writeUInt16LE(0, 8);
+    header.writeUInt32LE(body.length + 5_000, 18);
     header.writeUInt16LE(name.length, 26);
     header.writeUInt16LE(0, 28);
     const client = new GdeltGkgClient({

@@ -158,7 +158,7 @@ describe('checkLlmFailureRate', () => {
     const { channel, posted } = capturingChannel();
     await checkLlmFailureRate(
       {
-        windowSource: fixedSource({ llm_failure: 1, total: 1 }), // 1.0, but n=1
+        windowSource: fixedSource({ llm_failure: 1, total: 1 }),
         monitor: new LlmFailureRateMonitor(),
         alertChannel: channel,
         logger: undefined,

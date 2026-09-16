@@ -704,7 +704,13 @@ export function Rail(props: RailProps) {
   // caught by the compiler rather than falling through to the healthy
   // branch by default. `mismatched` above stays a literal check because it
   // drives ONLY this state's own visual styling (`rail-mismatch`,
-  // `data-contract-mismatch`), not the six tiles' render gate
+  // `data-contract-mismatch`), not the six tiles' render gate. While it is
+  // false none of the six tiles may compute a reading off `snapshot` — the
+  // wire shape underneath it is exactly what is in question during a
+  // contract mismatch, and rendering as usual is how #1316 itself
+  // happened (`AlertDeliveryBlock`'s `?? 0` reading an absent field as a
+  // healthy zero). `MismatchBlock` replaces each with an explicit "unknown"
+  // tile instead of hiding it — see that component's doc comment
   const renderHealthTiles = HEALTH[status].rendersHealthTiles;
   const onTabKey = (event: React.KeyboardEvent<HTMLDivElement>) => {
     const next = tabForKey(event.key, tab);
@@ -757,18 +763,6 @@ export function Rail(props: RailProps) {
           ))}
         </div>
       </nav>
-      {/*
-       * Six health-derived tiles below, each gated on `renderHealthTiles`
-       * (`HEALTH[status].rendersHealthTiles`, not a literal `status` check —
-       * see that field's doc comment): whenever the current `FeedStatus`
-       * says it must not, none of them may compute a reading off `snapshot`
-       * — the wire shape underneath it is exactly what is in question during
-       * a contract mismatch, and rendering as usual is how #1316 itself
-       * happened (`AlertDeliveryBlock`'s `?? 0` reading an absent field as a
-       * healthy zero). `MismatchBlock` replaces each with an explicit
-       * "unknown" tile instead of hiding it — see that component's doc
-       * comment.
-       */}
       <div className="rail-status">
         <HealthBlock feed={feed} />
         {renderHealthTiles ? (
@@ -804,10 +798,10 @@ export function Rail(props: RailProps) {
       </div>
       <div className="rail-foot mono muted" data-field="snapshot-clock">
         <span>snapshot {formatClockUtc(snapshot.as_of)}</span>
-        {/* Not a duplicate of HealthBlock's visible "polled" note: this one
-            renders in every health state, so it still reaches a screen reader
-            once the visible note has switched to STALE's "last update" line */}
         {lastSuccessAt !== null && (
+          // Not a duplicate of HealthBlock's visible "polled" note: this one
+          // renders in every health state, so it still reaches a screen reader
+          // once the visible note has switched to STALE's "last update" line
           <span className="visually-hidden">
             Last successful poll {formatClockUtc(lastSuccessAt)}
           </span>

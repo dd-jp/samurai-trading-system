@@ -74,7 +74,7 @@ function stubFetchWithTiming(
   timing: { headerDelayMs: number; bodyDelayMs: number },
 ) {
   const fetchMock = vi.fn(async () => {
-    vi.advanceTimersByTime(timing.headerDelayMs); // time to headers
+    vi.advanceTimersByTime(timing.headerDelayMs);
     const response = new Response(JSON.stringify(body), { status: 200, statusText: 'OK' });
     const originalJson = response.json.bind(response);
     // `Response.json` is a read-only property in the ambient fetch types, so
@@ -83,7 +83,7 @@ function stubFetchWithTiming(
     // without needing a cast to route around the readonly check
     Object.defineProperty(response, 'json', {
       value: async () => {
-        vi.advanceTimersByTime(timing.bodyDelayMs); // additional time to read the body
+        vi.advanceTimersByTime(timing.bodyDelayMs);
         return originalJson();
       },
     });

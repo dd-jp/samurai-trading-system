@@ -167,7 +167,7 @@ describe('LoggingVerdict.decide', () => {
     const verdict = new LoggingVerdict(new VerdictImpl(), store);
     const input = makeInput({
       risk_decision: makeRiskDecision({
-        order_intent: makeIntent({ decided_at: new Date('2026-07-15T13:00:00Z') }), // stale
+        order_intent: makeIntent({ decided_at: new Date('2026-07-15T13:00:00Z') }),
       }),
     });
 

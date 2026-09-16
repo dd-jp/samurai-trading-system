@@ -49,7 +49,7 @@ import { SAXO_CREDENTIAL_ENV_VARS, SAXO_GATEWAY_URLS } from './saxo-environment.
 import type { SaxoTokenSource } from './saxo-token-source.js';
 import { StaticSaxoTokenSource } from './saxo-token-source.js';
 
-export { SAXO_CREDENTIAL_ENV_VARS, SAXO_GATEWAY_URLS, type SaxoTradingEnvironment };
+export { SAXO_CREDENTIAL_ENV_VARS, type SaxoTradingEnvironment };
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_RETRY_CONFIG: RetryConfig = { maxAttempts: 3, baseDelayMs: 250, maxDelayMs: 4_000 };

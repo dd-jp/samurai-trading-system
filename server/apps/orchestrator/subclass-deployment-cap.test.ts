@@ -39,8 +39,8 @@ describe("ADR-0018 D5's fractions reproduce the ADR's own figures", () => {
     // base is right rather than a cap the system stores
     const fractions = subclassDeploymentCapFractionsOfEquity();
 
-    expect((fractions.index_etp_3x as number) * D5_PUBLISHED_LEG).toBeCloseTo(262.5, 6); // "~£260"
-    expect((fractions.single_stock_etp_3x as number) * D5_PUBLISHED_LEG).toBeCloseTo(187.5, 6); // "~£190"
+    expect((fractions.index_etp_3x as number) * D5_PUBLISHED_LEG).toBeCloseTo(262.5, 6);
+    expect((fractions.single_stock_etp_3x as number) * D5_PUBLISHED_LEG).toBeCloseTo(187.5, 6);
   });
 
   it('applies D5 to the WHOLE book, because the book is now all equity', () => {

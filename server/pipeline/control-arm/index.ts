@@ -23,11 +23,9 @@ export {
   EXIT_CLASSES,
   type ExitClass,
   type ExitClassDropCounts,
-  exitClassOf,
   noCostBasisDrops,
 } from './arm-comparison.js';
 export {
-  AXIS_VOTE_ANALYST_TYPE,
   CONTROL_DEBATE_ID_PREFIX,
   CONTROL_TRACE_SUFFIX,
   controlArmDecision,

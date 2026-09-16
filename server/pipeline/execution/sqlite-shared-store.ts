@@ -161,7 +161,7 @@ export class DuplicatePositionError extends Error {
 }
 
 /** `writeAheadFlatten`'s equivalent of `DuplicatePositionError` — see there for the reasoning */
-export class DuplicateFlattenSubmissionError extends Error {
+class DuplicateFlattenSubmissionError extends Error {
   constructor(readonly idempotency_key: string) {
     super(
       `SqliteExecutionStore.writeAheadFlatten: a flatten submission already exists for ` +

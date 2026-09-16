@@ -295,10 +295,10 @@ describe('TelegramBotApiClient — transient network failures and undeliverable 
     // pattern's `\b` anchors to fire against the surrounding filler —
     // without it, filler and token blend into one run of word characters and
     // the pattern never matches
-    const digits = '123456789012'; // 12 digits — clears the {6,} floor
-    const suffix = 'F'.repeat(40); // 40 chars — clears the {20,} floor
-    const secret = `${digits}:${suffix}`; // 53 chars
-    const after = ` ${'y'.repeat(200)}`; // boundary, then filler well past the cap
+    const digits = '123456789012';
+    const suffix = 'F'.repeat(40);
+    const secret = `${digits}:${suffix}`;
+    const after = ` ${'y'.repeat(200)}`;
 
     // `#call` classifies the thrown error before it reaches
     // `#recordDeliveryFailure`, wrapping the raw message in fixed prose —
@@ -315,16 +315,16 @@ describe('TelegramBotApiClient — transient network failures and undeliverable 
     ).message.indexOf(MARKER);
     // 12(digits) + 1(colon) + 2 = 15 chars of the secret survive the cap
     const targetSecretStart = MAX_ERROR_BODY_CHARS - 15;
-    const beforeContentLen = targetSecretStart - wrapperPrefixLen - 1; // -1 reserves the boundary space
-    const before = `${'x'.repeat(beforeContentLen)} `; // ends on a boundary
+    const beforeContentLen = targetSecretStart - wrapperPrefixLen - 1;
+    const before = `${'x'.repeat(beforeContentLen)} `;
     const rawMessage = `${before}${secret}${after}`;
 
     const wrapped = classifyTelegramThrown(new TypeError(rawMessage), 'sendMessage').message;
-    expect(wrapped.length).toBeGreaterThan(MAX_ERROR_BODY_CHARS); // must actually trigger the cap
+    expect(wrapped.length).toBeGreaterThan(MAX_ERROR_BODY_CHARS);
     expect(wrapped.indexOf(secret)).toBe(targetSecretStart);
     const survivingSuffixChars = MAX_ERROR_BODY_CHARS - (targetSecretStart + digits.length + 1);
-    expect(survivingSuffixChars).toBeGreaterThan(0); // still straddles into the opaque suffix
-    expect(survivingSuffixChars).toBeLessThan(20); // too little of it survives to match {20,}
+    expect(survivingSuffixChars).toBeGreaterThan(0);
+    expect(survivingSuffixChars).toBeLessThan(20);
 
     h.fetchMock.mockRejectedValue(new TypeError(rawMessage));
 

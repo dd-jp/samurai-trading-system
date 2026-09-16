@@ -163,6 +163,9 @@ export const ALERT_CHANNEL_FIELDS = [
  * "cleans up" — taking the guard with it. Proven in the #551 PR description
  * by temporarily adding a dummy field to `AlertChannelSlots` and confirming
  * `npm run typecheck` fails on this line, naming the field.
+ *
+ * @knipignore never imported by name — the guard is its type, not a value
+ * any caller reads. See knip.json's `tags`.
  */
 export const ALL_ALERT_CHANNEL_FIELDS_COVERED: {
   [K in Exclude<keyof AlertChannelSlots, (typeof ALERT_CHANNEL_FIELDS)[number]>]: never;

@@ -221,7 +221,7 @@ describe('MarketIntelligenceStore.getContext', () => {
   it('inherits the claimed decision bar instead of re-deriving one on a straddle (#811)', () => {
     const clock = new MutableClock(new Date('2026-07-14T13:59:55Z'));
     const store = new MarketIntelligenceStore(clock);
-    const window = 5 * 60_000; // 5 minutes
+    const window = 5 * 60_000;
 
     // Claimed while the wall clock was still inside the 13:00 bar — the same
     // derivation `DebateBarDecisionGate.claim` performs (floorToBar(asOf))
@@ -590,13 +590,13 @@ describe('MarketIntelligenceStore.subscribe', () => {
     store.subscribe('stocks', (ctx) => received.push(ctx));
 
     store.ingest(envelope([newsItem({ id: 'first' })], 'stocks'));
-    clock.advanceTo(new Date('2026-07-14T09:00:30Z')); // 30s later, within throttle window
+    clock.advanceTo(new Date('2026-07-14T09:00:30Z'));
     store.ingest(envelope([newsItem({ id: 'second', timestamp: clock.now() })], 'stocks'));
 
     expect(received).toHaveLength(1);
     expect(received[0]?.news.map((item) => item.id)).toEqual(['first']);
 
-    clock.advanceTo(new Date('2026-07-14T09:01:01Z')); // >1 minute after first delivery
+    clock.advanceTo(new Date('2026-07-14T09:01:01Z'));
     store.ingest(envelope([newsItem({ id: 'third', timestamp: clock.now() })], 'stocks'));
 
     expect(received).toHaveLength(2);
@@ -644,13 +644,13 @@ describe('MarketIntelligenceStore.subscribe', () => {
     store.subscribe('stocks', (ctx) => received.push(ctx));
 
     for (let i = 0; i < 3; i += 1) {
-      clock.advanceTo(new Date(clock.now().getTime() + 61_000)); // clear the 1/minute throttle
+      clock.advanceTo(new Date(clock.now().getTime() + 61_000));
       store.ingest(envelope([newsItem({ id: `slow-${i}`, timestamp: clock.now() })], 'stocks'));
     }
 
     expect(received).toHaveLength(3);
     expect(warnSpy).toHaveBeenCalledTimes(3);
-    expect(errorSpy).toHaveBeenCalledTimes(1); // alert on the 3rd slow delivery
+    expect(errorSpy).toHaveBeenCalledTimes(1);
 
     // Subscription was removed — a 4th ingest delivers nothing further
     clock.advanceTo(new Date(clock.now().getTime() + 61_000));

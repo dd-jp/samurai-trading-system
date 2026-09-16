@@ -625,7 +625,7 @@ export interface InvalidationCondition {
  * returned too little data — it is never a judgement, and it carries no
  * enforcement effect (a data gap must not block a trade).
  */
-export type InvalidationConditionState = 'breached' | 'not_breached' | 'unevaluable';
+type InvalidationConditionState = 'breached' | 'not_breached' | 'unevaluable';
 
 /** A condition plus the measured fact about it. `observed` is null iff `unevaluable`. */
 export interface EvaluatedCondition {

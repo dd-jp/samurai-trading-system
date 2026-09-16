@@ -125,13 +125,13 @@ export type WireSnapshot = Omit<DashboardSnapshot, 'mode' | 'llm_spend' | 'pnl'>
  * "type that lies" failure mode `mode`'s docblock above describes, reached
  * one field deeper.
  */
-export type WireLlmSpendSummary = Omit<LlmSpendSummary, 'cap_usd' | 'cap_armed_at'> & {
+type WireLlmSpendSummary = Omit<LlmSpendSummary, 'cap_usd' | 'cap_armed_at'> & {
   cap_usd: number | null | undefined;
   cap_armed_at: string | null | undefined;
 };
 
-export const SNAPSHOT_URL = '/api/snapshot';
-export const POLL_INTERVAL_MS = 3_000;
+const SNAPSHOT_URL = '/api/snapshot';
+const POLL_INTERVAL_MS = 3_000;
 /** Two consecutive missed polls put the page into its stale state (spec) */
 export const STALE_AFTER_MISSED_POLLS = 2;
 /**
@@ -191,7 +191,7 @@ export type FeedStatus = 'contract-mismatch' | 'waiting' | 'stale' | 'alive';
  * cold-start page must be able to say MISMATCH rather than reporting silence
  * the feed is not actually keeping.
  */
-export type ColdStatus = Exclude<FeedStatus, 'stale' | 'alive'>;
+type ColdStatus = Exclude<FeedStatus, 'stale' | 'alive'>;
 
 export interface SnapshotFeed {
   /**

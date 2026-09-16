@@ -23,7 +23,7 @@ import type {
 import { OUTCOME_WORD } from './vocabulary.ts';
 
 /** The five visual families a state word can wear. Each is also a word. */
-export type StateTone = 'done' | 'live' | 'stop' | 'skip' | 'wait';
+type StateTone = 'done' | 'live' | 'stop' | 'skip' | 'wait';
 
 export interface Presented {
   word: string;

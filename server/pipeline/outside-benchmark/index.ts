@@ -9,6 +9,5 @@ export {
   buildOutsideBenchmark,
   OUTSIDE_BENCHMARKS,
   type OutsideBenchmarkId,
-  type OutsideBenchmarkPerformance,
   type OutsideBenchmarkSample,
 } from './outside-benchmark.js';

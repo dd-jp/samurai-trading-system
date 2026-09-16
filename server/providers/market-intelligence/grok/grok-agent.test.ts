@@ -247,7 +247,7 @@ describe('GrokAgent', () => {
       expect(sink.calls).toBe(1);
 
       await agent.refresh('t2', 'BTC-USD', 'crypto');
-      expect(fetches()).toBe(1); // bucket held, no second call this window
+      expect(fetches()).toBe(1);
     });
 
     it('logs a warning distinguishing "recalled, never looked" from an unreadable response', async () => {

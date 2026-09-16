@@ -481,7 +481,7 @@ export function logRetentionKeepNamesFromEnvironment(
 }
 
 /** Enough of `fs.Stats` to identify an open descriptor's target file */
-export interface FileIdentity {
+interface FileIdentity {
   dev: number;
   ino: number;
 }
@@ -820,7 +820,8 @@ export function sweepStaleLogs(options: LogRetentionOptions): LogRetentionResult
   try {
     entries = readdirSync(root, { withFileTypes: true });
   } catch {
-    return result; // Missing or unreadable logs/ — nothing to sweep
+    // Missing or unreadable logs/ — nothing to sweep
+    return result;
   }
 
   const ctx = {

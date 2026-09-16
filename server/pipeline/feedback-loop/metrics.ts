@@ -22,17 +22,17 @@ import type {
   MetricsReport,
 } from './types.js';
 
-export const PBO_OVER_MAX = 'pbo_over_max';
-export const OOS_SHARPE_UNDER_MIN = 'oos_sharpe_under_min';
-export const DSR_INSIGNIFICANT = 'dsr_insignificant';
-export const LIVE_BACKTEST_DIVERGENCE_OVER_MAX = 'live_backtest_divergence_over_max';
+const PBO_OVER_MAX = 'pbo_over_max';
+const OOS_SHARPE_UNDER_MIN = 'oos_sharpe_under_min';
+const DSR_INSIGNIFICANT = 'dsr_insignificant';
+const LIVE_BACKTEST_DIVERGENCE_OVER_MAX = 'live_backtest_divergence_over_max';
 
 /**
  * The three lines that need a `RevalidationSnapshot`. Absent one — every
  * non-revalidation day — none of them can be evaluated, which is reported in
  * `MetricsReport.not_evaluated` rather than passing silently (#327).
  */
-export const REVALIDATION_GATED_KILL_LINES: readonly string[] = [
+const REVALIDATION_GATED_KILL_LINES: readonly string[] = [
   PBO_OVER_MAX,
   OOS_SHARPE_UNDER_MIN,
   DSR_INSIGNIFICANT,

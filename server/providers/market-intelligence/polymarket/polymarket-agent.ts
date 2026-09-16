@@ -161,10 +161,10 @@ export const POLYMARKET_ASSET_CLASS: AssetClass = 'stocks';
  * open. An earlier draft of this comment claimed the bucket floor made the
  * stamp land ON that bar — it did, and that was the #782 defect, not the fix.
  */
-export const POLYMARKET_REFRESH_MS = 60 * 60 * 1000;
+const POLYMARKET_REFRESH_MS = 60 * 60 * 1000;
 
 /** Below this |delta| the market did not move enough to call a direction */
-export const DEAD_BAND = 0.02;
+const DEAD_BAND = 0.02;
 
 /** `|delta| * 5` saturates the 0.95 ceiling at a 0.19 move */
 const CONFIDENCE_SCALE = 5;
@@ -211,7 +211,7 @@ const MAX_CONFIDENCE = 0.95;
  * the pin later, or a future row added while pinned, is caught without anyone
  * remembering this rule.
  */
-export const MIN_PROBABILITY_HEADROOM = 0.1;
+const MIN_PROBABILITY_HEADROOM = 0.1;
 
 /**
  * Book-quality floors. Markets measured at 0.298 (`U.K. Annual Inflation
@@ -280,12 +280,12 @@ export interface PolymarketAgentDeps {
  * `floorToBar`'s rule (#393) and `floorToRefreshBucket`'s, so a replay
  * stepping the same grid lands on the same coordinate.
  */
-export function floorToPolymarketBucket(at: Date, refreshMs: number = POLYMARKET_REFRESH_MS): Date {
+function floorToPolymarketBucket(at: Date, refreshMs: number = POLYMARKET_REFRESH_MS): Date {
   return new Date(Math.floor(at.getTime() / refreshMs) * refreshMs);
 }
 
 /** The three-valued sign the contract carries, with the dead band applied */
-export function signOfDelta(delta: number): 1 | 0 | -1 {
+function signOfDelta(delta: number): 1 | 0 | -1 {
   if (delta > DEAD_BAND) return 1;
   if (delta < -DEAD_BAND) return -1;
   return 0;
@@ -295,7 +295,7 @@ export function signOfDelta(delta: number): 1 | 0 | -1 {
  * Whether a quoted probability sits too near 0 or 1 to carry a 24h delta.
  * See `MIN_PROBABILITY_HEADROOM` for the derivation of the bound.
  */
-export function isPinnedProbability(probability: number): boolean {
+function isPinnedProbability(probability: number): boolean {
   // The tolerance is not decoration: `1 - 0.9` is 0.09999999999999998 in
   // binary floating point, so a bare `<` would refuse a market quoted at
   // exactly the bound. Vendor quotes arrive at two or three decimals, so a
@@ -304,7 +304,7 @@ export function isPinnedProbability(probability: number): boolean {
 }
 
 /** `clamp(|delta| * 5, 0.05, 0.95)` — #504 decision 3, verbatim */
-export function confidenceOfDelta(delta: number): number {
+function confidenceOfDelta(delta: number): number {
   return Math.min(MAX_CONFIDENCE, Math.max(MIN_CONFIDENCE, Math.abs(delta) * CONFIDENCE_SCALE));
 }
 

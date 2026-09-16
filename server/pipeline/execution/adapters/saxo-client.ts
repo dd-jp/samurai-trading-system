@@ -46,16 +46,16 @@ export interface SaxoInstrumentDetails {
  * uses. Plain `Stop` is rejected with `OrderTypeNotSupported`; the
  * stop-market leg is `StopIfTraded`.
  */
-export type SaxoOrderType = 'Market' | 'Limit' | 'StopIfTraded';
+type SaxoOrderType = 'Market' | 'Limit' | 'StopIfTraded';
 
 export type SaxoDurationType = 'DayOrder' | 'GoodTillCancel' | 'ImmediateOrCancel' | 'FillOrKill';
 
-export interface SaxoOrderDuration {
+interface SaxoOrderDuration {
   readonly DurationType: SaxoDurationType;
 }
 
 /** VERIFIED: a related (IfDone) order inside the master's `Orders` array */
-export interface SaxoRelatedOrderRequest {
+interface SaxoRelatedOrderRequest {
   readonly OrderType: SaxoOrderType;
   readonly OrderPrice: number;
   readonly BuySell: SaxoBuySell;
@@ -105,7 +105,7 @@ export interface SaxoOrderPlacement {
  * has still never been returned. `(string & {})` keeps the type open to
  * whatever else the venue sends rather than asserting a closed contract.
  */
-export type SaxoOpenOrderStatus = 'Working' | 'NotWorking' | (string & {});
+type SaxoOpenOrderStatus = 'Working' | 'NotWorking' | (string & {});
 
 /** VERIFIED: one row of `GET /port/v1/orders/me`. `FilledAmount` UNVERIFIED (never partially filled on SIM). */
 export interface SaxoOpenOrder {

@@ -375,7 +375,7 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
     // lookback verbatim. Nothing asserted that mapping before this test.
     process.env.POLYGON_API_KEY = 'test-key';
 
-    const localAsOf = new Date('2026-08-17T17:00:00.000Z'); // 13:00 ET Monday — mid regular session
+    const localAsOf = new Date('2026-08-17T17:00:00.000Z');
     const localWindow: BarWindow = { timeframe: '1h', lookback: 2 };
 
     function inSessionAggregate(isoOpenTime: string) {
@@ -392,9 +392,9 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
       new Response(
         JSON.stringify({
           results: [
-            inSessionAggregate('2026-08-17T14:00:00.000Z'), // 10:00 ET
-            inSessionAggregate('2026-08-17T15:00:00.000Z'), // 11:00 ET
-            inSessionAggregate('2026-08-17T16:00:00.000Z'), // 12:00 ET
+            inSessionAggregate('2026-08-17T14:00:00.000Z'),
+            inSessionAggregate('2026-08-17T15:00:00.000Z'),
+            inSessionAggregate('2026-08-17T16:00:00.000Z'),
           ],
         }),
         { status: 200 },
@@ -466,14 +466,14 @@ describe('buildFailoverDataSource — the default Polygon branch (#823)', () => 
     // POST-CLOSE extended-hours candles; only the two around 13:30Z/14:30Z
     // (09:30/10:30 ET) fall inside the regular session
     const rawAggregates = [
-      aggregate('2026-08-17T12:00:00.000Z'), // 08:00 ET — pre-market
-      aggregate('2026-08-17T13:00:00.000Z'), // 09:00 ET — pre-market
-      aggregate('2026-08-17T13:30:00.000Z'), // 09:30 ET — IN SESSION
-      aggregate('2026-08-17T14:30:00.000Z'), // 10:30 ET — IN SESSION
-      aggregate('2026-08-17T20:30:00.000Z'), // 16:30 ET — after close
-      aggregate('2026-08-17T21:30:00.000Z'), // 17:30 ET — after close
-      aggregate('2026-08-17T22:30:00.000Z'), // 18:30 ET — after close
-      aggregate('2026-08-17T23:30:00.000Z'), // 19:30 ET — after close
+      aggregate('2026-08-17T12:00:00.000Z'),
+      aggregate('2026-08-17T13:00:00.000Z'),
+      aggregate('2026-08-17T13:30:00.000Z'),
+      aggregate('2026-08-17T14:30:00.000Z'),
+      aggregate('2026-08-17T20:30:00.000Z'),
+      aggregate('2026-08-17T21:30:00.000Z'),
+      aggregate('2026-08-17T22:30:00.000Z'),
+      aggregate('2026-08-17T23:30:00.000Z'),
     ];
     const fetchMock = vi
       .fn()

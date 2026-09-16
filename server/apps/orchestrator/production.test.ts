@@ -1922,7 +1922,7 @@ describe('buildProductionComponents', () => {
           entry: 100,
           stop: 90,
           filled_size: 10,
-          realized_pnl_net: 200, // R = 2
+          realized_pnl_net: 200,
           fees_total: 1,
           opened_at: new Date('2026-07-29T09:30:00Z'),
           closed_at: new Date('2026-07-29T10:00:00Z'),
@@ -2637,10 +2637,10 @@ describe('tickSkipAlerts is wired by the composition root (#1084)', () => {
     vi.spyOn(orchestrator.tickRunner, 'runInstrument').mockImplementation(runInstrument);
 
     await orchestrator.start();
-    await vi.advanceTimersByTimeAsync(1_000); // tick 1: claims all four, hangs
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(tickSkipAlerts.postTickSkipAlert).not.toHaveBeenCalled();
 
-    await vi.advanceTimersByTimeAsync(1_000); // tick 2: all four still busy
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(tickSkipAlerts.postTickSkipAlert).toHaveBeenCalledTimes(1);
     expect(tickSkipAlerts.postTickSkipAlert).toHaveBeenCalledWith(
       expect.objectContaining({ skipped: 4, planned: 4 }),
@@ -3951,7 +3951,7 @@ describe('startTickLoop', () => {
       const tickSkipAlerts = { postTickSkipAlert: vi.fn(async () => {}) };
 
       const loop = startTickLoop({
-        scheduler: planScheduler(plan), // single-instrument plan
+        scheduler: planScheduler(plan),
         runner: { runInstrument } as TickRunner,
         clock: new SimulatedClock(START),
         logger,
@@ -3962,7 +3962,7 @@ describe('startTickLoop', () => {
         tickSkipAlerts,
       });
 
-      await vi.advanceTimersByTimeAsync(1_000); // tick 1: dispatches, blocks
+      await vi.advanceTimersByTimeAsync(1_000);
       // Several further ticks all see the one instrument still busy (1 of 1
       // planned) — below TICK_SKIP_ALERT_MIN_INSTRUMENTS, so this is the
       // ordinary "one slow debate" case and must stay quiet
@@ -4440,9 +4440,13 @@ describe('buildProductionOrchestrator', () => {
     const ranAt = async (now: Date, pinLse = true): Promise<boolean> => {
       const config = windowedConfig(now, pinLse);
       // The tail is `flatten_before_close_ms` wide, so 16:26 is only inside it
-      // while that is 5 minutes. Asserted, not assumed — a stub drifting to a
+      // while that is 5 minutes. Checked, not assumed — a stub drifting to a
       // narrower window would make the positive case below silently vacuous
-      expect(config.traderConfig.flatten_before_close_ms).toBe(5 * 60_000);
+      if (config.traderConfig.flatten_before_close_ms !== 5 * 60_000) {
+        throw new Error(
+          `expected flatten_before_close_ms to be 300000, got ${config.traderConfig.flatten_before_close_ms}`,
+        );
+      }
 
       const orchestrator = buildProductionOrchestrator(config);
       const runSpy = vi
@@ -6452,13 +6456,10 @@ describe('buildProductionOrchestrator', () => {
           loosenNotices: { notifyLoosenApplied: vi.fn() },
           metrics: {
             source: {
-              getDailyMetrics: () =>
-                'sample' in overrides
-                  ? overrides.sample
-                  : // `revalidation` omitted rather than set to `undefined`:
-                    // it is optional on `DailyMetricsSample` and nothing here
-                    // supplies a default to override
-                    { daily: SUITE },
+              // `revalidation` omitted rather than set to `undefined`:
+              // it is optional on `DailyMetricsSample` and nothing here
+              // supplies a default to override
+              getDailyMetrics: () => ('sample' in overrides ? overrides.sample : { daily: SUITE }),
             },
             backtest_reference_sharpe: overrides.backtest_reference_sharpe ?? 1.5,
           },
@@ -6599,7 +6600,7 @@ describe('buildProductionOrchestrator', () => {
       // (metrics.ts's `assertKillThresholdsWithinBounds` inside
       // `computeMetrics`), not the boot-time one #638 already covers
       await orchestrator.start();
-      feedback.config.kill_thresholds.max_pbo = 0.5; // bound: max 0.05
+      feedback.config.kill_thresholds.max_pbo = 0.5;
 
       await vi.advanceTimersByTimeAsync(1_500);
 
@@ -8629,7 +8630,7 @@ describe('falsifier arm 2, through the composition root (#753)', () => {
   it("buildArmComparison's return_pct falls ~100x when the same trade is sized against the corrected book instead of broker equity (#1112 AC7)", () => {
     const CLOSED_AT = new Date(START.getTime() - 60_000);
     const window = { from: new Date(CLOSED_AT.getTime() - 3_600_000), to: START };
-    const SIZING_INFLATION = 99_876 / LIVE_BOOK_GBP; // the issue's own ~100x figure
+    const SIZING_INFLATION = 99_876 / LIVE_BOOK_GBP;
 
     const tradeWith = (realized_pnl_net: number): ClosedTrade & { arm: TradingArm } => ({
       idempotency_key: 'ac7-fixture',

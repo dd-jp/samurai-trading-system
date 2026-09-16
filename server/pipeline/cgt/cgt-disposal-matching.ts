@@ -119,7 +119,7 @@ export interface MatchedDisposal {
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 /** The 30-day rule's window (CG51560/CG51570) — also used to flag a disposal as still provisional (see `disposalStillInThirtyDayWindow`) */
-export const THIRTY_DAY_WINDOW_MS = 30 * MS_PER_DAY;
+const THIRTY_DAY_WINDOW_MS = 30 * MS_PER_DAY;
 
 /**
  * True while a disposal's 30-day bed-and-breakfast window is still open as of

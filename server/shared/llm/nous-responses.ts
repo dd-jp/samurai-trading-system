@@ -67,7 +67,7 @@ import type { AnthropicUsage } from './pricing.js';
  * file to use a tool it has no other opinion about. The CALLER states the
  * shape it needs — see `x-search-client.ts`'s `XSearchTool`.
  */
-export interface NousServerTool {
+interface NousServerTool {
   type: string;
   [option: string]: unknown;
 }
@@ -495,13 +495,13 @@ async function dispatchResponses(
     citations,
     server_tool_calls,
     finish_reason: typeof parsed.status === 'string' ? parsed.status : null,
+    // The Responses API reports SECONDS since epoch; every other clock in
+    // this repo is milliseconds. Converting at the boundary keeps the
+    // 1000x mistake from reaching the recency comparison, where it would
+    // read as a 1970 timestamp and silently fail every post
     created_at_ms:
       typeof parsed.created_at === 'number' && Number.isFinite(parsed.created_at)
-        ? // The Responses API reports SECONDS since epoch; every other clock in
-          // this repo is milliseconds. Converting at the boundary keeps the
-          // 1000x mistake from reaching the recency comparison, where it would
-          // read as a 1970 timestamp and silently fail every post
-          parsed.created_at * 1000
+        ? parsed.created_at * 1000
         : null,
     ttfb_ms,
   };

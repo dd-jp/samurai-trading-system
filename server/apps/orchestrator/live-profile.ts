@@ -211,7 +211,7 @@ export function resolveLiveCapitalCeilingUsd(
  * or an argument name — never a credential, and the ceiling itself is not
  * secret, so quoting it back is what makes a typo visible.
  */
-export function assertLiveCapitalCeilingUsd(value: number, source: string): CapitalCeilingUsd {
+function assertLiveCapitalCeilingUsd(value: number, source: string): CapitalCeilingUsd {
   const ceiling = toCapitalCeilingUsd(value, source);
 
   const floor = minLiveCapitalCeilingUsd();

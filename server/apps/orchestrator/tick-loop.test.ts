@@ -1129,7 +1129,7 @@ describe('runTickPlan decision gate (#743)', () => {
     // takes the tick path, which always runs it
     const steps: TickSteps = {
       exitCheck: vi.fn(async () => null),
-      analysts: vi.fn(async () => []), // quorum skip — the chain ends here
+      analysts: vi.fn(async () => []),
       debate: vi.fn(async () => {
         throw new Error('unreachable: quorum-skipped');
       }),
@@ -1180,7 +1180,7 @@ describe('runTickPlan decision gate (#743)', () => {
     };
     const gate = new DebateBarDecisionGate();
     const config = loopConfig(gate);
-    const usClose = new Date('2026-07-15T20:00:00Z'); // bar-aligned on the 1h grid
+    const usClose = new Date('2026-07-15T20:00:00Z');
 
     await runTickPlan(
       { ...planAt(usClose, 'AAPL'), grace_only: true },
@@ -1573,7 +1573,7 @@ describe('runTickPlan decision gate (#743)', () => {
           return { trace_id: ctx.trace_id, final_stage: 'position_check' };
         },
       };
-      const gate = new DebateBarDecisionGate(1); // forfeits on the FIRST failure
+      const gate = new DebateBarDecisionGate(1);
       const config = loopConfig(gate);
 
       const barOpen = new Date('2026-07-15T14:00:00Z');

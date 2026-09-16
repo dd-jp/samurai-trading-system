@@ -31,7 +31,7 @@
 import { type AnthropicUsage, rateFor } from './pricing.js';
 
 /** Caps how much of a response body is ever baked into an error message (goes straight to logs) */
-export const MAX_ERROR_BODY_CHARS = 500;
+const MAX_ERROR_BODY_CHARS = 500;
 
 /** Wider than the callers' own timeouts — a backstop that reaps a dangling socket after an outer race has settled, not a race partner */
 export const DEFAULT_NOUS_TIMEOUT_MS = 60_000;
@@ -162,7 +162,7 @@ export function truncateForError(text: string): string {
 }
 
 /** Best-effort extraction of an OpenAI-style `{ error: { type, message } }` envelope */
-export function describeErrorBody(body: unknown): string | undefined {
+function describeErrorBody(body: unknown): string | undefined {
   if (typeof body !== 'object' || body === null || !('error' in body)) return undefined;
   const detail = (body as { error?: { type?: unknown; message?: unknown } }).error;
   if (typeof detail !== 'object' || detail === null) return undefined;
@@ -188,7 +188,7 @@ export async function buildApiError(response: Response): Promise<NousApiError> {
   return new NousApiError(response.status, `Nous API error: ${response.status} ${detail}`, body);
 }
 
-export function toTokenCount(value: unknown): number {
+function toTokenCount(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
 }
 

@@ -2816,18 +2816,19 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
     market_impact: 2,
   };
 
-  /** Float-tolerant equality — `prorateCostBreakdown` multiplies by a share, so exact decimal equality is not guaranteed */
-  function expectCostBreakdownCloseTo(
-    actual:
-      | { spread_cost: number; commission: number; slippage: number; market_impact: number }
-      | undefined,
-    expected: { spread_cost: number; commission: number; slippage: number; market_impact: number },
-  ): void {
-    expect(actual).toBeDefined();
-    expect(actual?.spread_cost).toBeCloseTo(expected.spread_cost, 9);
-    expect(actual?.commission).toBeCloseTo(expected.commission, 9);
-    expect(actual?.slippage).toBeCloseTo(expected.slippage, 9);
-    expect(actual?.market_impact).toBeCloseTo(expected.market_impact, 9);
+  /** Float-tolerant equality matcher — `prorateCostBreakdown` multiplies by a share, so exact decimal equality is not guaranteed */
+  function closeBreakdownMatcher(expected: {
+    spread_cost: number;
+    commission: number;
+    slippage: number;
+    market_impact: number;
+  }) {
+    return {
+      spread_cost: expect.closeTo(expected.spread_cost, 9),
+      commission: expect.closeTo(expected.commission, 9),
+      slippage: expect.closeTo(expected.slippage, 9),
+      market_impact: expect.closeTo(expected.market_impact, 9),
+    };
   }
 
   it('prorates the modelled entry cost breakdown across two partial entry fills, by each fill share of requested_size', async () => {
@@ -2853,18 +2854,22 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
     const e1 = fills.find((row) => row.broker_fill_id === 'e1');
     const e2 = fills.find((row) => row.broker_fill_id === 'e2');
     // share = 4/10 and 6/10 of the modelled breakdown, linearly
-    expectCostBreakdownCloseTo(e1?.cost_breakdown, {
-      spread_cost: 0.2,
-      commission: 0.4,
-      slippage: 0.1,
-      market_impact: 0.04,
-    });
-    expectCostBreakdownCloseTo(e2?.cost_breakdown, {
-      spread_cost: 0.3,
-      commission: 0.6,
-      slippage: 0.15,
-      market_impact: 0.06,
-    });
+    expect(e1?.cost_breakdown).toEqual(
+      closeBreakdownMatcher({
+        spread_cost: 0.2,
+        commission: 0.4,
+        slippage: 0.1,
+        market_impact: 0.04,
+      }),
+    );
+    expect(e2?.cost_breakdown).toEqual(
+      closeBreakdownMatcher({
+        spread_cost: 0.3,
+        commission: 0.6,
+        slippage: 0.15,
+        market_impact: 0.06,
+      }),
+    );
   });
 
   it('leaves cost_breakdown unset on an entry fill when the lot carries no modelled snapshot', async () => {
@@ -2934,12 +2939,14 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
 
       const fills = await store.getFills('key-1');
       // share = 4/10 of the protective snapshot, linearly
-      expectCostBreakdownCloseTo(fills.find((row) => row.broker_fill_id === 'x1')?.cost_breakdown, {
-        spread_cost: 0.8,
-        commission: 1.2,
-        slippage: 0.4,
-        market_impact: 0.8,
-      });
+      expect(fills.find((row) => row.broker_fill_id === 'x1')?.cost_breakdown).toEqual(
+        closeBreakdownMatcher({
+          spread_cost: 0.8,
+          commission: 1.2,
+          slippage: 0.4,
+          market_impact: 0.8,
+        }),
+      );
     },
   );
 
@@ -3082,18 +3089,22 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
     const key1Exit = key1Fills.find((row) => row.leg === 'exit');
     const key2Exit = key2Fills.find((row) => row.leg === 'exit');
     // share = 6/10 and 4/10 of the flatten's modelled breakdown
-    expectCostBreakdownCloseTo(key1Exit?.cost_breakdown, {
-      spread_cost: 0.3,
-      commission: 0.6,
-      slippage: 0.15,
-      market_impact: 0.06,
-    });
-    expectCostBreakdownCloseTo(key2Exit?.cost_breakdown, {
-      spread_cost: 0.2,
-      commission: 0.4,
-      slippage: 0.1,
-      market_impact: 0.04,
-    });
+    expect(key1Exit?.cost_breakdown).toEqual(
+      closeBreakdownMatcher({
+        spread_cost: 0.3,
+        commission: 0.6,
+        slippage: 0.15,
+        market_impact: 0.06,
+      }),
+    );
+    expect(key2Exit?.cost_breakdown).toEqual(
+      closeBreakdownMatcher({
+        spread_cost: 0.2,
+        commission: 0.4,
+        slippage: 0.1,
+        market_impact: 0.04,
+      }),
+    );
     // #1001: both split rows carry the FLATTEN's own key, not the lot's own
     // (already `idempotency_key` on these rows) — the join back to
     // `flatten_submissions` this column exists for
@@ -3181,12 +3192,14 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
     expect(exits).toHaveLength(2);
     // Each raw fill is 5 of the submitted 10, so each carries HALF
     for (const row of exits) {
-      expectCostBreakdownCloseTo(row.cost_breakdown, {
-        spread_cost: modelledCostBreakdown.spread_cost / 2,
-        commission: modelledCostBreakdown.commission / 2,
-        slippage: modelledCostBreakdown.slippage / 2,
-        market_impact: modelledCostBreakdown.market_impact / 2,
-      });
+      expect(row.cost_breakdown).toEqual(
+        closeBreakdownMatcher({
+          spread_cost: modelledCostBreakdown.spread_cost / 2,
+          commission: modelledCostBreakdown.commission / 2,
+          slippage: modelledCostBreakdown.slippage / 2,
+          market_impact: modelledCostBreakdown.market_impact / 2,
+        }),
+      );
     }
     // The property the review actually asked for: SUMMED, the modelled cost
     // across the flatten's fills EQUALS the one snapshot — never exceeds it
@@ -3199,7 +3212,7 @@ describe('ExecutionImpl.ingestFills — real-broker cost_breakdown fallback (#10
       }),
       { spread_cost: 0, commission: 0, slippage: 0, market_impact: 0 },
     );
-    expectCostBreakdownCloseTo(summed, modelledCostBreakdown);
+    expect(summed).toEqual(closeBreakdownMatcher(modelledCostBreakdown));
   });
 
   it('leaves flatten_idempotency_key unset on entry/stop/target fills — only a flatten-produced exit fill carries one', async () => {
@@ -4476,15 +4489,15 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
     );
 
     await execution.reconcile();
-    await execution.ingestFills(); // consecutive 1, quiet
-    await execution.ingestFills(); // consecutive 2, quiet
-    await execution.ingestFills(); // consecutive 3, warn
+    await execution.ingestFills();
+    await execution.ingestFills();
+    await execution.ingestFills();
 
     currentTime = new Date(currentTime.getTime() + FILLED_ZERO_SIZE_REANNOUNCE_EVERY_MS + 1);
-    await execution.ingestFills(); // past the reannounce interval: info
+    await execution.ingestFills();
 
     currentTime = new Date(currentTime.getTime() + FILLED_ZERO_SIZE_REANNOUNCE_EVERY_MS + 1);
-    await execution.ingestFills(); // past it again: another info
+    await execution.ingestFills();
 
     const announcements = logger.entries.filter((e) => e.message === FILLED_WITH_ZERO_SIZE);
     expect(announcements.map((e) => e.level)).toEqual(['warn', 'info', 'info']);
@@ -4581,7 +4594,7 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
     await execution.reconcile();
     await execution.ingestFills();
     await execution.ingestFills();
-    await execution.ingestFills(); // consecutive 3: warns once
+    await execution.ingestFills();
     expect(logger.entries.filter((e) => e.message === FILLED_WITH_ZERO_SIZE)).toHaveLength(1);
 
     await store.updatePositionState('key-1', { order_state: 'rejected', broker_order_ids: [] });

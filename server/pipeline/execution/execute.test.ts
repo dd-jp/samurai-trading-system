@@ -20,6 +20,13 @@ function hostileThrownValue(): Record<string, unknown> {
   return hostile;
 }
 
+/** Throws `message` when `condition` is false — a setup precondition, not a test assertion */
+function invariant(condition: boolean, message: string): void {
+  if (!condition) {
+    throw new Error(message);
+  }
+}
+
 import type { TradingCalendar } from '../../providers/market-data-service/index.js';
 import { AlwaysOpenCalendar } from '../../providers/market-data-service/index.js';
 import type { AssetClass } from '../../shared/index.js';
@@ -907,7 +914,7 @@ describe('ExecutionImpl.execute', () => {
       expect(result.reason).toBe('venue rejected the flatten');
       expect(result.order_state).toBeNull();
       expect(result.broker_order_ids).toBeNull();
-      expect(await store.countAllPositions()).toBe(1); // just the seed
+      expect(await store.countAllPositions()).toBe(1);
       const row = await store.getFlattenSubmission('key-aapl-1355');
       expect(row?.status).toBe('submitting');
       expect(row?.reason).toBeNull();
@@ -1486,7 +1493,7 @@ describe('ExecutionImpl.execute', () => {
       it('refuses an exit sized differently than the held quantity, without clamping it', async () => {
         const { store } = openTestExecutionStore();
         const broker = makeBroker();
-        await seedHeldLot(store); // filled_size 40
+        await seedHeldLot(store);
 
         const result = await new ExecutionImpl(makeInput({ store, broker })).execute(
           makeExitGo({ size: 999 }),
@@ -1533,7 +1540,7 @@ describe('ExecutionImpl.execute', () => {
         const { store } = openTestExecutionStore();
         const broker = makeBroker();
         await seedHeldLot(store, { requested_size: 10, filled_size: 10 });
-        await recordExitFill(store, 4); // an earlier flatten closed 4 of the 10
+        await recordExitFill(store, 4);
 
         const result = await new ExecutionImpl(makeInput({ store, broker })).execute(
           makeExitGo({ size: 6 }),
@@ -1573,7 +1580,7 @@ describe('ExecutionImpl.execute', () => {
         const { store } = openTestExecutionStore();
         const broker = makeBroker();
         await seedHeldLot(store, { requested_size: 10, filled_size: 10 });
-        await recordExitFill(store, 12); // the store contradicting itself
+        await recordExitFill(store, 12);
 
         // Any size at all: the divergence is refused before the size is
         // compared, because a negative lot would otherwise net against a
@@ -1593,10 +1600,10 @@ describe('ExecutionImpl.execute', () => {
       it('refuses an exit whose side does not match the closing side implied by the held lot', async () => {
         const { store } = openTestExecutionStore();
         const broker = makeBroker();
-        await seedHeldLot(store); // side 'buy' -> closing side should be 'sell'
+        await seedHeldLot(store);
 
         const result = await new ExecutionImpl(makeInput({ store, broker })).execute(
-          makeExitGo({ side: 'buy' }), // wrong: should be 'sell'
+          makeExitGo({ side: 'buy' }),
         );
 
         expect(result.status).toBe('error');
@@ -1632,7 +1639,7 @@ describe('ExecutionImpl.execute', () => {
         it('refuses a compensating swap between two lots even though the total is unchanged', async () => {
           const { store } = openTestExecutionStore();
           const broker = makeBroker();
-          await seedTwoHeldLots(store); // store: 20 + 20 = 40
+          await seedTwoHeldLots(store);
 
           // What the Trader recorded at decide-time: one lot up, the other
           // down by the same amount. 25 + 15 === 20 + 20 === order.size (40),
@@ -1662,7 +1669,7 @@ describe('ExecutionImpl.execute', () => {
         it('submits when the recorded per-lot held quantities match the store exactly', async () => {
           const { store } = openTestExecutionStore();
           const broker = makeBroker();
-          await seedTwoHeldLots(store); // store: 20 + 20 = 40
+          await seedTwoHeldLots(store);
 
           const result = await new ExecutionImpl(makeInput({ store, broker })).execute(
             makeExitGo({
@@ -1684,7 +1691,7 @@ describe('ExecutionImpl.execute', () => {
         it('does not refuse when the intent carries no per-lot snapshot at all', async () => {
           const { store } = openTestExecutionStore();
           const broker = makeBroker();
-          await seedHeldLot(store); // filled_size 40, no lot_held_quantities on the intent
+          await seedHeldLot(store);
 
           const result = await new ExecutionImpl(makeInput({ store, broker })).execute(
             makeExitGo(),
@@ -1759,7 +1766,7 @@ describe('ExecutionImpl.execute', () => {
 
       expect(result.status).toBe('submitted');
       expect(result.broker_order_ids).toEqual(['key-aapl-1355:flatten']);
-      expect(await store.countAllPositions()).toBe(1); // just the seed
+      expect(await store.countAllPositions()).toBe(1);
     });
 
     // #517: does a flatten-closed lot emit a correct `ClosedTrade` at all?
@@ -1895,10 +1902,10 @@ describe('ExecutionImpl.execute', () => {
         const costModel: CostModel = {
           fill: vi
             .fn()
-            .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() }) // lot A entry
-            .mockReturnValueOnce({ fill_price: 92, filled_size: 10, cost_breakdown: zeroCosts() }) // lot B entry
-            .mockReturnValueOnce({ fill_price: 95, filled_size: 10, cost_breakdown: zeroCosts() }) // lot A exit (signal_decay)
-            .mockReturnValueOnce({ fill_price: 96, filled_size: 10, cost_breakdown: zeroCosts() }), // lot B exit (flatten)
+            .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() })
+            .mockReturnValueOnce({ fill_price: 92, filled_size: 10, cost_breakdown: zeroCosts() })
+            .mockReturnValueOnce({ fill_price: 95, filled_size: 10, cost_breakdown: zeroCosts() })
+            .mockReturnValueOnce({ fill_price: 96, filled_size: 10, cost_breakdown: zeroCosts() }),
         };
         const marketData = makeMarketData();
         const broker = new SimulatedBrokerAdapter({
@@ -2023,9 +2030,9 @@ describe('ExecutionImpl.execute', () => {
         const costModel: CostModel = {
           fill: vi
             .fn()
-            .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() }) // lot 1 entry
-            .mockReturnValueOnce({ fill_price: 92, filled_size: 15, cost_breakdown: zeroCosts() }) // lot 2 entry
-            .mockReturnValueOnce({ fill_price: 100, filled_size: 25, cost_breakdown: zeroCosts() }), // flatten, covers both
+            .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() })
+            .mockReturnValueOnce({ fill_price: 92, filled_size: 15, cost_breakdown: zeroCosts() })
+            .mockReturnValueOnce({ fill_price: 100, filled_size: 25, cost_breakdown: zeroCosts() }),
         };
         const marketData = makeMarketData();
         const broker = new SimulatedBrokerAdapter({
@@ -2042,7 +2049,7 @@ describe('ExecutionImpl.execute', () => {
           makeGo({ idempotency_key: 'key-lot-1', size: 10, entry: 90, stop: 85, target: 110 }),
         );
         await execution.ingestFills();
-        now = new Date(now.getTime() + 60_000); // lot 2 opens a minute after lot 1
+        now = new Date(now.getTime() + 60_000);
         await execution.execute(
           makeGo({
             idempotency_key: 'key-lot-2',
@@ -2092,8 +2099,8 @@ describe('ExecutionImpl.execute', () => {
         const costModel: CostModel = {
           fill: vi
             .fn()
-            .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() }) // lot 1 entry
-            .mockReturnValueOnce({ fill_price: 92, filled_size: 15, cost_breakdown: zeroCosts() }) // lot 2 entry
+            .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() })
+            .mockReturnValueOnce({ fill_price: 92, filled_size: 15, cost_breakdown: zeroCosts() })
             // The flatten asked for 25 (10 + 15) but the IOC only fills 20 —
             // a thin book taking part of the order and cancelling the rest
             .mockReturnValueOnce({ fill_price: 100, filled_size: 20, cost_breakdown: zeroCosts() }),
@@ -2144,7 +2151,7 @@ describe('ExecutionImpl.execute', () => {
         // 5 short of its own 15 need, so it stays open, not silently
         // dropped and not double-counted by the repeat polls above
         const lot2 = await store.getPosition('key-lot-2');
-        expect(lot2?.order_state).toBe('filled'); // entry complete; exit is not
+        expect(lot2?.order_state).toBe('filled');
         const lot2ExitQty = (await store.getFills('key-lot-2'))
           .filter((fill) => fill.leg === 'exit')
           .reduce((sum, fill) => sum + fill.qty, 0);
@@ -2237,23 +2244,37 @@ describe('ExecutionImpl.execute', () => {
           const first = await execution.execute(
             makeExitGo({ idempotency_key: 'key-exit-1', size: 15 }),
           );
-          expect(first.status).toBe('submitted');
+          invariant(
+            first.status === 'submitted',
+            `expected the first exit to submit, got ${first.status}`,
+          );
           await execution.ingestFills();
           now = new Date(now.getTime() + 60_000);
 
-          // The precondition, asserted rather than assumed: lot 1 holds 6 of
+          // The precondition, checked rather than assumed: lot 1 holds 6 of
           // its 10, lot 2 still holds all 5, and both are open
-          expect((await store.getExitFillSizes(['key-lot-1', 'key-lot-2'])).get('key-lot-1')).toBe(
-            firstFlattenQty,
+          const lot1ExitFillSize = (await store.getExitFillSizes(['key-lot-1', 'key-lot-2'])).get(
+            'key-lot-1',
           );
-          expect(await store.getOpenPositions()).toHaveLength(2);
+          invariant(
+            lot1ExitFillSize === firstFlattenQty,
+            `expected key-lot-1's exit fill size to be ${firstFlattenQty}, got ${lot1ExitFillSize}`,
+          );
+          const openPositions = await store.getOpenPositions();
+          invariant(
+            openPositions.length === 2,
+            `expected 2 open positions, got ${openPositions.length}`,
+          );
 
           const second = await execution.execute(
             makeExitGo({ idempotency_key: 'key-exit-2', size: 11 }),
           );
           // The guard passes on 6 + 5 — this is a correctly sized exit, which
           // is what made the mis-split so quiet
-          expect(second.status).toBe('submitted');
+          invariant(
+            second.status === 'submitted',
+            `expected the second exit to submit, got ${second.status}`,
+          );
 
           return { execution, broker };
         }
@@ -2567,8 +2588,8 @@ describe('ExecutionImpl.execute', () => {
           const costModel: CostModel = {
             fill: vi
               .fn()
-              .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() }) // lot 1 entry
-              .mockReturnValueOnce({ fill_price: 92, filled_size: 15, cost_breakdown: zeroCosts() }) // lot 2 entry
+              .mockReturnValueOnce({ fill_price: 90, filled_size: 10, cost_breakdown: zeroCosts() })
+              .mockReturnValueOnce({ fill_price: 92, filled_size: 15, cost_breakdown: zeroCosts() })
               // The flatten asks for 25 (10 + 15) but only 7 fills — less
               // than even lot 1's own 10-share, so lot 2 gets nothing
               .mockReturnValueOnce({
@@ -2665,17 +2686,17 @@ describe('ExecutionImpl.execute', () => {
                   fill_price: 90,
                   filled_size: 10,
                   cost_breakdown: zeroCosts(),
-                }) // lot 1 entry
+                })
                 .mockReturnValueOnce({
                   fill_price: 92,
                   filled_size: 15,
                   cost_breakdown: zeroCosts(),
-                }) // lot 2 entry
+                })
                 .mockReturnValueOnce({
                   fill_price: 94,
                   filled_size: 8,
                   cost_breakdown: zeroCosts(),
-                }) // lot 3 entry
+                })
                 // Same shape as the ZERO-share-sibling test above: less than
                 // even lot 1's own 10-share, so lot 2 gets nothing
                 .mockReturnValueOnce({
@@ -2805,22 +2826,22 @@ describe('ExecutionImpl.execute', () => {
                   fill_price: 90,
                   filled_size: 10,
                   cost_breakdown: zeroCosts(),
-                }) // lot 1 entry
+                })
                 .mockReturnValueOnce({
                   fill_price: 92,
                   filled_size: 15,
                   cost_breakdown: zeroCosts(),
-                }) // lot 2 entry
+                })
                 .mockReturnValueOnce({
                   fill_price: 94,
                   filled_size: 8,
                   cost_breakdown: zeroCosts(),
-                }) // lot 3 entry
+                })
                 .mockReturnValueOnce({
                   fill_price: 100,
                   filled_size: 25,
                   cost_breakdown: zeroCosts(),
-                }), // the flatten, in full
+                }),
             };
             const marketData = makeMarketData();
             const broker = new SimulatedBrokerAdapter({

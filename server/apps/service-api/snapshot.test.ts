@@ -754,7 +754,7 @@ describe('buildSnapshot', () => {
       });
       const store = fakeStore({
         getRecentClosedTrades: () => [trade],
-        getFillsForTrades: () => [], // no fills captured for this lot
+        getFillsForTrades: () => [],
       });
 
       const snap = buildSnapshot(store, AS_OF, 'paper', 'live');
@@ -994,7 +994,7 @@ describe('buildSnapshot', () => {
       const store = fakeStore({
         getAllClosedTrades: () => trades,
         getOpenPositions: () => [makePosition({ idempotency_key: 'open-1' })],
-        getMark: () => makeMark(105), // (105 - 100) * 100 filled_size = +500 unrealized
+        getMark: () => makeMark(105),
       });
 
       const snap = buildSnapshot(store, AS_OF, 'paper', 'live');
@@ -1057,11 +1057,11 @@ describe('buildSnapshot', () => {
      * "2026-07-15" and drop it out of `asOf`'s ("2026-07-16") today window.
      */
     it('counts a 00:30 BST close on the London day it happened on, not the UTC day', () => {
-      const asOf = new Date('2026-07-16T10:00:00Z'); // London: 11:00 BST, day 2026-07-16
+      const asOf = new Date('2026-07-16T10:00:00Z');
       const trades = [
         makeClosedTrade({
           idempotency_key: 'bst-boundary',
-          closed_at: new Date('2026-07-15T23:30:00Z'), // London: 2026-07-16T00:30 BST
+          closed_at: new Date('2026-07-15T23:30:00Z'),
           realized_pnl_net: 25,
           fees_total: 1,
         }),
@@ -1082,7 +1082,7 @@ describe('buildSnapshot', () => {
      * mechanism doesn't over-shift when there is no offset to apply
      */
     it('counts a winter close on its UTC-equal London day, and excludes the prior day', () => {
-      const asOf = new Date('2026-01-16T18:00:00Z'); // GMT, no offset from UTC
+      const asOf = new Date('2026-01-16T18:00:00Z');
       const trades = [
         makeClosedTrade({
           idempotency_key: 'today-gmt',

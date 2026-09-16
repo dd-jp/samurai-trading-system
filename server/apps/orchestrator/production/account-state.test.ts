@@ -400,7 +400,7 @@ describe('BrokerAccountStateProvider — account scalars', () => {
       const provider = makeProvider(harness, {
         closedTrades: makeTradeReader([
           makeTrade(-50, '2026-08-01T10:00:00Z'),
-          makeTrade(120, '2026-08-02T10:00:00Z'), // the win that breaks it
+          makeTrade(120, '2026-08-02T10:00:00Z'),
           makeTrade(-30, '2026-08-03T09:00:00Z'),
           makeTrade(-20, '2026-08-03T10:00:00Z'),
         ]),

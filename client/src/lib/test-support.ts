@@ -27,14 +27,14 @@ const STAGES: readonly PipelineStage[] = [
 ];
 
 /** Fixed test epoch — no wall clock anywhere in these tests */
-export const T0 = Date.parse('2026-08-07T12:00:00.000Z');
+const T0 = Date.parse('2026-08-07T12:00:00.000Z');
 
 /** ISO timestamp `ms` after the fixed test epoch */
 export function at(ms: number): string {
   return new Date(T0 + ms).toISOString();
 }
 
-export interface CellSpec {
+interface CellSpec {
   state: PipelineCellState;
   recorded_at?: string | null;
   duration_ms?: number | null;

@@ -4,28 +4,12 @@
  * not `universe-pool/lse-etp-pool.js` directly.
  */
 
-export type {
-  EtpDirection,
-  LiquidityGateStatus,
-  LseEtpPoolRow,
-  RowProvenance,
-  SaxoTradeability,
-} from './lse-etp-pool.js';
+export type { LseEtpPoolRow } from './lse-etp-pool.js';
 export {
-  assertKnownSubclass,
-  assertValidFallbackSubset,
-  assertValidPool,
   buildRoutingMap,
-  countRankableUnderlyings,
-  FALLBACK_DEFAULT_MAX_ROWS,
-  gateAdmits,
-  isSterlingQuoted,
-  KNOWN_SUBCLASSES,
   LSE_ETP_POOL,
-  liquidityGateStatus,
   liveSizingSubclassFor,
   resolveMiSubject,
   screeningInstrumentFor,
   tradeableUniverse,
-  UnknownSubclassError,
 } from './lse-etp-pool.js';

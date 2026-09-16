@@ -1,6 +1,6 @@
 import { fundamentalAnalyst } from '../../pipeline/analysts/index.js';
 import { NO_DATA_MARKER, NOOP_ANALYST_TELEMETRY } from '../../pipeline/analysts/types.js';
-import type { SpendCap } from '../../pipeline/debate-engine/index.js';
+import type { LlmClient, LlmRequest, SpendCap } from '../../pipeline/debate-engine/index.js';
 import type { Clock, LogEntry, Logger } from '../../shared/index.js';
 import { AlwaysOpenCalendar } from '../market-data-service/index.js';
 import { MiArchiveStore } from './archive/mi-archive-store.js';
@@ -47,25 +47,37 @@ function article(overrides: Partial<AlpacaNewsArticle> = {}): AlpacaNewsArticle 
   };
 }
 
+/**
+ * Builds an `LlmClient` whose `complete` answers with `buildRaw(prompt)`'s
+ * text, narrowed through the caller's own `parseResponse` — the real
+ * `LlmClient` contract, not a cast past it
+ */
+function stubLlmClient(buildRaw: (prompt: string) => string): LlmClient {
+  return {
+    async complete<T>(request: LlmRequest<T>) {
+      const raw = buildRaw(request.prompt);
+      const parsed = request.parseResponse(raw);
+      if (!parsed.valid) {
+        throw new Error(parsed.reason);
+      }
+      return { data: parsed.data, raw_text: raw, latency_ms: 1 };
+    },
+  };
+}
+
 /** Returns a fixed score for every item, in input order */
 function scoringClient(sentiment: 1 | 0 | -1 = 1, confidence = 0.8) {
   const calls: string[] = [];
   return {
     calls,
-    client: {
-      async complete(request: { prompt: string; parseResponse: (raw: string) => unknown }) {
-        calls.push(request.prompt);
-        // Score every numbered line the prompt contains
-        const indices = [...request.prompt.matchAll(/^(\d+)\. /gm)].map((match) =>
-          Number(match[1]),
-        );
-        const raw = JSON.stringify({
-          scores: indices.map((index) => ({ index, sentiment, confidence })),
-        });
-        const parsed = request.parseResponse(raw) as { valid: boolean; data: unknown };
-        return { data: parsed.data, raw_text: raw, latency_ms: 1 };
-      },
-    },
+    client: stubLlmClient((prompt) => {
+      calls.push(prompt);
+      // Score every numbered line the prompt contains
+      const indices = [...prompt.matchAll(/^(\d+)\. /gm)].map((match) => Number(match[1]));
+      return JSON.stringify({
+        scores: indices.map((index) => ({ index, sentiment, confidence })),
+      });
+    }),
   };
 }
 
@@ -93,8 +105,7 @@ function build(
     archive,
     store,
     newsClient: news,
-    // biome-ignore lint/suspicious/noExplicitAny: minimal LlmClient stand-in.
-    llmClient: scorer.client as any,
+    llmClient: scorer.client,
     clock,
     assetClasses: ['stocks', 'crypto'],
     spendCap: options.spendCap ?? ADMITS,
@@ -434,17 +445,17 @@ describe('MiIngestAgent', () => {
       spendCap: ADMITS,
     });
 
-    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false); // streak 1
-    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false); // streak 2
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false);
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false);
 
     const scorer = scoringClient();
     (agent as unknown as { deps: { llmClient: unknown } }).deps.llmClient = scorer.client;
 
-    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false); // skipped, streak reset
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false);
     expect(scorer.calls).toHaveLength(0);
     expect(archive.rawRows('alpaca-news')).toHaveLength(1);
 
-    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(true); // streak reset, tries again
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(true);
     expect(scorer.calls).toHaveLength(1);
     expect(store.getContext('stocks', WINDOW, 't').news).toHaveLength(1);
   });
@@ -471,11 +482,11 @@ describe('MiIngestAgent', () => {
       logger,
     });
 
-    await agent.refresh('t', 'AAPL', 'stocks'); // streak 1
-    await agent.refresh('t', 'AAPL', 'stocks'); // streak 2
+    await agent.refresh('t', 'AAPL', 'stocks');
+    await agent.refresh('t', 'AAPL', 'stocks');
     logger.entries.length = 0;
 
-    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false); // skipped
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false);
 
     expect(
       logger.entries.some(
@@ -505,8 +516,8 @@ describe('MiIngestAgent', () => {
       spendCap: ADMITS,
     });
 
-    await agent.refresh('t', 'AAPL', 'stocks'); // streak 1
-    await agent.refresh('t', 'AAPL', 'stocks'); // streak 2
+    await agent.refresh('t', 'AAPL', 'stocks');
+    await agent.refresh('t', 'AAPL', 'stocks');
 
     // A refresh with nothing new to score — the fetch returns no articles at
     // all, so `unscored.length === 0` and `refresh` returns early, well
@@ -723,8 +734,7 @@ describe('MiIngestAgent', () => {
       archive,
       store: restarted,
       newsClient: newsClient([]),
-      // biome-ignore lint/suspicious/noExplicitAny: minimal LlmClient stand-in.
-      llmClient: scoringClient().client as any,
+      llmClient: scoringClient().client,
       clock,
       assetClasses: ['stocks'],
       spendCap: ADMITS,
@@ -787,8 +797,7 @@ describe('MiIngestAgent', () => {
       archive,
       store: restarted,
       newsClient: newsClient([]),
-      // biome-ignore lint/suspicious/noExplicitAny: minimal LlmClient stand-in.
-      llmClient: scoringClient().client as any,
+      llmClient: scoringClient().client,
       clock,
       assetClasses: ['stocks'],
       spendCap: ADMITS,
@@ -819,13 +828,9 @@ describe('MiIngestAgent', () => {
     const archive = new MiArchiveStore();
     const store = new MarketIntelligenceStore(clock);
     const omittedArticle = article({ id: '1002', headline: 'Apple faces antitrust probe' });
-    const omitsSecondIndex = {
-      async complete(request: { prompt: string; parseResponse: (raw: string) => unknown }) {
-        const raw = JSON.stringify({ scores: [{ index: 0, sentiment: 1, confidence: 0.8 }] });
-        const parsed = request.parseResponse(raw) as { valid: boolean; data: unknown };
-        return { data: parsed.data, raw_text: raw, latency_ms: 1 };
-      },
-    };
+    const omitsSecondIndex = stubLlmClient(() =>
+      JSON.stringify({ scores: [{ index: 0, sentiment: 1, confidence: 0.8 }] }),
+    );
     const agent = new MiIngestAgent({
       archive,
       store,
@@ -833,8 +838,7 @@ describe('MiIngestAgent', () => {
         article({ id: '1001', headline: 'Apple beats on revenue' }),
         omittedArticle,
       ]),
-      // biome-ignore lint/suspicious/noExplicitAny: minimal LlmClient stand-in.
-      llmClient: omitsSecondIndex as any,
+      llmClient: omitsSecondIndex,
       clock,
       assetClasses: ['stocks'],
       spendCap: ADMITS,
@@ -875,13 +879,9 @@ describe('MiIngestAgent', () => {
     const archive = new MiArchiveStore();
     const store = new MarketIntelligenceStore(clock);
     const omittedArticle = article({ id: '1002', headline: 'Apple faces antitrust probe' });
-    const omitsSecondIndex = {
-      async complete(request: { prompt: string; parseResponse: (raw: string) => unknown }) {
-        const raw = JSON.stringify({ scores: [{ index: 0, sentiment: 1, confidence: 0.8 }] });
-        const parsed = request.parseResponse(raw) as { valid: boolean; data: unknown };
-        return { data: parsed.data, raw_text: raw, latency_ms: 1 };
-      },
-    };
+    const omitsSecondIndex = stubLlmClient(() =>
+      JSON.stringify({ scores: [{ index: 0, sentiment: 1, confidence: 0.8 }] }),
+    );
     const agent = new MiIngestAgent({
       archive,
       store,
@@ -889,8 +889,7 @@ describe('MiIngestAgent', () => {
         article({ id: '1001', headline: 'Apple beats on revenue' }),
         omittedArticle,
       ]),
-      // biome-ignore lint/suspicious/noExplicitAny: minimal LlmClient stand-in.
-      llmClient: omitsSecondIndex as any,
+      llmClient: omitsSecondIndex,
       clock,
       assetClasses: ['stocks'],
       spendCap: ADMITS,
@@ -951,19 +950,14 @@ describe('MiIngestAgent', () => {
     // must answer with at least one shape-valid entry for an index outside the
     // batch — `isScore` checks shape, not bounds — so neither index 0 nor 1
     // finds a match in `byIndex`
-    const answersOutOfRangeIndexOnly = {
-      async complete(request: { prompt: string; parseResponse: (raw: string) => unknown }) {
-        const raw = JSON.stringify({ scores: [{ index: 99, sentiment: 1, confidence: 0.8 }] });
-        const parsed = request.parseResponse(raw) as { valid: boolean; data: unknown };
-        return { data: parsed.data, raw_text: raw, latency_ms: 1 };
-      },
-    };
+    const answersOutOfRangeIndexOnly = stubLlmClient(() =>
+      JSON.stringify({ scores: [{ index: 99, sentiment: 1, confidence: 0.8 }] }),
+    );
     const agent = new MiIngestAgent({
       archive,
       store,
       newsClient: newsClient([articleA, articleB]),
-      // biome-ignore lint/suspicious/noExplicitAny: minimal LlmClient stand-in.
-      llmClient: answersOutOfRangeIndexOnly as any,
+      llmClient: answersOutOfRangeIndexOnly,
       clock,
       assetClasses: ['stocks'],
       spendCap: ADMITS,

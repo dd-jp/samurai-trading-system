@@ -17,11 +17,9 @@
 
 import type {
   AssetClass,
-  DashboardSnapshot,
   LlmSpendSummary,
   MetricsSuite,
   PipelineStage,
-  StoreMode,
   TickStatus,
 } from '../../../contracts/index.js';
 import type { PersistedArmComparisonSample } from '../../pipeline/feedback-loop/index.js';
@@ -29,21 +27,15 @@ import type { OutsideBenchmarkSample } from '../../pipeline/outside-benchmark/in
 import type { RiskCriticVerdict } from '../../pipeline/risk-manager/index.js';
 import type { Mark } from '../../providers/market-data-service/index.js';
 import type { ClosedTrade, DebateLog, Fill, OpenPosition, TradingArm } from '../../shared/index.js';
-import type { ProviderStatusReader } from './provider-status.js';
 
 /**
  * The wire model, re-exported. Declared in `contracts/` because the browser
  * consumes every one of these and must not import a server module to do it.
  */
 export type {
-  AnalystPerformanceRow,
   ArmComparisonRow,
-  ArmPerformanceWire,
   ClosedTradeRow,
-  CloseReason,
   DashboardSnapshot,
-  DebateRow,
-  DroppedConditionWire,
   EvaluatedConditionWire,
   FillRow,
   LlmPerDebateStats,
@@ -51,11 +43,9 @@ export type {
   LlmSpendWindow,
   MetricsSuiteWire,
   OutsideBenchmarkRow,
-  OutsideBenchmarkWire,
   PositionRow,
   RiskCriticRow,
   TickStatus,
-  VerdictRow,
 } from '../../../contracts/index.js';
 
 /**
@@ -182,22 +172,6 @@ export interface PipelineActivity {
   events: PipelineStageEvent[];
   /** Every in-flight tick in the window, newest first. Empty when nothing is running. */
   live: PipelineLiveTick[];
-}
-
-/**
- * The pure test seam — a function of `(DashboardQueryStore, asOf)` that
- * produces the wire snapshot. No I/O beyond the injected store; trivially
- * testable against a fake `DashboardQueryStore` (dashboard-spec.md "Testing
- * Decisions").
- */
-export interface DashboardSnapshotBuilder {
-  buildSnapshot(
-    store: DashboardQueryStore,
-    asOf: Date,
-    mode: StoreMode,
-    arm: TradingArm,
-    providers?: ProviderStatusReader,
-  ): DashboardSnapshot;
 }
 
 /**

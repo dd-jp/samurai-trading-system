@@ -83,7 +83,7 @@ Technical analyst: Price is consolidating just above the 20-period EMA after a f
 Sentiment analyst: News flow is quiet, no material headlines in the last 24 hours for this name or its sector. Social mention volume is at its 30-day median, tone slightly positive but low-signal. No scheduled catalysts (earnings, macro prints) inside the current session. Net read: neutral, low information content.`;
 
 function buildUserPrompt() {
-  const filler = buildFillerBars(44); // ~1,200 tokens of market context
+  const filler = buildFillerBars(44);
   return `${ANALYST_VIEWS}\n\nRecent 1-minute bar context (most recent last):\n${filler}\n\nGiven the three analyst views and the bar context above, resolve to a single stance for the current session. Respond with the JSON object only.`;
 }
 

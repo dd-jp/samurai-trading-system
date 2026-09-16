@@ -360,6 +360,6 @@ describe("the source's own short-read policy still owns raw scarcity (#292)", ()
 
     const bars = await source.fetchBars('BTC-USD', { timeframe: '1h', lookback: 14 }, SESSION_SHUT);
 
-    expect(bars).toHaveLength(4); // 5 raw, newest still forming at asOf
+    expect(bars).toHaveLength(4);
   });
 });

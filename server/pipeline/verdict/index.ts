@@ -511,17 +511,7 @@ export class VerdictImpl implements Verdict {
 }
 
 export { LoggingVerdict } from './logging-verdict.js';
-export { formatDecisionMessage } from './notifications/format.js';
-export { isNotableVerdict } from './notifications/notable-verdict.js';
-export type { TelegramBotApiClientOptions } from './notifications/telegram/telegram-bot-api-client.js';
 export { TelegramBotApiClient } from './notifications/telegram/telegram-bot-api-client.js';
-export type { TelegramError } from './notifications/telegram/telegram-errors.js';
-export {
-  isRetryableTelegramError,
-  TelegramProviderError,
-  TelegramRateLimitError,
-  TelegramTimeoutError,
-} from './notifications/telegram/telegram-errors.js';
 export { TelegramChannel } from './notifications/telegram-channel.js';
 export type { TelegramClient, TradeChannelNotifier } from './notifications/types.js';
 export { NotifyingVerdict } from './notifying-verdict.js';
@@ -531,7 +521,6 @@ export type {
   ApprovalOutcome,
   ApprovalRequest,
   PositionStore,
-  Verdict,
   VerdictConfig,
   VerdictDecision,
   VerdictInput,

@@ -69,7 +69,7 @@ const MI_MIGRATIONS_DIR = fileURLToPath(new URL('./migrations', import.meta.url)
  * publisher time, so the row asserts we would have seen it the instant it
  * published.
  */
-export type ArchiveFidelity = 'live' | 'backfill';
+type ArchiveFidelity = 'live' | 'backfill';
 
 /** One immutable vendor record, exactly as fetched */
 export interface RawArchiveRow {

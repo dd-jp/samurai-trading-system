@@ -88,7 +88,7 @@ const DEFAULT_TIMERS: SaxoWeeklyReminderTimers = {
 };
 
 /** 18:00 — see the module doc's "Why Sunday 18:00" section */
-export const SAXO_WEEKLY_REMINDER_LONDON_MINUTES = 18 * 60;
+const SAXO_WEEKLY_REMINDER_LONDON_MINUTES = 18 * 60;
 
 /** `Date.prototype.getUTCDay()`'s numbering (0 = Sunday) — a civil date's weekday is zone-independent */
 function civilWeekday(date: ZonedCivilDate): number {

@@ -46,9 +46,7 @@ export type StoreHandle = BetterSqlite3.Database;
  * pre-#330 database can be detected and named in the refusal below. The live
  * path is keyed off the TRADING MODE now — see `sharedStorePath`.
  */
-export const STORE_ENVIRONMENTS = ['development', 'test', 'staging', 'production'] as const;
-
-export type StoreEnvironment = (typeof STORE_ENVIRONMENTS)[number];
+const STORE_ENVIRONMENTS = ['development', 'test', 'staging', 'production'] as const;
 
 /**
  * The trading modes that may own a store file (shared-sqlite-store-spec.md
@@ -122,7 +120,7 @@ export function sharedStorePath(mode: StoreMode = resolveStoreMode()): string {
  * The pre-#330 filename, kept only so a stranded database can be NAMED in the
  * refusal below. Nothing opens it.
  */
-export function legacyStorePath(rawEnv: string | undefined = process.env.NODE_ENV): string {
+function legacyStorePath(rawEnv: string | undefined = process.env.NODE_ENV): string {
   const env = rawEnv ?? 'development';
   if (!(STORE_ENVIRONMENTS as readonly string[]).includes(env)) {
     throw new Error(

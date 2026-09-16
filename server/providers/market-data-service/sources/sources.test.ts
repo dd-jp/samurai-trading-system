@@ -8,7 +8,7 @@ import type { BarWindow } from '../types.js';
 import { type AlpacaBar, AlpacaDataSource, type AlpacaMarketDataClient } from './alpaca-source.js';
 
 const WINDOW: BarWindow = { timeframe: '1h', lookback: 10 };
-const ASOF = new Date('2026-07-15T18:00:00Z'); // 14:00 ET, mid-session
+const ASOF = new Date('2026-07-15T18:00:00Z');
 
 /**
  * Two candles at 14:00 and 15:00 UTC (10:00/11:00 ET — both in session),
@@ -66,7 +66,7 @@ describe('marks', () => {
     const mark = await source.fetchMark('AAPL', ASOF, 'live');
 
     expect(mark).toEqual({
-      price: 999, // midpoint of 997/1001
+      price: 999,
       observed_at: new Date('2026-07-15T17:59:30Z'),
       source: 'alpaca',
       asset_class: 'stocks',
@@ -99,9 +99,9 @@ describe('marks', () => {
 
 describe('market-hours gating', () => {
   const outOfHoursAlpacaBars: AlpacaBar[] = [
-    { t: '2026-07-15T12:00:00Z', o: 1, h: 1, l: 1, c: 1, v: 1 }, // 08:00 ET pre-market
-    { t: '2026-07-15T14:00:00Z', o: 2, h: 2, l: 2, c: 2, v: 2 }, // 10:00 ET in session
-    { t: '2026-07-15T22:00:00Z', o: 3, h: 3, l: 3, c: 3, v: 3 }, // 18:00 ET after hours
+    { t: '2026-07-15T12:00:00Z', o: 1, h: 1, l: 1, c: 1, v: 1 },
+    { t: '2026-07-15T14:00:00Z', o: 2, h: 2, l: 2, c: 2, v: 2 },
+    { t: '2026-07-15T22:00:00Z', o: 3, h: 3, l: 3, c: 3, v: 3 },
   ];
 
   it('never produces stock bars outside trading hours, even when the source returns them', async () => {
@@ -195,7 +195,7 @@ describe("the window's short-read policy reaches the source client (#292)", () =
 
 describe('raw fetch requests one extra bar for the forming candle (#362)', () => {
   it('still returns the caller-requested count of completed bars when the newest raw candle is forming', async () => {
-    const asOf = new Date('2026-07-15T18:30:00Z'); // mid-hour: 18:00 candle is still forming
+    const asOf = new Date('2026-07-15T18:30:00Z');
     const source = new AlpacaDataSource(formingCandleClient(asOf), { asset_class: 'crypto' });
 
     const bars = await source.fetchBars('BTC-USD', { timeframe: '1h', lookback: 14 }, asOf);

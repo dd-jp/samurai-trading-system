@@ -204,8 +204,10 @@ describe('collectAnalystViews', () => {
       {
         analyst_id: 'analyst-sentiment-1',
         analyst_type: 'sentiment',
-        // biome-ignore lint/suspicious/noExplicitAny: deliberately malformed for the test
-        response: Promise.resolve({ analyst_id: 'analyst-sentiment-1' } as any),
+        // Deliberately malformed for the test — missing every AnalystView field but analyst_id
+        response: Promise.resolve({
+          analyst_id: 'analyst-sentiment-1',
+        } as unknown as AnalystView),
       },
     ];
 
