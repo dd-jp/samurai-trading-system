@@ -2859,8 +2859,9 @@ export function paperStartingProfile(
     // `max_risk_per_trade * asset_class_risk_multiplier.stocks * 1.5 /
     // (atr_k * vol_floor_fraction)` = 712.5% of equity at 1.9x (already 375%
     // at the shipped 1.0x) — a pre-existing gap this retune does not create
-    // and does not close (#1135 tracks the Risk Manager caps that should
-    // backstop it but currently read unclamped equity). 1.9x keeps the
+    // and does not close. The Risk Manager caps that would backstop it multiply
+    // unclamped paper equity by design (#1135's ruling); #1604 owns what that
+    // does to the control arm's exposure. 1.9x keeps the
     // reference tick's BOUNDED deployment under the cap; a higher-conviction
     // entry at the same realized ATR is not prevented from exceeding it.
     //
