@@ -160,13 +160,13 @@ describe('getChangedFiles resolves the merge-base, not a bare diff against baseR
     gitIn(repo, 'branch', 'base-ref');
 
     // baseRef (main) advances after the branch point, modifying a file this branch
-    // never touches — the scenario the two-dot bug misread as "changed here".
+    // never touches — the scenario the two-dot bug misread as "changed here"
     gitIn(repo, 'checkout', '-q', 'base-ref');
     writeIn(repo, 'server/pipeline/execution/shared.ts', 'export const shared = "main-drift";\n');
     gitIn(repo, 'add', '-A');
     gitIn(repo, 'commit', '-q', '-m', 'main drift');
 
-    // Back on the feature side, which diverged from root before that drift landed.
+    // Back on the feature side, which diverged from root before that drift landed
     gitIn(repo, 'checkout', '-q', headBranch);
     writeIn(repo, 'server/pipeline/execution/own-change.ts', 'export const own = 1;\n');
     gitIn(repo, 'add', '-A');

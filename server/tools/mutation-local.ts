@@ -44,7 +44,7 @@ const MUTABLE_ROOTS = ['server/', 'contracts/'] as const;
 const PRODUCTION_FILE_RE = /\.tsx?$/;
 const TEST_FILE_RE = /\.test\.tsx?$/;
 
-/** A `.ts`/`.tsx` production file Stryker can mutate — excludes tests and `server/tools/` (this script's own package, tooling, lower-stakes per #1634). */
+/** A `.ts`/`.tsx` production file Stryker can mutate — excludes tests and `server/tools/` (this script's own package, tooling, lower-stakes per #1634) */
 export function isMutableProductionFile(path: string): boolean {
   return (
     PRODUCTION_FILE_RE.test(path) &&
@@ -70,7 +70,7 @@ export interface PartitionedChanges {
   readonly advisory: readonly string[];
 }
 
-/** Splits changed, mutable production files into the score-barred set and everything else. */
+/** Splits changed, mutable production files into the score-barred set and everything else */
 export function partitionChangedFiles(files: readonly string[]): PartitionedChanges {
   const mutable = files.filter(isMutableProductionFile);
   return {
@@ -79,7 +79,7 @@ export function partitionChangedFiles(files: readonly string[]): PartitionedChan
   };
 }
 
-/** The commit `baseRef` and `HEAD` last shared, so a bare `git diff` against it excludes baseRef's own later history. */
+/** The commit `baseRef` and `HEAD` last shared, so a bare `git diff` against it excludes baseRef's own later history */
 export function resolveMergeBase(baseRef: string, root: string): string {
   return execFileSync('git', ['-C', root, 'merge-base', baseRef, 'HEAD'], {
     encoding: 'utf8',
@@ -163,7 +163,7 @@ function main(): void {
   // test lives outside these four packages (e.g. an orchestrator wiring test) reads as
   // NoCoverage and counts against the score below. A red gate on a line that has real
   // orchestrator-level coverage may be this gap, not a real regression — check before
-  // adding a test.
+  // adding a test
   const testFileGlobs = TRADING_PATH_PREFIXES.map((prefix) => `${prefix}**/*.test.ts`);
   const strykerBin = fileURLToPath(new URL('../../node_modules/.bin/stryker', import.meta.url));
   const result = spawnSync(
