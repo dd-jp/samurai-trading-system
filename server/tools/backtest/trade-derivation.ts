@@ -155,7 +155,7 @@ export function toReturnSeries(
     throw new Error('toReturnSeries: no bars in the sample — there is no series to compute over.');
   }
 
-  const pnlPerBar = new Array<number>(bars.length).fill(0);
+  const pnlPerBar = Array.from({ length: bars.length }, () => 0);
 
   for (const trade of trades) {
     const index = firstBarAtOrAfter(bars, trade.closed_at.getTime());

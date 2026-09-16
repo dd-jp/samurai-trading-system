@@ -419,7 +419,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
           payload: { ...divergence },
         });
       }
-      for (const key of [...lastReconcileAction.keys()]) {
+      for (const key of lastReconcileAction.keys()) {
         if (!reportedThisPass.has(key)) lastReconcileAction.delete(key);
       }
       // #1088: same trace `runStartupReconcile` logs above — the sweep is
@@ -478,7 +478,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
             payload: { ...divergence },
           });
         }
-        for (const key of [...lastSweepAction.keys()]) {
+        for (const key of lastSweepAction.keys()) {
           if (!reportedThisPass.has(key)) lastSweepAction.delete(key);
         }
       } catch (sweepError) {

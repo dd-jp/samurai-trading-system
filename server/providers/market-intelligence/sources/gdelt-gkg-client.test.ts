@@ -16,7 +16,7 @@ function gkgRow(fields: {
   source?: string;
   url?: string;
 }): string {
-  const columns = new Array<string>(27).fill('');
+  const columns = Array.from({ length: 27 }, () => '');
   columns[0] = fields.id;
   columns[1] = '20260815153000';
   columns[3] = fields.source ?? 'patersontimes.com';

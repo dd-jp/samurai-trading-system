@@ -31,7 +31,7 @@ const HOUR_MS = 60 * 60 * 1000;
 const CONTEXT_WINDOW_MS = 24 * HOUR_MS;
 
 function payload(theme: string, tone: number): string {
-  const columns = new Array<string>(27).fill('');
+  const columns = Array.from({ length: 27 }, () => '');
   columns[0] = 'record';
   columns[1] = '20260903120000';
   columns[3] = 'fixture.test';
