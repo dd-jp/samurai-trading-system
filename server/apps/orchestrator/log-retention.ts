@@ -622,8 +622,7 @@ function isBareTruncateCandidateName(name: string, truncateNameSet: ReadonlySet<
 
 /**
  * The truncate path's own allocation gate and the `truncate` call, pulled out
- * of `sweepStaleLogs`'s loop — see the module doc's "Bare live names" section
- * for why this is gated on `stat.blocks`, not `stat.size`
+ * of `sweepStaleLogs`'s loop
  */
 function tryTruncateBareLogEntry(
   path: string,
@@ -631,6 +630,19 @@ function tryTruncateBareLogEntry(
   bareTruncateBytes: number,
   truncate: (path: string) => void,
 ): { truncated: boolean; bytesReclaimed: number } {
+  // Gated on DISK ALLOCATION (`stat.blocks`), not apparent length
+  // (`stat.size`): a live, non-`O_APPEND` writer leaves a sparse hole
+  // behind a previous truncate (see the module doc), so `stat.size` climbs
+  // back toward its pre-truncation figure on its very next write while the
+  // disk usage that motivated the truncation stays freed. Gating on size
+  // would see that recovered apparent length, truncate again, and destroy
+  // whatever the writer had appended since the last boot — every boot
+  // after the first, for as long as the writer stays open. `stat.blocks`
+  // is fixed at 512-byte units by POSIX regardless of `stat.blksize`, and
+  // is what actually goes back to (near) zero after a truncate, cycle over
+  // cycle — verified interactively on macOS APFS (deployment), and by the
+  // "does not re-truncate" regression test below passing on Linux ext4 in
+  // this PR's own CI (`ubuntu-latest`, `.github/workflows/ci.yml`)
   const allocatedBytes = stat.blocks * STAT_BLOCK_BYTES;
   if (allocatedBytes <= bareTruncateBytes) {
     return { truncated: false, bytesReclaimed: 0 };
@@ -755,7 +767,7 @@ export function sweepStaleLogs(options: LogRetentionOptions): LogRetentionResult
 
     if (isArchivedLogName(entry.name)) {
       const stat = safeStat(path);
-      if (stat === undefined) continue;
+      if (stat === undefined) continue; // Vanished between listing and stat — not this sweep's problem
 
       const outcome = tryRemoveArchivedLogEntry(path, stat, liveIdentities, cutoff, remove);
       if (outcome.removed) {
@@ -782,21 +794,8 @@ export function sweepStaleLogs(options: LogRetentionOptions): LogRetentionResult
     }
 
     const stat = safeStat(path);
-    if (stat === undefined) continue;
+    if (stat === undefined) continue; // Vanished between listing and stat — not this sweep's problem
 
-    // Gated on DISK ALLOCATION (`stat.blocks`), not apparent length
-    // (`stat.size`): a live, non-`O_APPEND` writer leaves a sparse hole
-    // behind a previous truncate (see the module doc), so `stat.size` climbs
-    // back toward its pre-truncation figure on its very next write while the
-    // disk usage that motivated the truncation stays freed. Gating on size
-    // would see that recovered apparent length, truncate again, and destroy
-    // whatever the writer had appended since the last boot — every boot
-    // after the first, for as long as the writer stays open. `stat.blocks`
-    // is fixed at 512-byte units by POSIX regardless of `stat.blksize`, and
-    // is what actually goes back to (near) zero after a truncate, cycle over
-    // cycle — verified interactively on macOS APFS (deployment), and by the
-    // "does not re-truncate" regression test below passing on Linux ext4 in
-    // this PR's own CI (`ubuntu-latest`, `.github/workflows/ci.yml`)
     const outcome = tryTruncateBareLogEntry(path, stat, bareTruncateBytes, truncate);
     if (outcome.truncated) {
       result.filesTruncated += 1;
