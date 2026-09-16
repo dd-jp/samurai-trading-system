@@ -451,6 +451,7 @@ function decisionBarFor(debate: DebateResult): Date {
  * `direction` is the router's already-narrowed `debate.direction`: the type
  * is what keeps a neutral debate out, so nothing here re-checks it.
  */
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: sequential skip-guard chain (valuation, conviction, flatten window, ATR, mark, sizing) with each guard's position relative to the others explicitly documented and load-bearing; extracting risks silently reordering a guard
 async function buildBracket(
   input: TraderInput,
   direction: TradeDirection,
@@ -1440,6 +1441,7 @@ export async function decideWithReason(input: TraderInput): Promise<TraderOutcom
  * Module: Position Awareness, tickets #73/#74), with #698's diagnostic
  * accumulator threaded through
  */
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: position-state routing where branch ORDER is the safety property (flat-by-close must precede every other holding branch, see comment below) — extracting risks silently reordering a branch
 async function routeDecision(
   input: TraderInput,
   diagnostics: TraderDiagnostic[],
