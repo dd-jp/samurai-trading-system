@@ -222,6 +222,48 @@ export interface DebatePersonasWithState extends DebatePersonas {
   maxRounds: number;
 }
 
+// Split out of the mediator's `assess` closure purely to keep its cognitive
+// complexity down — a pure computation over already-resolved round data, with
+// no ordering dependency on anything else in the round (the caller still
+// computes `disagreement`/`confidence` first and calls this after, exactly as
+// the inline version did).
+function buildPartialDebateState(
+  debate_id: string,
+  context: RoundContext,
+  response: Awaited<ReturnType<typeof runMediatorPersona>>,
+  confidence: number,
+  disagreement: Awaited<ReturnType<typeof detectDisagreements>>,
+  accumulatedStances: AnalystRoundStance[],
+  roundVerdicts: readonly RoundVerdict[],
+): PartialDebateState {
+  return {
+    synthesis: response.rationale,
+    position: `${response.stance}: ${response.rationale}`,
+    confidence,
+    contributions: buildAnalystContributions(context.views, accumulatedStances),
+    disagreement_summary: disagreement.summary,
+    // A partial state is non-converged by construction, and `runDebate` holds
+    // the invariant that a non-converged result carries non-empty
+    // `open_items` so Trader/Risk can apply caution. Its own fallback — the
+    // disagreement summary — is empty on every non-final round
+    // (`detectDisagreements` runs once per debate), so falling back to it
+    // here would satisfy the invariant with an empty string. This says what
+    // actually happened instead.
+    open_items:
+      disagreement.conflicts.length > 0
+        ? disagreement.conflicts.map((conflict) => conflict.nature)
+        : ['debate did not converge before the latency budget fired'],
+    rounds_completed: context.round,
+    direction: response.stance,
+    // Snapshot rather than the live array, matching `contributions` above
+    // (`buildAnalystContributions` over a fresh copy of `accumulatedStances`)
+    // — a caller holding an old `currentState` reads what had completed AT
+    // THAT SNAPSHOT, not whatever `roundVerdicts` grows to later
+    round_verdicts: [...roundVerdicts],
+    debate_id,
+  };
+}
+
 /**
  * Builds one debate's bull/bear/mediator port set over a shared LLM client.
  * Stateful per debate (not reusable across debates): the mediator closure
@@ -352,33 +394,15 @@ export function buildDebatePersonas(
       // callers) reports no state rather than inventing an id that would not
       // match the `debate_log` row
       if (debate_id !== undefined) {
-        currentState = {
-          synthesis: response.rationale,
-          position: `${response.stance}: ${response.rationale}`,
-          confidence,
-          contributions: buildAnalystContributions(context.views, accumulatedStances),
-          disagreement_summary: disagreement.summary,
-          // A partial state is non-converged by construction, and
-          // `runDebate` holds the invariant that a non-converged result
-          // carries non-empty `open_items` so Trader/Risk can apply caution
-          // Its own fallback — the disagreement summary — is empty on every
-          // non-final round (`detectDisagreements` runs once per debate), so
-          // falling back to it here would satisfy the invariant with an empty
-          // string. This says what actually happened instead.
-          open_items:
-            disagreement.conflicts.length > 0
-              ? disagreement.conflicts.map((conflict) => conflict.nature)
-              : ['debate did not converge before the latency budget fired'],
-          rounds_completed: context.round,
-          direction: response.stance,
-          // Snapshot rather than the live array, matching `contributions`
-          // above (`buildAnalystContributions` over a fresh copy of
-          // `accumulatedStances`) — a caller holding an old `currentState`
-          // reads what had completed AT THAT SNAPSHOT, not whatever
-          // `roundVerdicts` grows to later
-          round_verdicts: [...roundVerdicts],
+        currentState = buildPartialDebateState(
           debate_id,
-        };
+          context,
+          response,
+          confidence,
+          disagreement,
+          accumulatedStances,
+          roundVerdicts,
+        );
       }
 
       return {
@@ -895,6 +919,7 @@ export function buildDebateStep(
    */
   const resolvedBarByInstrument = new Map<string, { barMs: number; debate_id: string }>();
 
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: an ordered gate/replay pipeline where each step's position is individually documented as load-bearing — the same-bar memo and persisted-log replays must run before any spend/rate is consumed, the spend check must precede the rate reservation (reserve mutates counters, so a later refusal must not have already booked one), and resolvedBarByInstrument.set must run AFTER persistDebateLog so a throw leaves the bar unresolved for the crash-retry path (#743) — extraction risks silently reordering one of these
   return async ({ trace_id, instrument, asset_class, views, clock, bar }) => {
     // The SAME `Date` must go into `debate_id`'s hash and into the row's
     // `bar_timestamp`, or the row claims a bar coordinate its own primary key
