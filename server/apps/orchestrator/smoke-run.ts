@@ -1624,16 +1624,7 @@ function exitPathCrashRestartFailures(
   return failures;
 }
 
-/**
- * #1088 — the terminal-row sweep's ENFORCEMENT assertion (#430's
- * convention again): scenario 6 seeded a `rejected`, `filled_size = 0`
- * `open_positions` row already older than `TERMINAL_SWEEP_AGE_MS`. Nothing
- * else in this run ever reads or clears that row — `getOpenPositions()`
- * already excluded it from every other check above by virtue of being
- * terminal — so its continued presence after the restarted `reconcile()`
- * can only mean `sweepTerminalPositions` was deleted, stopped being
- * called from `reconcile()`, or regressed its own predicate
- */
+/** #1088 — a seeded terminal row still present after the restart means `sweepTerminalPositions` regressed */
 function exitPathTerminalSweepFailures(evidence: ExitPathEvidence): string[] {
   const failures: string[] = [];
   const { terminalSweep } = evidence;
@@ -1650,11 +1641,8 @@ function exitPathTerminalSweepFailures(evidence: ExitPathEvidence): string[] {
 }
 
 /**
- * #576. Runs after the tick loop has stopped and drained: it shares `db` and
- * `clock` with the six-stage run but drives its own instruments
- * (`EXIT_PATH_INSTRUMENTS`), so the two cannot contend for the same lots or
- * the same `heldLots` filter (execute.ts). Residual alerts are gathered from
- * BOTH the tick loop and the harness — one is a defect wherever it fires.
+ * #576. Runs after the tick loop has drained; shares `db`/`clock` but drives
+ * its own instruments so the two runs cannot contend for the same lots.
  */
 const exitPathProbe: Probe<'exitPath'> = {
   async run({ db, clock, profile, logger, tickLoopResidualAlerts }) {
@@ -1671,9 +1659,6 @@ const exitPathProbe: Probe<'exitPath'> = {
     };
   },
   verdict(evidence, { observations }) {
-    // #576 — the exit path, unconditional: `runExitPathScenarios` always runs,
-    // so every one of these is expected on every healthy smoke run, the same
-    // way `tickLoopProbe`'s `positions`/`fills` checks are
     const { positions } = observations;
     const failures: string[] = [];
     failures.push(...exitPathFlattenSubmissionFailures(observations));
@@ -1707,34 +1692,15 @@ interface ExitPathScenarioContext {
 }
 
 /**
- * `ExitPathScenarioContext` minus `execution` (#1228). Scenario 5's
- * (#549) failed re-arm depends on no further `ingestFills()` reaching the
- * pre-restart `Execution` before `restartExecutionAndReconcile` runs — the
- * Simulated feed re-offers a flatten's fill on every poll, so one more
- * ingest would retry (and heal) the re-arm in-process and the restart would
- * find nothing left to sweep. Functions that run in that window take this
- * type instead of `ExitPathScenarioContext`, so `ctx.execution` does not
- * type-check inside them — an edit that adds an `ingestFills()` call to one
- * of them, or a new scenario function slotted in beside them, fails to
- * compile rather than failing the gate later. The runtime #549 gate
- * assertion already catches the call from anywhere else in this window —
- * a healed-in-process residual still clears the marker and protects the
- * right quantity on its own, so of its checks only
- * `residualSweep.sweepDivergenceAction`/`sweepDivergenceReason` (undefined
- * when the restart's own sweep found nothing left to do — see
- * `findSweepDivergence`, above `runExitPathScenarios`, and its own test
- * coverage, #1285) actually discriminate — this type only moves that failure
- * from `npm run smoke` to `npm run typecheck` for these three functions
- * specifically.
+ * `ExitPathScenarioContext` minus `execution` (#1228): the Simulated feed
+ * re-offers a flatten's fill every poll, so any `ingestFills()` between
+ * scenario 5's failed re-arm and the restart would heal it in-process.
+ * Omitting `execution` makes an accidental ingest in that window a compile
+ * error instead of a gate failure at `npm run smoke` time.
  */
 type PostSweepScenarioContext = Omit<ExitPathScenarioContext, 'execution'>;
 
-/**
- * Scenario 1 (#508/#516/#517): open, exit in full. `evaluateSmokeGate` reads
- * the cancel-before-flatten ORDERING off `broker.callSequence` and the
- * `ClosedTrade` off `closed_trades` — nothing scenario-specific has to be
- * returned for this one beyond the lot key.
- */
+/** Scenario 1 (#508/#516/#517): open, exit in full */
 async function runFullExitScenario(ctx: ExitPathScenarioContext): Promise<{ lotKey: string }> {
   const lot1 = 'smoke-exit-full-lot';
   await ctx.submit(
@@ -1796,9 +1762,9 @@ async function runPartialFlattenScenario(
     'scenario 2 exit',
   );
   await ctx.execution.ingestFills();
-  // Matches `heldQuantityFromFills`'s own `filledSize - exitQty` (shared/held-quantity.ts), not an algebraic
-  // rearrangement of it — the two are not guaranteed to be the same float64
-  // bit pattern (ADR-0005), only the SAME expression is
+  // Matches `heldQuantityFromFills`'s own `filledSize - exitQty` expression
+  // exactly — not an algebraic rearrangement, which isn't guaranteed to be
+  // the same float64 bit pattern (ADR-0005).
   const exitFillQty = EXIT_PATH_LOT_SIZE * PARTIAL_FLATTEN_FRACTION;
   const expectedResidual = EXIT_PATH_LOT_SIZE - exitFillQty;
 
@@ -1806,12 +1772,9 @@ async function runPartialFlattenScenario(
 }
 
 /**
- * Scenario 3 (#571): an older lot with a prior partial exit, plus a fresh
- * sibling, flattened TOGETHER. The older lot's "prior exit" is built with the
- * same partial-fill technique as scenario 2 (a full-size exit that only
- * partially fills) — that is the only way to leave it holding less than its
- * entry size, since `executeExit` refuses any exit whose size does not
- * exactly equal what is currently held (execute.ts).
+ * Scenario 3 (#571): an older lot with a prior partial exit (built with
+ * scenario 2's technique, since `executeExit` refuses any exit not equal to
+ * what's currently held) plus a fresh sibling, flattened together.
  */
 async function runTwoLotFlattenScenario(
   ctx: ExitPathScenarioContext,
@@ -1858,9 +1821,6 @@ async function runTwoLotFlattenScenario(
   );
   await ctx.execution.ingestFills();
 
-  // Both lots' held quantity, summed: the older one already gave up
-  // `PRIOR_EXIT_FRACTION` of its size (same `filledSize - exitQty` form as
-  // above), the newer one is untouched
   const olderPriorExitFillQty = EXIT_PATH_LOT_SIZE * PRIOR_EXIT_FRACTION;
   const olderHeld = EXIT_PATH_LOT_SIZE - olderPriorExitFillQty;
   const twoLotFlattenSize = olderHeld + EXIT_PATH_LOT_SIZE;
@@ -1882,13 +1842,9 @@ async function runTwoLotFlattenScenario(
 
 /**
  * Scenario 4's entry (#519/#526), hoisted ahead of scenario 5: scenario 5's
- * failed re-arm must be the LAST thing any `ingestFills()` does before the
- * restart — the Simulated feed re-offers a flatten's fill every poll, so any
- * later poll would retry (and heal) the re-arm IN-PROCESS and the restart
- * would find nothing to sweep. Scenario 4's own constraint is only that no
- * ingest runs between its EXIT and the restart, so its entry fill is
- * ingested here and its exit submitted by
- * `exitCrashRestartLotWithoutSweep`, after scenario 5's observing poll.
+ * failed re-arm must be the last thing any `ingestFills()` does before the
+ * restart, so scenario 4's exit is submitted separately, later, by
+ * `exitCrashRestartLotWithoutSweep`.
  */
 async function enterCrashRestartLotAheadOfResidualSweep(
   ctx: ExitPathScenarioContext,
