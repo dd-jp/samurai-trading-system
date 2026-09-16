@@ -1,53 +1,43 @@
 /**
- * Tick loop (ticket #94) — fans a TickPlan out across instruments under a
- * concurrency cap. See docs/specs/orchestrator-spec.md (Module: Tick Runner,
- * Module: Determinism & Backtest) and docs/wayfinder/orchestrator-map.md
- * ("bounded parallelism, not fully sequential").
+ * Tick loop — fans a TickPlan out across instruments under a concurrency cap.
  *
- * The cap protects the LLM rate limit shared by Analysts/Debate (CLAUDE.md's
- * HARD STOP governs those, not Execution's broker calls). It bounds how many
- * instruments run their pipelines concurrently — never any single
- * instrument's internal latency budget, which the Debate Engine owns.
+ * The cap protects the LLM rate limit shared by Analysts/Debate, not
+ * Execution's broker calls. It bounds how many instruments run their
+ * pipelines concurrently — never any single instrument's internal latency
+ * budget, which the Debate Engine owns.
  *
  * `max_concurrent_instruments: 1` is the sequential mode walk-forward replay
- * needs: outcomes come back in plan order regardless of the cap, but a cap of
- * 1 also makes the interleaving of stage calls across instruments
- * deterministic.
+ * needs: it makes the interleaving of stage calls across instruments
+ * deterministic (outcomes always come back in plan order regardless of cap).
  *
- * Each worker's `runner.runInstrument` call is wrapped in its own try/catch
- * (#507): one instrument throwing must fail only that instrument, not reject
- * this worker's `Promise.all` entry and settle the whole tick early while
- * sibling workers are still mid-pipeline (and still billing LLM debates). See
- * the `worker()` function below and `TickOutcome.error`.
+ * Each worker's `runner.runInstrument` call is wrapped in its own try/catch:
+ * one instrument throwing must fail only that instrument, not reject this
+ * worker's `Promise.all` entry and settle the whole tick early while sibling
+ * workers are still mid-pipeline (and still billing LLM debates).
  *
- * ## The phase split (#1040)
+ * ## The phase split
  *
- * The cap fans out WHOLE pipelines, which since #1013 set
- * `maxConcurrentInstruments: 6` for paper and live means sibling instruments
- * reach Risk concurrently and each clears the gross-exposure cap against
- * pre-trade exposure (#1019). So this file also owns the other half of the
- * bargain: `TailSequencer` below hands each instrument a turnstile
+ * The cap fans out WHOLE pipelines, so at width > 1 sibling instruments reach
+ * Risk concurrently and each clears the gross-exposure cap against pre-trade
+ * exposure. So this file also owns the other half of the bargain:
+ * `TailSequencer` below hands each instrument a turnstile
  * (`TickContext.beginPortfolioTail`) that the runner awaits at its Trader
  * entry point, and turns are granted STRICTLY IN PLAN ORDER. The expensive,
- * portfolio-free head (Analysts + Debate — 93-96% of wall time) still overlaps
- * at the configured width; the portfolio-mutating tail runs one instrument at
- * a time, in the same order every run.
+ * portfolio-free head (Analysts + Debate) still overlaps at the configured
+ * width; the portfolio-mutating tail runs one instrument at a time, in the
+ * same order every run.
  *
- * No second knob: `max_concurrent_instruments` is the phase-1 limit, which is
- * also what bounds provider burst and the `SpendCap` check-then-act overshoot
- * to at most `(width - 1)` debates in flight. At a width of 1 every turn is
- * already free when it is asked for, so the turnstile is inert and the pass is
- * byte-for-byte the serial pass replay has always run.
+ * No second knob: `max_concurrent_instruments` also bounds the `SpendCap`
+ * check-then-act overshoot to at most `(width - 1)` debates in flight. At a
+ * width of 1 every turn is already free when asked for, so the turnstile is
+ * inert and the pass is byte-for-byte the serial pass replay has always run.
  */
 import { randomUUID } from 'node:crypto';
 import type { Signal } from '../../pipeline/analysts/index.js';
 import { LlmRefusalError } from '../../pipeline/debate-engine/index.js';
 import type { Clock } from '../../shared/index.js';
-// #573: `describeThrown`/`safeLog` moved to shared/safe-log.ts once
-// execution/ingest-fills.ts and execution/reconcile.ts needed the identical
-// "a log call inside a catch must not itself throw" guarantee this file
-// worked out first (#507) — see that file's doc for the full reasoning,
-// unchanged by the move
+// `describeThrown`/`safeLog` live in shared/safe-log.ts: "a log call inside a
+// catch must not itself throw" is a guarantee other modules need too.
 import { describeThrown, safeLog } from '../../shared/index.js';
 import type { DecisionGate } from './decision-bar-gate.js';
 import { digest } from './digest.js';
@@ -66,52 +56,48 @@ export interface TickLoopConfig {
   /** Simultaneous instrument passes. Values < 1 are clamped to 1. */
   max_concurrent_instruments: number;
   /**
-   * Trace-ID source, generated per instrument at Signal emission
-   * (orchestrator-spec.md story 9). Injected rather than called directly so
-   * replay can supply a deterministic sequence — the determinism story needs
-   * byte-identical outcomes across two runs, which random UUIDs cannot give.
+   * Trace-ID source, generated per instrument at Signal emission. Injected
+   * rather than called directly so replay can supply a deterministic
+   * sequence — random UUIDs can't give byte-identical outcomes across runs.
    */
   newTraceId?: () => string;
-  /** Shared structured-logging interface, forwarded into every instrument's TickContext (#95) */
+  /** Shared structured-logging interface, forwarded into every instrument's TickContext */
   logger: Logger;
-  /** shared_store.audit_log writer, forwarded into every instrument's TickContext (#95) */
+  /** shared_store.audit_log writer, forwarded into every instrument's TickContext */
   auditLog: AuditLog;
-  /** shared_store.current_tick writer, forwarded into every instrument's TickContext (#96) */
+  /** shared_store.current_tick writer, forwarded into every instrument's TickContext */
   currentTickStore: CurrentTickStore;
   /**
-   * The tick/decision split's gate (#743). Consulted per instrument, per tick:
-   * a granted claim rides into `TickContext.decision_bar` and the runner runs
+   * The tick/decision split's gate. Consulted per instrument, per tick: a
+   * granted claim rides into `TickContext.decision_bar` and the runner runs
    * the full decision chain; no claim means the tick path only.
    *
-   * REQUIRED, not optional, for this repo's standing reason (#364, #388): an
-   * optional gate would let a composition root omit it, and the failure mode
-   * of omission — every tick a decision — is a silent 30x LLM-spend
-   * multiplier that reads as a healthy busy system. A caller that genuinely
-   * wants every tick to decide (the backtest harness stepping 1h bars says
-   * exactly this) constructs a `DebateBarDecisionGate` and lets every bar
-   * claim, which is the same thing stated honestly.
+   * REQUIRED, not optional: an optional gate would let a composition root
+   * omit it, and the failure mode of omission — every tick a decision — is a
+   * silent 30x LLM-spend multiplier that reads as a healthy busy system. A
+   * caller that genuinely wants every tick to decide constructs a
+   * `DebateBarDecisionGate` and lets every bar claim, stated honestly.
    */
   decisionGate: DecisionGate;
 }
 
 /**
- * Orders the portfolio-mutating tails of one plan (#1040).
+ * Orders the portfolio-mutating tails of one plan.
  *
  * Turns are granted by PLAN INDEX, never by head-completion order — the
- * property ADR-0003 §2's replay-from-log rests on. `begin(i)` resolves when
- * every index below `i` has SETTLED (reached its own tail and finished it, or
- * ended before ever asking for a turn — a quorum skip, a null exit intent, or
- * a head that threw); `finish(i)` is what reports that settlement, and the
- * tick loop calls it from a `finally` so a crash cannot strand the queue.
+ * property replay-from-log rests on. `begin(i)` resolves when every index
+ * below `i` has SETTLED (reached its own tail and finished it, or ended
+ * before ever asking for a turn); `finish(i)` reports that settlement, called
+ * from a `finally` so a crash cannot strand the queue.
  *
- * Out-of-order `finish` is normal, not exceptional: an instrument whose head
- * threw settles without ever entering the turnstile, possibly long before the
- * instrument ahead of it. So settlement is recorded in a set and the cursor
- * walks forward over whatever run of settled indices it finds.
+ * Out-of-order `finish` is normal: an instrument whose head threw settles
+ * without ever entering the turnstile, possibly before the instrument ahead
+ * of it. Settlement is recorded in a set and the cursor walks forward over
+ * whatever run of settled indices it finds.
  *
- * Deliberately NOT a mutex. A mutex grants in arrival order, which is head
- * completion order — exactly the phase-1 scheduling that must not be
- * observable downstream.
+ * Deliberately NOT a mutex — a mutex grants in arrival order, which is head
+ * completion order, exactly the scheduling that must not be observable
+ * downstream.
  */
 class TailSequencer {
   /** The one index whose tail may run. Advances only over SETTLED indices. */
@@ -130,15 +116,8 @@ class TailSequencer {
   /**
    * Resolves when it is `index`'s turn. Idempotent at every point in the
    * lifecycle — before the grant it hands back the pending promise, at or
-   * after the grant it resolves immediately — so adding a second call site
-   * (another portfolio read, say) cannot deadlock a pass against itself.
-   *
-   * The `#granted` check is the only one of the three that no pass can reach
-   * for itself today: while a pass holds the turn its index still equals
-   * `#turn`, and `finish` advances past it only once `runInstrument` has
-   * returned. It is kept because the cost is a set lookup and the failure it
-   * prevents — an await that never settles, for the life of the process — is
-   * not one worth relying on call-site discipline to avoid.
+   * after the grant it resolves immediately — so a second call site cannot
+   * deadlock a pass against itself.
    */
   begin(index: number): Promise<void> {
     if (this.#granted.has(index)) return Promise.resolve();
@@ -184,11 +163,11 @@ export async function runTickPlan(
 
   // Shared cursor over the plan: each worker claims the next index until the
   // plan is exhausted, so a slow instrument never holds up the queue behind
-  // it (orchestrator-spec.md story 5) — unlike fixed-size chunking, where a
-  // chunk runs only as fast as its slowest member
+  // it — unlike fixed-size chunking, where a chunk runs only as fast as its
+  // slowest member.
   let cursor = 0;
-  // The tail turnstile (#1040) — see `TailSequencer`. Built per plan, so its
-  // indices are this plan's indices and it cannot outlive the pass
+  // Built per plan, so its indices are this plan's indices and it cannot
+  // outlive the pass.
   const tails = new TailSequencer();
   const workerCount = Math.min(
     Math.max(Math.floor(config.max_concurrent_instruments), 1),
@@ -199,14 +178,11 @@ export async function runTickPlan(
     while (true) {
       const index = cursor++;
       const instrument = plan.instruments[index];
-      // Returns WITHOUT reporting a turn settled (#1040), and that is safe for
-      // one specific reason worth naming: `cursor++` hands out a dense prefix
-      // of the plan, so an index that was never dequeued is strictly greater
-      // than every index that was — and therefore greater than every index
-      // that could be waiting on a turn. The turnstile's cursor never has to
-      // walk past it. Any future change that made index allocation sparse or
-      // out of order would break that, and would have to call `tails.finish`
-      // here instead
+      // Returns WITHOUT reporting a turn settled — safe because `cursor++`
+      // hands out a dense prefix, so an index never dequeued is strictly
+      // greater than every index that could be waiting on a turn. Sparse or
+      // out-of-order index allocation would break this and need
+      // `tails.finish` here instead.
       if (instrument === undefined) return;
 
       const signal: Signal = {
@@ -216,17 +192,15 @@ export async function runTickPlan(
       const trace_id = newTraceId();
 
       // The decision gate is consulted on the PLAN's tick time, not a fresh
-      // clock read (#743): every instrument in one plan must be gated on the
-      // same instant — the same argument `UniverseScheduler.nextTick` makes
-      // for reading the calendar once — and in replay the plan time is the
-      // deterministic coordinate
+      // clock read: every instrument in one plan must be gated on the same
+      // instant, and in replay the plan time is the deterministic coordinate.
       //
-      // Not consulted at all when `plan.grace_only` (#1499): the US close
-      // sits exactly on the 1h debate-bar grid, so an unconditional claim
-      // would open a fresh decision bar for a pass whose only possible
-      // outcome is the Trader's `skip('session_closing')`, paying a full
-      // Analysts + Debate pass to reach it. Leaving `decisionBar` undefined
-      // is what routes the runner to the tick path (`exitCheck` only)
+      // Not consulted at all when `plan.grace_only`: the US close sits
+      // exactly on the debate-bar grid, so an unconditional claim would open
+      // a fresh decision bar for a pass whose only possible outcome is the
+      // Trader's `skip('session_closing')`, paying a full Analysts + Debate
+      // pass to reach it. Leaving `decisionBar` undefined routes the runner
+      // to the tick path (`exitCheck` only).
       let decisionBar: DecisionBar | undefined;
       try {
         decisionBar =
@@ -234,19 +208,15 @@ export async function runTickPlan(
             ? undefined
             : config.decisionGate.claim(instrument.asset, plan.tick_time);
       } catch (error) {
-        // The turnstile queue must not be STRANDED if the gate itself throws
-        // (#1040). The `finally` below reports this index as settled, but it is
-        // only reached once the try block is entered; a throw from the claim
-        // would leave every later index waiting on a turn that never comes —
-        // promises that never settle, inside a plan that is already failing
-        // Behaviour is otherwise unchanged: a throwing gate still rejects the
-        // whole plan through `Promise.all`, exactly as it did before
+        // The turnstile queue must not be STRANDED if the gate itself throws:
+        // without this, every later index would wait on a turn that never
+        // comes. Behaviour is otherwise unchanged — a throwing gate still
+        // rejects the whole plan through `Promise.all`.
         tails.finish(index);
         throw error;
       }
 
-      // See the file header (#507) for why this is caught here rather than
-      // left to reject `Promise.all`
+      // Caught here, not left to reject `Promise.all` — see file header.
       try {
         outcomes[index] = await runner.runInstrument(signal, {
           clock,
@@ -255,41 +225,27 @@ export async function runTickPlan(
           auditLog: config.auditLog,
           currentTickStore: config.currentTickStore,
           // Conditional spread under `exactOptionalPropertyTypes`: absent
-          // means "tick path only", never an explicit `undefined`
+          // means "tick path only", never an explicit `undefined`.
           ...(decisionBar === undefined ? {} : { decision_bar: decisionBar }),
-          // Supplied unconditionally, at every width (#1040). Passing it only
-          // when the width exceeds 1 would make the wide path the only tested
-          // one and leave the narrow path taking a second, untested route
-          // through the runner — and at a width of 1 the turn is always
-          // already free, so the await costs a microtask and changes nothing
+          // Supplied unconditionally, at every width: passing it only above
+          // width 1 would leave the narrow path on a second, untested route
+          // through the runner. At width 1 the turn is always already free.
           beginPortfolioTail: () => tails.begin(index),
         });
       } catch (error) {
         // A claimed decision whose pass THREW is handed back to the gate, so
         // the next tick in the same bar retries the decision instead of the
-        // bar being silently forfeited to a transient failure (#743). The
-        // debate adapter's same-bar memo and the #617 short-circuit make the
-        // retry cheap when the failed pass had already persisted its row
+        // bar being silently forfeited to a transient failure. The retry is
+        // BOUNDED: a persistently failing pass would otherwise rescind every
+        // tick for the rest of the bar. Once the gate's retry budget for this
+        // bar is exhausted, `rescind` KEEPS the claim (no further retry this
+        // bar) and reports `'forfeited'`, reported loudly here.
         //
-        // The retry is BOUNDED (#785): a persistently failing pass would
-        // otherwise rescind every tick for the rest of the bar — up to ~30
-        // analyst rebuilds at the production cadence, the exact churn #743
-        // exists to remove, reappearing under a sustained fault. Once the
-        // gate's retry budget for this bar is exhausted, `rescind` KEEPS the
-        // claim (no further retry this bar) and reports `'forfeited'`, which
-        // must be reported loudly here — a silent 30x-retry storm and a
-        // silently-abandoned bar are both the quiet-tick-vs-broken-system
-        // signature #625 exists to keep out of this codebase
-        //
-        // A REFUSAL is the one failure that must not be handed back (#1391)
-        // It is deterministic in the request, so each retry re-runs the whole
-        // pass to buy the identical refusal — and re-bills every persona that
-        // answered before the refusing one, since a pass that threw never
-        // persisted the `debate_log` row the same-bar replay short-circuits
-        // on. That is the ticket's own carve-out argument, one layer up from
-        // `isRetryable`: the claim is KEPT, the bar is forfeit immediately,
-        // and the next bar opens with a fresh claim in case the prompt or the
-        // model has moved
+        // A REFUSAL is the one failure that must not be handed back: it's
+        // deterministic in the request, so each retry would re-run the whole
+        // pass to buy the identical refusal and re-bill every persona that
+        // answered before the refusing one. So the claim is KEPT, the bar is
+        // forfeit immediately, and the next bar opens with a fresh claim.
         if (decisionBar !== undefined) {
           const refused = error instanceof LlmRefusalError;
           const rescindResult = refused
@@ -317,44 +273,30 @@ export async function runTickPlan(
           }
         }
         // Not swallowed: still reaches the logger, still gets a durable
-        // `audit_log` row (below — the runner itself never writes one for a
-        // stage that threw mid-call, since `record()` in tick-runner.ts only
-        // fires after a stage's step function RETURNS; a crash means "reached
-        // a stage but never finished it", which is otherwise invisible to
-        // anything reading `audit_log` after the fact), and still lands in
-        // the returned outcome array (so a caller reading `outcomes` sees the
-        // failure rather than a conspicuously-missing entry — every plan
-        // index is always populated)
+        // `audit_log` row (the runner itself never writes one for a stage
+        // that threw mid-call — a crash is otherwise invisible to anything
+        // reading `audit_log` after the fact), and still lands in the
+        // returned outcome array so every plan index is always populated.
         //
-        // Both side effects below are themselves guarded (#507 review, kimi
-        // cycle 2): this whole `catch` exists to guarantee `worker()` cannot
-        // reject, and `auditLog.record` is a database write — a SQLite
+        // Both side effects below are themselves guarded: this whole `catch`
+        // exists to guarantee `worker()` cannot reject, and a database write
         // failure here (disk full, handle closed) would otherwise propagate
-        // out of THIS catch and reopen the exact orphaned-worker leak #507
-        // closes. `logger.log` gets the same treatment for the same reason
-        // (see `safeLog`'s doc comment)
+        // out of THIS catch and reopen the orphaned-worker leak this exists
+        // to close.
         const message = describeThrown(error);
-        // `current_tick` (#96) is upserted by `markStage` before each stage
-        // begins and only ever deleted on a pass's SUCCESSFUL terminal path
-        // (tick-runner.ts) — a pass that throws mid-stage leaves its own row
-        // in place, so the row this same failed pass just wrote names the
-        // stage it was in when the throw hit (#1380). Keyed on `instrument`
-        // alone, the store has one row per instrument (see `CurrentTickStore`)
-        // — the `trace_id` check below is what confirms the row belongs to
-        // THIS pass rather than a stale row a prior crashed pass on the same
-        // instrument left behind (the store is never cleared on a throw, only
-        // on success), which would otherwise attribute this crash to a stage
-        // it never reached. Guarded the same way the two writes below are:
-        // a store read failure here must not turn "attribute the crash" into
-        // a second, unguarded crash of its own — the crash itself is still
-        // recorded regardless, just without a stage name
+        // `current_tick` is upserted before each stage begins and only ever
+        // deleted on a pass's SUCCESSFUL terminal path, so a pass that throws
+        // mid-stage leaves its own row in place naming the stage it was in.
+        // The `trace_id` check confirms the row belongs to THIS pass rather
+        // than a stale row a prior crashed pass on the same instrument left
+        // behind. Guarded the same way the writes below are: a store read
+        // failure here must not turn attribution into a second, unguarded crash.
         let crashedStage: TickStage | undefined;
         try {
           const currentTick = config.currentTickStore.get(instrument.asset);
           crashedStage = currentTick?.trace_id === trace_id ? currentTick.stage : undefined;
         } catch {
-          // Falls through with `crashedStage` left `undefined` — the
-          // pre-#1380 attribution
+          // Falls through with `crashedStage` left `undefined`.
         }
         safeLog(config.logger, {
           trace_id,
@@ -371,27 +313,18 @@ export async function runTickPlan(
         });
         try {
           // `decision: 'crashed'` has no stage-specific analogue in
-          // tick-runner.ts's `record()` calls (`quorum_skip`, `no_trade`,
-          // `rejected`, …) on purpose — those all describe a stage that
-          // COMPLETED and chose something; this describes a stage that never
-          // got the chance to. `input_digest` covers the `Signal` (the one
-          // thing known for certain going in) rather than nothing, so a
-          // crashed pass digests to something other than every other crash
-          // on this instrument
+          // tick-runner.ts's `record()` calls on purpose — those describe a
+          // stage that COMPLETED and chose something; this describes a stage
+          // that never got the chance to. `input_digest` covers the `Signal`
+          // rather than nothing, so a crashed pass digests to something other
+          // than every other crash on this instrument.
           //
-          // `stage` carries the crashed `TickStage` when `crashedStage` above
-          // found one, PREFIXED with the existing `tick-loop` sentinel rather
-          // than written bare (#1380). Bare would make this row pass
-          // `sqlite-query-store.ts`'s `stage IN (…PIPELINE_STAGES)` dashboard
-          // filter — built to keep control-arm and HITL-callback rows out of
-          // the live lane fold, never audited against a crash row wearing a
-          // real stage name — and start folding a `decision: 'crashed'` row
-          // into the six-stage lane matrix, a rendering change this ticket
-          // does not make. The prefix guarantees no PIPELINE_STAGES string
-          // can ever equal this value, so that filter's row set is provably
-          // unchanged, while `audit_log.stage` still names the real stage —
-          // `TickStage`'s own vocabulary, not a second one — for anything
-          // querying the table directly
+          // `stage` carries the crashed `TickStage` PREFIXED with the
+          // `tick-loop` sentinel rather than written bare: bare would make
+          // this row pass the dashboard's `stage IN (…PIPELINE_STAGES)`
+          // filter and start folding a crash row into the live lane matrix.
+          // The prefix guarantees no PIPELINE_STAGES string can ever equal
+          // this value.
           config.auditLog.record({
             trace_id,
             stage: crashedStage === undefined ? 'tick-loop' : `tick-loop:${crashedStage}`,
@@ -403,10 +336,9 @@ export async function runTickPlan(
             asset_class: instrument.asset_class,
           });
         } catch (auditError) {
-          // An audit-write failure must stay VISIBLE — this is not the
-          // silent-swallow #507 exists to close, it is the same "log it,
-          // don't let it propagate" treatment as the instrument crash itself
-          // just got, one layer in
+          // An audit-write failure must stay VISIBLE — the same "log it,
+          // don't let it propagate" treatment the instrument crash itself
+          // just got, one layer in.
           safeLog(config.logger, {
             trace_id,
             stage: 'tick-loop',
@@ -423,12 +355,10 @@ export async function runTickPlan(
         }
         outcomes[index] = { trace_id, error: message };
       } finally {
-        // Reported from a `finally` (#1040), not from the success path: a
-        // pass that threw — including one that threw INSIDE its tail, after
-        // taking its turn — must still release the queue, or every later
-        // instrument in the plan would wait out the tick and the plan would
-        // never settle. The catch above already turned the throw into an
-        // outcome; this only reports that the pass is over
+        // Reported from a `finally`, not the success path: a pass that
+        // threw — including one that threw INSIDE its tail, after taking its
+        // turn — must still release the queue, or every later instrument in
+        // the plan would wait out the tick and the plan would never settle.
         tails.finish(index);
       }
     }

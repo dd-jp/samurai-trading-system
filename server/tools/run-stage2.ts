@@ -1,26 +1,18 @@
 /**
- * Stage 2 runner (ticket #266) — see
- * docs/specs/stage2-validation-execution-spec.md and wayfinder map #154
- * (decisions #155/#157). One-shot (re-runnable) glue: ingests real Polygon
- * OHLCV for the MVP universe, runs the 12-config grid across stock and
- * crypto asset classes, and renders the Stage 2 overfitting verdict.
+ * Stage 2 runner — see docs/specs/stage2-validation-execution-spec.md.
+ * One-shot (re-runnable) glue: ingests real Polygon OHLCV for the MVP
+ * universe, runs the 12-config grid across stock and crypto asset classes,
+ * and renders the Stage 2 overfitting verdict. Every seam it wires already
+ * exists and is tested; this file only sequences calls.
  *
- * **Ops/setup, not new design.** Every seam this wires already exists and is
- * tested (`Stage2HistoricalStore` #241, `ReplayDriver` #243, `runTrialGrid`
- * #244, `renderStage2Verdict` #245). `HttpPolygonClient` (#266,
- * `../cost-model-backtest/http-polygon-client.js`) is the one new piece of
- * logic this file's neighbor supplies; this file only sequences calls.
- *
- * **Not exercised against live Polygon traffic.** This sandboxed environment
- * has no network access, so the real ~5-year, 6-symbol ingestion this script
- * is built to run has never actually executed here. `runStage2` is unit-
- * tested against a fake `PolygonClient` (`run-stage2.test.ts`) to verify the
- * wiring/typechecking is correct; running it for real against Polygon and
- * producing a written Stage 2 verdict is a follow-up manual/ops step — see
- * #245's still-open AC2/4/5, which this ticket does not attempt to close.
+ * Not exercised against live Polygon traffic: this sandboxed environment has
+ * no network access, so the real ~5-year, 6-symbol ingestion has never
+ * actually run here. `runStage2` is unit-tested against a fake
+ * `PolygonClient` (`run-stage2.test.ts`) to verify wiring/typechecking only —
+ * running it for real and producing a written verdict is a follow-up
+ * manual/ops step.
  *
  * Usage: `POLYGON_API_KEY=... npx tsc -p tsconfig.build.json && node dist/server/tools/run-stage2.js`
- * (or wire an `npm run stage2` script once this has been run for real once).
  */
 import { isDailyTimeframe } from '../providers/market-data-service/index.js';
 import { openSharedStore, sharedStorePath } from '../shared/store/index.js';
@@ -78,46 +70,25 @@ export const PESSIMISTIC_COST_CONFIG: CostConfig = {
 
 /**
  * Cost config calibrated against measured market data and published fee
- * schedules (2026-08-05). See
- * `docs/research/archive/2026-08-05-cost-model-calibration.md`.
+ * schedules. See docs/research/archive/2026-08-05-cost-model-calibration.md.
  *
- * Every number below has a stated basis. That is the whole point: the fixture
- * above did not, and the gross-vs-net decomposition (#403) showed it was
- * single-handedly responsible for the Stage 2 KILL — charging crypto 211bps a
- * round trip, an adverse move of 0.45 ATR per fill against 3-4 ATR targets.
+ * spreadVolatilityCoefficient — MEASURED: median spread/ATR14 from real
+ * Alpaca quotes sampled in the five minutes before each bar's close (where
+ * the replay fills); the fitted per-asset-class medians are used here.
  *
- * **spreadVolatilityCoefficient — MEASURED.** `run-spread-calibration.ts`
- * sampled 36,617 real Alpaca quotes across 24 dates spanning the same 2-year
- * window the grid replays, taken in the five minutes before each bar's close
- * (where the replay actually fills) and stopping short of the bell so
- * closing-auction artifacts are excluded. Per-symbol median spread/ATR14:
- * SPY 0.0022, QQQ 0.0022, AAPL 0.0051, TSLA 0.0063, BTC 0.0340, ETH 0.0220.
- * The fitted per-asset-class medians are the values used here. The fixture's
- * 0.1 / 0.5 were 27x and 18x those.
+ * commissionRate — PUBLISHED: Alpaca's crypto taker fee (0.25%,
+ * docs.alpaca.markets/docs/crypto-fees) and equities' commission-free rate
+ * (0, relying on `CostModelImpl`'s structural 1bp floor for the real
+ * SEC/FINRA-TAF/CAT pass-through).
  *
- * **commissionRate — PUBLISHED.** Crypto is Alpaca's base-tier TAKER fee of
- * 0.25% (docs.alpaca.markets/docs/crypto-fees, retrieved 2026-08-05); taker,
- * not maker, because `ReplayDriver` issues market orders. Note this is the one
- * term the old fixture set too LOW, at 0.001. US equities are commission-free
- * at Alpaca, with only SEC/FINRA-TAF/CAT regulatory fees passed through on
- * sells, so this is 0 — whereupon `CostModelImpl`'s structural 1bp floor
- * applies anyway, which is already more than the real pass-through. The floor
- * is left to do that job rather than a fabricated rate being written here.
+ * slippageCoefficient — ASSUMPTION: derived as
+ * `spreadVolatilityCoefficient / 4` since slippage can't be measured without
+ * live fills. Replace with a measured figure once the paper soak produces
+ * fills to compare modeled against realized.
  *
- * **slippageCoefficient — ASSUMPTION, and flagged as one.** Slippage cannot be
- * measured without live fills, and inventing a coefficient is the exact defect
- * this calibration exists to remove. So it is *derived* from the measured
- * spread instead: set to `spreadVolatilityCoefficient / 4`, i.e. half of the
- * half-spread, a conservative buffer on top of the modeled crossing cost. The
- * fraction is a judgement call, not a measurement. Replace it with the real
- * figure once the paper soak (#238) has produced live fills to compare
- * modeled against realized — which is also the divergence check the Feedback
- * Loop already wants (cross-spec GAP-F).
- *
- * **impactK — UNCHANGED, deliberately.** Market impact totalled 54 currency
- * units out of 62,393 in the worst decomposition row: negligible at
- * $10k-per-trade in this universe. There is no measurement basis to revise it
- * and no benefit to loosening it, so the fixture's pessimistic value stands.
+ * impactK — UNCHANGED: negligible at $10k/trade in this universe (54 of
+ * 62,393 currency units in the worst decomposition row), no measurement
+ * basis to revise it.
  */
 export const CALIBRATED_COST_CONFIG: CostConfig = {
   crypto: {
