@@ -26,5 +26,26 @@
     "server/providers/market-data-service/__fixtures__",
     "docs/research/**/*.mjs",
     "docs/research/**/*.mts"
+  ],
+  "ignoreDependencies": [
+    "@fontsource/chakra-petch",
+    "@fontsource/ibm-plex-mono",
+    "@fontsource/ibm-plex-sans",
+    "react",
+    "react-dom"
+  ],
+  "usedClassMembers": [
+    "shouldAlert",
+    "anchorEquity",
+    "protectiveRearmUnsupported",
+    "prices_own_fills",
+    "ageFlattenHeldQuantities",
+    "getPosition",
+    "countAllPositions",
+    "getClosedTrades",
+    "countAllFlattenSubmissions",
+    "dueFor",
+    "fetchEventMarket",
+    "fetchPriceHistory"
   ]
 }

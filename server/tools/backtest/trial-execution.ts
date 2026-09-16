@@ -33,8 +33,8 @@
  * arithmetic rather than a real comparison.
  */
 
-import { digest } from '../../apps/orchestrator/index.js';
 import { isDailyTimeframe, timeframeToMs } from '../../providers/market-data-service/index.js';
+import { digest } from '../../shared/index.js';
 import type { ConfigTrialLog } from './config-trial-log.js';
 import { EvalExecutorImpl } from './eval-executor.js';
 import type { EvalExecutor, EvalReport } from './eval-types.js';

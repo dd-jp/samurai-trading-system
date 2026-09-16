@@ -198,7 +198,7 @@ export function defaultFiveYearWindow(now: Date = new Date()): DateRange {
  * and re-exported here so other callers keep importing it from where they
  * always have.
  */
-export { STAGE2_FREE_STACK_WINDOW, STAGE2_PINNED_WINDOW } from './stage2-source.js';
+export { STAGE2_PINNED_WINDOW } from './stage2-source.js';
 
 /**
  * Where a DIRECT run keeps its ingested bars.

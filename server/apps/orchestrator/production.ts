@@ -230,7 +230,6 @@ export const BENCHMARK_INSTRUMENTS: ReadonlySet<string> = new Set(
 export type {
   AlertChannelSlots,
   DailyMetricsConfig,
-  DailyMetricsSourceDeps,
   FeedbackCycleConfig,
   ProductionConfig,
 } from './production/config.js';
@@ -250,7 +249,6 @@ export {
   buildAlpacaDataSource,
   buildBenchmarkDataSource,
   buildDefaultAlpacaBrokerClient,
-  buildDefaultAlpacaDataClient,
   buildDefaultLlmClient,
   DEFAULT_EXPECTED_NOUS_CALL_MS,
   DEFAULT_FEEDBACK_INTERVAL_MS,
