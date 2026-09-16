@@ -56,7 +56,7 @@ export const STAGE2_FREE_STACK_WINDOW: DateRange = {
   end: STAGE2_PINNED_WINDOW.end,
 };
 
-export type Stage2SourceLabel = 'polygon' | 'free-stack';
+type Stage2SourceLabel = 'polygon' | 'free-stack';
 
 export interface Stage2Source {
   client: PolygonClient;

@@ -79,15 +79,12 @@ export type {
   WedgedSweepInput,
 } from './types/execution.js';
 export type {
-  FillJournal,
   FillReader,
   FlattenAttribution,
   FlattenJournal,
   FlattenSubmissionWriteAhead,
   LotAdvance,
   LotJournal,
-  LotRetirement,
-  PositionReader,
   ResidualMarkers,
   SharedStore,
   UnprotectedResidualLot,
@@ -97,7 +94,3 @@ export type {
   UnattributedFlattenFillAlert,
   UnattributedFlattenFillAlertChannel,
 } from './unattributed-flatten-fill-alert.js';
-export type {
-  UnrecordedVenuePositionAlert,
-  UnrecordedVenuePositionAlertChannel,
-} from './unrecorded-venue-position-alert.js';

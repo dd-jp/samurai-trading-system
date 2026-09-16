@@ -12,21 +12,13 @@
 export type {
   LlmInFlightGate,
   LlmInFlightRefusalReason,
-  LlmInFlightRequest,
-  LlmInFlightSlot,
-  NousAccountInFlightGateOptions,
 } from './in-flight-gate.js';
 export {
   LlmInFlightRefusedError,
   NousAccountInFlightGate,
   UNGATED_LLM_IN_FLIGHT,
 } from './in-flight-gate.js';
-export type {
-  NousChatMessage,
-  NousChatOptions,
-  NousChatRequest,
-  NousChatResult,
-} from './nous-chat.js';
+export type { NousChatResult } from './nous-chat.js';
 export {
   DEFAULT_NOUS_TIMEOUT_MS,
   NousApiError,
@@ -34,32 +26,17 @@ export {
   NousTruncatedError,
   nousChat,
 } from './nous-chat.js';
-export type { NousCredentials, NousRole } from './nous-config.js';
+export type { NousCredentials } from './nous-config.js';
 export {
   DEFAULT_NOUS_MODELS,
-  NOUS_API_KEY_ENV_VAR,
-  NOUS_BASE_URL_ENV_VAR,
-  NOUS_MODEL_ENV_VAR,
-  NOUS_ROLES,
   nousCredentials,
-  nousEnvVars,
   tryNousCredentials,
 } from './nous-config.js';
-export type {
-  NousCitation,
-  NousResponsesOptions,
-  NousResponsesRequest,
-  NousResponsesResult,
-  NousServerTool,
-} from './nous-responses.js';
+export type { NousCitation } from './nous-responses.js';
 export { nousResponses } from './nous-responses.js';
-export type { AnthropicUsage, ModelRate } from './pricing.js';
+export type { AnthropicUsage } from './pricing.js';
 export {
-  CACHE_READ_MULTIPLIER,
-  CACHE_WRITE_MULTIPLIER,
   crossesPromptTier,
-  MODEL_RATES,
-  pricedModels,
   priceServerToolCalls,
   priceUsage,
   promptTokensOf,

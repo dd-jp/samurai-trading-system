@@ -58,7 +58,7 @@ import type { Logger } from '../types.js';
 import type { CalendarFallbackAlertChannel } from './calendar-fallback-alert.js';
 
 /** How far back/forward the fetched table reaches, in civil days from `now` */
-export const CALENDAR_FETCH_LOOKBACK_DAYS = 30;
+const CALENDAR_FETCH_LOOKBACK_DAYS = 30;
 /**
  * ~13 months forward. Generous on purpose: `sessionEnd`/`sessionStart` walk
  * at most `MAX_SESSION_SEARCH_DAYS` (10) days from `now`, so this window's
@@ -66,7 +66,7 @@ export const CALENDAR_FETCH_LOOKBACK_DAYS = 30;
  * soak needs a fraction of this, and the table costs nothing extra to fetch
  * wide (one HTTP round trip, a few hundred small rows).
  */
-export const CALENDAR_FETCH_LOOKAHEAD_DAYS = 400;
+const CALENDAR_FETCH_LOOKAHEAD_DAYS = 400;
 
 function addCivilDays(date: ZonedCivilDate, days: number): string {
   const shifted = new Date(Date.UTC(date.year, date.month - 1, date.day) + days * 86_400_000);

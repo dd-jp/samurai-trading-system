@@ -107,7 +107,7 @@ import { DEFAULT_TRADER_CONFIG } from '../pipeline/trader/index.js';
 /** Which branch the sentiment/fundamental pair is on for a given debate */
 export type DeskShape = 'absent' | 'hydrated-split' | 'hydrated-neutral' | 'hydrated-aligned';
 
-export const DESK_SHAPES: readonly DeskShape[] = [
+const DESK_SHAPES: readonly DeskShape[] = [
   'absent',
   'hydrated-split',
   'hydrated-neutral',
@@ -117,7 +117,7 @@ export const DESK_SHAPES: readonly DeskShape[] = [
 /** The mediator's verdict relative to the technical analyst's direction */
 export type MediatorStance = 'agrees' | 'neutral' | 'opposes';
 
-export const MEDIATOR_STANCES: readonly MediatorStance[] = ['agrees', 'neutral', 'opposes'];
+const MEDIATOR_STANCES: readonly MediatorStance[] = ['agrees', 'neutral', 'opposes'];
 
 /** `confidenceFrom`'s clamp bounds in both the sentiment and fundamental analysts */
 const MI_CONFIDENCE_FLOOR = 0.05;
@@ -224,7 +224,7 @@ function filler(count: number, prefix: string): string[] {
 }
 
 /** The three-analyst stocks desk as production builds it, for one desk shape */
-export function buildStocksDesk(point: LatticePoint, shape: DeskShape): AnalystView[] {
+function buildStocksDesk(point: LatticePoint, shape: DeskShape): AnalystView[] {
   const technical = view(
     'technical',
     point.direction,

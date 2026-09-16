@@ -106,7 +106,7 @@ export const DEFAULT_GDELT_WINDOWS: GdeltWindows = {
  * value — #688 owns replacing it, and its calibration must not be read off
  * this constant.
  */
-export const CONFIDENCE_HALF_POINT_TONE = 1;
+const CONFIDENCE_HALF_POINT_TONE = 1;
 
 /** Fraction of the baseline's buckets that must carry at least one record */
 export const MIN_BASELINE_BUCKET_FRACTION = 0.75;
@@ -143,7 +143,7 @@ export type GdeltRefusalReason =
   | 'signal_window_thin';
 
 /** What the derivation measured, emitted or not — the operator-facing numbers */
-export interface GdeltAggregateStats {
+interface GdeltAggregateStats {
   signal_records: number;
   baseline_records: number;
   baseline_buckets: number;

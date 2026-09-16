@@ -331,7 +331,7 @@ export const RSI_OVERSOLD = 30;
  * confidence; it does not flip a vote, because a weak trend says nothing about
  * direction.
  */
-export const ADX_TREND_FLOOR = 20;
+const ADX_TREND_FLOOR = 20;
 
 /**
  * `bb_kc_squeeze` is `bbWidth / kcWidth`: below 1 the Bollinger band has
@@ -339,7 +339,7 @@ export const ADX_TREND_FLOOR = 20;
  * is precisely when a directional read is least reliable and a breakout can go
  * either way, so it caps rather than votes.
  */
-export const SQUEEZE_ON_BELOW = 1;
+const SQUEEZE_ON_BELOW = 1;
 
 /**
  * The cap the gate applies. 0.40 is the issue's number, taken as given rather
@@ -486,7 +486,7 @@ export const AXIS_WEIGHTS: Readonly<Record<TechnicalAxis, number>> = {
 export type AxisVote = -1 | 0 | 1;
 
 /** An axis that produced a vote, with the already-interpreted band behind it */
-export interface AxisReading {
+interface AxisReading {
   axis: TechnicalAxis;
   vote: AxisVote;
   /** The interpretation, computed HERE — never a legend shipped to the prompt */
@@ -496,7 +496,7 @@ export interface AxisReading {
 }
 
 /** An axis that could not be read, with the arithmetic behind the refusal */
-export interface AxisUnavailable {
+interface AxisUnavailable {
   axis: TechnicalAxis;
   /** `IndicatorKind`, or the derived feature name for the participation read */
   kind: string;
@@ -530,7 +530,7 @@ function round4(value: number): number {
  * readings of one axis, and counting them separately is exactly the correlated
  * double-vote this design forbids.
  */
-export function trendVote(lastClose: number, sma: number): AxisVote {
+function trendVote(lastClose: number, sma: number): AxisVote {
   if (lastClose > sma) return 1;
   if (lastClose < sma) return -1;
   return 0;
@@ -542,7 +542,7 @@ export function trendVote(lastClose: number, sma: number): AxisVote {
  * `directionFrom` already took (`rsi < RSI_OVERBOUGHT` gated the bullish
  * branch) and #745 keeps.
  */
-export function rsiVote(rsi: number): AxisVote {
+function rsiVote(rsi: number): AxisVote {
   if (rsi >= RSI_OVERBOUGHT || rsi <= RSI_OVERSOLD) return 0;
   if (rsi > 50) return 1;
   if (rsi < 50) return -1;
@@ -550,7 +550,7 @@ export function rsiVote(rsi: number): AxisVote {
 }
 
 /** MOMENTUM's MACD half: the histogram's sign is the whole reading */
-export function macdVote(histogram: number): AxisVote {
+function macdVote(histogram: number): AxisVote {
   if (histogram > 0) return 1;
   if (histogram < 0) return -1;
   return 0;
@@ -579,7 +579,7 @@ export function momentumVote(rsi: number, macd: number | undefined): AxisVote {
 }
 
 /** STRUCTURE: where the close sits in the Donchian range */
-export function structureVote(donchianPos: number): AxisVote {
+function structureVote(donchianPos: number): AxisVote {
   if (donchianPos > STRUCTURE_UPPER) return 1;
   if (donchianPos < STRUCTURE_LOWER) return -1;
   return 0;
@@ -635,7 +635,7 @@ export function structureVote(donchianPos: number): AxisVote {
  * inputs (a calendar vs. none), complementary rather than duplicate; no
  * shared definition was used, and none should be.
  */
-export function upVolumeShare(bars: Bar[]): number | null {
+function upVolumeShare(bars: Bar[]): number | null {
   let up = 0;
   let down = 0;
   for (const bar of bars) {
@@ -647,7 +647,7 @@ export function upVolumeShare(bars: Bar[]): number | null {
   return up / participating;
 }
 
-export function participationVote(share: number | null): AxisVote {
+function participationVote(share: number | null): AxisVote {
   if (share === null) return 0;
   if (share >= PARTICIPATION_BULL_SHARE) return 1;
   if (share <= 1 - PARTICIPATION_BULL_SHARE) return -1;

@@ -60,7 +60,7 @@ export interface LlmRequestContext {
  * id and a content hash are bookkeeping, not prompt content, and putting them
  * on the wire would make a cost ticket cost tokens.
  */
-export interface LlmAttribution {
+interface LlmAttribution {
   trace_id?: string | undefined;
   stage?: string | undefined;
   /**

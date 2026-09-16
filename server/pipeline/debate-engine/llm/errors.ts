@@ -219,12 +219,3 @@ export class LlmTruncatedError extends Error {
     this.usage = usage;
   }
 }
-
-export type LlmError =
-  | LlmTimeoutError
-  | LlmRateLimitError
-  | LlmMalformedResponseError
-  | LlmProviderError
-  | LlmCancelledError
-  | LlmRefusalError
-  | LlmTruncatedError;

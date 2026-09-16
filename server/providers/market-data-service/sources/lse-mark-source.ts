@@ -148,7 +148,7 @@ export class NonTradeableInstrumentError extends Error {
 }
 
 /** One vendor candle, in the vendor's own quoted currency */
-export interface LseVendorCandle {
+interface LseVendorCandle {
   /** Source-native candle timestamp (period start) */
   open_time: Date;
   open: number;

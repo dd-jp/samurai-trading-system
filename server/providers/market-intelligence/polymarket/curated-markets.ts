@@ -177,7 +177,7 @@
  */
 
 /** The two outcome names every binary Polymarket market carries */
-export type PolymarketOutcome = 'Yes' | 'No';
+type PolymarketOutcome = 'Yes' | 'No';
 
 /** One tracked macro series: a market, and the human annotation the API cannot give */
 export interface CuratedMacroMarket {

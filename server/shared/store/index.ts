@@ -10,10 +10,9 @@ export {
   findStaleKeySchemeLots,
   IN_FLIGHT_ORDER_STATES,
   isWedgedZeroFillLot,
-  type StaleKeySchemeLot,
   TERMINAL_ORDER_STATES,
 } from './key-scheme-guard.js';
-export { MIGRATIONS_DIR, runMigrations } from './migrate.js';
+export { runMigrations } from './migrate.js';
 export {
   fromOpenPositionRow,
   type ModelledCostBreakdown,
@@ -21,10 +20,8 @@ export {
   parseModelledCostBreakdownColumn,
 } from './open-position-row.js';
 export {
-  legacyStorePath,
   openSharedStore,
   resolveStoreMode,
-  STORE_MODES,
   type StoreHandle,
   type StoreMode,
   sharedStorePath,
@@ -36,16 +33,10 @@ export {
   fromStoredTimestamp,
   fromStoredTimestampOrNull,
   isUniqueConstraintError,
-  type StoredTimestamp,
   toStoredTimestamp,
   toStoredTimestampOrNull,
 } from './sqlite-utils.js';
 export {
   guardedStore,
-  isStoreWriteGuardEnabled,
   STAGE_OWNED_TABLES,
-  STORE_OWNER_STAGES,
-  type StoreOwnerStage,
-  type StoreWriteGuardEnvironment,
-  writeTargetTables,
 } from './write-guard.js';

@@ -16,7 +16,7 @@ import type { LlmClient } from './llm/types.js';
 import type { AnalystView, Direction } from './types.js';
 
 /** One detected conflict: which analysts disagree and why, in free text */
-export interface DisagreementConflict {
+interface DisagreementConflict {
   analysts: string[];
   nature: string;
 }

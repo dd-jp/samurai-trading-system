@@ -5,35 +5,17 @@
  * Ticket #75 built cosine retrieval; #432 wired it into `decide`.
  */
 
-export {
-  type CosinePrecedentResult,
-  NO_PRECEDENT_MULTIPLIER,
-  retrieveCosinePrecedent,
-} from './cosine-precedent.js';
+export { NO_PRECEDENT_MULTIPLIER } from './cosine-precedent.js';
 export {
   checkExitsWithReason,
   decide,
   decideWithReason,
-  type ExitCheckInput,
   mostRecentOpenLot,
   type TraderDiagnostic,
-  type TraderOutcome,
 } from './decide.js';
-export {
-  DEFAULT_EARLY_EXIT_CONFIG,
-  type EarlyExitConfig,
-  readSignalDecay,
-  type SignalDecayRead,
-  type SignalDecayVerdict,
-} from './early-exit.js';
+export { DEFAULT_EARLY_EXIT_CONFIG } from './early-exit.js';
 export { FixtureSetupStore } from './fixture-setup-store.js';
-export { computeFlattenIdempotencyKey, computeIdempotencyKey } from './idempotency-key.js';
-export { buildSetupVector, type SetupMarketContext } from './setup-vector.js';
-export {
-  type SetupAssetClass,
-  SqliteSetupStore,
-  type SqliteSetupStoreOptions,
-} from './sqlite-setup-store.js';
+export { SqliteSetupStore } from './sqlite-setup-store.js';
 // Only the three names with consumers outside `server/pipeline/trader/` are
 // re-exported here (coding-standards.md §9): the composition root reads the two
 // D5 fractions, and both the root and its tests read the bracket table. The
@@ -47,13 +29,8 @@ export {
   D5_SINGLE_STOCK_ETP_DEPLOYMENT_FRACTION,
 } from './subclass-bracket.js';
 export type {
-  AssetClass,
-  Trader,
   TraderConfig,
-  TraderDiagnosticKind,
-  TraderInput,
   TraderSkipReason,
-  UnpricedFlattenReport,
   UnresolvedFlatten,
 } from './types.js';
 export { assertTraderConfigSound, DEFAULT_TRADER_CONFIG } from './types.js';

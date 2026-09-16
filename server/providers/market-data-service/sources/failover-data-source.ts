@@ -213,7 +213,7 @@ export const FAILOVER_CIRCUIT_COOLDOWN_MS = 5 * 60 * 1000;
  * catches it and either the fallback answers or it becomes the `cause` chain
  * of the combined error.
  */
-export class PrimaryCircuitOpenError extends Error {
+class PrimaryCircuitOpenError extends Error {
   constructor(primaryName: string, consecutiveFailures: number) {
     super(
       `${primaryName} circuit is OPEN after ${consecutiveFailures} consecutive failures — the ` +

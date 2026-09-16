@@ -12,8 +12,6 @@ import type { ClosedTrade, ClosedTradeStore, TuningStore } from '../../shared/in
 import { assertThresholdWithinBounds } from '../../shared/index.js';
 import type { OutsideBenchmarkSample } from '../outside-benchmark/index.js';
 import type {
-  Adjustment,
-  AdjustmentLog,
   ArmComparisonSample,
   ArmComparisonSampleStore,
   BreachAlert,
@@ -110,19 +108,6 @@ export class InMemoryTuningStore implements TuningStore {
     }
     this.thresholds[name] = value;
     return true;
-  }
-}
-
-export class InMemoryAdjustmentLog implements AdjustmentLog {
-  private readonly entries: Adjustment[] = [];
-
-  append(entry: Adjustment): void {
-    this.entries.push(entry);
-  }
-
-  /** Append-only: the log is read back in write order, never edited */
-  getEntries(): readonly Adjustment[] {
-    return this.entries;
   }
 }
 

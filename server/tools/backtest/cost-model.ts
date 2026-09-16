@@ -25,7 +25,7 @@ import type {
  * config omits that field, so every config that predates `floors` keeps
  * behaving exactly as it did before this ticket.
  */
-export const DEFAULT_COST_FLOORS: CostFloors = Object.freeze({
+const DEFAULT_COST_FLOORS: CostFloors = Object.freeze({
   // 1 bp of mid
   minHalfSpreadRate: 0.0001,
   // 1 bp of notional

@@ -71,9 +71,9 @@ import { makeAssetClass } from './stage2-support.js';
  * millisecond, so the effective window this intersects to — and therefore
  * every fold boundary — matches that run rather than merely resembling it
  */
-export const PINNED_VERDICT_WINDOW: DateRange = STAGE2_PINNED_WINDOW;
+const PINNED_VERDICT_WINDOW: DateRange = STAGE2_PINNED_WINDOW;
 
-export interface CostDecompositionDeps {
+interface CostDecompositionDeps {
   polygonClient: PolygonClient;
   window?: DateRange;
   /**
@@ -86,7 +86,7 @@ export interface CostDecompositionDeps {
 }
 
 /** One (config, asset class) pair, scored both ways */
-export interface CostDecompositionRow {
+interface CostDecompositionRow {
   config_hash: string;
   asset_class: 'crypto' | 'stocks';
   label: string;
@@ -100,7 +100,7 @@ export interface CostDecompositionRow {
   costs: RunCostAttribution;
 }
 
-export interface CostDecompositionResult {
+interface CostDecompositionResult {
   window: DateRange;
   rows: CostDecompositionRow[];
   /**
@@ -116,7 +116,7 @@ export interface CostDecompositionResult {
 }
 
 /** The grid's score under one scaling of every cost coefficient */
-export interface CostSensitivityPoint {
+interface CostSensitivityPoint {
   /** Multiplier applied to all four coefficients of both asset classes */
   scale: number;
   passes: number;
@@ -131,7 +131,7 @@ export interface CostSensitivityPoint {
  * the grid to survive — which is the number that decides whether calibrating
  * the cost model is worth doing before anything else.
  */
-export const COST_SCALES = [1, 0.5, 0.25, 0.1, 0.05] as const;
+const COST_SCALES = [1, 0.5, 0.25, 0.1, 0.05] as const;
 
 /**
  * Scales every cost coefficient of both asset classes by `factor`.
@@ -199,9 +199,7 @@ function scaleVenues(
   return copy;
 }
 
-export async function runCostDecomposition(
-  deps: CostDecompositionDeps,
-): Promise<CostDecompositionResult> {
+async function runCostDecomposition(deps: CostDecompositionDeps): Promise<CostDecompositionResult> {
   const print = deps.print ?? console.log;
   const requested = deps.window ?? PINNED_VERDICT_WINDOW;
   const costConfig = deps.costConfig ?? PESSIMISTIC_COST_CONFIG;

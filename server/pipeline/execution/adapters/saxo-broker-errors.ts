@@ -144,7 +144,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * gateway uses elsewhere. A leg-level `ErrorInfo` is read when the top level
  * carries none, so a rejected related order still names its cause.
  */
-export function parseSaxoErrorInfo(bodyText: string): {
+function parseSaxoErrorInfo(bodyText: string): {
   code: string | undefined;
   message: string | undefined;
 } {

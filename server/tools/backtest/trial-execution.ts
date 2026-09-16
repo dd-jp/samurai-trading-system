@@ -321,7 +321,7 @@ export interface TrialGridAssetClass {
  * `computeMetrics` throw on a zero-variance return series. Losing PBO for one
  * asset class is a reportable gap; losing the whole gate run to it is not.
  */
-export type CscvOutcome = { report: EvalReport } | { error: string };
+type CscvOutcome = { report: EvalReport } | { error: string };
 
 /** One (config, asset class) pair's scored result */
 export interface TrialGridResult {

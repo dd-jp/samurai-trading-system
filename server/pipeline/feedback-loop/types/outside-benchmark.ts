@@ -68,7 +68,7 @@ export interface OutsideBenchmarkSampleStore {
  * presence in the log. Without it "the vendor 429'd" and "FL never ran" are the
  * same empty panel.
  */
-export interface UnmeasuredOutsideBenchmark {
+interface UnmeasuredOutsideBenchmark {
   benchmark: OutsideBenchmarkId;
   reason: string;
 }

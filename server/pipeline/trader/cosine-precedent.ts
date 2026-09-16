@@ -15,7 +15,7 @@ export const K_NEIGHBORS = 5;
 export const MIN_SIMILARITY_THRESHOLD = 0.75;
 
 /** Fewer qualifying neighbors than this triggers the no-precedent default */
-export const MIN_NEIGHBOR_COUNT = 1;
+const MIN_NEIGHBOR_COUNT = 1;
 
 /** 0.75x default when there is no close neighbor (trader-spec story 15) */
 export const NO_PRECEDENT_MULTIPLIER = 0.75;
@@ -25,7 +25,7 @@ export const MIN_MULTIPLIER = 0.5;
 export const MAX_MULTIPLIER = 1.5;
 
 /** Weighted-mean-R magnitude at which the multiplier saturates to the bound */
-export const R_SATURATION = 2;
+const R_SATURATION = 2;
 
 export interface CosinePrecedentResult {
   cosine_multiplier: number;

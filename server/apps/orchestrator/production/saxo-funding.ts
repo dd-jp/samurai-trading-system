@@ -35,7 +35,7 @@ import type { RiskConfig } from '../../../pipeline/risk-manager/index.js';
 import type { AccountFunding, AccountFundingSource } from './account-state.js';
 
 /** The currency `LIVE_BOOK_GBP` is denominated in (ADR-0015's 2026-08-18 amendment) */
-export const LIVE_BOOK_CURRENCY = 'GBP';
+const LIVE_BOOK_CURRENCY = 'GBP';
 
 export function saxoFunding(client: SaxoAccountBalanceReader): AccountFundingSource {
   return {

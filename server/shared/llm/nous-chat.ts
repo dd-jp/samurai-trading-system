@@ -49,7 +49,7 @@ export {
   NousTruncatedError,
 } from './nous-wire.js';
 
-export interface NousChatMessage {
+interface NousChatMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
 }

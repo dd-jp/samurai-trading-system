@@ -37,45 +37,17 @@ import type {
 } from './types.js';
 
 export type {
-  AutoReArmPolicy,
   BreakerConfig,
   BreakerEvalInput,
-  VolatilityBreakerConfig,
   VolatilityReading,
 } from './breakers.js';
 export { CircuitBreakers } from './breakers.js';
-export { countryForInstrument, trackedCountries } from './cii-mapping.js';
-export type { CorrelationConfig, CorrelationEstimateInput } from './correlation.js';
+export { countryForInstrument } from './cii-mapping.js';
+export type { CorrelationConfig } from './correlation.js';
 export { computeCorrelationEstimate } from './correlation.js';
-export type {
-  BuildRiskCriticProducerOptions,
-  CriticHeldPosition,
-  LlmRiskCriticProducerOptions,
-  ParsedCriticResponse,
-  ReplayRiskCriticProducerOptions,
-  RiskCriticProducer,
-  RiskCriticRequest,
-} from './critic.js';
-export {
-  buildRiskCriticProducer,
-  DEFAULT_CRITIC_BUDGET_MS,
-  LlmRiskCriticProducer,
-  parseCriticVerdict,
-  ReplayRiskCriticProducer,
-  renderCriticPrompt,
-} from './critic.js';
-export { InMemoryRiskCriticStore, SqliteRiskCriticStore } from './critic-store.js';
-export type { EvaluateConditionsInput, ValidatedConditions } from './invalidation.js';
-export {
-  breachedConditions,
-  evaluateConditions,
-  INVALIDATED_BINDING_CONSTRAINT,
-  invalidationReasons,
-  MAX_INVALIDATION_CONDITIONS,
-  NO_CONDITIONS_REASON,
-  validateConditions,
-} from './invalidation.js';
-export type { PortfolioAccountingInput } from './portfolio-view.js';
+export type { RiskCriticProducer } from './critic.js';
+export { buildRiskCriticProducer } from './critic.js';
+export { SqliteRiskCriticStore } from './critic-store.js';
 export {
   BookValuationError,
   computePortfolioView,
@@ -85,7 +57,6 @@ export {
 } from './portfolio-view.js';
 export {
   RISK_THRESHOLD_KEYS,
-  type RiskThresholdKey,
   type RiskThresholdSource,
   resolveRiskConfig,
   riskThresholdsFrom,
@@ -94,24 +65,14 @@ export type { BreakerStatePersistence } from './sqlite-breaker-state-store.js';
 export { SqliteBreakerStateStore } from './sqlite-breaker-state-store.js';
 export type {
   BreakerState,
-  CorrelationEstimate,
-  DailyPnl,
-  DailyPnlByClass,
-  DroppedCondition,
   EvaluatedCondition,
-  InvalidationCondition,
-  InvalidationConditionState,
-  InvalidationDropReason,
   InvalidationObservable,
   PersistedBreakerState,
   PortfolioView,
   RiskConfig,
-  RiskCriticLog,
-  RiskCriticStore,
   RiskCriticVerdict,
   RiskDecision,
   RiskInput,
-  RiskManager,
   SessionBasis,
   SessionBasisByClass,
   SubclassDeploymentCap,

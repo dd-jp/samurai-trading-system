@@ -82,7 +82,7 @@ import type { ResidualReflattenInput } from './types.js';
 export const MAX_RESIDUAL_REFLATTEN_ATTEMPTS = 3;
 
 /** Why an attempt was not made — a bare code for the log payload and the sweep's divergence reason */
-export type ResidualReflattenSkipReason =
+type ResidualReflattenSkipReason =
   /** The venue is shut — a market order must not be fired into it */
   | 'venue_shut'
   /** The calendar could not answer, so "is the venue open" is unknown. Fail closed. */

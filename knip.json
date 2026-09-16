@@ -6,5 +6,6 @@
     "e2e/**/*.spec.ts",
     "server/tools/data-cli.ts"
   ],
-  "ignore": ["docs/research/**/*.mjs", "docs/research/**/*.mts", "server/tools/__fixtures__/**"]
+  "ignore": ["docs/research/**/*.mjs", "docs/research/**/*.mts", "server/tools/__fixtures__/**"],
+  "tags": ["-knipignore"]
 }

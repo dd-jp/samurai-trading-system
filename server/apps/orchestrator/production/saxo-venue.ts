@@ -100,7 +100,7 @@ import type { ProductionConfig } from './config.js';
 /** Which venue the run's `BrokerAdapter` is built against */
 export const BROKER_VENUE_ENV_VAR = 'SAMURAI_BROKER';
 
-export const BROKER_VENUES = ['alpaca', 'saxo'] as const;
+const BROKER_VENUES = ['alpaca', 'saxo'] as const;
 
 export type BrokerVenue = (typeof BROKER_VENUES)[number];
 

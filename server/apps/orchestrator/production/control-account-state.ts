@@ -302,7 +302,7 @@ export class ControlArmAccountStateProvider implements AccountStateProvider {
  * the same trade.
  */
 /** The durable home for the anchor — `SqliteAccountStateStore`'s shape, narrowed */
-export interface BookAnchorStore {
+interface BookAnchorStore {
   /** The persisted anchor, or null before one was ever written */
   peakEquity(): number | null;
   /** First-write-wins: stores `equity` if absent, and returns the value in force */
