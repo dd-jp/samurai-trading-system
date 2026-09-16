@@ -1050,19 +1050,10 @@ export interface ExitPathEvidence {
 }
 
 /**
- * The #549 sweep's own divergence for one lot, by key (every scenario shares
- * one `divergences` list). Returns the whole divergence rather than just
- * `.action` so both fields callers need come off one lookup — a wrong-key
- * mutation at one call site can't leave a second, correctly-keyed lookup
- * elsewhere still passing (#1285 B2: scenario 4's flatten divergence is also
- * `action: 'adopted'`, so only `.reason` — `sweepOne`'s re-arm text —
- * distinguishes a genuine #549 sweep from a wrong-key substitution).
- *
- * `.find`, never `.findLast` (#1285 N2): `findUnrecordedVenuePositions`
- * appends entries keyed `idempotency_key: ''` last in the same list, and an
- * empty string is a substring/suffix of every key, so `.findLast` under a
- * containment predicate would land on that sentinel instead of this lot's
- * own entry.
+ * The #549 sweep's own divergence for one lot, by key. Returns the whole divergence, not just
+ * `.action` (#1285 B2: two scenarios share `action: 'adopted'`, only `.reason` distinguishes them).
+ * `.find`, never `.findLast` (#1285 N2): a sentinel `idempotency_key: ''` entry is appended last
+ * and an empty string is a substring of every key.
  */
 export function findSweepDivergence(
   divergences: readonly ReconcileDivergence[],
@@ -1859,14 +1850,9 @@ async function restartExecutionAndReconcile(ctx: PostSweepScenarioContext): Prom
 }
 
 /**
- * The crypto-emulation scenario (#586): Alpaca rejects every advanced order
- * class for crypto (verified live, #550: 422 code 42210000), so
- * `AlpacaBrokerAdapter` emulates the protective pair instead. Neither the
- * six-stage run nor the exit-path harness reaches this path (both override
- * the broker with `SimulatedBrokerAdapter`), so this composes the real
- * `AlpacaBrokerAdapter` with only the wire client scripted, mirroring the
- * verified venue posture — a regression back to `order_class: 'bracket'`
- * fails here the same way it would fail the soak.
+ * #586 — Alpaca rejects every advanced order class for crypto (verified live, #550: 422 code
+ * 42210000), so `AlpacaBrokerAdapter` emulates the protective pair. Composes the REAL adapter
+ * with only the wire client scripted, since neither other harness reaches this path.
  */
 class CryptoEmulationScenarioClient implements AlpacaBrokerClient {
   private readonly orders = new Map<string, AlpacaOrder>();
@@ -3681,14 +3667,8 @@ export interface DataSourceFactoryEvidence {
 }
 
 /**
- * The vendor name the LSE probe's client stamps.
- *
- * Deliberately not a real vendor's: #895 (choose and provision the real-time
- * L1 feed) is open and the delayed-data route is only registered for, not
- * provisioned (Refs #1034), so no vendor in this tree can serve the
- * `kind: 'lse'` arm. What the probe can still prove is that the arm is
- * REACHED — the port is injected, exactly so answering #895 lands as a
- * config change.
+ * Deliberately not a real vendor's: #895 (provision the real-time L1 feed) is open, so no
+ * vendor in this tree can serve the `kind: 'lse'` arm — the probe only proves the arm is REACHED.
  */
 export const SMOKE_LSE_VENDOR = 'smoke-lse-vendor';
 
@@ -3708,21 +3688,11 @@ function factoryProbeBars(openTimes: readonly string[]) {
 }
 
 /**
- * `createDataSource`'s enforcement assertion (#1151), per the standard that
- * wiring a mechanism means asserting it HERE (#430).
- *
- * The factory was the repo's named dominant defect class in its purest form:
- * every production source was constructed BESIDE it, so its arms were reached
- * by nothing and breaking one changed no observable behaviour. Both surviving
- * arms are driven here through `buildProductionOrchestrator` — the real
- * composition root — against a COLD `:memory:` store, and asserted on their
- * DURABLE effect: a `bars` row carrying the provenance the arm the factory
- * resolved stamps.
- *
- * Construction is INSIDE the try on purpose. A broken arm makes
- * `buildAlpacaDataSource` throw at boot, and that has to reach the gate as a
- * failing row rather than as an unhandled rejection that never reaches
- * `formatSmokeReport`.
+ * `createDataSource`'s enforcement assertion (#1151): every production source used to be
+ * constructed BESIDE the factory, so its arms were reached by nothing. Both surviving arms are
+ * driven through the real `buildProductionOrchestrator`, asserted on the DURABLE effect (a
+ * provenance-stamped `bars` row). Construction is INSIDE the try so a broken arm's boot-time
+ * throw reaches the gate as a failing row, not an unhandled rejection.
  */
 async function runDataSourceFactoryScenario(logger: Logger): Promise<DataSourceFactoryEvidence> {
   const profile = paperStartingProfile('paper');
@@ -3888,34 +3858,11 @@ class AnalystDebugRecorder implements Logger {
 }
 
 /**
- * #1114's enforcement assertion, per the standard that wiring a mechanism
- * means asserting it HERE (#430).
- *
- * Driven through `buildProductionOrchestrator` — the same real composition
- * root `runDataFailoverScenario` above uses — with BOTH the primary AND the
- * equities fallback throwing, so the technical analyst's `market_data.getBars`
- * genuinely REJECTS (a real combined error carrying a `.cause` chain,
- * `ohlcv-failover.ts`'s `withOhlcvFailover`) rather than timing out.
- *
- * That choice is deliberate, not an oversight of the timeout path: #1114's
- * own soak tally found 100% of the historical failures were timeouts, and a
- * timeout's cause is unrecoverable by construction at the point it is
- * detected (see `withTimeout`'s doc comment in `pipeline/analysts/
- * orchestrator.ts`) — proving THAT path fired for real here would mean
- * waiting out a genuine multi-second deadline inside every `npm run smoke` run
- * for a probe that cannot assert anything a fake-timer unit test
- * (`orchestrator.test.ts`, "failure cause logging (#1114)") doesn't already
- * mutation-test more cheaply. The non-timeout half is the one this gate CAN
- * prove in milliseconds, through the exact composition root and the exact
- * `AnalystOrchestrator` instance `production.ts` builds — which is also
- * literally what the ticket asks for (a non-timeout rejection's collapsed
- * detail), just not the headline failure mode.
- *
- * Asserted on the DURABLE effect, not construction: the `debug` payloads the
- * real `AnalystOrchestrator` recorded through the real `logger` `production.ts`
- * wires into it via `new AnalystOrchestrator({ ..., logger })`. Delete that
- * one field and this scenario records nothing (the orchestrator falls back to
- * its internal `NOOP_LOGGER`) — the gate's whole point.
+ * #1114's enforcement assertion, driven through the real `buildProductionOrchestrator` with
+ * BOTH the primary AND the equities fallback throwing, so `market_data.getBars` genuinely
+ * REJECTS rather than timing out (the timeout half is unrecoverable-by-construction and covered
+ * by a fake-timer unit test instead). Asserted on the DURABLE effect: `debug` payloads the real
+ * `AnalystOrchestrator` recorded through the real logger — delete that wiring and this records nothing.
  */
 async function runAnalystFailureCauseScenario(
   logger: Logger,
@@ -4451,26 +4398,10 @@ export interface PromptTierWarningEvidence {
 }
 
 /**
- * #1155's producer, asserted on its DURABLE effect through the real
- * `SqliteLlmSpendStore` — the same "own composition root, own cold
- * `:memory:` store" pattern `runRiskCriticScenario` and
- * `runDataFailoverScenario` use for a mechanism the six-stage tick loop above
- * cannot exercise for real: `ConstantResponseLlmClient`/`SmokeLlmClient`
- * (this file) implement `LlmClient` directly and carry no `usage` field at
- * all, so no metered call — let alone a tiered one — happens anywhere else in
- * this process.
- *
- * `record()` is called directly rather than through a fabricated
- * `AnthropicMessagesClient` wrapped in `AnthropicLlmClient`: the gap #1155
- * closes is entirely inside `SqliteLlmSpendStore.record` (whether it calls
- * `crossesPromptTier` and dispatches), and `AnthropicLlmClient`'s own usage
- * extraction is unchanged and already covered by anthropic-client.test.ts.
- * Only the INPUT — "the provider reported this many prompt tokens" — is
- * fabricated here, the same relationship `FixtureDataSource` has to the
- * indicators computed over its bars: the mechanism under test runs for real,
- * for a real tiered model (`x-ai/grok-4.5`, pricing.ts) through the real `crossesPromptTier`.
- * Two crossing calls, not one: a single call can't distinguish a throttle that fires once
- * from one deleted outright — the second, on the same model, must be suppressed.
+ * #1155's producer, asserted on its DURABLE effect through the real `SqliteLlmSpendStore`.
+ * `record()` is called directly since the gap #1155 closes is entirely inside it — only the
+ * INPUT (reported prompt tokens) is fabricated. Two crossing calls, not one: a single call can't
+ * distinguish a throttle that fires once from one deleted outright.
  */
 function runPromptTierWarningScenario(): PromptTierWarningEvidence {
   const db = openSharedStore(':memory:');
