@@ -298,13 +298,7 @@ export interface UnresolvedFlattenSubmission {
   terminal_unswept_checked_at: Date | null;
 }
 
-/**
- * The journalled record of which lots a flatten was closing, and how much
- * each HELD when it was submitted — see `getFlattenAttribution`.
- *
- * The two arrays are positionally parallel and the store refuses a row where
- * they are not, so a reader may index one by the other's position without re-checking.
- */
+/** The journalled record of which lots a flatten was closing, and how much each HELD when submitted — see `getFlattenAttribution`. The two arrays are positionally parallel; the store refuses a row where they are not. */
 export interface FlattenAttribution {
   /** In the `opened_at` order `executeExit` read the lots in — the FIFO order the split allocates in */
   lot_idempotency_keys: readonly string[];

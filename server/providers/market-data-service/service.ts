@@ -23,12 +23,7 @@ export interface MarketDataFetchTelemetry {
   logger: Logger;
 }
 
-/**
- * A cache MISS whose (instrument, timeframe, lookback) has already missed this
- * many times in a row escalates from `info` to `warn` — chosen so a single
- * cold-start miss stays `info`, and only a run REPEATING the same failing
- * window warns.
- */
+/** Chosen so a single cold-start miss stays `info`, and only a run REPEATING the same failing window warns. */
 export const MARKET_DATA_REPEATED_MISS_WARN_THRESHOLD = 3;
 
 /** Timeframes are explicitly config, tuned in paper trading; one default is used until that config lands. */

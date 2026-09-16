@@ -1,8 +1,7 @@
 /**
- * Real HTTP `AlpacaMarketDataClient` against Alpaca's Market Data API v2. No
- * paper/live guard here (unlike the broker client) — one host serves both.
- * Crypto and equities are a path-root split on different, non-interchangeable
- * API versions; a client instance is scoped to one asset class at construction.
+ * Real HTTP `AlpacaMarketDataClient`. No paper/live guard here (unlike the broker client) —
+ * one host serves both. Crypto and equities are a path-root split on non-interchangeable API
+ * versions; a client instance is scoped to one asset class at construction.
  */
 
 import type { RetryConfig, TokenBucket } from '../../../shared/index.js';
@@ -18,11 +17,7 @@ import {
 import type { AlpacaBar, AlpacaMarketDataClient, AlpacaQuote } from './alpaca-source.js';
 
 const DEFAULT_BASE_URL = 'https://data.alpaca.markets';
-/**
- * Alpaca versions its two data roots independently; crypto is NOT on `/v2`
- * (verified live: `/v2/crypto/us/bars` 404s, `/v1beta3/crypto/us/bars` 200s).
- * Re-verify against a live account before changing either.
- */
+/** Crypto is NOT on `/v2` (verified live: `/v2/crypto/us/bars` 404s, `/v1beta3/crypto/us/bars` 200s). */
 const ALPACA_CRYPTO_API_VERSION = 'v1beta3';
 const ALPACA_STOCKS_API_VERSION = 'v2';
 /** Exported so `deriveAnalystTimeoutMs`'s fetch-bound floor is computed from these actual constants rather than a re-guessed literal. */
@@ -37,12 +32,7 @@ export const ALPACA_BARS_RETRY_CONFIG: RetryConfig = {
 const MAX_PAGES = 25;
 /** Rows requested per page — well under Alpaca's own page-size cap, unrelated to the caller's `limit` */
 const PAGE_SIZE = 1_000;
-/**
- * How many `timeframe`-widths back of `asOf` to search for `limit` bars.
- * Generous on purpose (weekends/holidays for daily bars, session-hours-vs-24h
- * for intraday equity). An optimization, not a guarantee — the completed,
- * in-session count is guaranteed one layer up (`NormalizingDataSource.fetchBars`).
- */
+/** How many `timeframe`-widths back of `asOf` to search for `limit` bars. An optimization, not a guarantee — the in-session count is guaranteed one layer up. */
 const BUFFER_MULTIPLIER = 8;
 /** Widening factor for the one retry a short first read earns — a sparse symbol (halt, fresh listing) can break `BUFFER_MULTIPLIER`'s assumption. */
 const RETRY_WIDEN_FACTOR = 4;
@@ -167,13 +157,7 @@ export function toAlpacaCryptoSymbol(symbol: string): string {
   return symbol.endsWith('-USD') ? `${symbol.slice(0, -'-USD'.length)}/USD` : symbol;
 }
 
-/**
- * Looks up a keyed crypto response object by the translated Alpaca symbol,
- * falling back to the original. **Matches by name only — it will not guess**:
- * a single-key fallback used to hand back a DIFFERENT instrument's bars under
- * the requested instrument's name, which is strictly worse than the loud
- * failure (`AlpacaDataUnderfetchError`/thrown error) a missing key produces.
- */
+/** Matches by name only — it will not guess: a single-key fallback used to hand back a DIFFERENT instrument's bars under the requested name. */
 function lookupCryptoKey<T>(
   byKey: Record<string, T | undefined> | undefined,
   alpacaSymbol: string,
@@ -185,12 +169,8 @@ function lookupCryptoKey<T>(
 }
 
 /**
- * Equity market-data feed (stocks only — crypto endpoints take no `feed`).
- * Defaults to `iex` deliberately: Alpaca's own default (SIP) 403s a Basic
- * subscription for data under 15 minutes old, and `asOf` is always
- * `clock.now()`, so every equity request would land inside that window on the
- * default feed. Cost: IEX is a single venue, so ADV-derived market impact
- * reads low — a calibration caveat, not a correctness bug.
+ * Equity feed only. Defaults to `iex` deliberately: Alpaca's own default (SIP) 403s a Basic
+ * subscription for data under 15 minutes old, and `asOf` is always `clock.now()`.
  */
 export type AlpacaDataFeed = 'iex' | 'sip';
 
