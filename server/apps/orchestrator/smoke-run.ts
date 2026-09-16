@@ -4074,9 +4074,7 @@ async function runAnalystFailureCauseScenario(
       universe: [{ asset: signal.asset, asset_class: signal.asset_class }],
       tradingCalendar: new UsEquityRegularHoursCalendar(),
       stocksTradingWindow: () => true,
-      // Both legs down — see the doc comment above for why a double failure,
-      // not a single one that would fail over cleanly like
-      // `runDataFailoverScenario`'s probe
+      // Both legs down: a single failure would fail over cleanly (see runDataFailoverScenario)
       alpacaDataClient: {
         getBars: async () => {
           throw new Error('alpaca down (smoke analyst-failure-cause probe, #1114)');
@@ -4119,15 +4117,9 @@ const analystFailureCauseProbe: Probe<'analystFailureCause'> = {
   },
   verdict(evidence) {
     const failures: string[] = [];
-    // #1114 — the analyst failure-cause logging's enforcement assertion, on its
-    // DURABLE effect through the real composition root. See
-    // `runAnalystFailureCauseScenario`'s own doc for why this proves the
-    // non-timeout half of the ticket rather than waiting out a real deadline
     const failureCause = evidence;
-    // `other`, not `error`, since #1394 widened `AnalystFailureKind` onto the
-    // shared cause taxonomy: the probe's two dead legs are combined by
-    // `withOhlcvFailover` into a plain `Error`, which the classifier reports as
-    // unclassified rather than guessing a transport fault
+    // #1394: `withOhlcvFailover` combines the probe's two dead legs into a plain Error,
+    // classified as 'other' rather than a guessed transport fault
     if (!failureCause.failureKinds.includes('other')) {
       failures.push(
         "the analyst failure-cause probe's double-failed data source did not produce a genuine " +
@@ -4178,22 +4170,11 @@ export interface FilledZeroSizeWedgeEvidence {
 /** The lot `runFilledZeroSizeWedgeScenario` seeds — named here so the gate check below can pin it */
 const FILLED_ZERO_SIZE_WEDGE_LOT_KEY = 'smoke-filled-zero-size-wedge';
 const FILLED_ZERO_SIZE_WEDGE_INSTRUMENT = 'AAPL';
-/** How far before the scenario's fixed clock the lot opened — arbitrary but deterministic, giving a nonzero `stuck_ms` */
 const FILLED_ZERO_SIZE_WEDGE_OPENED_BEFORE_MS = 60 * 60_000;
-/**
- * How far before `opened_at` the decision was made — kept DISTINCT from it
- * (never the same Date) so a swap of the two fields at the call site is
- * something the gate could in principle catch, rather than invisible because
- * both carried an identical value
- */
+/** Kept DISTINCT from `opened_at` so a swap of the two fields at the call site is catchable */
 const FILLED_ZERO_SIZE_WEDGE_DECISION_BEFORE_OPENED_MS = 5_000;
 
-/**
- * Records every FILLED_WITH_ZERO_SIZE line on the way to the real logger —
- * the one channel #1087's throttled wedge-detector reaches. Mirrors
- * `AnalystDebugRecorder`'s shape (#1114): scoped to the one message this
- * scenario exists to prove, never throws itself, passes everything through.
- */
+/** Records every FILLED_WITH_ZERO_SIZE line reaching the real logger — #1087's throttled wedge-detector */
 class FilledZeroSizeWarningRecorder implements Logger {
   private readonly warnings: FilledZeroSizeWedgeEvidence['warnings'][number][] = [];
 
@@ -4212,29 +4193,10 @@ class FilledZeroSizeWarningRecorder implements Logger {
 }
 
 /**
- * The second broker/harness surface #1125 asked for: a `BrokerAdapter` that
- * reports a lot `filled` while never surfacing its own fill. `fetchNewFills`
- * below applies its own `since` filter, matching a real broker's contract —
- * it is handed the SAME `since` `ingest-fills.ts`'s floor computed (this
- * lot's own `opened_at`, since it is the store's sole open position), and
- * the scripted fill is dated 1ms BEFORE that, so the filter excludes it on
- * every poll: `fetchNewFills` returns `[]` forever, never returning the
- * fill to the caller at all. One way to wedge a lot at zero `filled_size`
- * forever, not the only one — a non-entry-leg fill or a zero-qty entry fill
- * would wedge it identically; this one reproduces #1087's own incident
- * shape. Same shape as `filled-zero-size-wiring.test.ts`'s `WedgingBroker`,
- * which proves a DIFFERENT property (the throttle is SHARED across two
- * surfaces built from one `executionDeps`) against the composition root
- * directly; this class exists to drive the same wedge through `npm run
- * smoke`'s own gate instead.
- *
- * `SimulatedBrokerAdapter` cannot produce this post-#1087 — it now stamps
- * every fill at submit time, which is the fix — so no scripting of the
- * exit-path harness's own `innerBroker` could ever reach this branch. The
- * wedge is a broker-side invariant violation, not a missing feature of
- * `SimulatedBrokerAdapter`'s cost/market-data machinery, so this broker needs
- * none of it: every method beyond `getOrder`/`fetchNewFills` throws, so an
- * unexpected call fails loudly rather than returning a silently-wrong stub.
+ * #1125's second broker/harness surface: `fetchNewFills` applies its own `since` filter and the
+ * scripted fill is dated 1ms before it, so it returns `[]` forever — reproducing #1087's wedge.
+ * `SimulatedBrokerAdapter` can't produce this post-#1087 (stamps fills at submit time), so every
+ * method beyond `getOrder`/`fetchNewFills` throws rather than returning a silently-wrong stub.
  */
 class SmokeWedgedLotBroker implements BrokerAdapter {
   constructor(
@@ -4278,25 +4240,10 @@ class SmokeWedgedLotBroker implements BrokerAdapter {
 }
 
 /**
- * #1125 — the second broker/harness surface the #1096 review deferred:
- * drives a genuinely wedged lot through the REAL `ingestFills()`/throttle
- * path (`buildExecutionSurface`, the same binding `production.ts` uses), on
- * its own composition root and its own cold `:memory:` store, so the
- * exit-path harness's single shared `innerBroker` is never in the way.
- *
- * `reconcile()` adopts the broker's `filled` state first (matching #1087's
- * own incident shape: the venue reported the fill before the feed surfaced
- * it), then `ALERT_AFTER_CONSECUTIVE_ZERO_SIZE` consecutive `ingestFills()`
- * polls — each seeing the same excluded-forever fill — reach the throttle's
- * first warning. `costModel`/`marketData` are never consulted on this path
- * (verified by reading ingest-fills.ts/reconcile.ts before building this —
- * neither file references `input.config`, `costModel` or `marketData`): the
- * empty cast below rests on that reading, not on itself as proof — a cast to
- * `unknown` only guarantees an unexpected METHOD call throws, not that a
- * stray property read would be caught (it would return `undefined` and
- * likely fail elsewhere, less legibly). Same convention
- * `filled-zero-size-wiring.test.ts`'s `stubConfig` uses for the fields its
- * own scenario never reaches.
+ * #1125 — drives a genuinely wedged lot through the REAL `ingestFills()`/throttle path
+ * (`buildExecutionSurface`) on its own cold `:memory:` store, so the exit-path harness's shared
+ * `innerBroker` is never in the way. `costModel`/`marketData` are never consulted on this path
+ * (verified by reading ingest-fills.ts/reconcile.ts) — the cast to `unknown` below relies on that.
  */
 async function runFilledZeroSizeWedgeScenario(
   logger: Logger,
