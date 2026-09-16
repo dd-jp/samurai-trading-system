@@ -3196,31 +3196,12 @@ export interface ApprovalFallbackEvidence {
 }
 
 /**
- * The approvals-fallback probe (#1152) — the surviving fallback
- * (`UnwiredApprovalChannel`, resolved once by `resolveApprovalsChannel` at
- * composition-root construction) must refuse rather than fabricate consent
- * if Verdict's HITL gate (6) is ever reached.
- *
- * No full-orchestrator TICK can exercise this: ADR-0007's `auto` automation
- * dial makes the gate unreachable on every real tick (`shouldEngageHitl`
- * short-circuits before `approvals.requestApproval` is ever called), so a
- * class that silently went back to fabricating consent would leave every
- * other check in this gate green — #430's defect class exactly, the same
- * reason `runThresholdClampScenario` above reaches its seams directly rather
- * than through a tick.
- *
- * `channel` MUST be read off a real, built `ProductionOrchestrator` /
- * `ProductionComponents` (`orchestrator.approvals` — the caller in
- * `runSmoke`), never reconstructed here by calling `resolveApprovalsChannel`
- * a second time: a probe that built its own instance would prove the
- * HELPER refuses, not that the composition root's own `verdictStepDeps`
- * is actually bound to that refusal. A mutation of `buildProductionComponents`
- * that stopped passing the resolved channel through (while leaving
- * `resolveApprovalsChannel` itself untouched) would go undetected by a
- * self-reconstructing probe; reading the field back off the built
- * orchestrator is what makes it detectable. `production.test.ts`'s
- * `resolveApprovalsChannel` describe block already covers the helper's own
- * logic in isolation — this probe's job is the wiring, not the helper.
+ * #1152 — the surviving fallback must refuse rather than fabricate consent.
+ * No full-orchestrator tick can exercise this (ADR-0007's `auto` dial makes
+ * the HITL gate unreachable), so `channel` must be read off a real, built
+ * orchestrator (`orchestrator.approvals`), never reconstructed here — a
+ * self-reconstructing probe would prove the helper refuses, not that the
+ * composition root is actually wired to it.
  */
 async function runApprovalFallbackScenario(
   channel: ApprovalChannel,
@@ -3260,9 +3241,6 @@ const approvalFallbackProbe: Probe<'approvalFallback'> = {
   },
   verdict(approvalFallback) {
     const failures: string[] = [];
-    // #1152 — the composition root's approvals fallback must refuse rather
-    // than fabricate consent if Verdict's HITL gate (6) is ever reached: no
-    // auto-approving default may ever be wired here
     if (!approvalFallback.refusedFabricatedConsent) {
       failures.push(
         "the composition root's approvals fallback did NOT refuse Verdict's HITL gate (6) — it " +
@@ -3281,67 +3259,37 @@ const approvalFallbackProbe: Probe<'approvalFallback'> = {
 };
 
 /**
- * What `evaluateSmokeGate` needs from the arm-comparison surface (#971).
- *
- * The Feedback Loop's daily timer is 24h and this run lasts seconds, so the
- * orchestrator's own cycle cannot fire here. The probe therefore drives the
- * REAL `runArmComparisonCycle` — the same function `production.ts` calls, over
- * the same `SqliteArmComparisonSource`, `SqliteArmComparisonSampleStore` and
- * thresholds — against the tape this run just traded. Same posture as
- * `runThresholdClampScenario`: when the shipped timer cannot be reached inside
- * a smoke run, the gate exercises the shipped classes directly rather than
- * asserting nothing.
+ * #971 — the Feedback Loop's daily timer is 24h and this run lasts seconds,
+ * so the probe drives the real `runArmComparisonCycle` directly against the
+ * tape this run just traded, same posture as `runThresholdClampScenario`.
  */
 export interface ArmComparisonEvidence {
-  /** Both arms as computed. `null` only if the cycle produced no comparison at all. */
+  /** `null` only if the cycle produced no comparison at all */
   live: ArmPerformance | null;
   control: ArmPerformance | null;
-  /** Rows read back out of `arm_comparison_samples` — 0 means nothing persisted */
   persistedRows: number;
-  /** Whether the drawdown column survived the round trip on BOTH arms */
   persistedBothDrawdowns: boolean;
   diverged: boolean;
-  /** Divergence alerts that reached the injected channel */
   alerts: number;
-  /**
-   * The comparison itself, so the outside-benchmark probe can be handed the
-   * SAME window rather than recomputing one that merely looks equal (#981)
-   */
+  /** So the outside-benchmark probe can be handed the same window rather than recomputing one (#981) */
   comparison: ArmComparison;
 }
 
-/**
- * What `evaluateSmokeGate` needs from the outside-benchmark surface (#981).
- *
- * Same posture and same reason as `ArmComparisonEvidence` above: FL's daily
- * timer cannot fire inside a seconds-long run, so the gate drives the shipped
- * `runOutsideBenchmarkCycle` directly over this run's own store.
- */
+/** #981 — same posture as `ArmComparisonEvidence`: FL's timer can't fire in a seconds-long run */
 export interface OutsideBenchmarkEvidence {
-  /** Benchmarks the cycle measured — 0 means the mechanism produced nothing */
   measured: number;
-  /** Rows read back out of `outside_benchmark_samples` — 0 means nothing persisted */
   persistedRows: number;
   /** Whether return AND drawdown both survived the round trip on every row (D4) */
   persistedBothColumns: boolean;
-  /**
-   * Whether every persisted row's window is the arm comparison's own window,
-   * to the millisecond. The one property #636 turns on: a benchmark measured
-   * over an approximate window is noise, not a comparison.
-   */
+  /** To the millisecond — a benchmark measured over an approximate window is noise, not a comparison (#636) */
   windowsMatchArmComparison: boolean;
-  /** Benchmarks the cycle could not measure, with reasons — for the report */
   unmeasured: readonly string[];
 }
 
 /**
- * Whether `scheduleFeedbackCycle` (production.ts, #1110) actually ran inside
- * THIS run's `start()`/`stop()` — read from the same store, after `stop()`
- * drains everything. Unlike `runArmComparisonProbe` below, this reads no
- * shipped class directly: `feedback_cycle_schedule.last_boundary` is written
- * ONLY by the composition root's own timer, so a row present here is
- * evidence the real scheduler ran, not evidence a probe standing in for it
- * ran.
+ * Whether `scheduleFeedbackCycle` (#1110) actually ran inside this run.
+ * `feedback_cycle_schedule.last_boundary` is written only by the composition
+ * root's own timer, so a row here is evidence the real scheduler ran.
  */
 function feedbackCycleScheduleWasWritten(db: StoreHandle): boolean {
   return new SqliteFeedbackCycleScheduleStore(db).lastBoundary() !== null;
@@ -3359,13 +3307,6 @@ const feedbackCycleScheduleWrittenProbe: Probe<'feedbackCycleScheduleWritten'> =
   },
   verdict(evidence) {
     const failures: string[] = [];
-    // #1110 — the daily cycle's restart-durable schedule must have a row after
-    // a real `start()`/`stop()` through the composition root. `armComparisonProbe`
-    // proves nothing about this: `runArmComparisonProbe` calls
-    // `runArmComparisonCycle` DIRECTLY, never through `scheduleFeedbackCycle`,
-    // so it stays green even if the scheduler is deleted entirely. This is the
-    // one check in the gate that can only pass if the composition root's own
-    // timer actually ran
     if (!evidence) {
       failures.push(
         'no row in `feedback_cycle_schedule` after the run — either `scheduleFeedbackCycle` was ' +
@@ -3381,24 +3322,12 @@ const feedbackCycleScheduleWrittenProbe: Probe<'feedbackCycleScheduleWritten'> =
 };
 
 /**
- * #1112 AC5 — see `sizingCeilingProbe`'s verdict.
- *
- * Filtered to `BTC-USD`, `SMOKE_TEST_UNIVERSE`'s only instrument: the exit
- * scenarios below trade five OTHER underlyings through their own
- * directly-constructed `SqliteExecutionStore`s, sharing this run's database
- * but not its `config.capitalCeilingUsd` — including them would let a
- * genuinely broken composition-root wire pass on the exit scenarios' rows
- * alone.
- *
- * Both tables, because a lot that opened and closed inside the run leaves
- * `open_positions` empty and `closed_trades` populated; reading only the
- * former would report "the wire is broken" for a run that merely finished its
- * position, which is a misdiagnosis, not a gate.
- *
- * Compared against the run's own `config.capitalCeilingUsd` rather than
- * null-checked: a wire that stamps any non-null number — a literal that has
- * drifted from the config, another store's ceiling — is exactly the defect
- * this field exists to catch, and a null check passes it.
+ * #1112 AC5 — filtered to BTC-USD, `SMOKE_TEST_UNIVERSE`'s only instrument,
+ * since the exit scenarios trade five other underlyings through their own
+ * stores sharing this db but not its `capitalCeilingUsd`. Both tables, since
+ * a lot that closed within the run leaves `open_positions` empty. Compared
+ * against the run's own configured ceiling rather than null-checked, since a
+ * drifted literal is exactly the defect this field exists to catch.
  */
 export type SizingCeilingEvidence = {
   /** `paperStartingProfile('paper').capitalCeilingUsd` for this run — `undefined` is itself the #1112 defect */
@@ -3442,9 +3371,6 @@ const sizingCeilingProbe: Probe<'sizingCeiling', 'armComparison'> = {
   },
   verdict(evidence, { prior }) {
     const failures: string[] = [];
-    // #1112 AC5 (migration 0045) — see `SizingCeilingEvidence`. Three
-    // distinct failures, named separately: a gate that reports "the wire is
-    // broken" for a run that produced no row at all is a misdiagnosis
     const { configuredCeiling, rows, allMatchConfiguredCeiling } = evidence;
     if (configuredCeiling === undefined) {
       failures.push(
@@ -3466,7 +3392,7 @@ const sizingCeilingProbe: Probe<'sizingCeiling', 'armComparison'> = {
       );
     }
 
-    // #1112 AC3, and #1180's conversion with it: the comparison's denominator
+    // #1112 AC3/#1180: the comparison's denominator
     // and the Trader's sizing denominator are ONE value. Split them and
     // `return_pct` is a return on capital nothing was sized against — the
     // reading that made both figures wrong when the ceiling became a converted

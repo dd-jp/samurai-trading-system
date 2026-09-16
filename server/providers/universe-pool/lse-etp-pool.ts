@@ -162,113 +162,51 @@ export interface LseEtpPoolRow {
   /** ISO 4217-ish currency code of the LSE-listed line this row actually names (may be GBP, GBX, or USD) */
   readonly currency: string;
   /**
-   * Best-effort determination that Trading 212 LISTS this ticker, from
-   * T212's own public instrument pages (see `provenance.t212_source_url`) —
-   * NOT that it is confirmed listed-and-tradeable inside a Trading 212
-   * account. On a row compiled AFTER the 2026-08-30 venue change (3LUS,
-   * #1220) `false` means "no T212 evidence exists" rather than "T212 does
-   * not list it" — no such research pass runs any more; those rows carry no
-   * `t212_source_url` and say so in their own `provenance.notes`. NOT a
-   * claim about Saxo (the live equity venue since
-   * 2026-08-30, ADR-0015's amendment, map #905 — see "## Saxo venue change"
-   * above). Listing is verified; T212-side eligibility to actually trade it
-   * was pending #665 (the complex-products questionnaire), which closed
-   * 2026-08-27 as out of scope once T212 was ruled out as a venue at all
-   * (#896/#912, both closed 2026-08-27) — it never ran, so this field never
-   * shrank on that basis. This is also NOT a spread or liquidity
-   * measurement — #666, which would have measured real T212 spreads, closed
-   * the same day for the same reason; #750 now gates on a real per-instrument
-   * spread measurement instead; the chain that would deliver it —
-   * #1034 → #1035 — carries `needs-decision` pending whether Saxo's
-   * `infoprices` spread (#1310) supersedes DMD, per ADR-0016. Every `true`
-   * here means only
-   * "T212 lists the instrument" — not "tradeable", not "the spread is
-   * tradeable", and not anything about Saxo, which this field has never
-   * checked.
+   * Best-effort: does Trading 212 LIST this ticker (from T212's own public
+   * instrument pages), never a Saxo or tradeability/spread claim. On a row
+   * compiled after T212 was barred (#1220), `false` means "no T212 evidence
+   * exists", not "T212 does not list it" — such rows carry no
+   * `t212_source_url` and say so in `provenance.notes`.
    */
   readonly t212_isa: boolean;
   /**
-   * Whether this instrument is tradeable on Saxo Capital Markets UK (GIA) —
-   * the live equity venue since 2026-08-30 (ADR-0015's amendment, map #905)
-   * — sourced from SAXO'S OWN instrument list. **This is the field
-   * `docs/specs/universe-selector-spec.md` story 16 / #750 AC7 name as the
-   * hard liquidity gate.** `t212_isa` above answers a different,
-   * no-longer-live question (does Trading 212 list it) and must never be
-   * read as this one.
-   *
-   * Sourced on every row from `provenance.saxo` (#1032 item 3, 2026-09-05,
-   * SIM gateway): `true` iff Saxo lists the row's OWN `<lse_ticker>:xlon`
-   * line on `LSE_ETF`. `false` covers two honest cases the evidence block
-   * distinguishes — Saxo lists a sibling line under the same ISIN but not
-   * this ticker (7 rows), or lists nothing for the ISIN at all (10 rows).
-   * Neither is a tradeability claim about the underlying product; both are a
-   * claim about THIS line, which is the one every route binds on.
-   *
-   * `'unverified'` was every row's value before that pass and remains the
-   * only value a new row may carry until its own capture lands — it is not
-   * a quiet placeholder for `true`. Read through `liquidityGateStatus`:
-   * `assertValidPool` refuses a pool where `gateAdmits` is constant across
-   * verified rows, because a gate that excludes nothing (or everything) on
-   * every row is a bug, not a legitimate configuration.
+   * Tradeable on Saxo Capital Markets UK (GIA) — the live venue — sourced
+   * from Saxo's OWN instrument list (`provenance.saxo`, #1032 item 3). This
+   * is the hard liquidity gate; `t212_isa` is a different, unrelated claim.
+   * `false` covers two cases the evidence block distinguishes: a sibling
+   * line under the same ISIN lists but not this ticker, or nothing lists at
+   * all — neither is a claim about the underlying product. `'unverified'`
+   * is not a placeholder for `true`; read through `liquidityGateStatus`.
    */
   readonly saxo_tradeable: SaxoTradeability;
   /**
    * Whether ADR-0018's D3/D5 numbers for THIS row's `subclass` were actually
-   * measured against an instrument like this one — not just whether the
-   * subclass string is known (`assertKnownSubclass`'s separate, weaker job:
-   * a string can be a recognised member of `KNOWN_SUBCLASSES` while still
-   * describing an instrument nobody measured, which is exactly #813's
-   * `index_etp_3x` widening).
-   *
-   * `false` on exactly the four rows #813 added whose underlying is nothing
-   * like SPY (3VT/VT all-world, 3KOR/EWY South Korea, 3KWE/KWEB China
-   * internet, 3XLE/XLE US energy sector) — ADR-0018 D3's frozen bracket and
-   * D5's deployment fraction for `index_etp_3x` were measured with SPY
-   * standing in for the whole subclass. `true` on every other row.
-   *
-   * Read this through `liveSizingSubclassFor()`, never directly — that
-   * function is what a live-sizing consumer (#751) must build its
-   * `subclassOf` map from. #903 records the interim resolution.
+   * measured against an instrument like it — not just whether the subclass
+   * string is recognised (`assertKnownSubclass`'s separate, weaker job).
+   * `false` on exactly the four rows whose underlying is nothing like SPY
+   * (3VT, 3KOR, 3KWE, 3XLE) — `index_etp_3x`'s numbers were measured with
+   * SPY standing in for the subclass. Read through `liveSizingSubclassFor()`,
+   * never directly (#903).
    */
   readonly subclass_envelope_measured: boolean;
   /**
-   * Whether this row is part of the pool's DECLARED DEFAULT SUBSET — the
-   * watchlist Samurai falls back to when the screener's output is stale,
-   * empty or unreadable (`docs/specs/universe-selector-spec.md`, "Candidate
-   * pool", story 12's invariant 3).
-   *
-   * **Why this field lives in the pool file and not in #751's rotation
-   * logic.** The fallback exists to work *when the screener has failed*, so
-   * it cannot be derived from anything the screener produces or consumes —
-   * not last known ranking (the spec's own third constraint), and not the
-   * per-instrument liquidity or cost #750 gates on and the #1034 → #1035
-   * chain (`needs-decision` pending #1310) would deliver, because a
-   * screener run that could not read its inputs is exactly the run that
-   * triggers the fallback. It has to be statically declared in a checked-in
-   * artifact, which is this one. #751 owns the fallback's *behaviour* — when
-   * it triggers, what alert fires — and never names this field. (This
-   * module doc previously said the opposite; see "## The fallback subset"
-   * above for what that error was and why it mattered.)
-   *
-   * Enforced by `assertValidPool`: at least one row must carry `true`, and
-   * no more than `FALLBACK_DEFAULT_MAX_ROWS` may. A pool that cannot answer
-   * "what do we trade when the screener fails" fails silently on the one day
-   * it matters, and the failure presents as a healthy no-trade session.
+   * Whether this row is part of the pool's declared fallback watchlist —
+   * used when the screener's output is stale, empty or unreadable. Lives
+   * here rather than in the consumer's rotation logic because the fallback
+   * must work when the screener has failed, so it can't be derived from
+   * anything the screener produces. Enforced by `assertValidPool`: at least
+   * one row must carry `true`, and no more than `FALLBACK_DEFAULT_MAX_ROWS`
+   * may.
    */
   readonly fallback_default: boolean;
   readonly provenance: RowProvenance;
 }
 
 /**
- * The subclasses this pool file may legally populate. A SUBSET of
- * `InstrumentSubclass` (`contracts/primitives.ts`) — `'crypto'` is a member
- * of that union but never appears in an LSE equity pool, and is excluded
- * here on purpose rather than merely never used, so an accidental crypto row
- * fails the same loud way an unrecognised string would.
- *
- * `contracts/primitives.ts` already owns `InstrumentSubclass` per
- * `docs/specs/cross-spec-contracts.md` CV-24 — this file does not redefine
- * the type, only the allow-list this pool checks rows against.
+ * The subclasses this pool file may legally populate — a SUBSET of
+ * `InstrumentSubclass`. `'crypto'` is excluded on purpose (never appears in
+ * an LSE equity pool) so an accidental crypto row fails as loudly as an
+ * unrecognised string would.
  */
 export const KNOWN_SUBCLASSES: readonly InstrumentSubclass[] = [
   'index_etp_3x',
@@ -1449,22 +1387,9 @@ export function buildRoutingMap(
 }
 
 /**
- * The `screening_instrument` for a traded `lse_ticker`, or `null` when the
- * instrument is not a pool row at all (#797).
- *
- * **This is a LOOKUP, not a routing map.** It answers "is the instrument I am
- * about to compute a volume read on a leveraged-ETP wrapper, and if so what is
- * the informed instrument behind it" — the question #744's volume caveat
- * forces on every volume-derived read. It is deliberately NOT the inverse of
- * `buildRoutingMap` and must never be used to pick an API root or place an
- * order: `screening_instrument` reaching a routing layer is exactly what
- * `buildRoutingMap`'s doc comment refuses, and nothing here changes that.
- *
- * `null` for a non-pool instrument is a real answer, not a miss to paper over.
- * Every instrument in today's configured universes (`DEFAULT_UNIVERSE`'s SPY,
- * QQQ, AAPL, TSLA) IS a liquid US instrument, so its own volume is the
- * informed volume and no caveat is owed — see `technical-analyst.ts`'s RVOL
- * call site, which renders the caveat only on the non-`null` branch.
+ * The `screening_instrument` for a traded `lse_ticker`, or `null` when it's
+ * not a pool row at all. A LOOKUP, not the inverse of `buildRoutingMap` —
+ * must never be used to pick an API root or place an order.
  */
 export function screeningInstrumentFor(
   lseTicker: string,
@@ -1474,25 +1399,11 @@ export function screeningInstrumentFor(
 }
 
 /**
- * Resolves the Market Intelligence RETRIEVAL subject for an instrument — the
- * "key on `screening_instrument`, not `lse_ticker`" rule #960 recorded as
- * MI-wide (#914). News/sentiment/X coverage for an LSE-listed leveraged ETP
- * is filed under, and must be read back under, the liquid US underlying it
- * tracks: a 3x wrapper generates no headlines of its own, and keying MI on
- * the wrapper produces either an invisible-wrong class-wide read (#914's
- * measured defect) or a permanent `NO_DATA_MARKER` for a name that genuinely
- * has coverage under its underlying.
- *
- * Unlike `screeningInstrumentFor`, this ALWAYS returns a usable subject
- * rather than `null`: a non-pool instrument (every name in today's
- * `DEFAULT_UNIVERSE` — SPY, QQQ, AAPL, TSLA, and crypto ids like `BTC-USD`)
- * already IS its own MI subject, so the fallback is the identity, not a
- * missing answer.
- *
- * Same routing caveat as `screeningInstrumentFor` above: this is a lookup for
- * WHAT TO ASK MI FOR, never for order placement or bar-fetching — those stay
- * keyed on `lse_ticker` (or the routing map's inverse), and nothing here
- * changes that.
+ * Market Intelligence retrieval subject for an instrument — MI is keyed on
+ * `screening_instrument`, not `lse_ticker`, since a 3x wrapper generates no
+ * headlines of its own (#914). Unlike `screeningInstrumentFor`, always
+ * returns a usable subject: a non-pool instrument already IS its own MI
+ * subject. Never used for order placement or bar-fetching.
  */
 export function resolveMiSubject(
   instrument: string,
@@ -1502,13 +1413,10 @@ export function resolveMiSubject(
 }
 
 /**
- * The count #707 (screener ranking/shortlist) actually consumes: the number
- * of DISTINCT `screening_instrument` values in a pool — rankable
- * underlyings, not tradeable ETP lines. Strictly less than `pool.length`
- * whenever an underlying carries more than one issuer's ETP line, which this
- * pool's SPY/QQQ/PLTR/NVDA rows do (11 rows, 7 distinct underlyings). See
- * the module doc's pool-count finding for why row count is NOT the measure
- * #707's 25-name threshold is against.
+ * Distinct `screening_instrument` values (rankable underlyings, not
+ * tradeable ETP lines) — the count the screener's ranking step consumes,
+ * strictly less than `pool.length` whenever an underlying carries more than
+ * one issuer's ETP line.
  */
 export function countRankableUnderlyings(pool: readonly LseEtpPoolRow[] = LSE_ETP_POOL): number {
   return new Set(pool.map((row) => row.screening_instrument)).size;
@@ -1516,101 +1424,46 @@ export function countRankableUnderlyings(pool: readonly LseEtpPoolRow[] = LSE_ET
 
 /**
  * The subclass a LIVE-SIZING consumer may use for this row, or `undefined`
- * when ADR-0018's D3/D5 numbers for that subclass were never measured
- * against an instrument like it (#903).
- *
- * **This is the function a future `UniverseInstrument[]` builder (#751) MUST
- * call when setting `UniverseInstrument.subclass` from a pool row.** Reading
- * `row.subclass` directly would silently re-introduce the hazard #813's
- * widening created: `UniverseInstrument.subclass` is optional specifically
- * so an unset value arms NO per-subclass regime for that instrument
- * (`subclassOfUniverse`, `server/apps/orchestrator/types.ts`, filters out
- * `instrument.subclass === undefined`) rather than sizing it off another
- * instrument's envelope — the same "unclassified is safer than
- * misclassified" argument `resolveSubclassBracket`
- * (`server/pipeline/trader/subclass-bracket.ts`) makes one stage later. A
- * `subclassOf` map built with `liveSizingSubclassFor` therefore cannot
- * contain 3VT, 3KOR, 3KWE or 3XLE, and `resolveSubclassBracket` throws
- * `SubclassBracketUnresolvableError` for any of them rather than sizing
- * against the SPY-measured `index_etp_3x` bracket (see
- * `lse-etp-pool.test.ts`, which asserts this end-to-end against the real
- * function, not just against this file's flag).
- *
- * **What this does NOT close.** A caller can still read `row.subclass`
- * directly and bypass this entirely — Option 3 (#903's chosen resolution)
- * is "structurally excluded from live sizing" through this helper plus the
- * test that proves it, not a type-level guarantee that no code path can
- * reach `row.subclass`. #751 must use this helper; nothing here can force
- * it to.
- *
- * Screening/ranking is untouched by this function and must stay that way —
- * `countRankableUnderlyings` and every other screening consumer keep
- * reading the full `LSE_ETP_POOL` (31 rows, 26 underlyings) unchanged, since
- * this exclusion is sizing-only, not a pool filter.
+ * when its envelope was never measured (#903). A future universe builder
+ * MUST call this rather than reading `row.subclass` directly — an unset
+ * `UniverseInstrument.subclass` arms no per-subclass regime, which is safer
+ * than silently sizing against another instrument's envelope. Does not
+ * change screening/ranking, which still reads the full pool unfiltered —
+ * this exclusion is sizing-only. A caller can still bypass this by reading
+ * `row.subclass` directly; nothing here can force it not to.
  */
 export function liveSizingSubclassFor(row: LseEtpPoolRow): InstrumentSubclass | undefined {
   return row.subclass_envelope_measured ? row.subclass : undefined;
 }
 
 /**
- * Row-level admission decision the liquidity gate actually applies:
- * admit-unless-verified-`false`. An `'unverified'` row is admitted, because
- * an unarmed gate must pass rows through rather than exclude on a
- * tradeability claim nobody has checked (see `saxo_tradeable`'s own doc on
- * `LseEtpPoolRow`); only a Saxo-VERIFIED `false` excludes. `liquidityGateStatus`
- * and `assertValidFallbackSubset` both read admission through this function
- * rather than re-deriving it from `saxo_tradeable` a second way — "what does
- * the gate admit" is answered in exactly one place, so the two can never
- * silently disagree (#1100 review: they used to — see `liquidityGateStatus`).
+ * Row-level admission: admit-unless-verified-`false`. An `'unverified'` row
+ * is admitted — an unarmed gate must pass rows through, not exclude on a
+ * tradeability claim nobody checked. Both `liquidityGateStatus` and
+ * `assertValidFallbackSubset` read admission through this single function so
+ * the two can never silently disagree (#1100 review: they used to).
  */
 export function gateAdmits(row: LseEtpPoolRow): boolean {
   return row.saxo_tradeable !== false;
 }
 
 /**
- * Whether the row's LSE line is quoted in sterling — the second gate the
- * tradeable universe applies, alongside `gateAdmits` (#1220).
- *
- * David's 2026-09-08 ruling on #1220 excludes the non-sterling lines outright
- * for the live ramp rather than deprioritising them: the GBP/USD leg between
- * entry and exit is an uncompensated term nothing in this system prices (the
- * cost model has no FX margin — see `venues.saxo` in
- * `server/tools/backtest/types.ts`), and a broker fee arriving in a foreign
- * currency is summed into a GBP book. A ranked-last USD row is still a row
- * the screener can surface on a thin day; an excluded one cannot.
- *
- * GBX is IN. Pence is an exact unit conversion, not an FX rate, and #1302
- * already lands the scaling through Saxo's `PriceToContractFactor`.
- *
- * Delegates to `isBookCurrency` (`shared/book-currency.ts`, #1465) rather
- * than a hand-duplicated code list: this file already imports the `shared`
- * barrel for `AssetClass`/`InstrumentSubclass` (no `assertValidPool`-at-
- * import cost the way importing `market-data-service` would carry), so the
- * two "is this sterling" answers can no longer silently diverge the way
- * `gateAdmits` once did (#1100).
+ * Whether the row's LSE line is quoted in sterling — the second gate
+ * alongside `gateAdmits` (#1220, David's 2026-09-08 ruling): the GBP/USD leg
+ * between entry and exit is an uncompensated cost nothing here prices, and a
+ * foreign-currency broker fee cannot be summed cleanly into a GBP book. GBX
+ * is IN — pence is an exact unit conversion, not an FX rate.
  */
 export function isSterlingQuoted(row: LseEtpPoolRow): boolean {
   return isBookCurrency(row.currency);
 }
 
 /**
- * The rows a live consumer may trade: Saxo-listed (`gateAdmits`) AND
- * sterling-quoted (`isSterlingQuoted`).
- *
- * **This is the function #751's `ActiveUniverseProvider` must build its
- * `UniverseInstrument[]` from**, the same way `liveSizingSubclassFor` is the
- * function it must set `subclass` through. Reading `LSE_ETP_POOL` directly
- * would readmit the twelve non-sterling lines the #1220 ruling excluded.
- *
- * The two gates stay separate predicates rather than folding currency into
- * `gateAdmits`: that function is the Saxo LIQUIDITY gate, and
- * `liquidityGateStatus`'s reasons speak in `saxo_tradeable`'s own terms —
- * folding currency in would make it report "every row is Saxo-verified
- * false" for a USD row Saxo verified true.
- *
- * **The result is deliberately narrow, and that is the ruling's own
- * consequence, not a bug**: five rows of the checked-in thirty-one. Universe
- * width for the live ramp is #1310's.
+ * The rows a live consumer may trade: Saxo-listed AND sterling-quoted. This
+ * is the function a live universe builder must build its instruments from —
+ * reading `LSE_ETP_POOL` directly would readmit the non-sterling lines
+ * #1220 excluded. Deliberately narrow: five rows of the checked-in
+ * thirty-one.
  */
 export function tradeableUniverse(
   pool: readonly LseEtpPoolRow[] = LSE_ETP_POOL,
@@ -1619,25 +1472,12 @@ export function tradeableUniverse(
 }
 
 /**
- * The gate's own account of whether `saxo_tradeable` is doing anything,
- * classified off `gateAdmits`'s row-level decision rather than off
- * `saxo_tradeable` directly — so this can never say something `gateAdmits`
- * itself would disagree with (it is `assertValidPool`'s own source of truth,
- * not a parallel description of it).
- *
- * - `'unarmed'` — no row (or an empty pool) carries a Saxo-verified value;
- *   every row is `'unverified'`. The gate has nothing to exclude on yet and
- *   MUST be read as pass-through, not as "nothing is tradeable". This was
- *   the checked-in pool's state from #1054 Part 1 until #1032 item 3's
- *   evidence pass (2026-09-05) armed it.
- * - `'vacuous'` — at least one row carries a Saxo-verified value, but
- *   `gateAdmits` returns the SAME answer for every row — all admitted, or
- *   all excluded. This is not a legitimate configuration: a gate that
- *   excludes nothing, or excludes everything, on every input is a bug.
- *   `admits` names which extreme it is. `assertValidPool` refuses a pool in
- *   this state.
- * - `'armed'` — `gateAdmits` disagrees between at least two rows. The gate
- *   has real information to exclude on.
+ * Whether `saxo_tradeable` is doing anything, classified off `gateAdmits`'s
+ * output (never re-derived from `saxo_tradeable` directly, so the two can't
+ * disagree). `'unarmed'` = every row `'unverified'`, must read as
+ * pass-through. `'vacuous'` = `gateAdmits` agrees on every row (admits all
+ * or excludes all) — not a legitimate configuration; `assertValidPool`
+ * refuses it. `'armed'` = `gateAdmits` disagrees between rows.
  */
 export type LiquidityGateStatus =
   | { readonly state: 'unarmed'; readonly reason: string }
@@ -1647,13 +1487,9 @@ export type LiquidityGateStatus =
 export function liquidityGateStatus(
   pool: readonly LseEtpPoolRow[] = LSE_ETP_POOL,
 ): LiquidityGateStatus {
-  // "Armed at all" and "what it decides" are two different questions, asked
-  // in two passes on purpose. Collapsing them into one pass that just tracks
-  // whether `saxo_tradeable` is constant (as an earlier version of this
-  // function did) answers "armed" from `saxo_tradeable`'s raw distinctness
-  // instead of from `gateAdmits`'s actual output, which is the wrong
-  // question: `liquidityGateStatus([{unverified}, {true}])` reported 'armed'
-  // even though admit-unless-false admits both rows, so nothing is excluded
+  // Two passes on purpose: "armed at all" and "what it decides" must read off
+  // `gateAdmits`'s actual output, not `saxo_tradeable`'s raw distinctness —
+  // the latter reported 'armed' for a case where nothing was excluded.
   const verifiedCount = pool.filter((row) => row.saxo_tradeable !== 'unverified').length;
   if (pool.length === 0 || verifiedCount === 0) {
     return {
@@ -1694,33 +1530,14 @@ export function liquidityGateStatus(
 }
 
 /**
- * Validates every row of a pool: subclass is recognised (fails loud per
- * `assertKnownSubclass`), and both instrument-identity fields are non-empty
- * and distinct — distinct meaning UNEQUAL AFTER TRIMMING AND CASE-FOLDING
- * (`'3USL'` and `' 3usl '` are the SAME identity here, not two). Rejects a
- * whole malformed pool at once rather than letting a bad row surface later as
- * a routing throw mid-session.
- *
- * Distinctness is the invariant this module exists to carry: `buildRoutingMap`
- * binds only on `lse_ticker`, which is what makes a wrong-root fetch/route
- * impossible by construction rather than by convention (see module doc). A row
- * whose two identities coincide collapses that split back into one overloaded
- * identifier, so it is refused here rather than merely observed by a test
- * against the checked-in pool (#807).
- *
- * **Why this comparison folds case while `buildRoutingMap` and
- * `screeningInstrumentFor` match case-sensitively.** Those two do runtime key
- * lookup, where the exact string a caller holds is the key and must match
- * exactly. This is authoring-time data hygiene on a hand-compiled file, where
- * a pair differing only in case or surrounding whitespace is a transcription
- * of one identifier, never two genuinely different instruments on two venues —
- * exactly the identity confusion the named field pair was introduced to
- * refuse. Case-sensitive validation here would wave through the confusing case
- * and catch only the obvious one.
- *
- * The comparison is equality on the normalised values, never containment: the
- * checked-in pool legitimately holds `3SPY`/`SPY` and `3QQQ`/`QQQ`, which are
- * a distinct ETP line and its distinct US underlying.
+ * Validates every row: subclass recognised, both identity fields non-empty
+ * and distinct after TRIMMING AND CASE-FOLDING (`'3USL'`/`' 3usl '` are the
+ * same identity, not two). Rejects the whole pool at once rather than
+ * letting a bad row surface later as a routing throw mid-session. Folds
+ * case here (unlike `buildRoutingMap`'s runtime lookups, which must match
+ * exactly) because this is authoring-time hygiene on a hand-compiled file,
+ * where a case/whitespace-only difference is a transcription of one
+ * identifier, never two genuinely different instruments.
  */
 export function assertValidPool(pool: readonly LseEtpPoolRow[]): void {
   for (const row of pool) {
@@ -1747,21 +1564,11 @@ export function assertValidPool(pool: readonly LseEtpPoolRow[]): void {
 }
 
 /**
- * Refuses a pool whose liquidity gate (`saxo_tradeable`) is 'vacuous' per
- * `liquidityGateStatus` — constant `true` or constant `false` across every
- * row. Both are a no-op-or-total gate shipping silently, this repo's
- * dominant defect class (a mechanism that runs but enforces nothing) one
- * level up: the ORIGINAL version of this defect was exactly this, with
- * `t212_isa` constant `true` on all 30 rows then in the pool (#1054).
- *
- * The `'unarmed'` state (constant `'unverified'`) does NOT throw here — see
- * `liquidityGateStatus`'s own doc for why that state is the honest one, not
- * the bug. If a future evidence pass verifies every row to the SAME value,
- * that is either a coincidence worth recording explicitly (not just leaving
- * the field uniform and silent) or, if it is genuinely accurate, a signal
- * that `saxo_tradeable` has stopped carrying exclusion information and the
- * real gate has to come from #1054 Part 2's cost ceiling instead — never a
- * reason to flip one row back to the other value just to silence this check.
+ * Refuses a pool whose liquidity gate is 'vacuous' (constant `true` or
+ * `false` across every row) — a no-op-or-total gate shipping silently, this
+ * repo's dominant defect class one level up (#1054 was exactly this, with
+ * `t212_isa` constant `true` on every row). The `'unarmed'` state does NOT
+ * throw — see `liquidityGateStatus`'s own doc for why that one is honest.
  */
 function assertLiquidityGateNotVacuous(pool: readonly LseEtpPoolRow[]): void {
   const status = liquidityGateStatus(pool);
@@ -1778,74 +1585,31 @@ function assertLiquidityGateNotVacuous(pool: readonly LseEtpPoolRow[]): void {
 }
 
 /**
- * The most rows `assertValidPool` will accept as the fallback subset.
- *
- * The spec does not put a number on the loader; it puts one on the subset
- * ("sized to the watchlist range (5–10 names)") and gives the reason:
- * falling back to every row "would deploy into 30 names at once, which the
- * subclass envelope refuses anyway — so the fallback would produce a
- * refusal storm instead of trading". The same 10 is also the tick
- * budget (τ = 2 min against the instrument-pass cost), which "binds whatever
- * produced the list" — the fallback included. So the ceiling is enforced.
- *
- * **The floor deliberately is not.** The spec's only stated loader rule is
- * that a pool carrying NO fallback row is rejected; "5–10" describes how the
- * subset should be sized, not a condition the loader was asked to fail on,
- * and a hard floor of 5 would reject a legitimately small future pool for
- * violating a range written against this one.
+ * The most rows `assertValidPool` will accept as the fallback subset. The
+ * spec sizes the watchlist at 5-10 names and gives the reason: falling back
+ * to every row would produce a refusal storm instead of trading, and 10 is
+ * also the tick budget. The floor is deliberately NOT enforced — only "no
+ * fallback row at all" is a loader failure; a hard floor would reject a
+ * legitimately small future pool.
  */
 export const FALLBACK_DEFAULT_MAX_ROWS = 10;
 
 /**
- * Enforces the six rules on the pool's declared fallback subset.
- *
- * Rule 1 is the spec's: "a pool with no `fallback_default` row is rejected at
- * load, not at fallback time".
- *
- * **Rule 2 is a ceiling, not the spec's "Not the full pool" clause**, and the
- * difference matters: a pool of ten rows or fewer may mark every row and
- * still pass. A strict `fallback.length < pool.length` subset rule is
- * deliberately not enforced, for the same reason the 5-row floor is not — it
- * would reject a legitimately small future pool for violating a range written
- * against this 31-row one. At any pool size the ceiling is the binding
- * constraint the spec gives a reason for (the refusal storm, and the tick
- * budget); "not the full pool" is a property of a pool this size, which
- * `lse-etp-pool.test.ts` pins on the checked-in artifact rather than here.
- *
- * **Rule 3 — every fallback row must carry a measured subclass envelope.**
- * Degraded mode is the worst place to discover an unmeasured envelope: there
- * is no screener running to notice, and `liveSizingSubclassFor` omits the
- * unmeasured rows, so a fallback list holding one would size against nothing.
- * The subset selection was made on this basis (#903); the rule stops a later
- * edit from marking a widened row without re-reading that reasoning.
- *
- * **Rule 4 — no two fallback rows may share a `screening_instrument` — is
- * this module's own invariant, not the spec's**, and is called out as such
- * here and in its throw message so it can be removed without hunting for a
- * document that required it. It exists because four underlyings in this pool
- * (SPY, QQQ, PLTR, NVDA) carry two ETP lines each, and a fallback list that
- * picked up both lines of one underlying would concentrate a degraded-mode
- * session on a single name — in precisely the mode where no screener is
- * running to notice.
- *
- * **Rule 5 is the spec's ("Fallback behaviour"): no fallback row may be one
- * `gateAdmits` excludes** — i.e. none may carry a Saxo-VERIFIED
- * `saxo_tradeable: false`. A fallback watchlist that can hand back a name
- * Saxo has been verified NOT to list is the silent halt wearing the
- * fallback's name. This is deliberately "not verified ineligible", not
- * "verified eligible", so a future pool whose rows are still `'unverified'`
- * loads (#1054 Part 1); the checked-in pool's fallback rows are all
- * verified `true` regardless (#1032 item 3), which `lse-etp-pool.test.ts`
- * pins on the artifact rather than here.
- *
- * **Rule 6 — no fallback row may be non-sterling** (#1220, David's
- * 2026-09-08 ruling). `tradeableUniverse` excludes USD and EUR lines
- * outright, so a fallback row in one of those currencies would hand degraded
- * mode an instrument selection has already refused. This is rule 5's argument
- * one gate over, and it is what dropped the four USD fallback rows (3LTS,
- * NVD3, 3LPA, 3LAL) the 2026-09-05 subset named: unlike 3USL, none of them
- * has a sterling line of the same ISIN to move to, so they fall out with no
- * replacement.
+ * Enforces six rules on the pool's declared fallback subset:
+ * 1. At least one `fallback_default` row exists (the spec's own rule).
+ * 2. At most `FALLBACK_DEFAULT_MAX_ROWS` — a ceiling, not "not the full
+ *    pool"; a pool of ≤10 rows may legitimately mark every row.
+ * 3. Every fallback row has a measured subclass envelope — degraded mode
+ *    has no screener running to notice an unmeasured one (#903).
+ *    `liveSizingSubclassFor` would size such a row against nothing.
+ * 4. No two fallback rows share a `screening_instrument` — this module's
+ *    own invariant (not the spec's): two lines on one underlying would
+ *    concentrate a degraded-mode session on a single name.
+ * 5. No fallback row is Saxo-VERIFIED `false` (the spec's "Fallback
+ *    behaviour") — an `'unverified'` row still loads; only a verified
+ *    exclusion is refused.
+ * 6. No fallback row is non-sterling (#1220, David's 2026-09-08 ruling) —
+ *    same silent-halt argument as rule 5, one gate over.
  */
 export function assertValidFallbackSubset(pool: readonly LseEtpPoolRow[]): void {
   const fallback = pool.filter((row) => row.fallback_default);
