@@ -1672,72 +1672,72 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   }
 
   // The flatten sweep (#517) — structurally the bracket loop above with
-    // `entry.legs` dropped (a flatten has none) and `leg: 'exit'` fixed
-    // rather than derived per-leg. Kept as its own loop, over its own
-    // `flattens` map, rather than folded into the one above: a flatten is
-    // never a bracket (`submitFlatten`'s own docstring), and merging the
-    // maps would make the loop above fetch `entry.legs` for an order that
-    // has none
-    //
-    // `flattens` IS IN-MEMORY ONLY, unlike `brackets` (which the constructor
-    // warms from `this.state.loadBrackets('alpaca')`, because a bracket can
-    // legitimately still be waiting on a stop/target fill days after a
-    // restart). A flatten is a plain IOC market order: by the time this
-    // process could poll it again, the venue has already resolved it one way
-    // or another, so the ONLY window not surviving a restart costs is the
-    // narrow one between `submitFlatten` returning and this sweep next
-    // running
-    //
-    // THAT WINDOW IS NOW CLOSED, not by this map becoming durable, but by
-    // `reconcile()` learning about `flatten_submissions` rows (#519/#526):
-    // on startup (and whenever `reconcile()` next runs), it reads every
-    // unresolved journal row and calls `resumeFlatten` for each, which
-    // re-populates THIS map from the venue's own record of the order —
-    // see `resumeFlatten`'s doc above. A crash inside the window still
-    // empties this map exactly as before; what changed is that the map is no
-    // longer the only place that memory lived
-    //
-    // Entries ARE removed once their order reaches a terminal state (#524
-    // review, deepseek: "the flatten poll set grows monotonically for the
-    // whole [14-day soak] run" against a ~200 req/min account-wide budget
-    // `alpaca-http-client.ts` warns can starve LIVE ORDER PLACEMENT if
-    // exhausted — a resource leak that degrades the soak itself, not a
-    // tidiness item). Deliberately ASYMMETRIC with `brackets`, which is
-    // still never pruned: a bracket can go on mattering after its entry
-    // fills (`resizeProtectiveLegs`, the stop/target legs), so "terminal"
-    // has no single moment for it. A flatten is a one-shot IOC market
-    // order — once it stops being `'submitted'` it will NEVER change again,
-    // including `'partially_filled'`: whatever did not fill immediately was
-    // cancelled by the venue, not left resting, so there is no later fill
-    // this entry could still deliver. Pruning happens below, INSIDE the
-    // `try`, only once `collectFill` has already run for this poll — the
-    // no-lookahead-preserving reason `advanceLot`'s own filter lives where
-    // it does in ingest-fills.ts applies here too: pruning first and
-    // collecting second would silently drop the terminal fill this exact
-    // ticket exists to stop dropping
-    //
-    // What this does NOT wait for: confirmation that `ingestFills()`
-    // actually PERSISTED the fill this call handed it. This adapter has no
-    // `SharedStore` access to confirm that (`AlpacaBrokerAdapterInput.state`
-    // above documents that boundary as deliberate), so there is a narrow
-    // residual window — if `ingestFills()` goes on to fail, this poll, for a
-    // reason unrelated to this flatten, AFTER this fill was handed off but
-    // BEFORE its target lot's own advance is durably written — where the
-    // fill is not re-offered on the next poll, because this entry is
-    // already gone
-    //
-    // #519/#526 close this ACROSS A RESTART: `flatten_submissions`'s
-    // `fills_swept_at` (migration 0023) is deliberately NOT set by
-    // `ingestFills()` merely because a raw fill was observed — only once
-    // every lot the flatten named has durably applied its share — so THIS
-    // exact failure leaves the journal row unresolved, and the next
-    // `reconcile()` pass's `resumeFlatten` call re-adds the order here for
-    // another attempt. What stays open is the WITHIN-PROCESS gap: this
-    // codebase has no recurring `reconcile()` cadence today (it runs at
-    // startup only — see orchestrator/fill-sync.ts's file doc), so a fill
-    // lost this way is not re-offered until the next restart, not the next
-    // poll. Adding a cadence is a scheduling decision out of scope for
-    // either ticket; the mechanism here is ready for one whenever it exists
+  // `entry.legs` dropped (a flatten has none) and `leg: 'exit'` fixed
+  // rather than derived per-leg. Kept as its own loop, over its own
+  // `flattens` map, rather than folded into the one above: a flatten is
+  // never a bracket (`submitFlatten`'s own docstring), and merging the
+  // maps would make the loop above fetch `entry.legs` for an order that
+  // has none
+  //
+  // `flattens` IS IN-MEMORY ONLY, unlike `brackets` (which the constructor
+  // warms from `this.state.loadBrackets('alpaca')`, because a bracket can
+  // legitimately still be waiting on a stop/target fill days after a
+  // restart). A flatten is a plain IOC market order: by the time this
+  // process could poll it again, the venue has already resolved it one way
+  // or another, so the ONLY window not surviving a restart costs is the
+  // narrow one between `submitFlatten` returning and this sweep next
+  // running
+  //
+  // THAT WINDOW IS NOW CLOSED, not by this map becoming durable, but by
+  // `reconcile()` learning about `flatten_submissions` rows (#519/#526):
+  // on startup (and whenever `reconcile()` next runs), it reads every
+  // unresolved journal row and calls `resumeFlatten` for each, which
+  // re-populates THIS map from the venue's own record of the order —
+  // see `resumeFlatten`'s doc above. A crash inside the window still
+  // empties this map exactly as before; what changed is that the map is no
+  // longer the only place that memory lived
+  //
+  // Entries ARE removed once their order reaches a terminal state (#524
+  // review, deepseek: "the flatten poll set grows monotonically for the
+  // whole [14-day soak] run" against a ~200 req/min account-wide budget
+  // `alpaca-http-client.ts` warns can starve LIVE ORDER PLACEMENT if
+  // exhausted — a resource leak that degrades the soak itself, not a
+  // tidiness item). Deliberately ASYMMETRIC with `brackets`, which is
+  // still never pruned: a bracket can go on mattering after its entry
+  // fills (`resizeProtectiveLegs`, the stop/target legs), so "terminal"
+  // has no single moment for it. A flatten is a one-shot IOC market
+  // order — once it stops being `'submitted'` it will NEVER change again,
+  // including `'partially_filled'`: whatever did not fill immediately was
+  // cancelled by the venue, not left resting, so there is no later fill
+  // this entry could still deliver. Pruning happens below, INSIDE the
+  // `try`, only once `collectFill` has already run for this poll — the
+  // no-lookahead-preserving reason `advanceLot`'s own filter lives where
+  // it does in ingest-fills.ts applies here too: pruning first and
+  // collecting second would silently drop the terminal fill this exact
+  // ticket exists to stop dropping
+  //
+  // What this does NOT wait for: confirmation that `ingestFills()`
+  // actually PERSISTED the fill this call handed it. This adapter has no
+  // `SharedStore` access to confirm that (`AlpacaBrokerAdapterInput.state`
+  // above documents that boundary as deliberate), so there is a narrow
+  // residual window — if `ingestFills()` goes on to fail, this poll, for a
+  // reason unrelated to this flatten, AFTER this fill was handed off but
+  // BEFORE its target lot's own advance is durably written — where the
+  // fill is not re-offered on the next poll, because this entry is
+  // already gone
+  //
+  // #519/#526 close this ACROSS A RESTART: `flatten_submissions`'s
+  // `fills_swept_at` (migration 0023) is deliberately NOT set by
+  // `ingestFills()` merely because a raw fill was observed — only once
+  // every lot the flatten named has durably applied its share — so THIS
+  // exact failure leaves the journal row unresolved, and the next
+  // `reconcile()` pass's `resumeFlatten` call re-adds the order here for
+  // another attempt. What stays open is the WITHIN-PROCESS gap: this
+  // codebase has no recurring `reconcile()` cadence today (it runs at
+  // startup only — see orchestrator/fill-sync.ts's file doc), so a fill
+  // lost this way is not re-offered until the next restart, not the next
+  // poll. Adding a cadence is a scheduling decision out of scope for
+  // either ticket; the mechanism here is ready for one whenever it exists
   private async sweepFlattens(
     since: Date,
     observedAt: Date,
@@ -1794,22 +1794,22 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     return flattenFailures;
   }
 
-    // The re-arm sweep (#525) — structurally the flatten loop above, with
-    // two differences: keyed by the LOT's own `idempotency_key` (not the
-    // OCO's wire id, so a fill lands in `ingestFills()`'s ordinary
-    // per-position bucket with no routing of its own — see `rearmedLegs`'
-    // doc), and the top-level order is tagged `'target'` rather than
-    // `'exit'`/`'entry'`: an OCO's parent order IS the take-profit leg
-    // (Alpaca's own shape, `rearmProtectiveLegs`'s doc), not a market order
-    // with nothing attached. Its one child leg (the stop-loss) is tagged via
-    // `legName`, same as a bracket's legs above. Both satisfy
-    // `isExitFill`/`Fill.leg !== 'entry'` in ingest-fills.ts, so a rearmed
-    // leg firing correctly reduces the lot and can close it
-    //
-    // Pruned once terminal, same asymmetry with `brackets` as `flattens`
-    // documents and for the same reason: an OCO here protects a residual
-    // that is either still open (worth polling again) or done (a single
-    // fire-or-cancel event, never resting again after that)
+  // The re-arm sweep (#525) — structurally the flatten loop above, with
+  // two differences: keyed by the LOT's own `idempotency_key` (not the
+  // OCO's wire id, so a fill lands in `ingestFills()`'s ordinary
+  // per-position bucket with no routing of its own — see `rearmedLegs`'
+  // doc), and the top-level order is tagged `'target'` rather than
+  // `'exit'`/`'entry'`: an OCO's parent order IS the take-profit leg
+  // (Alpaca's own shape, `rearmProtectiveLegs`'s doc), not a market order
+  // with nothing attached. Its one child leg (the stop-loss) is tagged via
+  // `legName`, same as a bracket's legs above. Both satisfy
+  // `isExitFill`/`Fill.leg !== 'entry'` in ingest-fills.ts, so a rearmed
+  // leg firing correctly reduces the lot and can close it
+  //
+  // Pruned once terminal, same asymmetry with `brackets` as `flattens`
+  // documents and for the same reason: an OCO here protects a residual
+  // that is either still open (worth polling again) or done (a single
+  // fire-or-cancel event, never resting again after that)
   private async sweepRearmedLegs(
     since: Date,
     observedAt: Date,

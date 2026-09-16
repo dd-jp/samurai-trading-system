@@ -62,8 +62,8 @@ import { logCaughtFailure, SystemClock } from '../../shared/index.js';
 import {
   assertNoStaleKeyScheme,
   openSharedStore,
-  sharedStorePath,
   type StoreHandle,
+  sharedStorePath,
 } from '../../shared/store/index.js';
 import { loggingAlertChannel } from './alert-catalogue.js';
 import {
@@ -88,8 +88,8 @@ import { LSE_TICKERS } from './production/defaults.js';
 import {
   armSameCurrencyCeilings,
   assertSameCurrencyFunding,
-  saxoFunding,
   type SameCurrencyVerdict,
+  saxoFunding,
   verifySameCurrency,
 } from './production/saxo-funding.js';
 import {

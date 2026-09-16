@@ -466,7 +466,14 @@ export class RiskManagerImpl implements RiskManager {
       return config.whole_share_sizing ? Math.floor(raw) : raw;
     };
 
-    const gatesResult = applyEntryCapGates(config, intent, portfolio, correlation, notional, reasons);
+    const gatesResult = applyEntryCapGates(
+      config,
+      intent,
+      portfolio,
+      correlation,
+      notional,
+      reasons,
+    );
     notional = gatesResult.notional;
     if (gatesResult.bindingConstraint !== null) bindingConstraint = gatesResult.bindingConstraint;
 

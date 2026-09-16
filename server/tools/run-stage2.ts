@@ -513,7 +513,10 @@ function buildAssetClasses(ctx: ReplayContext, timeframe: string): TrialGridAsse
     isDailyTimeframe(timeframe) ? undefined : 'saxo',
   );
   return isDailyTimeframe(timeframe)
-    ? [stocks, makeAssetClass(ctx, 'crypto', CRYPTO_SYMBOLS, periodsPerYearFor('crypto', timeframe))]
+    ? [
+        stocks,
+        makeAssetClass(ctx, 'crypto', CRYPTO_SYMBOLS, periodsPerYearFor('crypto', timeframe)),
+      ]
     : [stocks];
 }
 

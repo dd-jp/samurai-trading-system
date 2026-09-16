@@ -830,8 +830,7 @@ function participationReading(share: number | null): AxisReading {
 /** The `structure` axis reading — only built when `enrichment.donchian` is readable */
 function structureReading(donchian: number): AxisReading {
   const vote = structureVote(donchian);
-  const band =
-    vote > 0 ? 'upper third of range' : vote < 0 ? 'lower third of range' : 'mid range';
+  const band = vote > 0 ? 'upper third of range' : vote < 0 ? 'lower third of range' : 'mid range';
   return {
     axis: 'structure',
     vote,
