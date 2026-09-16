@@ -8,10 +8,8 @@
  * store's `bars` table, although that table exists (0001_init.sql) with the
  * same columns and key: the shared store is runtime state the Feedback Loop
  * and dashboard read live, and research ingests must not be able to corrupt
- * it or collide with the orchestrator's writes. (The original justification
- * here — "that table doesn't exist yet" — was never true; the split stands
- * on the isolation argument alone. Review 2026-08-06 A3.) A fresh
- * `Stage2HistoricalStore` over `:memory:` is also the fixture shape for tests.
+ * it or collide with the orchestrator's writes. A fresh `Stage2HistoricalStore`
+ * over `:memory:` is also the fixture shape for tests.
  *
  * The Polygon HTTP client is injected (`PolygonClient`), matching
  * `AlpacaDataSource`'s precedent in market-data-service/sources —
@@ -173,23 +171,14 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
   /**
    * The ONE timeframe this store instance ingests, stores and serves.
    *
-   * Every read below is scoped by it (#664 item 5). The table is shared across
-   * timeframes — its PRIMARY KEY already carries `timeframe`, so a `'1m'` row
-   * and a `'1d'` row for the same instrument and open time are distinct rows
-   * and neither overwrites the other. What was missing was scoping on the READ
-   * side: `bars`, `barTimestamps`, `barTimestampsFor` and the
-   * "never ingested" diagnostic all ignored the column, so a file holding both
-   * resolutions would have served their UNION to a replay — silently, as a
-   * jagged series no assertion could catch.
+   * Every read below is scoped by it (#664 item 5) — the table's PRIMARY KEY
+   * already carries `timeframe`, so a `'1m'` and a `'1d'` row for the same
+   * instrument/open-time are distinct and neither overwrites the other, but
+   * an unscoped read would silently serve their UNION as one jagged series.
    *
-   * The alternative considered and rejected: a separate scratch FILE (or table)
-   * per timeframe. It gets the same isolation, but splits the coverage
-   * bookkeeping (`stage2_coverage` is already keyed by `(instrument,
-   * timeframe)`, so one file holds both cleanly), makes a daily-vs-intraday
-   * comparison a two-connection job, and buys nothing the composite index below
-   * does not already buy. Existing daily scratch files keep working untouched
-   * either way — their rows are already stamped `'1d'` — which is what makes
-   * this a reversible choice rather than a migration.
+   * A separate scratch file per timeframe was considered and rejected: it
+   * splits the `stage2_coverage` bookkeeping for no benefit the composite
+   * index below doesn't already buy.
    */
   readonly timeframe: string;
 
@@ -239,12 +228,12 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
         requested_to TEXT NOT NULL,
         PRIMARY KEY (instrument, timeframe)
       );
-      -- #664. Every read here filters on (instrument, timeframe, close_time),
+      -- (#664) Every read here filters on (instrument, timeframe, close_time),
       -- and the PRIMARY KEY is on OPEN time, so none of them could use it:
       -- \`bars\` and both timeline queries were full table SCANs. Invisible at
       -- ~500 daily rows per symbol; a cliff at minute resolution, where one
       -- instrument-year is ~98k rows and ten years across four symbols is
-      -- ~4M. \`EXPLAIN QUERY PLAN\` before/after is in the PR body.
+      -- ~4M.
       CREATE INDEX IF NOT EXISTS idx_stage2_bars_read
         ON stage2_bars (instrument, timeframe, close_time);
     `);
@@ -312,33 +301,19 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
    * Idempotent per `(instrument, timeframe, open_time)`, matching
    * `SqliteMarketDataStore.appendBars`'s re-ingest-is-a-no-op convention.
    *
-   * **Before #495 this fetched the whole window every time.** The database was
-   * consulted only on the WRITE (`INSERT OR IGNORE` dedups after the network
-   * round-trip), so nothing was ever reused and every run re-pulled five
-   * years. That made the free-data decision (#487) rest on a false premise:
-   * a free, no-SLA source is only acceptable because history lives on disk and
-   * a dead vendor costs new bars alone. It is also what makes an equities
-   * fallback possible at all — Polygon's free tier 403s beyond two years
-   * against a five-year window, so it can only ever serve the increment.
+   * Coverage is read first and only the uncovered head and tail are
+   * requested, so a window already covered at both ends issues no call and a
+   * partial window tops up rather than restarting.
    *
-   * Coverage is read first and only the uncovered head and tail are requested.
-   * A window already requested at both ends issues NO call at all, so a repeat
-   * run is a true no-op and a partial window tops up rather than restarting.
-   *
-   * The tail refetch starts at the LAST STORED BAR rather than at the previous
+   * The tail refetch starts at the LAST STORED BAR rather than the previous
    * request boundary, because that bar is the only one that could have been
-   * PROVISIONAL: a run whose window ended mid-session stored a partially
-   * formed daily bar. `INSERT OR REPLACE` then corrects it. This costs one
-   * re-read bar per top-up.
+   * PROVISIONAL (a run whose window ended mid-session stores a partially
+   * formed daily bar); `INSERT OR REPLACE` then corrects it, at the cost of
+   * one re-read bar per top-up.
    *
-   * Residual, stated so it is not rediscovered as a surprise: a repeat run
-   * with an UNCHANGED window fetches nothing, so it does not revisit a bar
-   * that was provisional when first stored. Correcting that would cost a
-   * request per symbol on every re-run and contradict this ticket's own
-   * "re-running must stay a no-op". It does not arise on the path that
-   * matters — `STAGE2_PINNED_WINDOW` ends at a fixed PAST instant, so no run
-   * of it can store a forming bar — and any run that does advance its window
-   * picks up the correction on the next call.
+   * A repeat run with an UNCHANGED window fetches nothing, so it will not
+   * revisit a bar that was provisional when first stored — this doesn't
+   * arise on `STAGE2_PINNED_WINDOW`, which ends at a fixed past instant.
    */
   async ingest(symbol: string, window: DateRange): Promise<void> {
     const coverage = this.#coverage(symbol);
@@ -370,18 +345,18 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
 
-    // ONE transaction for the whole page, not one implicit transaction per row
-    // (#664). Measured on this branch before the change: a single
-    // instrument-year of 1-minute bars — 98,280 rows — took **25.9 seconds** to
-    // persist, because each `run()` outside a transaction commits on its own
-    // Ten years across the four-symbol equity universe is ~4M rows, i.e. ~17
-    // HOURS of writing for a backfill whose network side is minutes. Batched,
-    // the same 98,280 rows take well under a second
+    // ONE transaction for the whole page, not one implicit transaction per
+    // row (#664): unbatched, a single instrument-year of 1-minute bars
+    // (98,280 rows) takes ~25.9s to persist since each `run()` outside a
+    // transaction commits on its own — ten years across four symbols is ~4M
+    // rows, ~17 hours for a backfill whose network side is minutes. Batched,
+    // the same rows take well under a second
     //
-    // Invisible at daily resolution — 2,500 rows a symbol committed one at a
-    // time is under a second — which is why it survived until intraday made it
-    // the binding cost. `better-sqlite3`'s `transaction()` is synchronous and
-    // rolls back on a throw, so a malformed page leaves no half-written series
+    // Invisible at daily resolution (2,500 rows/symbol committed one at a
+    // time is under a second), which is why it survived until intraday made
+    // it the binding cost. `better-sqlite3`'s `transaction()` is synchronous
+    // and rolls back on a throw, so a malformed page leaves no half-written
+    // series
     this.db.transaction((rows: PolygonAggregate[]) => {
       for (const aggregate of rows) {
         const openTime = new Date(aggregate.t);

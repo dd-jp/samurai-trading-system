@@ -70,13 +70,13 @@ export interface VerdictAuditEntry {
 
 /**
  * One recent Risk decision joined to the Risk Critic verdict it was reached
- * with (#1066) — the store-side material behind the wire's `RiskCriticRow`.
+ * with — the store-side material behind the wire's `RiskCriticRow`.
  *
  * Server-side, not wire: `created_at` is a `Date` and `critic` is the Risk
  * Manager's own `RiskCriticVerdict`, carried across whole rather than picked
  * apart, because this store "defines no competing shapes for data owned
  * elsewhere" — the verdict, its conditions and its drop reasons belong to the
- * Risk Manager (#994).
+ * Risk Manager.
  *
  * `critic` is `undefined` when the decision has no `risk_critic_log` row: the
  * critic was skipped, was never consulted, or the trace has no `trader_log`
@@ -112,7 +112,7 @@ export interface AttributionSummary {
 
 /**
  * One `audit_log` row that has been ATTRIBUTED to an instrument — the raw
- * material the Pipeline view's lanes are built from (wayfinder map #411).
+ * material the Pipeline view's lanes are built from.
  *
  * `audit_log` itself carries no instrument (0001_init.sql: `trace_id`,
  * `stage`, `decision`, two digests, `timestamp`) and `trace_id` is a bare
@@ -181,40 +181,40 @@ export interface PipelineActivity {
  */
 export interface DashboardQueryStore {
   /**
-   * Arm-less by scope (#1594): `debate_log` is written only by the live
-   * debate path (`debate-adapter.ts`) — the control arm's `DebateResult` is
-   * synthesized in memory and never written there — so this table cannot
-   * hold a control row for an `arm` parameter to filter
+   * Arm-less by scope: `debate_log` is written only by the live debate path
+   * — the control arm's `DebateResult` is synthesized in memory and never
+   * written there — so this table cannot hold a control row for an `arm`
+   * parameter to filter
    */
   getRecentDebates(limit: number, asOf: Date): DebateLog[];
   /**
-   * Arm-less by scope (#1594): reflects `current_tick`, persisted only by
-   * the live arm's `SequentialTickRunner`. The control arm's ticks live in
-   * its own in-memory, never-persisted store (`control-arm-wiring.ts`), so
-   * there is no control row this could ever surface.
+   * Arm-less by scope: reflects `current_tick`, persisted only by the live
+   * arm's `SequentialTickRunner`. The control arm's ticks live in its own
+   * in-memory, never-persisted store, so there is no control row this could
+   * ever surface.
    */
   getTickStatus(asOf: Date): TickStatus | null;
   /**
-   * #1592: `arm` is required, not optional — the #753/#1318 "no read returns
-   * both arms" guarantee lives in the type here, not just in a convention a
-   * future caller could forget. The dashboard entry point resolves an absent
+   * `arm` is required, not optional — the "no read returns both arms"
+   * guarantee lives in the type here, not just in a convention a future
+   * caller could forget. The dashboard entry point resolves an absent
    * request-side arm to `'live'` before it ever reaches this interface.
    */
   getOpenPositions(asOf: Date, arm: TradingArm): OpenPosition[];
   /**
-   * Recent realized round trips (#940), most-recently-closed first — the
+   * Recent realized round trips, most-recently-closed first — the
    * `closed_trades` mirror of `getRecentDebates`/`getVerdictHistory` above.
-   * `arm` required for the same reason as `getOpenPositions` (#1592).
+   * `arm` required for the same reason as `getOpenPositions`.
    */
   getRecentClosedTrades(limit: number, asOf: Date, arm: TradingArm): ClosedTrade[];
   /**
-   * EVERY closed trade for one arm, unbounded — the P&L headline's source
-   * (#1595): `cumulativePnl` (control-arm/arm-comparison.ts) needs the whole
-   * realized series to find the all-time peak and trough, and a `LIMIT`
-   * window sized for a recent-history list (`getRecentClosedTrades` above)
-   * would silently truncate the drawdown to whatever fits in it. `arm`
-   * required for the same reason as `getOpenPositions`/`getRecentClosedTrades`
-   * (#1592) — the headline must never blend the two arms' realized series.
+   * EVERY closed trade for one arm, unbounded — the P&L headline's source:
+   * `cumulativePnl` needs the whole realized series to find the all-time
+   * peak and trough, and a `LIMIT` window sized for a recent-history list
+   * (`getRecentClosedTrades` above) would silently truncate the drawdown to
+   * whatever fits in it. `arm` required for the same reason as
+   * `getOpenPositions`/`getRecentClosedTrades` — the headline must never
+   * blend the two arms' realized series.
    */
   getAllClosedTrades(asOf: Date, arm: TradingArm): ClosedTrade[];
   /**
@@ -225,74 +225,72 @@ export interface DashboardQueryStore {
    * fills returned are guaranteed complete for those trades rather than
    * coincidentally so.
    *
-   * Arm-less by scope (#1594): scoped by `idempotencyKeys`, not by an arm
-   * predicate — the caller (`buildSnapshot`) passes only the keys of an
-   * already arm-scoped `getRecentClosedTrades` read, so the arm boundary is
-   * enforced by the caller, not by a column here.
+   * Arm-less by scope: scoped by `idempotencyKeys`, not by an arm predicate
+   * — the caller (`buildSnapshot`) passes only the keys of an already
+   * arm-scoped `getRecentClosedTrades` read, so the arm boundary is enforced
+   * by the caller, not by a column here.
    */
   getFillsForTrades(idempotencyKeys: readonly string[], asOf: Date): Fill[];
   /**
-   * #1594: `arm` required, same guarantee as `getOpenPositions` (#1592) —
-   * `verdict_log` carries no `arm` column, so the store discriminates on
-   * `trace_id` instead, but the type-level contract is identical: a read
-   * names exactly one arm, and no read returns both
+   * `arm` required, same guarantee as `getOpenPositions` — `verdict_log`
+   * carries no `arm` column, so the store discriminates on `trace_id`
+   * instead, but the type-level contract is identical: a read names exactly
+   * one arm, and no read returns both
    */
   getVerdictHistory(limit: number, asOf: Date, arm: TradingArm): VerdictAuditEntry[];
   /**
-   * Recent Risk decisions with their critic verdicts (#1066), most recent
-   * first — the drawer's invalidation section.
+   * Recent Risk decisions with their critic verdicts, most recent first —
+   * the drawer's invalidation section.
    *
    * Keyed by `(trace_id, instrument)` like `risk_log` itself, so the drawer
    * looks a decision up by the trace it is showing rather than by the debate,
    * which a retried tick shares across traces (migration 0015).
    *
-   * `arm` required (#1594), same guarantee as `getOpenPositions` (#1592). A
-   * control-arm read still returns rows — the control arm's own Risk
-   * decisions — each with `critic: undefined`, since the control calls no
-   * model and consults no critic; it does not mean "no risk decisions".
+   * `arm` required, same guarantee as `getOpenPositions`. A control-arm read
+   * still returns rows — the control arm's own Risk decisions — each with
+   * `critic: undefined`, since the control calls no model and consults no
+   * critic; it does not mean "no risk decisions".
    */
   getRiskCritics(limit: number, asOf: Date, arm: TradingArm): RiskCriticRecord[];
   /**
-   * Arm-less by structure, not by oversight (#1594; listed among the control
-   * arm's structural limits in wayfinder map #1590). `analyst_weights` carries
-   * no `arm` column: the Feedback Loop that writes it takes only the live
-   * arm's closed trades (`SqliteClosedTradeStore`'s `arm: 'live'` default) —
-   * the control arm has no analyst contributions to credit, so there is no
-   * control-arm weight set for a parameter to select between.
+   * Arm-less by structure, not by oversight. `analyst_weights` carries no
+   * `arm` column: the Feedback Loop that writes it takes only the live arm's
+   * closed trades — the control arm has no analyst contributions to credit,
+   * so there is no control-arm weight set for a parameter to select between.
    */
   getAnalystWeights(asOf: Date): Record<string, number>;
   /**
-   * #1594: `arm` required, same guarantee as `getOpenPositions` (#1592).
+   * `arm` required, same guarantee as `getOpenPositions`.
    * `getAttribution(asOf, 'control')` returns `{}`: the join is onto
-   * `debate_log`, which the control arm never writes (`axis-vote-decision.ts`
-   * — the control's `DebateResult` is synthesized in-memory and has no
-   * `debate_log` row), so there is nothing for a control-scoped read to
-   * attribute, not a bug in the join.
+   * `debate_log`, which the control arm never writes — the control's
+   * `DebateResult` is synthesized in-memory and has no `debate_log` row — so
+   * there is nothing for a control-scoped read to attribute, not a bug in
+   * the join.
    */
   getAttribution(asOf: Date, arm: TradingArm): Record<string, AttributionSummary>;
-  /** `arm` required (#1594), same guarantee as `getOpenPositions` (#1592) */
+  /** `arm` required, same guarantee as `getOpenPositions` */
   getDailyMetrics(asOf: Date, arm: TradingArm): MetricsSuite;
   /**
-   * The Feedback Loop's persisted matched-control comparisons (#971),
+   * The Feedback Loop's persisted matched-control comparisons,
    * most-recently-computed first — the panel's whole data source.
    *
    * Returns FL's own `PersistedArmComparisonSample`, not a dashboard-local
    * shape: this store "defines no competing shapes for data owned elsewhere",
-   * and the comparison is owned by the Feedback Loop (#636). It is read here
-   * rather than recomputed at snapshot time because recomputing would move the
-   * computation out of FL and show a number FL never saw and never alerted on
-   * — see migration 0034's own comment.
+   * and the comparison is owned by the Feedback Loop. It is read here rather
+   * than recomputed at snapshot time because recomputing would move the
+   * computation out of FL and show a number FL never saw and never alerted
+   * on — see migration 0034's own comment.
    *
    * The PERSISTED shape, so what this returns is bounded by what
-   * `arm_comparison_samples` holds: `ArmPerformance.refused_pass_count` (#1099)
-   * has a nullable column since migration 0057 (#1483) — `null` on a row
-   * computed before that migration, a real count on every row after it, never
-   * a fabricated `0` the table never actually measured.
+   * `arm_comparison_samples` holds: `ArmPerformance.refused_pass_count` has
+   * a nullable column since migration 0057 — `null` on a row computed
+   * before that migration, a real count on every row after it, never a
+   * fabricated `0` the table never actually measured.
    */
   getArmComparisons(limit: number, asOf: Date): PersistedArmComparisonSample[];
   /**
-   * The Feedback Loop's outside benchmarks (#981), newest first, bounded by
-   * `asOf`. `limit` counts ROWS, not cycles — two benchmarks per cycle.
+   * The Feedback Loop's outside benchmarks, newest first, bounded by `asOf`.
+   * `limit` counts ROWS, not cycles — two benchmarks per cycle.
    */
   getOutsideBenchmarks(limit: number, asOf: Date): OutsideBenchmarkSample[];
   getMark(instrument: string, asOf: Date): Mark;
@@ -308,8 +306,8 @@ export interface DashboardQueryStore {
    * `instruments` order, so the failure is identical to what the per-position
    * loop produced.
    *
-   * Arm-less by scope (#1594): market data (`latest_mark`) has no arm
-   * dimension — both arms price against the same observed market.
+   * Arm-less by scope: market data (`latest_mark`) has no arm dimension —
+   * both arms price against the same observed market.
    */
   getMarks(instruments: readonly string[], asOf: Date): Map<string, Mark>;
   /**
@@ -318,29 +316,27 @@ export interface DashboardQueryStore {
    * table written by another component (the debate engine's LLM client) — the
    * same relationship this store has to `open_positions` or `verdict_log`.
    *
-   * Arm-less by scope (#1594): the control arm calls no model, so it never
-   * writes a row here — this table cannot hold control-arm spend.
+   * Arm-less by scope: the control arm calls no model, so it never writes a
+   * row here — this table cannot hold control-arm spend.
    */
   getLlmSpend(asOf: Date): LlmSpendSummary;
   /**
-   * Raw material for the Pipeline view (#411). `maxLanes` bounds the number of
-   * instruments; `lookbackMs` bounds how far back a lane reaches (#413) — both
-   * are passed in rather than read from config so the caller that owns the
-   * poll (`buildSnapshot`) owns the payload size, exactly as the `limit`
+   * Raw material for the Pipeline view. `maxLanes` bounds the number of
+   * instruments; `lookbackMs` bounds how far back a lane reaches — both are
+   * passed in rather than read from config so the caller that owns the poll
+   * (`buildSnapshot`) owns the payload size, exactly as the `limit`
    * arguments above do.
    *
    * Bounded on purpose: this rides the 3-second poll, so it must never grow
    * with the audit history. At most one settled candidate trace and one live
    * trace per lane are returned.
    *
-   * `arm` required (#1594), same guarantee as `getOpenPositions` (#1592).
-   * `PipelineActivity.live` is always `[]` for `arm: 'control'`: `current_tick`
-   * is written only by the live arm's `SequentialTickRunner` (the control arm
-   * is wired to its own never-persisted `InMemoryCurrentTickStore`,
-   * `control-arm-wiring.ts`), so a control-arm request excludes that table's
-   * leg from the universe query entirely rather than reading a table that
-   * structurally cannot hold a control row — the same "no read returns both"
-   * guarantee, applied to a table with no `arm` column and no rows to filter.
+   * `arm` required, same guarantee as `getOpenPositions`. `PipelineActivity.live`
+   * is always `[]` for `arm: 'control'`: `current_tick` is written only by
+   * the live arm's `SequentialTickRunner` (the control arm is wired to its
+   * own never-persisted `InMemoryCurrentTickStore`), so a control-arm
+   * request excludes that table's leg from the universe query entirely
+   * rather than reading a table that structurally cannot hold a control row.
    */
   getPipelineActivity(
     maxLanes: number,
@@ -349,75 +345,17 @@ export interface DashboardQueryStore {
     arm: TradingArm,
   ): PipelineActivity;
   /**
-   * Count of alert sends to the ESCALATION chat recorded in
-   * `alert_delivery_failures` in the TRAILING 24 HOURS as of `asOf` (#1108,
-   * windowed by #1131) — same relationship to that table `getLlmSpend` has to
-   * `llm_spend`: written by another component (the Telegram client), read
-   * here. `asOf`-bounded above like every other reader here, so a replay
-   * against an older snapshot cannot see a failure that hadn't happened yet.
+   * Count of alert sends to the ESCALATION chat that exhausted retries, in
+   * the TRAILING 24 HOURS as of `asOf` — windowed, not all-time, so one
+   * transient failure does not make the tile read "degraded" forever.
    *
-   * WINDOWED, NOT ALL-TIME (#1131). This used to be an unbounded-below count,
-   * so one transient failure made the tile read "degraded" forever with no
-   * way to tell it from a live outage. The 24-hour window
-   * (`alert-delivery-log.ts`'s `ALERT_DELIVERY_FAILURE_WINDOW_MS`) is sized
-   * against the mechanism: a row here is written only when an
-   * escalation-chat send exhausts retries, escalations fire across roughly
-   * twenty pipeline channels with no rate floor between them, and the window
-   * has to outlast the expected gap between escalations or a live outage's
-   * only evidence would age out during a quiet stretch. The lifetime total
-   * this used to also expose is dropped from the wire (nothing consumed it),
-   * recoverable over the table's (env-configurable, default 30-day)
-   * retention window by reading it directly — bounded by that retention,
-   * never a lifetime — which is why that retention is floored at 2 days
-   * rather than 1, and why the floor's
-   * standing above this window is pinned by
-   * `alert-delivery-failure-retention.test.ts` rather than implied by the
-   * floor's value.
-   *
-   * Scoped to the chat `alert-transport.ts` reads `TELEGRAM_CHAT_ID` into
-   * (#1108 third review pass): the table also durably records heartbeat-chat
-   * sends (#342's isolation only stops those from advancing the escalation
-   * counter, not from being written), and this tile answers "is the alert
-   * channel down" — a heartbeat hiccup on its own chat must not degrade it.
-   *
-   * This IS the channel-down surface (#1130), not a supplement to one: the
-   * in-band Telegram "channel degraded" notice
-   * (`telegram-bot-api-client.ts`'s `#recordDeliveryFailure`) posts over the
-   * exact chat/transport it is reporting on, so it gets through only while
-   * that chat is reachable — its own retries widen that from an instant to a
-   * window that can run to tens of seconds, but an outage outlasting them
-   * silences it.
-   * Only this tile answers regardless, because it is a plain SQL read of a
-   * durable table, crossing no live transport at read time.
-   *
-   * **What a 0 does NOT prove, even now that the count is windowed.** A row
-   * is written only when a send is ATTEMPTED and exhausts retries — no
-   * attempt means no row, windowed or not. A quiet system with nothing worth
-   * escalating in the last 24 hours reports 0 even if the channel is
-   * completely dead, because nothing has tried to use it recently. So a 0
-   * here means "no failed attempt observed in the trailing window", not "the
-   * channel is confirmed reachable" — narrower than it may read at a glance,
-   * and the windowing does not close this gap, only the "forever" one.
-   *
-   * **The precondition, and what violating it looks like (#1130 review
-   * round 1).** This count is only as good as this process's own
-   * `TELEGRAM_CHAT_ID` (`server/apps/service-api/index.ts`, which reads and
-   * normalizes it the way `alert-transport.ts` does for the orchestrator).
-   * That process warns at boot when the var is UNSET; a set-but-WRONG value
-   * is accepted silently, this method then filters on a chat nothing ever
-   * wrote to, and returns 0. `Rail.tsx`'s `AlertDeliveryBlock` renders
-   * nothing at 0, so the tile is ABSENT — byte-identical to a healthy or
-   * merely-quiet channel.
-   *
-   * Tile absence is therefore three CONFIGURATION states, and only two are
-   * named at boot: healthy-or-quiet (see the "what a 0 does NOT prove"
-   * paragraph above — this state itself does not distinguish healthy from
-   * dead-but-unused), `log-only` (warned, and 0 by design there — nothing is
-   * ever sent to mark), and chat-mismatch (silent). Since #1130 makes this
-   * tile the sole channel-down surface, that third state is a silent false
-   * all-clear. It is documented here, not mitigated — index.ts's
-   * boot-warning block carries the local signal that could detect it, and
-   * the three reasons #1130 still declines to build the detector.
+   * A 0 does NOT prove the channel is reachable: a row is written only when
+   * a send is attempted, so a quiet system with nothing to escalate reports
+   * 0 even if the channel is dead. It is also silently wrong if this
+   * process's `TELEGRAM_CHAT_ID` is set but mismatched — the read then
+   * filters on a chat nothing ever wrote to, indistinguishable from healthy.
+   * Scoped to the escalation chat specifically: the table also records
+   * heartbeat-chat sends, which must not count toward this tile.
    */
   getAlertDeliveryFailureCount(asOf: Date): number;
 }

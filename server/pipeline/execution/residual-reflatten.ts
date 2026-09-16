@@ -115,6 +115,7 @@ export type ResidualReflattenOutcome =
  * that suppresses the #525 page is `submitted`, and only until the attempt
  * budget runs out.
  */
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: each early return is a distinct, named skip/fail/stand-down outcome the doc comments justify individually, and the write-ahead-before-broker-call ordering is mandatory (see the comment above `writeAheadFlatten`) — extracting a branch risks separating a return from the specific evidence it is conditioned on
 export async function reflattenResidual(
   input: ResidualReflattenInput,
   position: OpenPosition,

@@ -1,12 +1,9 @@
 /**
- * Real `TelegramClient` over the Telegram Bot API (ticket #275) — see
- * docs/specs/transport-layer-spec.md ("Module: TelegramClient").
+ * Real `TelegramClient` over the Telegram Bot API.
  *
  * Outbound only: `sendMessage`, which the heartbeat, the operator escalations
  * and the verdict notifier all post through. No inbound polling — there is no
- * human gate (ADR-0007, ADR-0013).
- *
- * ## Secret handling
+ * human gate.
  *
  * The bot token is embedded in every request path (`/bot<token>/<method>`),
  * so no URL is ever logged or baked into an error message — see
@@ -34,12 +31,9 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 
 /**
  * Telegram's hard `sendMessage` limit, counted in UTF-16 code units.
- *
  * Exceeding it is a `400 Bad Request: message is too long`, which is
- * PERMANENT: `DEFAULT_RETRY` re-sends the same over-long body twice more and
- * the alert is then dropped, having never been delivered. Observed live on
- * 2026-09-04 — `control_arm_valuation_refused` for NFLX failed this way, and
- * the operator learned nothing.
+ * PERMANENT — retrying re-sends the same over-long body and the alert is
+ * dropped, having never been delivered.
  */
 export const TELEGRAM_MAX_MESSAGE_CHARS = 4096;
 
@@ -47,29 +41,19 @@ export const TELEGRAM_MAX_MESSAGE_CHARS = 4096;
  * Bounds an outbound message so an over-long body degrades to a truncated
  * alert instead of no alert at all.
  *
- * Applied HERE, in the transport, rather than in each alert formatter, for
- * the reason `formatLogLine` gives about redaction: a guarantee that holds
- * only where a formatter remembered it is not a guarantee. Every alert
- * catalogue entry (orchestrator/alert-catalogue.ts) builds its own body and
- * any of them can interpolate an unbounded `detail` — the NFLX failure
- * came from `describeThrown` over a multi-member `AggregateError`, whose size
- * scales with the number of open positions.
- *
+ * Applied HERE, in the transport, rather than in each alert formatter: a
+ * guarantee that holds only where a formatter remembered it isn't a
+ * guarantee, and any catalogue entry can interpolate an unbounded `detail`.
  * This bounds only what goes on the wire; `#capForWire` is the sole caller
- * and owns keeping the record. The suffix names the original length, so a
- * reader knows to go to the log rather than assuming the alert was all there
- * was.
+ * and owns keeping the untruncated record in the log.
  */
 export function capOutboundText(text: string): string {
   if (text.length <= TELEGRAM_MAX_MESSAGE_CHARS) return text;
-  // Slicing to the limit and appending after would still exceed it and still
-  // 400. No guard is needed on `cut`: `suffix` is ~30 chars plus the digits
-  // of `text.length`, and no JS string is long enough to make that 4,096
+  // Slicing to the limit and appending the suffix after would still exceed it
   const suffix = `… (truncated, ${text.length} chars total)`;
   let cut = TELEGRAM_MAX_MESSAGE_CHARS - suffix.length;
-  // A lone high surrogate is not valid UTF-8 on the wire. Telegram counts
-  // UTF-16 code units, so `.length` is the right unit and a split pair is the
-  // only slicing hazard it leaves
+  // A lone high surrogate is not valid UTF-8 on the wire; Telegram counts
+  // UTF-16 code units, so a split surrogate pair is the only slicing hazard
   const last = text.charCodeAt(cut - 1);
   if (last >= 0xd800 && last <= 0xdbff) cut -= 1;
   return `${text.slice(0, cut)}${suffix}`;
@@ -80,19 +64,10 @@ const DEFAULT_RETRY: RetryConfig = { maxAttempts: 3, baseDelayMs: 500, maxDelayM
 
 /**
  * Escalate on the Nth permanently-undeliverable alert send and every Nth
- * after (#1108) — a failed send is individually swallowed by the caller's own
+ * after: a failed send is individually swallowed by the caller's own
  * `.catch`, so nothing else surfaces that a pattern is forming until an
- * operator goes looking. It posts over the transport it is reporting on, so
- * it arrives only if `#alertChatId` is reachable at some point inside this
- * send's OWN retry window — not at one instant: the escalation goes through
- * `#call`, so `DEFAULT_RETRY.maxAttempts` attempts of `DEFAULT_TIMEOUT_MS`
- * each, plus backoff, span up to tens of seconds — a bound, not an elapsed
- * time: a refused connection fast-fails and leaves only the backoffs. A
- * necessary condition about that
- * window, not a partition of failure classes, and NOT sufficient (this send
- * has its own `#call`, which can fail on its own). See `#recordDeliveryFailure`'s doc
- * (#1130), and `alert_delivery_failures` for the surface that answers
- * regardless.
+ * operator goes looking. See `#recordDeliveryFailure`'s doc for why this
+ * escalation's own delivery is not guaranteed either.
  */
 const DELIVERY_FAILURE_ALERT_EVERY = 3;
 
@@ -100,13 +75,10 @@ const DELIVERY_FAILURE_ALERT_EVERY = 3;
 const LOG_STAGE = 'verdict.telegram';
 
 /**
- * Write-only view of the orchestrator's `SqliteAlertDeliveryLog`
- * (alert-delivery-log.ts), declared here rather than imported so that
- * `verdict/` never depends on `orchestrator/` — the dependency runs the other
- * way everywhere else in this repo (e.g. orchestrator's `tradeChannelAlert`
- * imports `TelegramClient` from `verdict/index.js`). `SqliteAlertDeliveryLog`
- * satisfies this structurally, and a type-level test in
- * telegram-bot-api-client.test.ts pins that.
+ * Write-only view of the orchestrator's `SqliteAlertDeliveryLog`, declared
+ * here rather than imported so that `verdict/` never depends on
+ * `orchestrator/` — the dependency runs the other way everywhere else in
+ * this repo. `SqliteAlertDeliveryLog` satisfies this structurally.
  */
 export interface AlertDeliveryFailureLog {
   recordFailure(entry: {
@@ -121,18 +93,14 @@ export interface AlertDeliveryFailureLog {
 export interface TelegramBotApiClientOptions {
   /**
    * Defaults to `process.env.TELEGRAM_BOT_TOKEN`. Never logged, and never
-   * baked into an error message. Trimmed at construction (#355, same rule as
-   * the chat ids and `SAMURAI_ALERTS` in #354): a trailing newline or space
-   * out of an env file must not reach the request URL, where it fails every
-   * send. Whitespace-only counts as not configured, same as unset.
+   * baked into an error message. Trimmed at construction: a trailing newline
+   * or space out of an env file must not reach the request URL, where it
+   * fails every send. Whitespace-only counts as not configured, same as unset.
    */
   botToken?: string;
   /** The escalation chat — where the repeated-delivery-failure notice posts. Omit to disable that notice. */
   alertChatId?: string;
-  /**
-   * Where a send that exhausted `retry` is durably recorded (#1108). Omit to
-   * skip durable recording — the failure still logs loudly either way.
-   */
+  /** Where a send that exhausted `retry` is durably recorded. Omit to skip durable recording — the failure still logs loudly either way. */
   alertDeliveryLog?: AlertDeliveryFailureLog;
   /** Defaults to `https://api.telegram.org` */
   baseUrl?: string;
@@ -155,10 +123,9 @@ export class TelegramBotApiClient implements TelegramClient {
   #deliveryFailureCount = 0;
 
   constructor(options: TelegramBotApiClientOptions) {
-    // Trimmed at the read point, not just validated — same rule #354 applied
-    // to the chat ids and SAMURAI_ALERTS: whitespace-only counts as unset,
-    // and the *normalized* value is what's handed onward, so a trailing
-    // newline out of an env file never reaches the request URL below
+    // Trimmed at the read point: whitespace-only counts as unset, and the
+    // normalized value is what's handed onward so a trailing newline out of
+    // an env file never reaches the request URL below
     const botToken = (options.botToken ?? process.env.TELEGRAM_BOT_TOKEN)?.trim();
     if (botToken === undefined || botToken === '') {
       throw new Error(
@@ -178,24 +145,12 @@ export class TelegramBotApiClient implements TelegramClient {
   /**
    * The wire bound and its record, together. Capping without logging the
    * original would make the truncation the very data loss it exists to
-   * prevent: the ten alert channels log only in their `.catch`, and a capped
-   * send SUCCEEDS, so no other line would ever carry the dropped tail.
+   * prevent: a capped send SUCCEEDS, so no other line would ever carry the
+   * dropped tail.
    *
-   * The body goes in `payload`, not `message`: `redactPayload` walks every
-   * string it reaches and runs `maskCredentials` over it, so a token
-   * appearing in alert prose is masked by pattern rather than by the
-   * accident that `text` does not carry one today. `formatLogLine` masks
-   * `message` the same way now too (#1133), so this convention is no
-   * longer the only thing standing between a stray token and the log — but
-   * `redactPayload`'s KEY rule still redacts a value wholesale by field
-   * name (`{ api_key: '<value>' }`, whatever the value looks like), which a
-   * plain interpolated `message` string can never receive; that is what
-   * payload still earns over message. Not a length-cap difference — neither
-   * has one (`redact-payload.ts` is explicit about deliberately not adding
-   * a second cap).
-   *
-   * Nothing bridges logger output into an alert channel, so this warn cannot
-   * re-enter the transport that emitted it.
+   * The body goes in `payload`, not `message`: `redactPayload` masks a
+   * value wholesale by field name, which a plain interpolated `message`
+   * string can never receive.
    */
   #capForWire(text: string): string {
     const capped = capOutboundText(text);
@@ -221,123 +176,39 @@ export class TelegramBotApiClient implements TelegramClient {
   }
 
   /**
-   * Durable record of a send that exhausted `#retry` (#1108) — `#call`
-   * already gave it `#retry.maxAttempts` tries; by the time this runs the
-   * alert is genuinely undelivered, not merely slow. Never throws past this
-   * point: a broken durable write must not replace the original send
+   * Durable record of a send that exhausted `#retry` — by the time this runs
+   * the alert is genuinely undelivered, not merely slow. Never throws past
+   * this point: a broken durable write must not replace the original send
    * failure the caller is about to see.
    *
-   * Passes `text`/`detail` through uncapped, not the wire-capped body —
+   * Passes `text`/`detail` through uncapped, not the wire-capped body:
    * `SqliteAlertDeliveryLog.recordFailure` owns masking-then-capping the
-   * durable row (mask first, so a bot token cannot be bisected by a cap
-   * applied ahead of it and left half-unmasked); capping here first would
-   * just re-do that decision in the wrong order. The row ends up holding as
-   * much of the original alert as that shared 500-char error-body cap
-   * allows, independent of what Telegram's 4096-char limit happened to let
-   * through.
+   * durable row (mask first, so a bot token can't be bisected by an
+   * earlier cap and left half-unmasked).
    *
-   * The repeated-failure escalation reuses `#call` directly rather than
-   * `sendMessage`, deliberately: routing it back through `sendMessage` would
-   * re-enter this method on a further failure, and an outage that never lets
-   * up would recurse. `#call`'s own failure here is best-effort and logged,
-   * never recorded as a second delivery failure.
+   * Reuses `#call` directly rather than `sendMessage` for the escalation
+   * send: routing it back through `sendMessage` would re-enter this method
+   * on a further failure, and a sustained outage would recurse.
    *
    * The escalation counter only advances for a failure on `#alertChatId`
-   * itself — every real alert send targets that one chat. The heartbeat is the
-   * deliberate exception (#342: a different chat, precisely so a dead
-   * heartbeat destination cannot mute or drown the escalation channel); a
-   * heartbeat failure is still durably recorded below, but must not count
-   * toward — or itself trigger — a "the escalation channel is degraded"
-   * alert posted to the very channel #342 protects.
+   * itself. The heartbeat posts to a separate chat by design, so a dead
+   * heartbeat destination must not count toward or trigger a "channel
+   * degraded" alert on the escalation channel it's isolated from.
    *
-   * **What the "channel degraded" notice below is (and is not) for (#1130).**
-   * It posts to `#alertChatId` over this same `#call`/`sendMessage` path —
-   * the exact transport that just exhausted its retries. The guarantee that
-   * buys is exactly one thing, and it is narrower than a statement about
-   * failure classes: **the notice arrives only if this chat is reachable at
-   * some point within the escalation send's own retry window.** Not at one
-   * instant, and that distinction is this method's, not a quibble: the
-   * escalation goes through `#call`, i.e. `withRetry(..., this.#retry,
-   * isRetryableTelegramError)`, and `isRetryableTelegramError` accepts
-   * exactly the errors a live outage throws (`TelegramNetworkError`,
-   * `TelegramTimeoutError`, `TelegramRateLimitError`). So the escalation can
-   * fire mid-outage, lose its first attempt, and land on a later one. With
-   * this file's defaults — `DEFAULT_RETRY` (3 attempts, 500ms base, 5s cap)
-   * over `DEFAULT_TIMEOUT_MS` (10s per attempt) — that window is up to
-   * roughly 30 seconds, and longer if Telegram's own `retry_after` hints set
-   * the backoffs; both are injectable (`options.retry`, `options.timeoutMs`),
-   * so the window is a property of the configured client, not a constant.
-   * It is a CEILING, not an elapsed time: a refused connection fails in
-   * milliseconds, so the same three attempts can span under two seconds.
-   * Necessary, not sufficient — the converse does not hold, because this
-   * escalation's own `#call` can fail for reasons independent of the chat
-   * (the misconfigured `baseUrl` this module's header names as the live
-   * threat is exactly one), and its failure is swallowed into
-   * `telegram_delivery_escalation_failed` below. So a chat that is up does
-   * not guarantee the notice was sent, and a notice that arrived proves only
-   * that the chat was up somewhere in that window.
+   * The "channel degraded" notice below posts over this same transport, so
+   * its arrival only proves `#alertChatId` was reachable somewhere inside
+   * this escalation's own retry window (up to ~30s with default config) —
+   * not that the channel is healthy, and not that earlier sends' failures
+   * were the same kind of problem. Its ABSENCE is equally undiagnostic:
+   * nobody can observe a message they never received. The durable
+   * `alert_delivery_failures` count — not this notice — is the surface that
+   * answers "is the channel down", since it survives regardless of whether
+   * any Telegram send can get through.
    *
-   * That partition does NOT line up with "content problem vs channel
-   * problem", and earlier wording here claimed it did. Two corrections, both
-   * measured against this file:
-   *
-   *  - Intermittent transport failure lands on BOTH sides. Three sends can
-   *    exhaust `DEFAULT_RETRY` against a real outage that then lifts before
-   *    the third failure's escalation fires, and the notice gets through —
-   *    so an arriving notice is not evidence the channel was healthy. It is
-   *    evidence about the escalation's own retry window only, and the outage
-   *    need not even have lifted before that window opened: the escalation
-   *    retries across it.
-   *  - The oversized-body example this doc used to lead with cannot occur.
-   *    `#capForWire` runs `capOutboundText` on every `sendMessage` body,
-   *    and that function computes its cut as
-   *    `TELEGRAM_MAX_MESSAGE_CHARS - suffix.length` *before* appending, so
-   *    the wire body is always <= 4,096 — #1108's own fix. A rate limit is
-   *    likewise not "content-specific": it is a property of the sender's
-   *    traffic, and it was listed inside a set labelled content-specific.
-   *
-   * The other direction matters just as much for the operator: the notice's
-   * ABSENCE is not diagnostic. Nobody can observe a message they never
-   * received, so silence is indistinguishable from a healthy channel. That
-   * is why the durable count, not this notice, is the surface. There is no
-   * alternative transport to fail over to: every catalogue alert sends over
-   * this one client (`tradeChannelAlert`, orchestrator/alert-catalogue.ts), and
-   * the Discord seam that once existed as a type was deleted for never
-   * having an implementation (#1154). Routing this notice to the heartbeat chat instead would
-   * not help either: that chat is a different `chat_id` over the identical
-   * bot/`#call` stack, so it fails identically when Telegram itself is down,
-   * and posting an escalation there would violate #342's isolation invariant
-   * in the other direction (an escalation sharing the beat's destination is
-   * exactly what #342 forbids). The durable count this method writes below
-   * — `alert_delivery_failures`, rendered on the dashboard Rail whenever
-   * nonzero — is what actually answers "is the channel down": it is a
-   * straight read of this table, so it survives regardless of whether any
-   * Telegram send, including this escalation's own attempt, could get
-   * through — subject to its own precondition, which `types.ts`'s
-   * `getAlertDeliveryFailureCount` doc states in full: a service-api process
-   * holding a *wrong* `TELEGRAM_CHAT_ID` counts zero and renders nothing.
-   *
-   * The two numbers have different denominators, and the sent text below
-   * says so rather than leaving an operator to reconcile them. This
-   * method's `#deliveryFailureCount` is in-process and resets with the
-   * process; the tile counts rows in the TRAILING 24 HOURS
-   * (`alert-delivery-log.ts`'s `countFailures`, windowed by #1131 — it used
-   * to bound `timestamp` only above by `asOf`, so a nonzero tile could be a
-   * transient failure from weeks ago that never cleared). The window means
-   * the tile now self-clears once the channel has been quiet for a day, but
-   * it still is not the same count as the one above: this run's total can
-   * exceed the windowed tile (an earlier failure in this same run already
-   * aged out), or fall short of it (a previous run's failures are still
-   * inside the window).
-   *
-   * `error: detail` in the `#log` payload below is masked centrally by
-   * `formatLogLine`'s `redactPayload` walk, and `message` is masked there
-   * too now (#1133) via `maskCredentials` directly — a bot-token-shaped
-   * `TypeError` message (a misconfigured `baseUrl`, say) no longer depends
-   * on this call site to stay out of the log. `detail` is still run through
-   * `sanitizeLogText` before interpolation below regardless: `formatLogLine`
-   * masks but does not cap `message`, and `sanitizeLogText` still owns that
-   * length bound.
+   * That count and the dashboard's 24h tile have different denominators
+   * (this field is in-process and resets with the process; the tile windows
+   * by timestamp), so the sent text below states both rather than leaving
+   * the operator to reconcile them.
    */
   #recordDeliveryFailure(chatId: string, method: string, text: string, error: unknown): void {
     const detail = describeThrownSafely(error);
@@ -352,12 +223,8 @@ export class TelegramBotApiClient implements TelegramClient {
           timestamp: new Date(),
         });
       } catch (recordError) {
-        // Same reason `detail` below is wrapped: `sanitizeLogText` still owns
-        // the length cap `formatLogLine`'s central message mask (#1133)
-        // doesn't apply, for the same token-bearing-`TypeError` threat this
-        // module's header documents — e.g. a misconfigured storage
-        // `baseUrl`/driver whose thrown message happens to echo back the
-        // failed insert's own token-bearing text (#1108 third review pass)
+        // sanitizeLogText guards against a thrown message that happens to
+        // echo back token-bearing text (e.g. from a misconfigured storage driver).
         this.#log(
           'error',
           'telegram_delivery_record_failed',
@@ -394,11 +261,8 @@ export class TelegramBotApiClient implements TelegramClient {
           'for this chat in the trailing 24 hours, so its number is a different denominator ' +
           'from the one above.',
       }).catch((escalationError: unknown) => {
-        // Same reason `detail` above is wrapped: this escalation send itself
-        // reaches `#call`/`#request` and can fail against the very
-        // misconfigured `baseUrl` this module's header names as the threat —
-        // `redactPayload` never walks this plain string `message` (#1108
-        // third review pass)
+        // The escalation send itself can fail (e.g. a misconfigured baseUrl);
+        // sanitize since redactPayload never walks this plain string message
         this.#log(
           'error',
           'telegram_delivery_escalation_failed',

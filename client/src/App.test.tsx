@@ -28,9 +28,7 @@ function renderApp(
   now?: () => number,
   intervalMs: number = POLL_MS,
 ) {
-  return render(
-    <App snapshotOptions={{ fetchImpl: fakeFetch(payloads), intervalMs, now }} />,
-  );
+  return render(<App snapshotOptions={{ fetchImpl: fakeFetch(payloads), intervalMs, now }} />);
 }
 
 function laneView() {

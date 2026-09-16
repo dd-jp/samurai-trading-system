@@ -15,8 +15,6 @@ concurrency:
 jobs:
   checks:
     runs-on: ubuntu-latest
-    # Install plus all four checks is ~2 minutes; anything approaching this
-    # is hung, and GitHub's default would let it burn 6 hours of runner time.
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -26,11 +24,6 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
 
-      # The fixture-provenance step below shells out to python3. It currently
-      # works only because the ubuntu-latest image happens to ship one, which
-      # is a property of the runner image rather than of this workflow — and a
-      # provenance check that silently stops running is worth less than no
-      # check, because the green tick still reads as "verified".
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.12'
@@ -39,13 +32,50 @@ jobs:
         id: install
         run: npm ci
 
-      # Every check runs even after an earlier one fails, so a lint break
-      # doesn't hide a test break; the job still fails if any of them fail.
-      # Gating on the install's outcome keeps a failed install from producing
-      # four cascading "command not found" failures instead of one clear one.
-      - name: Lint
+      - name: Oxlint
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: npm run lint
+        run: npm run lint:oxlint
+
+      - name: Biome
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run lint:biome
+
+      - name: Fallow architecture boundaries
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        uses: fallow-rs/fallow@4f3bd9720ca6b22c8547adb7f1d225f57fc502d4 # v3
+        with:
+          command: dead-code
+          args: --boundary-violations
+          auto-changed-since: false
+
+      # Blocking, whole repo (not just this PR's diff): the existing backlog at the
+      # time this gate was flipped on was 5 unused exports, 16 unused type exports,
+      # 13 unused class members, 5 devDependencies used in production, 22 circular
+      # dependencies, and 1 unused component prop. That backlog must be cleared
+      # before this step passes on any PR.
+      - name: Fallow dead code
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run fallow:dead-code -- --format github-annotations --quiet
+
+      # Advisory: duplication and design-system drift findings across the whole
+      # repo, not just this PR's diff. continue-on-error keeps these off the merge
+      # gate; the annotations still surface on the PR.
+      - name: Fallow duplication (advisory)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        continue-on-error: true
+        uses: fallow-rs/fallow@4f3bd9720ca6b22c8547adb7f1d225f57fc502d4 # v3
+        with:
+          command: dupes
+          auto-changed-since: false
+
+      - name: Fallow design-system drift (advisory)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        continue-on-error: true
+        uses: fallow-rs/fallow@4f3bd9720ca6b22c8547adb7f1d225f57fc502d4 # v3
+        with:
+          command: health
+          args: --css
+          auto-changed-since: false
 
       - name: Typecheck
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
@@ -55,9 +85,6 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: npm run build
 
-      # Separate from `npm run build` on purpose: a frontend-toolchain failure
-      # must never block building (and therefore hot-fixing) the trading
-      # process, but the bundle still has to prove it builds somewhere.
       - name: Build web dashboard
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: npm run build:web
@@ -66,33 +93,10 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: npm test
 
-      # Backticked inline path citations in markdown (#821). This step is the
-      # mechanism's production caller — the tool is otherwise a complete, tested
-      # thing nothing runs, which is this repo's dominant defect class (#430). The
-      # suite asserts the same green on the real tree, so a local `npm test` catches
-      # a stale citation too; this step is what makes it a merge gate.
-      #
-      # Never "fix" a red run here by editing a file under docs/adr/,
-      # docs/wayfinder/, docs/research/archive/ or docs/reviews/ — those are not
-      # scanned at all, and rewriting a decision record to satisfy a checker
-      # falsifies the record. The tool's own failure output says so.
       - name: Path citations resolve
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: npm run check:citations
 
-      # The indicator golden fixture is the independent reference the whole
-      # characterisation rests on (#703 step B1), and its authority comes from
-      # being generated rather than hand-written. Without this step that is an
-      # honour-system claim: a hand-edited `indicator-golden.json` would make
-      # every golden case agree with whatever it was edited to say, and the
-      # suite would go green confirming the bug.
-      #
-      # Deliberately unconditional on the other steps: it is a provenance check,
-      # not a consequence of the tests. The generator is stdlib-only and
-      # deterministic by construction (an LCG written out in the script, no
-      # `random`, no network), so a diff here means exactly one of two things —
-      # an intended fixture change that was not regenerated, or an edit to the
-      # fixture that was never in the generator at all.
       - name: Indicator golden fixture is generated, not hand-edited
         if: ${{ !cancelled() }}
         run: |
@@ -112,14 +116,6 @@ jobs:
             exit 1
           fi
 
-  # The dashboard's browser suite (#544). Its own job because it needs a
-  # browser download and several minutes of wall clock, and because a UI
-  # regression must not be able to hide behind — or delay — the checks that
-  # gate the trading process.
-  #
-  # Requires NO repository secret: the suite serves the real bundle from
-  # `dist/server/apps/service-api/fixture-server.js` over an in-memory store, and
-  # fails itself if the page makes a single off-origin request.
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -134,18 +130,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Chromium only: the operator runs one browser on one MacBook, and a
-      # matrix here would triple the job for coverage nobody consumes.
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
-      # These steps carry no `if:`, unlike `checks` above — there each check is
-      # independent and worth running past a failure, here each step is the
-      # previous one's prerequisite and running past a failure would only
-      # produce a second, derived error.
-      #
-      # No separate build step either: the suite's `webServer` runs `npm run build`
-      # itself, so the bytes under test are always the ones this job produced.
       - name: E2E
         run: npm run e2e
 

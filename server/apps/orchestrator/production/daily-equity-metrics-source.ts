@@ -1,27 +1,18 @@
 /**
- * The real `DailyMetricsSource` (#345) — the first thing in this repo that can
+ * The real `DailyMetricsSource` — the first thing in this repo that can
  * actually produce the `MetricsSuite` `computeMetrics` evaluates.
  *
- * `DailyMetricsSource`'s own doc records why it shipped as a supplied port: the
- * validation library needs a `ReturnSeries` of evenly spaced periodic EQUITY
- * returns, and nothing persisted one. `daily_equity` (migration 0011) does now,
- * so this class derives the series from it rather than asking the operator for
- * a number nobody can compute.
+ * `DailyMetricsSource`'s own doc records why it shipped as a supplied port:
+ * the validation library needs a `ReturnSeries` of evenly spaced periodic
+ * equity returns, and nothing persisted one until `daily_equity` (migration
+ * 0011) did.
  *
- * ## The gate is the substance of this class
- *
- * Returning a suite is not free. A breach does not merely report — `autoTighten`
- * WRITES every risk threshold toward its extreme and appends to the
- * `AdjustmentLog`. So the interesting behaviour here is the refusal: below
- * `MIN_RETURN_OBSERVATIONS` this returns `undefined`, which the port already
- * defines as the first-class "no suite this cycle" answer, and the orchestrator
- * already announces at `warn`.
- *
- * That split — capture from day one, evaluate only when the sample can carry a
- * conclusion — is deliberate and asymmetric. Equity not recorded on the day is
- * unrecoverable, so sampling must start immediately; a Sharpe computed too early
- * is worse than no Sharpe, because it moves real risk configuration. Hence a
- * sampler with no threshold and a reader with a strict one.
+ * Returning a suite is not free — a breach makes `autoTighten` write every
+ * risk threshold toward its extreme. So below `MIN_RETURN_OBSERVATIONS` this
+ * returns `undefined` (the port's first-class "no suite this cycle" answer)
+ * rather than compute a Sharpe too early: equity not recorded on the day is
+ * unrecoverable so sampling starts immediately, but a threshold decision made
+ * off a premature estimate is worse than none.
  */
 
 import type {
@@ -43,12 +34,10 @@ import type { Logger } from '../types.js';
 const MS_PER_DAY = 24 * 60 * 60 * 1_000;
 
 /**
- * 365, not 252: the series is anchored to the portfolio's UTC-day boundary
- * (migration 0011), which advances every calendar day including weekends,
- * because the account holds crypto that trades through them. 252 is the trading-
- * day count and would over-annualize a series that genuinely has 365 bars a
- * year. `ReturnSeries.periodsPerYear` is explicit precisely so this cannot be
- * guessed wrong silently.
+ * 365, not 252: the series is anchored to the portfolio's UTC-day boundary,
+ * which advances every calendar day including weekends because the account
+ * holds crypto that trades through them. 252 (the trading-day count) would
+ * over-annualize a series that genuinely has 365 bars a year.
  */
 const PERIODS_PER_YEAR = 365;
 
@@ -56,58 +45,19 @@ const PERIODS_PER_YEAR = 365;
  * The minimum number of RETURNS (not observations — n observations yield n−1
  * returns) below which the suite is not computed at all.
  *
- * ## Why 60, stated honestly
+ * Per Lo (2002), "The Statistics of Sharpe Ratios", eq. 8 (also Jobson &
+ * Korkie 1981), the annualized Sharpe's standard error is governed by the
+ * sample length in YEARS, not the count of observations — sampling more
+ * often does not tighten it. At n = 60 (P = 365) SE(S_ann) is still ~2.5, so
+ * this is a floor of meaninglessness, not a precision guarantee: below n =
+ * 30 the asymptotic-normal approximation itself becomes unreliable, and at
+ * n = 60 a strategy with a true Sharpe of 2 is statistically indistinguishable
+ * from one of −2.
  *
- * For an IID sample the standard error of a Sharpe estimate is
- * (Lo 2002, "The Statistics of Sharpe Ratios", eq. 8; Jobson & Korkie 1981):
- *
- *     SE(Ŝ_period) ≈ sqrt( (1 + Ŝ_period² / 2) / n )
- *
- * The suite reports an ANNUALIZED Sharpe, S_ann = S_period·√P. Substituting,
- * and writing T = n/P for the sample length in years:
- *
- *     SE(S_ann) ≈ sqrt( 1 + S_ann²/(2P) ) / √T   ≈  1/√T  for small S_ann
- *
- * The load-bearing consequence: **precision is governed by the number of YEARS,
- * not the number of observations.** Sampling more often does not buy a tighter
- * Sharpe. At P = 365 that gives, for a strategy whose true annualized Sharpe is
- * near zero:
- *
- *     n =  10  (T = 0.027 yr)  →  SE(S_ann) ≈ 6.0
- *     n =  30  (T = 0.082 yr)  →  SE(S_ann) ≈ 3.5
- *     n =  60  (T = 0.164 yr)  →  SE(S_ann) ≈ 2.5
- *     n = 120  (T = 0.329 yr)  →  SE(S_ann) ≈ 1.7
- *     n = 365  (T = 1.0   yr)  →  SE(S_ann) ≈ 1.0
- *
- * So the ~10 observations a 14-day soak yields (#238) carry a 95% interval
- * roughly ±12 wide on the annualized Sharpe. That is not a weak measurement, it
- * is no measurement: a strategy with a true Sharpe of 2 and one with a true
- * Sharpe of −2 are indistinguishable at n = 10. Feeding it to a detector that
- * writes risk thresholds is strictly worse than the honest silence #327 shipped.
- *
- * 60 is chosen as the floor for three reasons, none of which is "60 is enough":
- *
- * 1. It is the smallest n at which the asymptotic-normal SE above is a fair
- *    approximation at all. Below roughly n = 30 the Sharpe estimator's
- *    small-sample bias and the t-correction are material, so the numbers in the
- *    table stop being even a conservative guide — the gate would be reasoning
- *    with a formula outside its own validity.
- * 2. It puts a full calendar quarter between the start of a run and the first
- *    time the kill-lines can move anything, which is longer than any planned
- *    paper soak. `autoTighten` therefore cannot fire during the soak this system
- *    is about to run, which is the specific outcome #345 asks for.
- * 3. `computeMetrics` applies Lo's autocorrelation correction with lags up to
- *    `min(P − 1, n − 1)`. At n = 60 the highest lags are estimated from a
- *    handful of pairs and are mostly noise; the Bartlett weights keep the
- *    variance-of-sum non-negative so it cannot blow up, but the correction is
- *    doing little real work. Below 60 it is doing none.
- *
- * **This is a floor of meaninglessness, NOT a precision guarantee.** At n = 60
- * the annualized Sharpe still carries SE ≈ 2.5. Anyone setting
- * `max_live_backtest_divergence` should size it against that number, and anyone
- * wanting a decision-grade estimate should raise the threshold toward 365 via
- * `minReturnObservations` — which is why that option exists and why it can only
- * be raised (see the constructor).
+ * Anyone wanting a decision-grade estimate should raise the threshold toward
+ * 365 via `minReturnObservations`, which can only be raised (see the
+ * constructor) — lowering it would defeat the kill-line safety property this
+ * floor protects.
  */
 export const MIN_RETURN_OBSERVATIONS = 60;
 
@@ -123,10 +73,9 @@ export interface DailyEquityMetricsSourceInput {
    */
   minReturnObservations?: number;
   /**
-   * The frozen Stage 2 selections (#375, #384). Absent means the three
-   * revalidation kill-lines stay inert — which is what they were before this
-   * existed, and still the right answer for a deployment that has never run
-   * Stage 2.
+   * The frozen Stage 2 selections. Absent means the three revalidation
+   * kill-lines stay inert — the right answer for a deployment that has never
+   * run Stage 2.
    */
   stage2Selections?: { getLatestPerAssetClass(): Stage2Selection[] };
   /** Needed to age a selection out; defaults to the system clock */
@@ -134,25 +83,14 @@ export interface DailyEquityMetricsSourceInput {
 }
 
 /**
- * 90 days.
+ * 90 days — one quarter of regime, matching `docs/research/02-staged-deployment-plan.md`'s
+ * Stage 4 revisit horizon. Erring long rather than short is deliberate:
+ * expiring too eagerly silences kill-lines that were working.
  *
- * docs/research/02-staged-deployment-plan.md's Stage 4 requires re-running the
- * Stage 2 validation checks periodically "as new data accumulates (edges decay;
- * what passed six months ago may not still hold)". A verdict has to expire for
- * that to mean anything, and 90 days is the same horizon #182 uses for its
- * WorldMonitor revisit — one quarter of regime, rather than a number invented
- * here.
- *
- * Erring long rather than short is deliberate: expiring too eagerly silences
- * kill-lines that were working, which is the failure #384 is about.
- *
- * **Not configurable, on purpose** (PR #446 review). Two consumers read the
- * same frozen selection — this source, for `revalidation`, and the composition
- * root, for the divergence baseline — and a knob on one of them would let the
- * two disagree about whether a selection is fresh, so three kill-lines could
- * go inert while the fourth kept firing off the same row. Nothing configures
- * it, and a knob that can desynchronise two halves of one verdict is worse
- * than no knob.
+ * Not configurable: this source (`revalidation`) and the composition root
+ * (divergence baseline) both read the same frozen selection, and a knob on
+ * one would let the two disagree about freshness — some kill-lines could go
+ * inert while others kept firing off the same row.
  */
 export const DEFAULT_STAGE2_MAX_AGE_DAYS = 90;
 
@@ -162,8 +100,7 @@ export const DEFAULT_STAGE2_MAX_AGE_DAYS = 90;
  * DSR null is a typed refusal, and the snapshot's shape has no room for one.
  *
  * Exported because the startup line in `production.ts` reports this exact
- * decision; a re-implemented predicate there is how the pre-#579 warning came
- * to describe a producer that no longer existed.
+ * decision; a re-implemented predicate there risks silently diverging from it.
  */
 export function usableRevalidationSelections(
   selections: readonly Stage2Selection[],
@@ -197,11 +134,10 @@ export class SqliteDailyEquityMetricsSource implements DailyMetricsSource {
   }
 
   /**
-   * Called once per feedback cycle by the orchestrator, which is why the
-   * skip-reason below is logged unconditionally: once per cycle is once per day,
-   * not the ~20,000 lines a per-tick log would put into an unattended soak. The
-   * per-tick side of this feature — the sampler in `BrokerAccountStateProvider`
-   * — logs nothing at all.
+   * Called once per feedback cycle by the orchestrator, so the skip-reason
+   * below is logged unconditionally — once per cycle is once per day, not
+   * per tick. The per-tick sampler in `BrokerAccountStateProvider` logs
+   * nothing at all.
    */
   getDailyMetrics(): DailyMetricsSample | undefined {
     const run = usableRun(this.input.equity.all());
@@ -270,25 +206,17 @@ export class SqliteDailyEquityMetricsSource implements DailyMetricsSource {
   }
 
   /**
-   * `DailyMetricsSample.revalidation` (#384), read from the frozen Stage 2
-   * selection rather than computed here.
+   * `DailyMetricsSample.revalidation`, read from the frozen Stage 2 selection
+   * rather than computed here — PBO, out-of-sample Sharpe and the deflated
+   * Sharpe are walk-forward/CSCV statistics over a trial grid that a live
+   * paper run cannot compute about itself.
    *
-   * PBO, out-of-sample Sharpe and the deflated Sharpe are walk-forward / CSCV
-   * statistics over a trial grid — a live paper run cannot compute them about
-   * itself, which is exactly why the three kill-lines they feed had no producer
-   * and could never fire. #384 named this resolution in advance.
+   * Absent whenever there is nothing honest to report: Stage 2 has never
+   * persisted a selection; the selection is older than `stage2MaxAgeMs`; or
+   * the run refused to compute PBO or DSR.
    *
-   * Absent (`undefined`) whenever there is nothing honest to report, which
-   * keeps those lines inert rather than fabricating a snapshot:
-   * - Stage 2 has never been run and persisted anything;
-   * - the selection is older than `stage2MaxAgeMs` (below);
-   * - the run refused to compute PBO or DSR, so a snapshot would have to
-   *   invent one of the two numbers the kill-lines test.
-   *
-   * When BOTH asset classes have a selection, the WORSE one is reported: the
-   * higher PBO. A portfolio holding crypto and stocks is only as validated as
-   * its weaker half, and averaging two verdicts would hide a failed one behind
-   * a passing one.
+   * When both asset classes have a selection, the worse one (higher PBO) is
+   * reported — a portfolio is only as validated as its weaker half.
    */
   private revalidation(): RevalidationSnapshot | undefined {
     const selections = this.input.stage2Selections?.getLatestPerAssetClass() ?? [];
@@ -330,9 +258,8 @@ export class SqliteDailyEquityMetricsSource implements DailyMetricsSource {
   /**
    * Says once per process why the three revalidation kill-lines stay inert.
    *
-   * Once, not once per cycle: this is a standing state of the deployment, not
-   * an event, and #342's lesson is that a line repeated daily for 14 days is a
-   * line nobody reads.
+   * Once, not once per cycle: this is a standing state of the deployment,
+   * not an event, and a line repeated daily is a line nobody reads.
    */
   private noteInert(reason: string): void {
     if (this.inertNoted) return;
@@ -365,22 +292,13 @@ export class SqliteDailyEquityMetricsSource implements DailyMetricsSource {
  * The longest run of observations ending at the most recent one that is both
  * evenly spaced and usable as a return denominator.
  *
- * Walks BACKWARDS from the newest row and stops at the first violation, so the
- * result is always the freshest usable window rather than some stale stretch
- * from months ago. Two things end a run:
- *
- * - **A spacing gap.** A process down across a midnight leaves no row for that
- *   session, and the surviving neighbours are 48h apart while still looking
- *   adjacent. Treating that step as one period would book two days of PnL as a
- *   single daily return — inflating the mean, understating the variance, and
- *   flattering the Sharpe on exactly the days the system was broken.
- *   `ReturnSeries` requires even spacing (validation-types.ts) and this is the
- *   only place that can enforce it.
- * - **A non-positive equity.** It is the denominator of the next return, and a
- *   zero or negative base makes that return Infinity or NaN. NaN then compares
- *   false against every kill threshold, so the lines would silently stop firing
- *   rather than fail — the same trap `sessionBasisFor` guards for the daily-loss
- *   breaker.
+ * Walks backwards from the newest row and stops at the first violation, so
+ * the result is always the freshest usable window. A spacing gap (a process
+ * down across a midnight) would otherwise book two days of PnL as one daily
+ * return, flattering the Sharpe on exactly the days the system was broken. A
+ * non-positive equity is the denominator of the next return and would make
+ * it Infinity or NaN, which then compares false against every kill
+ * threshold — silently disarming the lines rather than failing loudly.
  */
 function usableRun(observations: readonly DailyEquityObservation[]): DailyEquityObservation[] {
   if (observations.length === 0) return [];
@@ -406,19 +324,15 @@ function usableRun(observations: readonly DailyEquityObservation[]): DailyEquity
 
 /**
  * Simple (not log) fractional returns between consecutive observations —
- * `(E_t − E_{t−1}) / E_{t−1}`.
+ * `(E_t − E_{t−1}) / E_{t−1}`. Fractional because the suite's drawdown and
+ * profit-factor fields are currency-denominated; mixing log returns in would
+ * make them incommensurable.
  *
- * Fractional because `ReturnSeries` says so, and it says so because the suite's
- * drawdown and profit-factor fields are defined over realized equity and its
- * expectancy is a currency quantity; mixing log returns into that set would make
- * the fields incommensurable (validation-types.ts).
- *
- * These are EQUITY returns, which is the whole point of #345. The obvious
- * alternative — dividing each day's realized `ClosedTrade` PnL by capital — has
- * the wrong denominator and is unevenly spaced, and it books an open position's
- * entire move on the day it happens to close rather than as it happens. Equity
- * includes open, unrealized positions, so a drawdown shows up while it is
- * happening instead of only once someone closes out of it.
+ * These are equity returns, not `ClosedTrade` PnL divided by capital — that
+ * alternative has the wrong denominator, is unevenly spaced, and books an
+ * open position's entire move on the day it closes rather than as it
+ * happens. Equity includes unrealized positions, so a drawdown shows up
+ * while it is happening.
  */
 function periodicReturns(run: readonly DailyEquityObservation[]): number[] {
   const returns: number[] = [];

@@ -39,10 +39,9 @@
  */
 import type { Signal } from '../../pipeline/analysts/index.js';
 import { DEBATE_BAR_TIMEFRAME_MS, floorToBar } from '../../pipeline/debate-engine/index.js';
-import { type OrderIntent, runWithTraceId } from '../../shared/index.js';
+import { digest, type OrderIntent, runWithTraceId } from '../../shared/index.js';
 import { analystsSkipDecisionWord } from './analysts-decision.js';
 import { debateDecisionWord, isDegradedDecision } from './debate-decision.js';
-import { digest } from './digest.js';
 import type { TickContext, TickOutcome, TickRunner, TickStage, TickSteps } from './types.js';
 
 export class SequentialTickRunner implements TickRunner {

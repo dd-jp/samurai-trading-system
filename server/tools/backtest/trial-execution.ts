@@ -1,46 +1,40 @@
 /**
- * Stage 2 trial grid execution (ticket #244) — see
- * docs/specs/stage2-validation-execution-spec.md ("Module: Trial Execution")
- * and wayfinder map #154 (decisions #159, #160).
+ * Stage 2 trial grid execution — see
+ * docs/specs/stage2-validation-execution-spec.md ("Module: Trial Execution").
  *
- * Runs the 12-config grid (`buildTrialGrid`) through the replay driver (#243)
- * and `EvalExecutorImpl` (#90), logging every config exactly once in
- * `ConfigTrialLog` (#89) by its `config_hash` — the trial count the Verdict
- * module (#245) deflates DSR/PBO/MinBTL by. Nothing here computes a metric or
- * generates a split of its own: it calls the seams those tickets already ship
+ * Runs the 12-config grid (`buildTrialGrid`) through the replay driver and
+ * `EvalExecutorImpl`, logging every config exactly once in `ConfigTrialLog`
+ * by its `config_hash` — the trial count the Verdict module deflates
+ * DSR/PBO/MinBTL by. Nothing here computes a metric or generates a split of
+ * its own: it calls the seams those tickets already ship
  * (`ReplayDriver.run`, `EvalExecutorImpl.evaluate`, `ConfigTrialLog.recordTrial`)
- * in the sequence the spec's Trial Execution module describes.
+ * in the sequence the spec describes.
  *
- * **12 configs, not 12 reports.** `config_hash` is a function of
+ * 12 configs, not 12 reports: `config_hash` is a function of
  * `ProxyStrategyConfig` alone — it does not fold in asset class — so N (the
  * distinct-trial count) stays 12 regardless of how many asset classes are
- * evaluated. `recordTrial` is therefore called exactly once per config,
- * whichever asset class loop iteration reaches it first; a re-run of the same
- * config for a second asset class would be a no-op for N anyway (the log's own
- * dedup-by-hash contract), but calling it twice per config is avoided here so
- * the "logged exactly once" acceptance criterion holds literally, not just by
- * the log tolerating it. The *report* count is `12 × (asset classes present)`
- * — a stock-only run yields exactly 12 `EvalReport`s, a stock+crypto run 24 —
- * because stock and crypto trades are annualized differently (252 vs 365
- * periods/year) and mixing them into one return series would misannualize
- * both (spec, "Module: Trial Execution").
+ * evaluated. `recordTrial` is called exactly once per config, whichever
+ * asset class loop iteration reaches it first. The report count is
+ * `12 × (asset classes present)` — a stock-only run yields 12 `EvalReport`s,
+ * a stock+crypto run 24 — because stock and crypto trades are annualized
+ * differently (252 vs 365 periods/year) and mixing them into one return
+ * series would misannualize both.
  *
- * **A fresh `ReplayRunner` per (config, asset class) pair.** `ReplayDriver`
- * steps its injected `SimulatedClock` forward across a `run()` call and never
- * resets it (replay-driver.ts: `RunState` is rebuilt per run, but `clock`
- * lives on `deps` and is not). Re-running the *same* driver instance for a
- * second config over the same window would `advanceTo` backwards on step one
- * and throw. `TrialGridAssetClass.makeRunner` is therefore a factory, called
- * once per config, so every run gets a clock that starts fresh at the window.
+ * A fresh `ReplayRunner` per (config, asset class) pair: `ReplayDriver`
+ * steps its injected `SimulatedClock` forward across a `run()` call and
+ * never resets it, so re-running the same driver instance for a second
+ * config over the same window would `advanceTo` backwards on step one and
+ * throw. `TrialGridAssetClass.makeRunner` is a factory, called once per
+ * config, so every run gets a clock that starts fresh at the window.
  *
- * **All 12 configs, and every asset class, see identical inputs** — same
- * window, same `averageCapital`. PBO (#245) ranks configs against each other
- * on their fold Sharpes; a per-config denominator would make that ranking
+ * All 12 configs, and every asset class, see identical inputs — same
+ * window, same `averageCapital`. PBO ranks configs against each other on
+ * their fold Sharpes; a per-config denominator would make that ranking
  * arithmetic rather than a real comparison.
  */
 
-import { digest } from '../../apps/orchestrator/index.js';
 import { isDailyTimeframe, timeframeToMs } from '../../providers/market-data-service/index.js';
+import { digest } from '../../shared/index.js';
 import type { ConfigTrialLog } from './config-trial-log.js';
 import { EvalExecutorImpl } from './eval-executor.js';
 import type { EvalExecutor, EvalReport } from './eval-types.js';
@@ -54,18 +48,18 @@ import type { DateRange } from './universe.js';
 const DAY_MS = 86_400_000;
 
 /**
- * The spec's fixed embargo, in bars, for the 5-fold walk-forward split — sized
- * to the largest `slowWindow` in the grid. The CSCV pass (#406) purges with the
- * same number: it partitions the same window over the same bars, and a second
- * embargo would be a second, undocumented knob.
+ * The spec's fixed embargo, in bars, for the 5-fold walk-forward split —
+ * sized to the largest `slowWindow` in the grid. The CSCV pass purges with
+ * the same number: it partitions the same window over the same bars, and a
+ * second embargo would be a second, undocumented knob.
  */
 const EMBARGO_BARS = 50;
 
 /**
  * This path has no stochastic consumer (`types.ts`: the only seeded mode is
- * `CostModel`'s opt-in slippage, which #87 does not implement) — a fixed seed
- * is recorded for the trial's identity, not per-config, since nothing here
- * varies by it
+ * `CostModel`'s opt-in slippage, which this harness does not implement) — a
+ * fixed seed is recorded for the trial's identity, not per-config, since
+ * nothing here varies by it
  */
 const TRIAL_SEED = 0;
 
@@ -77,31 +71,26 @@ const US_REGULAR_SESSION_MINUTES = 6.5 * 60;
 const MINUTES_PER_DAY = 24 * 60;
 
 /**
- * How many bars of `timeframe` an asset class prints in a year (#664).
+ * How many bars of `timeframe` an asset class prints in a year.
  *
  * `periodsPerYear` is the annualization base for every Sharpe, Sortino and
  * Calmar in the suite — `sharpe_annual = sharpe_per_period * sqrt(periodsPerYear)`.
- * The two constants above are DAILY bar counts, and they were the only answer
- * available while the harness could only replay daily.
- *
- * They are wrong by a factor of ~sqrt(390) on a 1-minute replay, and this is
- * exactly the class of defect #664 was warned about: a timeframe parameter
- * threaded end-to-end while a derived quantity keeps its daily literal. Nothing
- * would have failed — every metric would simply have been understated ~20x, and
- * the kill-lines are stated in annualized Sharpe.
+ * The two constants above are daily bar counts; used unadjusted against a
+ * non-daily timeframe they'd be wrong by ~sqrt(390) on a 1-minute replay,
+ * silently understating every annualized metric rather than failing loudly.
  *
  * Regular hours only for stocks, deliberately: `FreeStackAggregatesClient`
  * requests no `feed`/extended-hours parameter, so what Alpaca serves for an
- * equity is the regular session. Overstating the bar count would OVERSTATE the
- * annualized Sharpe, which is the dangerous direction.
+ * equity is the regular session. Overstating the bar count would overstate
+ * the annualized Sharpe, the dangerous direction.
  */
 export function periodsPerYearFor(assetClass: 'stocks' | 'crypto', timeframe: string): number {
   const barMinutes = timeframeToMs(timeframe) / 60_000;
   const tradingDays = assetClass === 'stocks' ? STOCK_PERIODS_PER_YEAR : CRYPTO_PERIODS_PER_YEAR;
 
-  // A day-grained bar is one bar per trading day whatever the venue's session
-  // length — the arithmetic below would divide a 6.5-hour session by a 24-hour
-  // bar and report 0.27 stock bars a year
+  // A day-grained bar is one bar per trading day whatever the venue's
+  // session length — the arithmetic below would divide a 6.5-hour session
+  // by a 24-hour bar and report 0.27 stock bars a year
   if (isDailyTimeframe(timeframe)) return tradingDays;
 
   const sessionMinutes = assetClass === 'stocks' ? US_REGULAR_SESSION_MINUTES : MINUTES_PER_DAY;
@@ -143,9 +132,8 @@ export interface TrialGridEntry {
 /**
  * The documented 12-config cross-product: `fastWindow` × `slowWindow` × the
  * three paired risk:reward presets, `atrWindow`/`allowShort` fixed. See the
- * grid-generation test for the regression guard on this exact set (the spec's
- * testing decision: silently adding or dropping a config changes N without
- * anyone noticing).
+ * grid-generation test for the regression guard on this exact set —
+ * silently adding or dropping a config changes N without anyone noticing.
  */
 export function buildTrialGrid(): TrialGridEntry[] {
   const entries: TrialGridEntry[] = [];
@@ -169,7 +157,7 @@ export function buildTrialGrid(): TrialGridEntry[] {
   return entries;
 }
 
-/** What sizing the grid to the sample decided (#405) */
+/** What sizing the grid to the sample decided */
 export interface TrialGridSizing {
   /** The configs that will actually be run */
   selected: TrialGridEntry[];
@@ -182,33 +170,24 @@ export interface TrialGridSizing {
 }
 
 /**
- * Cuts the grid to what the sample can actually support (#405).
- *
- * ## Why this is the binding constraint
+ * Cuts the grid to what the sample can actually support.
  *
  * MinBTL caps the number of independent configurations a sample of a given
- * length can be searched over before the best in-sample Sharpe is expected to
- * be spurious. The 12-config grid was sized against an assumed 5-year sample
- * (cap ~45); the Polygon plan actually serves 2 years, which supports 7. Every
- * run so far reported `{"limit":7,"distinct_configs":12,"exceeded":true}`.
+ * length can be searched over before the best in-sample Sharpe is expected
+ * to be spurious. The 12-config grid was sized against an assumed 5-year
+ * sample (cap ~45); the Polygon plan actually serves 2 years, which
+ * supports 7.
  *
- * The cap was computed at the END and reported as a verdict field, after all
- * 12 trials had run. That is the wrong order: the number exists to CONSTRAIN
- * the search, not to grade it afterwards. And it cut the wrong way once cost
- * calibration took passing configs from 2/24 to 12/24 — with 2 passing,
- * "pick the best" was not a live risk; with 12 on an over-budget grid, it is.
+ * The cap must constrain the search, not grade it afterwards — computing
+ * it only at the end, after all 12 trials had run, would let "pick the
+ * best" become a live risk the moment more configs start passing.
  *
- * ## The subset is spread, not truncated
- *
- * Taking the first N of the cross-product would keep every config from one
- * corner of the parameter space — all the shortest fast/slow windows — and
- * discard the rest. That is not a smaller search, it is a different and
- * narrower one, chosen by array order rather than by design.
- *
- * So the retained configs are sampled EVENLY across the ordered grid. The
- * selection is deterministic (no RNG, no seed) because a reproducible verdict
- * is the whole point of Stage 2: the same window must always yield the same
- * configs, or the gate cannot be re-run to check it.
+ * The subset is spread, not truncated: taking the first N of the
+ * cross-product would keep every config from one corner of the parameter
+ * space and discard the rest — a narrower search chosen by array order,
+ * not by design. So the retained configs are sampled evenly across the
+ * ordered grid, deterministically (no RNG, no seed), since a reproducible
+ * verdict is the whole point of Stage 2.
  */
 export function sizeTrialGridToSample(
   entries: TrialGridEntry[],
@@ -218,8 +197,8 @@ export function sizeTrialGridToSample(
    * `MINBTL_TARGET_ANNUAL_SHARPE` doc comment. Defaults to that constant
    * (1.0); pass a different value to size the grid against a different
    * stated assumption. Which E[SR] is operative is a judgement call
-   * reserved for the repo owner (issue #637) — this parameter only makes
-   * the choice explicit rather than hardcoded.
+   * reserved for the repo owner — this parameter only makes the choice
+   * explicit rather than hardcoded.
    */
   expectedAnnualSharpe?: number,
 ): TrialGridSizing {
@@ -228,24 +207,13 @@ export function sizeTrialGridToSample(
   const requested = entries.length;
 
   // A window too short to support even ONE configuration must REFUSE, not
-  // return an empty selection. `runTrialGrid` over zero configs completes
-  // without error and yields zero trials, and a Stage 2 verdict rendered over
-  // zero trials has no failing config to report — it reads as a pass. That is
-  // the single worst outcome this whole function exists to prevent: the cap is
-  // here to make the gate harder to pass, and a bug in it that makes the gate
-  // pass vacuously inverts its purpose
-  //
-  // Stated honestly: this is UNREACHABLE as `minbtl` is written today — it
-  // starts its search at `limit = 1` and only ever increments
-  // (overfitting.ts:195), so it cannot return less. The guard is here because
-  // nothing in the `{ limit: number }` return type says that, the invariant is
-  // one refactor away from being lost, and the failure mode it protects
-  // against is silent rather than loud. `< 1` rather than `=== 0` for the same
-  // reason: MinBTL is a continuous expression underneath
-  // Same failure, from the other side and reachable: an EMPTY grid falls
-  // through the `requested <= limit` branch below and returns an empty
-  // selection with no complaint. This function is exported, so "no caller
-  // passes an empty array today" is not a guarantee it holds
+  // return an empty selection: a Stage 2 verdict over zero trials has no
+  // failing config to report, so it reads as a pass — the one outcome this
+  // function exists to prevent. This branch is unreachable as `minbtl` is
+  // written today (its search starts at `limit = 1` and only increments), but
+  // nothing in the `{ limit: number }` return type guarantees that, and this
+  // function is exported, so an empty input grid is a real path to the same
+  // failure
   if (requested < 1) {
     throw new Error(
       'sizeTrialGridToSample: an empty grid cannot be sized — there is nothing to run, ' +
@@ -273,11 +241,10 @@ export function sizeTrialGridToSample(
   for (let i = 0; i < limit; i++) {
     const index = limit === 1 ? 0 : Math.round((i * (requested - 1)) / (limit - 1));
     const entry = entries[index];
-    // Provably in bounds — `i` runs to `limit - 1` and `limit < requested`
-    // here, so `index` never exceeds `requested - 1`. Throwing rather than
-    // skipping because a silent skip would make `selected` shorter than
-    // `limit` with no signal, and `announceSizing` would then report a grid
-    // size that is not the one that ran
+    // Provably in bounds (`i < limit < requested`), so this should never
+    // fire. Throwing rather than skipping: a silent skip would make
+    // `selected` shorter than `limit` with no signal, and `announceSizing`
+    // would report a grid size that is not the one that ran
     if (entry === undefined) {
       throw new Error(
         `sizeTrialGridToSample: index ${index} is out of bounds for ${requested} configs ` +
@@ -311,15 +278,12 @@ export interface TrialGridAssetClass {
  * The CSCV pass's result for one (config, asset class) pair — the report, or
  * the reason it could not be produced.
  *
- * A refusal rather than a throw, and the one place in this module that does
- * not fail fast. The walk-forward pass answers the OOS-Sharpe kill line and
- * must abort the grid if it breaks (see the `catch` in `runTrialGrid`); the
- * CSCV pass only feeds PBO, and its extra fold is the window's *first* group
- * — the one the walk-forward scheme trains on and never tests. That group
- * carries the indicator warm-up (`slowWindow` up to 50 bars plus
- * `atrWindow`), so it can legitimately contain no closed trades, which makes
- * `computeMetrics` throw on a zero-variance return series. Losing PBO for one
- * asset class is a reportable gap; losing the whole gate run to it is not.
+ * A refusal rather than a throw, unlike the walk-forward pass (which must
+ * abort the grid — see the `catch` in `runTrialGrid`): CSCV's extra fold is
+ * the window's first group, which the walk-forward scheme never tests and
+ * which can legitimately hold no closed trades during indicator warm-up,
+ * making `computeMetrics` throw on a zero-variance series. Losing PBO for one
+ * asset class is a reportable gap, not grounds to lose the whole gate run.
  */
 type CscvOutcome = { report: EvalReport } | { error: string };
 
@@ -344,8 +308,8 @@ export interface TrialGridRunDeps {
    * E[SR] for the MinBTL grid-sizing cap, forwarded to
    * `sizeTrialGridToSample`. Defaults to `MINBTL_TARGET_ANNUAL_SHARPE` (1.0)
    * if omitted — see that constant's doc comment in `overfitting.ts`. Which
-   * E[SR] is operative is the repo owner's call (issue #637); this only
-   * makes the assumption a stated one instead of a hardcoded one.
+   * E[SR] is operative is the repo owner's call; this only makes the
+   * assumption a stated one instead of a hardcoded one.
    */
   expectedAnnualSharpe?: number;
   /**
@@ -356,29 +320,26 @@ export interface TrialGridRunDeps {
   makeEvaluator?: (run: ReplayRunResult) => EvalExecutor;
   /**
    * Also score every pair under the `cscv` scheme, populating
-   * `TrialGridResult.cscv` — the configs x folds matrix `pbo()` needs (#406).
+   * `TrialGridResult.cscv` — the configs x folds matrix `pbo()` needs.
    *
    * Opt-in, defaulting to off, because it costs a second `evaluate()` per
-   * (config, asset class) pair. The Stage 2 gate run wants it; the cost
-   * decomposition and its sensitivity ladder re-run the whole grid several
-   * times over and read only `killLineChecks`, so paying for it there would
-   * double that work for a number nothing reads.
+   * (config, asset class) pair — worth paying for the Stage 2 gate run, but
+   * not for the cost decomposition and its sensitivity ladder, which re-run
+   * the whole grid several times over and read only `killLineChecks`.
    *
-   * The replay is *not* re-run — both passes score the same
-   * `ReplayRunResult`, so the strategy's trades are identical and only the
-   * partitioning differs. That is what makes the two passes comparable.
+   * The replay is not re-run: both passes score the same `ReplayRunResult`,
+   * so the strategy's trades are identical and only the partitioning
+   * differs — that is what makes the two passes comparable.
    */
   includeCscvPass?: boolean;
   /**
-   * Called once with the sizing this run ACTUALLY used, before any trial runs.
+   * Called once with the sizing this run actually used, before any trial runs.
    *
    * A callback rather than letting the caller size the grid itself and print
-   * from that: `run-stage2.ts` used to call `sizeTrialGridToSample` a second
-   * time purely to build its log line, so the number an operator reads and the
-   * number that constrained the search were two computations that agreed only
-   * by convention. They are pure and take the same window, so they cannot
-   * disagree today — but a verdict's audit trail should not rest on "cannot
-   * disagree today", and the divergence would be silent if it ever did.
+   * from that: a second, separate call to `sizeTrialGridToSample` for a log
+   * line would let the number an operator reads and the number that
+   * constrained the search silently diverge — a verdict's audit trail
+   * should not rest on the two staying in sync by convention.
    */
   announceSizing?: (sizing: TrialGridSizing) => void;
 }
@@ -418,19 +379,15 @@ async function runOneAssetClassTrial(
       }
     }
   } catch (cause) {
-    // Deliberately fail-fast, not fail-soft: catching here and continuing
-    // to the next config would silently shrink the grid below 12
-    // configs/asset class, which #245 (Verdict) reads as the trial count
-    // N it deflates DSR/PBO/MinBTL by. A shrunk N understates deflation —
-    // an optimistic bias in the overfitting verdict — and a missing row
-    // breaks the configs×folds matrix PBO ranks configs against each
-    // other on (see this module's header). Swallowing `run()` failures
+    // Deliberately fail-fast, not fail-soft: catching here and continuing to
+    // the next config would silently shrink the grid below 12 configs/asset
+    // class, the trial count N that Verdict deflates DSR/PBO/MinBTL by — a
+    // shrunk N understates deflation, and a missing row breaks the
+    // configs×folds matrix PBO ranks configs on. Swallowing `run()` failures
     // would also swallow `LookaheadViolationError`, the one error this
-    // harness exists to surface, undermining the `lookahead_audit:
-    // 'passed'` attestation below (which is only honest because `run()`
-    // did not throw). What *is* a real gap in the thrown error — no
-    // config identity — is fixed here: rethrow with that context
-    // attached via `cause`, still aborting the whole grid
+    // harness exists to surface, undermining the `lookahead_audit: 'passed'`
+    // attestation below. Rethrow with config identity attached via `cause`,
+    // still aborting the whole grid
     throw new Error(
       `runTrialGrid: failed on config_hash=${config_hash} ` +
         `(fastWindow=${config.fastWindow}, slowWindow=${config.slowWindow}, ` +
@@ -464,10 +421,8 @@ function logTrial(configTrialLog: ConfigTrialLog, config_hash: string): void {
     seed: TRIAL_SEED,
     // No `TickOutcome`s: this path bypasses the Orchestrator's
     // Scheduler/TickRunner entirely (replay-driver.ts), so there is no
-    // per-instrument-pass trace to carry. `ConfigTrialLog` only needs
-    // the report to identify the trial and attest the run's honesty —
-    // matching the log's own test fixture precedent
-    // (config-trial-log.test.ts)
+    // per-instrument-pass trace to carry — `ConfigTrialLog` only needs the
+    // report to identify the trial and attest the run's honesty
     tick_outcomes: [],
     // An attestation the auditor earned by not throwing: `run()` above
     // completed without a `LookaheadViolationError`
@@ -497,7 +452,7 @@ export async function runTrialGrid(deps: TrialGridRunDeps): Promise<TrialGridRes
     ((run: ReplayRunResult) =>
       new EvalExecutorImpl({ source: run.trades, timeline: run.timeline }));
 
-  // #405: sized from the sample BEFORE any trial runs, not graded afterwards
+  // Sized from the sample before any trial runs, not graded afterwards
   const sizing = sizeTrialGridToSample(buildTrialGrid(), deps.window, deps.expectedAnnualSharpe);
   deps.announceSizing?.(sizing);
   const grid = sizing.selected;

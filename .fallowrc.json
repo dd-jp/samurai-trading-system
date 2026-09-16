@@ -1,0 +1,51 @@
+{
+  "$schema": "./node_modules/fallow/schema.json",
+  "entry": [
+    "server/apps/*/index.ts",
+    "server/apps/service-api/fixture-server.ts",
+    "e2e/**/*.spec.ts",
+    "server/tools/data-cli.ts",
+    "client/src/main.tsx"
+  ],
+  "boundaries": {
+    "zones": [
+      { "name": "client", "patterns": ["client/**"] },
+      { "name": "server", "patterns": ["server/**"] },
+      { "name": "contracts", "patterns": ["contracts/**"] }
+    ],
+    "rules": [
+      { "from": "client", "allow": ["contracts"] },
+      { "from": "server", "allow": ["contracts"] }
+    ]
+  },
+  "ignorePatterns": [
+    "dist",
+    "coverage",
+    "docs/prototypes",
+    "server/tools/__fixtures__",
+    "server/providers/market-data-service/__fixtures__",
+    "docs/research/**/*.mjs",
+    "docs/research/**/*.mts"
+  ],
+  "ignoreDependencies": [
+    "@fontsource/chakra-petch",
+    "@fontsource/ibm-plex-mono",
+    "@fontsource/ibm-plex-sans",
+    "react",
+    "react-dom"
+  ],
+  "usedClassMembers": [
+    "shouldAlert",
+    "anchorEquity",
+    "protectiveRearmUnsupported",
+    "prices_own_fills",
+    "ageFlattenHeldQuantities",
+    "getPosition",
+    "countAllPositions",
+    "getClosedTrades",
+    "countAllFlattenSubmissions",
+    "dueFor",
+    "fetchEventMarket",
+    "fetchPriceHistory"
+  ]
+}

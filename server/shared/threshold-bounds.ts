@@ -187,7 +187,7 @@ export const GUARDED_THRESHOLD_BOUNDS = {
   },
 } as const satisfies Readonly<Record<string, ThresholdBound>>;
 
-export type GuardedThresholdName = keyof typeof GUARDED_THRESHOLD_BOUNDS;
+type GuardedThresholdName = keyof typeof GUARDED_THRESHOLD_BOUNDS;
 
 /** Every guarded name, for callers that must prove they covered all of them */
 export const GUARDED_THRESHOLD_NAMES = Object.keys(

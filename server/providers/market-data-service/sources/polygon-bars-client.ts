@@ -51,8 +51,8 @@ import {
   truncateForError,
   withRetry,
 } from '../../../shared/index.js';
-import type { Bar } from '../index.js';
-import { closeTimeOf, isDailyTimeframe, timeframeToMs } from '../index.js';
+import { closeTimeOf, isDailyTimeframe, timeframeToMs } from '../timeframe.js';
+import type { Bar } from '../types.js';
 import {
   classifyPolygonBarsNetworkError,
   classifyPolygonBarsResponse,

@@ -605,37 +605,54 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
         instrument,
         masterWasOpen,
       );
-      if (verdict.kind === 'defer' || verdict.kind === 'uncorroborated') {
-        safeLog(this.logger, {
-          trace_id: 'saxo-cancel',
-          stage: 'execution',
-          level: 'warn',
-          event: 'saxo_cancel_deferred_dormant_legs',
-          message:
-            verdict.kind === 'defer'
-              ? 'Saxo cancel: the legs read NotWorking but the audit trail has not settled the ' +
-                'master, so they were left in place rather than cancelled on Status alone'
-              : 'Saxo cancel: the master left the open list inside this call and its audit trail ' +
-                'answered nothing at all, so the legs were left in place — an empty answer about ' +
-                'an order this call just read open is a failed corroboration, not a verdict',
-          payload: { client_order_id: clientOrderId },
-        });
-        return;
-      }
-      if (verdict.kind === 'cancel') {
-        this.clearRefusedDefer(clientOrderId);
-        await this.cancelOrderIds(legs.map((leg) => leg.OrderId));
-        return;
-      }
-      throw await this.refuse(
+      await this.resolveDormantClearVerdict(
+        verdict,
         clientOrderId,
+        legs,
         instrument,
-        masterWasOpen ? FILL_INSIDE_CALL : FILL_UNPLACED,
+        masterWasOpen,
       );
+      return;
     }
     if (masterWasOpen) throw await this.refuse(clientOrderId, instrument, FILL_INSIDE_CALL);
     this.clearRefusedDefer(clientOrderId);
     await this.cancelOrderIds(legs.map((leg) => leg.OrderId));
+  }
+
+  private async resolveDormantClearVerdict(
+    verdict: DormantVerdict,
+    clientOrderId: string,
+    legs: readonly SaxoOpenOrder[],
+    instrument: string,
+    masterWasOpen: boolean,
+  ): Promise<void> {
+    if (verdict.kind === 'defer' || verdict.kind === 'uncorroborated') {
+      safeLog(this.logger, {
+        trace_id: 'saxo-cancel',
+        stage: 'execution',
+        level: 'warn',
+        event: 'saxo_cancel_deferred_dormant_legs',
+        message:
+          verdict.kind === 'defer'
+            ? 'Saxo cancel: the legs read NotWorking but the audit trail has not settled the ' +
+              'master, so they were left in place rather than cancelled on Status alone'
+            : 'Saxo cancel: the master left the open list inside this call and its audit trail ' +
+              'answered nothing at all, so the legs were left in place — an empty answer about ' +
+              'an order this call just read open is a failed corroboration, not a verdict',
+        payload: { client_order_id: clientOrderId },
+      });
+      return;
+    }
+    if (verdict.kind === 'cancel') {
+      this.clearRefusedDefer(clientOrderId);
+      await this.cancelOrderIds(legs.map((leg) => leg.OrderId));
+      return;
+    }
+    throw await this.refuse(
+      clientOrderId,
+      instrument,
+      masterWasOpen ? FILL_INSIDE_CALL : FILL_UNPLACED,
+    );
   }
 
   /**
@@ -795,26 +812,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     const open = await this.client.listOpenOrders();
     const wireReference = saxoExternalReference(externalReference);
     const master = open.find((order) => order.ExternalReference === wireReference);
-    if (master !== undefined) {
-      const ids: OrderIds = { entry: master.OrderId };
-      for (const related of master.RelatedOpenOrders ?? []) {
-        if (related.OpenOrderType === 'StopIfTraded') ids.stop = related.OrderId;
-        else ids.target = related.OrderId;
-      }
-      const filled = master.FilledAmount ?? 0;
-      return {
-        kind: 'master',
-        ids,
-        side: master.BuySell === 'Buy' ? 'buy' : 'sell',
-        amount: master.Amount,
-        normalized: {
-          client_order_id: externalReference,
-          broker_order_ids: orderIdList(ids),
-          order_state: filled > 0 ? 'partially_filled' : 'submitted',
-          filled_qty: filled,
-        },
-      };
-    }
+    if (master !== undefined) return masterLookup(master, externalReference);
     // Only the protective legs still open, no master. `Working` on a leg
     // means it ACTIVATED on the entry's fill (VERIFIED), treated as filled
     // below — but a master's legs activating the same way on EXPIRY rather
@@ -824,24 +822,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     const [first] = legs;
     if (first === undefined) return null;
     if (legs.every(isNeverActivated)) return { dormant: legs };
-    const ids: OrderIds = {};
-    for (const leg of legs) {
-      if (leg.OpenOrderType === 'StopIfTraded') ids.stop = leg.OrderId;
-      else ids.target = leg.OrderId;
-    }
-    return {
-      kind: 'legs',
-      ids,
-      legs,
-      side: first.BuySell === 'Buy' ? 'sell' : 'buy',
-      amount: first.Amount,
-      normalized: {
-        client_order_id: externalReference,
-        broker_order_ids: orderIdList(ids),
-        order_state: 'filled',
-        filled_qty: first.Amount,
-      },
-    };
+    return activatedLegsLookup(externalReference, legs, first);
   }
 
   /**
@@ -981,39 +962,11 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
   ): Promise<LookedUpOrder | null> {
     const open = await this.findOpen(externalReference);
     if (open !== null && !isDormantLegs(open)) {
-      // `kind: 'legs'` is `findOpen`'s activated-legs-no-master branch — the
-      // read `corroborateActivatedLegs` exists to check. Cancelling off
-      // `open.legs` rather than the role-deduped `orderIdList(open.ids)`
-      // matches `clearLegs` and doesn't drop a duplicate row
+      // `kind: 'legs'` is `findOpen`'s activated-legs-no-master branch (the
+      // master-present branch is always `kind: 'master'`) — the read
+      // `corroborateActivatedLegs` exists to check (#1215, #1426)
       if (open.kind === 'legs') {
-        const verdict = await this.corroborateActivatedLegs(externalReference, lookbackMs);
-        if (verdict.kind === 'expired') {
-          await this.cancelOrderIds(open.legs.map((leg) => leg.OrderId));
-          this.clearDormantDefer(externalReference);
-          return fromActivity(verdict.latest, externalReference);
-        }
-        this.clearDormantDefer(externalReference);
-        // The audit trail's own fill amount replaces the leg's resting
-        // `Amount` when corroboration found one — `Amount` is the order
-        // size, not necessarily what actually filled (#1563). A summed `0`
-        // (a filled-classified row with no `FillAmount`, e.g. a bare
-        // `FinalFill`) is no better than what `open` already carries, not a
-        // genuine zero-fill, so it falls through to `open`'s own
-        // `first.Amount` reading instead of overriding it (#1574). The
-        // override is also clamped at the order's own `Amount`: summed
-        // `FillAmount` has no cross-row idempotency behind it (this adapter's
-        // ~15s retry window, doc 43), so duplicate fill rows under one wire
-        // reference must not be allowed to report a fill larger than the
-        // order itself (#1574)
-        return verdict.filledQty === undefined || verdict.filledQty <= 0
-          ? open
-          : {
-              ...open,
-              normalized: {
-                ...open.normalized,
-                filled_qty: Math.min(verdict.filledQty, open.amount),
-              },
-            };
+        return this.resolveActivatedLegsLookup(open, externalReference, lookbackMs);
       }
       this.clearDormantDefer(externalReference);
       return open;
@@ -1026,6 +979,57 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
       return fromActivity(latest, externalReference);
     }
 
+    return this.resolveDormantLegsLookup(open, externalReference, lookbackMs, instrument);
+  }
+
+  /**
+   * Cancelling off `open.legs` here — rather than the role-deduped
+   * `orderIdList(open.ids)` — matches `clearLegs`' own behavior on the mirror
+   * branch and does not silently drop a duplicate row under one leg's
+   * reference (#1215 round 3)
+   */
+  private async resolveActivatedLegsLookup(
+    open: LookedUpActivatedLegsOrder,
+    externalReference: string,
+    lookbackMs: number,
+  ): Promise<LookedUpOrder> {
+    const verdict = await this.corroborateActivatedLegs(externalReference, lookbackMs);
+    if (verdict.kind === 'expired') {
+      await this.cancelOrderIds(open.legs.map((leg) => leg.OrderId));
+      this.clearDormantDefer(externalReference);
+      return fromActivity(verdict.latest, externalReference);
+    }
+    this.clearDormantDefer(externalReference);
+    // The audit trail's own fill amount replaces the leg's resting `Amount`
+    // when corroboration found one — `Amount` is the order size, not
+    // necessarily what actually filled (#1563). A summed `0` (a
+    // filled-classified row with no `FillAmount`, e.g. a bare `FinalFill`) is
+    // no better than what `open` already carries, not a genuine zero-fill,
+    // so it falls through to `open`'s own `first.Amount` reading instead of
+    // overriding it (#1574). The override is also clamped at the order's own
+    // `Amount`: summed `FillAmount` has no cross-row idempotency behind it
+    // (this adapter's ~15s retry window, doc 43), so duplicate fill rows
+    // under one wire reference must not be allowed to report a fill larger
+    // than the order itself (#1574)
+    return verdict.filledQty === undefined || verdict.filledQty <= 0
+      ? open
+      : {
+          ...open,
+          normalized: {
+            ...open.normalized,
+            filled_qty: Math.min(verdict.filledQty, open.amount),
+          },
+        };
+  }
+
+  // The same mutually exclusive verdict shape `resolveDormantClearVerdict`
+  // handles for `clearLegs`, just with `lookup`'s own return values
+  private async resolveDormantLegsLookup(
+    open: DormantLegs,
+    externalReference: string,
+    lookbackMs: number,
+    instrument: string | undefined,
+  ): Promise<LookedUpOrder | null> {
     const verdict = await this.corroborateDormantLegs(
       externalReference,
       lookbackMs,
@@ -1290,6 +1294,54 @@ function adopt(existing: LookedUpOrder, externalReference: string): Placed {
     throw new SaxoBrokerProviderError(reason, undefined, 'DeadOrderUnderReference', reason);
   }
   return { ids: existing.ids, order_state: state };
+}
+
+/** Builds a `LookedUpOrder` from an open master row — `findOpen`'s resting-entry case */
+function masterLookup(master: SaxoOpenOrder, externalReference: string): LookedUpOrder {
+  const ids: OrderIds = { entry: master.OrderId };
+  for (const related of master.RelatedOpenOrders ?? []) {
+    if (related.OpenOrderType === 'StopIfTraded') ids.stop = related.OrderId;
+    else ids.target = related.OrderId;
+  }
+  const filled = master.FilledAmount ?? 0;
+  return {
+    kind: 'master',
+    ids,
+    side: master.BuySell === 'Buy' ? 'buy' : 'sell',
+    amount: master.Amount,
+    normalized: {
+      client_order_id: externalReference,
+      broker_order_ids: orderIdList(ids),
+      order_state: filled > 0 ? 'partially_filled' : 'submitted',
+      filled_qty: filled,
+    },
+  };
+}
+
+/** Builds a `LookedUpOrder` from an activated (top-level `Working`) leg pair — `findOpen`'s no-master case */
+function activatedLegsLookup(
+  externalReference: string,
+  legs: readonly SaxoOpenOrder[],
+  first: SaxoOpenOrder,
+): LookedUpOrder {
+  const ids: OrderIds = {};
+  for (const leg of legs) {
+    if (leg.OpenOrderType === 'StopIfTraded') ids.stop = leg.OrderId;
+    else ids.target = leg.OrderId;
+  }
+  return {
+    kind: 'legs',
+    ids,
+    legs,
+    side: first.BuySell === 'Buy' ? 'sell' : 'buy',
+    amount: first.Amount,
+    normalized: {
+      client_order_id: externalReference,
+      broker_order_ids: orderIdList(ids),
+      order_state: 'filled',
+      filled_qty: first.Amount,
+    },
+  };
 }
 
 /** Builds a `LookedUpOrder` from the master's own audit-trail row (`lookup`'s no-open-order fallback) */

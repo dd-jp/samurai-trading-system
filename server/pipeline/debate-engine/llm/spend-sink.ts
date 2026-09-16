@@ -39,20 +39,10 @@ export interface LlmSpendRecord {
   trace_id: string;
   /**
    * Which pipeline stage issued the call, for attributing an unexpected bill.
-   *
-   * `'debate'` was the only value until #957, which added `'risk_critic'`
-   * (`risk-manager/critic.ts`) — check-pipeline step 7's single pass, ~1-2
-   * calls a day. Both bill through the SAME `LlmClient`, so the distinction
-   * lives entirely in this column: without it the critic's cost would land
-   * inside the debate's, which is exactly the confusion the column exists to
-   * prevent. Its rows still carry `debate_id`, so the per-decision totals on
-   * the dashboard (`getLlmSpend`, which applies no stage filter) attribute it
-   * to the decision it was spent on, which is the honest place for it.
-   *
-   * The three analysts (technical, fundamental, sentiment) are deterministic
-   * numeric scorers — `sentiment-analyst.ts` says so in its own header: "over
-   * the primary/context inputs, not an LLM call" — so there is still no
-   * Analyst-stage spend to record.
+   * `'debate'` and `'risk_critic'` (#957) bill through the SAME `LlmClient`,
+   * so without this column the critic's cost would land inside the
+   * debate's. Rows still carry `debate_id`, so the dashboard's per-decision
+   * totals attribute it to the decision it was spent on.
    */
   stage: string;
   /**
@@ -68,15 +58,12 @@ export interface LlmSpendRecord {
   /**
    * How many SERVER-SIDE tool invocations this call incurred (#476).
    *
-   * Zero or absent on every call this system currently makes: ADR-0009 routes
-   * all of them through Nous's `chat/completions`, which runs no server-side
-   * tool. The field survives the cutover because the charge it prices is real
-   * wherever a provider does run one — "Tool requests are priced based on two
-   * components: token usage and tool invocations" — and a meter that has no
-   * slot for it under-counts silently rather than loudly.
-   *
-   * Priced independently of `MODEL_RATES`, so it lands in `cost_usd` even when
-   * the model itself is unrecognised.
+   * Zero or absent on every call this system currently makes — ADR-0009
+   * routes calls through Nous's `chat/completions`, which runs no
+   * server-side tool — but the field stays because the charge it prices is
+   * real wherever a provider does run one, and a meter with no slot for it
+   * would under-count silently. Priced independently of `MODEL_RATES`, so it
+   * lands in `cost_usd` even when the model itself is unrecognised.
    */
   server_tool_calls?: number | undefined;
   /** Wall-clock time for this one API call, as measured by the client */
@@ -104,18 +91,15 @@ export interface LlmSpendRecord {
   /** The model's raw response text, same provenance and same treatment as `prompt` */
   response?: string | undefined;
   /**
-   * `hashPromptTemplate("<stageTemplateHash>:<wireEnvelopeHash>")` (#1514,
-   * round-1 review) — the call's stage's STATIC template combined with the
-   * shared wire envelope every call also passes through
-   * (`WIRE_ENVELOPE_TEMPLATE_HASH`, `anthropic-client.ts`), not the rendered
-   * prompt (which also carries per-request dynamic content and would make
-   * the hash different on every call) and not the bare stage hash alone
-   * (which would miss an edit to the shared envelope). The only writer,
-   * `AnthropicLlmClient.recordSpend`, computes this composite via
-   * `withWireEnvelope`; a `LlmSpendRecord` built directly (e.g. in a test)
-   * must supply the same composite to match a real row. Undefined for a call
-   * site that has not been wired to supply a stage hash at all; persisted as
-   * NULL rather than fabricated (migrations/0058).
+   * `hashPromptTemplate("<stageTemplateHash>:<wireEnvelopeHash>")` (#1514) —
+   * the call's stage's static template combined with the shared wire
+   * envelope every call passes through (`WIRE_ENVELOPE_TEMPLATE_HASH`,
+   * `anthropic-client.ts`), not the rendered prompt (varies per call) and
+   * not the bare stage hash alone (misses an envelope edit). Computed by
+   * `AnthropicLlmClient.recordSpend` via `withWireEnvelope`; a record built
+   * directly (e.g. in a test) must supply the same composite. Undefined when
+   * a call site hasn't been wired for it; persisted as NULL rather than
+   * fabricated (migrations/0058).
    */
   prompt_template_hash?: string | undefined;
 }
@@ -176,20 +160,15 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
      */
     private readonly promptTierAlerts?: PromptTierAlertChannel,
     /**
-     * Defaults to a fresh instance rather than being required, so every
-     * existing construction (tests, the backtest path) keeps working
-     * unchanged — the same shape `captureText`/`promptTierAlerts` take.
+     * Defaults to a fresh instance so existing constructions (tests,
+     * backtest) keep working unchanged.
      *
      * MUST be the SAME instance across every store that can meter the same
-     * model, or the throttle's one-then-every-8 contract silently becomes
-     * two independent counters: `production.ts` constructs this class twice
-     * (the debate stage and the sentiment `GrokAgent`), and both can be
-     * pointed at a tiered model by `NOUS_MODEL` alone with no code change
-     * (nous-config.ts's `nousCredentials('debate'|'sentiment')` both fall
-     * back through it, and the startup guard only rejects a model missing
-     * from `MODEL_RATES` — a tiered model passes). `production.ts` hoists
-     * one instance and passes it to both constructions for exactly this
-     * reason.
+     * model, or the throttle's one-then-every-8 contract silently splits
+     * into two independent counters — `production.ts` constructs this class
+     * twice (debate stage, sentiment `GrokAgent`) and both can end up
+     * metering a tiered model, so it hoists one instance and passes it to
+     * both.
      */
     private readonly promptTierThrottle = new PromptTierCrossingThrottle(),
   ) {}
@@ -245,17 +224,15 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
     const toolCost = priceServerToolCalls(toolCalls);
 
     // The two halves are priced independently, and the tool half is recorded
-    // EVEN WHEN THE TOKEN HALF IS NOT (#476). Discarding a charge we know
-    // exactly, because a different charge is missing from a rate table,
-    // would under-count the cap for the same reason the phantom `grok-4`
-    // rate over-counted it — a number we hold and throw away is the worst of
-    // the three options. Such a row stays recognisable: `server_tool_calls`
-    // is non-zero while `cost_usd` is too small to cover the tokens
+    // EVEN WHEN THE TOKEN HALF IS NOT (#476): discarding a charge we know
+    // exactly because a different one is missing would under-count the cap,
+    // which is worse than a partial number. Such a row stays recognisable:
+    // `server_tool_calls` is non-zero while `cost_usd` is too small to cover
+    // the tokens
     const cost = tokenCost === null ? (toolCost > 0 ? toolCost : null) : tokenCost + toolCost;
 
     if (tokenCost === null) {
-      // The gap #476 named: nothing used to say when a call that cost money
-      // went unpriced. A silent null is how a cap stops being a cap.
+      // A silent null here is how a spend cap stops being a cap
       this.logger?.log({
         trace_id: entry.trace_id,
         stage: 'orchestrator',
@@ -344,18 +321,16 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
   }
 
   /**
-   * The wiring `crossesPromptTier` (pricing.ts) existed without (#1155):
-   * called on every metered call, whether or not it crosses, so
-   * `promptTierThrottle` sees every call THIS INSTANCE meters and a call back
-   * under the tier correctly clears it. "This instance", not "the run" — the
-   * throttle only sees the whole run's crossings for a model when every
-   * store that can meter that model shares the one throttle instance
-   * (`production.ts` arranges this; see the constructor param's doc).
+   * Called on every metered call (#1155), whether or not it crosses, so
+   * `promptTierThrottle` sees every call THIS INSTANCE meters and a call
+   * back under the tier correctly clears it. "This instance", not "the run"
+   * — the throttle only sees the whole run's crossings for a model when
+   * every store that can meter that model shares one throttle instance.
    *
-   * `crossesPromptTier` already REFUSES a model with no tier row, so
+   * `crossesPromptTier` already refuses a model with no tier row, so
    * `rateFor(entry.model)?.tier` is guaranteed defined once `crossed` is
-   * true — the `undefined` branch below is unreachable in practice and
-   * guards only against the two functions disagreeing in a future edit.
+   * true — the `undefined` branch below guards only against the two
+   * functions disagreeing in a future edit.
    */
   private maybeAlertPromptTierCrossing(entry: LlmSpendRecord): void {
     const crossed = crossesPromptTier(entry.model, entry.usage);
@@ -378,9 +353,8 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
   }
 
   /**
-   * Persists the call's text and emits the one log line that answers the whole
-   * question (#1035): when it ran, how long it took, which model, what it
-   * cost, how many tokens each way, what it was asked, and what it said.
+   * Persists the call's text and emits the one log line for this call
+   * (#1035).
    *
    * `started_at`/`duration_ms` are set from the call's own timestamp and
    * latency rather than measured here, so the line agrees exactly with the

@@ -1,34 +1,28 @@
 /**
  * Dashboard HTTP server — a thin, read-only transport over `buildSnapshot`
- * plus a static file handler for the built Vite+React bundle (ADR-0010,
- * #539). Uses Node 22's built-in `http` and `fs`: zero new runtime
- * dependencies (`better-sqlite3` is still the only entry in `dependencies`;
- * react/vite are devDependencies that produce bytes on disk at build time).
+ * plus a static file handler for the built Vite+React bundle (ADR-0010).
+ * Uses Node 22's built-in `http` and `fs`: zero new runtime dependencies.
  *
  * Two `GET` surfaces:
- *   - `GET /api/snapshot` → `buildSnapshot(store, now, mode, arm, providers)` as
- *                           JSON. Requires a valid `Authorization: Bearer <token>`
- *                           against `SAMURAI_DASHBOARD_TOKEN` whenever that
- *                           credential is configured (#1038, `request-auth.ts`);
- *                           unauthenticated when it is not — see
- *                           `DashboardServerOptions.dashboardCredential`. `arm`
- *                           is `?arm=live|control` (#1592), absent meaning
+ *   - `GET /api/snapshot` → `buildSnapshot(store, now, mode, arm, providers)`
+ *                           as JSON. Requires a valid `Authorization: Bearer
+ *                           <token>` against `SAMURAI_DASHBOARD_TOKEN`
+ *                           whenever that credential is configured; see
+ *                           `DashboardServerOptions.dashboardCredential`.
+ *                           `arm` is `?arm=live|control`, absent meaning
  *                           `'live'`; any other value is a 400.
  *   - everything else     → a file inside `bundleRoot` (`/` → `index.html`),
  *                           404 when it is not there or not a servable type.
  *                           Never gated by the credential — see
  *                           `request-auth.ts`'s header for why.
  *
- * No `POST`/`PUT`/`DELETE` handlers exist by construction (dashboard-spec.md
- * "Any write path ... strictly read-only") — the dashboard can never place,
- * block, or modify a trade. The server's blast radius is exactly "an operator
- * reads something," same as the CLI.
+ * No `POST`/`PUT`/`DELETE` handlers exist by construction — the dashboard can
+ * never place, block, or modify a trade.
  *
- * Serving files from disk is the one genuinely new attack surface v2
- * introduces, so the containment guard (`resolveBundlePath`) is a pure,
- * separately-tested function rather than a few lines buried in the request
- * handler — see its own comment for why a `startsWith` prefix check is not
- * the same question.
+ * Serving files from disk is the one genuinely new attack surface here, so
+ * the containment guard (`resolveBundlePath`) is a pure, separately-tested
+ * function rather than a few lines buried in the request handler — see its
+ * own comment for why a `startsWith` prefix check is not the same question.
  */
 import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -46,47 +40,21 @@ import type { DashboardQueryStore } from './types.js';
  * Renders a caught value into an HTTP error-body string, for the two
  * responders (`/api/snapshot`'s catch, `serveStatic`'s rejection handler)
  * whose own job is to report a failure — a throw from inside either would
- * leave the response it was building incomplete (#1355).
+ * leave the response it was building incomplete.
  *
- * `describeThrownSafely` (safe-log.ts, #1262) is what guards the render
- * itself: an `Error` instance whose own `message` is a throwing getter, or
- * any other value whose rendering path throws, degrades to
- * `'[unrenderable error]'` rather than propagating.
+ * `describeThrownSafely` guards the render itself: a throwing `message`
+ * getter, or any value whose rendering path throws, degrades to
+ * `'[unrenderable error]'` rather than propagating. `sanitizeLogText` is
+ * load-bearing here, not belt-and-suspenders: an uncaught throw now renders
+ * the thrown *value* into a client-visible body rather than a fixed fallback
+ * string, so masking known credential syntaxes is what makes that safe.
  *
- * `sanitizeLogText` is load-bearing here, not belt-and-suspenders: dropping
- * the two literals these sites used to fall back to on a non-`Error` throw
- * (`'snapshot failed'` / `'static read failed'`) means such a throw now
- * renders the thrown *value* into a client-visible body where before it
- * always rendered a fixed string, so masking known credential syntaxes is what
- * makes that widening safe. Its `MAX_ERROR_BODY_CHARS` cap (~500 chars,
- * `http/response-errors.ts`) matters too: an operator reading a long real
- * error message would notice truncation before they'd notice masking. Same
- * posture `logCaughtFailure` already takes for a log line (safe-log.ts's own
- * doc comment: "belt and suspenders costs nothing here"), applied here to a
- * body a client can read instead.
- *
- * Scope: both call sites guard `res.headersSent` before `writeHead(500,
- * ...)` runs and this function's render is evaluated as its `.end`
- * argument — same order `/api/snapshot`'s own success path already has,
- * where `writeHead` runs before the value that can throw is evaluated:
- * `res.writeHead(200, ...).end(JSON.stringify(snapshot))`
- * — `writeHead` runs first, then `JSON.stringify` is evaluated for `.end`;
- * a value it refuses (a BigInt, a circular reference) reaches this catch
- * with `res.headersSent` already true. Without the guard, the catch's own
- * `writeHead(500, ...)` would itself throw `ERR_HTTP_HEADERS_SENT`,
- * uncaught — one `writeHead` earlier than the failure this function guards
- * against.
- *
- * `serveStatic`'s rejection handler carries the same `res.headersSent`
- * guard for its own reason, not this one: its success path is
- * `res.writeHead(200, ...).end(body)` with `body` an already-resolved
- * `Buffer` — a bare variable, not an expression that can throw — so
- * nothing in the paths that reach this handler today throws mid-render the
- * way `/api/snapshot`'s does. The guard is defensive there — protecting
- * against any future path where a rejection reaches this handler after
- * `serveStatic` already committed a `writeHead` internally (its success
- * path is the same `writeHead(200, ...).end(body)` shape) — not proof that
- * the two sites share a trigger.
+ * Both call sites guard `res.headersSent` before their own `writeHead(500,
+ * ...)` runs: `/api/snapshot`'s success path evaluates
+ * `JSON.stringify(snapshot)` only after `writeHead(200, ...)` has already
+ * run, so a value it refuses (a BigInt, a circular reference) reaches this
+ * catch with headers already sent. Without the guard, the catch's own
+ * `writeHead(500, ...)` would itself throw `ERR_HTTP_HEADERS_SENT`, uncaught.
  */
 function renderResponderError(err: unknown): string {
   return sanitizeLogText(describeThrownSafely(err));
@@ -97,19 +65,16 @@ export interface DashboardServerOptions {
   host: string;
   store: DashboardQueryStore;
   /**
-   * The dashboard's fail-closed bind guard (#887, ADR-0019, `bind-guard.ts`).
+   * The dashboard's fail-closed bind guard (ADR-0019, `bind-guard.ts`).
    * `undefined` reads as "not configured" — the loopback default stays
    * startable with no value here, and a non-loopback `host` refuses unless
    * this is a non-empty string. Callers resolve it from
-   * `process.env[DASHBOARD_CREDENTIAL_ENV_VAR]` (`SAMURAI_DASHBOARD_TOKEN`)
-   * per this repo's env-var convention — this option exists so the guard is
-   * testable without touching `process.env`.
+   * `process.env[DASHBOARD_CREDENTIAL_ENV_VAR]` so the guard stays testable
+   * without touching `process.env`.
    *
-   * Also verified per request against `GET /api/snapshot` (#1038,
-   * `request-auth.ts`) whenever it is configured — the static bundle is
-   * deliberately NOT covered, see that module's header for why. See
-   * `bind-guard.ts`'s `assertBindAllowed` doc comment for how the boot-time
-   * and request-time checks compose.
+   * Also verified per request against `GET /api/snapshot` (`request-auth.ts`)
+   * whenever it is configured — the static bundle is deliberately not
+   * covered, see that module's header for why.
    */
   dashboardCredential?: string | undefined;
   /**
@@ -162,13 +127,13 @@ function isTradingArm(value: string): value is TradingArm {
 }
 
 /**
- * `?arm=` for `GET /api/snapshot` (#1592). Absent means `'live'` — never
- * guessed otherwise: an unrecognised value, an empty string, or the param
- * repeated more than once (ambiguous — `URLSearchParams.get` would silently
- * take only the first) is refused rather than defaulted. This only catches a
- * typo in the VALUE (`?arm=lvie`) — a typo in the KEY (`?ram=control`,
- * `?Arm=control`) is indistinguishable from the param being absent at all,
- * by HTTP query-string design, and silently returns live.
+ * `?arm=` for `GET /api/snapshot`. Absent means `'live'` — never guessed
+ * otherwise: an unrecognised value, an empty string, or the param repeated
+ * more than once (ambiguous — `URLSearchParams.get` would silently take only
+ * the first) is refused rather than defaulted. This only catches a typo in
+ * the VALUE (`?arm=lvie`) — a typo in the KEY is indistinguishable from the
+ * param being absent at all, by HTTP query-string design, and silently
+ * returns live.
  */
 function parseArmParam(
   searchParams: URLSearchParams,
@@ -188,12 +153,9 @@ function parseArmParam(
  * rather than a lookup with an `application/octet-stream` fallback: an
  * unknown extension inside the bundle is either a Vite output nobody
  * anticipated or a file that has no business being fetched, and 404 is the
- * honest answer to both. Everything Vite emits for this app is here
- * (`.js`/`.css`/`.svg`/`.woff2`/`.woff` assets, `.map` sourcemaps,
- * `index.html`) — verified against a real `npm run build:web` output, not
- * assumed: `@fontsource` emits a `.woff` fallback beside every `.woff2` and
- * the built CSS references it 36 times, so the ticket's five-entry map would
- * have 404'd every font on a browser without woff2 support.
+ * honest answer to both. Verified against a real `npm run build:web` output:
+ * `@fontsource` emits a `.woff` fallback beside every `.woff2`, so a naive
+ * extension map would 404 every font on a browser without woff2 support.
  */
 const BUNDLE_CONTENT_TYPES: Readonly<Record<string, string>> = {
   '.html': 'text/html; charset=utf-8',
@@ -219,20 +181,16 @@ export function bundleContentType(filePath: string): string | undefined {
  * escapes. Pure and exported so the containment rule can be tested directly:
  * over HTTP, both `new URL()` and `fetch()` normalise `..` segments away
  * before a request is ever sent, so an HTTP-level test of a literal `../`
- * escape asserts nothing about this guard (dashboard-spec.md "Testing
- * Decisions" makes the same point).
+ * escape asserts nothing about this guard.
  *
- * **Containment, not string prefix.** `resolved.startsWith(root)` is NOT the
- * check: it accepts any sibling directory whose name merely begins with the
- * root's, so a `dist/client-evil/` next to `dist/client/`
- * escapes the bundle without using a single `..` segment. `path.relative`
- * asks about directory containment rather than about characters.
+ * Containment, not string prefix: `resolved.startsWith(root)` would accept
+ * any sibling directory whose name merely begins with the root's (e.g.
+ * `dist/client-evil/` next to `dist/client/`). `path.relative` asks about
+ * directory containment instead.
  *
  * The caller must decode percent-escapes EXACTLY ONCE before calling this. A
  * second decode would turn a legitimate filename containing a literal `%2e`
- * into a traversal, which is how double-decoding bugs are born; a
- * double-encoded `%252e%252e%252f` therefore names a file that does not exist
- * inside the bundle and gets a 404, which is correct.
+ * into a traversal.
  */
 export function resolveBundlePath(root: string, urlPath: string): string | null {
   // A NUL byte truncates the path at the syscall boundary on some platforms,
@@ -255,26 +213,18 @@ export function resolveBundlePath(root: string, urlPath: string): string | null 
 
 /**
  * Whether `bundleRoot` holds a usable build, and if not, why — the diagnostic
- * text, or `null` when the bundle is fine. Synchronous so the entry point can
- * call it at boot (see `server/apps/service-api/index.ts`); the request path
- * calls it too, so a page load and the startup log say the same thing.
+ * text, or `null` when the bundle is fine. Synchronous so both the boot-time
+ * entry point and the request path can call it, so a page load and the
+ * startup log say the same thing.
  *
- * Two distinct failures, because they have different fixes and only one of
- * them is visible as a missing file:
- *
- *  1. **No `index.html`.** Nobody ran `npm run build:web`. A bare 404 is the most
- *     confusing outcome the v2 changeover can produce — the process boots,
- *     `/api/snapshot` works, the page is blank — so this names the path and
- *     the command.
- *  2. **`index.html` is the Vite SOURCE template, not a build** (PR #597
- *     review). Running the server from source
- *     (`tsx server/apps/service-api/index.ts`) puts `bundleRoot` at the repo's
- *     `client/` directory, which DOES contain an
- *     `index.html` — the dev template, whose only script tag is
- *     `/src/main.tsx`. An existence check passes and the server then serves a
- *     page whose module 404s, which looks like a broken app rather than a
- *     wrong directory. The built file references `./assets/…` instead, so the
- *     dev-only reference is the thing to look for.
+ * Two distinct failures, because they have different fixes:
+ *  1. No `index.html` — nobody ran `npm run build:web`.
+ *  2. `index.html` is the Vite SOURCE template, not a build. Running the
+ *     server from source puts `bundleRoot` at the repo's `client/`
+ *     directory, which does contain an `index.html` — the dev template,
+ *     whose only script tag is `/src/main.tsx`. An existence check alone
+ *     would pass and then serve a page whose module 404s, which looks like a
+ *     broken app rather than a wrong directory.
  */
 export function bundleDiagnostic(root: string): string | null {
   const resolvedRoot = resolvePath(root);
@@ -373,16 +323,16 @@ export function createDashboardServer(opts: DashboardServerOptions): DashboardSe
    * this one route, not to dispatching in general
    */
   function handleSnapshotRequest(req: IncomingMessage, res: ServerResponse, parsedUrl: URL) {
-    // #1038: verified before buildSnapshot ever runs, so a request with no
-    // valid credential never touches the store — the store's data is the
-    // asset this check protects, not just the HTTP response
+    // Verified before buildSnapshot ever runs, so a request with no valid
+    // credential never touches the store — the store's data is the asset
+    // this check protects, not just the HTTP response
     if (!isAuthorizedRequest(req.headers.authorization, opts.dashboardCredential)) {
       res
         .writeHead(401, { ...JSON_HEADERS, 'WWW-Authenticate': 'Bearer' })
         .end(JSON.stringify({ error: 'unauthorized' }));
       return;
     }
-    // #1592: named arm, or 400 — never a silent fallback to live on a bad value
+    // Named arm, or 400 — never a silent fallback to live on a bad value
     const parsedArm = parseArmParam(parsedUrl.searchParams);
     if (!parsedArm.ok) {
       res.writeHead(400, JSON_HEADERS).end(JSON.stringify({ error: parsedArm.reason }));
