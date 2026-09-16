@@ -1,12 +1,4 @@
-/**
- * Concrete `LlmClient` (ticket #31 AC: "Concrete implementation using
- * configured LLM provider"). The wire client is injected rather than
- * constructed here, mirroring `AlpacaBrokerClient`/`CcxtBrokerClient` — connection
- * provisioning (API key, base URL) is an ops concern, and `AnthropicMessagesClient`
- * is deliberately the narrow slice of the Anthropic Messages API this file
- * uses, so any real SDK client (or a test double) satisfies it structurally
- * without a hard dependency on a specific SDK package.
- */
+/** Concrete `LlmClient` (#31): the wire client is injected, mirroring `AlpacaBrokerClient`/`CcxtBrokerClient` — connection provisioning is an ops concern, not this file's */
 
 import { type RetryAttemptReport, withRetry } from '../../../shared/index.js';
 import type { AnthropicUsage } from '../../../shared/llm/index.js';
@@ -34,49 +26,9 @@ import {
 } from './types.js';
 
 /**
- * Only failure modes the spec calls out as transient are retried (rate limit,
- * malformed response). Anything else (auth errors, bad requests, unclassified
- * `LlmProviderError`s) is assumed non-transient and rethrown immediately.
- * Closed over the generalized `withRetry` (issue #271).
- *
- * TIMEOUT is split on `LlmTimeoutError.source` (#1080, 2026-09-14), because the
- * two things that word covers have opposite costs. A `status` timeout is the
- * gateway answering 408 or 504, usually well inside the deadline — a transient
- * blip, and a retry costs a backoff. A `deadline` timeout is OUR clock firing,
- * so the attempt has already spent the entire per-attempt budget; every caller
- * in this system issues its calls inside a latency budget the retry is not
- * counted against (`enforceLatencyBudget`), so retrying spends a second full
- * deadline out of the budget it was supposed to help meet.
- *
- * Measured rather than argued, over the only two soak sessions that log
- * retries at all — `onRetryAttempt` ships with #1103, so nothing earlier could
- * have recorded one: all 38 retried attempts are attempt 1 of 2, each
- * reporting `elapsed_ms` of 28,002-28,012ms against `LLM call exceeded
- * 28000ms` — the deadline itself, not a transient blip — and at most 6 of the
- * 37 debate-stage ones are followed by any metered `llm_spend` row in their
- * own debate. Every one of them is the `deadline` branch; no 408 or 504
- * appears in either session at all.
- *
- * What this gives up, stated rather than hidden: a genuinely transient network
- * stall that stretches past the deadline rather than being reported as a status
- * now surfaces as `LlmTimeoutError` to the caller. That is not a silent loss —
- * #1385 degrades it inside `enforceLatencyBudget` with `termination_cause:
- * 'llm_failure'`, which is the discriminator #1080 AC4 asks for, and the next
- * tick re-asks.
- *
- * "Malformed responses are reparseable on a fresh sample" is TRUE OF THE
- * SAMPLE, not of every response that fails to parse, and there are two
- * carve-outs where the failure is deterministic in the request rather than in
- * the draw — retrying either one re-bills an identical failure:
- *
- *  - TRUNCATION (`LlmTruncatedError`, #1394). Excluded by ITS OWN CLASS. It
- *    was excluded by the ABSENCE of a `.status` field until #1394 — which
- *    rejected it correctly but left it reading as an unclassified
- *    `LlmProviderError` at every call site downstream.
- *  - REFUSAL (`LlmRefusalError`, #1391). Excluded by ITS OWN CLASS — the same
- *    construction `LlmCancelledError` uses — because a refusal must stay
- *    distinguishable in the log from an unclassified provider fault, and
- *    carries the `usage` of the call it burned.
+ * Only transient failures retry (rate limit, malformed response, `status`-source timeout); a `deadline` timeout
+ * does not (#1080) — it already spent its full per-attempt budget, so retrying spends a second one.
+ * TRUNCATION (#1394) and REFUSAL (#1391) are excluded by their own error class, not by this check.
  */
 function isRetryable(error: unknown): boolean {
   if (error instanceof LlmTimeoutError) {
@@ -94,75 +46,31 @@ export interface AnthropicMessageRequest {
 /** The subset of the Messages API response this client reads (text content blocks) */
 export interface AnthropicMessageResponse {
   content: Array<{ type: string; text?: string }>;
-  /**
-   * Token counts, fed to the local spend meter (llm/spend-sink.ts). Optional
-   * because `AnthropicMessagesClient` is a structural interface any wire
-   * client may satisfy — the many test doubles in this suite return `content`
-   * alone, and requiring `usage` would break every one of them for a field
-   * nothing trading-critical reads.
-   *
-   * A real wire client passes the provider's block straight through, so it
-   * arrives at runtime without extra parsing.
-   */
+  /** Token counts for the spend meter. Optional — `AnthropicMessagesClient` is structural and many test doubles return bare `content`. */
   usage?: AnthropicUsage;
   /**
-   * Set to `'refusal'` when the provider declined to answer (#1391). Read here
-   * rather than left to `parseResponse` because `extractText` keeps only
-   * `type: 'text'` blocks, so a refusal reaches the parse gate as empty text
-   * and becomes a RETRYABLE `LlmMalformedResponseError` — three full-price
-   * calls to a model that has already declined the prompt.
-   *
-   * DORMANT in this tree, and deliberately kept: `NousMessagesClient` is the
-   * only implementation of this interface and speaks OpenAI-compatible
-   * `chat/completions`, where the refusal is signalled on the wire and thrown
-   * by `nous-chat.ts` before it ever reaches here. The field is Anthropic's own
-   * spelling of the same signal, which is what any second wire client on this
-   * structural interface would set.
+   * Set to `'refusal'` when the provider declined (#1391) — read here so a refusal doesn't fall through
+   * to `parseResponse` as empty text and become a retryable `LlmMalformedResponseError`
    */
   stop_reason?: string;
-  /**
-   * The model that actually served the request, which is not always the model
-   * requested — a server-side fallback can reroute a refused request to a
-   * different (differently priced) model. Preferred over `config.model` when
-   * pricing, so the meter bills what ran rather than what was asked for.
-   */
+  /** Model that actually served the request (may differ from `config.model` via server-side fallback) — preferred for pricing so the meter bills what ran */
   model?: string;
-  /**
-   * Time-to-first-byte (#1012), as measured by the wire client — see
-   * `nous-chat.ts`'s `NousChatResult.ttfb_ms` doc comment for exactly what it
-   * spans. Optional for the same reason `usage` is: `AnthropicMessagesClient`
-   * is structural, and requiring this field would break every test double in
-   * this suite that predates #1012 and returns bare `content`.
-   */
+  /** Time-to-first-byte (#1012), optional for the same structural-interface reason as `usage` */
   ttfb_ms?: number;
 }
 
-/**
- * Per-call transport options (#347). Separate from `AnthropicMessageRequest`,
- * which is the wire body — a signal is not something to serialize and send.
- */
+/** Per-call transport options (#347), separate from the wire body `AnthropicMessageRequest` — a signal isn't serialized */
 export interface AnthropicMessageOptions {
   /** Aborts the underlying request. Wire clients that can honour it should. */
   signal?: AbortSignal | undefined;
-  /**
-   * Names this call on the in-flight gate's own log lines (#1533) — see
-   * `LlmAttribution.gate_stage`'s doc for the fallback (`gate_stage ?? stage`)
-   * that fills this in. Wire clients that honour it (`NousMessagesClient`)
-   * forward it as `llmStage`; a client that ignores it just keeps naming
-   * every call `'debate'`, which is the pre-#1533 behaviour.
-   */
+  /** Names this call on the in-flight gate's log lines (#1533); a client that ignores it just labels every call `'debate'` */
   stage?: string | undefined;
 }
 
 export interface AnthropicMessagesClient {
   /**
-   * `options` is a second, OPTIONAL parameter rather than a field on the
-   * request body: TypeScript lets an implementation declare fewer parameters
-   * than the interface, so every existing wire double in this suite
-   * (`createMessage(request)`) still satisfies this interface unchanged. That
-   * matters because `AnthropicMessagesClient` is deliberately structural — any
-   * SDK client or fake can satisfy it — and a required parameter would have
-   * broken all of them for a capability only the real HTTP client can honour.
+   * Second, OPTIONAL parameter rather than a request-body field: TS lets an implementation take fewer
+   * params, so existing structural doubles (`createMessage(request)`) still satisfy the interface unchanged
    */
   createMessage(
     request: AnthropicMessageRequest,
@@ -170,12 +78,7 @@ export interface AnthropicMessagesClient {
   ): Promise<AnthropicMessageResponse>;
 }
 
-/**
- * One retried attempt, as reported to `AnthropicLlmClientConfig.onRetryAttempt`
- * (#1080): the shared loop's report plus the identity fields only this client
- * holds, so a log line can name which model, which trace and which debate paid
- * for the attempt that vanished
- */
+/** One retried attempt, reported to `onRetryAttempt` (#1080), with the identity fields only this client holds */
 interface LlmRetryAttemptReport extends RetryAttemptReport {
   model: string;
   trace_id: string | undefined;
@@ -183,11 +86,7 @@ interface LlmRetryAttemptReport extends RetryAttemptReport {
   debate_id: string | undefined;
 }
 
-/**
- * One abandoned call, as reported to `AnthropicLlmClientConfig.onCallFailed`
- * (#1394). `failure_cause` is classified here rather than at each seam so
- * every caller reports the same word for the same fault.
- */
+/** One abandoned call, reported to `onCallFailed` (#1394); `failure_cause` classified here so every caller reports the same word */
 export interface LlmCallFailureReport {
   failure_cause: FailureCause;
   /** The thrown value itself, so the observer can render it as it sees fit */
@@ -205,71 +104,26 @@ export interface AnthropicLlmClientConfig {
   timeoutMs: number;
   retry: LlmRetryConfig;
   /**
-   * Observes every attempt this client retries (#1080). Optional, so the many
-   * test and backtest construction sites are unchanged and simply report
-   * nothing; the production composition root supplies one that logs at `warn`.
-   *
-   * A RETRIED ATTEMPT IS OTHERWISE INVISIBLE, and that is what this closes.
-   * `attempt()` starts its own `latency_ms` clock and meters only through
-   * `recordSpend`, which a failed attempt never reaches — so the attempt is
-   * absent from `llm_spend`, absent from the `llm call:` log stream, and
-   * absent from every derived figure. It still consumed real wall-clock time
-   * inside whatever latency budget the caller was racing (`enforceLatencyBudget`
-   * for a debate), and still billed the provider. #1080 had to infer those
-   * attempts from >30s gaps between logged calls; with this wired they are
-   * read off a line.
+   * Observes every retried attempt (#1080) — optional, defaulting to a no-op. A retried attempt is otherwise
+   * invisible: it bills the provider and spends wall-clock time but never reaches `llm_spend` or the log stream.
    */
   onRetryAttempt?: ((report: LlmRetryAttemptReport) => void) | undefined;
   /**
-   * Observes every call this client gives up on (#1394), once, after the retry
-   * budget is spent. Optional for the same reason `onRetryAttempt` is; the
-   * production composition root supplies one that logs `llm_call_failed` at
-   * `warn` with the classified cause.
-   *
-   * `production.ts` builds a single client and shares it across the debate
-   * personas, the disagreement detector, the risk critic and MI scoring — most
-   * of which then swallow the error to fail open, so a per-caller line is
-   * exactly what #1394 found missing. A count of failures by cause for a
-   * session is `llm_call_failed` grouped by `payload.failure_cause`.
-   *
-   * One dispatch never reaches here: `RateLimitedLlmClient` (which wraps this
-   * client for the personas and the disagreement detector) throws
-   * `LlmCancelledError` on an already-aborted signal without calling
-   * `complete`, by design (#347) — that path costs nothing and reports
-   * nothing. Only a cancellation raised BEFORE dispatch is missed this way: an
-   * abort while the call is in flight is raised inside `callWithTimeout`,
-   * inside the retry loop, and does reach here as `cancelled`. The
-   * disagreement detector names its own pre-dispatch cancellation through
-   * `debate_disagreement_llm_failed`.
+   * Observes every call this client gives up on (#1394), once, after retry budget is spent. One dispatch
+   * never reaches here: `RateLimitedLlmClient` throws `LlmCancelledError` on an already-aborted signal
+   * without calling `complete` (#347) — that path costs nothing and reports nothing.
    */
   onCallFailed?: ((report: LlmCallFailureReport) => void) | undefined;
 }
 
 /**
- * `request.context.analyst_views` (and any `debate_state`) carries the same
- * ingested free text (`key_points`, persona rationale) as `request.prompt` —
- * some callers (e.g. `disagreement-detector.ts`) rely on it entirely rather
- * than interpolating free text into the prompt string. Wrapping it here
- * (#208, prompt-safety.ts) is what makes the mitigation hold on the actual
- * wire content sent to the provider, not just on `personas.ts`'s `prompt`.
+ * `request.context.analyst_views` carries the same ingested free text as `request.prompt` — wrapping it
+ * here (#208, prompt-safety.ts) makes the mitigation hold on the actual wire content, not just `personas.ts`'s prompt
  */
 /**
- * The half of `LlmRequestContext` the model is allowed to see, selected by
- * READING `LLM_CONTEXT_FIELD_KIND` rather than by naming fields (PR #387
- * review).
- *
- * An allowlist derived from the classification map, not a denylist of
- * attribution names. The distinction is the whole point: a denylist is correct
- * only while someone remembers to extend it, and the field it forgets is
- * silently billed to the operator on every call. Here, a new context field is
- * unrepresentable until it is classified — the map's `satisfies Record<keyof
- * LlmRequestContext, ...>` refuses to compile otherwise — and only fields
- * classified `'prompt'` are ever serialized.
- *
- * Top-level keys only. `JSON.stringify`'s own replacer-array parameter would
- * do this in one argument but applies at EVERY level of nesting, which would
- * silently gut `debate_state` (an open `Record<string, unknown>` whose inner
- * keys this layer must not interpret).
+ * The half of `LlmRequestContext` the model may see, selected by reading `LLM_CONTEXT_FIELD_KIND` (PR #387) —
+ * an allowlist the classification map enforces at compile time, not a denylist someone must remember to extend.
+ * Top-level keys only: a replacer array would recurse into `debate_state`'s own unrelated keys.
  */
 function promptContextOf(context: LlmRequestContext): Record<string, unknown> {
   const promptContext: Record<string, unknown> = {};
@@ -278,9 +132,7 @@ function promptContextOf(context: LlmRequestContext): Record<string, unknown> {
       continue;
     }
     const value = context[field as keyof LlmRequestContext];
-    // Absent optional fields stay absent rather than serializing as `null` —
-    // `JSON.stringify` drops `undefined` values anyway, so this only keeps the
-    // rendered prompt byte-identical to what it was before this indirection
+    // Absent optional fields stay absent rather than `null` — keeps the rendered prompt byte-identical to before this indirection
     if (value !== undefined) {
       promptContext[field] = value;
     }
@@ -289,49 +141,9 @@ function promptContextOf(context: LlmRequestContext): Record<string, unknown> {
 }
 
 /**
- * THE debate request builder (#1010). Flattens `prompt` + the serialized
- * context into a single string with no content-block structure — there is
- * nowhere here a `cache_control: {type: 'ephemeral'}` breakpoint could be
- * attached even if one were wanted, since Anthropic's cache breakpoints are
- * a property of a content BLOCK, and this produces one opaque string that
- * `nous-messages-client.ts` wraps in a single `{role:'user', content}`
- * message.
- *
- * #1010 measured whether that gap is worth closing and found it moot on a
- * more basic ground: the pinned debate model (`anthropic/claude-haiku-4.5`)
- * requires 4,096 input tokens before Anthropic will cache anything at all,
- * and every debate-stage request this repo sends is measured well under
- * that minimum — including the full bull/bear request this function
- * renders, which is byte-identical across every round of one debate
- * (`personas.ts`'s `PersonaInput` has no field for
- * `RoundContext.priorArguments` at all as of #1010, so the round number
- * never reaches the rendered prompt) and would therefore be exactly the
- * shape caching helps most, if it were large enough to qualify. Full
- * figures, the provider docs citation, the production (`llm_spend`)
- * measurement this rests on, and why a naive chars/4 estimate is not itself
- * proof of "under the minimum" all live in `prompt-caching.test.ts` (same
- * directory) — that file is the canonical home for this finding, kept as a
- * test so it re-verifies rather than going stale. Below 4,096 tokens,
- * restructuring this into content blocks would buy nothing — Anthropic
- * silently skips caching rather than erroring, so it would look like it
- * worked and never fire.
- *
- * Separately (and this holds regardless of prompt size): `nous-chat.ts`'s
- * usage parsing reads only `prompt_tokens`/`completion_tokens` from the
- * proxy's response and drops everything else, so even a hit somewhere
- * upstream of Nous would currently be invisible here — see the comment on
- * that parsing and the characterization test next to it.
- *
- * Do not re-add `cache_control` here without first: (1) re-measuring this
- * average against the model's current minimum (Anthropic's per-model
- * minimums have moved before), (2) confirming Nous's proxy actually forwards
- * an Anthropic-specific `cache_control` field through its OpenAI-compatible
- * `chat/completions` shape (undocumented anywhere in this repo as of #1010 —
- * `docs/adr/0009-single-provider-nous.md` is the canonical document
- * distinguishing Nous from other providers/OpenRouter, and says nothing about
- * caching), and (3) giving `MODEL_RATES` a per-model `cache_read` column
- * first, per the existing deferral note on `CACHE_READ_MULTIPLIER` in
- * pricing.ts — a uniform multiplier mis-prices most of Nous's vendor lineup.
+ * THE debate request builder (#1010): flattens to one opaque string, so no `cache_control` breakpoint applies —
+ * moot since debate requests run well under the pinned model's 4,096-token cache minimum (see `prompt-caching.test.ts`).
+ * Do not re-add caching without re-measuring that minimum and confirming Nous's proxy forwards the field at all.
  */
 export function renderMessageContent<T>(request: LlmRequest<T>): string {
   const contextJson = JSON.stringify(promptContextOf(request.context), null, 2);
@@ -339,25 +151,15 @@ export function renderMessageContent<T>(request: LlmRequest<T>): string {
 }
 
 /**
- * The fixed scaffold `renderMessageContent` wraps every prompt in, OUTSIDE
- * `request.prompt` — the `\n\nContext:\n` separator plus `wrapUntrusted`'s
- * preamble/tags. #1514's round-1 review: this scaffold is shared by every
- * metered call regardless of stage (every call passes through it, unlike the
- * per-stage templates), so an edit here changes what the model sees on every
- * call while the per-call `prompt_template_hash` stays byte-identical —
- * exactly the invisibility #1514 exists to end. Folded into the persisted
- * hash below rather than into `LlmAttribution`: it is a property of the wire
- * client's own rendering, not of any one call site's template, so it belongs
- * where `renderMessageContent` itself lives.
+ * Fixed scaffold `renderMessageContent` wraps every prompt in, outside `request.prompt` (#1514). Folded into
+ * the persisted template hash below since it's a property of the wire client's rendering, shared by every call.
  */
 const WIRE_ENVELOPE_TEMPLATE = `\n\nContext:\n${UNTRUSTED_WRAPPER_TEMPLATE}`;
 export const WIRE_ENVELOPE_TEMPLATE_HASH = hashPromptTemplate(WIRE_ENVELOPE_TEMPLATE);
 
 /**
- * Combines a call site's own template hash with `WIRE_ENVELOPE_TEMPLATE_HASH`
- * into the single hash actually persisted, so a change to EITHER half changes
- * the stored value. `undefined` in, `undefined` out: a call site that has not
- * been wired to supply `prompt_template_hash` still gets no fabricated value.
+ * Combines a call site's template hash with `WIRE_ENVELOPE_TEMPLATE_HASH` so a change to either changes the
+ * stored value. `undefined` in, `undefined` out — no fabricated value for an unwired call site.
  */
 function withWireEnvelope(callTemplateHash: string | undefined): string | undefined {
   return callTemplateHash === undefined
@@ -375,28 +177,19 @@ function extractText(response: AnthropicMessageResponse): string {
     .join('');
 }
 
-/**
- * Duck-types the injected client's thrown errors into the typed hierarchy
- * (errors.ts) via the Anthropic SDK's conventional `status` field, rather
- * than importing the SDK's own error classes — keeping `AnthropicMessagesClient`
- * a structural interface any provider client can satisfy
- */
+/** Duck-types the injected client's thrown errors via the SDK's conventional `status` field rather than importing its error classes, keeping `AnthropicMessagesClient` structural */
 function classifyProviderError(error: unknown): Error {
   if (
     error instanceof LlmTimeoutError ||
     error instanceof LlmRateLimitError ||
     error instanceof LlmMalformedResponseError ||
     error instanceof LlmProviderError ||
-    // Passed through rather than duck-typed down to `LlmProviderError`: the
-    // refusal's `signal` and `usage` are the only record of what the burned
-    // call cost, and re-wrapping would discard both (#1391). A truncation
-    // carries `max_tokens`/`usage` for the same reason (#1394)
+    // Passed through rather than duck-typed to `LlmProviderError`: refusal's `signal`/`usage` (#1391) and
+    // truncation's `max_tokens`/`usage` (#1394) are the only record of what the burned call cost
     error instanceof LlmRefusalError ||
     error instanceof LlmTruncatedError ||
-    // #1080: an in-flight refusal names a call that was never sent. Duck-typed
-    // down to `LlmProviderError` it would be counted as `transport` — a
-    // counterfeit gateway fault, and precisely the conflation the gate exists
-    // to remove
+    // #1080: an in-flight refusal names a call that was never sent; duck-typed to `LlmProviderError` it
+    // would be miscounted as `transport`, a counterfeit gateway fault
     error instanceof LlmAdmissionRefusedError
   ) {
     return error;
@@ -421,19 +214,13 @@ export class AnthropicLlmClient implements LlmClient {
   constructor(
     private readonly client: AnthropicMessagesClient,
     private readonly config: AnthropicLlmClientConfig,
-    /**
-     * Where token usage is metered. Defaults to `NULL_SPEND_SINK` so every
-     * existing construction site — tests, backtests, anything without a shared
-     * store — keeps working unchanged and simply meters nothing.
-     */
+    /** Where token usage is metered. Defaults to `NULL_SPEND_SINK` so tests/backtests keep working unmetered. */
     private readonly spendSink: LlmSpendSink = NULL_SPEND_SINK,
   ) {}
 
   complete<T>(request: LlmRequest<T>): Promise<LlmResponse<T>> {
-    // Checked before the retry loop, not inside it: a request whose signal is
-    // already aborted must cost nothing at all. This is the guard that makes
-    // "no further LLM calls after the budget fires" (#347) hold even for a
-    // call the round loop had already begun to dispatch
+    // Checked before the retry loop: an already-aborted signal must cost nothing at all, making
+    // "no further LLM calls after the budget fires" (#347) hold even mid-dispatch
     if (request.signal?.aborted === true) {
       return Promise.reject(
         this.reportFailure(
@@ -452,10 +239,8 @@ export class AnthropicLlmClient implements LlmClient {
       onRetryAttempt === undefined
         ? undefined
         : (report) => {
-            // Read off the request's own attribution rather than threaded
-            // separately: it is the SAME source `recordSpend` bills against,
-            // so a retried attempt and the attempt that eventually succeeded
-            // are joinable on `debate_id` without a second convention
+            // Read off the request's own attribution, not threaded separately — it's the same source
+            // `recordSpend` bills against, so retried and successful attempts join on `debate_id`
             const attribution = request.context.attribution;
             onRetryAttempt({
               ...report,
@@ -465,19 +250,14 @@ export class AnthropicLlmClient implements LlmClient {
               debate_id: attribution?.debate_id,
             });
           },
-      // The ONE place a production LLM failure is guaranteed to be named
-      // (#1394). Every caller below this client either swallows the error to
-      // fail open or re-renders it in its own words; this fires once, after
-      // the retry budget, before either
+      // The one place a production LLM failure is guaranteed to be named (#1394) — every caller below
+      // either swallows it to fail open or re-renders it in its own words
     ).catch((error: unknown) => {
       throw this.reportFailure(request, error);
     });
   }
 
-  /**
-   * Returns `error` unchanged — the observer is a side channel, and a throw
-   * from a logger must not turn a classified failure into a different one
-   */
+  /** Returns `error` unchanged — the observer is a side channel; a throw from a logger must not reclassify the failure */
   private reportFailure<T>(request: LlmRequest<T>, error: unknown): unknown {
     const onCallFailed = this.config.onCallFailed;
     if (onCallFailed === undefined) return error;
@@ -492,54 +272,34 @@ export class AnthropicLlmClient implements LlmClient {
         debate_id: attribution?.debate_id,
       });
     } catch {
-      // Same guard `withRetry` puts around `onRetry`: an observer that throws
-      // loses its own line, never the call's real failure
+      // Same guard `withRetry` puts around `onRetry`: an observer that throws loses its own line, not the call's real failure
     }
     return error;
   }
 
   private async attempt<T>(request: LlmRequest<T>): Promise<LlmResponse<T>> {
     const start = Date.now();
-    // Hoisted out of the call below so the capture path can persist the EXACT
-    // string that went on the wire (#1035), rather than rebuilding it from
-    // `request.prompt` and the context afterwards. A reconstruction is a
-    // different artifact: it answers "what would we send now", not "what was
-    // this call actually asked", and the second question is the one an
-    // operator has on day six of a soak
+    // Hoisted out so the capture path persists the EXACT string sent on the wire (#1035), not a
+    // reconstruction from `request.prompt` + context afterwards
     const content = renderMessageContent(request);
     const attribution = request.context.attribution;
     const gateStage = attribution?.gate_stage ?? attribution?.stage;
     const response = await this.callWithTimeout(content, request.signal, gateStage);
     const latency_ms = Date.now() - start;
 
-    // `finally`, not a plain sequence: `extractText` reads `response.content`,
-    // and a provider payload without that field throws a TypeError. Metering
-    // was ABOVE this extraction before #1035, so ordering the two naively
-    // would newly lose the `llm_spend` row for a billed call — and
-    // `SqliteSpendCap` sums that table, so the cap would silently understate
-    // by exactly the malformed responses. This restores the pre-#1035
-    // guarantee while still letting the record carry whatever text existed
+    // `finally`, not a plain sequence: `extractText` can throw on a malformed payload, and metering must
+    // still record the row (#1035) or `SqliteSpendCap`'s sum would understate by exactly those calls
     let rawText = '';
     try {
       rawText = extractText(response);
     } finally {
-      // Metered BEFORE the parse gate below, because a malformed response was
-      // still generated and still billed. Recording only well-formed responses
-      // would make the meter understate spend by exactly the calls most likely
-      // to be retried — i.e. it would be most wrong when it matters most.
-      //
-      // Moved BELOW `extractText` by #1035 so the same record can carry the
-      // response text. The ordering argument is unchanged and now cuts twice: a
-      // malformed response is exactly the case whose text an operator most
-      // wants to read, so capturing it only for well-formed answers would
-      // withhold the evidence precisely when it is needed
+      // Metered BEFORE the parse gate: a malformed response was still generated and billed, and moved
+      // below `extractText` (#1035) so the same record can also carry the response text
       this.recordSpend(request, response, latency_ms, content, rawText);
     }
 
-    // Below the metering `finally` for the reason the parse gate is: a refused
-    // response was still generated and still billed. Above the parse gate
-    // because a refusal is not a bad draw — it must not become the retryable
-    // `LlmMalformedResponseError` its empty text would otherwise produce
+    // Below the metering `finally` (billed either way) but above the parse gate — a refusal is not a bad
+    // draw and must not become the retryable `LlmMalformedResponseError` its empty text would produce
     if (response.stop_reason === 'refusal') {
       throw new LlmRefusalError(
         `LLM refused to answer: ${this.config.model} returned stop_reason="refusal"`,
@@ -557,47 +317,9 @@ export class AnthropicLlmClient implements LlmClient {
   }
 
   /**
-   * Note what is NOT metered: a call that times out or throws never reaches
-   * here, so its tokens are missing from the total even though the provider
-   * may have generated (and billed) them. There is no usage block to read on a
-   * failed call — the information does not exist client-side — so this is a
-   * known floor on the figure, not an oversight. Retries are each counted
-   * separately, which is correct: each attempt is separately billed.
-   *
-   * #1080 MEASURED THAT FLOOR for the first time, and the number is not
-   * negligible. Across the two soak sessions running the 28,000ms deadline
-   * (2026-09-08, 2026-09-10) `onRetryAttempt` recorded 38 attempts that spent
-   * the full deadline and wrote no row — 37 at `stage: 'debate'` — and two
-   * further debate calls gave up with `failure_cause: 'timeout'`, their second
-   * attempt unmetered too. At those sessions' mean metered debate-call cost of
-   * $0.002297, those 39 debate attempts are a floor of ~$0.090 against $0.2595
-   * metered over 113 rows: `llm_spend` sees 113 of 152 debate attempts. It is
-   * a floor and not a total — 17 more calls gave up `cancelled`, the budget
-   * aborting a request already on the wire, and wrote nothing either. All 17
-   * were in flight: `complete`'s pre-dispatch guard reports through the same
-   * `onCallFailed` observer, and no give-up line in either session carries its
-   * `cancelled before dispatch` message, which is the one cancellation shape
-   * that costs nothing. ADR-0008 carries the working.
-   *
-   * They are counted because `onRetryAttempt` logs each retried attempt with
-   * its elapsed time, which is the ONLY source: inference from `llm_spend`
-   * timestamps cannot see these at all, since none of the 37 debate attempts
-   * sits between two metered rows of its own debate. The rows are still not
-   * written — there is still no usage block on a failed call — so this remains
-   * a floor, but a floor whose size can be read off the log.
-   *
-   * A `deadline` timeout is no longer retried (`isRetryable`), which halves
-   * the worst case per failing call from two unmetered attempts to one. That
-   * does not remove the floor: every measured attempt above is a FIRST
-   * attempt, which still expires and still writes nothing, and a terminal
-   * deadline can make failing calls more numerous rather than fewer.
-   *
-   * `latency_ms` (#326) is the SAME number returned to the caller on
-   * `LlmResponse` — measured once, around `callWithTimeout`, and passed in
-   * rather than re-measured here, so the persisted figure and the logged one
-   * can never disagree. It is recorded even for a response that goes on to
-   * fail the parse gate below, for the same reason the tokens are: the call
-   * took that long and cost that much whether or not the answer was usable.
+   * A call that times out or throws never reaches here, so its tokens are missing from the total even
+   * though the provider may have billed them — a known floor, not an oversight (#1080 measured it at
+   * ~$0.090 of $0.2595 metered spend across two soak sessions; ADR-0008 carries the working)
    */
   private recordSpend<T>(
     request: LlmRequest<T>,
@@ -606,13 +328,8 @@ export class AnthropicLlmClient implements LlmClient {
     prompt: string,
     responseText: string,
   ): void {
-    // The capture inherits this early return, and that coupling is worth
-    // stating rather than discovering: text is recorded only for METERED
-    // calls. On the production path Nous always returns a usage block, so the
-    // two coincide; in tests, the many doubles that return a bare `content`
-    // capture nothing. Combined with the floor named above — a call that times
-    // out or throws never reaches here — the capture's coverage is "every call
-    // that completed and reported usage", which is narrower than "every call"
+    // Text is captured only for METERED calls (the production path always returns a usage block; test
+    // doubles with bare `content` capture nothing) — narrower coverage than "every call"
     if (response.usage === undefined) return;
     try {
       this.spendSink.record({
@@ -629,35 +346,16 @@ export class AnthropicLlmClient implements LlmClient {
         prompt_template_hash: withWireEnvelope(request.context.attribution?.prompt_template_hash),
       });
     } catch {
-      // The sink contract says `record` must not throw, and the SQLite
-      // implementation honours it — but `LlmSpendSink` is a public interface
-      // any caller may implement, so trusting that contract per-implementation
-      // leaves the guarantee one bad sink away from failing a trading call
-      // Enforced here, at the boundary, where it actually holds
-      //
-      // Silent by necessity: this class has no logger, and adding one to carry
-      // a metering failure would widen a hot constructor for a message the
-      // SQLite sink already logs for itself. The observable symptom — a spend
-      // total that stops rising — is on the dashboard either way
+      // `LlmSpendSink` is a public interface any caller may implement, so the "must not throw" contract
+      // is enforced here at the boundary rather than trusted per-implementation. Silent by necessity —
+      // this class has no logger; the SQLite sink already logs failures for itself
     }
   }
 
   /**
-   * Races the wire call against `config.timeoutMs` — and, since #347, CANCELS
-   * the loser instead of abandoning it. Three things changed here, all of them
-   * live on the production path (this timeout fires on every slow call, not
-   * only on a timed-out debate):
-   *
-   *  - The per-call timeout now aborts its own in-flight request. Before, a
-   *    timed-out call kept running and was RETRIED underneath itself (every
-   *    `LlmTimeoutError` was retryable then; since #1080 only a `'status'` one
-   *    is), so one slow call could hold two or
-   *    three concurrent requests open against the provider's rate limit and
-   *    bill for all of them while at most one answer was ever read.
-   *  - `callerSignal` (the debate's latency budget) is combined with that
-   *    timeout via `AbortSignal.any`, so either can cancel the request.
-   *  - The timer is cleared once the race settles. It used to leak one
-   *    unfired timer per LLM call, forever — a real leak at soak scale.
+   * Races the wire call against `config.timeoutMs` and, since #347, CANCELS the loser rather than
+   * abandoning it — a timed-out call used to keep running and get retried underneath itself, holding
+   * multiple concurrent requests open and billing for all of them
    */
   private async callWithTimeout(
     content: string,
@@ -670,10 +368,8 @@ export class AnthropicLlmClient implements LlmClient {
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
         const expired = new LlmTimeoutError(`LLM call exceeded ${this.config.timeoutMs}ms`);
-        // Abort first, reject second: the point of the ticket is that the
-        // request stops, not merely that the caller stops waiting. The same
-        // error object is the abort reason, so a wire client that surfaces
-        // `signal.reason` and this race report the identical failure
+        // Abort first, reject second: the point of #347 is that the request stops, not merely that the
+        // caller stops waiting — the abort reason is the same error object the race reports
         timeoutController.abort(expired);
         reject(expired);
       }, this.config.timeoutMs);
@@ -697,21 +393,16 @@ export class AnthropicLlmClient implements LlmClient {
         throw classifyProviderError(error);
       });
 
-    // No `call.catch(() => {})` guard here, deliberately: the losing side now
-    // REJECTS (aborted) instead of hanging, but `Promise.race` attaches its
-    // own handlers to `call`, so that late rejection is handled-and-ignored,
-    // not unhandled. Same finding as `latency-budget.ts` — see the note there.
+    // No `call.catch(() => {})` guard here: the losing side now REJECTS instead of hanging, but
+    // `Promise.race` already attaches its own handler, so the late rejection is handled, not unhandled
     try {
       return await Promise.race([call, timeout]);
     } catch (error) {
-      // A caller-initiated abort surfaces from `fetch` as a generic
-      // `AbortError`, which `classifyProviderError` can only call an
-      // `LlmProviderError` — i.e. a counterfeit provider fault. Attributed
-      // here instead, where the caller's signal is in scope
+      // A caller-initiated abort surfaces from `fetch` as generic `AbortError`; attributed here, where
+      // the caller's signal is in scope, rather than miscounted as a provider fault
       if (callerSignal?.aborted === true) {
-        // `cause` carries the original: this branch fires on ANY failure that
-        // surfaces once the signal is aborted, so a real 429 or 500 racing the
-        // abort would otherwise be silently relabelled and lost
+        // `cause` carries the original: this branch fires on ANY failure once the signal is aborted, so
+        // a real 429/500 racing the abort isn't silently relabelled
         throw new LlmCancelledError('LLM call cancelled by caller while in flight', error);
       }
       throw error;

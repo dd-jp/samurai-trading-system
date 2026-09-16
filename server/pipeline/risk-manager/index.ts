@@ -1,23 +1,9 @@
 /**
- * Risk Manager (Stage 4) — core check pipeline (ticket #76).
- * See docs/specs/risk-manager-spec.md (Module: Check Pipeline).
- *
- * Ordered, monotonic risk-reducing gate: long-only book -> breakers ->
- * per-trade -> per-asset -> per-asset-class -> portfolio -> concentration ->
- * min-size. Every step trims notional exposure or hard-rejects; nothing ever
- * increases size or loosens a stop. Exits skip every entry gate and pass
- * through verbatim.
- *
- * `PortfolioView` (#78), `BreakerState` (#77), and `CorrelationEstimate`
- * (#50, correlation.ts) are consumed as pre-built inputs — this pipeline
- * does not compute exposure, drawdown, breaker trips, or correlations
- * itself.
- *
- * The CII soft signal (#205, ADR-0002) runs alongside this pipeline as a
- * purely advisory check — it reads `RiskInput.cii` (pre-fetched by
- * `CiiConsumer`, market-intelligence/worldmonitor-adapter/cii-consumer.ts)
- * and appends to `RiskDecision.warnings`, but never participates in trimming
- * or rejecting.
+ * Risk Manager (Stage 4) — core check pipeline. Ordered, monotonic
+ * risk-reducing gate: long-only book -> breakers -> per-trade -> per-asset ->
+ * per-asset-class -> portfolio -> concentration -> min-size. Nothing ever
+ * increases size or loosens a stop; exits skip every entry gate. Consumes
+ * `PortfolioView`/`BreakerState`/`CorrelationEstimate` as pre-built inputs.
  */
 import { countryForInstrument } from './cii-mapping.js';
 import {
@@ -79,33 +65,17 @@ export type {
 } from './types.js';
 
 /**
- * `RiskInput.next_breaker_state` (#203) is only ever echoed onto
- * `RiskDecision.next_breaker_state` below — `evaluate()` stays pure and
- * never computes or mutates breaker state itself. The caller (whoever
- * called `CircuitBreakers.getPersistedState()` to build this input)
- * persists the echoed value to the `breaker_state` table after each call.
- */
-
-/**
- * The reason pushed when step 7 runs with no verdict on `RiskInput.critic`.
- *
- * EXPORTED, and that is load-bearing since #957. `buildRiskStep`
- * (apps/orchestrator/production/direct-bind.ts) evaluates once with no verdict
- * and consults the critic only when that pass actually REACHED step 7 — the
- * presence of this reason is how it knows. A string matched by hand in the
- * caller would be a cross-module contract nothing enforces; one constant, read
- * from both sides, cannot drift.
+ * EXPORTED and load-bearing: `buildRiskStep` matches this reason to know a
+ * pass reached step 7 with no critic verdict. A hand-matched string literal
+ * in the caller would be a cross-module contract nothing enforces.
  */
 export const RISK_CRITIC_SKIPPED_REASON =
   'risk_critic: skipped — no critic verdict was supplied for this evaluation';
 
 /**
- * CII soft signal (#205, ADR-0002): runs alongside the check pipeline, not
- * as one of its ordered steps — purely advisory, never consulted by any trim
- * or reject decision above. Fires on the country's absolute CII level (not
- * delta), so a sustained high-risk exposure warns every cycle it's
- * evaluated. An unmapped instrument or a country with no cached score
- * produces no warning.
+ * Purely advisory — never consulted by a trim/reject decision. Fires on the
+ * country's absolute CII level, not delta, so sustained exposure warns every
+ * cycle.
  */
 function ciiWarnings(instrument: string, cii: Record<string, number>, threshold: number): string[] {
   const country = countryForInstrument(instrument);
@@ -120,17 +90,9 @@ function ciiWarnings(instrument: string, cii: Record<string, number>, threshold:
 }
 
 /**
- * Correlation warm-up warning (#303). Step 6 treats an instrument absent from
- * `correlation.correlations` as not correlated — the warm-up fallback
- * documented in risk-manager-spec.md, "Module: Correlation Warm-up
- * Visibility". That is unchanged here: this produces advisory tags only and
- * is never consulted by a trim or a reject.
- *
- * What it fixes is the conflation. An empty `correlations` map is produced
- * both by a portfolio of genuinely independent holdings and by a portfolio
- * with no overlapping history at all — the day-1-of-a-soak case, where the
- * concentration cap is silently inert precisely while the first positions go
- * on. `insufficient_history` names the second case so the decision states it.
+ * Advisory only. Distinguishes "genuinely uncorrelated" from "no overlapping
+ * history yet" (the day-1-of-a-soak case, where the concentration cap is
+ * silently inert) — an empty `correlations` map alone conflates the two.
  */
 function correlationWarmupWarnings(insufficientHistory: string[]): string[] {
   return insufficientHistory.map((instrument) => `correlation_warmup:${instrument}`);
@@ -150,25 +112,12 @@ function snapshot(portfolio: PortfolioView, breakers: BreakerState): RiskDecisio
 }
 
 /**
- * What one instrument has DEPLOYED against the entry caps: what is held plus
- * what is in flight and not yet filled (#1019).
- *
- * Every gate below is shaped `fraction × equity - deployed`, and until #1019
- * every one of them read `deployed` as `filled_size × mark` alone. An order
- * submitted seconds earlier has a durable `open_positions` row with
- * `filled_size = 0` until `ingestFills()` runs on its own 15s poll, so in that
- * window it subtracted NOTHING — the next instrument evaluated against the
- * same subclass, class or gross envelope saw an empty book and was handed the
- * whole envelope a second time. That is the netting failure #1019 describes,
- * and `PortfolioView.reserved_exposure_by_instrument` is the term that closes
- * it.
- *
- * Read through one helper, at every gate, rather than each gate deciding for
- * itself: "already deployed" is one question with one answer, and a gate that
- * answered it differently from its neighbours would be a hole nothing in the
- * types could find. `equity` is deliberately NOT adjusted — see
- * `PortfolioView.reserved_exposure_by_instrument` for why the reservation
- * belongs on this side of the subtraction only.
+ * What one instrument has DEPLOYED against the entry caps: held plus
+ * in-flight-unfilled. Without the reserved term, an order submitted seconds
+ * earlier reads as zero exposure until its fill poll runs, and the next
+ * instrument evaluated against the same envelope gets handed it a second
+ * time. Read through one helper so every gate answers "already deployed"
+ * the same way.
  */
 function committedExposureFor(portfolio: PortfolioView, instrument: string): number {
   return (
@@ -233,11 +182,10 @@ function applyEntryCapGates(
 
 export class RiskManagerImpl implements RiskManager {
   /**
-   * `thresholds` is the live `risk_thresholds` table (#433). Optional, because
-   * a backtest or a unit test has no store and the static config is the whole
-   * truth there — but on the production path it is supplied, and without it
-   * `autoTighten`'s defensive response to a kill-line breach changes no
-   * decision at all (feedback-loop-spec.md "Module: Guardrailed Tuning").
+   * `thresholds` is the live `risk_thresholds` table. Optional because a
+   * backtest/unit test has no store and the static config is the whole truth
+   * there; without it on the production path, `autoTighten`'s response to a
+   * kill-line breach changes no decision.
    */
   constructor(
     private readonly config: RiskConfig,
@@ -247,34 +195,17 @@ export class RiskManagerImpl implements RiskManager {
   /**
    * The check pipeline: exit pass-through, then the circuit-breaker gate,
    * then `ENTRY_CAP_GATES` in declared order, then the min-viable re-check
-   * and the critic review. The ordering IS the spec's step numbering — each
-   * gate's own doc says what it caps.
+   * and the critic review
    */
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: ordered gate pipeline — the sequence of early returns IS the spec's step numbering (see doc above), each one placed deliberately relative to the others; extracting risks silently reordering a gate
   evaluate(input: RiskInput): RiskDecision {
     const { intent, portfolio, breakers, correlation, cii, critic, next_breaker_state } = input;
 
-    // Resolved per call, not per construction. That is the entire point of the
-    // ticket: a threshold the Feedback Loop tightened between two ticks has to
-    // bind on the second one, and a config frozen in the constructor cannot
-    //
-    // SKIPPED for an exit intent (#766). `resolveRiskConfig` re-checks the
-    // WHOLE `risk_thresholds` row set against the in-code clamp
-    // (threshold-bounds.ts) on every call and THROWS on a crossing — that is
-    // the point of the clamp, but until this fix the throw was raised ahead
-    // of the `intent_type === 'exit'` branch below, so an out-of-bound row
-    // aborted an exit intent exactly like an entry one. An exit bypasses
-    // every entry gate and consults `config` nowhere in the branch below —
-    // `cii_threshold` is the one field the exit's `warnings` calculation
-    // reads, and it is deliberately excluded from `RISK_THRESHOLD_KEYS`
-    // (risk-thresholds.ts: "drives a WARNING, not a limit"), so
-    // `resolveRiskConfig` never changes it — `config.cii_threshold` is
-    // byte-identical whether or not the live table is consulted. Skipping the
-    // resolve therefore changes NOTHING about what an exit decides; it only
-    // removes exits' exposure to a corrupt threshold row they never needed
-    // ADR-0014's flat-by-close flatten rides the exit path, and a bad
-    // threshold row stranding open positions through the close would be a
-    // materially worse defect than the audibility gap #766 was filed for
+    // Resolved per call, not per construction, so a threshold the Feedback
+    // Loop tightened between ticks binds on the next one. Skipped for an
+    // exit: `resolveRiskConfig` throws on an out-of-bound threshold row, and
+    // a bad row must not strand an exit (including the flat-by-close
+    // flatten) through the close — an exit reads no other field of `config`
     const { config } =
       intent.intent_type === 'exit' || !this.thresholds
         ? { config: this.config }
@@ -313,34 +244,12 @@ export class RiskManagerImpl implements RiskManager {
       };
     }
 
-    // #1511: long-only book, David's 2026-09-14 decision. A `sell` intent
-    // reaching HERE (below the exit early-return above) is never a close —
-    // it is `sideFor`'s bearish-direction answer on an instrument with no
-    // held lot (`routeDecision` only ever builds `intent_type: 'entry'` when
-    // `positions.length === 0`, decide.ts), i.e. a short. GIA equities do not
-    // size or cost a short (no borrow, no margin model, ADR-0016/0018 sized
-    // the leveraged-ETP universe long-only), so this refuses unconditionally
-    // rather than sizing one. A "down" thesis belongs on the paired inverse
-    // line if the universe carries it — that routing is a Trader concern, not
-    // this gate's
-    //
-    // Scoped to `config.long_only_instruments` — the ACTUAL Saxo-venue set
-    // the run is configured to trade (`saxoTradeableUniverse()`,
-    // production/saxo-venue.ts), threaded in from `paperStartingProfile`'s
-    // `bookCurrency === 'GBP'` branch. `asset_class === 'stocks'` was the
-    // first-pass discriminator here and was wrong: it also caught the Alpaca
-    // paper universe (`DEFAULT_UNIVERSE`, also `asset_class: 'stocks'`),
-    // which trades no venue this decision named. See `RiskConfig`'s own doc
-    // comment for why `per_subclass_deployment_cap.subclass_of` is not the
-    // discriminator either (it under-refuses unmeasured Saxo rows)
-    //
-    // Placed here rather than in `ENTRY_CAP_GATES`: this is a structural
-    // refusal, not a sizing cap, so it should not pay for a portfolio/breaker
-    // read it has no use for — and unlike `ENTRY_CAP_GATES`'s monotonic
-    // trim-only contract, this one REJECTS outright, which the gates array
-    // does not otherwise do (the two `PerSubclassCapUnresolvableError` gates
-    // throw instead of returning a decision — this is a genuine `rejected()`
-    // both ends can act on)
+    // #1511 long-only book: a `sell` reaching here (past the exit early
+    // return) is a short, not a close — GIA equities have no borrow/margin
+    // model to size or cost one. Scoped to `config.long_only_instruments`
+    // (the actual Saxo-venue set), not `asset_class === 'stocks'`, which also
+    // caught the Alpaca paper universe. Placed here rather than in
+    // `ENTRY_CAP_GATES` since it's a structural refusal, not a sizing cap
     if (intent.side === 'sell' && config.long_only_instruments?.has(intent.instrument)) {
       const binding = 'long_only_book';
       const positionClaim = intent.intent_type === 'entry' ? 'with no held lot' : 'on a scale_in';
@@ -353,18 +262,11 @@ export class RiskManagerImpl implements RiskManager {
       ]);
     }
 
-    // #841: an entry may not be sized against a book that was only partly
-    // valued. `computePortfolioView` normally refuses to produce such a view
-    // at all, and on the entry path it still does — but the exit path now
-    // takes a degraded one deliberately (`unvaluable_marks: 'exclude'`), so
-    // "no degraded view can exist" stopped being a property of the type and
-    // became a property of one call site in the composition root. This is the
-    // guard that puts it back in the gate: every cap below reads an absent
-    // instrument as ZERO exposure, so a book missing a position is a book
-    // whose per-asset, per-subclass and gross caps are all too wide
-    //
-    // Placed BELOW the exit branch on purpose — an exit is what the degraded
-    // view exists to let through, and it consults none of these caps
+    // An entry may not be sized against a partly-valued book: every cap below
+    // reads an absent instrument as ZERO exposure, so a missing valuation
+    // makes every cap too wide. Placed below the exit branch — the exit path
+    // is what deliberately takes a degraded view, and consults none of these
+    // caps
     if (portfolio.unvalued_instruments.length > 0) {
       const binding = 'unvalued_book';
       return rejected(binding, [
@@ -386,13 +288,10 @@ export class RiskManagerImpl implements RiskManager {
     }
 
     const reasons: string[] = [];
-    // #1019: recorded whenever ANY order is in flight, not only when one of
-    // the caps below actually binds on it. `risk_snapshot.exposure` reports
-    // the VALUED book (`filled_size × mark`), so an entry trimmed against a
-    // reservation would otherwise show a cap binding against exposure the
-    // audit row says is zero — an unreproducible decision. One line naming
-    // the reserved instruments makes the subtraction the gates performed
-    // re-derivable from the `risk_log` row alone
+    // Recorded whenever ANY order is in flight, not only when a cap binds on
+    // it — `risk_snapshot.exposure` reports the valued book only, so this is
+    // what makes a trim against a reservation re-derivable from the
+    // `risk_log` row alone
     const reservedInstruments = Object.entries(portfolio.reserved_exposure_by_instrument);
     if (reservedInstruments.length > 0) {
       reasons.push(
@@ -406,22 +305,11 @@ export class RiskManagerImpl implements RiskManager {
     let notional = originalNotional;
 
     /**
-     * #941, second site. The Trader floors the entry it PROPOSES; every gate
-     * below trims a notional and the size is re-derived by dividing, which
-     * re-introduces the fraction the Trader removed. Both sites are needed:
-     * without the Trader's floor an untrimmed entry is fractional, without
-     * this one a trimmed entry is.
-     *
-     * `Math.floor`, not rounding, for the same reason as in `decide.ts` —
-     * rounding up would restore exposure a cap gate had just removed, which
-     * is the one direction this must never move.
-     *
-     * The `originalNotional` short-circuit is not an optimisation. When no
-     * gate binds, `notional / intent.entry` is a float round-trip of a value
-     * the Trader already floored, and it can land a hair BELOW the integer
-     * (93 as 92.999...), which a floor would then take to 92 — a silent
-     * one-share haircut on the untrimmed path. Returning `intent.size`
-     * verbatim when nothing trimmed it is exact by construction.
+     * `Math.floor`, never round: rounding up would restore exposure a cap
+     * gate just removed. The `originalNotional` short-circuit is not an
+     * optimisation — a float round-trip of an already-floored value can land
+     * a hair below the integer, and flooring that would silently haircut one
+     * share on the untrimmed path.
      */
     const submittableSize = (value: number): number => {
       const raw = value === originalNotional ? intent.size : value / intent.entry;
@@ -439,9 +327,8 @@ export class RiskManagerImpl implements RiskManager {
     notional = gatesResult.notional;
     if (gatesResult.bindingConstraint !== null) bindingConstraint = gatesResult.bindingConstraint;
 
-    // Deliberately NOT quantised: this is the reported pre-quantisation size,
-    // and flooring it here would move a number the caps reason about as a side
-    // effect of a venue fix. Quantisation happens once, at the emit below.
+    // Deliberately NOT quantised — the caps above reason about this number;
+    // quantisation happens once, at the emit below
     const finalSize = notional / intent.entry;
 
     if (notional < config.min_viable_size) {
@@ -460,19 +347,11 @@ export class RiskManagerImpl implements RiskManager {
 
     const approvedSize = submittableSize(notional);
 
-    // The dust floor has to be re-tested on what will ACTUALLY be submitted
-    // The `min_viable_size` check above ran on the pre-floor notional, and
-    // flooring only ever reduces it: £110 of trimmed notional at an entry of
-    // £60 is 1.83 shares, floors to 1, and submits £60 against a config that
-    // just declared anything under £100 to be dust. A quantity grid can turn
-    // a viable order into a sub-viable one, so the floor is checked on both
-    // sides of it
-    //
-    // Two reasons, not one, and for the same reason `decide.ts` keeps
-    // `rounds_to_zero_shares` distinct from `below_min_notional`: a soak log
-    // must distinguish "the venue's grid ate the whole position" from "what
-    // survived the caps was dust". The zero case is the strictly worse one —
-    // there is no order left at all
+    // Re-tested on what will ACTUALLY be submitted: flooring to whole shares
+    // can turn a viable trimmed notional into dust, so the min-viable floor
+    // is checked on both sides of it. Two distinct reasons (zero vs. dust) so
+    // a soak log can tell "grid ate the whole position" from "what survived
+    // the caps was dust"
     const approvedNotional = approvedSize * intent.entry;
     if (approvedSize <= 0) {
       reasons.push(
@@ -487,10 +366,8 @@ export class RiskManagerImpl implements RiskManager {
       return rejected('min_viable_size:quantised', reasons);
     }
 
-    // `modifications` carries only sizes, so a reader cannot tell a cap trim
-    // from a grid floor by comparing them — and `binding_constraint` names
-    // the cap. Recorded in `reasons` instead, which is the audit channel, so
-    // an under-deployed entry is attributable without re-deriving the grid
+    // `modifications` carries only sizes, so a grid floor is indistinguishable
+    // from a cap trim there — recorded in `reasons` instead
     if (config.whole_share_sizing && approvedSize !== finalSize) {
       reasons.push(
         `whole_share_sizing: floored size from ${finalSize} to ${approvedSize} (whole shares)`,
@@ -512,17 +389,10 @@ export class RiskManagerImpl implements RiskManager {
   }
 
   /**
-   * Risk-critic review (#204; producer built by #957 in `critic.ts`). Pushes
-   * onto `reasons` in the same order as the inline block it replaces — the
-   * invalidation half (#994) is recorded BEFORE the prose branch acts so that
-   * the condition states and every validator drop reason land on `reasons`
-   * on every path, a clean pass, a trim, a prose reject and a breach reject
-   * alike. Ordering then decides only which `binding_constraint` wins, never
-   * what is audited.
-   *
-   * Returns `rejectedBinding` non-null when the caller must reject outright;
-   * otherwise `notional`/`bindingConstraint` carry the (possibly trimmed)
-   * result, with `bindingConstraint: null` meaning "no change".
+   * Invalidation reasons are recorded BEFORE the prose branch acts, so every
+   * path (clean pass, trim, prose reject, breach reject) lands on `reasons`
+   * regardless of which one wins as `binding_constraint`. `rejectedBinding`
+   * non-null means the caller must reject outright.
    */
   private applyCriticReview(
     critic: RiskCriticVerdict | undefined,
@@ -530,12 +400,8 @@ export class RiskManagerImpl implements RiskManager {
     reasons: string[],
   ): { rejectedBinding: string | null; notional: number; bindingConstraint: string | null } {
     if (critic === undefined) {
-      // Fails open BY RECORD, not silently (review 2026-08-06 B3): a decision
-      // the critic never saw must stay distinguishable from one it actually
-      // passed. Since #957 this is the producer's failure path — a provider
-      // error, a spend-cap refusal, an unreadable answer, or a backtest
-      // replaying history the critic never saw — rather than the permanent
-      // state it used to be. The mechanical steps above remain the safety net.
+      // Fails open BY RECORD, not silently: a decision the critic never saw
+      // must stay distinguishable from one it actually passed
       reasons.push(RISK_CRITIC_SKIPPED_REASON);
       return { rejectedBinding: null, notional, bindingConstraint: null };
     }
@@ -546,18 +412,10 @@ export class RiskManagerImpl implements RiskManager {
     if (criticTrim.rejected) {
       return { rejectedBinding: 'risk_critic:reject', notional, bindingConstraint: null };
     }
-    // #997 Q2b: a MEASURED breach rejects even when the prose said `pass`
-    // The producer never pre-computes this — it reports `verdict: 'pass'`
-    // beside a `breached` condition and `evaluate()` holds the authority,
-    // which is ADR-0003's seam exactly and keeps the persisted row honest
-    // about what the model actually said. The constraint is its own, so
-    // "how often do prose and predicates disagree?" stays answerable: this
-    // line is reached only when the prose verdict did NOT itself reject
-    //
-    // `unevaluable` is deliberately absent from this test. A data gap must
-    // never block a trade (`devils-advocate-spec.md`:94), and an absent or
-    // empty `conditions` list — a pre-fold row, or a malformed conditions
-    // half — yields no breaches and therefore no effect at all
+    // A MEASURED breach rejects even when the prose said `pass` — the
+    // producer never pre-computes this, keeping the persisted row honest
+    // about what the model actually said. `unevaluable` is deliberately
+    // absent from this test: a data gap must never block a trade
     const breached = breachedConditions(critic);
     if (breached.length > 0) {
       return { rejectedBinding: INVALIDATED_BINDING_CONSTRAINT, notional, bindingConstraint: null };
@@ -574,13 +432,10 @@ export class RiskManagerImpl implements RiskManager {
 }
 
 /**
- * Thrown by `perSubclassDeploymentCap` (#726) when the gate cannot resolve an
- * envelope for the intent's own instrument — no subclass recorded for it, or a
- * subclass recorded with no cap declared for it. Carries `bindingConstraint`
- * pre-formatted so the catch in `direct-bind.ts`'s `buildRiskStep` can write
- * the `risk_log` row this throw would otherwise leave absent (see that gate's
- * doc comment for why the throw itself is not softened) without re-parsing
- * the message or re-deriving which subclass was the problem.
+ * Thrown when a deployment-cap gate cannot resolve an envelope for the
+ * intent's own instrument. Carries `bindingConstraint` pre-formatted so the
+ * catch in `buildRiskStep` can write the `risk_log` row this throw would
+ * otherwise leave absent.
  */
 export class PerSubclassCapUnresolvableError extends Error {
   constructor(
@@ -604,10 +459,9 @@ function trippedBreakerTier(
 }
 
 /**
- * One entry cap: how much ADDITIONAL notional this gate allows, under its
- * binding-constraint name — or `null` when the gate does not apply to this
- * intent. Evaluated in `ENTRY_CAP_GATES` order; monotonic risk-reducing by
- * construction, since `trimToAllowed` only ever trims.
+ * One entry cap: how much ADDITIONAL notional this gate allows, or `null`
+ * when it does not apply. Monotonic risk-reducing by construction —
+ * `trimToAllowed` only ever trims.
  */
 type EntryCapGate = (
   config: RiskConfig,
@@ -617,21 +471,12 @@ type EntryCapGate = (
 ) => { name: string; allowedAdditional: number } | null;
 
 /**
- * Whether D5 is ARMED for this instrument with a NUMERIC fraction — the
- * predicate `perTradeSizeCap`, `perAssetExposureCap`, and
- * `perSubclassDeploymentCap` must agree on (#886, extended to
- * `perAssetExposureCap` by #932), so it lives once, here, rather than each
- * gate re-deriving "is this instrument classified" and drifting on what that
- * means.
- *
- * Deliberately NOT "has a `subclass_of` entry": a subclass with a `null`
- * fraction (crypto, today — doc 18 covers only the two leveraged-ETP
- * subclasses) means D5 measured no envelope at all, so exempting
- * `per_trade_size_cap` there would leave the instrument with NO per-trade
- * bound whatsoever — strictly looser than today, and not what #886 ruled.
- * An instrument absent from `subclass_of` (undefined) is likewise not
- * exempt: `perSubclassDeploymentCap` throws on it, so keeping the generic
- * cap is fail-closed either way.
+ * Whether D5 is ARMED for this instrument with a NUMERIC fraction — one
+ * predicate shared by `perTradeSizeCap`, `perAssetExposureCap`, and
+ * `perSubclassDeploymentCap` so they can't drift on what "classified" means.
+ * Deliberately NOT "has a `subclass_of` entry": a `null` fraction means D5
+ * measured no envelope at all, so exempting the generic cap there would
+ * leave the instrument with none whatsoever.
  */
 function isD5ArmedWithNumericFraction(
   config: RiskConfig,
@@ -645,13 +490,8 @@ function isD5ArmedWithNumericFraction(
 }
 
 /**
- * #886: David's ruling on the anchor-vs-equity mismatch this gate used to
- * have with D5 (`server/pipeline/risk-manager/index.ts:513`) — "D5's own
- * fraction … is the sole drawdown authority once an instrument is
- * subclass-classified. `per_trade_size_cap` becomes the cap for unclassified
- * instruments only." A D5-classified instrument with a numeric fraction
- * therefore skips this gate entirely (`null`) rather than being trimmed to
- * whichever of the two caps is smaller.
+ * D5's own fraction is the sole drawdown authority once an instrument is
+ * subclass-classified; this cap applies to unclassified instruments only
  */
 const perTradeSizeCap: EntryCapGate = (config, intent, portfolio) => {
   if (isD5ArmedWithNumericFraction(config, intent.instrument)) return null;
@@ -662,27 +502,12 @@ const perTradeSizeCap: EntryCapGate = (config, intent, portfolio) => {
 };
 
 /**
- * #932: extends #886's ruling to this cap. D5 caps DEPLOYMENT into one
- * subclass and this cap caps EXPOSURE to one instrument — not the same claim,
- * which is why #886 correctly left it alone — but `per_asset_cap_fraction_of_equity`
- * (10%) is tighter than either D5 fraction (35%/25%), so a full-envelope
- * D5-classified entry was still trimmed here even after #886's fix, just at a
- * different gate. Once an instrument is D5-classified with a numeric
- * fraction, D5 is the sole per-instrument drawdown authority for it on this
- * axis too, so this gate skips entirely (`null`) exactly as `perTradeSizeCap`
- * does — see `isD5ArmedWithNumericFraction`'s docstring for why "armed with a
- * numeric fraction" (not merely "has a `subclass_of` entry") is the right
- * predicate.
- *
- * With this gate skipped, `perSubclassDeploymentCap` (below) is the sole
- * per-instrument *deployment-fraction* bound left for a D5-classified
- * instrument — see that gate's "Netted across the subclass" paragraph for
- * how it holds that role across MULTIPLE concurrently-armed instruments in
- * the same subclass, not just one. `concentrationCorrelationCap` (below) is
- * a second, independent bound: it carries no D5-armed guard, so it still
- * applies to a D5-classified instrument's size unchanged, binding whenever
- * correlation data is present and the correlated set's exposure exceeds
- * `config.concentration.cap_fraction_of_equity`.
+ * D5 caps DEPLOYMENT into a subclass; this caps EXPOSURE to one instrument —
+ * not the same claim, but D5-classified instruments still skip this gate
+ * (`null`) once armed, since D5 is the sole per-instrument drawdown
+ * authority for them on this axis too. `perSubclassDeploymentCap` becomes
+ * the sole remaining per-instrument bound; `concentrationCorrelationCap`
+ * still applies independently.
  */
 const perAssetExposureCap: EntryCapGate = (config, intent, portfolio) => {
   if (isD5ArmedWithNumericFraction(config, intent.instrument)) return null;
@@ -709,12 +534,9 @@ const portfolioGrossExposureCap: EntryCapGate = (config, _intent, portfolio) => 
 });
 
 /**
- * Concentration check (v2 dynamic correlation matrix, #50). Instruments
- * absent from `correlation.correlations` are treated as not correlated —
- * that's the warm-up fallback, not a special case here. #303 deliberately
- * did NOT change that: an under-`min_bars` pair still cannot bind this cap.
- * It is surfaced as a `correlation_warmup:` warning instead, so the
- * inertness is stated rather than inferred from silence.
+ * Instruments absent from `correlation.correlations` are treated as not
+ * correlated (the warm-up fallback) — an under-`min_bars` pair cannot bind
+ * this cap, and is surfaced as a `correlation_warmup:` warning instead
  */
 const concentrationCorrelationCap: EntryCapGate = (config, intent, portfolio, correlation) => {
   const correlatedInstruments = Object.entries(correlation.correlations)
@@ -735,99 +557,13 @@ const concentrationCorrelationCap: EntryCapGate = (config, intent, portfolio, co
 };
 
 /**
- * ADR-0018 D5's deployment envelope (#703, step A6) — max notional across
- * every instrument of the intent's subclass.
- *
- * **Netted across the subclass, not per position.** The tempting form is
- * `allowedAdditional: cap`, matching `perTradeSizeCap`, and it is wrong twice
- * over: `buildBracket` sizes a `scale_in` exactly like an entry precisely
- * because "Risk enforces the exposure cap downstream" (trader/decide.ts), so a
- * non-netted cap admits entry-at-35% then scale-in-at-35%; and two different
- * 3x index ETPs held at once would each get the full envelope. Either voids
- * the 23.1% drawdown figure the fraction was measured to hold. D5's envelope
- * is "35% of the leg deployed to 3x index ETPs", so the sum is what binds.
- *
- * Instruments absent from `subclass_of` are skipped by the netting filter
- * (`undefined !== subclass`) rather than throwing — a legacy or manually-held
- * position should not be able to break sizing for an unrelated name. Only the
- * INTENT's own instrument must be classified, and that one throws.
- *
- * **This netting is what makes this gate the sole per-instrument
- * deployment-fraction bound for a D5-classified instrument, once #932
- * exempts it from `per_asset_cap`** — `concentrationCorrelationCap` (above)
- * is a second, independent bound (correlation-based, not deployment-based)
- * that still applies to a D5-classified instrument's size unchanged.
- * `deployedToSubclass` sums `exposure_by_instrument` across every instrument
- * the pool file classifies into the intent's subclass, not just the
- * intent's own instrument, so N concurrently-armed names in
- * `single_stock_etp_3x` share ONE 25%-of-equity envelope rather than each
- * reaching 25% independently — exactly the "two different 3x index ETPs …
- * would each get the full envelope" failure mode the paragraph above names
- * and nets away. ADR-0018 D5 states the envelope the same way: "35% of the
- * leg deployed to 3x index ETPs", a subclass aggregate, not a per-name
- * allowance. See `d5-trader-cap-agreement.test.ts`'s "#959" describe block
- * for the concurrent-instrument coverage.
- *
- * **#1019: the sum is over COMMITTED exposure, and that is what makes the
- * paragraph above true rather than aspirational.** `exposure_by_instrument`
- * values a lot at `filled_size × mark`, so a sibling whose order was
- * submitted moments ago — durable write-ahead row, `filled_size = 0` until
- * `ingestFills()`'s 15s poll — summed to ZERO here and the "ONE combined
- * cap" claim collapsed to N independent full envelopes. #1040's tail
- * turnstile orders sibling evaluations within a pass but cannot make the
- * first one's exposure visible to the second, and passes across overlapping
- * ticks are not ordered at all. `committedExposureFor` adds the unfilled
- * remainder of every in-flight lot, so the envelope is shared from the
- * instant an order is submitted rather than from the next fill poll.
- *
- * **What the throw can and cannot reach, since it fires on the live decision
- * path.** `evaluate()` returns at `intent.intent_type === 'exit'` BEFORE the
- * `ENTRY_CAP_GATES` loop is entered, so no throw in any gate — this one
- * included — can block an exit. Flat-by-close therefore cannot be stopped by a
- * stale pool file, which matters because a flatten that silently stops running
- * is the defect class #670/#706 were filed for. **The blast radius is no
- * longer just one unclassified instrument (#888 review fix-up added a second
- * refusal path).** An instrument absent from `subclass_of` still refuses ITS
- * OWN entries alone, every tick, until the pool file is corrected — that part
- * is unchanged. But an OVERFUNDED account now refuses much wider than that:
- * this gate's own `equity_ceiling` refuses every D5-classified instrument's
- * entries once armed, and `liveBookCeiling` (this file, below) refuses EVERY
- * instrument's entries — classified or not — regardless of pool-file state,
- * because it reads `config.live_book_ceiling` directly rather than resolving
- * through `subclass_of`. Both are the intended reading of their respective
- * triggers (a half-populated pool file; an overfunded account) and remedies
- * (correct the pool file; re-fund the account down to the declared book, or
- * raise the book deliberately) — both strictly safer than entering unbounded.
- *
- * **That "one instrument" bound is a claim about a caller, so here is the
- * caller.** `SequentialTickRunner.runInstrument` deliberately has no try/catch;
- * the containment is one level up, in `tick-loop.ts`'s `worker()`, which wraps
- * each `runInstrument` call in its own try/catch (#507) precisely so one
- * instrument throwing cannot reject the worker's `Promise.all` entry and settle
- * the whole tick while sibling instruments are still mid-pipeline. The throw
- * becomes a logged `TickOutcome.error` and a durable `audit_log` row for that
- * instrument alone. Without #507's catch this throw WOULD take down the tick
- * for every instrument, so if that catch is ever removed, this gate must be
- * revisited with it — the two are coupled, and only this comment says so.
- *
- * **What the throw cost, and #726's fix.** This is the only entry gate that
- * throws rather than returning a decision, and `riskLog.write` in
- * `production/direct-bind.ts` runs only AFTER `evaluate()` returns normally —
- * so on its own a refused instrument would write **no `risk_log` row**. #726
- * closed that: `buildRiskStep` wraps the `evaluate()` call in a try/catch and,
- * on a `PerSubclassCapUnresolvableError`, writes a `risk_log` row with
- * `status: 'error'` and `binding_constraint` set from the error's own
- * `bindingConstraint` (naming the unclassified instrument or subclass) BEFORE
- * re-throwing — the throw itself is untouched and still propagates to #507's
- * catch in `tick-loop.ts` for the `audit_log` row and the log line. The row is
- * additive, not a substitute: #507's catch still runs unchanged.
- *
- * Returning a rejected decision instead WOULD have closed the original gap
- * too, and that was rejected deliberately: a rejection is quiet, and a
- * half-populated pool file that merely declines entries can run for days
- * looking like a market with no setups. The throw is chosen for being
- * impossible to ignore — #726 made the audit gap it left behind not free, not
- * the throw itself.
+ * ADR-0018 D5's deployment envelope, netted across the WHOLE subclass rather
+ * than per position — two D5-classified instruments in the same subclass
+ * share one envelope; a per-position form would let each reach the full
+ * fraction independently and void the drawdown figure it was measured to
+ * hold. Throws (not reject) when the intent's own instrument is unclassified,
+ * since a quiet rejection could look like "no setups" for days; exits never
+ * reach this gate (`evaluate()` returns before `ENTRY_CAP_GATES` for them).
  */
 const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
   const declared = config.per_subclass_deployment_cap;
@@ -845,15 +581,11 @@ const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
     );
   }
 
-  // `cap` is total over `InstrumentSubclass` at COMPILE time only. `subclass_of`
-  // is built from the pool file at the composition root, so a subclass string
-  // that reaches here without a row in `cap` is a runtime possibility the type
-  // cannot exclude — and `undefined` is the one value that must not fall
-  // through. `undefined - deployedToSubclass` is `NaN`, `trimToAllowed` does
-  // `Math.max(NaN, 0) === NaN`, `notional <= NaN` is false so it "trims" to
-  // `NaN`, and `NaN < config.min_viable_size` is false too — so the intent
-  // clears both this gate and the min-viable floor with no envelope at all
-  // That is the exact failure D5 exists to prevent, arriving silently
+  // `cap` is total over `InstrumentSubclass` at compile time only; a subclass
+  // string without a row in `cap` is a real runtime possibility. `undefined`
+  // must not fall through: `undefined - deployed` is `NaN`, and every
+  // downstream comparison against `NaN` is false, so an unhandled case would
+  // clear this gate and the min-viable floor with no envelope at all
   const capFraction: number | null | undefined = declared.cap_fraction_of_equity[subclass];
   if (capFraction === undefined) {
     throw new PerSubclassCapUnresolvableError(
@@ -868,30 +600,17 @@ const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
   }
   if (capFraction === null) return null;
 
-  // #888 — the equity this fraction resolves against is the DECLARED BOOK
-  // (`equity_ceiling.book`), not raw `portfolio.equity`, once the two
-  // diverge. `portfolio.equity` is one blended broker figure with no
-  // per-leg accounting, so it equals the book only by coincidence of how the
-  // account happens to be funded at this instant; funding it past the book
-  // must not silently widen every position the same fractions size
+  // The equity this fraction resolves against is the DECLARED BOOK
+  // (`equity_ceiling.book`), not raw `portfolio.equity` — the latter is one
+  // blended broker figure that equals the book only by coincidence, and
+  // funding past the book must not silently widen every position's cap
   const ceiling = declared.equity_ceiling;
   if (ceiling !== undefined) {
-    // #949, re-affirmed by #1180 — `book` is GBP, `portfolio.equity` is read
-    // from Alpaca's USD-denominated `GET /v2/account`
-    // (production/account-state.ts:129), so this comparison cannot verify
-    // funding in EITHER direction until it is known to compare like-for-like
-    // — not just above `refuseAbove`, where the previous behaviour merely
-    // gave the wrong REASON, but also below it, where a stale FX rate could
-    // have let a genuinely wrong funding level clamp and pass silently
-    // Refuse outright, before the numeric comparison, rather than let either
-    // failure mode reach it
-    //
-    // **A configured rate now exists (`SIZING_USD_PER_GBP`) and this gate
-    // still refuses — by design, not by staleness.** See
-    // `same_currency_verified`'s doc comment (types.ts) for the arithmetic:
-    // the rate's own drift is larger than `refuse_above_tolerance`, so arming
-    // this with it would make FX movement indistinguishable from the
-    // overfunding the refusal exists to catch
+    // `book` is GBP; `portfolio.equity` is read from Alpaca's
+    // USD-denominated account. Refuses to arm rather than compare currencies
+    // — a configured FX rate exists for sizing but its own drift is larger
+    // than `refuse_above_tolerance`, so using it here would make FX movement
+    // indistinguishable from the overfunding this refusal exists to catch
     if (!ceiling.same_currency_verified) {
       throw new PerSubclassCapUnresolvableError(
         'per_subclass_deployment_cap: currency mismatch, cannot verify funding — ' +
@@ -910,13 +629,9 @@ const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
     }
     const refuseAbove = ceiling.book * (1 + ceiling.refuse_above_tolerance);
     if (portfolio.equity > refuseAbove) {
-      // The backstop half of the fix: an account funded THIS far past the
-      // declared book does not merely make this one cap too generous — it
-      // invalidates the other assumptions the book was sized against too
-      // (the breaker baselines, the drawdown envelope D5's fractions were
-      // measured to hold). Refusing the entry outright, rather than quietly
-      // capping and moving on, is what turns that into something the
-      // operator has to notice and correct, per #888's chosen resolution
+      // An account funded this far past the declared book invalidates other
+      // sizing assumptions too (breaker baselines, the drawdown envelope D5
+      // was measured to hold) — refused outright rather than quietly capped
       throw new PerSubclassCapUnresolvableError(
         `per_subclass_deployment_cap's declared book is ${ceiling.book} but portfolio.equity is ` +
           `${portfolio.equity}, more than ${(ceiling.refuse_above_tolerance * 100).toFixed(0)}% ` +
@@ -930,23 +645,17 @@ const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
     }
   }
 
-  // Resolved against the equity read of THIS decision (#739), which is the
-  // whole point of the fractional form: a frozen cash cap is a rising fraction
-  // of a falling book, so it stops bounding drawdown at the first loss. Below
-  // the declared book (or when no book is declared at all) that equity read
-  // is `portfolio.equity` unclamped; at or above the book (within tolerance)
-  // it is clamped to the book, per #888 — the whole point of `equity_ceiling`
+  // Resolved against THIS decision's equity read — a frozen cash cap would be
+  // a rising fraction of a falling book, and stop bounding drawdown at the
+  // first loss. Clamped to the declared book once equity exceeds it.
   const cappedEquity =
     ceiling === undefined ? portfolio.equity : Math.min(portfolio.equity, ceiling.book);
   const cap = capFraction * cappedEquity;
 
-  // Over the UNION of the held and the in-flight keys (#1019). An instrument
-  // whose only row is a write-ahead `pending` one appears in
-  // `reserved_exposure_by_instrument` and NOT in `exposure_by_instrument`, so
-  // iterating the held record alone would skip exactly the sibling this
-  // netting exists to count — which is what made the invariant this gate's
-  // docstring claims ("N concurrently-armed names share ONE combined cap")
-  // false for anything submitted before the next fill poll
+  // Over the UNION of held and in-flight keys — an instrument whose only row
+  // is write-ahead `pending` appears in `reserved_exposure_by_instrument` and
+  // NOT `exposure_by_instrument`, so iterating the held record alone would
+  // skip exactly the sibling this netting exists to count
   const deployedToSubclass = [
     ...new Set([
       ...Object.keys(portfolio.exposure_by_instrument),
@@ -963,50 +672,15 @@ const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
 };
 
 /**
- * #888 review fix-up — the account-level counterpart of
- * `perSubclassDeploymentCap`'s `equity_ceiling`, armed INDEPENDENTLY of
- * universe classification.
- *
- * `perSubclassDeploymentCap`'s `equity_ceiling` refusal only fires once an
- * instrument is D5-classified (`declared.subclass_of[intent.instrument]`
- * resolves) — and `DEFAULT_UNIVERSE` (scheduler.ts), the universe
- * `liveStartingProfile()` actually boots on, classifies nothing today. This
- * gate reads `config.live_book_ceiling` instead, a sibling field set by
- * `buildStartingProfileConfigs` whenever a book is supplied (live only),
- * with no dependency on `subclass_of` — so an overfunded live account
- * refuses EVERY entry, on EVERY instrument, from the first tick, not just
- * the ones the pool file happens to classify. See
- * `RiskConfig['live_book_ceiling']`'s doc comment (types.ts) for the full
- * "why doesn't the existing mechanism cover this" account.
- *
- * Placed in `ENTRY_CAP_GATES` rather than ahead of the exit early-return in
- * `evaluate()` on purpose: a throw above that early return would block
- * exits and flat-by-close too (the exact defect class `guards-before-early-
- * returns` was filed for) — living in the gates array inherits the
- * structural guarantee that only entries ever reach it.
- *
- * **Returns `null`, never a cap.** This gate is a pure refusal (throw) or
- * pass-through — it does not itself narrow `allowedAdditional`, because
- * `perSubclassDeploymentCap`'s own `equity_ceiling` clamp already does that
- * job once an instrument IS classified. Duplicating the clamp here would
- * double-count for a classified instrument and do nothing for an
- * unclassified one (no fraction to clamp).
- *
- * **Currency mismatch, guarded rather than flagged (#949), and PERMANENTLY so
- * as of #1180 — read `live_book_ceiling`'s doc comment (types.ts) for the
- * full account.** `ceiling.book` is GBP; `portfolio.equity` is sourced from
- * Alpaca's account balance, which is USD. Below, `same_currency_verified`
- * guards the numeric comparison entirely: absent/`false` refuses to arm
- * BEFORE the comparison runs, in either direction — this used to only
- * "misfire" (refuse a correctly funded GBP account, or fail to refuse one,
- * depending on the prevailing rate); now it refuses unconditionally with a
- * `currency_mismatch` binding_constraint, distinguishable from the
- * `equity_exceeds_book` refusal below.
- *
- * #1180 converted the SIZING inlet at a configured rate and left this refusal
- * standing on purpose — the refusal's cause is not "no rate exists" but "no
- * rate accurate enough for a percentage-point funding test exists". The
- * arithmetic is on `same_currency_verified` (types.ts).
+ * #888 review fix-up — account-level counterpart of
+ * `perSubclassDeploymentCap`'s `equity_ceiling`, armed independently of
+ * universe classification (`DEFAULT_UNIVERSE` classifies nothing today, so
+ * this is what refuses an overfunded account before any instrument is
+ * D5-classified). Placed in `ENTRY_CAP_GATES` rather than ahead of the exit
+ * early-return in `evaluate()` — a throw there would block exits too.
+ * Returns `null`, never a cap — a pure refusal or pass-through;
+ * `perSubclassDeploymentCap`'s own clamp narrows a classified instrument's
+ * size.
  */
 const liveBookCeiling: EntryCapGate = (config, intent, portfolio) => {
   const ceiling = config.live_book_ceiling;
@@ -1065,10 +739,6 @@ function applyCritic(
   reasons: string[],
 ): { changed: boolean; notional: number; rejected: boolean } {
   if (critic.verdict === 'pass' || critic.verdict === 'unavailable') {
-    // Nothing to apply. `notional` goes back untouched — before #957 this
-    // branch echoed the SHARE COUNT back in a field named `notional`, inert
-    // only because the caller ignores the value when `changed` is false. That
-    // path is reachable for the first time now, so it returns the real thing
     return { changed: false, notional, rejected: false };
   }
 
