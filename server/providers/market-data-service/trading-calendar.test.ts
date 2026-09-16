@@ -230,7 +230,7 @@ describe('UsEquityRegularHoursCalendar', () => {
     });
 
     it('treats the close instant as the START of the new session (half-open, matching isOpen)', () => {
-      const close = new Date('2026-07-15T20:00:00Z'); // 16:00 ET exactly
+      const close = new Date('2026-07-15T20:00:00Z');
 
       // isOpen is half-open: the close instant is not inside the old session
       expect(calendar.isOpen(close)).toBe(false);

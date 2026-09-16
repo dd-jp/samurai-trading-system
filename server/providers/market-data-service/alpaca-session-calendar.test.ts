@@ -221,7 +221,7 @@ describe('AlpacaEquitySessionCalendar', () => {
    * FETCHED table, not from the table #684 replaces
    */
   const table = buildAlpacaSessionTable([
-    { date: '2026-08-17', open: '09:30', close: '13:00' }, // an early close absent from the hand table
+    { date: '2026-08-17', open: '09:30', close: '13:00' },
     { date: '2026-08-18', open: '09:30', close: '16:00' },
     { date: '2026-08-19', open: '09:30', close: '16:00' },
   ]);

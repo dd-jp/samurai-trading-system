@@ -251,8 +251,8 @@ describe('MiArchiveStore', () => {
 
     it('deletes rows strictly older than the cutoff and leaves the rest untouched', () => {
       const store = new MiArchiveStore();
-      const old = new Date(cutoff.getTime() - 1); // 1ms older than the window
-      const fresh = new Date(cutoff.getTime() + 1); // 1ms inside the window
+      const old = new Date(cutoff.getTime() - 1);
+      const fresh = new Date(cutoff.getTime() + 1);
 
       store.write(
         [

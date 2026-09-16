@@ -154,7 +154,7 @@ describe('flatten-tail throughput at incident scale (#1390)', () => {
     'MUTATION EVIDENCE — at the incident throughput, the fixed order reaches only 2 of 9 ' +
       'held lots; held-first ordering reaches 5 at the same throughput',
     async () => {
-      const budget = 5; // roughly the incident's own throughput before the bell
+      const budget = 5;
 
       const fixed = tailArrivalOrder({ instruments: universe, tick_time: tickTime });
       await fixed.pending;

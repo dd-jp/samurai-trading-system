@@ -81,9 +81,9 @@ describe('LseRegularHoursCalendar', () => {
   });
 
   it('is open 08:00-16:30 and shut either side', () => {
-    expect(calendar.isOpen(new Date('2026-07-15T06:59:00Z'))).toBe(false); // 07:59 London
-    expect(calendar.isOpen(new Date('2026-07-15T07:00:00Z'))).toBe(true); // 08:00 London
-    expect(calendar.isOpen(new Date('2026-07-15T15:29:00Z'))).toBe(true); // 16:29 London
+    expect(calendar.isOpen(new Date('2026-07-15T06:59:00Z'))).toBe(false);
+    expect(calendar.isOpen(new Date('2026-07-15T07:00:00Z'))).toBe(true);
+    expect(calendar.isOpen(new Date('2026-07-15T15:29:00Z'))).toBe(true);
     // Half-open at the close, matching the port's convention
     expect(calendar.isOpen(new Date('2026-07-15T15:30:00Z'))).toBe(false);
   });

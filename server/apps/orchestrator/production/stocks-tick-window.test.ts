@@ -181,10 +181,10 @@ describe('postCloseFlattenTail (#1389)', () => {
   const inGrace = postCloseFlattenTail(new LseRegularHoursCalendar(), GRACE_MS);
 
   it('is true from the bell to the end of the grace, and false either side', () => {
-    expect(inGrace(at('16:29'))).toBe(false); // still open — `withFlattenTail`'s half
-    expect(inGrace(at('16:30'))).toBe(true); // the bell itself
+    expect(inGrace(at('16:29'))).toBe(false);
+    expect(inGrace(at('16:30'))).toBe(true);
     expect(inGrace(at('16:34'))).toBe(true);
-    expect(inGrace(at('16:35'))).toBe(true); // the far edge, inclusive
+    expect(inGrace(at('16:35'))).toBe(true);
     expect(inGrace(at('16:36'))).toBe(false);
   });
 

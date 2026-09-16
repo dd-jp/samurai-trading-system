@@ -832,7 +832,7 @@ describe('runEntrypointLogRetention (#1116)', () => {
   // the fix from a regression that silently disables it again
   it('truncates an oversized soak-boot.out with no configuration at all', () => {
     const soakBoot = join(dir, 'soak-boot.out');
-    const oversized = 17 * 1024 * 1024; // > 16 MiB DEFAULT_BARE_TRUNCATE_BYTES
+    const oversized = 17 * 1024 * 1024;
     writeFileSync(soakBoot, 'x'.repeat(oversized));
 
     const result = runEntrypointLogRetention(sinkConfig(), { log: () => {} }, {});

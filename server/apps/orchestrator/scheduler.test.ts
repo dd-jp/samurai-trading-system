@@ -6,8 +6,8 @@ import type { Clock } from '../../shared/index.js';
 import { DEFAULT_UNIVERSE, type SchedulerConfig, UniverseScheduler } from './scheduler.js';
 import type { UniverseInstrument } from './types.js';
 
-const MARKET_OPEN = new Date('2026-07-15T14:00:00Z'); // 10:00 ET, a Wednesday
-const MARKET_CLOSED = new Date('2026-07-15T02:00:00Z'); // 22:00 ET the prior evening
+const MARKET_OPEN = new Date('2026-07-15T14:00:00Z');
+const MARKET_CLOSED = new Date('2026-07-15T02:00:00Z');
 
 function clockAt(instant: Date): Clock {
   return { now: () => instant };

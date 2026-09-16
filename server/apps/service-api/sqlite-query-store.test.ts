@@ -142,7 +142,7 @@ describe('SqliteQueryStore', () => {
     await execStore.writeAheadPosition(
       makePosition({
         idempotency_key: 'key-3',
-        opened_at: new Date('2026-07-28T00:00:00Z'), // after NOW
+        opened_at: new Date('2026-07-28T00:00:00Z'),
       }),
     );
 
@@ -486,7 +486,7 @@ describe('SqliteQueryStore', () => {
     const debateStore = new SqliteDebateLogStore(db);
 
     debateStore.writeLog(makeDebateLog());
-    await seedClosedTrade(execStore, makeClosedTrade({ realized_pnl_net: 50 })); // R = 50 / (5*10) = 1
+    await seedClosedTrade(execStore, makeClosedTrade({ realized_pnl_net: 50 }));
 
     const store = new SqliteQueryStore(db, 30);
     const attribution = store.getAttribution(NOW, 'live');
@@ -633,7 +633,7 @@ describe('SqliteQueryStore', () => {
       const execStore = new SqliteExecutionStore(db);
       await seedClosedTrade(
         execStore,
-        makeClosedTrade({ closed_at: new Date('2026-07-28T00:00:00Z') }), // after NOW
+        makeClosedTrade({ closed_at: new Date('2026-07-28T00:00:00Z') }),
       );
 
       const store = new SqliteQueryStore(db);
@@ -759,7 +759,7 @@ describe('SqliteQueryStore', () => {
       const execStore = new SqliteExecutionStore(db);
       await seedClosedTrade(
         execStore,
-        makeClosedTrade({ closed_at: new Date('2026-07-28T00:00:00Z') }), // after NOW
+        makeClosedTrade({ closed_at: new Date('2026-07-28T00:00:00Z') }),
       );
 
       const store = new SqliteQueryStore(db);
@@ -856,9 +856,9 @@ describe('SqliteQueryStore.getLlmSpend', () => {
 
   it('scopes each rolling window to its own cutoff', () => {
     const db = makeDb();
-    seedSpend(db, 1, hoursBefore(1)); // inside 24h, 7d and all-time
-    seedSpend(db, 2, hoursBefore(48)); // inside 7d and all-time only
-    seedSpend(db, 4, hoursBefore(24 * 30)); // all-time only
+    seedSpend(db, 1, hoursBefore(1));
+    seedSpend(db, 2, hoursBefore(48));
+    seedSpend(db, 4, hoursBefore(24 * 30));
 
     const spend = new SqliteQueryStore(db).getLlmSpend(NOW);
     expect(spend.last_24h.calls).toBe(1);

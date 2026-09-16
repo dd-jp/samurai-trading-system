@@ -79,7 +79,7 @@ function pollDrivenClock(payloads: Parameters<typeof fakeFetch>[0]): {
  * later as an assertion on state the loop never reached.
  */
 async function stepFakeTimersUntil(predicate: () => boolean): Promise<void> {
-  const MAX_STEPS = 20; // 400ms of virtual time; generous, not tuned
+  const MAX_STEPS = 20;
   for (let step = 0; step < MAX_STEPS; step += 1) {
     if (predicate()) return;
     await act(async () => {

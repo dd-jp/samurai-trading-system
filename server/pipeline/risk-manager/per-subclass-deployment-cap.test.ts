@@ -28,8 +28,8 @@ import type {
 
 /** A £750 equity leg, so the caps below are ADR-0018 D5's own figures */
 const EQUITY_LEG = 750;
-const INDEX_CAP = 0.35 * EQUITY_LEG; // 262.50 — D5's "~£260"
-const SINGLE_STOCK_CAP = 0.25 * EQUITY_LEG; // 187.50 — D5's "~£190"
+const INDEX_CAP = 0.35 * EQUITY_LEG;
+const SINGLE_STOCK_CAP = 0.25 * EQUITY_LEG;
 
 /**
  * The equity every case below is decided against. The caps are declared as
@@ -546,7 +546,7 @@ describe('#888 — equity_ceiling: the fraction resolves against the declared BO
     expect(DEPLOYMENT_CAP.equity_ceiling).toBeUndefined();
     const decision = decide(intentFor('3USL', 10_000), {}, DEPLOYMENT_CAP, PORTFOLIO_EQUITY);
     expect(decision.binding_constraint).toBe('per_subclass_deployment_cap');
-    expect(finalSizeOf(decision)).toBeCloseTo(INDEX_CAP, 6); // 35% of £100,000, unclamped
+    expect(finalSizeOf(decision)).toBeCloseTo(INDEX_CAP, 6);
   });
 
   it('clamps resolution to the book once equity is ABOVE it, within tolerance', () => {
@@ -554,7 +554,7 @@ describe('#888 — equity_ceiling: the fraction resolves against the declared BO
     // reproduced directly against the gate rather than through the
     // composition root: fund 2% past the book and, pre-#888, the cap would
     // have resolved 2% wider too
-    const withinTolerance = BOOK * 1.02; // 2% over, inside the 5% tolerance
+    const withinTolerance = BOOK * 1.02;
 
     const decision = decide(intentFor('3USL', 10_000), {}, capWithCeiling(), withinTolerance);
 
@@ -574,7 +574,7 @@ describe('#888 — equity_ceiling: the fraction resolves against the declared BO
   });
 
   it('REFUSES the entry once equity clears the tolerance above the book, rather than sizing on the wider figure', () => {
-    const farOverBook = BOOK * 1.5; // 50% over — well past the 5% tolerance
+    const farOverBook = BOOK * 1.5;
 
     expect(() => decide(intentFor('3USL', 10_000), {}, capWithCeiling(), farOverBook)).toThrow(
       /per_subclass_deployment_cap's declared book/,

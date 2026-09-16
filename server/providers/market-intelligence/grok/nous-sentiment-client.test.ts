@@ -209,7 +209,7 @@ describe('NousSentimentClient', () => {
 
     const result = await client().fetchSentiment('BTC-USD', AS_OF);
 
-    expect(result.items).toHaveLength(1); // still parsed — GrokAgent decides what happens next
+    expect(result.items).toHaveLength(1);
     expect(result.retrievalEvidence).toBe(false);
   });
 

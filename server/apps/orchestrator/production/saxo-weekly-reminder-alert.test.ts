@@ -193,7 +193,7 @@ describe('SaxoWeeklyReminder', () => {
     await Promise.resolve();
 
     expect(scheduled).toHaveLength(2);
-    expect(scheduled[0]?.cleared).toBe(false); // fired timers are not cleared, only stop() clears
+    expect(scheduled[0]?.cleared).toBe(false);
     // The second arm is a full week out from the first fire, not a repeat of the first delay
     expect(scheduled[1]?.delayMs).toBe(7 * 24 * 60 * 60 * 1000);
   });

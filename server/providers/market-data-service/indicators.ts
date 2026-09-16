@@ -284,8 +284,10 @@ function macdHistogramValue(bars: Bar[], fast: number, slow: number, signal: num
     return series;
   };
 
-  const fastSeries = emaSeries(values, fast); // fastSeries[k] is the EMA at values index (fast - 1 + k)
-  const slowSeries = emaSeries(values, slow); // slowSeries[k] is the EMA at values index (slow - 1 + k)
+  // fastSeries[k] is the EMA at values index (fast - 1 + k)
+  const fastSeries = emaSeries(values, fast);
+  // slowSeries[k] is the EMA at values index (slow - 1 + k)
+  const slowSeries = emaSeries(values, slow);
 
   // The MACD line exists only where BOTH EMAs exist, i.e. from
   // max(fast, slow) - 1 onward — this is `minimumBarsFor`'s arity for this

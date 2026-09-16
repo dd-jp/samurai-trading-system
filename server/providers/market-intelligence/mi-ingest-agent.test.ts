@@ -434,17 +434,17 @@ describe('MiIngestAgent', () => {
       spendCap: ADMITS,
     });
 
-    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false); // streak 1
-    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false); // streak 2
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false);
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false);
 
     const scorer = scoringClient();
     (agent as unknown as { deps: { llmClient: unknown } }).deps.llmClient = scorer.client;
 
-    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false); // skipped, streak reset
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false);
     expect(scorer.calls).toHaveLength(0);
     expect(archive.rawRows('alpaca-news')).toHaveLength(1);
 
-    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(true); // streak reset, tries again
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(true);
     expect(scorer.calls).toHaveLength(1);
     expect(store.getContext('stocks', WINDOW, 't').news).toHaveLength(1);
   });
@@ -471,11 +471,11 @@ describe('MiIngestAgent', () => {
       logger,
     });
 
-    await agent.refresh('t', 'AAPL', 'stocks'); // streak 1
-    await agent.refresh('t', 'AAPL', 'stocks'); // streak 2
+    await agent.refresh('t', 'AAPL', 'stocks');
+    await agent.refresh('t', 'AAPL', 'stocks');
     logger.entries.length = 0;
 
-    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false); // skipped
+    await expect(agent.refresh('t', 'AAPL', 'stocks')).resolves.toBe(false);
 
     expect(
       logger.entries.some(
@@ -505,8 +505,8 @@ describe('MiIngestAgent', () => {
       spendCap: ADMITS,
     });
 
-    await agent.refresh('t', 'AAPL', 'stocks'); // streak 1
-    await agent.refresh('t', 'AAPL', 'stocks'); // streak 2
+    await agent.refresh('t', 'AAPL', 'stocks');
+    await agent.refresh('t', 'AAPL', 'stocks');
 
     // A refresh with nothing new to score — the fetch returns no articles at
     // all, so `unscored.length === 0` and `refresh` returns early, well

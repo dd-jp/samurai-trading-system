@@ -30,8 +30,8 @@ function makeIntent(overrides: Partial<OrderIntent> = {}): OrderIntent {
     stop: 95,
     target: 110,
     time_in_force: 'day',
-    decision_timestamp: new Date('2026-07-15T13:55:00Z'), // 5 min before NOW
-    decided_at: new Date('2026-07-15T13:55:00Z'), // 5 min before NOW
+    decision_timestamp: new Date('2026-07-15T13:55:00Z'),
+    decided_at: new Date('2026-07-15T13:55:00Z'),
     metadata: {
       debate_id: 'debate-abc123',
       conviction: 0.72,
@@ -166,7 +166,7 @@ describe('VerdictImpl.decide — staleness gate', () => {
     const verdict = new VerdictImpl();
     const input = makeInput({
       risk_decision: makeRiskDecision({
-        order_intent: makeIntent({ decided_at: new Date('2026-07-15T13:00:00Z') }), // 60 min old
+        order_intent: makeIntent({ decided_at: new Date('2026-07-15T13:00:00Z') }),
       }),
     });
 
@@ -209,8 +209,8 @@ describe('VerdictImpl.decide — staleness gate', () => {
 
     it('a tick at bar+61min no longer no-goes on staleness when the decision itself is fresh', async () => {
       const verdict = new VerdictImpl();
-      const decidedAt = new Date('2026-07-15T13:59:00Z'); // decided 1 min before the tick
-      const tickNow = new Date('2026-07-15T14:01:00Z'); // 61 min after the bar opened
+      const decidedAt = new Date('2026-07-15T13:59:00Z');
+      const tickNow = new Date('2026-07-15T14:01:00Z');
 
       const decision = await verdict.decide(
         makeInput({
@@ -229,8 +229,8 @@ describe('VerdictImpl.decide — staleness gate', () => {
 
     it('a genuinely stale decision still no-goes on staleness even with a fresh bar coordinate', async () => {
       const verdict = new VerdictImpl();
-      const tickNow = new Date('2026-07-15T13:05:00Z'); // inside the bar: decision_timestamp is fresh
-      const decidedAt = new Date('2026-07-15T12:00:00Z'); // but decided over an hour before the tick
+      const tickNow = new Date('2026-07-15T13:05:00Z');
+      const decidedAt = new Date('2026-07-15T12:00:00Z');
 
       const decision = await verdict.decide(
         makeInput({
@@ -250,7 +250,7 @@ describe('VerdictImpl.decide — staleness gate', () => {
     it('treats a decision shortly after its bar opens the same as one 55 minutes in, when equally fresh', async () => {
       const verdict = new VerdictImpl();
       const runAt = (decidedAt: Date) => {
-        const tickNow = new Date(decidedAt.getTime() + 5_000); // Verdict runs 5s after the Trader decided
+        const tickNow = new Date(decidedAt.getTime() + 5_000);
         return verdict.decide(
           makeInput({
             clock: { now: () => tickNow },
@@ -263,8 +263,8 @@ describe('VerdictImpl.decide — staleness gate', () => {
         );
       };
 
-      const earlyInBar = await runAt(new Date(BAR.getTime() + 60_000)); // 1 min into the bar
-      const lateInBar = await runAt(new Date(BAR.getTime() + 55 * 60_000)); // 55 min into the SAME bar
+      const earlyInBar = await runAt(new Date(BAR.getTime() + 60_000));
+      const lateInBar = await runAt(new Date(BAR.getTime() + 55 * 60_000));
 
       expect(earlyInBar.status).toBe('go');
       expect(lateInBar.status).toBe('go');
@@ -465,7 +465,7 @@ describe('VerdictImpl.decide — drift gate', () => {
   it('no-go with drift when current price has moved past tolerance from entry', async () => {
     const verdict = new VerdictImpl();
     const input = makeInput({
-      marketData: makeMarketData(makeMark({ price: 105 })), // entry 100, tolerance 1
+      marketData: makeMarketData(makeMark({ price: 105 })),
     });
 
     const decision = await verdict.decide(input);
@@ -491,7 +491,7 @@ describe('VerdictImpl.decide — drift gate', () => {
     it('fires on a $200 equity that the old absolute 500 could never have caught', async () => {
       const verdict = new VerdictImpl();
       const entry = 200;
-      const price = 250; // $50 away — a 25% move, and stale by any reading
+      const price = 250;
 
       // The old shape, stated as an executable fact rather than a claim: 50 is
       // nowhere near 500, so the absolute gate would have passed this through
@@ -539,7 +539,7 @@ describe('VerdictImpl.decide — drift gate', () => {
       // Same entry and same drift for both classes; only the dial differs. A
       // gate that ignored `asset_class` would answer identically twice
       const config = makeConfig({ drift_tolerance_pct: { crypto: 0.5, stocks: 0.001 } });
-      const marketData = makeMarketData(makeMark({ price: 110 })); // 10% from entry 100
+      const marketData = makeMarketData(makeMark({ price: 110 }));
 
       const stocks = await verdict.decide(
         makeInput({
@@ -576,7 +576,7 @@ describe('VerdictImpl.decide — drift gate', () => {
       // safe answer does not depend on which side of zero the bad value is
       const input = makeInput({
         risk_decision: makeRiskDecision({ order_intent: makeIntent({ entry: 0 }) }),
-        marketData: makeMarketData(makeMark({ price: 0 })), // zero drift
+        marketData: makeMarketData(makeMark({ price: 0 })),
         config: makeConfig({ drift_tolerance_pct: PAPER_PCT }),
       });
 
@@ -811,7 +811,7 @@ describe('VerdictImpl.decide — HITL gate', () => {
 describe('VerdictImpl.decide — automation dial', () => {
   it('auto mode never engages HITL, even for a near-limit (flagged) trade', async () => {
     const verdict = new VerdictImpl();
-    const approvals = makeApprovals('rejected'); // would fail if ever called
+    const approvals = makeApprovals('rejected');
     const input = makeInput({
       config: makeConfig({ automation_level: { crypto: 'manual', stocks: 'auto' } }),
       risk_decision: makeRiskDecision({
@@ -846,7 +846,7 @@ describe('VerdictImpl.decide — automation dial', () => {
 
   it('semi_auto skips HITL for an unflagged trade', async () => {
     const verdict = new VerdictImpl();
-    const approvals = makeApprovals('rejected'); // would fail if ever called
+    const approvals = makeApprovals('rejected');
     const input = makeInput({
       config: makeConfig({ automation_level: { crypto: 'manual', stocks: 'semi_auto' } }),
       risk_decision: makeRiskDecision({ modifications: null }),
@@ -943,7 +943,7 @@ describe('VerdictImpl.decide — automation dial', () => {
   it('the same OrderIntent produces different routing under each dial setting', async () => {
     const verdict = new VerdictImpl();
     const riskDecision = makeRiskDecision({
-      modifications: { original_size: 200, final_size: 100, stop_tightened: true }, // near-limit
+      modifications: { original_size: 200, final_size: 100, stop_tightened: true },
     });
 
     const manualApprovals = makeApprovals('approved');
@@ -1031,12 +1031,12 @@ describe('VerdictImpl.decide — gate ordering', () => {
     const verdict = new VerdictImpl();
     const input = makeInput({
       risk_decision: makeRiskDecision({
-        order_intent: makeIntent({ decided_at: new Date('2026-07-15T13:00:00Z') }), // stale
+        order_intent: makeIntent({ decided_at: new Date('2026-07-15T13:00:00Z') }),
       }),
-      marketData: makeMarketData(makeMark({ price: 999 })), // would also drift-fail
-      positionStore: makePositionStore(true), // would also dedup-fail
-      breakers: makeBreakers({ portfolio_tripped: true }), // would also breaker-fail
-      approvals: makeApprovals('rejected'), // would also HITL-fail
+      marketData: makeMarketData(makeMark({ price: 999 })),
+      positionStore: makePositionStore(true),
+      breakers: makeBreakers({ portfolio_tripped: true }),
+      approvals: makeApprovals('rejected'),
     });
 
     const decision = await verdict.decide(input);
@@ -1048,7 +1048,7 @@ describe('VerdictImpl.decide — gate ordering', () => {
     const verdict = new VerdictImpl();
     const input = makeInput({
       risk_decision: makeRiskDecision({
-        order_intent: makeIntent({ decided_at: new Date('2026-07-15T13:00:00Z') }), // stale
+        order_intent: makeIntent({ decided_at: new Date('2026-07-15T13:00:00Z') }),
       }),
       // Every other gate would pass cleanly
       marketData: makeMarketData(makeMark({ price: 100 })),

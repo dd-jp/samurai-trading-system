@@ -4473,15 +4473,15 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
     );
 
     await execution.reconcile();
-    await execution.ingestFills(); // consecutive 1, quiet
-    await execution.ingestFills(); // consecutive 2, quiet
-    await execution.ingestFills(); // consecutive 3, warn
+    await execution.ingestFills();
+    await execution.ingestFills();
+    await execution.ingestFills();
 
     currentTime = new Date(currentTime.getTime() + FILLED_ZERO_SIZE_REANNOUNCE_EVERY_MS + 1);
-    await execution.ingestFills(); // past the reannounce interval: info
+    await execution.ingestFills();
 
     currentTime = new Date(currentTime.getTime() + FILLED_ZERO_SIZE_REANNOUNCE_EVERY_MS + 1);
-    await execution.ingestFills(); // past it again: another info
+    await execution.ingestFills();
 
     const announcements = logger.entries.filter((e) => e.message === FILLED_WITH_ZERO_SIZE);
     expect(announcements.map((e) => e.level)).toEqual(['warn', 'info', 'info']);
@@ -4578,7 +4578,7 @@ describe('ExecutionImpl.reconcile() then ingestFills() — the adopted-from-reco
     await execution.reconcile();
     await execution.ingestFills();
     await execution.ingestFills();
-    await execution.ingestFills(); // consecutive 3: warns once
+    await execution.ingestFills();
     expect(logger.entries.filter((e) => e.message === FILLED_WITH_ZERO_SIZE)).toHaveLength(1);
 
     await store.updatePositionState('key-1', { order_state: 'rejected', broker_order_ids: [] });

@@ -356,9 +356,9 @@ describe('decide — conviction scaling', () => {
     const sizeAt = async (confidence: number) =>
       (await decide(traderInput({ debate: debateResult({ confidence }) })))?.size;
 
-    const low = await sizeAt(0.6625); // conviction multiplier 0.25
-    const mid = await sizeAt(0.775); //  conviction multiplier 0.50
-    const high = await sizeAt(1.0); //   conviction multiplier 1.00
+    const low = await sizeAt(0.6625);
+    const mid = await sizeAt(0.775);
+    const high = await sizeAt(1.0);
 
     if (low === undefined || mid === undefined || high === undefined) {
       throw new Error('expected intents at every conviction above the floor');

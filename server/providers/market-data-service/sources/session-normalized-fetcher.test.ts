@@ -100,7 +100,7 @@ describe('withSessionNormalization (#562)', () => {
     // worth — and every indicator over the window would have thrown
     expect(bars).toHaveLength(15);
     expect(lookbacks.length).toBeGreaterThan(1);
-    expect(lookbacks[0]).toBe(16); // lookback + FORMING_BAR_FETCH_MARGIN
+    expect(lookbacks[0]).toBe(16);
     expect(lookbacks[1]).toBeGreaterThan(16);
   });
 

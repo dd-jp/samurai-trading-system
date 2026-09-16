@@ -51,10 +51,10 @@ const UNIVERSE: readonly UniverseInstrument[] = [
 /** instrument -> indicator value, so the fixture reads like a small table */
 const READING_BY_INSTRUMENT: Record<string, number> = {
   'BTC-USD': 10,
-  'ETH-USD': 40, // crypto max; not first (BTC-USD) nor average (~23.33)
+  'ETH-USD': 40,
   'SOL-USD': 20,
   AAPL: 5,
-  TSLA: 15, // stocks max; not first (AAPL) nor average (10)
+  TSLA: 15,
 };
 
 function fixtureIndicatorValue(instrument: string): IndicatorValue {
@@ -415,7 +415,7 @@ describe('MarketDataVolatilityReadingProvider', () => {
 
       await provider.getVolatilityReading(SESSION_SHUT);
 
-      expect(getIndicator).toHaveBeenCalledTimes(3); // the three crypto pairs
+      expect(getIndicator).toHaveBeenCalledTimes(3);
       for (const asset of ['BTC-USD', 'ETH-USD', 'SOL-USD']) {
         expect(getIndicator).toHaveBeenCalledWith(asset, VOLATILITY_INDICATOR, SESSION_SHUT);
       }
@@ -453,7 +453,7 @@ describe('MarketDataVolatilityReadingProvider', () => {
 
       const reading = await provider.getVolatilityReading(WEEKDAY_OVERNIGHT);
 
-      expect(getIndicator).toHaveBeenCalledTimes(3); // the three crypto pairs
+      expect(getIndicator).toHaveBeenCalledTimes(3);
       expect(reading.stocks).toBe(0);
     });
 

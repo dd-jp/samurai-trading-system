@@ -95,10 +95,10 @@ describe('computeFlipRate (#1517)', () => {
   it('aggregates across multiple debates independently', () => {
     const rows = [
       row({ debate_id: 'd1', round: 1, direction: 'bearish' }),
-      row({ debate_id: 'd1', round: 2, direction: 'bullish' }), // flip
+      row({ debate_id: 'd1', round: 2, direction: 'bullish' }),
       row({ debate_id: 'd2', round: 1, direction: 'bullish' }),
-      row({ debate_id: 'd2', round: 2, direction: 'bullish' }), // no flip
-      row({ debate_id: 'd3', round: 1, direction: 'neutral' }), // single round, excluded
+      row({ debate_id: 'd2', round: 2, direction: 'bullish' }),
+      row({ debate_id: 'd3', round: 1, direction: 'neutral' }),
     ];
     expect(computeFlipRate(rows)).toEqual({
       total_debates: 3,

@@ -237,7 +237,7 @@ describe('LseMarkDataSource — marks', () => {
     const source = sourceWith(
       fakeClient({
         quote: {
-          price: 300, // a stale last trade
+          price: 300,
           bid: 310,
           ask: 314,
           currency: 'GBP',

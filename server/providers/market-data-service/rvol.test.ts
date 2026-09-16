@@ -62,7 +62,7 @@ function sessionBars(dayOffset: number, volumes: number[]): Bar[] {
   );
 }
 
-const ASOF = new Date('2026-08-10T00:10:00Z'); // inside "day 0"
+const ASOF = new Date('2026-08-10T00:10:00Z');
 
 describe('computeRvol — median, same-clock-time baseline (#747)', () => {
   it('the median binds: one 1000x-volume outlier session does not move the baseline the way a mean would', () => {
@@ -108,7 +108,7 @@ describe('computeRvol — median, same-clock-time baseline (#747)', () => {
     const result = computeRvol(bars, DAILY_SESSION_CALENDAR, ASOF);
 
     expect(result.degraded_reason).toBeNull();
-    expect(result.rvol).toBeCloseTo(1, 8); // an ordinary open, correctly NOT flagged
+    expect(result.rvol).toBeCloseTo(1, 8);
 
     // The trap: a WHOLE-SESSION-AVERAGE baseline (session avg = (1000+50)/2
     // = 525) would read this same, entirely ordinary open as ~1.9x

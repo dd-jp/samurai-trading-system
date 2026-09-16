@@ -189,8 +189,8 @@ describe('SqliteCgtFillSource — currency handling (#1518 review round 1, findi
 
     expect(unconverted).toHaveLength(0);
     expect(legs).toHaveLength(1);
-    expect(legs[0].grossAmount).toBe(10); // (100 * 10) / 100
-    expect(legs[0].charges).toBeCloseTo(0.01); // 1 / 100
+    expect(legs[0].grossAmount).toBe(10);
+    expect(legs[0].charges).toBeCloseTo(0.01);
   });
 
   it('normalises GBp (lowercase p, vendor pence spelling) the same as GBX — pence-first check, not swallowed by a case-insensitive GBP match', () => {
@@ -202,7 +202,8 @@ describe('SqliteCgtFillSource — currency handling (#1518 review round 1, findi
 
     expect(unconverted).toHaveLength(0);
     expect(legs).toHaveLength(1);
-    expect(legs[0].grossAmount).toBe(10); // (100 * 10) / 100, not 1000 — 'GBp'.toUpperCase() === 'GBP' would 100x this if pence weren't checked first
+    // (100 * 10) / 100, not 1000 — 'GBp'.toUpperCase() === 'GBP' would 100x this if pence weren't checked first
+    expect(legs[0].grossAmount).toBe(10);
     expect(legs[0].charges).toBeCloseTo(0.01);
   });
 
@@ -352,9 +353,9 @@ describe('SqliteCgtFillSource — currency handling (#1518 review round 1, findi
 
     expect(unconverted).toHaveLength(0);
     expect(legs).toHaveLength(2);
-    expect(legs.find((l) => l.kind === 'acquisition')?.grossAmount).toBeCloseTo(800); // 1000 USD * 0.8
-    expect(legs.find((l) => l.kind === 'acquisition')?.charges).toBeCloseTo(0.8); // 1 USD * 0.8
-    expect(legs.find((l) => l.kind === 'disposal')?.grossAmount).toBeCloseTo(960); // 1200 USD * 0.8
+    expect(legs.find((l) => l.kind === 'acquisition')?.grossAmount).toBeCloseTo(800);
+    expect(legs.find((l) => l.kind === 'acquisition')?.charges).toBeCloseTo(0.8);
+    expect(legs.find((l) => l.kind === 'disposal')?.grossAmount).toBeCloseTo(960);
   });
 
   it('treats a null fee_currency (pre-#1220 legacy fills) as GBP, unchanged from before', () => {

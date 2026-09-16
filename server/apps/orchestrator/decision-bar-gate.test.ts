@@ -106,7 +106,7 @@ describe('DebateBarDecisionGate', () => {
     });
 
     it('a forfeited bar does not poison the NEXT bar — claim resets the retry count', () => {
-      const gate = new DebateBarDecisionGate(1); // forfeits on the FIRST rescind
+      const gate = new DebateBarDecisionGate(1);
       const claimed = gate.claim('BTC-USD', MID_BAR) as NonNullable<ReturnType<typeof gate.claim>>;
       expect(gate.rescind('BTC-USD', claimed)).toBe('forfeited');
       expect(gate.claim('BTC-USD', new Date(MID_BAR.getTime() + 5 * 60_000))).toBeUndefined();

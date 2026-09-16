@@ -750,7 +750,8 @@ export function sweepStaleLogs(options: LogRetentionOptions): LogRetentionResult
   try {
     entries = readdirSync(root, { withFileTypes: true });
   } catch {
-    return result; // Missing or unreadable logs/ — nothing to sweep
+    // Missing or unreadable logs/ — nothing to sweep
+    return result;
   }
 
   for (const entry of entries) {
@@ -767,7 +768,8 @@ export function sweepStaleLogs(options: LogRetentionOptions): LogRetentionResult
 
     if (isArchivedLogName(entry.name)) {
       const stat = safeStat(path);
-      if (stat === undefined) continue; // Vanished between listing and stat — not this sweep's problem
+      // Vanished between listing and stat — not this sweep's problem
+      if (stat === undefined) continue;
 
       const outcome = tryRemoveArchivedLogEntry(path, stat, liveIdentities, cutoff, remove);
       if (outcome.removed) {
@@ -794,7 +796,8 @@ export function sweepStaleLogs(options: LogRetentionOptions): LogRetentionResult
     }
 
     const stat = safeStat(path);
-    if (stat === undefined) continue; // Vanished between listing and stat — not this sweep's problem
+    // Vanished between listing and stat — not this sweep's problem
+    if (stat === undefined) continue;
 
     const outcome = tryTruncateBareLogEntry(path, stat, bareTruncateBytes, truncate);
     if (outcome.truncated) {

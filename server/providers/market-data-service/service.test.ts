@@ -51,9 +51,9 @@ function bar(closeTime: string, close: number, volume = 1): Bar {
 }
 
 const BARS: Bar[] = [
-  bar('2026-07-15T09:00:00Z', 100), // strictly before asOf
-  bar('2026-07-15T10:00:00Z', 110), // exactly at asOf
-  bar('2026-07-15T11:00:00Z', 120), // forming candle — strictly after asOf
+  bar('2026-07-15T09:00:00Z', 100),
+  bar('2026-07-15T10:00:00Z', 110),
+  bar('2026-07-15T11:00:00Z', 120),
 ];
 
 const ASOF = new Date('2026-07-15T10:00:00Z');
@@ -464,7 +464,7 @@ describe('MarketDataServiceImpl.getMark', () => {
 
     const mark = await service.getMark(INSTRUMENT, ASOF);
 
-    expect(mark.price).toBe(110); // last completed bar's close, not the live 999
+    expect(mark.price).toBe(110);
     expect(mark.observed_at.toISOString()).toBe('2026-07-15T10:00:00.000Z');
   });
 
@@ -631,9 +631,9 @@ describe('MarketDataServiceImpl.getADV', () => {
   it('averages bars volume over the window, excluding the forming candle', async () => {
     const volumeBars: Bar[] = [
       bar('2026-07-15T08:00:00Z', 90, 10),
-      bar('2026-07-15T09:00:00Z', 100, 20), // strictly before asOf
-      bar('2026-07-15T10:00:00Z', 110, 30), // exactly at asOf
-      bar('2026-07-15T11:00:00Z', 120, 999), // forming candle — must be excluded
+      bar('2026-07-15T09:00:00Z', 100, 20),
+      bar('2026-07-15T10:00:00Z', 110, 30),
+      bar('2026-07-15T11:00:00Z', 120, 999),
     ];
     const dataSource = new FixtureDataSource(
       volumeBars,
@@ -649,7 +649,7 @@ describe('MarketDataServiceImpl.getADV', () => {
 
     const adv = await service.getADV(INSTRUMENT, { timeframe: TIMEFRAME, lookback: 10 }, ASOF);
 
-    expect(adv).toBe(20); // (10 + 20 + 30) / 3, forming candle excluded
+    expect(adv).toBe(20);
   });
 
   it('throws rather than returning 0 when the window has no bars', async () => {
@@ -724,7 +724,7 @@ describe('MarketDataServiceImpl — market_data_fetch telemetry (#1082)', () => 
     const { service, entries } = serviceWithTelemetry('live', new ManualClock(ASOF));
     const window = { timeframe: TIMEFRAME, lookback: 2 };
 
-    await service.getBars(INSTRUMENT, window, ASOF); // cold miss — fetches and warms the store
+    await service.getBars(INSTRUMENT, window, ASOF);
     entries.length = 0;
     // 20 minutes later, same 1h bar interval — route 1 (#391) hits
     await service.getBars(INSTRUMENT, window, new Date(ASOF.getTime() + 20 * 60_000));
@@ -747,7 +747,7 @@ describe('MarketDataServiceImpl — market_data_fetch telemetry (#1082)', () => 
       cache: 'miss',
       consecutive_misses: 1,
       outcome: 'ok',
-      rows: 2, // FixtureDataSource's own PIT filter: only 2 bars close at-or-before ASOF
+      rows: 2,
     });
     expect(typeof events[0].duration_ms).toBe('number');
   });
@@ -821,7 +821,7 @@ describe('MarketDataServiceImpl — market_data_fetch telemetry (#1082)', () => 
     const { service, entries } = serviceWithTelemetry('live', new ManualClock(ASOF));
     const window = { timeframe: TIMEFRAME, lookback: 2 };
 
-    await service.getBars(INSTRUMENT, window, ASOF); // miss #1 — cold, warms the store
+    await service.getBars(INSTRUMENT, window, ASOF);
     // Same interval, 20 minutes later — a hit (#391), clearing the streak
     await service.getBars(INSTRUMENT, window, new Date(ASOF.getTime() + 20 * 60_000));
     // A new bar interval — store recency (#512) now falls outside one

@@ -367,7 +367,7 @@ describe('phase split — tail order is plan order, not completion order (#1040)
 
   it('degrades to today’s serial pass at width 1', async () => {
     const plan = makePlan('SPY', 'QQQ', 'AAPL');
-    const heads = deferredHeads([]); // every head resolves immediately
+    const heads = deferredHeads([]);
     const { steps, tailOrder, book } = bookSteps(heads);
 
     const outcomes = await runTickPlan(plan, new SequentialTickRunner(steps), CLOCK, {
@@ -384,7 +384,7 @@ describe('phase split — tail order is plan order, not completion order (#1040)
     // A head that throws never asks for a turn. If settlement were reported
     // only from the success path, every later instrument in the plan would
     // wait out the tick and the plan would never settle
-    const heads = deferredHeads([]); // every head resolves immediately
+    const heads = deferredHeads([]);
     const { steps, tailOrder } = bookSteps(heads);
     const failing: TickSteps = {
       ...steps,

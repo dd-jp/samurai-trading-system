@@ -91,7 +91,7 @@ describe('TickSkipThrottle', () => {
 
   it('does not re-alert on every consecutive degraded tick', () => {
     const throttle = new TickSkipThrottle();
-    throttle.observe(true); // consecutive 1 — alerts
+    throttle.observe(true);
     for (let i = 2; i < ALERT_REPEAT_EVERY_DEGRADED_TICKS + 1; i += 1) {
       const result = throttle.observe(true);
       expect(result.alert).toBe(false);
@@ -167,8 +167,8 @@ describe('reportTickSkip', () => {
     const channel = recordingChannel();
     const params = { skipped: ['A', 'B', 'C'], planned: 4, reportedAt: new Date() };
 
-    await reportTickSkip(throttle, channel, undefined, params); // consecutive 1 — alerts
-    await reportTickSkip(throttle, channel, undefined, params); // consecutive 2 — quiet
+    await reportTickSkip(throttle, channel, undefined, params);
+    await reportTickSkip(throttle, channel, undefined, params);
 
     expect(channel.alerts).toHaveLength(1);
   });

@@ -1199,7 +1199,8 @@ const SKIP_REASON_CLASS: Record<TraderSkipReason, TraderDecisionClass> = {
   flatten_in_flight: 'declined_on_signal',
   early_exit_signal_unavailable: 'input_unusable',
   no_position_side: 'input_unusable',
-  atr_insufficient_bars: 'input_unusable', // benign warm-up, not corruption — see the class doc above
+  // benign warm-up, not corruption — see the class doc above
+  atr_insufficient_bars: 'input_unusable',
   atr_not_finite: 'input_unusable',
   mark_not_finite: 'input_unusable',
   stop_distance_not_positive: 'input_unusable',

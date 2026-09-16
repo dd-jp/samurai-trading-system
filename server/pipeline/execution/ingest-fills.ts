@@ -488,7 +488,8 @@ async function redistributeFlattenFills(
   // instead — see that lookup's own comment for what happens to it from
   // there, and why it is safe
   for (const clientOrderId of [...byLot.keys()]) {
-    if (positionKeys.has(clientOrderId)) continue; // a lot's own bucket — the existing path
+    // a lot's own bucket — the existing path
+    if (positionKeys.has(clientOrderId)) continue;
 
     // #575's containment boundary for one flatten. `getFlattenAttribution`
     // alone throws five ways, and every one of them is a statement about THIS

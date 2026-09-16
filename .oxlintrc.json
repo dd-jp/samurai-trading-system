@@ -12,8 +12,8 @@
   "rules": {
     "no-comment-slop/no-banner-comment": "error",
     "no-comment-slop/no-foreign-syntax": "error",
-    "no-comment-slop/no-jargon": "warn",
-    "no-comment-slop/no-trailing-comment": "warn",
+    "no-comment-slop/no-jargon": ["error", { "allow": ["leverage"] }],
+    "no-comment-slop/no-trailing-comment": "error",
     "no-comment-slop/multiline-jsdoc-format": "error",
     "no-comment-slop/no-trailing-period": "error",
     "complexity": ["error", { "max": 20 }],

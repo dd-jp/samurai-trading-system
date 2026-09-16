@@ -81,7 +81,7 @@ describe('FilledZeroSizeThrottle', () => {
     const throttle = new FilledZeroSizeThrottle();
     throttle.observe('lot-1', at(0));
     throttle.observe('lot-1', at(1));
-    throttle.observe('lot-1', at(2)); // consecutive: 3, warns
+    throttle.observe('lot-1', at(2));
     // lot-2's FIRST observation is still below threshold, unaffected by
     // lot-1's count — no shared state between lots
     expect(throttle.observe('lot-2', at(3))).toEqual({ announce: null, consecutive: 1 });
@@ -91,7 +91,7 @@ describe('FilledZeroSizeThrottle', () => {
     const throttle = new FilledZeroSizeThrottle();
     throttle.observe('lot-1', at(0));
     throttle.observe('lot-1', at(1));
-    expect(throttle.observe('lot-1', at(2))).toEqual({ announce: 'warn', consecutive: 3 }); // lot-1 warns
+    expect(throttle.observe('lot-1', at(2))).toEqual({ announce: 'warn', consecutive: 3 });
     throttle.observe('lot-2', at(3));
     throttle.observe('lot-2', at(4));
     // lot-2 reaching the same threshold warns too — the silence is per-lot,
@@ -103,7 +103,7 @@ describe('FilledZeroSizeThrottle', () => {
     const throttle = new FilledZeroSizeThrottle();
     throttle.observe('lot-1', at(0));
     throttle.observe('lot-1', at(1));
-    throttle.observe('lot-1', at(2)); // consecutive: 3, warns
+    throttle.observe('lot-1', at(2));
     throttle.clear('lot-1');
     expect(throttle.observe('lot-1', at(3))).toEqual({ announce: null, consecutive: 1 });
     throttle.observe('lot-1', at(4));
@@ -115,12 +115,12 @@ describe('FilledZeroSizeThrottle', () => {
   it('clear() reports whether the cleared episode had actually warned', () => {
     const throttle = new FilledZeroSizeThrottle();
     throttle.observe('lot-1', at(0));
-    throttle.observe('lot-1', at(1)); // consecutive: 2 — never reached the warn threshold
+    throttle.observe('lot-1', at(1));
     expect(throttle.clear('lot-1')).toEqual({ hadWarned: false });
 
     throttle.observe('lot-2', at(0));
     throttle.observe('lot-2', at(1));
-    throttle.observe('lot-2', at(2)); // consecutive: 3 — warned
+    throttle.observe('lot-2', at(2));
     expect(throttle.clear('lot-2')).toEqual({ hadWarned: true });
   });
 

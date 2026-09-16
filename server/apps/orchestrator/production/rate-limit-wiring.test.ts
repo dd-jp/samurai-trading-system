@@ -928,10 +928,7 @@ describe("Alpaca's burst covers one fill-poll sweep of the configured universe (
    * instrument fetches at once while `reconcile()` sweeps
    */
   it('has capacity for a cold-start bar sweep alongside the order path', () => {
-    const coldStart =
-      DEFAULT_UNIVERSE.length + // one bars fetch per instrument, cache empty
-      DEFAULT_UNIVERSE.length + // reconcile: one getOrder per open bracket
-      1; // a submitBracket from the first tick
+    const coldStart = DEFAULT_UNIVERSE.length + DEFAULT_UNIVERSE.length + 1;
 
     expect(DEFAULT_VENUE_PACING.alpaca.capacity).toBeGreaterThanOrEqual(coldStart);
   });

@@ -565,7 +565,7 @@ describe('AnalystOrchestrator', () => {
       const { clock, marketData, marketIntelligence } = buildDeps('stocks');
       const personas = [
         stubAnalyst('technical', 'mandatory', 'succeed'),
-        stubAnalyst('fundamental', 'optional', 'fail'), // hypothetical demotion, see comment above
+        stubAnalyst('fundamental', 'optional', 'fail'),
         stubAnalyst('sentiment', 'optional', 'fail'),
       ];
       const orchestrator = new AnalystOrchestrator(
@@ -601,7 +601,7 @@ describe('AnalystOrchestrator', () => {
       const personas = [
         stubAnalyst('technical', 'mandatory', 'succeed'),
         stubAnalyst('fundamental', 'mandatory', 'succeed'),
-        stubAnalyst('sentiment', 'mandatory', 'fail'), // hypothetical promotion
+        stubAnalyst('sentiment', 'mandatory', 'fail'),
       ];
       const orchestrator = new AnalystOrchestrator(
         { market_data: marketData, market_intelligence: marketIntelligence },
@@ -775,7 +775,7 @@ describe('AnalystOrchestrator', () => {
       expect(result.failures[0]?.reason).toContain('technical unavailable (after 2 attempts)');
 
       const debugEntries = logger.entries.filter((entry) => entry.level === 'debug');
-      expect(debugEntries).toHaveLength(2); // one per attempt — both attempts reject the same way
+      expect(debugEntries).toHaveLength(2);
       for (const [index, entry] of debugEntries.entries()) {
         expect(entry.trace_id).toBe('trace-cause');
         expect(entry.stage).toBe('analysts');
