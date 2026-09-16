@@ -174,6 +174,7 @@ export async function runTickPlan(
     plan.instruments.length,
   );
 
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: every allocated index must reach tails.finish (including the gate-claim throw path, which calls it before re-throwing, #1040) and the crash-handling guards (safeLog, currentTickStore read, auditLog.record) exist so worker() can never reject (#507's orphaned-worker leak) — both invariants are compiler-invisible and an extraction deep enough to matter would take several more cuts through code an earlier session already called untouchable
   async function worker(): Promise<void> {
     while (true) {
       const index = cursor++;

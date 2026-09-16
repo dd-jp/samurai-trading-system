@@ -137,6 +137,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+function collectSaxoErrorCandidates(parsed: Record<string, unknown>): unknown[] {
+  const candidates: unknown[] = [parsed.ErrorInfo, parsed];
+  if (Array.isArray(parsed.Orders)) {
+    for (const leg of parsed.Orders) {
+      if (isRecord(leg)) candidates.push(leg.ErrorInfo);
+    }
+  }
+  return candidates;
+}
+
+function readSaxoErrorInfo(
+  candidate: unknown,
+): { code: string | undefined; message: string | undefined } | undefined {
+  if (!isRecord(candidate)) return undefined;
+  const code = typeof candidate.ErrorCode === 'string' ? candidate.ErrorCode : undefined;
+  const message =
+    typeof candidate.Message === 'string' ? truncateForError(candidate.Message) : undefined;
+  return code === undefined && message === undefined ? undefined : { code, message };
+}
+
 /**
  * Pulls `ErrorCode`/`Message` from Saxo's two documented error shapes: the
  * order envelope `{ErrorInfo: {ErrorCode, Message}, Orders: [{ErrorInfo}]}`
@@ -156,18 +176,9 @@ function parseSaxoErrorInfo(bodyText: string): {
   }
   if (!isRecord(parsed)) return { code: undefined, message: undefined };
 
-  const candidates: unknown[] = [parsed.ErrorInfo, parsed];
-  if (Array.isArray(parsed.Orders)) {
-    for (const leg of parsed.Orders) {
-      if (isRecord(leg)) candidates.push(leg.ErrorInfo);
-    }
-  }
-  for (const candidate of candidates) {
-    if (!isRecord(candidate)) continue;
-    const code = typeof candidate.ErrorCode === 'string' ? candidate.ErrorCode : undefined;
-    const message =
-      typeof candidate.Message === 'string' ? truncateForError(candidate.Message) : undefined;
-    if (code !== undefined || message !== undefined) return { code, message };
+  for (const candidate of collectSaxoErrorCandidates(parsed)) {
+    const info = readSaxoErrorInfo(candidate);
+    if (info !== undefined) return info;
   }
   return { code: undefined, message: undefined };
 }

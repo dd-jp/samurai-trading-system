@@ -125,6 +125,7 @@ export async function sweepResidualProtection(
  * SAME expressions the observing poll uses (`heldQuantityFromFills`/`isFlat`,
  * shared/held-quantity.ts), so the two surfaces cannot disagree about flatness.
  */
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: each branch is a distinct settlement outcome (flat/garbage-residual/rearm-failed/etc), several fail-closed on purpose per the doc comments above them — extracting one would separate a return from the specific evidence and escalation it is paired with
 async function sweepOne(
   input: ResidualSweepInput,
   row: UnprotectedResidualLot,

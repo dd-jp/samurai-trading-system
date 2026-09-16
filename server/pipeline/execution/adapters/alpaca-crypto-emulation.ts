@@ -429,43 +429,67 @@ export class AlpacaCryptoLegEmulation {
         collectFill(targetOrder, 'target', key, instrument, since, observedAt, fills);
 
       await this.watchDoubleFill(bracket, stopOrder, targetOrder, failures);
-
-      if (bracket.phase === 'pending_entry') {
-        await this.advanceEntry(bracket, entry);
-      } else if (bracket.phase === 'arming') {
-        await this.resumeArming(bracket);
-      } else if (bracket.phase === 'armed') {
-        await this.advanceExits(bracket, stopOrder, targetOrder);
-      } else if (bracket.phase === 'cancelling_sibling') {
-        await this.finishSiblingCancel(bracket, stopOrder, targetOrder);
-      } else if (
-        bracket.phase === 'resolved' &&
-        isTerminal(entry) &&
-        (stopOrder === null || isTerminal(stopOrder)) &&
-        (targetOrder === null || isTerminal(targetOrder))
-      ) {
-        // Everything terminal and its fills just (re-)offered: nothing
-        // left to observe until a restart re-derives once more
-        bracket.donePolling = true;
-      }
+      await this.advanceBracketPhase(bracket, entry, stopOrder, targetOrder);
       return false;
     } catch (error) {
       // Same isolation, same UnpricedFillError bookkeeping (guarded journal
       // write, expected-condition-not-a-failure) as the adapter's bracket/
       // flatten/re-arm sweeps — see their comments
-      if (error instanceof UnpricedFillError) {
-        try {
-          this.deps.state.recordUnpricedFill('alpaca', error.observation, this.deps.clock.now());
-          return false;
-        } catch (stateError) {
-          failures.push(stateError);
-          return true;
-        }
-      } else {
-        failures.push(error);
+      return this.recordSweepError(error, failures);
+    }
+  }
+
+  /**
+   * The phase machine's one-transition-per-poll dispatch, split out of
+   * `sweepOneBracket`'s try block. Branches are mutually exclusive on
+   * `bracket.phase` (or, for the terminal case, `phase === 'resolved'` plus
+   * every leg's own terminal check) — no branch's effect depends on another
+   * having run first.
+   */
+  private async advanceBracketPhase(
+    bracket: EmulatedBracket,
+    entry: AlpacaOrder,
+    stopOrder: AlpacaOrder | null,
+    targetOrder: AlpacaOrder | null,
+  ): Promise<void> {
+    if (bracket.phase === 'pending_entry') {
+      await this.advanceEntry(bracket, entry);
+    } else if (bracket.phase === 'arming') {
+      await this.resumeArming(bracket);
+    } else if (bracket.phase === 'armed') {
+      await this.advanceExits(bracket, stopOrder, targetOrder);
+    } else if (bracket.phase === 'cancelling_sibling') {
+      await this.finishSiblingCancel(bracket, stopOrder, targetOrder);
+    } else if (
+      bracket.phase === 'resolved' &&
+      isTerminal(entry) &&
+      (stopOrder === null || isTerminal(stopOrder)) &&
+      (targetOrder === null || isTerminal(targetOrder))
+    ) {
+      // Everything terminal and its fills just (re-)offered: nothing
+      // left to observe until a restart re-derives once more
+      bracket.donePolling = true;
+    }
+  }
+
+  /**
+   * Shared with `sweepOneBracket`'s catch: an `UnpricedFillError` is
+   * journaled and NOT counted as a failure unless the journal write itself
+   * throws (#524 review, deepseek) — see the adapter's own `recordSweepError`
+   * for the full reasoning, which applies unchanged here
+   */
+  private recordSweepError(error: unknown, failures: unknown[]): boolean {
+    if (error instanceof UnpricedFillError) {
+      try {
+        this.deps.state.recordUnpricedFill('alpaca', error.observation, this.deps.clock.now());
+        return false;
+      } catch (stateError) {
+        failures.push(stateError);
         return true;
       }
     }
+    failures.push(error);
+    return true;
   }
 
   /**

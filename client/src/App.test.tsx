@@ -23,10 +23,12 @@ import {
 
 const POLL_MS = 20;
 
-function renderApp(payloads: Parameters<typeof fakeFetch>[0], now?: () => number) {
-  return render(
-    <App snapshotOptions={{ fetchImpl: fakeFetch(payloads), intervalMs: POLL_MS, now }} />,
-  );
+function renderApp(
+  payloads: Parameters<typeof fakeFetch>[0],
+  now?: () => number,
+  intervalMs: number = POLL_MS,
+) {
+  return render(<App snapshotOptions={{ fetchImpl: fakeFetch(payloads), intervalMs, now }} />);
 }
 
 function laneView() {
@@ -120,7 +122,10 @@ describe('rail', () => {
   });
 
   it('marks the page STALE after two missed polls and keeps the last clock', async () => {
-    renderApp([makeSnapshot(), null]);
+    // Wider than POLL_MS: this test needs to observe ALIVE before the
+    // watchdog flips it, and the default 20ms/40ms window races the real
+    // wall clock under load (findByRole + a full Rail render can outrun it)
+    renderApp([makeSnapshot(), null], undefined, 100);
     const rail = await screen.findByRole('complementary', { name: 'Rail' });
     await within(rail).findByText('ALIVE');
     await waitFor(() => expect(within(rail).getByText('STALE')).toBeTruthy(), {
@@ -422,7 +427,12 @@ describe('cold start (#1520)', () => {
   });
 
   it('keeps the last known book on screen when the feed goes stale — a stale feed is never a cold start', async () => {
-    renderApp([makeSnapshot({ positions: [makePosition({ instrument: 'SPY' })] }), null]);
+    // Wider than POLL_MS for the same reason as the STALE test above (#1520)
+    renderApp(
+      [makeSnapshot({ positions: [makePosition({ instrument: 'SPY' })] }), null],
+      undefined,
+      100,
+    );
 
     const rail = await screen.findByRole('complementary', { name: 'Rail' });
     await within(rail).findByText('ALIVE');

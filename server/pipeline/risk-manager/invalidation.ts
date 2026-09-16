@@ -1,27 +1,39 @@
 /**
  * The invalidation half of check-pipeline step 7 — the DETERMINISTIC half.
- * `docs/specs/risk-manager-spec.md`, "Module: Risk Critic — the invalidation
- * fold", is the spec this file implements.
  *
- * Separate from `critic.ts` because only condition EMISSION is LLM work:
- * `critic.ts` owns the single model call (prose and raw conditions come back
- * from the same pass, so this seam accumulates no second LLM pass). Everything
- * here — the validator, the tri-state evaluator, the reason lines `evaluate()`
- * records — is deterministic code, unit-testable in isolation.
+ * `devils-advocate-spec.md` designed a standalone `invalidation` stage; David
+ * declined it as a stage on 2026-09-02 (*"fold this to risk critic"*) and
+ * [#997](https://github.com/dd-jp/samurai-trading-system/issues/997) fixed how
+ * the mechanism folds in. `docs/specs/risk-manager-spec.md`, "Module: Risk
+ * Critic — the invalidation fold", is the spec this file implements.
  *
- * The load-bearing rule: the LLM names what to check; deterministic code does
- * the checking, so a model cannot produce a breach — only propose a condition.
- * That is enforced by the TYPES, not a prompt instruction — `RawCondition`
- * below has no `state` field for a model to fill in, so a response containing
+ * ## Why this is a separate module from `critic.ts`
+ *
+ * #997 Q1: only condition EMISSION is LLM work. `critic.ts` owns the single
+ * model call (prose and raw conditions come back from the same pass, so the
+ * step-7 seam accumulates no second LLM pass and the ~$1/yr envelope holds).
+ * Everything here — the validator, the tri-state evaluator, the reason lines
+ * `evaluate()` records — is deterministic code, unit-testable in isolation and
+ * deliberately outside the module the spec defines as the qualitative pass.
+ *
+ * ## The load-bearing rule
+ *
+ * **The LLM names what to check; deterministic code does the checking, so a
+ * model cannot produce a breach — only propose a condition.** That is enforced
+ * by the TYPES, not by a prompt instruction: `RawCondition` below has no
+ * `state` field for a model to fill in, so a response containing
  * `"state":"breached"` is read as an unknown property and discarded. Every
- * `EvaluatedCondition.state` is produced by `evaluateConditions` from a
- * measured read.
+ * `EvaluatedCondition.state` in this system is produced by `evaluateConditions`
+ * from a measured read.
  *
- * Failure posture is partial-tolerant: nothing in this file can void the
- * prose verdict. A conditions half that is absent, unreadable, or emptied by
- * the drop rules yields an empty list, which reports `no_conditions` and
- * enforces nothing; `unevaluable` likewise has no enforcement effect, since a
- * data gap must never block a trade. Only a MEASURED `breached` has teeth.
+ * ## Failure posture
+ *
+ * Partial-tolerant (#997 Q2a). Nothing in this file can void the prose verdict:
+ * a conditions half that is absent, unreadable, or emptied by the drop rules
+ * yields an empty list, which reports `no_conditions` and enforces nothing.
+ * `unevaluable` likewise has no enforcement effect — a data gap must never
+ * block a trade. Only a MEASURED `breached` has teeth, and the authority to act
+ * on it lives in `evaluate()` (#997 Q2b), not here.
  */
 
 import {
@@ -67,11 +79,11 @@ export const MAX_INVALIDATION_CONDITIONS = 5;
 export const MAX_INSPECTED_CONDITIONS = 16;
 
 /**
- * The ceiling on `lookback` for an indicator spec or a bars window — otherwise
- * a model emission of `lookback: 1_000_000` validates and triggers a huge
- * `getBars`/indicator read on the path an order is waiting on (`withinDeadline`
- * races the read against the budget but does not cancel it, so an unbounded
- * fetch is an unbounded wait either way).
+ * The ceiling on `lookback` for an indicator spec or a bars window (#994
+ * review, PR #1067) — otherwise a model emission of `lookback: 1_000_000`
+ * validates and triggers a huge `getBars`/indicator read on the path an order
+ * is waiting on (`withinDeadline` races the read against the budget but does
+ * not cancel it, so an unbounded fetch is an unbounded wait either way).
  *
  * Sized off the largest lookback any real caller in this codebase asks the
  * Market Data Service for on the indicator/bars path: `technical-analyst.ts`'s
@@ -82,7 +94,7 @@ export const MAX_INSPECTED_CONDITIONS = 16;
  */
 export const MAX_INVALIDATION_LOOKBACK = 1000;
 
-/** `binding_constraint` for a hard-reject on a measured breach. DISTINCT from `risk_critic:reject`. */
+/** `binding_constraint` for a hard-reject on a measured breach. DISTINCT from `risk_critic:reject` (#997 Q2b). */
 export const INVALIDATED_BINDING_CONSTRAINT = 'risk_critic:invalidated';
 
 /** Cap on any single audit string kept from the model's output */
@@ -205,8 +217,8 @@ export interface ValidatedConditions {
  * on an array yields its elements, which would otherwise pass this check and
  * then get cast to `Record<string, number>` downstream. Shared by
  * `readIndicatorSpec` (known `kind`) and `isObservable`'s retired-`kind`
- * branch, so the two never drift on what counts as a well-formed `params`
- * map.
+ * branch (#1068), so the two never drift on what counts as a well-formed
+ * `params` map.
  */
 function isWellFormedParams(value: unknown): value is Record<string, number> | undefined {
   if (value === undefined) return true;
@@ -249,6 +261,26 @@ function readBarWindow(value: unknown): BarWindow | 'unparseable' | 'lookback_to
   return { timeframe: window.timeframe, lookback: window.lookback };
 }
 
+function readIndicatorObservable(
+  rawSpec: unknown,
+): InvalidationObservable | 'unparseable' | 'unknown_indicator' | 'lookback_too_large' {
+  const spec = readIndicatorSpec(rawSpec);
+  if (spec === 'unparseable' || spec === 'unknown_indicator' || spec === 'lookback_too_large') {
+    return spec;
+  }
+  return { kind: 'indicator', spec };
+}
+
+function readBarsObservable(
+  measure: unknown,
+  rawWindow: unknown,
+): InvalidationObservable | 'unparseable' | 'lookback_too_large' {
+  if (measure !== 'volume_ratio') return 'unparseable';
+  const window = readBarWindow(rawWindow);
+  if (window === 'unparseable' || window === 'lookback_too_large') return window;
+  return { kind: 'bars', window, measure: 'volume_ratio' };
+}
+
 function readObservable(
   value: unknown,
 ):
@@ -265,27 +297,19 @@ function readObservable(
     measure?: unknown;
   };
 
-  if (observable.kind === 'mark') return { kind: 'mark' };
-
-  if (observable.kind === 'indicator') {
-    const spec = readIndicatorSpec(observable.spec);
-    if (spec === 'unparseable' || spec === 'unknown_indicator' || spec === 'lookback_too_large') {
-      return spec;
-    }
-    return { kind: 'indicator', spec };
+  switch (observable.kind) {
+    case 'mark':
+      return { kind: 'mark' };
+    case 'indicator':
+      return readIndicatorObservable(observable.spec);
+    case 'bars':
+      return readBarsObservable(observable.measure, observable.window);
+    default:
+      // Anything else — including the 2026-08-05 proposal's `mi_context`,
+      // which this fold deliberately does not carry — binds to no service
+      // the Risk step can read at decision time
+      return 'unknown_observable';
   }
-
-  if (observable.kind === 'bars') {
-    if (observable.measure !== 'volume_ratio') return 'unparseable';
-    const window = readBarWindow(observable.window);
-    if (window === 'unparseable' || window === 'lookback_too_large') return window;
-    return { kind: 'bars', window, measure: 'volume_ratio' };
-  }
-
-  // Anything else — including the earlier proposal's `mi_context`, which this
-  // fold deliberately does not carry — binds to no service the Risk step can
-  // read at decision time
-  return 'unknown_observable';
 }
 
 function rangeFor(observable: InvalidationObservable): ThresholdRange | undefined {
@@ -341,6 +365,70 @@ function thresholdInRange(observable: InvalidationObservable, threshold: number)
   return range.exclusive_min === true ? threshold > range.min : threshold >= range.min;
 }
 
+type ConditionClassification =
+  | { id: string | null; ok: false; reason: InvalidationDropReason }
+  | { id: string; ok: true; condition: InvalidationCondition };
+
+/**
+ * One element of `validateConditions`'s loop, pulled out so the ceiling check
+ * and every drop reason stay in the same declared-precedence order they had
+ * inline: `acceptedCount` is `accepted.length` at the moment this element is
+ * reached, so `over_cap` still only fires once an on-merits-valid condition
+ * would be the one to overflow the cap
+ */
+function classifyRawCondition(
+  candidate: RawCondition,
+  side: OrderIntent['side'],
+  acceptedCount: number,
+): ConditionClassification {
+  const id = isNonEmptyString(candidate.id) ? candidate.id.trim().slice(0, MAX_RAW_CHARS) : null;
+
+  if (id === null || !isNonEmptyString(candidate.rationale)) {
+    return { id, ok: false, reason: 'unparseable' };
+  }
+  if (!COMPARATORS.includes(candidate.comparator as Comparator)) {
+    return { id, ok: false, reason: 'unparseable' };
+  }
+  if (!isFiniteNumber(candidate.threshold)) {
+    return { id, ok: false, reason: 'unparseable' };
+  }
+
+  const observable = readObservable(candidate.observable);
+  if (observable === 'unparseable' || observable === 'unknown_observable') {
+    return { id, ok: false, reason: observable };
+  }
+  if (observable === 'unknown_indicator' || observable === 'lookback_too_large') {
+    return { id, ok: false, reason: observable };
+  }
+
+  const comparator = candidate.comparator as Comparator;
+  if (!thresholdInRange(observable, candidate.threshold)) {
+    return { id, ok: false, reason: 'threshold_out_of_range' };
+  }
+  if (!directionIsCoherent(observable, comparator, side)) {
+    return { id, ok: false, reason: 'direction_incoherent' };
+  }
+
+  // The ceiling is applied LAST, so a surplus condition that would have been
+  // dropped on its own merits is recorded with the real reason rather than
+  // hidden behind `over_cap`
+  if (acceptedCount >= MAX_INVALIDATION_CONDITIONS) {
+    return { id, ok: false, reason: 'over_cap' };
+  }
+
+  return {
+    id,
+    ok: true,
+    condition: {
+      id,
+      observable,
+      comparator,
+      threshold: candidate.threshold,
+      rationale: candidate.rationale.trim().slice(0, MAX_RAW_CHARS),
+    },
+  };
+}
+
 /**
  * The deterministic validator: raw model output in, a checkable list plus an
  * audited list of refusals out. Never throws, and never coerces — a malformed
@@ -364,61 +452,12 @@ export function validateConditions(raw: unknown, side: OrderIntent['side']): Val
       dropped.push(drop(null, element, 'unparseable'));
       continue;
     }
-    const candidate = element as RawCondition;
-    const id = isNonEmptyString(candidate.id) ? candidate.id.trim().slice(0, MAX_RAW_CHARS) : null;
-
-    if (id === null || !isNonEmptyString(candidate.rationale)) {
-      dropped.push(drop(id, element, 'unparseable'));
-      continue;
+    const result = classifyRawCondition(element as RawCondition, side, accepted.length);
+    if (result.ok) {
+      accepted.push(result.condition);
+    } else {
+      dropped.push(drop(result.id, element, result.reason));
     }
-    if (!COMPARATORS.includes(candidate.comparator as Comparator)) {
-      dropped.push(drop(id, element, 'unparseable'));
-      continue;
-    }
-    if (!isFiniteNumber(candidate.threshold)) {
-      dropped.push(drop(id, element, 'unparseable'));
-      continue;
-    }
-
-    const observable = readObservable(candidate.observable);
-    if (observable === 'unparseable' || observable === 'unknown_observable') {
-      dropped.push(drop(id, element, observable));
-      continue;
-    }
-    if (observable === 'unknown_indicator') {
-      dropped.push(drop(id, element, 'unknown_indicator'));
-      continue;
-    }
-    if (observable === 'lookback_too_large') {
-      dropped.push(drop(id, element, 'lookback_too_large'));
-      continue;
-    }
-
-    const comparator = candidate.comparator as Comparator;
-    if (!thresholdInRange(observable, candidate.threshold)) {
-      dropped.push(drop(id, element, 'threshold_out_of_range'));
-      continue;
-    }
-    if (!directionIsCoherent(observable, comparator, side)) {
-      dropped.push(drop(id, element, 'direction_incoherent'));
-      continue;
-    }
-
-    // The ceiling is applied LAST, so a surplus condition that would have been
-    // dropped on its own merits is recorded with the real reason rather than
-    // hidden behind `over_cap`
-    if (accepted.length >= MAX_INVALIDATION_CONDITIONS) {
-      dropped.push(drop(id, element, 'over_cap'));
-      continue;
-    }
-
-    accepted.push({
-      id,
-      observable,
-      comparator,
-      threshold: candidate.threshold,
-      rationale: candidate.rationale.trim().slice(0, MAX_RAW_CHARS),
-    });
   }
 
   if (raw.length > MAX_INSPECTED_CONDITIONS) {
@@ -437,37 +476,69 @@ export function validateConditions(raw: unknown, side: OrderIntent['side']): Val
 }
 
 /**
- * Reading a PERSISTED conditions half back. `risk_critic_log.conditions_json`
- * is a TEXT column: its contents are whatever a past process wrote, plus
- * whatever a hand-edit or a partial write left behind. A cast alone (`parsed
- * as EvaluatedCondition[]`) buys nothing — `[{}]` then reaches `evaluate()`
- * and throws reading `.observable`, and `[{"state":"breached"}]` reaches a
- * HARD REJECT with no measurement behind it, defeating the "a model cannot
- * produce a breach" rule via the storage layer.
+ * ## Reading a PERSISTED conditions half back (#994 review, tightened #1068)
+ *
+ * `risk_critic_log.conditions_json` is a TEXT column: its contents are
+ * whatever a past process wrote, plus whatever a hand-edit or a partial write
+ * left behind. A cast alone (`parsed as EvaluatedCondition[]`) buys nothing —
+ * `[{}]` then reaches `evaluate()` and throws reading `.observable`, and
+ * `[{"state":"breached"}]` reaches a HARD REJECT with no measurement behind
+ * it, which is exactly the "a model cannot produce a breach" rule defeated by
+ * the storage layer.
  *
  * So the FULL shape is checked on read (`risk-manager-spec.md`, "persistence &
  * replay"): finite `observed` on a measured state, `observed: null` on
  * `unevaluable`, a well-formed `window` on a `bars` observable, and an
  * indicator's `lookback` (at or under `MAX_INVALIDATION_LOOKBACK`),
- * `timeframe`, and `params` — re-checked independently of whether the
- * indicator `kind` itself is still recognized, so a retired `kind` cannot
- * smuggle a malformed field past the registry-drift leniency below.
+ * `timeframe`, and `params` — all three are re-checked independently of
+ * whether the indicator `kind` itself is still recognized, so a retired
+ * `kind` cannot smuggle an oversized lookback, a missing timeframe, or a
+ * malformed params map past the registry-drift leniency below.
  *
  * Per-element, not whole-list: a malformed element is DROPPED from the
  * replayed list rather than collapsing the whole row. If nothing survives,
- * the row reports `no_conditions`, the same marker a pre-fold row produces —
- * never a hard reject and never a silent accept of a breach.
- * `readPersistedDroppedConditions` (the drop-audit column) keeps its original
- * all-or-nothing rule, since that column has zero enforcement effect either
- * way.
+ * the row reports `no_conditions` — the same marker a pre-fold row produces
+ * (#997 Q3) — never a hard reject and never a silent accept of a breach.
+ * `readPersistedDroppedConditions` (the drop-audit column) is unaffected and
+ * keeps its original all-or-nothing rule: that column has zero enforcement
+ * effect either way, so there is no safety reason to touch it here.
  *
- * One deliberate exception: an indicator `kind` that has since left
- * `INDICATOR_KINDS` is still accepted when everything else about it is
- * well-formed, so a historical row replays to the decision it produced when
- * the state was actually measured — dropping it on registry drift would
- * silently change a historical verdict for a reason unrelated to what
- * happened at the time.
+ * One deliberate exception survives the tightening: an indicator `kind` that
+ * has since left `INDICATOR_KINDS` is still accepted when everything else
+ * about it is well-formed, so a historical row replays to the decision it
+ * produced when the state was actually measured. Dropping it on registry
+ * drift would silently change a historical verdict for a reason that has
+ * nothing to do with what happened at the time.
  */
+// `readIndicatorSpec` reports the retired-`kind` case before it ever inspects
+// `lookback`, `timeframe`, or `params`, so all three have to be re-checked
+// independently here: registry drift may not smuggle an oversized lookback,
+// a missing timeframe, or a malformed params map past the read-time safety
+// checks
+function isRetiredIndicatorSpecWellFormed(spec: unknown): boolean {
+  const rawSpec = spec as { lookback?: unknown; timeframe?: unknown; params?: unknown };
+  return (
+    isPositiveInteger(rawSpec.lookback) &&
+    rawSpec.lookback <= MAX_INVALIDATION_LOOKBACK &&
+    isNonEmptyString(rawSpec.timeframe) &&
+    isWellFormedParams(rawSpec.params)
+  );
+}
+
+function isValidIndicatorObservable(rawSpec: unknown): boolean {
+  const spec = readIndicatorSpec(rawSpec);
+  if (spec === 'unparseable' || spec === 'lookback_too_large') return false;
+  // `unknown_indicator` is deliberately still accepted (registry-drift leniency, above)
+  if (spec === 'unknown_indicator') return isRetiredIndicatorSpecWellFormed(rawSpec);
+  return true;
+}
+
+function isValidBarsObservable(measure: unknown, rawWindow: unknown): boolean {
+  if (measure !== 'volume_ratio') return false;
+  const window = readBarWindow(rawWindow);
+  return window !== 'unparseable' && window !== 'lookback_too_large';
+}
+
 function isObservable(value: unknown): value is InvalidationObservable {
   if (typeof value !== 'object' || value === null) return false;
   const observable = value as {
@@ -476,37 +547,16 @@ function isObservable(value: unknown): value is InvalidationObservable {
     window?: unknown;
     measure?: unknown;
   };
-  if (observable.kind === 'mark') return true;
-  if (observable.kind === 'indicator') {
-    const spec = readIndicatorSpec(observable.spec);
-    if (spec === 'unparseable' || spec === 'lookback_too_large') return false;
-    // `unknown_indicator` is deliberately still accepted (registry-drift
-    // leniency, above) — but `readIndicatorSpec` reports the retired-`kind`
-    // case before it ever inspects `lookback`, `timeframe`, or `params`, so
-    // all three have to be re-checked independently here: registry drift may
-    // not smuggle an oversized lookback, a missing timeframe, or a malformed
-    // params map past the read-time safety checks
-    if (spec === 'unknown_indicator') {
-      const rawSpec = observable.spec as {
-        lookback?: unknown;
-        timeframe?: unknown;
-        params?: unknown;
-      };
-      return (
-        isPositiveInteger(rawSpec.lookback) &&
-        rawSpec.lookback <= MAX_INVALIDATION_LOOKBACK &&
-        isNonEmptyString(rawSpec.timeframe) &&
-        isWellFormedParams(rawSpec.params)
-      );
-    }
-    return true;
+  switch (observable.kind) {
+    case 'mark':
+      return true;
+    case 'indicator':
+      return isValidIndicatorObservable(observable.spec);
+    case 'bars':
+      return isValidBarsObservable(observable.measure, observable.window);
+    default:
+      return false;
   }
-  if (observable.kind === 'bars') {
-    if (observable.measure !== 'volume_ratio') return false;
-    const window = readBarWindow(observable.window);
-    return window !== 'unparseable' && window !== 'lookback_too_large';
-  }
-  return false;
 }
 
 function isInvalidationCondition(value: unknown): value is InvalidationCondition {
@@ -558,7 +608,7 @@ function readListStrict<T>(
 }
 
 /**
- * Parses a persisted `conditions` list ELEMENT-WISE: a malformed
+ * Parses a persisted `conditions` list ELEMENT-WISE (#1068): a malformed
  * element is dropped, the well-formed survivors are kept, and the result is
  * `undefined` (= `no_conditions`) only when NOTHING survives — never a hard
  * reject on a partially-corrupt row, and never enforcement built on an
@@ -605,6 +655,21 @@ export interface EvaluateConditionsInput {
   signal?: AbortSignal;
 }
 
+function volumeRatioFromBars(
+  bars: Awaited<ReturnType<MarketDataService['getBars']>>,
+): number | null {
+  if (bars.length < 2) return null;
+  const latest = bars[bars.length - 1];
+  const baseline = bars.slice(0, -1);
+  if (latest === undefined) return null;
+  const mean = baseline.reduce((total, bar) => total + bar.volume, 0) / baseline.length;
+  // A zero baseline has no ratio to report — an untraded window is a data
+  // gap, not a falsified thesis
+  if (!isFiniteNumber(mean) || mean === 0) return null;
+  const ratio = latest.volume / mean;
+  return isFiniteNumber(ratio) ? ratio : null;
+}
+
 /**
  * Measures one observable, or returns `null` for "could not be measured".
  *
@@ -630,16 +695,7 @@ async function observe(
       }
       case 'bars': {
         const bars = await marketData.getBars(instrument, observable.window, asOf);
-        if (bars.length < 2) return null;
-        const latest = bars[bars.length - 1];
-        const baseline = bars.slice(0, -1);
-        if (latest === undefined) return null;
-        const mean = baseline.reduce((total, bar) => total + bar.volume, 0) / baseline.length;
-        // A zero baseline has no ratio to report — an untraded window is a data
-        // gap, not a falsified thesis
-        if (!isFiniteNumber(mean) || mean === 0) return null;
-        const ratio = latest.volume / mean;
-        return isFiniteNumber(ratio) ? ratio : null;
+        return volumeRatioFromBars(bars);
       }
     }
   } catch {
