@@ -1,4 +1,4 @@
-/** The execution store port — split out because both Execution and Verdict depend on it. */
+/** The execution store port — split out because both Execution and Verdict depend on it */
 import type {
   AssetClass,
   BrokerFillId,
@@ -11,9 +11,9 @@ import type {
 } from '../../../shared/index.js';
 import type { ModelledCostBreakdown } from '../../../shared/store/index.js';
 
-/** The open book: every lot still in flight and how much of each is already closed. */
+/** The open book: every lot still in flight and how much of each is already closed */
 export interface PositionReader {
-  /** Excludes terminal lots — a fill against a closed lot is not ours to act on. */
+  /** Excludes terminal lots — a fill against a closed lot is not ours to act on */
   getOpenPositions(): Promise<OpenPosition[]>;
   /**
    * Each named lot's already-closed (exit-leg) quantity, summed — what makes held
@@ -32,10 +32,10 @@ export interface LotJournal {
   /**
    * True if an order or fill already exists under this key, OR a flatten
    * submission does — an exit writes no `OpenPosition`, so this is what makes
-   * a replayed exit dedupe the same way a replayed entry does.
+   * a replayed exit dedupe the same way a replayed entry does
    */
   findByKey(idempotency_key: string): Promise<boolean>;
-  /** Persist the intended lot at `pending` BEFORE the broker call, so a crash is recoverable via reconcile. */
+  /** Persist the intended lot at `pending` BEFORE the broker call, so a crash is recoverable via reconcile */
   writeAheadPosition(position: OpenPosition): Promise<void>;
   /** Persist the post-ack transition (`pending` → `submitted`) */
   updatePositionState(
@@ -44,7 +44,7 @@ export interface LotJournal {
   ): Promise<void>;
 }
 
-/** Reads over `fills`: the dedup check and per-lot fill history held-quantity is reconstructed from. */
+/** Reads over `fills`: the dedup check and per-lot fill history held-quantity is reconstructed from */
 export interface FillReader {
   /**
    * True if this `(idempotency_key, broker_fill_id)` pair was already ingested.
@@ -53,7 +53,7 @@ export interface FillReader {
    * one lot's fill to a different lot sharing that id string.
    */
   hasFill(args: { idempotency_key: string; broker_fill_id: BrokerFillId }): Promise<boolean>;
-  /** Every `Fill` recorded against a lot, in ingestion order — realized size/price/PnL are rebuilt from these, not a running total. */
+  /** Every `Fill` recorded against a lot, in ingestion order — realized size/price/PnL are rebuilt from these, not a running total */
   getFills(idempotency_key: string): Promise<Fill[]>;
   /**
    * Each named lot's persisted ENTRY fill quantity, summed. A key with no
@@ -64,12 +64,12 @@ export interface FillReader {
   getEntryFillSizes(idempotency_keys: readonly string[]): Promise<Map<string, number>>;
 }
 
-/** What `ingestFills()` persists through and nothing else does: the atomic lot advance and flatten-fill routing. */
+/** What `ingestFills()` persists through and nothing else does: the atomic lot advance and flatten-fill routing */
 export interface FillJournal {
   /**
    * Persist one poll's advance of a lot — new fills, recomputed state, and
    * on round-trip-to-flat the `ClosedTrade` — atomically, so a crash cannot
-   * land between the fill rows and the lot state they imply.
+   * land between the fill rows and the lot state they imply
    */
   applyLotAdvance(advance: LotAdvance): Promise<void>;
   /**
@@ -88,7 +88,7 @@ export interface FillJournal {
   markFlattenFillsSwept(idempotency_key: string, swept_at: Date): Promise<void>;
 }
 
-/** The flatten path's write-ahead-then-resolve journal over `flatten_submissions` — written by `executeExit`, settled by `reconcile()`. */
+/** The flatten path's write-ahead-then-resolve journal over `flatten_submissions` — written by `executeExit`, settled by `reconcile()` */
 export interface FlattenJournal {
   /**
    * Write-ahead at `'submitting'` BEFORE `broker.submitFlatten`, the same
@@ -160,7 +160,7 @@ export interface FlattenJournal {
   ): Promise<void>;
 }
 
-/** The durable marker on a lot whose partial-flatten residual is not yet confirmed protected, and the sweep worklist it feeds. */
+/** The durable marker on a lot whose partial-flatten residual is not yet confirmed protected, and the sweep worklist it feeds */
 export interface ResidualMarkers {
   /**
    * Durably marks a lot's partial-flatten residual as observed but not yet
@@ -197,7 +197,7 @@ export interface ResidualMarkers {
    * Point-read of the permanent-gap dedup, consulted BEFORE paging: after a
    * re-flatten is submitted for a residual, a later partial fill can hit the
    * same venue refusal again for the SAME episode, and without this check that
-   * pass would page a second time before the reflatten's fill closes the marker.
+   * pass would page a second time before the reflatten's fill closes the marker
    */
   getResidualRearmUnsupportedAlertedAt(idempotency_key: string): Promise<Date | null>;
   /**
@@ -208,7 +208,7 @@ export interface ResidualMarkers {
   getUnprotectedResidualLots(): Promise<UnprotectedResidualLot[]>;
 }
 
-/** Bookkeeping closes of lots that were never real positions — no venue action, ever. */
+/** Bookkeeping closes of lots that were never real positions — no venue action, ever */
 export interface LotRetirement {
   /**
    * Deletes `open_positions` rows that were never real positions and never
@@ -241,7 +241,7 @@ export interface LotRetirement {
 /**
  * Execution's writer seam over the shared store, of which it is the sole
  * writer — every role above, which is what one concrete store implements and
- * the composition root shares.
+ * the composition root shares
  */
 export type SharedStore = PositionReader &
   LotJournal &
@@ -251,10 +251,10 @@ export type SharedStore = PositionReader &
   ResidualMarkers &
   LotRetirement;
 
-/** One lot the residual-protection sweep still has work to do on — see `SharedStore.getUnprotectedResidualLots`. */
+/** One lot the residual-protection sweep still has work to do on — see `SharedStore.getUnprotectedResidualLots` */
 export interface UnprotectedResidualLot {
   position: OpenPosition;
-  /** When the unprotected residual was FIRST observed. */
+  /** When the unprotected residual was FIRST observed */
   unprotected_since: Date;
   /** When this episode's operator alert was posted; null if it never was */
   alerted_at: Date | null;
@@ -265,7 +265,7 @@ export interface UnprotectedResidualLot {
   rearm_unsupported_alerted_at: Date | null;
 }
 
-/** One `flatten_submissions` row `reconcile()`'s sweep still has work to do on — see `SharedStore.getUnresolvedFlattens`. */
+/** One `flatten_submissions` row `reconcile()`'s sweep still has work to do on — see `SharedStore.getUnresolvedFlattens` */
 export interface UnresolvedFlattenSubmission {
   idempotency_key: string;
   instrument: string;
@@ -275,7 +275,7 @@ export interface UnresolvedFlattenSubmission {
    * before it drops out of the scan.
    */
   status: 'submitting' | 'submitted';
-  /** The write-ahead time — how long this row has blocked its instrument, and the anchor the max-age bound measures against. */
+  /** The write-ahead time — how long this row has blocked its instrument, and the anchor the max-age bound measures against */
   submitted_at: Date;
   /**
    * The venue's last known answer, or `null` if it has never once described
@@ -340,7 +340,7 @@ export interface FlattenAttribution {
   size: number;
 }
 
-/** One poll's atomic advance of a single lot — see `SharedStore.applyLotAdvance`. */
+/** One poll's atomic advance of a single lot — see `SharedStore.applyLotAdvance` */
 export interface LotAdvance {
   idempotency_key: string;
   /** New fills this poll ingested (already deduped against `hasFill`). One row per fill. */
@@ -351,7 +351,7 @@ export interface LotAdvance {
   closed_trade?: ClosedTrade;
 }
 
-/** The write-ahead record for `SharedStore.writeAheadFlatten` — see there for why it exists. */
+/** The write-ahead record for `SharedStore.writeAheadFlatten` — see there for why it exists */
 export interface FlattenSubmissionWriteAhead {
   idempotency_key: string;
   instrument: string;

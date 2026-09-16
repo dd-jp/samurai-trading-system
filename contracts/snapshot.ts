@@ -1,4 +1,4 @@
-/** Dashboard wire model — the JSON payload `GET /api/snapshot` returns; `Date` fields serialize to ISO strings at the HTTP boundary (`buildSnapshot`). */
+/** Dashboard wire model — the JSON payload `GET /api/snapshot` returns; `Date` fields serialize to ISO strings at the HTTP boundary (`buildSnapshot`) */
 
 import type { MetricsSuite, ProfitFactorWire } from './metrics.js';
 import type { PipelineStage, PipelineView } from './pipeline.js';
@@ -50,7 +50,7 @@ export interface DebateRow {
   created_at: string;
   /** How this debate resolved. Absent for a row written before migration 0041. */
   termination?: DebateTerminationWire;
-  /** Present only when `termination === 'latency_truncated'` and the row postdates migration 0051 — distinguishes an escaped LLM failure from latency-budget starvation. */
+  /** Present only when `termination === 'latency_truncated'` and the row postdates migration 0051 — distinguishes an escaped LLM failure from latency-budget starvation */
   termination_cause?: DebateTerminationCauseWire;
   contributions: {
     analyst_id: string;
@@ -118,7 +118,7 @@ export interface ArmComparisonRow {
   min_trades_per_arm: number;
 }
 
-/** The outside benchmarks this system measures — closed union because #636 settled the set (SPY and 60/40). */
+/** The outside benchmarks this system measures — closed union because #636 settled the set (SPY and 60/40) */
 export type OutsideBenchmarkWire = 'spy' | 'sixty_forty';
 
 /**
@@ -160,9 +160,9 @@ export interface PnlOverallWire {
   net_gbp: number;
   /** `net_gbp` as a signed fraction of the declared book (`PnlHeadlineWire.book_gbp`) — 0.05 is 5% */
   net_pct_of_book: number;
-  /** Peak-to-trough fall of the REALIZED series only, as a positive fraction of the declared book. */
+  /** Peak-to-trough fall of the REALIZED series only, as a positive fraction of the declared book */
   max_drawdown_pct: number;
-  /** Every closed trade this arm has ever recorded — unfiltered, can exceed the arm-comparison panel's figure for the same window. */
+  /** Every closed trade this arm has ever recorded — unfiltered, can exceed the arm-comparison panel's figure for the same window */
   trade_count: number;
 }
 
@@ -182,14 +182,14 @@ export interface PnlTodayWire {
   trade_count: number;
 }
 
-/** The dashboard's server-computed P&L headline for one arm — all-time with drawdown, and today (Europe/London), both in GBP with the conversion rate carried alongside. */
+/** The dashboard's server-computed P&L headline for one arm — all-time with drawdown, and today (Europe/London), both in GBP with the conversion rate carried alongside */
 export interface PnlHeadlineWire {
   overall: PnlOverallWire;
   today: PnlTodayWire;
   /** USD per GBP — `SIZING_USD_PER_GBP` (`paper-profile.ts`), the same static rate `ArmComparisonRow.basis` is converted at */
   rate_usd_per_gbp: number;
   rate_source: PnlRateSource;
-  /** The declared book both `net_pct_of_book` fields are a fraction of, in GBP (`LIVE_BOOK_GBP`) — carried since this figure has already moved once (£1,500 → £1,000). */
+  /** The declared book both `net_pct_of_book` fields are a fraction of, in GBP (`LIVE_BOOK_GBP`) — carried since this figure has already moved once (£1,500 → £1,000) */
   book_gbp: number;
 }
 
@@ -202,7 +202,7 @@ export type CloseReason =
   | 'signal_decay'
   | 'direction_flip';
 
-/** One realized round trip from `closed_trades` — the dashboard's only view of a position after it flattens. */
+/** One realized round trip from `closed_trades` — the dashboard's only view of a position after it flattens */
 export interface ClosedTradeRow {
   idempotency_key: string;
   debate_id: string;
@@ -210,7 +210,7 @@ export interface ClosedTradeRow {
   asset_class: AssetClass;
   side: 'buy' | 'sell';
   entry_price: number;
-  /** Derived by `buildSnapshot` from weighted exit-fill price (or PnL arithmetic as fallback) — not a stored column. */
+  /** Derived by `buildSnapshot` from weighted exit-fill price (or PnL arithmetic as fallback) — not a stored column */
   exit_price: number;
   filled_size: number;
   realized_pnl_net: number;
@@ -220,7 +220,7 @@ export interface ClosedTradeRow {
   close_reason: CloseReason;
 }
 
-/** One `fills` row — the venue-side execution trail; `broker_fill_id` outlives `open_positions.broker_order_ids`, which isn't kept once a lot closes. */
+/** One `fills` row — the venue-side execution trail; `broker_fill_id` outlives `open_positions.broker_order_ids`, which isn't kept once a lot closes */
 export interface FillRow {
   idempotency_key: string;
   broker_fill_id: string;
@@ -292,7 +292,7 @@ export interface RiskCriticRow {
   instrument: string;
   /** The debate this decision attacked, from `trader_log`. Null when the trace links to none. */
   debate_id: string | null;
-  /** The gate that decided it, verbatim from `risk_log` — `risk_critic:invalidated` (measured breach) vs `risk_critic:reject` (critic's prose), kept distinct so the two can disagree visibly. */
+  /** The gate that decided it, verbatim from `risk_log` — `risk_critic:invalidated` (measured breach) vs `risk_critic:reject` (critic's prose), kept distinct so the two can disagree visibly */
   binding_constraint: string | null;
   critic_verdict: 'pass' | 'trim' | 'reject' | 'unavailable' | null;
   /** The critic's argument text (audit) */
@@ -311,14 +311,14 @@ export interface AnalystPerformanceRow {
   window_days: number;
 }
 
-/** The Feedback Loop's daily MetricsSuite — NOT `MetricsSuite` verbatim: `profit_factor` is `ProfitFactorWire`, since `Infinity` has no `JSON.stringify` form (see `contracts/metrics.ts`). */
+/** The Feedback Loop's daily MetricsSuite — NOT `MetricsSuite` verbatim: `profit_factor` is `ProfitFactorWire`, since `Infinity` has no `JSON.stringify` form (see `contracts/metrics.ts`) */
 export type MetricsSuiteWire = Omit<MetricsSuite, 'profit_factor'> & {
   profit_factor: ProfitFactorWire;
 };
 
 /** Locally-metered Anthropic spend over one time window, from `llm_spend`. Not a balance/invoice — Anthropic exposes neither, so this is what this bot spent per its own `usage` blocks. */
 export interface LlmSpendWindow {
-  /** USD across PRICED calls only — a model missing from the rate table contributes tokens but no dollars, so a non-zero `unpriced_calls` means this is a floor. */
+  /** USD across PRICED calls only — a model missing from the rate table contributes tokens but no dollars, so a non-zero `unpriced_calls` means this is a floor */
   cost_usd: number;
   input_tokens: number;
   output_tokens: number;
@@ -345,7 +345,7 @@ export interface LlmPerDebateStats {
   llm_latency_ms_p95: number;
 }
 
-/** Rolling windows, not calendar days: a UTC-day bucket would disagree with the operator's wall clock. */
+/** Rolling windows, not calendar days: a UTC-day bucket would disagree with the operator's wall clock */
 export interface LlmSpendSummary {
   last_24h: LlmSpendWindow;
   last_7d: LlmSpendWindow;
@@ -361,7 +361,7 @@ export interface LlmSpendSummary {
   cap_armed_at: string | null;
 }
 
-/** The single payload `GET /api/snapshot` returns — the CLI views plus the coarse tick-in-progress line, projected to JSON-friendly shapes. */
+/** The single payload `GET /api/snapshot` returns — the CLI views plus the coarse tick-in-progress line, projected to JSON-friendly shapes */
 export interface DashboardSnapshot {
   generated_at: string;
   as_of: string;
@@ -402,7 +402,7 @@ export interface DashboardSnapshot {
   /** Third-party provider tiles. Shapes differ because the facts do: `alpaca` is a polled balance, `polygon` is reachability only, `llm_spend` is a locally-metered total. */
   providers: ProviderStatusPanel;
   llm_spend: LlmSpendSummary;
-  /** The Pipeline view's lanes — rides the existing `GET /api/snapshot` poll rather than a new endpoint, so the two views can't disagree about `as_of`. */
+  /** The Pipeline view's lanes — rides the existing `GET /api/snapshot` poll rather than a new endpoint, so the two views can't disagree about `as_of` */
   pipeline: PipelineView;
   /**
    * The server's stamp of its own wire shape, compared by the client every
@@ -448,7 +448,7 @@ export const DASHBOARD_SNAPSHOT_FIELD_NAMES = [
 /**
  * The other half of the exhaustiveness check: a key missing from
  * `DASHBOARD_SNAPSHOT_FIELD_NAMES` gives the mapped type below a required
- * key, so `{}` no longer satisfies it and `npm run typecheck` fails, naming it.
+ * key, so `{}` no longer satisfies it and `npm run typecheck` fails, naming it
  */
 type _MissingDashboardSnapshotFieldNames = Exclude<
   keyof DashboardSnapshot,
@@ -473,5 +473,5 @@ export function contractVersionOf(fieldNames: readonly string[]): string {
   return fnv1aHex(fieldNames.join(','));
 }
 
-/** The server's stamp of its own wire shape, and the client's point of comparison — both computed by this same function from the same source list. */
+/** The server's stamp of its own wire shape, and the client's point of comparison — both computed by this same function from the same source list */
 export const CONTRACT_VERSION = contractVersionOf(DASHBOARD_SNAPSHOT_FIELD_NAMES);

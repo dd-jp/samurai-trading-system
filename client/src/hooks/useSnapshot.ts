@@ -75,7 +75,7 @@ export const STALE_AFTER_MISSED_POLLS = 2;
 /**
  * Tied to the staleness horizon rather than picked independently: the slot is
  * released at the same instant the watchdog admits the page is stale, so the
- * next interval tick can retry.
+ * next interval tick can retry
  */
 function pollTimeoutMs(intervalMs: number): number {
   return intervalMs * STALE_AFTER_MISSED_POLLS;
@@ -95,7 +95,7 @@ export type FeedStatus = 'contract-mismatch' | 'waiting' | 'stale' | 'alive';
 /**
  * The two members reachable while no snapshot has EVER validated —
  * `'contract-mismatch'` outranks `'waiting'` here too, so a cold-start page
- * can say MISMATCH rather than report silence the feed isn't keeping.
+ * can say MISMATCH rather than report silence the feed isn't keeping
  */
 type ColdStatus = Exclude<FeedStatus, 'stale' | 'alive'>;
 
@@ -109,7 +109,7 @@ export interface SnapshotFeed {
   snapshot: WireSnapshot | null;
   /**
    * Client wall-clock time of the last successful poll — distinct from
-   * `snapshot.generated_at`, which the server stamps.
+   * `snapshot.generated_at`, which the server stamps
    */
   lastSuccessAt: string | null;
   /** Why the last poll failed, for the rail to name. `null` when the last poll worked. */
@@ -173,7 +173,7 @@ export interface UseSnapshotOptions {
    * no-credential request shape unchanged.
    */
   authToken?: string | null;
-  /** Which arm's `positions`/`closed_trades` to poll for; `undefined` and `'live'` are the same request. */
+  /** Which arm's `positions`/`closed_trades` to poll for; `undefined` and `'live'` are the same request */
   arm?: TradingArmWire;
 }
 
@@ -216,7 +216,7 @@ function hasWireShape(value: unknown): boolean {
     if (!Array.isArray(candidate[key])) return false;
   }
   // `llm_spend` deliberately NOT required here — narrowed to `null` by
-  // `toWireSnapshot` instead, so an absent summary costs one panel, not the page.
+  // `toWireSnapshot` instead, so an absent summary costs one panel, not the page
   for (const key of ['metrics', 'providers']) {
     const field = candidate[key];
     if (typeof field !== 'object' || field === null) return false;
@@ -266,7 +266,7 @@ function isPnlHeadline(value: unknown): boolean {
  * collapse into each other: a corrupt `cap_usd` alongside a real
  * `cap_armed_at` is reachable with no version skew (a nullified `REAL`
  * column keeps `armed_at`), and reading it as `null` would manufacture an
- * affirmative "operator removed the ceiling" claim from an unreadable value.
+ * affirmative "operator removed the ceiling" claim from an unreadable value
  */
 function normalizeCapUsd(value: unknown): number | null | undefined {
   if (value === null) return null;
@@ -381,7 +381,7 @@ const INITIAL: FeedState = {
   error: null,
 };
 
-/** The single place `FeedStatus` is computed from the raw booleans above. */
+/** The single place `FeedStatus` is computed from the raw booleans above */
 function deriveStatus(state: FeedState): FeedStatus {
   if (state.contractMismatch) return 'contract-mismatch';
   if (state.snapshot === null) return 'waiting';
@@ -406,14 +406,14 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
   const [state, setState] = useState<FeedState>(INITIAL);
 
   // A ref, not state: the interval callback must see current options without
-  // the effect tearing down and restarting the poll clock on every payload.
+  // the effect tearing down and restarting the poll clock on every payload
   const optionsRef = useRef({ url, fetchImpl, now, authToken, arm });
   optionsRef.current = { url, fetchImpl, now, authToken, arm };
 
   useEffect(() => {
     let cancelled = false;
     // Per-effect locals, not refs: a ref would outlive a StrictMode remount
-    // and find `inFlight` still true, skipping the remount's first poll.
+    // and find `inFlight` still true, skipping the remount's first poll
     let inFlight = false;
     let lastSuccessMs = optionsRef.current.now();
     const controllers = new Set<AbortController>();
@@ -428,7 +428,7 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
 
     const poll = async () => {
       // Not replaced when already in flight: overlapping requests could let
-      // an older response land after a newer one and move numbers backwards.
+      // an older response land after a newer one and move numbers backwards
       if (inFlight) return;
       inFlight = true;
       const controller = new AbortController();
@@ -436,11 +436,11 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
       const doFetch = optionsRef.current.fetchImpl ?? globalThis.fetch;
 
       // Per POLL INVOCATION, not per effect: a fresh `timedOut` per call means
-      // one poll being declared dead cannot discard the next poll's payload.
+      // one poll being declared dead cannot discard the next poll's payload
       let timedOut = false;
       // Idempotent, reachable from BOTH the timeout and `finally`: aborting a
       // controller does not settle a request that ignores its signal, so a
-      // finally-only release would leave `inFlight` true forever after a hang.
+      // finally-only release would leave `inFlight` true forever after a hang
       let released = false;
       const release = () => {
         if (released) return;
@@ -460,7 +460,7 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
       try {
         const { authToken: token } = optionsRef.current;
         // Omitted entirely when there is no token, rather than sent as an
-        // empty/blank header, so the default no-token request is unchanged.
+        // empty/blank header, so the default no-token request is unchanged
         const headers =
           token !== undefined && token !== null && token !== ''
             ? { Authorization: `Bearer ${token}` }
@@ -476,15 +476,15 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
         if (!response.ok) throw new Error(`snapshot request failed: HTTP ${response.status}`);
         const body: unknown = await response.json();
         // Checked after BOTH awaits: a response whose headers arrived in time
-        // but whose body hung must be discarded too.
+        // but whose body hung must be discarded too
         if (cancelled || timedOut) return;
         // Checked BEFORE the structural check below, so a renamed/dropped
         // field is diagnosed as a contract mismatch rather than the generic
-        // "did not match the wire shape" error.
+        // "did not match the wire shape" error
         const serverVersion = readServerContractVersion(body);
         if (serverVersion !== CONTRACT_VERSION) {
           // Does NOT advance `lastSuccessMs` or touch `snapshot` — not a
-          // success by either measure this hook uses.
+          // success by either measure this hook uses
           const message =
             serverVersion === undefined
               ? `served bundle disagrees with the server's wire contract (server sent no contract_version; this client expects ${CONTRACT_VERSION})`
@@ -508,10 +508,10 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
         }));
       } catch (cause) {
         // An abort is either this effect tearing down or the timeout above,
-        // which has already named itself in `error`.
+        // which has already named itself in `error`
         if (cancelled || controller.signal.aborted) return;
         // Leaves `snapshot` and `contractMismatch` untouched: numbers stay on
-        // screen, and a prior mismatch stays one until a validating poll clears it.
+        // screen, and a prior mismatch stays one until a validating poll clears it
         const message = describeError(cause);
         setState((prev) => (prev.error === message ? prev : { ...prev, error: message }));
       } finally {
@@ -524,7 +524,7 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
 
     const timer = setInterval(() => {
       // Evaluated every tick regardless of an outstanding request — "how long
-      // since a successful poll" is true of a hang, a rejection and a 500 alike.
+      // since a successful poll" is true of a hang, a rejection and a 500 alike
       markStale(optionsRef.current.now() - lastSuccessMs > intervalMs * STALE_AFTER_MISSED_POLLS);
       void poll();
     }, intervalMs);

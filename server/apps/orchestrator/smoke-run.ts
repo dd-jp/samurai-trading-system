@@ -232,10 +232,10 @@ function seedSmokeGdeltBaseline(archive: MiArchiveStore): void {
   archive.write(rows, []);
 }
 
-/** The seed above, plus the one canned batch row `smokeGdeltClient`'s theme filter keeps — named so the fixture and gate stay one fact, not two. */
+/** The seed above, plus the one canned batch row `smokeGdeltClient`'s theme filter keeps — named so the fixture and gate stay one fact, not two */
 export const SMOKE_GDELT_EXPECTED_ROWS = SMOKE_GDELT_SEEDED_ROWS + 1;
 
-/** Derived from `SMOKE_TEST_UNIVERSE` rather than a literal so a universe change can't silently turn a correct run red. */
+/** Derived from `SMOKE_TEST_UNIVERSE` rather than a literal so a universe change can't silently turn a correct run red */
 const SMOKE_GDELT_ASSET_CLASSES: readonly AssetClass[] = [
   ...new Set(SMOKE_TEST_UNIVERSE.map((instrument) => instrument.asset_class)),
 ];
@@ -302,7 +302,7 @@ const SMOKE_POLYMARKET_EXPECTED_ITEMS = 1;
 /**
  * A REAL `PolymarketClient` behind a fake `fetchImpl`, not a hand-rolled fake: Gamma serialises
  * `outcomes`/`outcomePrices`/`clobTokenIds` as JSON-encoded strings, and that decode is most of
- * what this client is.
+ * what this client is
  */
 function smokePolymarketClient(): PolymarketClient {
   const [healthy, thin] = CURATED_MACRO_MARKETS;
@@ -326,14 +326,14 @@ function smokePolymarketClient(): PolymarketClient {
       return [{ slug, markets: [marketFor(healthy.marketSlug, 533_307)] }];
     }
     if (thin !== undefined && slug === thin.eventSlug) {
-      // Below `MIN_VOLUME_24H_USD`, so the agent must refuse it — the reason the expected count is 1, not 2.
+      // Below `MIN_VOLUME_24H_USD`, so the agent must refuse it — the reason the expected count is 1, not 2
       return [{ slug, markets: [marketFor(thin.marketSlug, 5)] }];
     }
-    // Every other curated row reads as rotted: Gamma answers with an empty array, which the agent warns on and ingests nothing from.
+    // Every other curated row reads as rotted: Gamma answers with an empty array, which the agent warns on and ingests nothing from
     return [];
   };
 
-  // A 24h hourly series rising 0.60 -> 0.66; +0.06 clears the ±0.02 dead band, giving a real direction rather than a dead-band zero.
+  // A 24h hourly series rising 0.60 -> 0.66; +0.06 clears the ±0.02 dead band, giving a real direction rather than a dead-band zero
   const history = Array.from({ length: 25 }, (_, index) => ({
     t: Math.floor((SMOKE_RUN_INSTANT.getTime() - (24 - index) * 60 * 60_000) / 1000),
     p: 0.6 + (0.06 * index) / 24,
@@ -471,7 +471,7 @@ export class ConstantResponseLlmClient implements LlmClient {
   }
 }
 
-/** Injected: the only in-repo `AccountStateProvider` makes a network call, out of bounds here. */
+/** Injected: the only in-repo `AccountStateProvider` makes a network call, out of bounds here */
 export class FixedAccountStateProvider implements AccountStateProvider {
   constructor(private readonly equity: number = 100_000) {}
 
@@ -573,7 +573,7 @@ const EXIT_PATH_INSTRUMENTS = {
  * `CostModelImpl.fill()` always returns `filled_size: request.size` — no
  * partial-fill modelling exists in the real cost model, so
  * `ExitPathBrokerAdapter` truncates a NAMED flatten's fill to this fraction
- * on this side of the `BrokerAdapter` seam, leaving `execution/` untouched.
+ * on this side of the `BrokerAdapter` seam, leaving `execution/` untouched
  */
 const PARTIAL_FLATTEN_FRACTION = 0.4;
 /** Scenario 3's setup fraction, reusing scenario 2's partial-flatten technique */
@@ -585,7 +585,7 @@ const EXIT_PATH_LOT_SIZE = 10;
  * `AlwaysOpenCalendar` for both classes, matching this run's `tradingCalendar`
  * override — `SMOKE_RUN_INSTANT` sits outside real session hours, and a shut
  * venue would stand down the residual re-flatten (#1214) for a reason none of
- * these scenarios is about.
+ * these scenarios is about
  */
 const EXIT_PATH_SESSION_CALENDARS: Record<AssetClass, TradingCalendar> = {
   crypto: new AlwaysOpenCalendar(),
@@ -595,7 +595,7 @@ const EXIT_PATH_SESSION_CALENDARS: Record<AssetClass, TradingCalendar> = {
 /**
  * `ResidualExposureAlert` is documented as the fallback for when
  * `maybeRearmResidual` (ingest-fills.ts) itself fails — a successful re-arm
- * posts nothing here, so a healthy smoke run should produce zero of these.
+ * posts nothing here, so a healthy smoke run should produce zero of these
  */
 class RecordingResidualExposureAlertChannel implements ResidualExposureAlertChannel {
   readonly alerts: ResidualExposureAlert[] = [];
@@ -656,7 +656,7 @@ const TOLERATED_FILL_SYNC_FAILURES: readonly string[] = [];
 /**
  * An empty tolerated entry is ignored rather than honoured —
  * `'x'.includes('')` is true, so a blank allowlist line would otherwise
- * tolerate every failure the loop ever logs.
+ * tolerate every failure the loop ever logs
  */
 export function untoleratedFillSyncFailures(
   failures: readonly FillSyncFailure[],
@@ -669,7 +669,7 @@ export function untoleratedFillSyncFailures(
 /**
  * Records every fill-sync rejection (#1049) on the way to the real logger —
  * the gate's other checks read effects, not log lines, so this stays scoped
- * to `FILL_SYNC_FAILURE_MESSAGES` rather than reading a `Logger` back in full.
+ * to `FILL_SYNC_FAILURE_MESSAGES` rather than reading a `Logger` back in full
  */
 export class FillSyncFailureRecorder implements Logger {
   private readonly failures: FillSyncFailure[] = [];
@@ -715,7 +715,7 @@ export interface MarketDataFetchEvidence {
   traceIds: string[];
 }
 
-/** Records every `market_data_fetch` line (#1082), matched by `LogEntry.event` not message text. */
+/** Records every `market_data_fetch` line (#1082), matched by `LogEntry.event` not message text */
 export class MarketDataFetchRecorder implements Logger {
   private fetchCount = 0;
   private readonly traceIds = new Set<string>();
@@ -776,7 +776,7 @@ function payloadError(payload: unknown): string {
 /**
  * Decorates a real `SimulatedBrokerAdapter` for the exit-path harness (#576): `callSequence`
  * records call order so cancel-before-flatten (#516) can be asserted, and `truncateFlattenFill`
- * produces a genuinely partial fill while preserving `broker_fill_id`, which `ingestFills()` dedups on.
+ * produces a genuinely partial fill while preserving `broker_fill_id`, which `ingestFills()` dedups on
  */
 class ExitPathBrokerAdapter implements BrokerAdapter {
   readonly callSequence: string[] = [];
@@ -784,7 +784,7 @@ class ExitPathBrokerAdapter implements BrokerAdapter {
   /** Lots whose next `rearmProtectiveLegs` call throws — scenario 5's one-shot failure (#549) */
   private readonly rearmFailuresOnce = new Set<string>();
 
-  /** Concrete `SimulatedBrokerAdapter`, not `BrokerAdapter`: `getProtectedQty` isn't on that interface. */
+  /** Concrete `SimulatedBrokerAdapter`, not `BrokerAdapter`: `getProtectedQty` isn't on that interface */
   constructor(private readonly delegate: SimulatedBrokerAdapter) {}
 
   truncateFlattenFill(clientOrderId: string, fraction: number): void {
@@ -793,7 +793,7 @@ class ExitPathBrokerAdapter implements BrokerAdapter {
 
   /**
    * One-shot stand-in for "the observing poll's re-arm did not confirm",
-   * forcing the durable marker to be the only path back to protection.
+   * forcing the durable marker to be the only path back to protection
    */
   failRearmOnce(clientOrderId: string): void {
     this.rearmFailuresOnce.add(clientOrderId);
@@ -882,7 +882,7 @@ class ExitPathBrokerAdapter implements BrokerAdapter {
   }
 }
 
-/** A minimal `OrderIntent` for the exit-path harness — Trader-computed fields are fixed placeholders `execute()` never reads. */
+/** A minimal `OrderIntent` for the exit-path harness — Trader-computed fields are fixed placeholders `execute()` never reads */
 function exitPathOrder(
   instrument: string,
   idempotencyKey: string,
@@ -949,7 +949,7 @@ const EXIT_PATH_VERDICT_CONFIG: VerdictConfig = {
 /**
  * A `no_go` throws rather than being returned: every scenario here is built
  * to pass every gate, so a refusal means a lost precondition or a changed
- * gate, and the run should say which reason fired rather than submit nothing.
+ * gate, and the run should say which reason fired rather than submit nothing
  */
 async function exitPathVerdict(
   order: OrderIntent,
@@ -1019,7 +1019,7 @@ export interface ExitPathEvidence {
   /**
    * Scenario 5 (#549): a one-shot scripted re-arm failure, so the durable
    * marker (migration 0024) plus the restarted `reconcile()` sweep are the
-   * only path back to protection.
+   * only path back to protection
    */
   residualSweep: {
     lotKey: string;
@@ -1031,7 +1031,7 @@ export interface ExitPathEvidence {
      * Read off the SAME `findSweepDivergence` lookup as `sweepDivergenceAction`
      * (see its doc) — scenario 4's flatten divergence is also `action:
      * 'adopted'`, so only this reason text distinguishes a genuine #549
-     * sweep from a wrong-key substitution.
+     * sweep from a wrong-key substitution
      */
     sweepDivergenceReason: string | undefined;
   };
@@ -1158,7 +1158,7 @@ async function runExitPathScenarios(input: {
   // #549/#1228: an extra `ingestFills()` before the restart would retry (and
   // heal) this failed re-arm in-process; `PostSweepScenarioContext` guards
   // the scenario functions against that, and `sweepDivergenceAction`/
-  // `sweepDivergenceReason` below catch it if it happens anyway.
+  // `sweepDivergenceReason` below catch it if it happens anyway
   await exitCrashRestartLotWithoutSweep(ctx, crashRestartLot.exitKey);
   const terminalSweepKey = await seedTerminalSweepRow(ctx);
   const { restarted, restartReconcile } = await restartExecutionAndReconcile(ctx);
@@ -1232,7 +1232,7 @@ function exitPathFlattenSubmissionFailures(observations: SmokeObservations): str
  * #516 — ordering, not merely that both calls happened: each `submitFlatten`
  * must have a `cancel` since the PREVIOUS `submitFlatten`, not merely
  * somewhere earlier in the sequence (the weaker form would let every later
- * flatten's window wrongly borrow an earlier cancel).
+ * flatten's window wrongly borrow an earlier cancel)
  */
 function exitPathCancelBeforeFlattenFailures(evidence: ExitPathEvidence): string[] {
   const failures: string[] = [];
@@ -1425,7 +1425,7 @@ function exitPathTwoLotFlattenFailures(
  * #519/#526 — a regression that deletes `reconcile()`'s flatten sweep, or
  * reverts `resumeFlatten` to a no-op, leaves scenario 4's lot open forever:
  * `ingestFills()` alone never polls an order the process-local `flattens`
- * map has forgotten.
+ * map has forgotten
  */
 function exitPathCrashRestartFailures(
   evidence: ExitPathEvidence,
@@ -1616,7 +1616,7 @@ async function runPartialFlattenScenario(
   await ctx.execution.ingestFills();
   // Matches `heldQuantityFromFills`'s own `filledSize - exitQty` expression
   // exactly — not an algebraic rearrangement, which isn't guaranteed to be
-  // the same float64 bit pattern (ADR-0005).
+  // the same float64 bit pattern (ADR-0005)
   const exitFillQty = EXIT_PATH_LOT_SIZE * PARTIAL_FLATTEN_FRACTION;
   const expectedResidual = EXIT_PATH_LOT_SIZE - exitFillQty;
 
@@ -1626,7 +1626,7 @@ async function runPartialFlattenScenario(
 /**
  * Scenario 3 (#571): an older lot with a prior partial exit (built with
  * scenario 2's technique, since `executeExit` refuses any exit not equal to
- * what's currently held) plus a fresh sibling, flattened together.
+ * what's currently held) plus a fresh sibling, flattened together
  */
 async function runTwoLotFlattenScenario(
   ctx: ExitPathScenarioContext,
@@ -1696,7 +1696,7 @@ async function runTwoLotFlattenScenario(
  * Scenario 4's entry (#519/#526), hoisted ahead of scenario 5: scenario 5's
  * failed re-arm must be the last thing any `ingestFills()` does before the
  * restart, so scenario 4's exit is submitted separately, later, by
- * `exitCrashRestartLotWithoutSweep`.
+ * `exitCrashRestartLotWithoutSweep`
  */
 async function enterCrashRestartLotAheadOfResidualSweep(
   ctx: ExitPathScenarioContext,
@@ -1764,7 +1764,7 @@ async function runResidualSweepScenario(
 /**
  * Scenario 4's exit (#519/#526): a flatten that acks but is never swept for
  * fills before a "restart" — `reconcile()`'s flatten-journal sweep, not
- * `ingestFills()` alone, is what recovers it.
+ * `ingestFills()` alone, is what recovers it
  */
 async function exitCrashRestartLotWithoutSweep(
   ctx: PostSweepScenarioContext,
@@ -1782,13 +1782,13 @@ async function exitCrashRestartLotWithoutSweep(
     'scenario 4 exit',
   );
   // Deliberately no ingestFills() here — the flatten acks but its fill is
-  // never swept, exactly the row SharedStore.getUnresolvedFlattens() exists to find.
+  // never swept, exactly the row SharedStore.getUnresolvedFlattens() exists to find
 }
 
 /**
  * Scenario 6 (#1088): seeded directly via the store port, never through
  * `submit()` — `decision_timestamp` is set the full `TERMINAL_SWEEP_AGE_MS`
- * behind `clock.now()` directly rather than relying on the clock advancing that far.
+ * behind `clock.now()` directly rather than relying on the clock advancing that far
  */
 async function seedTerminalSweepRow(ctx: PostSweepScenarioContext): Promise<string> {
   const terminalSweepKey = 'smoke-terminal-sweep-target';
@@ -1839,7 +1839,7 @@ async function restartExecutionAndReconcile(ctx: PostSweepScenarioContext): Prom
       unrecordedVenuePositionThrottle: new UnrecordedVenuePositionThrottle(),
       logger: ctx.logger,
       // Fresh instance — a real restart's process is gone too, and
-      // FilledZeroSizeThrottle is documented restart-clean by design.
+      // FilledZeroSizeThrottle is documented restart-clean by design
       filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
     },
     'smoke-exit-path-restart',
@@ -2008,7 +2008,7 @@ async function runCryptoEmulationScenario(
     },
     logger,
     // A double fill is impossible here (the target is cancelled before it
-    // could ever fill), so an alert here is itself a defect.
+    // could ever fill), so an alert here is itself a defect
     ocoDoubleFillAlerts: {
       postOcoDoubleFillAlert: async (alert) => {
         throw new Error(
@@ -2456,7 +2456,7 @@ export interface EntrypointFaultGuardEvidence {
  * The same "throw when nothing subscribed" trick as `BreakablePipe.breakPipe`
  * (#714): a mutation that stops calling `watchStdoutErrors` inside
  * `watchDashboardStdout`/`watchSupervisorStdout` makes this throw, aborting
- * `npm run smoke` loudly instead of passing silently.
+ * `npm run smoke` loudly instead of passing silently
  */
 class NoListenerBreakablePipe {
   private listener?: (error: Error) => void;
@@ -2483,7 +2483,7 @@ class NoListenerBreakablePipe {
  * #764 — #714 fixed the unguarded-stdout class for the orchestrator only;
  * this fixes it for service-api and supervisor, whose arbitrary-fault
  * decision is CONTINUE rather than the orchestrator's STOP (see each
- * fault-guard.ts's own doc for the reasoning).
+ * fault-guard.ts's own doc for the reasoning)
  */
 function runEntrypointFaultGuardScenario(): EntrypointFaultGuardEvidence {
   function probe(
@@ -2498,7 +2498,7 @@ function runEntrypointFaultGuardScenario(): EntrypointFaultGuardEvidence {
     const stderrPipe = new NoListenerBreakablePipe();
     watchStdout(stdoutPipe, stderrPipe);
     // No boolean field records this outcome deliberately — the throw itself
-    // is the enforcement (a mutation that drops the subscription aborts the run).
+    // is the enforcement (a mutation that drops the subscription aborts the run)
     stdoutPipe.breakPipe(name, 'stdout');
     stderrPipe.breakPipe(name, 'stderr');
     const stdoutFaultLines = stderrPipe.lines;
@@ -2574,7 +2574,7 @@ interface SmokeTick {
 /**
  * What the run observably did, read back from the shared store via SQL
  * against the same handle the process wrote through — not from log strings,
- * since a log line is a description of an effect, not the effect itself.
+ * since a log line is a description of an effect, not the effect itself
  */
 export interface SmokeObservations {
   ticks: SmokeTick[];
@@ -2689,7 +2689,7 @@ function readSmokeObservations(
       .all() as SmokeObservations['verdicts'],
     // #1028: ordered by content, not `rowid` — insertion order across arms
     // is scheduling-dependent, and this makes the readback describe what
-    // was recorded rather than when.
+    // was recorded rather than when
     positions: db
       .prepare(
         'SELECT idempotency_key, instrument, side, requested_size, filled_size, avg_entry_price, ' +
@@ -2715,7 +2715,7 @@ function readSmokeObservations(
     gdeltRowsArchived: miArchive?.rawRows(SOURCE_GDELT).length ?? 0,
     // Counted across every leg of SMOKE_TEST_UNIVERSE with fundamental's own
     // 24h window (MI_CONTEXT_WINDOW_MS), so this counts what the analyst
-    // would have seen rather than what was merely written.
+    // would have seen rather than what was merely written
     gdeltAggregateItems: SMOKE_GDELT_ASSET_CLASSES.reduce(
       (total, asset_class) =>
         total +
@@ -2726,13 +2726,13 @@ function readSmokeObservations(
     ),
     polymarketRowsArchived: miArchive?.rawRows(SOURCE_POLYMARKET).length ?? 0,
     // #835: the items table, not the raw one — this source wrote `[]` for
-    // its items, which no raw-row count could see.
+    // its items, which no raw-row count could see
     polymarketItemsArchived:
       miArchive?.itemsKnownAt(POLYMARKET_ASSET_CLASS, SMOKE_RUN_INSTANT, [SOURCE_POLYMARKET])
         .length ?? 0,
     // Entity-scoped like every analyst read (resolveMiSubject, #914/#960) —
     // unscoped, a curated market filed under a macro series name would reach
-    // this count with no analyst seeing it (#1164).
+    // this count with no analyst seeing it (#1164)
     polymarketIntelItems:
       marketIntelligence
         ?.getContext(POLYMARKET_ASSET_CLASS, 24 * 60 * 60 * 1000, 'smoke', undefined, 'SPY')
@@ -2891,7 +2891,7 @@ function refuses(probe: () => void): boolean {
     return false;
   } catch (error) {
     // Only a bounds refusal counts — any other throw would read as the clamp
-    // working while the probe never reached it.
+    // working while the probe never reached it
     return isThresholdBoundViolation(error);
   }
 }
@@ -3108,7 +3108,7 @@ const approvalFallbackProbe: Probe<'approvalFallback'> = {
 /**
  * #971 — the Feedback Loop's daily timer is 24h and this run lasts seconds,
  * so the probe drives the real `runArmComparisonCycle` directly against the
- * tape this run just traded, same posture as `runThresholdClampScenario`.
+ * tape this run just traded, same posture as `runThresholdClampScenario`
  */
 export interface ArmComparisonEvidence {
   /** `null` only if the cycle produced no comparison at all */
@@ -3515,7 +3515,7 @@ export const FAILOVER_IN_SESSION_OPEN_TIMES: readonly string[] =
 /**
  * #562 — driven through `buildProductionOrchestrator` with a market-data
  * client that cannot answer and a fallback fetcher that can, against a cold
- * `:memory:` store so the read can't be satisfied from the Tier-2 cache.
+ * `:memory:` store so the read can't be satisfied from the Tier-2 cache
  */
 async function runDataFailoverScenario(logger: Logger): Promise<DataFailoverEvidence> {
   const db = openSharedStore(':memory:');
@@ -3668,7 +3668,7 @@ export interface DataSourceFactoryEvidence {
 
 /**
  * Deliberately not a real vendor's: #895 (provision the real-time L1 feed) is open, so no
- * vendor in this tree can serve the `kind: 'lse'` arm — the probe only proves the arm is REACHED.
+ * vendor in this tree can serve the `kind: 'lse'` arm — the probe only proves the arm is REACHED
  */
 export const SMOKE_LSE_VENDOR = 'smoke-lse-vendor';
 
@@ -4162,7 +4162,7 @@ async function runFilledZeroSizeWedgeScenario(
   }
 }
 
-/** #1125 — drives a genuinely wedged lot through the real gate, not just the unit-test proof. */
+/** #1125 — drives a genuinely wedged lot through the real gate, not just the unit-test proof */
 const filledZeroSizeWedgeProbe: Probe<'filledZeroSizeWedge'> = {
   run({ logger }) {
     return runFilledZeroSizeWedgeScenario(logger);
@@ -4340,7 +4340,7 @@ async function runRiskCriticScenario(logger: Logger): Promise<RiskCriticEvidence
 
 /**
  * #957 — the six-stage run can't stand in for this: it has produced zero approved entries
- * historically (#625), so a never-fired critic is indistinguishable from an unwired one.
+ * historically (#625), so a never-fired critic is indistinguishable from an unwired one
  */
 const riskCriticProbe: Probe<'riskCritic'> = {
   run({ logger }) {
@@ -4442,7 +4442,7 @@ function runPromptTierWarningScenario(): PromptTierWarningEvidence {
   }
 }
 
-/** #1155 — `crossesPromptTier` (pricing.ts) had a test and no production caller. */
+/** #1155 — `crossesPromptTier` (pricing.ts) had a test and no production caller */
 const promptTierWarningProbe: Probe<'promptTierWarning'> = {
   run() {
     return runPromptTierWarningScenario();
@@ -4580,7 +4580,7 @@ function summariseVerdicts(verdicts: SmokeObservations['verdicts']): string {
 /**
  * Checked explicitly rather than left to the throw: `startTickLoop` catches everything a tick
  * throws and logs it, so a run that reached the network would otherwise fail for a downstream
- * symptom and never name the cause.
+ * symptom and never name the cause
  */
 function tickLoopWireAndTickFailures(
   evidence: TickLoopEvidence,
@@ -4970,7 +4970,7 @@ const tickLoopProbe: Probe<'tickLoop'> = {
 
 /**
  * #388 — `RateLimiter.snapshot()` after the run: an effect no table records, so this is the
- * only check that would have caught the component being fully unit-tested with no production caller.
+ * only check that would have caught the component being fully unit-tested with no production caller
  */
 const llmRateLimiterSnapshotProbe: Probe<'llmRateLimiterSnapshot'> = {
   run({ llmRateLimiter }) {
@@ -5070,7 +5070,7 @@ function everyProbeOnce<const Order extends readonly ProbeId[]>(
   return order;
 }
 
-/** Side-effect order over the shared store and clock: exitPath/cryptoEmulation write the tape armComparison reads. */
+/** Side-effect order over the shared store and clock: exitPath/cryptoEmulation write the tape armComparison reads */
 const PROBE_RUN_ORDER = everyProbeOnce([
   'tickLoop',
   'exitPath',
@@ -5096,7 +5096,7 @@ const PROBE_RUN_ORDER = everyProbeOnce([
   'marketDataFetch',
 ]);
 
-/** Readout order: cause before symptom, so a never-debated run is reported before checks that hang off a debate. */
+/** Readout order: cause before symptom, so a never-debated run is reported before checks that hang off a debate */
 const PROBE_VERDICT_ORDER = everyProbeOnce([
   'tickLoop',
   'llmRateLimiterSnapshot',
@@ -5222,7 +5222,7 @@ const DEFAULT_SMOKE_DEADLINE_MS = 30_000;
 const FILL_GRACE_MS = 2_000;
 /** Store-polling granularity for the two waits below */
 const OBSERVE_INTERVAL_MS = 25;
-/** #1028 — falsifier arm 2 (control) is mandated to run alongside live from the first soak day (ADR-0014 amendment 2). */
+/** #1028 — falsifier arm 2 (control) is mandated to run alongside live from the first soak day (ADR-0014 amendment 2) */
 const SMOKE_TRADING_ARMS: readonly TradingArm[] = ['live', 'control'];
 
 /** Polls the store until `done` or the deadline — never a fixed sleep */
@@ -5302,7 +5302,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
     // HERE if this object isn't updated to match (#803's regression: a channel landed without
     // this injection and nothing caught it). Log-only throughout except where noted: a few
     // ports' real implementations already log at `error` before consulting them, so a logging
-    // stand-in here would double-emit — those get a bare no-op instead.
+    // stand-in here would double-emit — those get a bare no-op instead
     const smokeAlertChannels = {
       heartbeatChannel: loggingAlertChannel('heartbeatChannel', logger),
       orphanAlerts: loggingAlertChannel('orphanAlerts', logger),
@@ -5348,7 +5348,7 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       // resolves through `automation_level: 'auto'` exactly as it will during the soak. No
       // `approvals` is injected, so the root installs `UnwiredApprovalChannel`, which THROWS
       // if the HITL gate is ever reached — this run transacting is positive evidence the
-      // `auto` dial short-circuits before any approval is requested (ADR-0007 enforcement).
+      // `auto` dial short-circuits before any approval is requested (ADR-0007 enforcement)
       ...profile,
       // #1112: bumped for this offline run only, enough to clear the whole-share floor at this
       // fixture's ATR — `paperStartingProfile`'s own multiplier (real paper/live sizing) is untouched

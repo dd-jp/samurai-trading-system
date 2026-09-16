@@ -40,7 +40,7 @@ import type {
 /**
  * `TERMINAL_ORDER_STATES` minus `closed` and `abandoned` (#1088, #1186) —
  * sweeping `abandoned` would delete `abandon_reason` on the very next
- * reconcile pass, since its age gate is already past cutoff when written.
+ * reconcile pass, since its age gate is already past cutoff when written
  */
 const SWEEPABLE_TERMINAL_STATES: readonly OrderState[] = TERMINAL_ORDER_STATES.filter(
   (state) => state !== 'closed' && state !== 'abandoned',
@@ -263,7 +263,7 @@ export class SqliteExecutionStore implements SharedStore {
   async abandonWedgedZeroFillLot(idempotency_key: string, reason: string): Promise<boolean> {
     const result = this.db
       .prepare(
-        // #753: arm-scoped, though a wedge can occur on either arm.
+        // #753: arm-scoped, though a wedge can occur on either arm
         // WHERE-guarded on the exact wedge shape so a race can't overwrite a
         // lot that un-wedged itself between read and write; mirrors
         // `isWedgedZeroFillLot` (key-scheme-guard.ts) in SQL — keep in sync (#1601)
@@ -279,7 +279,7 @@ export class SqliteExecutionStore implements SharedStore {
   /**
    * Dedup gate matched on the full `fills` PK — `(idempotency_key,
    * broker_fill_id)`, not `broker_fill_id` alone (#1320) — since
-   * `broker_fill_id` is venue-assigned and not unique across lots.
+   * `broker_fill_id` is venue-assigned and not unique across lots
    */
   async hasFill({
     idempotency_key,
@@ -335,7 +335,7 @@ export class SqliteExecutionStore implements SharedStore {
   /**
    * Every fill for a lot, in ingestion order — `rowid` breaks ties
    * same-millisecond timestamps can't, so `ingestFills()` can reconstruct
-   * state deterministically.
+   * state deterministically
    */
   async getFills(idempotency_key: string): Promise<Fill[]> {
     const rows = this.db
@@ -353,7 +353,7 @@ export class SqliteExecutionStore implements SharedStore {
     return this.fillSizesByLeg(idempotency_keys, 'entry');
   }
 
-  /** #568's mirror of `getEntryFillSizes` over the closing legs (see `shared/held-quantity.ts`). */
+  /** #568's mirror of `getEntryFillSizes` over the closing legs (see `shared/held-quantity.ts`) */
   async getExitFillSizes(idempotency_keys: readonly string[]): Promise<Map<string, number>> {
     return this.fillSizesByLeg(idempotency_keys, 'exit');
   }
@@ -452,7 +452,7 @@ export class SqliteExecutionStore implements SharedStore {
 
   /**
    * One poll's advance of a lot, in a single transaction — fills, lot state,
-   * and (on round-trip-to-flat) the `ClosedTrade` commit together or not at all.
+   * and (on round-trip-to-flat) the `ClosedTrade` commit together or not at all
    */
   async applyLotAdvance(advance: LotAdvance): Promise<void> {
     this.db.transaction(() => {
@@ -594,7 +594,7 @@ export class SqliteExecutionStore implements SharedStore {
 
   /**
    * Pure read backing the invariant that a retry key is only safe over a row
-   * provably dead at the venue (#1214) — only `'error'` clears the retry walk.
+   * provably dead at the venue (#1214) — only `'error'` clears the retry walk
    */
   async isRetryableFlattenError(idempotency_key: string): Promise<boolean> {
     const row = this.db
@@ -635,7 +635,7 @@ export class SqliteExecutionStore implements SharedStore {
 
     // Validated, not cast (#509) — an unvalidated `as string[]` would blow up
     // deep inside `ingestFills()`'s allocation loop with no clear cause. The
-    // raw value is withheld from the error since it reaches `audit_log` (#507).
+    // raw value is withheld from the error since it reaches `audit_log` (#507)
     const keys = parseJsonColumn(idempotency_key, 'lot_idempotency_keys', row.lot_idempotency_keys);
     if (!Array.isArray(keys) || !keys.every((entry) => typeof entry === 'string')) {
       throw new Error(
@@ -668,7 +668,7 @@ export class SqliteExecutionStore implements SharedStore {
     }
 
     // Non-negative and finite: `executeExit` refuses an over-exited lot
-    // before writing this row, so anything else is a corrupted record.
+    // before writing this row, so anything else is a corrupted record
     const paired: LotHeldQuantity[] = [];
     for (const [index, key] of keys.entries()) {
       const quantity: unknown = held[index];
@@ -733,7 +733,7 @@ export class SqliteExecutionStore implements SharedStore {
 
   /**
    * A fresher venue answer on an already-`'submitted'` row — must not touch
-   * `resolved_at`/`status` the way `resolveFlattenSubmitted` does.
+   * `resolved_at`/`status` the way `resolveFlattenSubmitted` does
    */
   async recordFlattenOrderStateObserved(
     idempotency_key: string,
@@ -841,7 +841,7 @@ export class SqliteExecutionStore implements SharedStore {
 
   /**
    * #549's once-per-episode alert dedup — first-writer-wins: the write lands
-   * only while the episode is un-alerted; `changes` reports who won.
+   * only while the episode is un-alerted; `changes` reports who won
    */
   async markResidualAlerted(idempotency_key: string, alerted_at: Date): Promise<boolean> {
     const result = this.db
@@ -857,7 +857,7 @@ export class SqliteExecutionStore implements SharedStore {
 
   /**
    * Same first-writer-wins dedup as `markResidualAlerted`, over its own
-   * column — a pre-attempt page can't block this, and vice versa.
+   * column — a pre-attempt page can't block this, and vice versa
    */
   async markResidualRearmUnsupportedAlerted(
     idempotency_key: string,
@@ -891,7 +891,7 @@ export class SqliteExecutionStore implements SharedStore {
       : fromStoredTimestampOrNull(row.residual_rearm_unsupported_alerted_at);
   }
 
-  /** The #549 sweep's worklist — non-terminal lots still marked unprotected. */
+  /** The #549 sweep's worklist — non-terminal lots still marked unprotected */
   async getUnprotectedResidualLots(): Promise<UnprotectedResidualLot[]> {
     const placeholders = TERMINAL_ORDER_STATES.map(() => '?').join(', ');
     const rows = this.db
@@ -928,7 +928,7 @@ export class SqliteExecutionStore implements SharedStore {
 
 /**
  * `JSON.parse` for one `flatten_submissions` column; the raw value is
- * withheld from the error — see `getFlattenAttribution`.
+ * withheld from the error — see `getFlattenAttribution`
  */
 function parseJsonColumn(idempotency_key: string, column: string, raw: string): unknown {
   try {

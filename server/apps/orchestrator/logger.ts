@@ -33,7 +33,7 @@ export interface StdoutStream {
   on(event: 'error', listener: (error: Error) => void): unknown;
 }
 
-/** Last-resort stream, used only when neither sink can take a line. */
+/** Last-resort stream, used only when neither sink can take a line */
 export interface ErrorStream {
   write(line: string): unknown;
 }
@@ -41,7 +41,7 @@ export interface ErrorStream {
 /**
  * Redacts a payload and serializes it; cannot throw (#1035) — a redaction
  * failure degrades to `{ redaction_failed: true }` instead of destroying the
- * last-resort write on `log`'s no-sink path.
+ * last-resort write on `log`'s no-sink path
  */
 function redactedPayloadJson(payload: unknown): string | undefined {
   if (payload === undefined) return undefined;
@@ -84,7 +84,7 @@ export function formatLogLine(entry: LogEntry): string {
 
 /**
  * A degradation notice in the same wire format as `formatLogLine`, built
- * directly so the redaction walker is bypassed on this failure path.
+ * directly so the redaction walker is bypassed on this failure path
  */
 function degradationLine(
   event: LogEventCode,
@@ -136,7 +136,7 @@ export class JsonLogger implements Logger {
     private readonly stderr: ErrorStream = process.stderr,
     /**
      * Constructor argument, not an environment read, so the dozen `new
-     * JsonLogger()` test call sites don't inherit an ambient setting.
+     * JsonLogger()` test call sites don't inherit an ambient setting
      */
     private readonly debugEnabled = false,
   ) {}
@@ -147,7 +147,7 @@ export class JsonLogger implements Logger {
    */
   log(entry: LogEntry): void {
     // Checked before the sinks: a suppressed debug line must not fall through
-    // to the no-sink throw below on an otherwise healthy run.
+    // to the no-sink throw below on an otherwise healthy run
     if (entry.level === 'debug' && !this.debugEnabled) return;
 
     const line = formatLogLine(entry);
@@ -156,7 +156,7 @@ export class JsonLogger implements Logger {
     if (reachedStdout || reachedFile) return;
 
     // Not swallowed: a run that can't record what it did with real money
-    // must not carry on unremarked (#714).
+    // must not carry on unremarked (#714)
     this.reportNoSink();
     this.lastResort(line);
     throw new Error(
@@ -179,7 +179,7 @@ export class JsonLogger implements Logger {
       return true;
     } catch (error) {
       // Rethrow when nothing durable can hold the report — same last-resort
-      // trace as `log`'s own escalation.
+      // trace as `log`'s own escalation
       if (!this.degradeStdout(error)) {
         this.reportNoSink();
         this.lastResort(line);
@@ -210,7 +210,7 @@ export class JsonLogger implements Logger {
     return true;
   }
 
-  /** Reports sink exhaustion on stderr once per process, not once per line. */
+  /** Reports sink exhaustion on stderr once per process, not once per line */
   private reportNoSink(): void {
     if (this.noSinkReported) return;
     this.noSinkReported = true;
@@ -227,7 +227,7 @@ export class JsonLogger implements Logger {
 
   /**
    * Writes to stderr, ignoring any failure — this is already the
-   * both-sinks-gone path and the caller throws regardless.
+   * both-sinks-gone path and the caller throws regardless
    */
   private lastResort(line: string): void {
     try {
@@ -237,7 +237,7 @@ export class JsonLogger implements Logger {
     }
   }
 
-  /** Whether stdout has been retired (#714). */
+  /** Whether stdout has been retired (#714) */
   get stdoutRetired(): boolean {
     return this.stdoutDegraded;
   }
@@ -281,12 +281,12 @@ export class JsonLogger implements Logger {
 /**
  * Subscribes to stdout's `'error'` event so an async write failure (a broken
  * pipe, which never reaches `writeToStdout`'s synchronous catch) degrades the
- * logger instead of raising an uncaught EPIPE.
+ * logger instead of raising an uncaught EPIPE
  */
 export function watchStdoutErrors(logger: JsonLogger, stdout: StdoutStream = process.stdout): void {
   stdout.on('error', (error: Error) => {
     // No durable sink left to record on: throw so it reaches
-    // `uncaughtException`, the only case a logging fault may end the run.
+    // `uncaughtException`, the only case a logging fault may end the run
     if (!logger.degradeStdout(error)) {
       throw new Error(
         `structured log stdout sink failed (${describe(error)}) and the failure could not be ` +

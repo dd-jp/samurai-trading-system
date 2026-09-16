@@ -217,7 +217,7 @@ export const SMOKE_TEST_UNIVERSE: readonly UniverseInstrument[] = [
 
 /**
  * Every instrument the outside-benchmark path can write, derived from `BENCHMARK_COMPOSITION` (#989 review)
- * rather than hardcoded, so a future benchmark leg change can't silently diverge from a second copy of this list.
+ * rather than hardcoded, so a future benchmark leg change can't silently diverge from a second copy of this list
  */
 export const BENCHMARK_INSTRUMENTS: ReadonlySet<string> = new Set(
   Object.values(BENCHMARK_COMPOSITION).flatMap((legs) =>
@@ -302,7 +302,7 @@ export interface ProductionOrchestrator {
   marketIntelligenceRefresh: MiRefreshQueue | undefined;
   /**
    * The MI store itself (#504), exposed so the offline smoke gate can read back what ingestion actually put
-   * in front of the analysts — an archive row alone only proves a fetch happened, not that it reached `fundamental`.
+   * in front of the analysts — an archive row alone only proves a fetch happened, not that it reached `fundamental`
    */
   marketIntelligence: MarketIntelligenceStore;
   /** `ProductionComponents.universe`'s value (#1167) — read this, don't re-derive from config */
@@ -321,23 +321,23 @@ export interface ProductionComponents {
   steps: TickSteps;
   /**
    * The operator escalation channel, exposed because TWO consumers need the same instance — Feedback Loop's
-   * kill-threshold breach and the LLM spend cap's breach (ADR-0008) — so an injected override can't miss one of them.
+   * kill-threshold breach and the LLM spend cap's breach (ADR-0008) — so an injected override can't miss one of them
    */
   breachAlerts: BreachAlertChannel;
   /**
    * Where arm divergence escalates (#971), exposed for the same reason as `breachAlerts`: resolved once here
-   * so an injected override can't be missed by a second instance built elsewhere.
+   * so an injected override can't be missed by a second instance built elsewhere
    */
   armDivergenceAlerts: ArmDivergenceAlertChannel;
   /**
    * The tuning dials (#433): Risk Manager READS `risk_thresholds` at evaluate time, Feedback Loop WRITES
-   * them — exposed so both halves share the one instance rather than a second construction.
+   * them — exposed so both halves share the one instance rather than a second construction
    */
   tuning: TuningStore;
   marketData: MarketDataService;
   /**
    * The OUTSIDE BENCHMARKS' series reader (#981) — separate from `marketData` on purpose, since `marketData`
-   * is universe-derived and refuses `'SPY'` once the universe is LSE-only (#734/#751).
+   * is universe-derived and refuses `'SPY'` once the universe is LSE-only (#734/#751)
    */
   benchmarkSeries: BenchmarkSeriesSource;
   broker: BrokerAdapter;
@@ -345,29 +345,29 @@ export interface ProductionComponents {
   circuitBreakers: CircuitBreakers;
   /**
    * The exact instance `steps.verdict`'s HITL gate would call `requestApproval` on (#1152) — not a
-   * reconstruction, since a probe using a fresh instance would prove the helper refuses, not that the tick loop is bound to it.
+   * reconstruction, since a probe using a fresh instance would prove the helper refuses, not that the tick loop is bound to it
    */
   approvals: ApprovalChannel;
   /**
    * The `onTradeClose`-hooked store (#237) — every consumer (`getOpenPositions`, Verdict, Execution) shares
-   * this one instance so a scheduled `ingestFills()` call reaches the same hook, not a separately decorated copy.
+   * this one instance so a scheduled `ingestFills()` call reaches the same hook, not a separately decorated copy
    */
   executionStore: ExecutionSharedStore;
-  /** Execution's dependency set, exposed so the fill-sync loop can bind `reconcile()`/`ingestFills()` from the same object the tick step uses. */
+  /** Execution's dependency set, exposed so the fill-sync loop can bind `reconcile()`/`ingestFills()` from the same object the tick step uses */
   executionDeps: ExecutionStepDeps;
   /**
    * Falsifier arm 2's wiring (#753), exposed so its fill poller can run on its own cadence from
-   * `buildProductionOrchestrator` — without it the control arm's lots stall at `submitted` and never close.
+   * `buildProductionOrchestrator` — without it the control arm's lots stall at `submitted` and never close
    */
   controlArmWiring: ControlArmWiring;
   /**
    * The LLM budget every debate is admitted against and metered through (#388) — the same instance inside
-   * `steps.debate`, exposed so a caller can assert the limiter actually saw the run's calls (the failure mode is invisible to a unit suite).
+   * `steps.debate`, exposed so a caller can assert the limiter actually saw the run's calls (the failure mode is invisible to a unit suite)
    */
   llmRateLimiter: RateLimiter;
   /**
    * The ONE account-wide in-flight gate (#1080) every Nous-speaking client this function builds shares —
-   * Nous queues per ACCOUNT, so exposing this instance is the only way to prove this root's clients are actually behind it.
+   * Nous queues per ACCOUNT, so exposing this instance is the only way to prove this root's clients are actually behind it
    */
   llmInFlightGate: LlmInFlightGate;
   /**
@@ -401,7 +401,7 @@ export interface ProductionComponents {
   universe: readonly UniverseInstrument[];
   /**
    * The `debate_log` store the `debate` step writes through, exposed (#1396) so a test can write history
-   * through the SAME instance the llm-failure-rate guard reads and observe the alert on a real call.
+   * through the SAME instance the llm-failure-rate guard reads and observe the alert on a real call
    */
   debateLog: SqliteDebateLogStore;
   /**
@@ -537,7 +537,7 @@ export function resolveApprovalsChannel(
 
 /**
  * Builds the six `TickSteps` from real stage implementations (#234/#235), built once and shared: a second
- * `AlpacaBrokerAdapter` over the same account would silently lose bracket-leg lookups the first one made.
+ * `AlpacaBrokerAdapter` over the same account would silently lose bracket-leg lookups the first one made
  */
 /**
  * The boot-time refusal family (#434/#691/#670/#1389/#638/#569/#989/#1378) — every gate that must run
@@ -639,7 +639,7 @@ function resolveProductionBootConfig(
   return { ceiling, environment, universe, tradingCalendar };
 }
 
-/** The LLM client, its shared in-flight/spend metering, and the whole MI writer set (news/social/GDELT/Polymarket) — self-contained beyond the six fields threaded back out. */
+/** The LLM client, its shared in-flight/spend metering, and the whole MI writer set (news/social/GDELT/Polymarket) — self-contained beyond the six fields threaded back out */
 function buildLlmAndMarketIntelligenceLayer(deps: {
   config: ProductionConfig;
   clock: Clock;
@@ -682,7 +682,7 @@ function buildLlmAndMarketIntelligenceLayer(deps: {
    * as the row ceiling above, for the same reason. Wired here, not in `MiArchiveStore.write`, for the same reason (#1059's history).
    */
   pruneMiArchiveWithLog(config.miArchive, miArchiveRetentionDays, clock, logger, 'startup');
-  /** #1131: same two-call-site shape as the MI archive purge above — see `pruneAlertDeliveryFailuresWithLog` for why this table needs its own retention sweep. */
+  /** #1131: same two-call-site shape as the MI archive purge above — see `pruneAlertDeliveryFailuresWithLog` for why this table needs its own retention sweep */
   pruneAlertDeliveryFailuresWithLog(
     config.db,
     alertDeliveryFailureRetentionDays,
@@ -692,18 +692,18 @@ function buildLlmAndMarketIntelligenceLayer(deps: {
   );
   // `tryNousCredentials`, not `nousCredentials`: an unconfigured Nous environment degrades this optional stage to no-agent rather than failing boot. An unpriced model still throws — a hole in the spend cap, not a config gap
   const sentimentCredentials = sentimentEnabled ? tryNousCredentials('sentiment') : undefined;
-  /** ONE `LlmClient` for the whole root — the debate stage and MI scoring both bill through it, so there's one spend meter rather than two disagreeing. */
+  /** ONE `LlmClient` for the whole root — the debate stage and MI scoring both bill through it, so there's one spend meter rather than two disagreeing */
   const promptTierAlerts =
     config.promptTierAlerts ?? loggingAlertChannel('promptTierAlerts', logger);
   /**
    * ONE throttle for the whole root: `NOUS_MODEL` can route both the debate client and the sentiment
    * `GrokAgent` through the same tiered model, and a throttle per store would double-count that model's
-   * consecutive crossings (#1155).
+   * consecutive crossings (#1155)
    */
   const promptTierThrottle = new PromptTierCrossingThrottle();
   /**
    * ONE in-flight gate for the whole root (#1080): Nous queues per ACCOUNT, not per key or client, so a
-   * second gate would cap two populations of the same queue independently and cap neither.
+   * second gate would cap two populations of the same queue independently and cap neither
    */
   const llmInFlightGate = new NousAccountInFlightGate({
     maxInFlight: config.maxInFlightLlmCalls ?? DEFAULT_MAX_IN_FLIGHT_LLM_CALLS,
@@ -774,7 +774,7 @@ function buildLlmAndMarketIntelligenceLayer(deps: {
   /**
    * The deterministic news path (#552), preferred over `grokAgent` when buildable: `GrokAgent`'s
    * `retrievalEvidence: false` makes it ingest `[]` by construction, and #625 measured the cost — with
-   * `sentiment`/`fundamental` both at confidence 0.05, no stock could trade at any RSI.
+   * `sentiment`/`fundamental` both at confidence 0.05, no stock could trade at any RSI
    */
   const miIngestAgent = buildMiIngestAgent({
     archive: config.miArchive,
@@ -981,7 +981,7 @@ function buildExecutionAndRiskInfra(deps: {
         closedTrades: new SqliteClosedTradeStore(guardedStore(config.db, 'feedback-loop')),
         // Two calendars: crypto resets at 00:00 UTC, stocks at the prior 16:00 ET close — only the equity
         // one is overridable here. SHARING `tradingCalendar` with the scheduler is deliberate (#331): the
-        // accounting boundary and session gating move together, so a holiday-calendar fix reaches the daily-PnL boundary without touching this file.
+        // accounting boundary and session gating move together, so a holiday-calendar fix reaches the daily-PnL boundary without touching this file
         calendars: sessionCalendars,
         mode: config.mode,
         // Composition happens at startup, so "now" here IS the process start — it decides whether a
@@ -1018,7 +1018,7 @@ function buildExecutionAndRiskInfra(deps: {
     costModel: new CostModelImpl(config.costConfig),
     marketData,
     config: config.executionConfig,
-    // #525: the fallback alert for a residual `ingestFills()` failed to re-arm after a partial flatten.
+    // #525: the fallback alert for a residual `ingestFills()` failed to re-arm after a partial flatten
     // Required on `ExecutionInput`, same "no silent default" reason as `unpricedFillAlerts` (#298) — an omitted channel is the #322 bug re-created
     residualExposureAlerts:
       config.residualExposureAlerts ?? loggingAlertChannel('residualExposureAlerts', logger),
@@ -1155,7 +1155,7 @@ function buildMarketDataAndSpendLayer(deps: {
   // so a caller can assert the degraded-coverage flag actually moves (same reasoning as `llmRateLimiter`)
   const miCoverageMonitor = new MiCoverageMonitor();
 
-  // #1396: one monitor for the whole process, same restart-clean-in-memory posture as `miCoverageMonitor`.
+  // #1396: one monitor for the whole process, same restart-clean-in-memory posture as `miCoverageMonitor`
   // `debateLogStore` is hoisted so this guard and `SqliteDebateLogStore.writeLog` share one instance, not a second connection
   const llmFailureRateMonitor = new LlmFailureRateMonitor();
   // #1533: its own monitor, because its own latch — the two signals cross
@@ -1182,17 +1182,17 @@ function buildMarketDataAndSpendLayer(deps: {
       market_data: marketData,
       /**
        * #746: reuses the SAME `sessionCalendars` pair the flatten rule resolved above rather than deriving
-       * a second one (#696 found exactly that bug class once already).
+       * a second one (#696 found exactly that bug class once already)
        */
       sessionCalendars,
       /**
        * #745: `technical_indicator_unavailable{kind}`, wired unconditionally with no config switch — an
-       * unwired counter is indistinguishable from an instrument whose axes are all available.
+       * unwired counter is indistinguishable from an instrument whose axes are all available
        */
       telemetry: new LoggingAnalystTelemetry(logger),
       /**
        * #1114: deleting this line collapses `AnalystOrchestrator`'s logger back to `NOOP_LOGGER` silently —
-       * `runAnalystFailureCauseScenario` (smoke-run.ts) drives a real rejection and fails the gate if it observes nothing.
+       * `runAnalystFailureCauseScenario` (smoke-run.ts) drives a real rejection and fails the gate if it observes nothing
        */
       logger,
     },
@@ -1206,13 +1206,13 @@ function buildMarketDataAndSpendLayer(deps: {
 
   /**
    * Hoisted above the tick steps (#433): the Risk Manager now READS `risk_thresholds` at evaluate time,
-   * and a threshold `autoTighten` writes has to be the same row Risk reads — one instance, both ends of the dial.
+   * and a threshold `autoTighten` writes has to be the same row Risk reads — one instance, both ends of the dial
    */
   const tuningStore = new SqliteTuningStore(guardedStore(config.db, 'feedback-loop'), clock);
 
   /**
    * Hoisted above `spendCap` below rather than left beside the Feedback Loop's stores: the LLM spend cap
-   * escalates its breach through this same channel, and a breach reaching only the log stream is invisible on an unattended run.
+   * escalates its breach through this same channel, and a breach reaching only the log stream is invisible on an unattended run
    */
   const breachAlerts = config.breachAlerts ?? loggingAlertChannel('breachAlerts', logger);
 
@@ -1222,7 +1222,7 @@ function buildMarketDataAndSpendLayer(deps: {
 
   /**
    * #1140: the SAME `config.llmBudgetUsd` the enforcer is built from, recorded where the dashboard process
-   * (which can't see this config object) can read it — armed on both sides so the published and enforced caps are one expression apart, not two copies.
+   * (which can't see this config object) can read it — armed on both sides so the published and enforced caps are one expression apart, not two copies
    */
   const publishedSpendCap = new SqliteLlmSpendCapStore(guardedStore(config.db, 'orchestrator'));
 
@@ -1319,13 +1319,13 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   // VALIDATES its config, and a malformed budget should be refused before a SQLite handle is open, so a
   // throw doesn't leave a half-built root behind. One instance for the process, shared by every instrument's
   // debate — a limiter per debate/instrument would enforce nothing across the universe. Takes THIS root's
-  // `clock`, so an injected frozen clock (the offline smoke run) gets one window for the whole run.
+  // `clock`, so an injected frozen clock (the offline smoke run) gets one window for the whole run
   const llmRateLimiter =
     config.llmRateLimiter ??
     new RateLimiter(clock, config.rateLimiterConfig ?? DEFAULT_LLM_RATE_LIMIT_CONFIG);
 
   // `tradingCalendar` is computed above, ahead of the precutover collision guard, which needs its
-  // RESOLVED value rather than re-deriving `mode` itself (#989 review).
+  // RESOLVED value rather than re-deriving `mode` itself (#989 review)
   /**
    * ONE calendar pair, shared by every consumer that needs to know when a venue is open (#331/#332, #386).
    * Built once rather than per call site — two literals would be two places for a future override to land on only one of them.
@@ -1337,7 +1337,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
 
   /**
    * Hoisted above the analysts (#745), market-data wiring (#562) and `alpacaBucket` below (#1083), each of
-   * which now logs through it — depends on nothing but `config`, so all three moves are free (same reasoning as `breachAlerts` below).
+   * which now logs through it — depends on nothing but `config`, so all three moves are free (same reasoning as `breachAlerts` below)
    */
   const logger = config.logger ?? new JsonLogger();
 
@@ -1370,9 +1370,9 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
   }
 
   // One broker wire client for the whole root: the order adapter and account-state provider both talk to
-  // Alpaca's Trading API, and two clients would mean two token budgets against one account's shared rate limit.
+  // Alpaca's Trading API, and two clients would mean two token budgets against one account's shared rate limit
   // LAZY since #1400, memoized so "one client" still holds — a run supplying both `config.broker` and
-  // `config.accountState` (or, since #1509, `config.accountFunding`) reaches neither call site, so building it unconditionally demanded `ALPACA_API_KEY` for a transport never used.
+  // `config.accountState` (or, since #1509, `config.accountFunding`) reaches neither call site, so building it unconditionally demanded `ALPACA_API_KEY` for a transport never used
   let alpacaBrokerClient: AlpacaBrokerClient | undefined;
   const brokerClient = (): AlpacaBrokerClient =>
     (alpacaBrokerClient ??=
@@ -1380,8 +1380,8 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
 
   // Outbound pacing per venue, from ops config rather than a literal (#299). Hoisted above the market-data
   // wiring (#391): ONE Alpaca bucket for the whole root, shared by the broker adapter and market-data
-  // client, since the 200 req/min limit is per ACCOUNT and two buckets would be two budgets against one limit.
-  // `{ logger, name: 'alpaca' }` (#1083) makes a wait on this shared bucket observable — previously silent starvation.
+  // client, since the 200 req/min limit is per ACCOUNT and two buckets would be two budgets against one limit
+  // `{ logger, name: 'alpaca' }` (#1083) makes a wait on this shared bucket observable — previously silent starvation
   const venuePacing = config.venuePacing ?? resolveVenuePacing();
   const alpacaBucket = new TokenBucket(venuePacing.alpaca, undefined, {
     logger,
@@ -1500,8 +1500,8 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     logger,
     // #957: check-pipeline step 7's producer. The SAME `llmClient` the debate bills through, so the
     // critic's calls land in `llm_spend` under `stage: 'risk_critic'` against ADR-0008's ceiling. `mode`
-    // picks the implementation: `backtest` holds no LLM client at all, making ADR-0003 §2 structural.
-    // `marketData` is required, not optional, so deleting this line is a compile error, not a silent `no_conditions`.
+    // picks the implementation: `backtest` holds no LLM client at all, making ADR-0003 §2 structural
+    // `marketData` is required, not optional, so deleting this line is a compile error, not a silent `no_conditions`
     critic: buildRiskCriticProducer({
       mode: config.mode,
       llm: llmClient,
@@ -1525,7 +1525,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     config: config.verdictConfig,
     // Unreachable by design since ADR-0007: `automation_level` is `auto` for both classes, so the HITL
     // gate short-circuits. `UnwiredApprovalChannel` THROWS rather than auto-approving, so re-enabling the
-    // gate without wiring a transport fails loudly instead of fabricating consent.
+    // gate without wiring a transport fails loudly instead of fabricating consent
     approvals: resolveApprovalsChannel(config),
     // Backs LoggingVerdict's verdict_log write (#302) — the same handle
     // every other Sqlite* store in this function reads/writes through
@@ -1553,8 +1553,8 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     execution: executionDeps,
     store: controlExecutionStore,
     // A SIMULATED venue, never the live one — the book is £1,000 and D5 deploys 35%/25% per position, so
-    // a control placing real orders at the same envelope would double deployment (no ADR authorises that).
-    // Fills priced through the SAME `CostModel` the live arm uses, so the comparison stays cost-inclusive.
+    // a control placing real orders at the same envelope would double deployment (no ADR authorises that)
+    // Fills priced through the SAME `CostModel` the live arm uses, so the comparison stays cost-inclusive
     broker: new SimulatedBrokerAdapter({
       clock,
       // #1121 AC1: the SAME `CostModelImpl` instance the live arm's `execute.ts` prices its modelled-cost
@@ -1565,14 +1565,14 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
       // second one — pins `MarketState.venue` ('saxo') identically on both arms' `CostModel.fill` calls, so
       // an edge can't be a fixture difference in disguise. The same RATE is not the same CHARGE though
       // (review round 2, finding 6): the live arm prices off the executed fill, the control off the mid at
-      // submit, so the live arm is systematically over-charged by a measured ~0.004bps — conservative in direction, stated here rather than corrected.
+      // submit, so the live arm is systematically over-charged by a measured ~0.004bps — conservative in direction, stated here rather than corrected
       config: config.executionConfig.simulated,
     }),
     circuitBreakers: new CircuitBreakers(config.breakerConfig, controlBreakerState.load()),
     breakerState: controlBreakerState,
     // The control arm's OWN account scalars, derived from its OWN book — the fourth per-arm thing, and
     // the one that was missing: a shared `AccountStateProvider` reflects only the LIVE arm's trades, which
-    // would make the control's D5 sizing and drawdown-halt timing functions of the live arm's cash (`control-account-state.ts`).
+    // would make the control's D5 sizing and drawdown-halt timing functions of the live arm's cash (`control-account-state.ts`)
     accountState: new ControlArmAccountStateProvider({
       // The live arm's REAL equity, observed ONCE at first boot and persisted first-write-wins — not the
       // declared £1,000. Since #1112 both arms clamp to the SAME `capitalCeilingUsd`, so as long as this
@@ -1590,7 +1590,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
         // ceiling must not cap one path and leave the other uncapped (#972 fix 3). The unverified branch is
         // `LIVE_BOOK_SIZING_USD`, not the raw GBP book, denominated in the account's currency so the
         // "anchor stays above the ceiling" note above keeps holding. Since #1509 `armSameCurrencyCeilings`
-        // sets `same_currency_verified` only from a Saxo balance read, so every Alpaca run stays on the USD fallback.
+        // sets `same_currency_verified` only from a Saxo balance read, so every Alpaca run stays on the USD fallback
         fallbackBook:
           config.riskConfig.live_book_ceiling?.same_currency_verified === true
             ? config.riskConfig.live_book_ceiling.book
@@ -1688,7 +1688,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
     ),
     // #328: `traderLog`/`riskLog` are what make the two stages that decide WHAT and HOW BIG
     // reconstructible after the fact — an `audit_log` digest alone proves the stage ran, never why. Both
-    // write on a skip/rejection too, the case with no downstream record at all.
+    // write on a skip/rejection too, the case with no downstream record at all
     trader: traderSteps.trader,
     risk: buildRiskStep(riskStepDeps),
     verdict: buildVerdictStep(verdictStepDeps),
@@ -1899,7 +1899,7 @@ export function startTickLoop(deps: {
 
       // Claim inside ONE loop — check and claim per asset, not filter-then-add. A separate filter/add pass
       // is not atomic: if `nextTick` ever returned the same asset twice, both entries would pass the filter
-      // before either was claimed, silently violating the one-pass-per-instrument invariant this guard exists to hold.
+      // before either was claimed, silently violating the one-pass-per-instrument invariant this guard exists to hold
       const claims = new Map<string, symbol>();
       const ready: typeof plan.instruments = [];
       const busy: string[] = [];
@@ -1909,7 +1909,7 @@ export function startTickLoop(deps: {
       const duplicated: string[] = [];
       // Duplicate detection reads THIS set, not `claims`: keying off `claims` misses a duplicate whose
       // first occurrence was already running from a prior pass (never entered `claims`), reporting it as an
-      // ordinary slow pass — the malformed plan hidden again, in exactly the case a duplicate matters most.
+      // ordinary slow pass — the malformed plan hidden again, in exactly the case a duplicate matters most
       const seenInPlan = new Set<string>();
       for (const instrument of instruments) {
         if (seenInPlan.has(instrument.asset)) {
@@ -1938,7 +1938,7 @@ export function startTickLoop(deps: {
           stage: 'tick-loop',
           // INFO, not warn: a partially-busy tick is the steady state (slow crypto debates routinely
           // outlast the interval), so at `warn` this would fire every interval and bury the case that
-          // matters — the equity leg falling behind inside its two-hour window.
+          // matters — the equity leg falling behind inside its two-hour window
           level: 'info',
           // Named, not counted: WHICH instrument is late decides whether this is benign — a bare count can't distinguish "crypto is slow again" from "the equity leg has stopped keeping up"
           message: `tick: ${busy.length} instrument(s) still running from a previous pass, skipped this tick`,
@@ -2037,7 +2037,7 @@ export function startTickLoop(deps: {
       // than one can legitimately be in flight. This only waits because `passes` holds SHIELDED promises
       // (#692); the raw chain would reject `Promise.all` and drop the remaining passes. The wait now spans
       // up to W passes serialized behind one another's portfolio tails (#1040), each bounded by the head's
-      // `raceWithTimeout` plus `DEFAULT_CRITIC_BUDGET_MS` (10s) since #957 folded the Risk Critic into the tail.
+      // `raceWithTimeout` plus `DEFAULT_CRITIC_BUDGET_MS` (10s) since #957 folded the Risk Critic into the tail
       await Promise.all(passes);
     },
   };
@@ -2098,7 +2098,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     // Passed through rather than defaulted here (#706): the composition root is where a run's policy is
     // chosen, and a default here would apply the window to the backtest harness and every programmatic
     // caller that never asked for it. Widened to the flatten tail before it reaches the scheduler, since the
-    // Trader is the only thing that flattens — the entry window alone would remove every tick that could satisfy flat-by-close.
+    // Trader is the only thing that flattens — the entry window alone would remove every tick that could satisfy flat-by-close
     ...(config.stocksTradingWindow === undefined
       ? {}
       : {
@@ -2132,7 +2132,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
   let feedbackHandle: NodeJS.Timeout | undefined;
   // Mirrors the SHAPE of `fill-sync.ts`'s own `stopped` flag (#1110), not its scope — this flag is
   // builder-scope and monotonic (`stop()` sets it `true`, never resets it), so `scheduleFeedbackCycle`
-  // resets it itself on every call; without that reset, a `start()` after a `stop()` would run its boot catch-up cycle once and then refuse to re-arm.
+  // resets it itself on every call; without that reset, a `start()` after a `stop()` would run its boot catch-up cycle once and then refuse to re-arm
   let feedbackScheduleStopped = false;
   let gdeltHandle: NodeJS.Timeout | undefined;
   let polymarketHandle: NodeJS.Timeout | undefined;
@@ -2383,7 +2383,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
   const runFeedbackCycle = (feedback: FeedbackCycleConfig): void => {
     // #1045, deliberately FIRST, outside the try below: a persistently throwing feedback cycle must not
     // silently disable retention too. Rides the existing daily cycle rather than a second scheduler (#636),
-    // and inherits whatever cadence is configured since #1110's wall-clock-boundary schedule below.
+    // and inherits whatever cadence is configured since #1110's wall-clock-boundary schedule below
     pruneLlmCallLogWithLog(config.db, llmCallLogMaxRows, logger, 'daily');
     // #1060. Same placement rule applies: outside the try, so a persistently
     // failing feedback cycle cannot silently disable the MI archive's purge
@@ -2463,12 +2463,12 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
     }
   };
 
-/**
- * Arms the daily feedback cycle on a restart-durable, wall-clock-boundary schedule (#1110) — replaces a
- * plain `setInterval` that never accumulated 24h of uptime on a soak restarting more often than daily.
- * Catch-up is capped at exactly ONE cycle (never a queue of missed boundaries), and the boundary is recorded
- * AFTER `runFeedbackCycle` returns, not before — recording before risked losing a boundary's cycle forever on a crash.
- */
+  /**
+   * Arms the daily feedback cycle on a restart-durable, wall-clock-boundary schedule (#1110) — replaces a
+   * plain `setInterval` that never accumulated 24h of uptime on a soak restarting more often than daily.
+   * Catch-up is capped at exactly ONE cycle (never a queue of missed boundaries), and the boundary is recorded
+   * AFTER `runFeedbackCycle` returns, not before — recording before risked losing a boundary's cycle forever on a crash.
+   */
   const scheduleFeedbackCycle = (feedback: FeedbackCycleConfig, intervalMs: number): void => {
     // Reset on every call, not just at module load — `stop()` sets this `true` and never resets it, so without this a second `start()` after `stop()` would refuse to re-arm (#1110's exact symptom through a third door)
     feedbackScheduleStopped = false;
@@ -2524,7 +2524,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
         }
       } catch (error) {
         // #1110: a throw here (most likely `SQLITE_BUSY` on the shared WAL file) must not take the timer
-        // down — before this `try`, an uncaught throw left the cycle unarmed for the rest of the process's life with no further log line, the exact symptom #1110 was filed to fix.
+        // down — before this `try`, an uncaught throw left the cycle unarmed for the rest of the process's life with no further log line, the exact symptom #1110 was filed to fix
         logger.log({
           trace_id: 'feedback-cycle',
           stage: 'feedback-loop',
@@ -2582,8 +2582,8 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
       });
 
       // #753: the control arm's own startup reconcile, same reason as the live arm's — awaited and allowed
-      // to propagate since it writes through the SAME database handle the live arm trades against.
-      // #1321: uses `CONTROL_RECONCILE_TRACE_ID`, not the live arm's, so the two arms' reconcile passes are distinguishable in the log.
+      // to propagate since it writes through the SAME database handle the live arm trades against
+      // #1321: uses `CONTROL_RECONCILE_TRACE_ID`, not the live arm's, so the two arms' reconcile passes are distinguishable in the log
       await runStartupReconcile({
         execution: components.controlArmWiring.reconcileExecution,
         logger,
@@ -2592,7 +2592,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
 
       // #371, placed beside reconcile before the tick loop. This path fails fast, unlike its siblings
       // below (which degrade a MISSING FEATURE to a warn): a throw here means the shared store won't take
-      // a write at all, and that same handle carries open positions/fills/closed trades — a process that can't write to it must not go on to place orders.
+      // a write at all, and that same handle carries open positions/fills/closed trades — a process that can't write to it must not go on to place orders
       if (config.feedback !== undefined) {
         // `runDailyCycle` only steps analysts with an existing `analyst_weights` row — without this every
         // cycle attributed trades and skipped every analyst. First-write-wins so a restart mid-soak can't flatten what the loop has learned
@@ -2823,7 +2823,7 @@ export function buildProductionOrchestrator(config: ProductionConfig): Productio
             /**
              * #379: the wired case, announced at startup for the same reason the unwired one is — a
              * detector that won't produce a suite for a calendar quarter (60-observation gate, ADR-0006 §5)
-             * is not the same as one that ran and found nothing, so this line must not just be replaced by silence.
+             * is not the same as one that ran and found nothing, so this line must not just be replaced by silence
              */
             logger.log({
               trace_id: 'startup',

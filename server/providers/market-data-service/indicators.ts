@@ -64,7 +64,7 @@ function rsi(values: number[], period: number): number {
 
   // A genuinely flat window (every change zero, e.g. a halted or
   // auction-flat bar): the standard `avgLoss === 0 -> 100` branch below
-  // would treat 0/0 as maximum strength, so return the neutral 50 instead (#725).
+  // would treat 0/0 as maximum strength, so return the neutral 50 instead (#725)
   if (avgGain === 0 && avgLoss === 0) {
     return 50;
   }
@@ -113,7 +113,7 @@ function atrPctValue(bars: Bar[], period: number): number {
   const lastClose = (bars[bars.length - 1] as Bar).close;
 
   // A 0 close never occurs in this system's universe, but guarding it keeps
-  // the "never NaN/Infinity" contract true unconditionally, not just in practice.
+  // the "never NaN/Infinity" contract true unconditionally, not just in practice
   if (lastClose === 0) {
     return 0;
   }
@@ -123,7 +123,7 @@ function atrPctValue(bars: Bar[], period: number): number {
 
 /**
  * Donchian channel position (#744): last close's fraction in [0, 1]
- * between the window's lowest low (0) and highest high (1).
+ * between the window's lowest low (0) and highest high (1)
  */
 function donchianPosValue(bars: Bar[], period: number): number {
   const window = bars.slice(-period);
@@ -133,7 +133,7 @@ function donchianPosValue(bars: Bar[], period: number): number {
   const lastClose = (window[window.length - 1] as Bar).close;
 
   // Zero-range window: no "where in the range" to report, so answer the
-  // neutral midpoint 0.5 rather than let NaN propagate (same posture as #725's RSI fix).
+  // neutral midpoint 0.5 rather than let NaN propagate (same posture as #725's RSI fix)
   if (range === 0) {
     return 0.5;
   }
@@ -175,10 +175,10 @@ function adxValue(bars: Bar[], period: number): number {
   let smoothedPlus = sum(plusDM.slice(0, period));
   let smoothedMinus = sum(minusDM.slice(0, period));
 
-  // Zero true range throughout: nothing to divide DI by, so DI+/DI- read 0 rather than NaN.
+  // Zero true range throughout: nothing to divide DI by, so DI+/DI- read 0 rather than NaN
   const diPlus = () => (smoothedTR === 0 ? 0 : (100 * smoothedPlus) / smoothedTR);
   const diMinus = () => (smoothedTR === 0 ? 0 : (100 * smoothedMinus) / smoothedTR);
-  // DI+ === DI- === 0: no directional imbalance to report, so DX reads 0 rather than NaN.
+  // DI+ === DI- === 0: no directional imbalance to report, so DX reads 0 rather than NaN
   const dxFrom = (plus: number, minus: number) =>
     plus + minus === 0 ? 0 : (100 * Math.abs(plus - minus)) / (plus + minus);
 
@@ -226,7 +226,7 @@ function macdHistogramValue(bars: Bar[], fast: number, slow: number, signal: num
   // slowSeries[k] is the EMA at values index (slow - 1 + k)
   const slowSeries = emaSeries(values, slow);
 
-  // MACD line exists only where both EMAs do: from max(fast, slow) - 1 onward.
+  // MACD line exists only where both EMAs do: from max(fast, slow) - 1 onward
   const macdStart = Math.max(fast, slow) - 1;
   const macdLine: number[] = [];
   for (let index = macdStart; index < values.length; index++) {
@@ -268,7 +268,7 @@ function bbKcSqueezeValue(
   const kcWidth = 2 * kcMult * kcAtr;
 
   // Zero-ATR window: true range being 0 throughout also forces bbWidth to
-  // 0, so answer the neutral ratio 1 (bands touching) rather than NaN.
+  // 0, so answer the neutral ratio 1 (bands touching) rather than NaN
   if (kcWidth === 0) {
     return 1;
   }
@@ -349,7 +349,7 @@ interface IndicatorDefinition {
 /**
  * Requires `spec.params[name]`, throwing and naming the parameter if
  * absent — unlike `periodOf`'s `spec.lookback` fallback, multi-parameter
- * kinds (`macd_histogram`, `bb_kc_squeeze`) have no single obviously-right default among their several named parameters.
+ * kinds (`macd_histogram`, `bb_kc_squeeze`) have no single obviously-right default among their several named parameters
  */
 function requiredParam(spec: IndicatorSpec, name: string): number {
   const value = spec.params[name];
@@ -413,7 +413,7 @@ const INDICATORS: Record<IndicatorKind, IndicatorDefinition> = {
     compute: (bars, spec) => atr(bars, periodOf(spec)),
   },
   // #744 additions: atr_pct/donchian_pos/adx use periodOf like the kinds
-  // above; macd_histogram/bb_kc_squeeze never call it (see requiredParam).
+  // above; macd_histogram/bb_kc_squeeze never call it (see requiredParam)
   atr_pct: {
     // Same arity as atr: one seed bar for the predecessor close, plus period
     minimumBars: (spec) => periodOf(spec) + 1,
@@ -431,10 +431,10 @@ const INDICATORS: Record<IndicatorKind, IndicatorDefinition> = {
   adx: {
     // 2 x period is genuine arity, not a warm-up preference: the first ADX
     // value needs `period` DX readings, each itself needing a period-long
-    // smoothed DI — no period-length DX average exists below 2 x period.
+    // smoothed DI — no period-length DX average exists below 2 x period
     minimumBars: (spec) => 2 * periodOf(spec),
     // Beyond the 2x-period arity floor, ADX is doubly Wilder-smoothed, so it
-    // gets a further 4 x period convergence margin on top.
+    // gets a further 4 x period convergence margin on top
     recommendedWarmup: (spec) => 2 * periodOf(spec) + 4 * periodOf(spec),
     reportedPeriod: (spec) => periodOf(spec),
     compute: (bars, spec) => adxValue(bars, periodOf(spec)),
@@ -445,7 +445,7 @@ const INDICATORS: Record<IndicatorKind, IndicatorDefinition> = {
       const slow = requiredIntParam(spec, 'slow');
       const signal = requiredIntParam(spec, 'signal');
       // MACD line exists from max(fast, slow) - 1 onward; the signal EMA
-      // then needs `signal` more MACD-line values to seed itself.
+      // then needs `signal` more MACD-line values to seed itself
       return Math.max(fast, slow) + signal - 1;
     },
     recommendedWarmup: (spec) => {
@@ -478,7 +478,7 @@ const INDICATORS: Record<IndicatorKind, IndicatorDefinition> = {
     recommendedWarmup: (spec) => {
       const bbPeriod = requiredIntParam(spec, 'bb_period');
       const kcPeriod = requiredIntParam(spec, 'kc_period');
-      // Bollinger half is warm-up-blind (stays at bb_period); Keltner half gets ema/atr's 4x-period margin.
+      // Bollinger half is warm-up-blind (stays at bb_period); Keltner half gets ema/atr's 4x-period margin
       return Math.max(bbPeriod, 4 * kcPeriod + 1);
     },
     reportedPeriod: (spec) =>
@@ -553,7 +553,7 @@ export function recommendedWarmupFor(spec: IndicatorSpec): number {
  * callers that must degrade check `minimumBarsFor` first instead of catching.
  */
 export function computeIndicator(bars: Bar[], spec: IndicatorSpec): number {
-  // Ordering checked before length: a misordered feed is the more actionable diagnosis.
+  // Ordering checked before length: a misordered feed is the more actionable diagnosis
   assertAscending(bars);
   const definition = definitionFor(spec.indicator);
 

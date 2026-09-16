@@ -55,7 +55,7 @@ export class SequentialTickRunner implements TickRunner {
 
   constructor(private readonly steps: TickSteps) {}
 
-  /** Publishes `trace_id` as ambient context so log sites with no channel to receive one (`TokenBucket`, `MarketDataService`) can still name the tick. */
+  /** Publishes `trace_id` as ambient context so log sites with no channel to receive one (`TokenBucket`, `MarketDataService`) can still name the tick */
   async runInstrument(signal: Signal, ctx: TickContext): Promise<TickOutcome> {
     return runWithTraceId(ctx.trace_id, () => this.#runInstrument(signal, ctx));
   }
@@ -65,9 +65,9 @@ export class SequentialTickRunner implements TickRunner {
     const instrument = signal.asset;
 
     // wallMs (real Date.now, not the backtest-steppable clock) for started_at;
-    // perfMs (monotonic performance.now, immune to NTP step-back) for duration.
+    // perfMs (monotonic performance.now, immune to NTP step-back) for duration
     // Named fields, not two positional numbers, since the two are trivially
-    // transposable as bare `number` params.
+    // transposable as bare `number` params
     const startStageTimer = () => ({ wallMs: Date.now(), perfMs: performance.now() });
 
     /**
@@ -86,7 +86,7 @@ export class SequentialTickRunner implements TickRunner {
       }
       // #1113: no_exit_due is ~29 of 30 passes and carries no information the
       // audit row (written regardless of level) doesn't already have, so it's
-      // quieted to `debug` rather than dropped.
+      // quieted to `debug` rather than dropped
       if (stage === 'position_check' && decision === 'no_exit_due') {
         return 'debug';
       }
@@ -120,7 +120,7 @@ export class SequentialTickRunner implements TickRunner {
         timestamp: clock.now(),
         // Without these, a tick that stopped at Analysts or Risk was
         // unattributable to an instrument: neither current_tick nor
-        // verdict_log covered it.
+        // verdict_log covered it
         instrument,
         asset_class: signal.asset_class,
       });
@@ -139,7 +139,7 @@ export class SequentialTickRunner implements TickRunner {
     /**
      * The shared Risk -> Verdict -> Execution tail both paths converge on once
      * an intent exists, so gate-vs-actor separation (Execution only on `go`)
-     * is enforced in exactly one place.
+     * is enforced in exactly one place
      */
     const runIntentTail = async (
       intent: OrderIntent,
@@ -193,7 +193,7 @@ export class SequentialTickRunner implements TickRunner {
       const exitCheckTimer = startStageTimer();
       const exitIntent = await this.steps.exitCheck(exitInput);
       // #748: names which kind of exit fired — `flatten` and `signal_decay`
-      // are different events and must not share one audit string.
+      // are different events and must not share one audit string
       record(
         'position_check',
         exitIntent === null ? 'no_exit_due' : (exitIntent.metadata.exit_reason ?? 'exit'),
@@ -208,7 +208,7 @@ export class SequentialTickRunner implements TickRunner {
       // Phase split (#1040): the turn is taken here, not at the top of the
       // check, since the exit check itself reads no portfolio state — taking
       // it earlier would queue every no-intent tick pass (~29 of 30) behind
-      // every instrument ahead of it in the plan for nothing.
+      // every instrument ahead of it in the plan for nothing
       await ctx.beginPortfolioTail?.();
       return runIntentTail(
         exitIntent,
@@ -222,10 +222,10 @@ export class SequentialTickRunner implements TickRunner {
     if (decisionBar === undefined) {
       // Falsifier arm 2 (#753): awaited, not fired off, so a pass can't
       // outlive its tick; run on the tick path too since the control arm
-      // holds its own lots and is subject to the same flat-by-close.
+      // holds its own lots and is subject to the same flat-by-close
       await this.steps.controlArm?.({ signal, ctx });
       // Bar floored once here, onto the decision gate's own grid, so every
-      // tick-pass flatten inside one bar re-keys to the same order (#743).
+      // tick-pass flatten inside one bar re-keys to the same order (#743)
       return runExitCheckPass(floorToBar(clock.now(), DEBATE_BAR_TIMEFRAME_MS));
     }
 
@@ -233,7 +233,7 @@ export class SequentialTickRunner implements TickRunner {
     const analystsInput = { trace_id, signal, clock, bar: decisionBar.open_time };
     const analystsTimer = startStageTimer();
     const views = await this.steps.analysts(analystsInput);
-    // Destructive read (#1080): a skip kind belongs to one pass, not a store to be queried later.
+    // Destructive read (#1080): a skip kind belongs to one pass, not a store to be queried later
     const analystsDecision =
       views.length === 0
         ? analystsSkipDecisionWord(this.steps.analystSkipKind?.(trace_id))
@@ -243,11 +243,11 @@ export class SequentialTickRunner implements TickRunner {
     // Falsifier arm 2 (#753): sited after analysts, before debate, so the
     // control arm sees the SAME views on the SAME bar with debate bypassed,
     // rather than re-running analysts itself (which could trigger a live
-    // model call the control arm must never make).
+    // model call the control arm must never make)
     await this.steps.controlArm?.({ signal, ctx, views });
 
     if (views.length === 0) {
-      // A quorum skip has no Trader entry point to carry the flatten (#785), so it runs the exit check itself.
+      // A quorum skip has no Trader entry point to carry the flatten (#785), so it runs the exit check itself
       return runExitCheckPass(decisionBar.open_time);
     }
 
@@ -269,7 +269,7 @@ export class SequentialTickRunner implements TickRunner {
 
     // A bar mismatch means the intent may land on a coordinate another intent
     // already holds and gets suppressed as a duplicate — indistinguishable
-    // from a healthy no-trade tick without this warning (#743).
+    // from a healthy no-trade tick without this warning (#743)
     if (debate.bar_timestamp.getTime() !== decisionBar.open_time.getTime()) {
       logger.log({
         trace_id,
@@ -291,7 +291,7 @@ export class SequentialTickRunner implements TickRunner {
       });
     }
 
-    // Phase split (#1040): everything above is the portfolio-free head; below reads/mutates the book and waits for this instrument's turn.
+    // Phase split (#1040): everything above is the portfolio-free head; below reads/mutates the book and waits for this instrument's turn
     await ctx.beginPortfolioTail?.();
 
     markStage('trader');
@@ -322,7 +322,7 @@ export class SequentialTickRunner implements TickRunner {
    * full warning set every tick; this only raises a CHANGE.
    */
   private reportAdvisoryWarnings(instrument: string, warnings: string[], ctx: TickContext): void {
-    // Sorted since warning order shifts whenever a position closes/reopens; comparing raw order would re-fire on a reordering alone.
+    // Sorted since warning order shifts whenever a position closes/reopens; comparing raw order would re-fire on a reordering alone
     const signature = [...warnings].sort().join('|');
     if (this.#lastAdvisory.get(instrument) === signature) return;
 
@@ -330,7 +330,7 @@ export class SequentialTickRunner implements TickRunner {
     if (warnings.length === 0 && !hadWarnings) return;
     this.#lastAdvisory.set(instrument, signature);
 
-    // Clearing is good news — `info`, not `warn` — and still emitted so coverage completing is a positive log statement, not silence.
+    // Clearing is good news — `info`, not `warn` — and still emitted so coverage completing is a positive log statement, not silence
     ctx.logger.log({
       trace_id: ctx.trace_id,
       stage: 'risk',

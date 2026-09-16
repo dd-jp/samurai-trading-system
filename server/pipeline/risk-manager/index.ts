@@ -195,7 +195,7 @@ export class RiskManagerImpl implements RiskManager {
   /**
    * The check pipeline: exit pass-through, then the circuit-breaker gate,
    * then `ENTRY_CAP_GATES` in declared order, then the min-viable re-check
-   * and the critic review.
+   * and the critic review
    */
   evaluate(input: RiskInput): RiskDecision {
     const { intent, portfolio, breakers, correlation, cii, critic, next_breaker_state } = input;
@@ -204,7 +204,7 @@ export class RiskManagerImpl implements RiskManager {
     // Loop tightened between ticks binds on the next one. Skipped for an
     // exit: `resolveRiskConfig` throws on an out-of-bound threshold row, and
     // a bad row must not strand an exit (including the flat-by-close
-    // flatten) through the close — an exit reads no other field of `config`.
+    // flatten) through the close — an exit reads no other field of `config`
     const { config } =
       intent.intent_type === 'exit' || !this.thresholds
         ? { config: this.config }
@@ -248,7 +248,7 @@ export class RiskManagerImpl implements RiskManager {
     // model to size or cost one. Scoped to `config.long_only_instruments`
     // (the actual Saxo-venue set), not `asset_class === 'stocks'`, which also
     // caught the Alpaca paper universe. Placed here rather than in
-    // `ENTRY_CAP_GATES` since it's a structural refusal, not a sizing cap.
+    // `ENTRY_CAP_GATES` since it's a structural refusal, not a sizing cap
     if (intent.side === 'sell' && config.long_only_instruments?.has(intent.instrument)) {
       const binding = 'long_only_book';
       const positionClaim = intent.intent_type === 'entry' ? 'with no held lot' : 'on a scale_in';
@@ -265,7 +265,7 @@ export class RiskManagerImpl implements RiskManager {
     // reads an absent instrument as ZERO exposure, so a missing valuation
     // makes every cap too wide. Placed below the exit branch — the exit path
     // is what deliberately takes a degraded view, and consults none of these
-    // caps.
+    // caps
     if (portfolio.unvalued_instruments.length > 0) {
       const binding = 'unvalued_book';
       return rejected(binding, [
@@ -290,7 +290,7 @@ export class RiskManagerImpl implements RiskManager {
     // Recorded whenever ANY order is in flight, not only when a cap binds on
     // it — `risk_snapshot.exposure` reports the valued book only, so this is
     // what makes a trim against a reservation re-derivable from the
-    // `risk_log` row alone.
+    // `risk_log` row alone
     const reservedInstruments = Object.entries(portfolio.reserved_exposure_by_instrument);
     if (reservedInstruments.length > 0) {
       reasons.push(
@@ -327,7 +327,7 @@ export class RiskManagerImpl implements RiskManager {
     if (gatesResult.bindingConstraint !== null) bindingConstraint = gatesResult.bindingConstraint;
 
     // Deliberately NOT quantised — the caps above reason about this number;
-    // quantisation happens once, at the emit below.
+    // quantisation happens once, at the emit below
     const finalSize = notional / intent.entry;
 
     if (notional < config.min_viable_size) {
@@ -350,7 +350,7 @@ export class RiskManagerImpl implements RiskManager {
     // can turn a viable trimmed notional into dust, so the min-viable floor
     // is checked on both sides of it. Two distinct reasons (zero vs. dust) so
     // a soak log can tell "grid ate the whole position" from "what survived
-    // the caps was dust".
+    // the caps was dust"
     const approvedNotional = approvedSize * intent.entry;
     if (approvedSize <= 0) {
       reasons.push(
@@ -366,7 +366,7 @@ export class RiskManagerImpl implements RiskManager {
     }
 
     // `modifications` carries only sizes, so a grid floor is indistinguishable
-    // from a cap trim there — recorded in `reasons` instead.
+    // from a cap trim there — recorded in `reasons` instead
     if (config.whole_share_sizing && approvedSize !== finalSize) {
       reasons.push(
         `whole_share_sizing: floored size from ${finalSize} to ${approvedSize} (whole shares)`,
@@ -400,7 +400,7 @@ export class RiskManagerImpl implements RiskManager {
   ): { rejectedBinding: string | null; notional: number; bindingConstraint: string | null } {
     if (critic === undefined) {
       // Fails open BY RECORD, not silently: a decision the critic never saw
-      // must stay distinguishable from one it actually passed.
+      // must stay distinguishable from one it actually passed
       reasons.push(RISK_CRITIC_SKIPPED_REASON);
       return { rejectedBinding: null, notional, bindingConstraint: null };
     }
@@ -414,7 +414,7 @@ export class RiskManagerImpl implements RiskManager {
     // A MEASURED breach rejects even when the prose said `pass` — the
     // producer never pre-computes this, keeping the persisted row honest
     // about what the model actually said. `unevaluable` is deliberately
-    // absent from this test: a data gap must never block a trade.
+    // absent from this test: a data gap must never block a trade
     const breached = breachedConditions(critic);
     if (breached.length > 0) {
       return { rejectedBinding: INVALIDATED_BINDING_CONSTRAINT, notional, bindingConstraint: null };
@@ -490,7 +490,7 @@ function isD5ArmedWithNumericFraction(
 
 /**
  * D5's own fraction is the sole drawdown authority once an instrument is
- * subclass-classified; this cap applies to unclassified instruments only.
+ * subclass-classified; this cap applies to unclassified instruments only
  */
 const perTradeSizeCap: EntryCapGate = (config, intent, portfolio) => {
   if (isD5ArmedWithNumericFraction(config, intent.instrument)) return null;
@@ -535,7 +535,7 @@ const portfolioGrossExposureCap: EntryCapGate = (config, _intent, portfolio) => 
 /**
  * Instruments absent from `correlation.correlations` are treated as not
  * correlated (the warm-up fallback) — an under-`min_bars` pair cannot bind
- * this cap, and is surfaced as a `correlation_warmup:` warning instead.
+ * this cap, and is surfaced as a `correlation_warmup:` warning instead
  */
 const concentrationCorrelationCap: EntryCapGate = (config, intent, portfolio, correlation) => {
   const correlatedInstruments = Object.entries(correlation.correlations)
@@ -584,7 +584,7 @@ const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
   // string without a row in `cap` is a real runtime possibility. `undefined`
   // must not fall through: `undefined - deployed` is `NaN`, and every
   // downstream comparison against `NaN` is false, so an unhandled case would
-  // clear this gate and the min-viable floor with no envelope at all.
+  // clear this gate and the min-viable floor with no envelope at all
   const capFraction: number | null | undefined = declared.cap_fraction_of_equity[subclass];
   if (capFraction === undefined) {
     throw new PerSubclassCapUnresolvableError(
@@ -602,14 +602,14 @@ const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
   // The equity this fraction resolves against is the DECLARED BOOK
   // (`equity_ceiling.book`), not raw `portfolio.equity` — the latter is one
   // blended broker figure that equals the book only by coincidence, and
-  // funding past the book must not silently widen every position's cap.
+  // funding past the book must not silently widen every position's cap
   const ceiling = declared.equity_ceiling;
   if (ceiling !== undefined) {
     // `book` is GBP; `portfolio.equity` is read from Alpaca's
     // USD-denominated account. Refuses to arm rather than compare currencies
     // — a configured FX rate exists for sizing but its own drift is larger
     // than `refuse_above_tolerance`, so using it here would make FX movement
-    // indistinguishable from the overfunding this refusal exists to catch.
+    // indistinguishable from the overfunding this refusal exists to catch
     if (!ceiling.same_currency_verified) {
       throw new PerSubclassCapUnresolvableError(
         'per_subclass_deployment_cap: currency mismatch, cannot verify funding — ' +
@@ -630,7 +630,7 @@ const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
     if (portfolio.equity > refuseAbove) {
       // An account funded this far past the declared book invalidates other
       // sizing assumptions too (breaker baselines, the drawdown envelope D5
-      // was measured to hold) — refused outright rather than quietly capped.
+      // was measured to hold) — refused outright rather than quietly capped
       throw new PerSubclassCapUnresolvableError(
         `per_subclass_deployment_cap's declared book is ${ceiling.book} but portfolio.equity is ` +
           `${portfolio.equity}, more than ${(ceiling.refuse_above_tolerance * 100).toFixed(0)}% ` +
@@ -654,7 +654,7 @@ const perSubclassDeploymentCap: EntryCapGate = (config, intent, portfolio) => {
   // Over the UNION of held and in-flight keys — an instrument whose only row
   // is write-ahead `pending` appears in `reserved_exposure_by_instrument` and
   // NOT `exposure_by_instrument`, so iterating the held record alone would
-  // skip exactly the sibling this netting exists to count.
+  // skip exactly the sibling this netting exists to count
   const deployedToSubclass = [
     ...new Set([
       ...Object.keys(portfolio.exposure_by_instrument),

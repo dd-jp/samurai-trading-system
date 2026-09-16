@@ -60,7 +60,7 @@ export const DEFAULT_GDELT_POLL_INTERVAL_MS = 5 * 60_000;
 /**
  * How often the Polymarket poller is OFFERED a chance to run (#504) — the
  * agent's own hourly epoch-floored bucket enforces the real cadence, so this
- * only bounds how promptly a bucket rollover is noticed.
+ * only bounds how promptly a bucket rollover is noticed
  */
 export const DEFAULT_POLYMARKET_POLL_INTERVAL_MS = 15 * 60_000;
 /**
@@ -74,7 +74,7 @@ export const DEFAULT_VOLATILITY_INDICATOR: IndicatorSpec = {
   indicator: 'atr',
   params: { period: 14 },
   // 1h, matching every other indicator in the live path (#315 made this explicit
-  // rather than hardcoded in getIndicator).
+  // rather than hardcoded in getIndicator)
   timeframe: '1h',
   lookback: recommendedWarmupFor({
     indicator: 'atr',
@@ -112,9 +112,9 @@ const DEFAULT_LLM_TIMEOUT_MS =
 /**
  * Debate/disagreement-detection's LLM knobs aren't yet exposed on `ProductionConfig` —
  * mirrored by hand in `disagreement-detector.integration.test.ts`, so #1080 moved
- * `timeoutMs` in both places.
+ * `timeoutMs` in both places
  */
-/** Exported for `production.test.ts` (PR #284 review) — asserts the actual retry/timeout budget, not just the startup warn log. */
+/** Exported for `production.test.ts` (PR #284 review) — asserts the actual retry/timeout budget, not just the startup warn log */
 export const DEFAULT_LLM_CLIENT_CONFIG: Omit<AnthropicLlmClientConfig, 'model'> = {
   max_tokens: 1024,
   timeoutMs: DEFAULT_LLM_TIMEOUT_MS,
@@ -127,7 +127,7 @@ export const DEFAULT_LLM_CLIENT_CONFIG: Omit<AnthropicLlmClientConfig, 'model'> 
  * var if the key/URL are absent or the model is unpriced — an unpriced call would
  * silently remove ADR-0008's spend ceiling (null `cost_usd` sums as zero).
  */
-/** Exported for `production.test.ts` (PR #284 review) — asserts the constructed client's actual shape, not just the startup warn log. */
+/** Exported for `production.test.ts` (PR #284 review) — asserts the constructed client's actual shape, not just the startup warn log */
 export function buildDefaultLlmClient(
   logger: Logger,
   gate: LlmInFlightGate,
@@ -135,7 +135,7 @@ export function buildDefaultLlmClient(
 ): LlmClient {
   const { apiKey, baseUrl, model } = nousCredentials('debate');
   // Loud, not silent: omitting `ProductionConfig.llmClient` means a real, billed
-  // API call per debate round, not a mock (kimi-3-review, #284).
+  // API call per debate round, not a mock (kimi-3-review, #284)
   logger.log({
     trace_id: 'startup',
     stage: 'orchestrator',
@@ -147,9 +147,9 @@ export function buildDefaultLlmClient(
   const config: AnthropicLlmClientConfig = {
     ...DEFAULT_LLM_CLIENT_CONFIG,
     model,
-    // #1080: the only line a retried attempt produces (see RetryAttemptReport).
+    // #1080: the only line a retried attempt produces (see RetryAttemptReport)
     // logCaughtFailure, not logger.log, since a throw here runs inside the retry
-    // loop's own observer guard and would otherwise be swallowed.
+    // loop's own observer guard and would otherwise be swallowed
     onRetryAttempt: (report) => {
       logCaughtFailure(
         logger,
@@ -176,14 +176,14 @@ export function buildDefaultLlmClient(
           debate_id: report.debate_id,
           llm_stage: report.stage,
           // #1394: names what was retried — a rate limit and a malformed draw
-          // used to log identically.
+          // used to log identically
           failure_cause: classifyFailureCause(report.error),
         },
       );
     },
     // #1394: terminal per-call line after the retry budget is spent — every
     // downstream caller fails open or re-renders in its own words, so this is
-    // the only session-wide failure-cause count.
+    // the only session-wide failure-cause count
     onCallFailed: (report) => {
       logCaughtFailure(
         logger,
@@ -210,13 +210,13 @@ export function buildDefaultLlmClient(
   };
   // `gateBudgetMs` = `config.timeoutMs`, not NousMessagesClient's own wider
   // network backstop — the gate wait happens inside the outer race in
-  // `callWithTimeout`, which is the clock a queue wait actually eats into (#1080).
+  // `callWithTimeout`, which is the clock a queue wait actually eats into (#1080)
   // Equal, no margin subtracted: the gate's own queue timer already fires a full
-  // expected call before the budget.
+  // expected call before the budget
   const client = new NousMessagesClient({ apiKey, baseUrl, gate, gateBudgetMs: config.timeoutMs });
   // `spendSink` is only ever supplied here — an overridden client is a test
   // double/other provider, and metering it against the Nous price table would
-  // show a confidently wrong dollar figure.
+  // show a confidently wrong dollar figure
   return new AnthropicLlmClient(client, config, spendSink);
 }
 
@@ -280,7 +280,7 @@ export function buildDefaultAlpacaBrokerClient(
 
   // The mirror of the check above (#511). The client's own resolveBaseUrl
   // already refuses this pairing, but by then the override is just a baseUrl
-  // argument, so only this can name which env var and mode disagree.
+  // argument, so only this can name which env var and mode disagree
   if (overrideHost === 'paper' && mode === 'live') {
     throw new Error(
       `ALPACA_BASE_URL points at Alpaca's PAPER trading host ('${override}') but SAMURAI_MODE ` +
@@ -292,7 +292,7 @@ export function buildDefaultAlpacaBrokerClient(
 
   // Constructed before the log line: the client re-checks environment/host
   // agreement and can still throw, so a startup log naming an unreached host
-  // would be worse than no log at all.
+  // would be worse than no log at all
   const client = new AlpacaHttpBrokerClient(
     override === undefined ? { environment } : { environment, baseUrl: override },
   );
@@ -314,7 +314,7 @@ export function buildDefaultAlpacaBrokerClient(
 
 /**
  * No mode branch: Alpaca serves market data from one host for paper and live
- * alike, so there's no money-safety decision here.
+ * alike, so there's no money-safety decision here
  */
 export function buildDefaultAlpacaDataClient(
   assetClass: 'crypto' | 'stocks',
@@ -331,7 +331,7 @@ export function buildDefaultAlpacaDataClient(
 /**
  * Derived rather than configured (#358) — `dataSourceAssetClass` used to
  * default to `'crypto'` with no way to say "both"; reading it off the universe
- * means market-data wiring can't disagree with the tick plan.
+ * means market-data wiring can't disagree with the tick plan
  */
 export function universeAssetClasses(universe: readonly UniverseInstrument[]): AssetClass[] {
   return (['crypto', 'stocks'] as const).filter((assetClass) =>
@@ -407,7 +407,7 @@ function buildLseMarkSourceIfNeeded(
     tradeable: LSE_TICKERS,
     screeningInstruments: LSE_SCREENING_INSTRUMENTS,
     // Only the HELD lines: a USD-quoted pool row nobody trades is fine; one in
-    // this universe is a mark the orchestrator must produce and can't.
+    // this universe is a mark the orchestrator must produce and can't
     declaredCurrencies: new Map(
       LSE_ETP_POOL.filter((row) => lseHeld.some((held) => held.asset === row.lse_ticker)).map(
         (row) => [row.lse_ticker, row.currency],
@@ -431,7 +431,7 @@ export function buildAlpacaDataSource(
 ): DataSource {
   // #734, runs FIRST — an LSE ETP is asset_class 'stocks' exactly like SPY, so
   // every check below would happily hand it to Alpaca, which doesn't list it
-  // (verified 2026-08-18).
+  // (verified 2026-08-18)
   const lseSource = buildLseMarkSourceIfNeeded(config, universe);
   if (lseSource !== undefined) return lseSource;
 
@@ -459,7 +459,7 @@ export function buildAlpacaDataSource(
     // A dataSourceAssetClass that CONTRADICTS the universe is refused, not
     // obeyed — obeying it would send every request to the wrong API root and
     // 404 silently (#358). Stays useful for an EMPTY universe, which asserts
-    // nothing to contradict.
+    // nothing to contradict
     if (override !== undefined && present.length > 0 && override !== single) {
       throw new Error(
         `Orchestrator cannot start: ProductionConfig.dataSourceAssetClass is '${override}', but ` +
@@ -533,10 +533,10 @@ export function buildBenchmarkDataSource(options: {
       kind: 'alpaca',
       client: options.dataClient ?? buildDefaultAlpacaDataClient('stocks', options.rateLimiter),
       // NO calendar, deliberately — AlpacaDataSource then defaults to
-      // UsEquityRegularHoursCalendar, the session SPY/AGG actually trade in.
+      // UsEquityRegularHoursCalendar, the session SPY/AGG actually trade in
       // Accepting one would re-couple this to the live path's calendar
       // (LseRegularHoursCalendar in live mode) through the back door; the
-      // signature has none, so the coupling can't recur structurally.
+      // signature has none, so the coupling can't recur structurally
       asset_class: 'stocks',
     }),
   );

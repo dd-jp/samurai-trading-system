@@ -18,7 +18,7 @@ export interface BreakerState {
 
 /**
  * Crash-restart-safe row shape for the sticky breakers (#203) — unlike `BreakerState` (a derived,
- * timestamp-less view), this is lossless: `CircuitBreakers` reconstructs from it exactly after a restart.
+ * timestamp-less view), this is lossless: `CircuitBreakers` reconstructs from it exactly after a restart
  */
 export interface PersistedBreakerState {
   tier: 'portfolio_drawdown' | 'kill_switch';
@@ -31,7 +31,7 @@ export interface PersistedBreakerState {
 /**
  * Session-scoped daily PnL as a fraction, or explicit "not known" (#332) — a discriminated union, NOT
  * `number | null`: `null <= -config.daily_loss_pct` coerces to a real comparison and would read an
- * unknown figure as flat, silently leaving the loss breaker un-tripped through a real loss.
+ * unknown figure as flat, silently leaving the loss breaker un-tripped through a real loss
  */
 export type DailyPnl =
   | { readonly known: true; readonly pct: number }
@@ -47,7 +47,7 @@ export interface DailyPnlByClass {
   readonly portfolio: DailyPnl;
 }
 
-/** Accounting view over the shared store (#78), consumed read-only — the pipeline never computes exposure/drawdown itself. */
+/** Accounting view over the shared store (#78), consumed read-only — the pipeline never computes exposure/drawdown itself */
 export interface PortfolioView {
   equity: number;
   peak_equity: number;
@@ -63,7 +63,7 @@ export interface PortfolioView {
   reserved_exposure_by_instrument: Record<string, number>;
   reserved_exposure_by_class: { crypto: number; stocks: number };
   reserved_gross_exposure: number;
-  /** Replaces the former `daily_pnl_pct: number`, which was Alpaca's blended `last_equity` on an unverified boundary (GAP-8, #332). */
+  /** Replaces the former `daily_pnl_pct: number`, which was Alpaca's blended `last_equity` on an unverified boundary (GAP-8, #332) */
   daily_pnl: DailyPnlByClass;
   consecutive_losses: number;
   /**
@@ -110,7 +110,7 @@ export interface CorrelationEstimate {
   insufficient_history: string[];
 }
 
-/** Static, config-driven thresholds the pipeline trims/rejects against — the shape, not the tuned numbers (risk-manager-spec.md). */
+/** Static, config-driven thresholds the pipeline trims/rejects against — the shape, not the tuned numbers (risk-manager-spec.md) */
 export interface RiskConfig {
   /**
    * Max single-trade notional as a FRACTION OF EQUITY resolved at evaluate time (#886), not a frozen cash
@@ -187,7 +187,7 @@ export interface RiskConfig {
 export interface SubclassDeploymentCap {
   /**
    * Instrument -> subclass ADR-0018 prices it under, sourced from the universe at the composition root —
-   * never derived from the ticker string (nothing in "3LAP" says single-stock).
+   * never derived from the ticker string (nothing in "3LAP" says single-stock)
    */
   subclass_of: Readonly<Record<string, InstrumentSubclass>>;
   /**
@@ -207,7 +207,7 @@ export interface SubclassDeploymentCap {
     /**
      * Fractional headroom above `book` before REFUSING the entry outright rather than merely capping at
      * `book` (#888) — an account funded far past the declared book invalidates every other sizing
-     * assumption (breaker baselines, D5's drawdown envelope), so past this tolerance it refuses entirely.
+     * assumption (breaker baselines, D5's drawdown envelope), so past this tolerance it refuses entirely
      */
     refuse_above_tolerance: number;
     /**
@@ -256,7 +256,7 @@ export interface EvaluatedCondition {
   observed: number | null;
 }
 
-/** Why the deterministic validator refused a proposed condition — persisted (not discarded) so a systematically malformed prompt doesn't hide for a month. */
+/** Why the deterministic validator refused a proposed condition — persisted (not discarded) so a systematically malformed prompt doesn't hide for a month */
 export type InvalidationDropReason =
   /** Not a readable condition object: blank id, non-finite threshold, unknown comparator, no rationale */
   | 'unparseable'
@@ -322,7 +322,7 @@ export interface RiskInput {
   clock: Clock;
   portfolio: PortfolioView;
   breakers: BreakerState;
-  /** Lossless sticky-breaker rows (#203) — `evaluate()` only echoes this onto `RiskDecision.next_breaker_state`, never derives or mutates it. */
+  /** Lossless sticky-breaker rows (#203) — `evaluate()` only echoes this onto `RiskDecision.next_breaker_state`, never derives or mutates it */
   next_breaker_state: PersistedBreakerState[];
   /** Pairwise correlation of the intent's instrument vs held instruments (#50); pre-computed by correlation.ts */
   correlation: CorrelationEstimate;

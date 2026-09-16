@@ -114,7 +114,7 @@ import {
 /**
  * Account-level accounting scalars `computePortfolioView` needs but has no
  * in-repo source for (realized PnL / fill history isn't tracked yet); tests
- * inject a fake.
+ * inject a fake
  */
 export interface AccountStateProvider {
   getAccountState(asOf: Date): Promise<{
@@ -122,7 +122,7 @@ export interface AccountStateProvider {
     peak_equity: number;
     /**
      * Session-open equity and realized PnL per class (#332) — not a finished
-     * percentage; `computePortfolioView` adds the unrealized term and divides.
+     * percentage; `computePortfolioView` adds the unrealized term and divides
      */
     daily_basis: SessionBasisByClass;
     consecutive_losses: number;
@@ -150,7 +150,7 @@ export interface TraderStepDeps extends BreakerStateDeps {
   /**
    * #568: `SharedStore.getExitFillSizes`, bound to the SAME store
    * `getOpenPositions` reads — `executeExit` refuses any exit whose size
-   * doesn't match this same derivation.
+   * doesn't match this same derivation
    */
   getExitFillSizes: (idempotency_keys: readonly string[]) => Promise<Map<string, number>>;
   /**
@@ -161,7 +161,7 @@ export interface TraderStepDeps extends BreakerStateDeps {
   getUnresolvedFlattens: () => Promise<readonly UnresolvedFlatten[]>;
   /**
    * #432: the same `SetupStore` instance `withOnTradeClose` labels through —
-   * two halves of one table, must not be independently-constructed stores.
+   * two halves of one table, must not be independently-constructed stores
    */
   setupStore: SetupStore;
   /**
@@ -185,7 +185,7 @@ export interface TraderStepDeps extends BreakerStateDeps {
    * hears about it, not what the system does.
    */
   traderDiagnosticAlerts?: TraderDiagnosticAlertChannel;
-  /** Fallback sink for an undeliverable diagnostic alert, and this step's own logging. */
+  /** Fallback sink for an undeliverable diagnostic alert, and this step's own logging */
   logger?: Logger;
 }
 
@@ -216,7 +216,7 @@ export function buildTraderStep(deps: TraderStepDeps): TickSteps['trader'] {
 /**
  * `TraderOutcome` carries no `debate_id` for a skip, so it's recomputed here
  * from the same `positions` snapshot via the exported `mostRecentOpenLot`
- * (decide.ts) rather than a second selection that could drift from it.
+ * (decide.ts) rather than a second selection that could drift from it
  */
 function mostRecentDebateId(positions: readonly OpenPosition[], instrument: string): string | null {
   const held = positions.filter((lot) => lot.instrument === instrument);
@@ -234,17 +234,17 @@ export function buildTraderSteps(deps: TraderStepDeps): {
   exitCheck: TickSteps['exitCheck'];
 } {
   // #698: per-step-set, not per-tick — the counter relates this tick to the
-  // ones before it, so it must outlive the closure body.
+  // ones before it, so it must outlive the closure body
   const diagnosticThrottle = new TraderDiagnosticThrottle();
 
   // #1128: the exit-check skip write gate — see `exit-skip-write-throttle.ts`
-  // for why "differs from the last written reason" alone can't bound volume.
+  // for why "differs from the last written reason" alone can't bound volume
   const exitSkipThrottle = new ExitSkipWriteThrottle();
 
   const trader: TickSteps['trader'] = async ({ trace_id, instrument, debate, clock }) => {
     // TraderInput.equity is the same portfolio OBSERVATION Risk gates
     // against this tick — memoized per trace so the two stages can't see two
-    // different portfolios (B4).
+    // different portfolios (B4)
     //
     // #847: capture-and-rethrow, not laziness. The read stays eager since
     // `computeCurrentPortfolioAndBreakers` also runs breaker evaluation and
@@ -252,7 +252,7 @@ export function buildTraderSteps(deps: TraderStepDeps): {
     // bar. Only the FAILURE is deferred: a strict-valuation throw is held and
     // re-raised, unwrapped, from inside `buildBracket`, so an entry still
     // aborts the tick (#507) while a flat-by-close branch that never reads
-    // equity gets to run (ADR-0014).
+    // equity gets to run (ADR-0014)
     let snapshot: PortfolioSnapshot | null = null;
     let snapshotError: unknown = null;
     try {
@@ -271,7 +271,7 @@ export function buildTraderSteps(deps: TraderStepDeps): {
         marketData: deps.marketData,
         // #847: either the strict whole-book equity or the strict read's own
         // throw — never a partial figure, since every exposure cap reads an
-        // absent instrument as zero exposure.
+        // absent instrument as zero exposure
         equity: async () => {
           if (snapshot === null) throw snapshotError;
           return sizingEquity(snapshot.portfolio.equity, deps.capitalCeilingUsd);
@@ -298,14 +298,14 @@ export function buildTraderSteps(deps: TraderStepDeps): {
       });
 
     // Written for a null intent too (#328) — a skip is a decision, and
-    // `TickOutcome.final_stage` records where a tick stopped but never why.
+    // `TickOutcome.final_stage` records where a tick stopped but never why
     deps.traderLog?.write({
       trace_id,
       instrument,
       debate_id: debate.debate_id,
       intent_type: intent?.intent_type ?? null,
       // #748: null on entry/scale-in/skip — set exactly when there's an
-      // exit, and on this path that's the flatten or direction flip.
+      // exit, and on this path that's the flatten or direction flip
       exit_reason: intent?.metadata.exit_reason ?? null,
       // The actual reason, since #475 — used to be one constant for all 13 skip paths
       skip_reason,
@@ -325,11 +325,11 @@ export function buildTraderSteps(deps: TraderStepDeps): {
     // #1128: a debate-bar decision can also fire the exit (`routeDecision`'s
     // holding branch), not only `exitCheck`'s own tick-path handling — so
     // whichever binding closes the lot must clear this instrument's episode
-    // state, or a reopened lot's first skip row reads as a suppressed repeat.
+    // state, or a reopened lot's first skip row reads as a suppressed repeat
     if (intent?.intent_type === 'exit') exitSkipThrottle.clearEpisode(instrument);
 
     // #698: escalate anything noticed but not fatal. AFTER the trader_log
-    // write on purpose — the durable record must land regardless of transport.
+    // write on purpose — the durable record must land regardless of transport
     escalateTraderDiagnostics(
       deps,
       diagnosticThrottle,
@@ -342,9 +342,9 @@ export function buildTraderSteps(deps: TraderStepDeps): {
 
   const exitCheck: TickSteps['exitCheck'] = async ({ trace_id, instrument, bar, clock }) => {
     // No `snapshotForTick` here: an exit sizes to held quantity, never
-    // equity, so the tick path skips the account read entirely (#743).
+    // equity, so the tick path skips the account read entirely (#743)
     // Memoized into `positionState` below rather than passed through
-    // directly, since `mostRecentDebateId` needs the same snapshot (#1128).
+    // directly, since `mostRecentDebateId` needs the same snapshot (#1128)
     const positions = await deps.getOpenPositions();
     const { intent, skip_reason, decision_class, reason_detail, atr, diagnostics } =
       await checkExitsWithReason({
@@ -362,7 +362,7 @@ export function buildTraderSteps(deps: TraderStepDeps): {
         sessionCalendars: deps.sessionCalendars,
         // #826: this is the binding that matters most — the mandatory
         // flat-by-close flatten is decided on the tick path, so an unpriced
-        // flatten during a stall is overwhelmingly raised here.
+        // flatten during a stall is overwhelmingly raised here
         onUnpricedFlatten: (report) =>
           reportExitValuationDegraded(
             deps,
@@ -393,17 +393,17 @@ export function buildTraderSteps(deps: TraderStepDeps): {
       });
       // #1128: cleared here rather than on the next observation, since a
       // position can close and reopen in one tick gap with no exit-check
-      // ever observing it flat in between.
+      // ever observing it flat in between
       exitSkipThrottle.clearEpisode(instrument);
     } else if (skip_reason === 'no_open_position') {
       // #1128: no lot open means no debate to attribute a row to
       // (`trader_log.debate_id` is NOT NULL), but it's still an episode
-      // boundary, same as a fired exit above.
+      // boundary, same as a fired exit above
       exitSkipThrottle.clearEpisode(instrument);
     } else if (skip_reason !== null) {
       // #1128: change-only for most reasons — #743 measured ~30 exit-check
       // calls per bar per instrument, and a row per call would bury the
-      // decision records under a flat/held instrument repeating its answer.
+      // decision records under a flat/held instrument repeating its answer
       let wrote = false;
       if (exitSkipThrottle.shouldWrite(instrument, skip_reason)) {
         // Every other exit-path skip fires with at least one lot open (see
@@ -482,7 +482,7 @@ function escalateTraderDiagnostics(
 
     // NOT awaited (#710): this step's return value is what Risk and
     // Execution act on, so awaiting a slow send here would put the transport
-    // in front of the order — including the flat-by-close exit.
+    // in front of the order — including the flat-by-close exit
     void postTraderDiagnosticAlert(deps, trace_id, {
       instrument,
       diagnostic,
@@ -561,7 +561,7 @@ interface BreakerStateDeps {
    * same tick. Absent = log-only; both seams also write an `error` line first.
    */
   exitValuationAlerts?: ExitValuationDegradedAlertChannel;
-  /** Sink for the `error` lines both seams above write, and #726's guarded `riskLog.write` failure. */
+  /** Sink for the `error` lines both seams above write, and #726's guarded `riskLog.write` failure */
   logger?: Logger;
 }
 
@@ -574,7 +574,7 @@ export interface PortfolioSnapshot {
    * synchronous step as `breakers` rather than after the caller's `await` —
    * `circuitBreakers` is one instance shared across concurrently-running
    * instruments (#1013), so a later read could attribute another
-   * instrument's advanced state to this one's `risk_log` row.
+   * instrument's advanced state to this one's `risk_log` row
    */
   next_breaker_state: ReturnType<CircuitBreakers['getPersistedState']>;
 }
@@ -624,7 +624,7 @@ async function computeCurrentPortfolioAndBreakers(deps: BreakerStateDeps, clock:
   // Persist the sticky tiers immediately: a restart between this call and a
   // later persist point would silently re-arm ADR-0007's mechanism. Read
   // ONCE and both persisted and carried on the snapshot (#1019) — see
-  // `PortfolioSnapshot.next_breaker_state`.
+  // `PortfolioSnapshot.next_breaker_state`
   const next_breaker_state = deps.circuitBreakers.getPersistedState();
   deps.breakerState.save(next_breaker_state);
   return { portfolio, breakers, next_breaker_state };
@@ -820,7 +820,7 @@ export interface RiskStepDeps extends BreakerStateDeps {
 /**
  * Asks the critic producer for a verdict, and NEVER throws (#957): a throw
  * here would reach `buildRiskStep`'s catch and abort the tick, turning
- * "critic unreachable" into "risk stage crashed" (ADR-0003, #640).
+ * "critic unreachable" into "risk stage crashed" (ADR-0003, #640)
  */
 async function criticVerdictFor(
   deps: RiskStepDeps,
@@ -861,7 +861,7 @@ async function criticVerdictFor(
 export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
   const riskManager = new RiskManagerImpl(deps.config, deps.thresholds);
   // #766: latched per process, not per instrument — the fix is always
-  // "correct the offending row", which doesn't change between ticks.
+  // "correct the offending row", which doesn't change between ticks
   let clampAlertSent = false;
 
   return async ({ trace_id, intent, clock }) => {
@@ -869,7 +869,7 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
     // reader. #841: an EXIT falls back to a PARTIAL valuation instead of
     // aborting — flattening a held position doesn't need the whole book
     // priced, unlike sizing an entry, which `RiskManagerImpl.evaluate` still
-    // refuses on any `unvalued_instruments`.
+    // refuses on any `unvalued_instruments`
     async function resolveSnapshot() {
       const { snapshot, degradation } =
         intent.intent_type === 'exit'
@@ -886,7 +886,7 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
         );
       }
       // Taken off the snapshot, not re-read (#1019 gap 2) — see
-      // `PortfolioSnapshot.next_breaker_state`.
+      // `PortfolioSnapshot.next_breaker_state`
       const next_breaker_state: PersistedBreakerState[] = snapshot.next_breaker_state;
       return { portfolio, breakers, next_breaker_state };
     }
@@ -910,7 +910,7 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
 
     const daily = portfolio.daily_pnl;
     function dailyPnlLogFields() {
-      // Null pct rather than 0 when unknown (#333) — 0 would read as flat.
+      // Null pct rather than 0 when unknown (#333) — 0 would read as flat
       return {
         daily_pnl_portfolio_pct: daily.portfolio.known ? daily.portfolio.pct : null,
         daily_pnl_crypto_pct: daily.crypto.known ? daily.crypto.pct : null,
@@ -938,11 +938,11 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
     };
 
     // #955: the critic must fire only on intents that reach step 7, but
-    // `evaluate()` is pure/synchronous (#642) and can't know that in advance.
+    // `evaluate()` is pure/synchronous (#642) and can't know that in advance
     // So evaluate once with no verdict — reaching step 7 is what pushes
     // `RISK_CRITIC_SKIPPED_REASON`, which doubles as the "reached it" signal
     // — then evaluate again with the critic's verdict if it did. Only the
-    // second decision is logged/returned.
+    // second decision is logged/returned
     async function evaluateWithCriticTwoPass(): Promise<RiskDecision> {
       const evaluateWith = (critic?: RiskCriticVerdict): RiskDecision =>
         riskManager.evaluate({
@@ -971,7 +971,7 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
     // decision (deliberately, per its own doc comment), which skips the
     // `riskLog.write` below. This writes that row from the catch, naming the
     // unresolved subclass, then re-throws unchanged so #507's catch still
-    // sees it.
+    // sees it
     function recordRiskEvaluationError(error: unknown): void {
       const binding_constraint =
         error instanceof PerSubclassCapUnresolvableError
@@ -981,7 +981,7 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
       // #766: `isThresholdBoundViolation`, not `instanceof
       // ThresholdBoundViolationError` — two or more crossings in one read
       // throw a plain `Error` (threshold-bounds.ts), which `instanceof`
-      // would miss on the more alarming case.
+      // would miss on the more alarming case
       if (!clampAlertSent && isThresholdBoundViolation(error)) {
         clampAlertSent = true;
         deps.thresholdClampAlerts?.postThresholdClampAlert({
@@ -993,7 +993,7 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
       }
 
       // Guarded like #507's own side effects: must not throw and replace the
-      // original error before it reaches #507's catch.
+      // original error before it reaches #507's catch
       try {
         deps.riskLog?.write({
           ...riskLogBase,
@@ -1031,7 +1031,7 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
       throw error;
     }
 
-    // Written on rejection too — a rejected intent never reaches Verdict.
+    // Written on rejection too — a rejected intent never reaches Verdict
     deps.riskLog?.write({
       ...riskLogBase,
       status: decision.status,
@@ -1058,7 +1058,7 @@ export interface VerdictStepDeps extends BreakerStateDeps {
   verdictAlerts?: TradeChannelNotifier;
   /**
    * Backs `LoggingVerdict`'s `verdict_log` write (#302) — the same shared
-   * handle every Sqlite* store here reads/writes through.
+   * handle every Sqlite* store here reads/writes through
    */
   store: StoreHandle;
 }
@@ -1071,7 +1071,7 @@ export interface VerdictStepDeps extends BreakerStateDeps {
  */
 export function buildVerdictStep(deps: VerdictStepDeps): TickSteps['verdict'] {
   // #465: `NotifyingVerdict` OUTSIDE `LoggingVerdict`, so the row is written
-  // before anyone is told.
+  // before anyone is told
   const logging = new LoggingVerdict(
     new VerdictImpl(),
     // #837 M9: the Verdict stage owns `verdict_log` and nothing else
@@ -1085,9 +1085,9 @@ export function buildVerdictStep(deps: VerdictStepDeps): TickSteps['verdict'] {
     // Verdict can fire late enough for a breaker to trip/clear in between
     // (verdict-spec.md gate 5). #841: an exit degrades to the sticky breaker
     // tiers (`breakersFromStickyState`) rather than a partial re-evaluation,
-    // for the same reason as `buildRiskStep`'s fallback.
+    // for the same reason as `buildRiskStep`'s fallback
     //
-    // `order_intent` is null only on a rejection, which never reaches Verdict.
+    // `order_intent` is null only on a rejection, which never reaches Verdict
     const isExit = risk_decision.order_intent?.intent_type === 'exit';
     const { snapshot, degradation } = isExit
       ? await snapshotForExit(deps, clock, () => computeCurrentPortfolioAndBreakers(deps, clock))

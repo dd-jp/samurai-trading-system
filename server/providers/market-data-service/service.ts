@@ -1,4 +1,4 @@
-/** Market data service: bar/mark serving, deterministic indicator computation, two-tier caching. */
+/** Market data service: bar/mark serving, deterministic indicator computation, two-tier caching */
 import { type Clock, currentTraceId, logCaughtFailure, safeLog } from '../../shared/index.js';
 import type { Logger } from '../../shared/types/primitives.js';
 import { buildIndicatorCacheKey, IndicatorCache } from './indicator-cache.js';
@@ -23,10 +23,10 @@ export interface MarketDataFetchTelemetry {
   logger: Logger;
 }
 
-/** Chosen so a single cold-start miss stays `info`, and only a run REPEATING the same failing window warns. */
+/** Chosen so a single cold-start miss stays `info`, and only a run REPEATING the same failing window warns */
 export const MARKET_DATA_REPEATED_MISS_WARN_THRESHOLD = 3;
 
-/** Timeframes are explicitly config, tuned in paper trading; one default is used until that config lands. */
+/** Timeframes are explicitly config, tuned in paper trading; one default is used until that config lands */
 export class MarketDataServiceImpl implements MarketDataService {
   private readonly indicatorCache = new IndicatorCache();
   /** `instrument|timeframe` -> the bar interval its last fetch was made in. In-process and restart-clean: a fresh process refetches. */
@@ -86,12 +86,12 @@ export class MarketDataServiceImpl implements MarketDataService {
   ): Promise<Bar[]> {
     const cached = this.cachedBars(instrument, window, asOf);
     if (cached !== undefined) {
-      // Clears this window's miss streak so the next miss counts only the current run of failures.
+      // Clears this window's miss streak so the next miss counts only the current run of failures
       this.consecutiveFetchMisses.delete(this.missCounterKey(instrument, window));
       return cached;
     }
 
-    // Backtest replays a single walk and never overlaps calls, so there is nothing to join.
+    // Backtest replays a single walk and never overlaps calls, so there is nothing to join
     if (this.mode !== 'backtest') {
       const key = this.inFlightKey(instrument, window, asOf);
       const inFlight = this.inFlightBarFetches.get(key);
@@ -114,7 +114,7 @@ export class MarketDataServiceImpl implements MarketDataService {
     window: BarWindow,
     asOf: Date,
   ): Promise<Bar[]> {
-    // Backtest skips the bump: `cachedBars` disables itself there, so every replay step would otherwise land here unbounded.
+    // Backtest skips the bump: `cachedBars` disables itself there, so every replay step would otherwise land here unbounded
     const consecutiveMisses =
       this.mode === 'backtest' ? 0 : this.recordCacheMiss(instrument, window);
     const startedAt = Date.now();
@@ -122,7 +122,7 @@ export class MarketDataServiceImpl implements MarketDataService {
     try {
       fetched = await this.dataSource.fetchBars(instrument, window, asOf);
     } catch (error) {
-      // Log the failed attempt with elapsed time, then rethrow unchanged — this observes, it never changes fetch behaviour.
+      // Log the failed attempt with elapsed time, then rethrow unchanged — this observes, it never changes fetch behaviour
       this.logFetch(instrument, window, 'error', consecutiveMisses, Date.now() - startedAt, error);
       throw error;
     }
@@ -178,10 +178,10 @@ export class MarketDataServiceImpl implements MarketDataService {
     rows?: number,
   ): void {
     if (this.telemetry === undefined) return;
-    // Backtest re-fetches on every call by design, so every replay step would otherwise be an uninformative "miss".
+    // Backtest re-fetches on every call by design, so every replay step would otherwise be an uninformative "miss"
     if (this.mode === 'backtest') return;
 
-    // Escalation applies to the `ok` branch only — a thrown fetch is itself the anomaly regardless of streak length.
+    // Escalation applies to the `ok` branch only — a thrown fetch is itself the anomaly regardless of streak length
     const level =
       outcome === 'error'
         ? 'warn'
@@ -284,10 +284,10 @@ export class MarketDataServiceImpl implements MarketDataService {
    * Forwards `mode` to `DataSource.fetchMark` without branching on it, except
    * for the persistence write, which must never touch `latest_mark` in
    * backtest — reading it in replay would inject a future price into a
-   * historical decision.
+   * historical decision
    */
   async getMark(instrument: string, asOf: Date = this.clock.now()): Promise<Mark> {
-    // Repeat live callers inside the TTL serve from the store; backtest never takes this path.
+    // Repeat live callers inside the TTL serve from the store; backtest never takes this path
     if (this.mode === 'live') {
       const fetchedAt = this.lastMarkFetch.get(instrument);
       if (fetchedAt !== undefined && asOf.getTime() - fetchedAt <= this.markTtlMs) {
@@ -343,13 +343,13 @@ export class MarketDataServiceImpl implements MarketDataService {
       return cached;
     }
 
-    // From the spec, not a module constant — a non-1h consumer must not silently compute on the wrong bars.
+    // From the spec, not a module constant — a non-1h consumer must not silently compute on the wrong bars
     const window: BarWindow = { timeframe: spec.timeframe, lookback: spec.lookback };
     const bars = await this.getBars(instrument, window, asOf);
 
     const lastBar = bars.at(-1);
     if (!lastBar) {
-      // Names the timeframe, not just the instrument: "no bars" is usually "no bars at THAT timeframe".
+      // Names the timeframe, not just the instrument: "no bars" is usually "no bars at THAT timeframe"
       throw new Error(
         `No ${spec.timeframe} bars for ${instrument} at or before ${asOf.toISOString()} ` +
           `(indicator '${spec.indicator}', lookback ${spec.lookback})`,
@@ -375,7 +375,7 @@ export class MarketDataServiceImpl implements MarketDataService {
     return quote === null ? null : quote.ask - quote.bid;
   }
 
-  /** The genuine bid/ask observation, with the same PIT re-check `getSpreadEstimate` delegates to. */
+  /** The genuine bid/ask observation, with the same PIT re-check `getSpreadEstimate` delegates to */
   async getQuote(instrument: string, asOf: Date = this.clock.now()): Promise<Quote | null> {
     const quote = await this.dataSource.fetchQuote?.(instrument, asOf);
     if (!quote || quote.observed_at.getTime() > asOf.getTime()) {

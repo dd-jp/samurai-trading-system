@@ -33,7 +33,7 @@ import type { UnpricedFillAlertChannel } from '../unpriced-fill-alert.js';
 import type { AlpacaBrokerClient, AlpacaOrder, AlpacaOrderLeg } from './alpaca-client.js';
 import { AlpacaCryptoLegEmulation } from './alpaca-crypto-emulation.js';
 // Shared by this adapter and the crypto emulation — the module split keeps
-// the import graph acyclic (PR #600 review).
+// the import graph acyclic (PR #600 review)
 import {
   collectFill,
   fromAlpacaSymbol,
@@ -58,7 +58,7 @@ export const DEFAULT_UNPRICED_FILL_AGE_OUT_MS = 15 * 60_000;
 /**
  * Fixed trace id for every `fetchNewFills` failure (#609): this adapter gets no
  * per-call trace id, and importing an orchestrator-level constant would invert
- * module layering.
+ * module layering
  */
 const ALPACA_FILL_SWEEP_TRACE_ID = 'alpaca-fetch-new-fills';
 
@@ -92,7 +92,7 @@ const rearmAttemptOf = (clientOrderId: string, wireId: string): number | null =>
 
 export interface AlpacaBrokerAdapterInput {
   client: AlpacaBrokerClient;
-  /** Optional for backward compat; when absent the adapter paces itself — see default below. */
+  /** Optional for backward compat; when absent the adapter paces itself — see default below */
   rateLimiter?: TokenBucket;
   /**
    * Durable home for the bracket index (#287) — in-memory default IS the #295
@@ -161,7 +161,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   private readonly rearmedLegs = new Map<string, string>();
   /**
    * Fallback for direct construction only — production always injects
-   * `rateLimiter` explicitly (#299, see `DEFAULT_VENUE_PACING.alpaca`).
+   * `rateLimiter` explicitly (#299, see `DEFAULT_VENUE_PACING.alpaca`)
    */
   private readonly rateLimiter: TokenBucket;
   private readonly state: BrokerStateStore;
@@ -170,7 +170,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   /**
    * Crypto path (#586): Alpaca rejects every advanced order class for crypto
    * (#550), so brackets are emulated — journalled in the same `BrokerStateStore`
-   * the native index uses.
+   * the native index uses
    */
   private readonly emulation: AlpacaCryptoLegEmulation;
   /** #609 — see `AlpacaBrokerAdapterInput.logger`'s doc for why this has no default */
@@ -178,7 +178,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
 
   constructor(private readonly input: AlpacaBrokerAdapterInput) {
     // Fallback for standalone construction (#1083); telemetry wired here too
-    // so that path isn't silently worse-observed than production's.
+    // so that path isn't silently worse-observed than production's
     this.rateLimiter =
       input.rateLimiter ??
       new TokenBucket(DEFAULT_VENUE_PACING.alpaca, undefined, {
@@ -199,10 +199,10 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     });
 
     // Synchronous: an empty map after restart reads as "no new fills," which
-    // is indistinguishable above the adapter from a quiet market.
+    // is indistinguishable above the adapter from a quiet market
     for (const record of this.state.loadBrackets('alpaca')) {
       // Emulated crypto rows are rehydrated by the emulation's own constructor
-      // above — polling them here too would sweep the same orders twice.
+      // above — polling them here too would sweep the same orders twice
       if (record.request?.asset_class === 'crypto') continue;
       if (record.entry_order_id === null) continue;
       this.brackets.set(record.client_order_id, record.entry_order_id);
@@ -286,7 +286,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   async cancel(clientOrderId: string, _instrument: string): Promise<void> {
     // Emulated crypto legs are independent plain orders only the emulation's
     // journal knows (#586) — delegated wholesale; the re-arm lookup below is
-    // the equity OCO's naming scheme and doesn't apply here.
+    // the equity OCO's naming scheme and doesn't apply here
     if (this.emulation.owns(clientOrderId)) {
       await this.emulation.cancelAll(clientOrderId);
       return;
@@ -297,7 +297,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     if (rearmedOrder !== null) {
       await this.call('cancel', () => this.input.client.cancelOrder(rearmedOrder));
       // Deleted only after the cancel confirms — a throw above must leave
-      // this map matching the venue, so a retry finds the same order again.
+      // this map matching the venue, so a retry finds the same order again
       this.rearmedLegs.delete(clientOrderId);
     }
 
@@ -323,7 +323,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     const order = await this.lookupOpenOrderId(clientOrderId);
     // An id this process re-armed itself is known without the venue, so it
     // stands even when the direct lookup failed — re-deriving from the list
-    // could lose it (one page; a re-armed leg past it reads as `null`).
+    // could lose it (one page; a re-armed leg past it reads as `null`)
     const rearmed: LookedUpOrderId =
       inProcessRearm !== null
         ? { id: inProcessRearm }
@@ -336,21 +336,21 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
 
     // Whichever lookup answered is KEPT; only the unanswered one is re-derived
     // from the list — discarding a known id would turn a partial outage into
-    // a full re-derivation.
+    // a full re-derivation
     const lookupError = 'error' in order ? order.error : (rearmed as { error: unknown }).error;
     let open: readonly AlpacaOrder[];
     try {
       open = await this.call('cancel', () => this.input.client.listOpenOrders());
     } catch {
       // The FIRST failure is rethrown — it's the cause the caller should
-      // name; a fallback that also failed adds nothing.
+      // name; a fallback that also failed adds nothing
       throw lookupError;
     }
     const idOf = (key: string): string | null =>
       open.find((candidate) => candidate.client_order_id === key)?.id ?? null;
     // The HIGHEST attempt still open, not the first match (#1346): only the
     // last wire id holds live protection, and `find` could return the wrong
-    // (stale) order — #867's failure class in a new costume.
+    // (stale) order — #867's failure class in a new costume
     const latestRearmId = (): string | null => {
       let best: { attempt: number; id: string } | null = null;
       for (const candidate of open) {
@@ -426,7 +426,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   /**
    * VERIFIED 2026-08-07 (#550): crypto rejects `order_class: 'bracket'`
    * outright, so a crypto instrument always routes to the emulation (#586)
-   * instead of the native path below.
+   * instead of the native path below
    */
   async submitBracket(order: NativeBracketRequest): Promise<BrokerAck> {
     if (order.asset_class === 'crypto') {
@@ -437,7 +437,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // sub-penny precision is refused outright (422, measured live). Rounded
     // into `submitted`, not at each call site, so the journal below records
     // exactly what was sent; a restart rehydrating unrounded prices would
-    // re-place the leg off-grid and never match the venue's own copy.
+    // re-place the leg off-grid and never match the venue's own copy
     const { entry, stop, target } = roundBracketToTick(
       order.side,
       order.entry,
@@ -464,7 +464,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
 
     this.brackets.set(order.client_order_id, response.id);
     // First-write-wins: a retried resubmission under the same client_order_id
-    // would otherwise move this bound past fills the first submission covers.
+    // would otherwise move this bound past fills the first submission covers
     if (!this.bracketSubmittedAt.has(order.client_order_id)) {
       this.bracketSubmittedAt.set(order.client_order_id, submittedAt);
     }
@@ -472,7 +472,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     const legIds = (response.legs ?? []).map((leg) => leg.id);
 
     // `phase: 'armed'`: a native bracket has no local state machine to be
-    // partway through — it's live from this call.
+    // partway through — it's live from this call
     this.state.saveBracket({
       venue: 'alpaca',
       client_order_id: order.client_order_id,
@@ -499,7 +499,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * treats an order as "never placed."
    */
   // `_instrument` is unused: Alpaca looks up by client id alone, but a
-  // symbol-keyed venue (ccxt) cannot, so the port requires the parameter.
+  // symbol-keyed venue (ccxt) cannot, so the port requires the parameter
   async getOrder(clientOrderId: string, _instrument: string): Promise<NormalizedOrder | null> {
     const order = await this.call('getOrder', () =>
       this.input.client.getOrderByClientOrderId(clientOrderId),
@@ -508,7 +508,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
 
     // Emulated crypto brackets (#586) are already journalled and swept by the
     // emulation — re-populating the native map would double-poll and stamp
-    // native-shaped ids over emulation state.
+    // native-shaped ids over emulation state
     if (this.emulation.owns(clientOrderId)) {
       return {
         client_order_id: clientOrderId,
@@ -520,7 +520,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
 
     // Re-populates the map so a post-restart `fetchNewFills` finds this
     // bracket again. Journalled via partial-upsert: this call knows the
-    // venue's order ids but not the request, and inventing one would be worse.
+    // venue's order ids but not the request, and inventing one would be worse
     this.brackets.set(clientOrderId, order.id);
     this.state.recordBracketOrderIds('alpaca', clientOrderId, {
       entry_order_id: order.id,
@@ -551,7 +551,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   /**
    * No-op on both paths: equities' native bracket keeps leg quantity in sync
    * with the parent at the venue; emulated crypto (#586) arms legs only once
-   * the entry goes terminal, so there's nothing to resize before then.
+   * the entry goes terminal, so there's nothing to resize before then
    */
   async resizeProtectiveLegs(): Promise<void> {
     // no-op — see doc comment above
@@ -586,7 +586,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   ): Promise<void> {
     // `owns` is authoritative; the `-USD` fallback catches a crypto residual
     // whose journal row is missing, which must REFUSE loudly rather than fall
-    // through to an order class the venue is verified to reject.
+    // through to an order class the venue is verified to reject
     if (this.emulation.owns(clientOrderId)) {
       return this.emulation.rearm(clientOrderId, instrument, side, qty, rawStop, rawTarget);
     }
@@ -601,37 +601,37 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     // #983, and BEFORE the adoption comparison below, not at the submit:
     // `rearmOrderMatches` compares against the venue's ROUNDED copy from last
     // time, so rounding only at submit would leave every re-arm permanently
-    // mismatched and forced onto the cancel-and-replace branch.
+    // mismatched and forced onto the cancel-and-replace branch
     const { stop, target } = roundProtectiveLegsToTick(side, rawStop, rawTarget);
 
-    // `side` is the lot's HELD side; the order that reduces it takes the opposite.
+    // `side` is the lot's HELD side; the order that reduces it takes the opposite
     const closingSide = side === 'buy' ? 'sell' : 'buy';
 
     // ADOPT-OR-PLACE (#549): ask the venue whether a prior re-arm attempt
     // already lives before submitting a new one — it may have succeeded and
     // then crashed before confirmation. Walks `rearmWireId` from attempt 0,
-    // since a spent id is refused forever (see `MAX_REARM_ATTEMPTS`).
+    // since a spent id is refused forever (see `MAX_REARM_ATTEMPTS`)
     //
     // THE WALK READS THE WHOLE ALLOCATED SEQUENCE BEFORE ADOPTING ANYTHING
     // (#1570): stopping at the first adoptable index can point `rearmedLegs`
     // at a terminal no-op while a higher, still-resting attempt is left live
-    // and unmanaged behind a cancelled bracket (#516).
+    // and unmanaged behind a cancelled bracket (#516)
     //
     // `live` (a still-resting match) is preferred outright over `settled` (a
     // fully-filled prior, adopted only once its own fill covers every size
     // this lot has been observed to hold since — see `observedSize` below,
-    // #1573/#1581) — only one of the two can ever be real protection.
+    // #1573/#1581) — only one of the two can ever be real protection
     //
     // ADOPTION IS ALLOWLISTED on the raw venue status (#549 review round 3):
     // `mapOrderState` folds every unrecognized status into `'submitted'`, so a
     // blocklist of dead states would let a matching-but-not-resting prior be
-    // adopted while nothing actually rests at the venue.
+    // adopted while nothing actually rests at the venue
     const RESTING_STATUSES = ['new', 'accepted', 'pending_new', 'accepted_for_bidding'];
     let live: AlpacaOrder | null = null;
     let settled: AlpacaOrder | null = null;
     let freeAttempt: number | null = null;
     // Largest size observed at an index above `settled` — the #1573
-    // discriminator, reset whenever `settled` moves up.
+    // discriminator, reset whenever `settled` moves up
     let sizedAboveSettled = 0;
 
     for (let attempt = 0; attempt < MAX_REARM_ATTEMPTS; attempt += 1) {
@@ -652,14 +652,14 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       sizedAboveSettled = Math.max(sizedAboveSettled, Number(prior.qty));
       // `partially_filled` belongs with LIVE, not terminal: its remainder is
       // still working at the venue and can still fire (#549) — never treat
-      // it as stale, or the walk arms a second leg on top of one still armed.
+      // it as stale, or the walk arms a second leg on top of one still armed
       if (
         priorState === 'partially_filled' ||
         (RESTING_STATUSES.includes(prior.status) && rearmOrderMatches(prior, qty, stop, target))
       ) {
         // Two resting priors on one lot are unreachable through this walk,
         // but the invariant is enforced here rather than assumed: whichever
-        // is older is retired.
+        // is older is retired
         const superseded = live;
         if (superseded !== null) {
           await this.call('rearmProtectiveLegs', () =>
@@ -672,24 +672,24 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       if (!['cancelled', 'rejected', 'expired'].includes(priorState)) {
         // Live but stale-sized, or a status that doesn't prove it dead:
         // retire it before stepping past. `cancelOrder` tolerates an
-        // already-terminal order, so losing the race to its own fill is fine.
+        // already-terminal order, so losing the race to its own fill is fine
         await this.call('rearmProtectiveLegs', () => this.input.client.cancelOrder(prior.id));
       }
     }
 
     // `live` beats `settled`: only a still-resting OCO can still fire; a fully
     // `settled` one already closed itself, so adopting it means the lot is
-    // flat, not naked.
+    // flat, not naked
     //
     // That holds only while the fill covers every size this lot has held
     // since (#1573/#1581): a post-re-arm entry fill can grow the residual past
-    // what `settled` closed, leaving a genuinely-naked remainder behind it.
+    // what `settled` closed, leaving a genuinely-naked remainder behind it
     // `observedSize` therefore takes the max of `qty`, the size of any attempt
     // allocated above `settled`, and (#1581) a fresh venue read of this lot's
     // own entry `filled_qty` — three independent, sometimes-stale views, since
     // none alone covers every ingestion-race timing. `settled` is adopted only
     // once its own fill covers that max; anything less is treated as naked and
-    // a fresh OCO is placed instead.
+    // a fresh OCO is placed instead
     let entryFilledQty = 0;
     if (settled !== null) {
       const entry = await this.call('rearmProtectiveLegs', () =>
@@ -704,7 +704,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     if (adopted !== null) {
       this.rearmedLegs.set(clientOrderId, adopted.id);
       // Same column semantics as the fresh-place path below — the OCO's
-      // parent id is the take-profit.
+      // parent id is the take-profit
       this.state.recordBracketOrderIds('alpaca', clientOrderId, {
         entry_order_id: null,
         stop_order_id: legOrderIds(adopted.legs).stop_order_id,
@@ -716,9 +716,9 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     if (freeAttempt === null) {
       // Every id is owned by an order not protecting this residual, and
       // Alpaca never releases one, so no later pass can help either —
-      // `ProtectiveRearmUnsupportedError` routes callers to re-flatten instead.
+      // `ProtectiveRearmUnsupportedError` routes callers to re-flatten instead
       // Thrown OUTSIDE `this.call`: `sanitizeBrokerError` would erase the
-      // discriminant this error type exists to carry.
+      // discriminant this error type exists to carry
       throw new ProtectiveRearmUnsupportedError(
         'alpaca',
         `Alpaca adapter exhausted all ${MAX_REARM_ATTEMPTS} re-arm wire ids for lot ` +
@@ -747,7 +747,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     this.rearmedLegs.set(clientOrderId, response.id);
     // NOT `legOrderIds(response.legs)`: an OCO's take-profit is the TOP-LEVEL
     // order itself, not a scanned `.legs` entry — `.legs` here holds only the
-    // stop-loss child, so `target_order_id` is set directly.
+    // stop-loss child, so `target_order_id` is set directly
     this.state.recordBracketOrderIds('alpaca', clientOrderId, {
       entry_order_id: null,
       stop_order_id: legOrderIds(response.legs).stop_order_id,
@@ -786,7 +786,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     if (filledAt.getTime() >= submittedAt.getTime()) return;
     // Keyed by lot AND leg, not lot alone (round-2 review): a lot-only key
     // would let the entry leg's first warn permanently suppress a genuine
-    // violation on the re-armed target leg of the same lot (#1087).
+    // violation on the re-armed target leg of the same lot (#1087)
     const warnedKey = `${clientOrderId}:${leg}`;
     if (this.warnedSinceFloorViolations.has(warnedKey)) return;
     this.warnedSinceFloorViolations.add(warnedKey);
@@ -838,8 +838,8 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     const rearmFailures = await this.sweepRearmedLegs(since, observedAt, fills, failures);
 
     // Emulated-crypto sweep (#586) — polls each emulated bracket's plain
-    // entry/stop/target orders and drives the journalled phase machine.
-    // Same isolation and UnpricedFillError bookkeeping as the three loops above.
+    // entry/stop/target orders and drives the journalled phase machine
+    // Same isolation and UnpricedFillError bookkeeping as the three loops above
     const emulationFailures = await this.emulation.sweep(since, fills, failures);
 
     // The venue caught up: resolve the anomaly row for each fill collected
@@ -849,18 +849,18 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         this.state.clearUnpricedFill('alpaca', fill.client_order_id, fill.broker_fill_id);
       }
     } catch (stateError) {
-      // A stale row only risks one redundant alert; losing the sweep loses real fills.
+      // A stale row only risks one redundant alert; losing the sweep loses real fills
       failures.push(stateError);
     }
 
     // Before the throw below, and unconditionally: escalation must not depend
-    // on whether some OTHER bracket happened to produce a fill this sweep.
+    // on whether some OTHER bracket happened to produce a fill this sweep
     await this.escalateAgedUnpricedFills(failures);
 
     // #609: log every accumulated failure BEFORE the throw/return split below
     // decides — previously, on any poll where `fills.length > 0`, `failures`
     // fell out of scope entirely unreported. Diagnosis-only: doesn't change
-    // what `fetchNewFills` returns or throws.
+    // what `fetchNewFills` returns or throws
     for (const failure of failures) {
       logCaughtFailure(
         this.logger,
@@ -874,7 +874,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         failure,
         {
           // All four sweeps funnel through the same `this.call('fetchNewFills', ...)`
-          // operation name; these counts restore which loop a failure came from.
+          // operation name; these counts restore which loop a failure came from
           bracket_failures: bracketFailures,
           flatten_failures: flattenFailures,
           rearm_failures: rearmFailures,
@@ -886,7 +886,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
 
     // Progress wins when there is any — dropping good fills to report a bad
     // bracket would re-create the stall this isolation removes. A wholly-failed
-    // sweep must not be reported as the "no new fills" an empty array means.
+    // sweep must not be reported as the "no new fills" an empty array means
     if (fills.length === 0 && failures.length > 0) {
       throw new AggregateError(
         failures,
@@ -946,12 +946,12 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       } catch (error) {
         // Skipped, not swallowed — this bracket is retried next sweep, same
         // as an order the venue hasn't reported yet; `ingestFills()` dedups
-        // on `broker_fill_id` so re-polling costs nothing.
+        // on `broker_fill_id` so re-polling costs nothing
         if (error instanceof UnpricedFillError) {
           // #524/#298: unpriced is MODELLED, not a failure — counting it here
           // would abort the whole sweep over one unpriced fill. A journal-write
           // failure recording it (`stateError` below) is a real failure and
-          // still counts.
+          // still counts
           try {
             this.state.recordUnpricedFill('alpaca', error.observation, this.clock.now());
           } catch (stateError) {
@@ -994,7 +994,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         const order = await this.call('fetchNewFills', () => this.input.client.getOrder(orderId));
         const instrument = fromAlpacaSymbol(symbolOf(order));
         // #1415: `flattens` is keyed by the exit's own idempotency_key, a
-        // different key space from `bracketSubmittedAt` — see `flattenSubmittedAt`.
+        // different key space from `bracketSubmittedAt` — see `flattenSubmittedAt`
         this.auditSinceFloorInvariant(
           order,
           'exit',
@@ -1012,7 +1012,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         // Same isolation/UnpricedFillError bookkeeping as the bracket loop
         // above — an unpriced flatten fill never reaches the
         // `mapOrderState`/`delete` line, so it's retried next poll, never
-        // pruned mid-unpriced.
+        // pruned mid-unpriced
         if (error instanceof UnpricedFillError) {
           try {
             this.state.recordUnpricedFill('alpaca', error.observation, this.clock.now());
@@ -1050,7 +1050,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
         const instrument = fromAlpacaSymbol(symbolOf(order));
         // #1123: `rearmedLegs` is keyed by the lot's own `idempotency_key`,
         // the same key space `bracketSubmittedAt` uses, so the original
-        // bracket's submission-time bound still applies here.
+        // bracket's submission-time bound still applies here
         const submittedAt = this.bracketSubmittedAt.get(lotKey);
         this.auditSinceFloorInvariant(order, 'target', lotKey, instrument, observedAt, submittedAt);
         collectFill(order, 'target', lotKey, instrument, since, observedAt, fills);
@@ -1158,7 +1158,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
 /**
  * `AlpacaOrder.symbol` is declared non-optional, so `'unknown'` only fires on
  * a payload that already contradicts the contract — trading a less
- * informative alert for no alert at all rather than reaching a NOT NULL column.
+ * informative alert for no alert at all rather than reaching a NOT NULL column
  */
 function symbolOf(order: AlpacaOrder): string {
   return typeof order.symbol === 'string' && order.symbol.length > 0 ? order.symbol : 'unknown';
@@ -1194,7 +1194,7 @@ function legOrderIds(legs: AlpacaOrderLeg[] | undefined): {
 
 /**
  * Shared by `getOrder`/`resumeFlatten`, which diverge only in which
- * in-process map they warm (`brackets` vs `flattens`), never in this shape.
+ * in-process map they warm (`brackets` vs `flattens`), never in this shape
  */
 function normalizeOrder(clientOrderId: string, order: AlpacaOrder): NormalizedOrder {
   return {

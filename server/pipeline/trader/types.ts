@@ -107,12 +107,12 @@ export interface TraderConfig {
   /**
    * Order time-in-force, per asset class (#381) — a venue constraint, not a
    * tuning knob: Alpaca's crypto leg accepts only `gtc`/`ioc`, equities take
-   * `day`.
+   * `day`
    */
   time_in_force: Record<'crypto' | 'stocks', string>;
   /**
    * Minimum conviction rise (current debate minus the position's stored
-   * conviction) that qualifies a same-direction hold for `scale_in` (#74).
+   * conviction) that qualifies a same-direction hold for `scale_in` (#74)
    */
   scale_in_conviction_delta: number;
   /**
@@ -128,7 +128,7 @@ export const DEFAULT_TRADER_CONFIG: TraderConfig = {
   max_risk_per_trade: 0.01,
   subclass_brackets: ADR_0018_SUBCLASS_BRACKETS,
   // Empty by default: brackets are declared but the regime is unarmed until a
-  // universe classifies its instruments (see `paperTradingProfile`).
+  // universe classifies its instruments (see `paperTradingProfile`)
   subclass_of: {},
   asset_class_risk_multiplier: {
     crypto: 0.5,
@@ -162,7 +162,7 @@ export function assertTraderConfigSound(config: TraderConfig): void {
         `a non-positive window disables flat-by-close, which ADR-0014 requires`,
     );
   }
-  // #1389: a zero grace restores the forward-only window this ticket removed.
+  // #1389: a zero grace restores the forward-only window this ticket removed
   if (!(config.flatten_after_close_ms > 0)) {
     throw new Error(
       `traderConfig.flatten_after_close_ms must be > 0 (got ${config.flatten_after_close_ms}); ` +
@@ -184,7 +184,7 @@ export interface TraderInput {
   arm?: TradingArm;
   /**
    * `DebateResult` carries no instrument, but `OrderIntent.instrument` needs
-   * one — threaded in from the Orchestrator's per-instrument tick.
+   * one — threaded in from the Orchestrator's per-instrument tick
    */
   instrument: string;
   debate: DebateResult;
@@ -263,22 +263,22 @@ interface UnpricedFlattenReport {
 export type TraderSkipReason =
   | 'neutral_direction_while_flat'
   | 'below_conviction_floor'
-  // Inside the flat-by-close window: distinct from a quiet market (#668).
+  // Inside the flat-by-close window: distinct from a quiet market (#668)
   | 'session_closing'
   | 'below_min_notional'
   | 'holding_neutral_or_non_converged'
   | 'scale_in_conviction_delta_not_met'
   | 'exit_no_filled_size'
   // A lot whose recorded exit fills exceed what it ever opened (#568) — a
-  // store self-inconsistency, not a quiet "nothing to close".
+  // store self-inconsistency, not a quiet "nothing to close"
   | 'exit_held_quantity_diverged'
-  // This arm already sent an unresolved flatten for this instrument (#1389).
+  // This arm already sent an unresolved flatten for this instrument (#1389)
   | 'flatten_in_flight'
-  // Tick path only: no lot is open, so the exit check has nothing to evaluate.
+  // Tick path only: no lot is open, so the exit check has nothing to evaluate
   | 'no_open_position'
-  // Tick path only (#748): a lot is held and momentum still supports it.
+  // Tick path only (#748): a lot is held and momentum still supports it
   // Replaces the old `flatten_not_due`, which is no longer reachable now
-  // that the early exit runs on every non-flatten tick.
+  // that the early exit runs on every non-flatten tick
   | 'signal_still_supports_position'
   // Tick path only (#748): held lot, flatten not due, momentum unreadable
   // (e.g. still in MACD warm-up) — distinct from a signal that was read.
@@ -289,16 +289,16 @@ export type TraderSkipReason =
   | 'mark_not_finite'
   | 'stop_distance_not_positive'
   | 'size_not_finite'
-  // Sized to less than one whole share on a whole-shares-only venue (#941).
+  // Sized to less than one whole share on a whole-shares-only venue (#941)
   | 'rounds_to_zero_shares'
   // `arm === 'control'` only: a whole-book valuation refusal from `equity()`
-  // that the live arm would instead let propagate (#1089).
+  // that the live arm would instead let propagate (#1089)
   | 'control_arm_valuation_refused';
 
 /**
  * The compared value and threshold missed, for a skip reason that is a
  * numeric gate (#1109) — lets a near-miss be told apart from a decisive one
- * without re-deriving either number from a log line.
+ * without re-deriving either number from a log line
  */
 export interface TraderReasonDetail {
   compared_value: number;
@@ -314,7 +314,7 @@ export interface TraderReasonDetail {
 export type TraderDiagnosticKind =
   /**
    * `sessionEnd` returned null for a non-crypto class — the documented
-   * answer for crypto, but a broken calendar for anything else.
+   * answer for crypto, but a broken calendar for anything else
    */
   | 'session_end_absent_on_non_crypto'
   /**
@@ -324,7 +324,7 @@ export type TraderDiagnosticKind =
   | 'atr_not_finite'
   /**
    * `arm === 'control'` only: paired with the `control_arm_valuation_refused`
-   * skip reason, raised from `buildBracket`'s equity read (#1089).
+   * skip reason, raised from `buildBracket`'s equity read (#1089)
    */
   | 'control_arm_valuation_refused'
   /**

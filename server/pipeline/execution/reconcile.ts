@@ -19,7 +19,7 @@ import type {
 } from './types.js';
 import { sweepWedgedZeroFillLots } from './wedged-zero-fill-sweep.js';
 
-/** #1088: how old a terminal, size-0 row must be before `sweepTerminalPositions` deletes it — bounded to survive idempotency-key reuse from a same-bar crash-restart replay. */
+/** #1088: how old a terminal, size-0 row must be before `sweepTerminalPositions` deletes it — bounded to survive idempotency-key reuse from a same-bar crash-restart replay */
 export const TERMINAL_SWEEP_AGE_MS = 24 * 60 * 60 * 1_000;
 
 /**
@@ -137,7 +137,7 @@ async function reconcileFlatten(
   } catch (error) {
     // Ignorance, not evidence: the adapter could not answer, so the row is left untouched and escalated
     // (#519) rather than marked "never placed". `order_state` stays untouched (sticky once confirmed
-    // WORKING); a never-confirmed row instead releases via `cancelNeverConfirmedFlatten` (#1500), never on age alone.
+    // WORKING); a never-confirmed row instead releases via `cancelNeverConfirmedFlatten` (#1500), never on age alone
     if (
       row.order_state === null &&
       now.getTime() - row.submitted_at.getTime() >= UNRESOLVABLE_FLATTEN_MAX_AGE_MS
@@ -181,7 +181,7 @@ async function reconcileFlatten(
 
     // A row already `'submitted'` carries venue-given `broker_order_ids` — a later null from `resumeFlatten`
     // proves only that the adapter can't reconfirm it, not that the write-ahead never landed. Escalated and
-    // left untouched up to `UNRESOLVABLE_FLATTEN_MAX_AGE_MS` (#1214); past the bound the system decides rather than freezes.
+    // left untouched up to `UNRESOLVABLE_FLATTEN_MAX_AGE_MS` (#1214); past the bound the system decides rather than freezes
     const age = now.getTime() - row.submitted_at.getTime();
     const provenance =
       `flatten '${row.idempotency_key}' was previously acked by the broker (a durable ` +
@@ -224,7 +224,7 @@ async function reconcileFlatten(
 
   // #1214: the one venue answer that must resolve the row, not just record it. `fills_swept_at` is the
   // only thing that ever bounds a `'submitted'` row, set only by `ingestFills()` for a flatten that actually
-  // produced fills — so a terminally refused flatten with `filled_qty === 0` has nothing owing and nothing else to wait for.
+  // produced fills — so a terminally refused flatten with `filled_qty === 0` has nothing owing and nothing else to wait for
   if (TERMINAL_ORDER_STATES.includes(order.order_state) && order.filled_qty === 0) {
     const reason =
       `reconcile: the venue reports this flatten '${order.order_state}' having filled nothing — ` +
@@ -261,7 +261,7 @@ async function reconcileFlatten(
 
   // #1500: a terminal row with unswept fills (`filled_qty > 0`) that `ingestFills()` will never sweep once
   // they age past their `since` floor. Released only past `UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS`, measured
-  // from the FIRST pass that saw this shape (migration 0063) — a pass inside the window does nothing at all.
+  // from the FIRST pass that saw this shape (migration 0063) — a pass inside the window does nothing at all
   if (TERMINAL_ORDER_STATES.includes(order.order_state)) {
     const firstSeen = row.terminal_unswept_checked_at;
     if (firstSeen === null) {
@@ -281,7 +281,7 @@ async function reconcileFlatten(
 
   // #1500: cancel-then-replace. A working row can never be released on age (a second full-size flatten
   // against a still-confirming order is the #516/#1389 over-sell), so the way out is to cancel it and let
-  // the cancel's own terminal answer resolve through the existing paths — gated on fresh `order_state`, not `row.status`.
+  // the cancel's own terminal answer resolve through the existing paths — gated on fresh `order_state`, not `row.status`
   const working = !TERMINAL_ORDER_STATES.includes(order.order_state);
   if (working && now.getTime() - row.submitted_at.getTime() >= UNRESOLVABLE_FLATTEN_MAX_AGE_MS) {
     return {
@@ -557,8 +557,8 @@ async function venueCoversStoreHeld(
   const longHeld = sumHeld(lots, 'buy', heldByKey);
   const shortHeld = sumHeld(lots, 'sell', heldByKey);
   // A venue reports ONE netted position, so it can corroborate the store's held quantity only while the
-  // store's lots are all one way — `heldQuantitiesFor` refuses to pre-sum across sides for that reason.
-  // Keyed on the lots themselves, not their held sums: an over-closed lot carries a NEGATIVE held.
+  // store's lots are all one way — `heldQuantitiesFor` refuses to pre-sum across sides for that reason
+  // Keyed on the lots themselves, not their held sums: an over-closed lot carries a NEGATIVE held
   if (lots.some((lot) => lot.side === 'buy') && lots.some((lot) => lot.side === 'sell')) {
     return {
       covered: false,
@@ -586,8 +586,8 @@ async function venueCoversStoreHeld(
     };
   }
   // A SURPLUS is not coverage either. The venue holding MORE than the store thinks means quantity the
-  // store has no lot for — invisible to `findUnrecordedVenuePositions`, which compares presence only.
-  // An unbooked exit fill can hide inside it: no over-sell, but the released row's fills go missing from the journal, PnL and CGT record.
+  // store has no lot for — invisible to `findUnrecordedVenuePositions`, which compares presence only
+  // An unbooked exit fill can hide inside it: no over-sell, but the released row's fills go missing from the journal, PnL and CGT record
   if (!coversQty(storeHeld, venueQty)) {
     return {
       covered: false,
@@ -746,7 +746,7 @@ async function reconcileLot(
       kind: 'bracket',
       // Safe to surface verbatim ON CREDENTIALS: every adapter converts what its client threw into a
       // curated `BrokerError` (#297 H1). Not the same as "only a `BrokerError` reaches this catch" though
-      // (#1262): some adapter code runs outside that wrapper, so the render stays guarded rather than trusted.
+      // (#1262): some adapter code runs outside that wrapper, so the render stays guarded rather than trusted
       reason: describeThrownSafely(error),
     };
   }
@@ -789,7 +789,7 @@ async function reconcileLot(
 
 /**
  * Agreement is on state AND the venue's leg ids: a `pending` lot the venue acked carries ids the store
- * never recorded, and losing them would leave nothing to cancel the bracket by.
+ * never recorded, and losing them would leave nothing to cancel the bracket by
  */
 function agrees(
   position: OpenPosition,

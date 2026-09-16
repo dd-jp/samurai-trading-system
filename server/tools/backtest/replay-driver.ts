@@ -174,7 +174,7 @@ class BarCursor {
 
     // #664: the driver is told its timeframe and bars carry their own, so
     // they can disagree — checked on the first bar only, since
-    // `Stage2HistoricalStore` now scopes every read to one timeframe.
+    // `Stage2HistoricalStore` now scopes every read to one timeframe
     const first = this.all[0];
     if (first !== undefined && first.timeframe !== timeframe) {
       throw new Error(
@@ -187,7 +187,7 @@ class BarCursor {
     // The cursor only reads an ascending array correctly — a misordered row
     // would cut the visible prefix short and every indicator would silently
     // compute over too few bars. `settle()` can't catch this: a past-stamped
-    // straggler passes the lookahead audit cleanly.
+    // straggler passes the lookahead audit cleanly
     for (let i = 1; i < this.all.length; i++) {
       const previous = this.all[i - 1] as Bar;
       const current = this.all[i] as Bar;
@@ -275,7 +275,7 @@ class SteppedTimeline implements ReplayTimeline {
 
 /**
  * One run's mutable state, held here (not on the driver) so a driver instance
- * can be re-run without a previous run's half-open lots leaking in.
+ * can be re-run without a previous run's half-open lots leaking in
  */
 interface RunState {
   config: ProxyStrategyConfig;
@@ -290,7 +290,7 @@ export class ReplayDriver {
 
   async run(config: ProxyStrategyConfig, window: DateRange): Promise<ReplayRunResult> {
     // Survivorship gate first, before a single bar is stepped — fail before
-    // producing trades from a biased universe.
+    // producing trades from a biased universe
     await assertSurvivorshipFree(
       this.deps.universe.map((instrument) => instrument.symbol),
       window,
@@ -298,7 +298,7 @@ export class ReplayDriver {
     );
 
     // Per-run, never per-driver: rebuilt each run so a previous run's lots
-    // (or a cached bar cursor) cannot leak into this one.
+    // (or a cached bar cursor) cannot leak into this one
     const auditor = new LookaheadAuditor(this.deps.clock);
     const cursors = new Map<string, BarCursor>();
     for (const instrument of this.deps.universe) {
@@ -316,14 +316,14 @@ export class ReplayDriver {
     };
     // Derived, never restated (#857) — `proxyWarmupBars` is the one place the
     // warmup width is stated; previously a separate ATR arity floor here
-    // silently capped the visible prefix to the seed.
+    // silently capped the visible prefix to the seed
     const warmup = proxyWarmupBars(config, this.deps.timeframe);
 
     const stepped = await this.deps.timeline.barTimestamps(window);
 
     for (const at of stepped) {
       // Monotonic by construction: `advanceTo` throws on a backwards step, so
-      // an unsorted timeline fails the run instead of rewinding T.
+      // an unsorted timeline fails the run instead of rewinding T
       this.deps.clock.advanceTo(at);
 
       for (const instrument of this.deps.universe) {
@@ -332,7 +332,7 @@ export class ReplayDriver {
 
         // No bar closing at this timestamp, or still inside warmup —
         // `computeIndicator` on a short window returns a wrong value rather
-        // than erroring, so it's never evaluated.
+        // than erroring, so it's never evaluated
         if (bar === undefined || bar.close_time.getTime() !== at.getTime()) continue;
         if (bars.length < warmup) continue;
 
@@ -340,13 +340,13 @@ export class ReplayDriver {
         const lot = state.open.get(instrument.symbol);
 
         // Where this bar sits in its session (#664) — null on a daily replay
-        // or a venue with no close.
+        // or a venue with no close
         const boundary = flattenBoundary(bar, this.deps.timeframe, this.deps.sessionCalendar);
         // AT LEAST ONE BAR WIDE (#664) — on a grid coarser than the flatten
         // window, no bar's open would ever fall inside it (the carry
         // assertion below would abort every run). Widening to one bar is the
         // honest reading of "be flat by close": flatten on the final bar of
-        // the session.
+        // the session
         const flattenBeforeCloseMs = Math.max(
           this.deps.flattenBeforeCloseMs ?? DEFAULT_FLATTEN_BEFORE_CLOSE_MS,
           timeframeToMs(this.deps.timeframe),
@@ -361,7 +361,7 @@ export class ReplayDriver {
           // hand-entered holiday/early-close tables (2026-2027 only) don't
           // know this session's real close. Throws rather than silently
           // carrying overnight, which would be a wrong number, not a failed
-          // run.
+          // run
           if (lot.session_end !== null && bar.open_time.getTime() >= lot.session_end.getTime()) {
             throw new Error(
               `ReplayDriver: ${instrument.symbol} carried a position from the session ending ` +
@@ -376,7 +376,7 @@ export class ReplayDriver {
 
           // Bracket first, flatten second: a stop/target already hit inside
           // the bar happened before the flatten window's clock ran out —
-          // flattening it instead would book an exit at the wrong price.
+          // flattening it instead would book an exit at the wrong price
           const exit =
             exitOf(lot, bar, signal) ?? (withinFlattenWindow ? flattenExit(bar) : undefined);
           if (exit !== undefined) {
@@ -385,7 +385,7 @@ export class ReplayDriver {
           }
           // No same-bar re-entry: the lot's exit is already priced at this
           // bar, and re-entering on it would open a second lot against the
-          // same bar's information.
+          // same bar's information
           continue;
         }
 
@@ -393,7 +393,7 @@ export class ReplayDriver {
 
         // Nothing new opens inside the flatten window — the live rule
         // (`withinFlattenWindow`, trader/decide.ts) turns the same `true`
-        // into an entry skip.
+        // into an entry skip
         if (withinFlattenWindow) continue;
 
         state.open.set(
@@ -414,7 +414,7 @@ export class ReplayDriver {
     for (const cursor of cursors.values()) cursor.settle();
 
     // A lot still open at the last bar produces no `ClosedTrade` — only a
-    // round-trip-to-flat is a realized record.
+    // round-trip-to-flat is a realized record
     return { trades: state.records, timeline: new SteppedTimeline(stepped) };
   }
 
@@ -512,7 +512,7 @@ export class ReplayDriver {
       // `Fill.leg` keeps its original four values — migration 0031 widened
       // `closed_trades.close_reason` only (#793), so a flatten is 'flatten'
       // on the trade but the generic 'exit' on its fill, matching the live
-      // path.
+      // path
       leg: exit.reason === 'flatten' ? 'exit' : exit.reason,
       price: result.fill_price,
       qty: result.filled_size,
@@ -542,7 +542,7 @@ export class ReplayDriver {
         closed_at: bar.close_time,
         close_reason: exit.reason,
         // #1121: always true — every leg is priced through `CostModel.fill`
-        // itself, so there's no venue report to fall back from.
+        // itself, so there's no venue report to fall back from
         modelled_cost_charged: true,
       },
       fills,
@@ -584,7 +584,7 @@ export class ReplayDriver {
       // one spec, two call sites, no literal to drift. Until #857 this read a
       // slice one short of a converged window, so the value was a plain
       // re-seeded mean wearing Wilder's name (fixed here, with the
-      // measurement).
+      // measurement)
       volatility: computeIndicator(bars.slice(-atrSpec.lookback) as Bar[], atrSpec),
       asset_class: instrument.asset_class,
       ...(instrument.venue === undefined ? {} : { venue: instrument.venue }),
@@ -639,7 +639,7 @@ function exitOf(
   }
 
   // Signal exit: priced at the close, the bar on which the signal became
-  // knowable.
+  // knowable
   if (signal.direction !== lot.direction) {
     return { reason: 'exit', reference: bar.close };
   }

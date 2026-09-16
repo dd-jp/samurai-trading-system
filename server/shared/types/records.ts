@@ -15,7 +15,7 @@ export interface OrderIntent {
   /**
    * sha256(instrument, bar, side[, arm if not 'live']) — NOT debate_id, since
    * debate re-runs from scratch on crash and would make the key unstable
-   * across retries (CONTEXT.md idempotency invariant).
+   * across retries (CONTEXT.md idempotency invariant)
    */
   idempotency_key: string;
   instrument: string;
@@ -37,7 +37,7 @@ export interface OrderIntent {
   /**
    * Wall-clock instant this intent was decided (`clock.now()` in decide.ts),
    * never floored to a bar — used for the freshness gate; `decision_timestamp`
-   * is the bar coordinate instead.
+   * is the bar coordinate instead
    */
   decided_at: Date;
   metadata: OrderIntentMetadata;
@@ -75,7 +75,7 @@ export interface OrderIntentMetadata {
   arm?: TradingArm;
   /**
    * Optional because entry/scale_in genuinely have none — not because an
-   * exit may omit it: `buildFlattenExit` requires the argument.
+   * exit may omit it: `buildFlattenExit` requires the argument
    */
   exit_reason?: ExitReason;
   /**
@@ -265,7 +265,7 @@ export interface VerdictLog {
 
 /**
  * Declared in `contracts/primitives.ts`, re-exported here: `PositionRow`
- * carries it to the browser, which must not import the execution registry.
+ * carries it to the browser, which must not import the execution registry
  */
 export type { OrderState } from '../../../contracts/index.js';
 
@@ -349,7 +349,7 @@ export interface OpenPosition {
   };
   /**
    * Set only when `order_state === 'abandoned'`: why
-   * `wedged-zero-fill-sweep.ts` retired this lot without ever seeing a fill.
+   * `wedged-zero-fill-sweep.ts` retired this lot without ever seeing a fill
    */
   abandon_reason?: string;
 }
@@ -397,7 +397,7 @@ export interface Fill {
   /**
    * The FLATTEN's own `idempotency_key` (not the lot's), joining an exit
    * fill back to the specific flatten submission that priced it — needed
-   * when a lot was partially flattened more than once.
+   * when a lot was partially flattened more than once
    */
   flatten_idempotency_key?: string;
   /**
@@ -434,7 +434,7 @@ export interface ClosedTrade {
   /** Avg entry, derived from the entry fills */
   entry: number;
   /**
-   * The INITIAL protective stop (denominator of R) — never a later trailed level.
+   * The INITIAL protective stop (denominator of R) — never a later trailed level
    */
   stop: number;
   /** → initial risk = |entry − stop| × filled_size */

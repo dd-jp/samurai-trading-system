@@ -64,7 +64,7 @@ export const PESSIMISTIC_COST_CONFIG: CostConfig = {
  * schedules (2026-08-05); see
  * docs/research/archive/2026-08-05-cost-model-calibration.md for the
  * per-field derivation (spread measured from live quotes, commission from
- * published fee schedules, slippage assumed at spread/4, impact unchanged).
+ * published fee schedules, slippage assumed at spread/4, impact unchanged)
  */
 export const CALIBRATED_COST_CONFIG: CostConfig = {
   crypto: {
@@ -130,7 +130,7 @@ export function defaultFiveYearWindow(now: Date = new Date()): DateRange {
 /**
  * The exact window the 2026-08-05 verdict requested, to the millisecond — a
  * direct run uses this rather than `defaultFiveYearWindow()`, which shifts
- * fold boundaries on each new day and would make the verdict unreproducible.
+ * fold boundaries on each new day and would make the verdict unreproducible
  */
 export { STAGE2_FREE_STACK_WINDOW, STAGE2_PINNED_WINDOW } from './stage2-source.js';
 
@@ -166,7 +166,7 @@ export interface RunStage2Deps {
 /**
  * The run's shared replay context, identical across every asset class this
  * script builds — bundled so `makeAssetClass` takes one context instead of
- * four separate positional params per call.
+ * four separate positional params per call
  */
 interface ReplayContext {
   store: Stage2HistoricalStore;
@@ -291,7 +291,7 @@ async function ingestUniverse(
 
 /**
  * Warn when EITHER boundary moved, naming which — warning only on the start
- * would let a lagging provider silently narrow the sample from the end.
+ * would let a lagging provider silently narrow the sample from the end
  */
 function warnIfWindowNarrowed(
   requested: DateRange,
@@ -512,7 +512,7 @@ function printReport(
 
 /**
  * Entrypoint guard — only runs when this file is executed directly, not when
- * imported by a test.
+ * imported by a test
  */
 if (import.meta.url === `file://${process.argv[1]}`) {
   // Polygon (2y) unless `STAGE2_SOURCE=free-stack` asks for the ten-year free stack

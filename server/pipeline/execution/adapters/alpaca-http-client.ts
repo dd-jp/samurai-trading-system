@@ -26,10 +26,10 @@ import type {
 
 /**
  * Per-shape response validation (#509): this is the one client whose fields feed money math directly,
- * so `AlpacaOrder`/`AlpacaPosition[]`/`AlpacaAccount` are each validated at their call site.
+ * so `AlpacaOrder`/`AlpacaPosition[]`/`AlpacaAccount` are each validated at their call site
  */
 
-/** `method` is required (#1275): retry classification (`isRetryableAlpacaBrokerError`) reads it back off `init.method`. */
+/** `method` is required (#1275): retry classification (`isRetryableAlpacaBrokerError`) reads it back off `init.method` */
 type AlpacaRequestInit = Omit<RequestInit, 'method'> & { method: AlpacaHttpMethod };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -38,7 +38,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /**
  * Alpaca reports decimals as strings; this validates the string is numeric-parseable without converting it,
- * so a garbage value can't silently become `NaN` downstream.
+ * so a garbage value can't silently become `NaN` downstream
  */
 function isFiniteNumericString(value: unknown): value is string {
   return typeof value === 'string' && Number.isFinite(Number(value));
@@ -56,9 +56,9 @@ function failValidation(context: string, detail: string, body: unknown): never {
 /**
  * Validates only the leg fields callers actually read (`id`/`type` always; fill fields only when present) —
  * Alpaca's real payload carries fields this repo's `AlpacaOrderLeg` doesn't declare, so validation happens
- * in place without rebuilding the object.
+ * in place without rebuilding the object
  */
-/** Scalar/string fields of an order response, split out to keep `validateAlpacaOrder` under the complexity gate. */
+/** Scalar/string fields of an order response, split out to keep `validateAlpacaOrder` under the complexity gate */
 function validateAlpacaOrderLeg(raw: unknown, context: string, body: unknown): void {
   if (!isRecord(raw)) failValidation(context, 'a bracket leg was not an object', body);
   const { id, type, status, filled_qty, filled_avg_price, filled_at } = raw;
@@ -136,8 +136,8 @@ function validateAlpacaOrder(body: unknown, context: string): AlpacaOrder {
   validateAlpacaOrderCoreFields(body, context);
   const { legs } = body;
   // `null` is ABSENT here, not malformed (#921): Alpaca returns `"legs": null` for every order with no legs,
-  // which broke `submitFlatten`/`resumeFlatten` when only `undefined` was excused.
-  // Verified live 2026-08-26: a filled market sell returns `"legs": null` with `"order_class": ""`.
+  // which broke `submitFlatten`/`resumeFlatten` when only `undefined` was excused
+  // Verified live 2026-08-26: a filled market sell returns `"legs": null` with `"order_class": ""`
   if (legs !== undefined && legs !== null) {
     if (!Array.isArray(legs)) failValidation(context, 'legs must be an array', body);
     for (const leg of legs) validateAlpacaOrderLeg(leg, context, body);
@@ -153,7 +153,7 @@ function validateAlpacaOrders(body: unknown, context: string): AlpacaOrder[] {
 
 /**
  * Complements `getOpenPositions`'s `Number.isFinite` guard with the type-level check it can't do:
- * a non-string `qty` would otherwise pass through as a structurally wrong `AlpacaPosition`.
+ * a non-string `qty` would otherwise pass through as a structurally wrong `AlpacaPosition`
  */
 function validateAlpacaPosition(raw: unknown, context: string): void {
   if (!isRecord(raw)) failValidation(context, 'a position was not an object', raw);
@@ -257,7 +257,7 @@ const DEFAULT_RETRY_CONFIG: RetryConfig = { maxAttempts: 3, baseDelayMs: 250, ma
 
 /**
  * Alpaca issues separate key pairs for paper and live (#511); keyed off `environment` here since that's
- * the single point of control an option-with-env-default requires callers to pass.
+ * the single point of control an option-with-env-default requires callers to pass
  */
 export const ALPACA_CREDENTIAL_ENV_VARS: Readonly<
   Record<AlpacaTradingEnvironment, { readonly key: string; readonly secret: string }>
@@ -276,7 +276,7 @@ export interface AlpacaHttpBrokerClientOptions {
   apiSecret?: string;
   /** Which Alpaca environment to reach. Defaults to `'paper'` — live is never reached by omission, only by naming it. */
   environment?: AlpacaTradingEnvironment;
-  /** Defaults to the host `environment` implies; naming the other environment's host throws rather than overriding it. */
+  /** Defaults to the host `environment` implies; naming the other environment's host throws rather than overriding it */
   baseUrl?: string;
   /** Per-attempt network timeout passed to `fetchWithTimeout` */
   timeoutMs?: number;
@@ -287,7 +287,7 @@ export interface AlpacaHttpBrokerClientOptions {
 export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
   private readonly apiKey: string;
   private readonly apiSecret: string;
-  /** Public so a startup log can state the resolved host without re-deriving the resolution rules. */
+  /** Public so a startup log can state the resolved host without re-deriving the resolution rules */
   readonly baseUrl: string;
   private readonly timeoutMs: number;
   private readonly retry: RetryConfig;
@@ -385,7 +385,7 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
 
   /**
    * Single attempt, no transport retry (#1275) — the one place `maxAttempts: 1` for order placement lives,
-   * so removing it removes it from every placement at once rather than leaving per-call copies to drift.
+   * so removing it removes it from every placement at once rather than leaving per-call copies to drift
    */
   private async submitPlacement<T>(
     path: string,
@@ -407,7 +407,7 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
     );
   }
 
-  /** The flatten (#429): `type: 'market'` is wire-only, same as `submitOrder`'s `type: 'limit'`. */
+  /** The flatten (#429): `type: 'market'` is wire-only, same as `submitOrder`'s `type: 'limit'` */
   async submitMarketOrder(request: AlpacaMarketOrderRequest): Promise<AlpacaOrder> {
     return this.submitPlacement<AlpacaOrder>(
       '/v2/orders',
@@ -430,7 +430,7 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
     );
   }
 
-  /** Crypto emulation entry/take-profit leg (#586): plain limit order, no `order_class` — crypto rejects advanced order classes (#550). */
+  /** Crypto emulation entry/take-profit leg (#586): plain limit order, no `order_class` — crypto rejects advanced order classes (#550) */
   async submitLimitOrder(request: AlpacaLimitOrderRequest): Promise<AlpacaOrder> {
     return this.submitPlacement<AlpacaOrder>(
       '/v2/orders',
@@ -440,7 +440,7 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
     );
   }
 
-  /** Crypto emulation stop leg (#586): plain stop-limit order carrying both `stop_price` and `limit_price`. */
+  /** Crypto emulation stop leg (#586): plain stop-limit order carrying both `stop_price` and `limit_price` */
   async submitStopLimitOrder(request: AlpacaStopLimitOrderRequest): Promise<AlpacaOrder> {
     return this.submitPlacement<AlpacaOrder>(
       '/v2/orders',
@@ -452,7 +452,7 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
 
   /**
    * Cancel, made idempotent (#429): 204/404/422 all mean "nothing working under this id any more,"
-   * so only a genuine transport/auth failure propagates.
+   * so only a genuine transport/auth failure propagates
    */
   async cancelOrder(alpacaOrderId: string): Promise<void> {
     const path = `/v2/orders/${encodeURIComponent(alpacaOrderId)}`;

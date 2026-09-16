@@ -112,7 +112,7 @@ interface SaxoInstrumentEvidence {
   readonly sibling_line?: SaxoInstrumentLine;
 }
 
-/** Per-row citation — a shared file-level date can't say which claim (ticker, ISIN, currency, listing) came from which fetch. */
+/** Per-row citation — a shared file-level date can't say which claim (ticker, ISIN, currency, listing) came from which fetch */
 interface RowProvenance {
   /** ISIN of the ETP, as stated by the issuer/aggregator source below */
   readonly isin: string;
@@ -141,7 +141,7 @@ interface RowProvenance {
   readonly notes?: string;
 }
 
-/** One tradeable-instrument row. */
+/** One tradeable-instrument row */
 export interface LseEtpPoolRow {
   /** What Samurai HOLDS and ROUTES orders against. The LSE-listed ETP. */
   readonly lse_ticker: string;
@@ -243,7 +243,7 @@ export function assertKnownSubclass(row: LseEtpPoolRow): void {
  * The checked-in pool: 31 rows (tradeable ETP lines) resolving to 26
  * distinct `screening_instrument` values (rankable underlyings — see
  * `countRankableUnderlyings()`), since SPY, QQQ, PLTR and NVDA each carry
- * more than one line.
+ * more than one line
  */
 export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
   {
@@ -299,7 +299,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
     subclass: 'index_etp_3x',
     currency: 'GBX',
     // Compiled after T212 was barred outright — `false` means "unevidenced",
-    // not "T212 does not list it"; see `t212_isa`'s own doc.
+    // not "T212 does not list it"; see `t212_isa`'s own doc
     t212_isa: false,
     saxo_tradeable: true,
     fallback_default: true,
@@ -689,7 +689,7 @@ export const LSE_ETP_POOL: readonly LseEtpPoolRow[] = [
   },
   // Verified 2026-08-19. T212 pages answer HTTP 403 to a programmatic fetch,
   // so `t212_source_url` evidence below is the search-returned page title,
-  // not a direct read of the page.
+  // not a direct read of the page
   {
     lse_ticker: '3LME',
     screening_instrument: 'MSFT',
@@ -1416,7 +1416,7 @@ export function resolveMiSubject(
  * Distinct `screening_instrument` values (rankable underlyings, not
  * tradeable ETP lines) — the count the screener's ranking step consumes,
  * strictly less than `pool.length` whenever an underlying carries more than
- * one issuer's ETP line.
+ * one issuer's ETP line
  */
 export function countRankableUnderlyings(pool: readonly LseEtpPoolRow[] = LSE_ETP_POOL): number {
   return new Set(pool.map((row) => row.screening_instrument)).size;
@@ -1489,7 +1489,7 @@ export function liquidityGateStatus(
 ): LiquidityGateStatus {
   // Two passes on purpose: "armed at all" and "what it decides" must read off
   // `gateAdmits`'s actual output, not `saxo_tradeable`'s raw distinctness —
-  // the latter reported 'armed' for a case where nothing was excluded.
+  // the latter reported 'armed' for a case where nothing was excluded
   const verifiedCount = pool.filter((row) => row.saxo_tradeable !== 'unverified').length;
   if (pool.length === 0 || verifiedCount === 0) {
     return {

@@ -80,7 +80,7 @@ interface VerdictLogRow {
   timestamp: string;
 }
 
-/** One `risk_log` row with the `debate_id` its `trader_log` twin recorded; NULL if no such row exists. */
+/** One `risk_log` row with the `debate_id` its `trader_log` twin recorded; NULL if no such row exists */
 interface RiskDecisionJoinRow {
   trace_id: string;
   instrument: string;
@@ -145,7 +145,7 @@ function fromDebateLogRow(row: DebateLogRow): DebateLog {
     rounds: row.rounds,
     created_at: fromStoredTimestamp(row.created_at),
     // NULL (pre-migration, or nothing to report) is omitted entirely rather
-    // than set to `undefined` — required by `exactOptionalPropertyTypes`.
+    // than set to `undefined` — required by `exactOptionalPropertyTypes`
     ...(row.termination === null ? {} : { termination: row.termination }),
     ...(row.termination_cause === null ? {} : { termination_cause: row.termination_cause }),
   };
@@ -188,15 +188,15 @@ const ZERO_METRICS: Omit<MetricsSuite, 'profit_factor' | 'expectancy'> = {
 };
 
 export class SqliteQueryStore implements DashboardQueryStore {
-  /** How far back `getAttribution` looks; not in the schema, so a constructor option defaulting to 30 days. */
-  /** The Feedback Loop's own sample store, read (never written) here. */
+  /** How far back `getAttribution` looks; not in the schema, so a constructor option defaulting to 30 days */
+  /** The Feedback Loop's own sample store, read (never written) here */
   private readonly armComparisons: SqliteArmComparisonSampleStore;
   private readonly outsideBenchmarks: SqliteOutsideBenchmarkSampleStore;
-  /** The Risk Manager's own critic log, read (never written) here. */
+  /** The Risk Manager's own critic log, read (never written) here */
   private readonly critics: SqliteRiskCriticStore;
-  /** The orchestrator's own alert-delivery-failure log, read (never written) here. */
+  /** The orchestrator's own alert-delivery-failure log, read (never written) here */
   private readonly alertDeliveryLog: SqliteAlertDeliveryLog;
-  /** The cap the orchestrator armed, read via the same store class it writes through — never a second copy of the number. */
+  /** The cap the orchestrator armed, read via the same store class it writes through — never a second copy of the number */
   private readonly spendCap: SqliteLlmSpendCapStore;
 
   constructor(
@@ -216,7 +216,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
     this.spendCap = new SqliteLlmSpendCapStore(db);
   }
 
-  /** Exactly one arm's rows, like every other read on this store — the other arm's lots are a measurement, not this arm's exposure. */
+  /** Exactly one arm's rows, like every other read on this store — the other arm's lots are a measurement, not this arm's exposure */
   getOpenPositions(asOf: Date, arm: TradingArm): OpenPosition[] {
     const placeholders = TERMINAL_ORDER_STATES.map(() => '?').join(', ');
     const rows = this.db
@@ -255,7 +255,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
     return rows.map(fromClosedTradeRow);
   }
 
-  /** Every fill for the named lots — scoped by `idempotency_key IN (...)` rather than a time window, since the caller always passes exactly the lots being rendered. */
+  /** Every fill for the named lots — scoped by `idempotency_key IN (...)` rather than a time window, since the caller always passes exactly the lots being rendered */
   getFillsForTrades(idempotencyKeys: readonly string[], _asOf: Date): Fill[] {
     if (idempotencyKeys.length === 0) return [];
     const placeholders = idempotencyKeys.map(() => '?').join(', ');
@@ -477,12 +477,12 @@ export class SqliteQueryStore implements DashboardQueryStore {
     return marks;
   }
 
-  /** Delegates to the Feedback Loop's own store rather than re-issuing its SELECT — two hand-written copies of the same row mapping is how a column gets dropped on one side. */
+  /** Delegates to the Feedback Loop's own store rather than re-issuing its SELECT — two hand-written copies of the same row mapping is how a column gets dropped on one side */
   getArmComparisons(limit: number, asOf: Date): PersistedArmComparisonSample[] {
     return this.armComparisons.getRecent(limit, asOf);
   }
 
-  /** Delegates to the Feedback Loop's own store, for the same reason as `getArmComparisons`. */
+  /** Delegates to the Feedback Loop's own store, for the same reason as `getArmComparisons` */
   getOutsideBenchmarks(limit: number, asOf: Date): OutsideBenchmarkSample[] {
     return this.outsideBenchmarks.getRecent(limit, asOf);
   }
@@ -527,19 +527,19 @@ export class SqliteQueryStore implements DashboardQueryStore {
     // `audit_log` has no `arm` column) is what lanes are built from;
     // `current_tick` extends it for the LIVE arm only; `latest_mark` extends
     // it without defining it, so a priced-but-idle instrument reads as an
-    // IDLE lane rather than vanishing.
+    // IDLE lane rather than vanishing
     //
     // `current_tick` is live-only STRUCTURALLY, not by filter: the control
     // arm uses its own in-memory `InMemoryCurrentTickStore` (never
     // persisted), so the leg is omitted entirely for `arm === 'control'`
-    // rather than filtered (matching ADR-0021's 2026-09-15 amendment).
+    // rather than filtered (matching ADR-0021's 2026-09-15 amendment)
     //
     // `active` (not row order) decides who survives `maxLanes`, so a stale
-    // priced instrument can never evict an active one at the cap.
+    // priced instrument can never evict an active one at the cap
     //
     // `GROUP BY instrument` + `MIN(asset_class)`: if the sources disagree on
     // an instrument's asset class, this renders the same choice every poll
-    // rather than flapping.
+    // rather than flapping
     const auditLegSql = `SELECT DISTINCT instrument, asset_class, 1 AS active FROM audit_log
                WHERE timestamp > ? AND timestamp <= ?
                  AND instrument IS NOT NULL AND asset_class IS NOT NULL
@@ -575,7 +575,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
 
     // The window applies to `current_tick` too, unlike `getTickStatus` — a
     // crash mid-tick deliberately leaves the row behind, and without a
-    // window a dead tick would show as running forever.
+    // window a dead tick would show as running forever
     const live: PipelineLiveTick[] =
       arm === 'control'
         ? []
@@ -591,7 +591,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
             .filter((row) => laneInstruments.has(row.instrument))
             // `position_check` is a tick-path stage, not a decision-chain one,
             // and has no lane column — excluded so lanes keep meaning "where
-            // is the decision" (`getTickStatus` still reports it).
+            // is the decision" (`getTickStatus` still reports it)
             .filter((row): row is PipelineTickRow & { stage: PipelineStage } => {
               return row.stage !== 'position_check';
             })
@@ -649,7 +649,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
       .all(fromIso, untilIso, `%${CONTROL_TRACE_SUFFIX}`, ...PIPELINE_STAGES) as AuditStageRow[];
 
     // One trace per instrument, newest wins — rows arrive oldest-first, so a
-    // later row simply overwrites the claim.
+    // later row simply overwrites the claim
     const chosenTrace = new Map<string, string>();
     for (const row of rows) {
       if (row.instrument !== null && laneInstruments.has(row.instrument)) {
@@ -678,7 +678,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
   }
 
   // `SUM(cost_usd)` skips NULLs (unpriced calls contribute tokens but no
-  // dollars); `unpriced_calls` is counted alongside so that's visible.
+  // dollars); `unpriced_calls` is counted alongside so that's visible
   private spendBetween(fromIso: string | null, untilIso: string): LlmSpendWindow {
     const where =
       fromIso === null ? 'WHERE timestamp <= ?' : 'WHERE timestamp > ? AND timestamp <= ?';
@@ -749,7 +749,7 @@ export class SqliteQueryStore implements DashboardQueryStore {
   }
 }
 
-/** `Array.prototype.sort` compares stringified elements by default ([9,10,100] -> [10,100,9]), which would corrupt every percentile below. */
+/** `Array.prototype.sort` compares stringified elements by default ([9,10,100] -> [10,100,9]), which would corrupt every percentile below */
 function ascending(a: number, b: number): number {
   return a - b;
 }

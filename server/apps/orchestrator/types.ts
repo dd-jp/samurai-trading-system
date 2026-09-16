@@ -1,4 +1,4 @@
-/** Orchestrator domain types & seams. */
+/** Orchestrator domain types & seams */
 import type { Signal } from '../../pipeline/analysts/index.js';
 import type { AnalystView, DebateResult } from '../../pipeline/debate-engine/index.js';
 import type { ExecutionResult } from '../../pipeline/execution/index.js';
@@ -58,7 +58,7 @@ export interface Scheduler {
 import type { LogEntry, Logger } from '../../shared/index.js';
 
 // `LogEntry` re-exported alongside `Logger`: it is the argument type of
-// `Logger.log`, so a fake logger built against this module needs both.
+// `Logger.log`, so a fake logger built against this module needs both
 export type { LogEntry, Logger };
 
 /** shared_store.audit_log writer (#95) */
@@ -70,7 +70,7 @@ export interface AuditLog {
     input_digest: string;
     output_digest: string;
     timestamp: Date;
-    /** Absent means "not attributable", never "no instrument". */
+    /** Absent means "not attributable", never "no instrument" */
     instrument?: string;
     asset_class?: AssetClass;
   }): void;
@@ -94,7 +94,7 @@ export type TickStage =
 /**
  * The debate bar a decision pass runs for — THE single source of the bar
  * coordinate, produced once by the decision gate and passed down so nothing
- * else floors its own `clock.now()` for it.
+ * else floors its own `clock.now()` for it
  */
 export interface DecisionBar {
   /** Stable identity for logs: `<open_time ISO>@<timeframe_ms>` */
@@ -121,7 +121,7 @@ export interface CurrentTick {
 /**
  * One row per instrument: `upsert` overwrites any existing row (a stale row
  * from a crashed prior tick is safely clobbered), `delete` clears it on
- * completion.
+ * completion
  */
 export interface CurrentTickStore {
   upsert(row: CurrentTick): void;
@@ -219,7 +219,7 @@ export interface TickSteps {
     /**
      * Passed down from `TickContext.decision_bar`, the SAME derivation
      * `debate`'s `bar` field below carries — never a second
-     * `floorToBar(clock.now())` taken here or inside an analyst.
+     * `floorToBar(clock.now())` taken here or inside an analyst
      */
     bar: Date;
   }): Promise<AnalystView[]>;
@@ -245,7 +245,7 @@ export interface TickSteps {
      * Passed down from `TickContext.decision_bar`; keys `debate_id` and
      * `bar_timestamp` on this value rather than flooring a fresh
      * `clock.now()`, so a debate straddling a bar boundary stays keyed to the
-     * bar the gate opened.
+     * bar the gate opened
      */
     bar: Date;
   }): Promise<DebateResult>;
@@ -262,7 +262,7 @@ export interface TickSteps {
     risk_decision: RiskDecision;
     clock: Clock;
   }): Promise<VerdictDecision>;
-  /** Called only on a Verdict `go`. */
+  /** Called only on a Verdict `go` */
   execution(verdict: VerdictDecision): Promise<ExecutionResult>;
   /**
    * Falsifier arm 2 (ADR-0014's mandated matched control), invoked on EVERY

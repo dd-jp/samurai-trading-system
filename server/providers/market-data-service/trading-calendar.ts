@@ -1,6 +1,6 @@
 /**
  * Trading calendar port (#66) — deliberately minimal, defining only the seam
- * stock ingestion needs so a real holiday/session table can implement it later.
+ * stock ingestion needs so a real holiday/session table can implement it later
  */
 
 export interface TradingCalendar {
@@ -63,7 +63,7 @@ const SESSION_OPEN_MINUTES = 9 * 60 + 30;
 // 16:00 ET
 const SESSION_CLOSE_MINUTES = 16 * 60;
 
-/** Formatters cached per zone — `Intl.DateTimeFormat` construction is the expensive part, and zone count is bounded (two venues). */
+/** Formatters cached per zone — `Intl.DateTimeFormat` construction is the expensive part, and zone count is bounded (two venues) */
 const WALL_CLOCK_PARTS = new Map<string, Intl.DateTimeFormat>();
 const CIVIL_PARTS = new Map<string, Intl.DateTimeFormat>();
 
@@ -88,7 +88,7 @@ interface ZonedInstant {
   minutesSinceMidnight: number;
 }
 
-/** Resolves an instant into a zone's wall-clock, DST included, via Intl. */
+/** Resolves an instant into a zone's wall-clock, DST included, via Intl */
 export function toZonedTime(instant: Date, zone: string): ZonedInstant {
   const parts = wallClockParts(zone).formatToParts(instant);
   const lookup = (type: Intl.DateTimeFormatPartTypes): string =>
@@ -116,7 +116,7 @@ export const MAX_SESSION_SEARCH_DAYS = 10;
 /** One pass computes the UTC offset, the second confirms it. 16:00 ET is never in a DST gap. */
 const MAX_OFFSET_PASSES = 3;
 
-/** Kept separate from the wall-clock formatter so `isOpen`/`isTradingDay` stay untouched; `hourCycle: 'h23'` renders midnight as 00, not '24'. */
+/** Kept separate from the wall-clock formatter so `isOpen`/`isTradingDay` stay untouched; `hourCycle: 'h23'` renders midnight as 00, not '24' */
 function civilParts(zone: string): Intl.DateTimeFormat {
   let formatter = CIVIL_PARTS.get(zone);
   if (formatter === undefined) {
@@ -507,10 +507,10 @@ export const LSE_HALF_DAYS = new Set([
   // neither qualifies (half-days apply only when the date is a weekday)
 ]);
 
-/** Last date `LSE_HALF_DAYS` was checked for — see `LSE_HOLIDAYS_CHECKED_THROUGH` for why it's 2028-12-31, not 2029. */
+/** Last date `LSE_HALF_DAYS` was checked for — see `LSE_HOLIDAYS_CHECKED_THROUGH` for why it's 2028-12-31, not 2029 */
 export const LSE_HALF_DAYS_CHECKED_THROUGH = '2028-12-31';
 
-/** The lexicographically earlier of two `YYYY-MM-DD` civil-date keys. */
+/** The lexicographically earlier of two `YYYY-MM-DD` civil-date keys */
 export function earlierOf(a: string, b: string): string {
   return a < b ? a : b;
 }

@@ -47,19 +47,19 @@ import { join, resolve } from 'node:path';
 import { nonEmpty, positiveIntegerFromEnv } from '../../shared/index.js';
 import type { Logger } from './types.js';
 
-/** Wider than #238's 14-day soak window, so the sweep can't have already dropped its opening days by the time anyone looks. */
+/** Wider than #238's 14-day soak window, so the sweep can't have already dropped its opening days by the time anyone looks */
 export const DEFAULT_LOG_RETENTION_DAYS = 30;
 
-/** Matches `DEFAULT_MAX_BYTES` in `rotating-file-sink.ts` — "big enough to rotate" there is a defensible "big enough to reclaim" here (#1206). */
+/** Matches `DEFAULT_MAX_BYTES` in `rotating-file-sink.ts` — "big enough to rotate" there is a defensible "big enough to reclaim" here (#1206) */
 export const DEFAULT_BARE_TRUNCATE_BYTES = 16 * 1024 * 1024;
 
 /**
  * Operators may extend this via `SAMURAI_LOG_BARE_TRUNCATE_NAMES` but never
- * shrink it — `soak-boot.out` is the one file #1206 names.
+ * shrink it — `soak-boot.out` is the one file #1206 names
  */
 export const DEFAULT_BARE_TRUNCATE_NAMES: readonly string[] = ['soak-boot.out'];
 
-/** POSIX `stat(2)` block size — NOT `stat.blksize` (the filesystem's preferred I/O size, 4096 here) and not `stat.size`. */
+/** POSIX `stat(2)` block size — NOT `stat.blksize` (the filesystem's preferred I/O size, 4096 here) and not `stat.size` */
 const STAT_BLOCK_BYTES = 512;
 
 const ENV_LOG_RETENTION_DAYS = 'SAMURAI_LOG_RETENTION_DAYS';
@@ -78,7 +78,7 @@ const ROTATED_GENERATION = /^.+\.log\.\d+$/;
  */
 const DATESTAMPED_ARTEFACT = /^.*-\d{8}(?:[-.].*)?\.(?:log|out)$/;
 
-/** Whether `name` is a finished log artefact eligible for age-based deletion — see the module doc's candidacy rule. */
+/** Whether `name` is a finished log artefact eligible for age-based deletion — see the module doc's candidacy rule */
 export function isArchivedLogName(name: string): boolean {
   return ROTATED_GENERATION.test(name) || DATESTAMPED_ARTEFACT.test(name);
 }
@@ -96,7 +96,7 @@ export function isBareLogName(name: string): boolean {
   return LOG_SHAPED_NAME.test(name) && !isArchivedLogName(name);
 }
 
-/** Malformed values are refused at startup rather than defaulted — this is retention policy, and a window nobody chose is worse than a named refusal. */
+/** Malformed values are refused at startup rather than defaulted — this is retention policy, and a window nobody chose is worse than a named refusal */
 export function logRetentionDaysFromEnvironment(env: NodeJS.ProcessEnv = process.env): number {
   return positiveIntegerFromEnv(
     env[ENV_LOG_RETENTION_DAYS],
@@ -110,7 +110,7 @@ export function logRetentionDaysFromEnvironment(env: NodeJS.ProcessEnv = process
 /**
  * Defaulted (not opt-in) like every other setting here, because
  * `bareTruncateNames` — not this threshold — is what scopes the blast
- * radius; see the module doc's "Bare live names" section.
+ * radius; see the module doc's "Bare live names" section
  */
 export function logBareTruncateBytesFromEnvironment(env: NodeJS.ProcessEnv = process.env): number {
   return positiveIntegerFromEnv(
@@ -125,7 +125,7 @@ export function logBareTruncateBytesFromEnvironment(env: NodeJS.ProcessEnv = pro
 /**
  * `DEFAULT_BARE_TRUNCATE_NAMES` plus whatever the env var adds — never
  * fewer, only ever more; `SAMURAI_LOG_RETENTION_KEEP` is the existing
- * mechanism for removing a file from eligibility instead.
+ * mechanism for removing a file from eligibility instead
  */
 export function logBareTruncateNamesFromEnvironment(
   env: NodeJS.ProcessEnv = process.env,
@@ -219,7 +219,7 @@ export interface LogRetentionOptions {
    */
   bareTruncateNames?: readonly string[];
   now?: () => number;
-  /** Seam for tests: stands in for `process.cwd()`, so the refusal path can be exercised without pointing a real sweep at the repo root. */
+  /** Seam for tests: stands in for `process.cwd()`, so the refusal path can be exercised without pointing a real sweep at the repo root */
   cwd?: () => string;
   /** Seam for tests: stands in for `fstatSync(1)` / `fstatSync(2)` */
   activeDescriptors?: () => readonly FileIdentity[];
@@ -240,7 +240,7 @@ export interface LogRetentionResult {
   bytesReclaimed: number;
   /** Bare log-shaped names truncated rather than removed (#1206) */
   filesTruncated: number;
-  /** Set only when the sweep declined to look at `directory` at all. */
+  /** Set only when the sweep declined to look at `directory` at all */
   refusedReason?: string;
 }
 
@@ -266,7 +266,7 @@ function safeStat(path: string): Stats | undefined {
   }
 }
 
-/** Unlink path's liveness + age gate — see the module doc's liveness rule for why descriptor identity is checked before mtime. */
+/** Unlink path's liveness + age gate — see the module doc's liveness rule for why descriptor identity is checked before mtime */
 function tryRemoveArchivedLogEntry(
   path: string,
   stat: Stats,
@@ -289,7 +289,7 @@ function tryRemoveArchivedLogEntry(
   return { removed: true, bytesReclaimed: stat.size };
 }
 
-/** See `LogRetentionOptions.bareTruncateNames` for why `isBareLogName` shape alone is not narrow enough. */
+/** See `LogRetentionOptions.bareTruncateNames` for why `isBareLogName` shape alone is not narrow enough */
 function isBareTruncateCandidateName(name: string, truncateNameSet: ReadonlySet<string>): boolean {
   return isBareLogName(name) && truncateNameSet.has(name);
 }
@@ -301,7 +301,7 @@ function tryTruncateBareLogEntry(
   truncate: (path: string) => void,
 ): { truncated: boolean; bytesReclaimed: number } {
   // Gated on disk allocation, not stat.size — see the module doc for why
-  // gating on apparent size would re-truncate and destroy data every boot.
+  // gating on apparent size would re-truncate and destroy data every boot
   const allocatedBytes = stat.blocks * STAT_BLOCK_BYTES;
   if (allocatedBytes <= bareTruncateBytes) {
     return { truncated: false, bytesReclaimed: 0 };
@@ -408,7 +408,7 @@ export function sweepStaleLogs(options: LogRetentionOptions): LogRetentionResult
   for (const entry of entries) {
     // isFile() reports the DIRECTORY ENTRY's type, never a symlink's target,
     // so a symlink is skipped rather than resolved and followed — this is
-    // what keeps the sweep inside `directory` structurally, not by convention.
+    // what keeps the sweep inside `directory` structurally, not by convention
     if (!entry.isFile()) continue;
     if (keepSet.has(entry.name)) continue;
 
@@ -430,7 +430,7 @@ export function sweepStaleLogs(options: LogRetentionOptions): LogRetentionResult
 
     // Bare log-shaped name (#1206): no age/liveness gate — truncate never
     // orphans a writer's descriptor, so disk allocation alone decides
-    // eligibility among names in truncateNameSet.
+    // eligibility among names in truncateNameSet
     if (
       bareTruncateBytes === undefined ||
       !isBareTruncateCandidateName(entry.name, truncateNameSet)

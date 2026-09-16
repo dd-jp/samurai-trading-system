@@ -91,33 +91,33 @@ import type { TraderDiagnosticAlertChannel } from './trader-diagnostic-alert.js'
  * silently diverge (#431, #465, #551).
  */
 export interface AlertChannelSlots {
-  /** Dead-man's-switch heartbeat transport; `SAMURAI_ALERTS` selects it at boot. */
+  /** Dead-man's-switch heartbeat transport; `SAMURAI_ALERTS` selects it at boot */
   heartbeatChannel?: HeartbeatChannel;
-  /** Restart-time orphaned `go` verdict report. */
+  /** Restart-time orphaned `go` verdict report */
   orphanAlerts?: OrphanAlertChannel;
-  /** Fill the venue reports filled but will not price, stuck too long (#298). */
+  /** Fill the venue reports filled but will not price, stuck too long (#298) */
   unpricedFillAlerts?: UnpricedFillAlertChannel;
-  /** Residual position `ingestFills()` failed to re-arm after a partial flatten (#525). */
+  /** Residual position `ingestFills()` failed to re-arm after a partial flatten (#525) */
   residualExposureAlerts?: ResidualExposureAlertChannel;
-  /** Emulated crypto OCO double fill: both protective legs filled in one poll window (#586). */
+  /** Emulated crypto OCO double fill: both protective legs filled in one poll window (#586) */
   ocoDoubleFillAlerts?: OcoDoubleFillAlertChannel;
   /**
    * Partial entry fill on a venue whose protective-leg resizing is UNVERIFIED
-   * (#1215) — required (no default) for `SaxoBrokerAdapter`.
+   * (#1215) — required (no default) for `SaxoBrokerAdapter`
    */
   legResizeAlerts?: LegResizeUnverifiedAlertChannel;
-  /** Dormant Saxo related-order pair the adapter cannot resolve (#1215/#1216). */
+  /** Dormant Saxo related-order pair the adapter cannot resolve (#1215/#1216) */
   dormantLegsAlerts?: DormantLegsUnresolvedAlertChannel;
-  /** Priced Saxo fill whose `Uic` resolves to no pool line; fill is refused, not booked (#1302). */
+  /** Priced Saxo fill whose `Uic` resolves to no pool line; fill is refused, not booked (#1302) */
   priceUnitAlerts?: UnresolvedPriceUnitAlertChannel;
   /**
    * `flatten_submissions` row `reconcile()` could not settle (#519). Since
    * #1349 pages the live arm only; `residualExposureAlerts` pages both arms.
    */
   flattenReconcileAlerts?: FlattenReconcileAlertChannel;
-  /** Consecutive analyst quorum skip run (#431). */
+  /** Consecutive analyst quorum skip run (#431) */
   analystSkipAlerts?: AnalystSkipAlertChannel;
-  /** Kill-threshold breach (#93). */
+  /** Kill-threshold breach (#93) */
   breachAlerts?: BreachAlertChannel;
   /**
    * Notice of an applied risk-threshold loosening (#91). Top-level rather
@@ -131,23 +131,23 @@ export interface AlertChannelSlots {
    * logs at `error`, so absence here means "no second, audible copy".
    */
   traderDiagnosticAlerts?: TraderDiagnosticAlertChannel;
-  /** Notable verdicts (#465) — filtered by `isNotableVerdict`, not every no-go. */
+  /** Notable verdicts (#465) — filtered by `isNotableVerdict`, not every no-go */
   verdictAlerts?: TradeChannelNotifier;
-  /** Degraded market-intelligence coverage gap (#752). */
+  /** Degraded market-intelligence coverage gap (#752) */
   miCoverageAlerts?: MiCoverageAlertChannel;
   /**
    * Out-of-bound `risk_thresholds` row tripping #638's runtime clamp (#766).
    * Both catch sites already log at `error`, so absence means no second copy.
    */
   thresholdClampAlerts?: ThresholdClampAlertChannel;
-  /** Live OHLCV failover to the fallback vendor for one (instrument, timeframe) (#562). */
+  /** Live OHLCV failover to the fallback vendor for one (instrument, timeframe) (#562) */
   dataFailoverAlerts?: DataFailoverAlertChannel;
   /**
    * Exit priced against a partly-valued book — a held instrument's mark was
    * unreadable or stale (#841). Both catch sites already log at `error`.
    */
   exitValuationAlerts?: ExitValuationDegradedAlertChannel;
-  /** Failed Alpaca `GET /v2/calendar` fetch at boot; paper leg fell back to the hand-entered table (#684). */
+  /** Failed Alpaca `GET /v2/calendar` fetch at boot; paper leg fell back to the hand-entered table (#684) */
   calendarFallbackAlerts?: CalendarFallbackAlertChannel;
   /**
    * Matched control (falsifier arm 2) out-performing the live arm (#971).
@@ -155,9 +155,9 @@ export interface AlertChannelSlots {
    * `autoTighten`, which this measurement must not do.
    */
   armDivergenceAlerts?: ArmDivergenceAlertChannel;
-  /** Materially degraded tick pass (#1084); threshold in `tick-skip-alert.ts`. */
+  /** Materially degraded tick pass (#1084); threshold in `tick-skip-alert.ts` */
   tickSkipAlerts?: TickSkipAlertChannel;
-  /** Prompt-tier crossing — unit cost jumped silently inside the meter (#1155). */
+  /** Prompt-tier crossing — unit cost jumped silently inside the meter (#1155) */
   promptTierAlerts?: PromptTierAlertChannel;
   /**
    * Live equity leg's own LSE table-coverage horizon nearing
@@ -165,7 +165,7 @@ export interface AlertChannelSlots {
    * which is the paper leg's fetch-failure fallback.
    */
   lseCalendarCoverageAlerts?: LseCalendarCoverageAlertChannel;
-  /** Sustained `debate_log.termination_cause = 'llm_failure'` rate (#1396). */
+  /** Sustained `debate_log.termination_cause = 'llm_failure'` rate (#1396) */
   llmFailureRateAlerts?: LlmFailureRateAlertChannel;
   /**
    * Near-total in-flight-gate refusal ratio (#1533). Separate from
@@ -175,12 +175,12 @@ export interface AlertChannelSlots {
   gateRefusalRateAlerts?: GateRefusalRateAlertChannel;
   /**
    * Fill fee reported outside book currency (#1465/#1220) — means an
-   * instrument was traded that the sterling-only gate should have excluded.
+   * instrument was traded that the sterling-only gate should have excluded
    */
   nonSterlingFeeAlerts?: NonSterlingFeeAlertChannel;
   /**
    * Flatten fill booked against a lot that had already closed (#1506) — the
-   * venue transacted quantity the lot's `closed_trade` does not contain.
+   * venue transacted quantity the lot's `closed_trade` does not contain
    */
   unattributedFlattenFillAlerts?: UnattributedFlattenFillAlertChannel;
   /**
@@ -188,13 +188,13 @@ export interface AlertChannelSlots {
    * only (#1349) — the control arm's simulated book is not actionable.
    */
   unrecordedVenuePositionAlerts?: UnrecordedVenuePositionAlertChannel;
-  /** Saxo session can no longer be renewed (#1524); names the `npm run saxo:login` fix. */
+  /** Saxo session can no longer be renewed (#1524); names the `npm run saxo:login` fix */
   saxoSessionLostAlerts?: SaxoSessionLostAlertChannel;
-  /** Weekly reminder of when the Saxo session was last refreshed (#1524). */
+  /** Weekly reminder of when the Saxo session was last refreshed (#1524) */
   saxoWeeklyReminderAlerts?: SaxoWeeklyReminderAlertChannel;
 }
 
-/** Everything the composition root cannot build from in-repo code. */
+/** Everything the composition root cannot build from in-repo code */
 export interface ProductionConfig extends AlertChannelSlots {
   /** The shared SQLite handle (`openSharedStore(...)`) every store here is built over */
   db: StoreHandle;
@@ -216,7 +216,7 @@ export interface ProductionConfig extends AlertChannelSlots {
    * host, so this seam is how every in-repo Saxo boot runs today.
    */
   saxoBrokerClient?: SaxoOpenApiClient;
-  /** Alpaca market-data REST surface; defaults to `AlpacaHttpDataClient` on `dataSourceAssetClass`. */
+  /** Alpaca market-data REST surface; defaults to `AlpacaHttpDataClient` on `dataSourceAssetClass` */
   alpacaDataClient?: AlpacaMarketDataClient;
   /**
    * Approval round-trip behind Verdict's HITL gate. No adapter exists
@@ -224,7 +224,7 @@ export interface ProductionConfig extends AlertChannelSlots {
    * falls back to `UnwiredApprovalChannel`, which throws if reached.
    */
   approvals?: ApprovalChannel;
-  /** How long a fill may stay unpriced before escalation; only meaningful against `fillPollIntervalMs`. */
+  /** How long a fill may stay unpriced before escalation; only meaningful against `fillPollIntervalMs` */
   unpricedFillAgeOutMs?: number;
   /** WorldMonitor CII reads (ADR-0002; live wiring parked during paper trading) */
   ciiScoreProvider?: CiiScoreProvider;
@@ -282,10 +282,10 @@ export interface ProductionConfig extends AlertChannelSlots {
   /**
    * Overrides the `AlpacaBrokerAdapter` this module would otherwise build —
    * the dual-target seam (ADR-0001) for `SimulatedBrokerAdapter` or a future
-   * ccxt/IBKR adapter.
+   * ccxt/IBKR adapter
    */
   broker?: BrokerAdapter;
-  /** Overrides the `AlpacaDataSource` this module would otherwise build — same rationale as `broker`. */
+  /** Overrides the `AlpacaDataSource` this module would otherwise build — same rationale as `broker` */
   dataSource?: DataSource;
   /**
    * Overrides the outside benchmarks' series reader (#981, under #636).
@@ -317,7 +317,7 @@ export interface ProductionConfig extends AlertChannelSlots {
   volatilityIndicator?: IndicatorSpec;
   /**
    * Session calendar for stock gating — also the boundary the stocks
-   * daily-PnL figure resets on via `sessionStart` (#331/#332).
+   * daily-PnL figure resets on via `sessionStart` (#331/#332)
    */
   tradingCalendar?: TradingCalendar;
   /**
@@ -358,7 +358,7 @@ export interface ProductionConfig extends AlertChannelSlots {
   gdeltClient?: GdeltGkgClient;
   /** Gap between Polymarket macro polls. Default 1 hour (`DEFAULT_POLYMARKET_POLL_INTERVAL_MS`, #504). */
   polymarketPollIntervalMs?: number;
-  /** The Polymarket fetcher, injectable — same no-credential-gate reason as `gdeltClient`. */
+  /** The Polymarket fetcher, injectable — same no-credential-gate reason as `gdeltClient` */
   polymarketClient?: PolymarketWireClient;
   /**
    * Bounds concurrent instrument passes within one tick. Default 1. No
@@ -458,7 +458,7 @@ export interface ProductionConfig extends AlertChannelSlots {
 
 export interface FeedbackCycleConfig {
   config: FeedbackConfig;
-  /** Per-cycle override for `ProductionConfig.loosenNotices`. */
+  /** Per-cycle override for `ProductionConfig.loosenNotices` */
   loosenNotices?: LoosenNotificationChannel;
   /**
    * Param/threshold moves to consider this cycle. Empty is a valid,
@@ -481,13 +481,13 @@ export interface FeedbackCycleConfig {
 /**
  * The stores a real `DailyMetricsSource` needs but a checked-in profile
  * cannot hold (#379) — `paperStartingProfile` supplies tuning values and
- * opens no database, so wiring belongs to the composition root instead.
+ * opens no database, so wiring belongs to the composition root instead
  */
 export interface DailyMetricsSourceDeps {
   /**
    * The shared handle, not a pre-built equity store: the root's own
    * `SqliteDailyEquityStore` does not exist when a caller injects its own
-   * provider.
+   * provider
    */
   db: StoreHandle;
   /** The root's own instance — the same reader `runDailyCycle` attributes over */
@@ -496,7 +496,7 @@ export interface DailyMetricsSourceDeps {
   /**
    * The frozen Stage 2 selections (#384) — where `DailyMetricsSample
    * .revalidation` comes from, since PBO/OOS-Sharpe/DSR are walk-forward
-   * statistics a live run cannot compute about itself.
+   * statistics a live run cannot compute about itself
    */
   stage2Selections: SqliteStage2SelectionStore;
   /** Ages a selection out; the root's clock, so a replay ages deterministically */

@@ -40,7 +40,7 @@ import type {
 export class ExecutionImpl implements Execution {
   constructor(private readonly input: ExecutionInput) {}
 
-  /** Delegated whole, so the fill lifecycle stays independently readable from `execute()`. */
+  /** Delegated whole, so the fill lifecycle stays independently readable from `execute()` */
   async ingestFills(): Promise<void> {
     return ingestFills(this.input);
   }
@@ -61,7 +61,7 @@ export class ExecutionImpl implements Execution {
     return sweepResidualProtection(this.input);
   }
 
-  /** Delegated whole, so a caller with only a `SubmitInput` (place-soak-position.ts) can call this directly. */
+  /** Delegated whole, so a caller with only a `SubmitInput` (place-soak-position.ts) can call this directly */
   async execute(verdict: VerdictDecision): Promise<ExecutionResult> {
     return executeVerdict(this.input, verdict);
   }
@@ -85,10 +85,10 @@ export async function executeVerdict(
   const order = verdict.order;
   const idempotencyKey = order.idempotency_key;
 
-  // Dedup layer 1 (local); layer 2 is the client order id at the broker.
+  // Dedup layer 1 (local); layer 2 is the client order id at the broker
   // #921: an exit gets a second chance via `resolveExitRetryKey` since a
   // flatten stuck at 'error' must not stand in for "closed" forever, unlike
-  // entry/scale_in which dedupe unconditionally (#516 hazard otherwise).
+  // entry/scale_in which dedupe unconditionally (#516 hazard otherwise)
   if (await store.findByKey(idempotencyKey)) {
     if (order.intent_type !== 'exit') {
       return result('deduped', idempotencyKey, now, {
@@ -107,7 +107,7 @@ export async function executeVerdict(
   // An exit closes existing lot(s) via submitFlatten (#429) rather than
   // opening a bracket, so it writes no `OpenPosition`. Delegated to
   // `executeExit` — enough steps (cancel-before-flatten, store cross-check,
-  // journal) that inlining would bury the bracket path below.
+  // journal) that inlining would bury the bracket path below
   if (order.intent_type === 'exit') {
     return executeExit(input, order, idempotencyKey, now);
   }
@@ -126,7 +126,7 @@ export async function executeVerdict(
 
   // #1001: best-effort snapshot, read BEFORE the write-ahead so it lands in
   // the same durable row a crash-restart would recover. Unbounded here,
-  // unlike the exit path — an entry is not racing the close.
+  // unlike the exit path — an entry is not racing the close
   const snapshot = await captureSubmitSnapshot(input, order, now);
 
   const position: OpenPosition = {
@@ -148,7 +148,7 @@ export async function executeVerdict(
     conviction: order.metadata.conviction,
     converged: order.metadata.converged,
     // #1014: omitted (not `null`) when absent, matching every other
-    // optional snapshot field below.
+    // optional snapshot field below
     ...(snapshot.decision_price === null ? {} : { decision_price: snapshot.decision_price }),
     ...(snapshot.quote_bid === null ? {} : { quote_bid: snapshot.quote_bid }),
     ...(snapshot.quote_ask === null ? {} : { quote_ask: snapshot.quote_ask }),
@@ -169,7 +169,7 @@ export async function executeVerdict(
   // Write-ahead: `pending` is durable BEFORE the broker call (#86), so a
   // crash leaves a record to reconcile rather than resubmitting blind. Only
   // `DuplicatePositionError` means dedup; any other store failure means the
-  // write-ahead did NOT happen and must not be swallowed.
+  // write-ahead did NOT happen and must not be swallowed
   try {
     await store.writeAheadPosition(position);
   } catch (error) {
@@ -186,7 +186,7 @@ export async function executeVerdict(
     ack = await broker.submitBracket(bracket);
   } catch (error) {
     // The `pending` record deliberately survives: only the broker can settle
-    // whether the bracket landed (#86's reconcile adopts broker truth).
+    // whether the bracket landed (#86's reconcile adopts broker truth)
     return result('error', idempotencyKey, now, {
       order_state: 'pending',
       reason: describeThrownSafely(error),
@@ -211,7 +211,7 @@ export async function executeVerdict(
  */
 const EXIT_SNAPSHOT_BUDGET_MS = 2_000;
 
-/** The submit-time snapshot #1001 captures alongside every write-ahead. */
+/** The submit-time snapshot #1001 captures alongside every write-ahead */
 interface SubmitSnapshot {
   decision_price: number | null;
   quote_bid: number | null;
@@ -335,7 +335,7 @@ async function readSubmitSnapshot(
     // non-determinism in the cost model. Skipped rather than shared, to keep
     // the simulation detail out of the live code path. Keyed on the declared
     // `prices_own_fills` capability, not `instanceof SimulatedBrokerAdapter`
-    // (CLAUDE.md's Broker Plan).
+    // (CLAUDE.md's Broker Plan)
     if (input.broker.prices_own_fills === true) {
       safeLog(logger, {
         trace_id,
@@ -387,7 +387,7 @@ async function readSubmitSnapshot(
       // #1301: the protective exit this submission arms, priced off this
       // same `marketState` (#1121 AC6 allows one derivation per priced
       // event). An exit has no protective leg to price. Assigned only once
-      // BOTH have priced, so the pair is present or absent together.
+      // BOTH have priced, so the pair is present or absent together
       const protectiveExitCost =
         order.intent_type === 'exit'
           ? null
@@ -510,7 +510,7 @@ async function executeExit(
   // Fail closed per lot, before summing: a negative here means the store
   // contradicts itself and could net against a sibling into a
   // plausible-looking total. Not ADR-0005's `coversQty` tolerance — a lot
-  // within that epsilon is already `closed` and off `getOpenPositions()`.
+  // within that epsilon is already `closed` and off `getOpenPositions()`
   const overExited = perLotHeld.find((lot) => lot.held < 0);
   if (overExited !== undefined) {
     return result('error', idempotencyKey, now, {
@@ -536,7 +536,7 @@ async function executeExit(
   // Exact equality, not a tolerance: `heldSize` uses the SAME derivation
   // `buildExitIntent` used (#568), so drift here means a fill genuinely
   // landed between decide-time and now — which must be refused, not
-  // smoothed over with ADR-0005's summation-order epsilon.
+  // smoothed over with ADR-0005's summation-order epsilon
   if (order.size !== heldSize) {
     return result('error', idempotencyKey, now, {
       reason:
@@ -550,7 +550,7 @@ async function executeExit(
   // is `buildFlattenExit`'s own per-lot snapshot, compared lot-by-lot here. A
   // lot missing from the snapshot reads as 0 (hadn't opened yet at
   // decide-time); a lot appearing after decide-time isn't visible to this
-  // loop but moves `heldSize`, so the total check above already catches it.
+  // loop but moves `heldSize`, so the total check above already catches it
   if (order.metadata.lot_held_quantities !== undefined) {
     const recordedByKey = new Map(
       order.metadata.lot_held_quantities.map((lot) => [lot.idempotency_key, lot.held]),
@@ -571,7 +571,7 @@ async function executeExit(
 
   // #793: every exit intent carries `metadata.exit_reason` via
   // `buildFlattenExit` — its absence means some other path built this order
-  // without going through it, worth refusing loudly rather than guessing.
+  // without going through it, worth refusing loudly rather than guessing
   if (order.metadata.exit_reason === undefined) {
     return result('error', idempotencyKey, now, {
       reason:
@@ -581,13 +581,13 @@ async function executeExit(
   }
 
   // #1001: best-effort snapshot, same reasoning as the bracket path but
-  // BOUNDED — the budget is carved out of the #826 flatten window.
+  // BOUNDED — the budget is carved out of the #826 flatten window
   const snapshot = await captureSubmitSnapshot(input, order, now, EXIT_SNAPSHOT_BUDGET_MS);
 
   // Write-ahead before any broker call. `writeAheadFlatten` throwing a
   // genuine store failure is NOT caught — only `UnresolvedFlattenForInstrumentError`
   // is, which means #1214's other-submitter race, refused atomically and
-  // placed here (above the cancel loop) so a refusal destroys no protective legs.
+  // placed here (above the cancel loop) so a refusal destroys no protective legs
   try {
     await store.writeAheadFlatten({
       idempotency_key: idempotencyKey,
@@ -599,10 +599,10 @@ async function executeExit(
       size: order.size,
       submitted_at: now,
       // Which lots this closes and what each holds, so `ingestFills()` can
-      // split the fill without re-deriving (migrations 0020/0021).
+      // split the fill without re-deriving (migrations 0020/0021)
       // `perLotHeld` preserves `getOpenPositions()`'s order for
       // oldest-lot-first allocation. A lot holding nothing is still named so
-      // its legs get re-armed (#525).
+      // its legs get re-armed (#525)
       lot_held_quantities: perLotHeld,
       decision_price: snapshot.decision_price,
       quote_bid: snapshot.quote_bid,
@@ -616,11 +616,11 @@ async function executeExit(
     // `deduped`, not `error`: another submitter is already closing this
     // instrument, so flat-by-close is being served by it. Instrument-scoped
     // (not lot-scoped) since `UnresolvedFlattenSubmission` carries no lot
-    // identity — narrowing further risks the #516 reversal.
+    // identity — narrowing further risks the #516 reversal
     //
     // #1214 round 2: status stays `deduped` (exhaustively switched
     // elsewhere) but gets its own warn line so an operator can tell a
-    // REFUSED exit from an ordinary "already flat" one.
+    // REFUSED exit from an ordinary "already flat" one
     safeLog(input.logger, {
       trace_id: input.trace_id,
       stage: 'execution',
@@ -651,10 +651,10 @@ async function executeExit(
     } catch (error) {
       // No `submitFlatten` was issued, so nothing exists for reconcile to
       // adopt — the row resolves to 'error' immediately. Not guaranteed: an
-      // earlier lot's cancel may have landed while its response was lost.
+      // earlier lot's cancel may have landed while its response was lost
       // Lots PROVABLY naked (cancel confirmed, flatten not sent) get #549's
       // durable marker; the failing lot itself is left unmarked since its
-      // legs may still be live (re-arming would double-protect, #516).
+      // legs may still be live (re-arming would double-protect, #516)
       const reason =
         `cancelling held lot '${lot.idempotency_key}' before the flatten failed, so the ` +
         `flatten was not sent: ${describeThrownSafely(error)}`;
@@ -670,7 +670,7 @@ async function executeExit(
   } catch (error) {
     // Genuinely ambiguous — the venue may have seen this before the response
     // was lost — so left at 'submitting' for #86's reconcile to resolve,
-    // same posture as the bracket path's `submitBracket` failure.
+    // same posture as the bracket path's `submitBracket` failure
     return result('error', idempotencyKey, now, {
       reason: describeThrownSafely(error),
     });

@@ -150,7 +150,7 @@ interface DormantDeferRecord {
    * refused to.
    */
   readonly masterSeenOpen: boolean;
-  /** Epoch ms of the last `DormantLegsUnresolvedAlert`; `0` before the first. */
+  /** Epoch ms of the last `DormantLegsUnresolvedAlert`; `0` before the first */
   readonly lastAlertedAtMs: number;
 }
 
@@ -159,7 +159,7 @@ function refusedKey(externalReference: string): string {
   return `refused:${externalReference}`;
 }
 
-/** Whether THIS observation should page — grace met, and repeat interval elapsed. */
+/** Whether THIS observation should page — grace met, and repeat interval elapsed */
 function dueForDormantDeferAlert(
   consecutive: number,
   lastAlertedAtMs: number,
@@ -275,11 +275,11 @@ export interface SaxoBrokerAdapterInput {
   state?: BrokerStateStore;
   clock?: Clock;
   activityLookbackMs?: number;
-  /** REQUIRED, no logging default: the only signal a partial entry fill leaves — see `resizeProtectiveLegs`. */
+  /** REQUIRED, no logging default: the only signal a partial entry fill leaves — see `resizeProtectiveLegs` */
   legResizeAlerts: LegResizeUnverifiedAlertChannel;
-  /** REQUIRED, no default: `escalateIfStale` pages here rather than cancelling a dormant-legs wedge on suspicion or going quiet. */
+  /** REQUIRED, no default: `escalateIfStale` pages here rather than cancelling a dormant-legs wedge on suspicion or going quiet */
   dormantLegsAlerts: DormantLegsUnresolvedAlertChannel;
-  /** REQUIRED, no default: a priced fill whose Uic resolves to no pool line both throws and pages — see `refuseUnresolvedPriceUnit`. */
+  /** REQUIRED, no default: a priced fill whose Uic resolves to no pool line both throws and pages — see `refuseUnresolvedPriceUnit` */
   priceUnitAlerts: UnresolvedPriceUnitAlertChannel;
   logger: Logger;
 }
@@ -380,7 +380,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
       AssetType: ref.asset_type,
       Uic: ref.uic,
       // GTC, not the entry's duration: a Day leg would buy nothing except a
-      // naked position if flat-by-close ever misses.
+      // naked position if flat-by-close ever misses
       OrderDuration: { DurationType: 'GoodTillCancel' as const },
       ManualOrder: false as const,
       ExternalReference: legReference(wireReference, suffix),
@@ -499,7 +499,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
    * Thrown OUTSIDE `this.call`, and that is load-bearing: the refusal is a
    * settled property of the venue, not an attempt that failed, and
    * `sanitizeBrokerError` would erase the discriminant the sweep reads to
-   * tell those two apart — see `ProtectiveRearmUnsupportedError`'s invariant.
+   * tell those two apart — see `ProtectiveRearmUnsupportedError`'s invariant
    */
   async rearmProtectiveLegs(
     clientOrderId: string,
@@ -698,11 +698,11 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
       if (adopted !== null && !isDormantLegs(adopted)) return adopt(adopted, externalReference);
       // A dormant-legs signal here is not acted on — cancelling on `Status`
       // alone is the UNVERIFIED read `lookup` exists to avoid. Left for the
-      // next `reconcile()` pass to settle against the audit trail.
+      // next `reconcile()` pass to settle against the audit trail
       if (adopted !== null) throw cause;
       // The open list forgets an order the instant it stops being open, on a
       // fill too — the audit trail still carries it, so it's adopted in its
-      // own state rather than reported as a failed flatten.
+      // own state rather than reported as a failed flatten
       const latest = await this.latestActivityFor(externalReference, PLACEMENT_LOOKBACK_MS);
       if (latest === undefined) throw cause;
       return adopt(fromActivity(latest, externalReference), externalReference);
@@ -819,7 +819,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     // means it ACTIVATED on the entry's fill (VERIFIED), treated as filled
     // below — but a master's legs activating the same way on EXPIRY rather
     // than a fill is UNVERIFIED, so `lookup` corroborates this reading
-    // against the master's audit trail too (see `corroborateActivatedLegs`).
+    // against the master's audit trail too (see `corroborateActivatedLegs`)
     const legs = legRows(open, externalReference);
     const [first] = legs;
     if (first === undefined) return null;
@@ -984,7 +984,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
       // `kind: 'legs'` is `findOpen`'s activated-legs-no-master branch — the
       // read `corroborateActivatedLegs` exists to check. Cancelling off
       // `open.legs` rather than the role-deduped `orderIdList(open.ids)`
-      // matches `clearLegs` and doesn't drop a duplicate row.
+      // matches `clearLegs` and doesn't drop a duplicate row
       if (open.kind === 'legs') {
         const verdict = await this.corroborateActivatedLegs(externalReference, lookbackMs);
         if (verdict.kind === 'expired') {
@@ -1106,7 +1106,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     );
     if (fillRows.length > 0) {
       // Summed, not read off one row — a partial fill split across several
-      // activity rows would under-report at any single row's own amount.
+      // activity rows would under-report at any single row's own amount
       return {
         kind: 'confirmed',
         filledQty: fillRows.reduce((sum, row) => sum + (row.FillAmount ?? 0), 0),
@@ -1126,7 +1126,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
    * `externalReference` here is the actual wire value observed on an
    * activity row — the one place this adapter goes reference-to-order,
    * so the one place that reads `wireReferences` rather than deriving
-   * forward with `saxoExternalReference`.
+   * forward with `saxoExternalReference`
    */
   private attribute(
     externalReference: string | undefined,
@@ -1416,8 +1416,8 @@ function assertExternalReferenceFits(
 function activityState(activity: SaxoOrderActivity): NormalizedOrder['order_state'] {
   if (activity.SubStatus === 'Rejected' || activity.Status === 'Rejected') return 'rejected';
   switch (activity.Status) {
-    // MEASURED: the venue writes `FinalFill` on a full fill, never `Filled`.
-    // `Filled` stays handled too since nothing measures its absence elsewhere.
+    // MEASURED: the venue writes `FinalFill` on a full fill, never `Filled`
+    // `Filled` stays handled too since nothing measures its absence elsewhere
     case 'FinalFill':
     case 'Filled':
       return 'filled';

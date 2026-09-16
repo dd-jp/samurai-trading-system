@@ -22,7 +22,7 @@ import { screeningInstrumentFor } from '../../providers/universe-pool/index.js';
 import type { AnalystView, Direction } from '../debate-engine/index.js';
 import type { Analyst, AnalystInput, AnalystTelemetry, AssetClass } from './types.js';
 
-/** 5m, not 1h: at period 14 a 1h SMA/RSI is a 2.3-session lookback on a flat-by-close position (ADR-0014). */
+/** 5m, not 1h: at period 14 a 1h SMA/RSI is a 2.3-session lookback on a flat-by-close position (ADR-0014) */
 const INDICATOR_TIMEFRAME = '5m';
 /** 1h read retained as context only — never feeds direction/confidence */
 const CONTEXT_TIMEFRAME = '1h';
@@ -68,14 +68,14 @@ const RSI_FLOOR_SPEC: IndicatorSpec = {
 /**
  * RSI(14) over a CONVERGED warm-up (57 bars), not the arity floor of 15: at the floor, Wilder
  * smoothing ran zero times and the simple-mean seed measured a median 4.6-point RSI shift and
- * flipped the overbought/oversold classification on 18% of bars.
+ * flipped the overbought/oversold classification on 18% of bars
  */
 export const RSI_SPEC: IndicatorSpec = {
   ...RSI_FLOOR_SPEC,
   lookback: recommendedWarmupFor(RSI_FLOOR_SPEC),
 };
 
-/** Puts a spec on its CONVERGED warm-up rather than its arity floor, applied once instead of restated per spec. */
+/** Puts a spec on its CONVERGED warm-up rather than its arity floor, applied once instead of restated per spec */
 function onRecommendedWarmup(spec: IndicatorSpec): IndicatorSpec {
   return { ...spec, lookback: recommendedWarmupFor(spec) };
 }
@@ -100,17 +100,17 @@ const MACD_SIGNAL = 9;
 /**
  * MACD histogram — ENRICHMENT, and the widest spec in the file: converged
  * warm-up is 112 bars (~9 hours, more than one session), which is exactly why
- * it cannot be core — a fresh instrument would trade nothing for a session and a half.
+ * it cannot be core — a fresh instrument would trade nothing for a session and a half
  */
 export const MACD_SPEC: IndicatorSpec = onRecommendedWarmup({
   indicator: 'macd_histogram',
   params: { fast: MACD_FAST, slow: MACD_SLOW, signal: MACD_SIGNAL },
   timeframe: INDICATOR_TIMEFRAME,
-  // Placeholder: `macd_histogram`'s arity/warm-up are functions of fast/slow/signal alone; `onRecommendedWarmup` replaces this before any consumer sees it.
+  // Placeholder: `macd_histogram`'s arity/warm-up are functions of fast/slow/signal alone; `onRecommendedWarmup` replaces this before any consumer sees it
   lookback: MACD_SLOW,
 });
 
-/** ADX(14) — ENRICHMENT, feeds the CONFIDENCE CAP rather than a vote: it answers "is there a trend to have an opinion about", not "which way". */
+/** ADX(14) — ENRICHMENT, feeds the CONFIDENCE CAP rather than a vote: it answers "is there a trend to have an opinion about", not "which way" */
 export const ADX_SPEC: IndicatorSpec = onRecommendedWarmup({
   indicator: 'adx',
   params: { period: INDICATOR_LOOKBACK },
@@ -140,7 +140,7 @@ export const SQUEEZE_SPEC: IndicatorSpec = onRecommendedWarmup({
   indicator: 'bb_kc_squeeze',
   params: { bb_period: BB_PERIOD, bb_mult: BB_MULT, kc_period: KC_PERIOD, kc_mult: KC_MULT },
   timeframe: INDICATOR_TIMEFRAME,
-  // Placeholder, replaced below — same reason as `MACD_SPEC`'s.
+  // Placeholder, replaced below — same reason as `MACD_SPEC`'s
   lookback: BB_PERIOD,
 });
 
@@ -156,13 +156,13 @@ export const RSI_OVERSOLD = 30;
  */
 const ADX_TREND_FLOOR = 20;
 
-/** `bb_kc_squeeze` below 1 means the Bollinger band narrowed inside the Keltner channel — a coil where a breakout can go either way, so it caps rather than votes. */
+/** `bb_kc_squeeze` below 1 means the Bollinger band narrowed inside the Keltner channel — a coil where a breakout can go either way, so it caps rather than votes */
 const SQUEEZE_ON_BELOW = 1;
 
-/** A DAMPER, not a veto: a gated tape can still clear the conviction floor if the mediator independently agrees. */
+/** A DAMPER, not a veto: a gated tape can still clear the conviction floor if the mediator independently agrees */
 export const LOW_CONVICTION_CAP = 0.4;
 
-/** Matched to `DONCHIAN_PERIOD` so the two intraday-range axes describe the same stretch of tape. */
+/** Matched to `DONCHIAN_PERIOD` so the two intraday-range axes describe the same stretch of tape */
 export const PARTICIPATION_LOOKBACK = 20;
 
 /**
@@ -179,7 +179,7 @@ const STRUCTURE_LOWER = 0.3;
 /** The five axes. `volatility` is the GATE — it never votes; see `VOTING_AXES`. */
 export type TechnicalAxis = 'trend' | 'momentum' | 'volatility' | 'participation' | 'structure';
 
-/** `volatility` is deliberately absent: if it also voted, ADX/squeeze would move confidence twice — once through the numerator, again through the cap. */
+/** `volatility` is deliberately absent: if it also voted, ADX/squeeze would move confidence twice — once through the numerator, again through the cap */
 export const VOTING_AXES: readonly TechnicalAxis[] = [
   'trend',
   'momentum',
@@ -187,7 +187,7 @@ export const VOTING_AXES: readonly TechnicalAxis[] = [
   'structure',
 ];
 
-/** EQUAL and UNFITTED: a weight chosen by outcome is a fitted parameter, forbidden by ADR-0018 D4's selection-budget cap. */
+/** EQUAL and UNFITTED: a weight chosen by outcome is a fitted parameter, forbidden by ADR-0018 D4's selection-budget cap */
 export const AXIS_WEIGHTS: Readonly<Record<TechnicalAxis, number>> = {
   trend: 1,
   momentum: 1,
@@ -478,7 +478,7 @@ function capReasonsFor(enrichment: EnrichmentReads): string[] {
 }
 
 function confidenceFor(net: number, availableAxes: number, capReasons: string[]): number {
-  // `availableAxes` is never 0 (trend/momentum are core) but guarded anyway — a NaN confidence would reach a live sizing multiplier.
+  // `availableAxes` is never 0 (trend/momentum are core) but guarded anyway — a NaN confidence would reach a live sizing multiplier
   const raw = availableAxes === 0 ? 0 : Math.abs(net) / availableAxes;
   return round4(capReasons.length > 0 ? Math.min(raw, LOW_CONVICTION_CAP) : raw);
 }
@@ -584,7 +584,7 @@ export const technicalAnalyst: Analyst = {
       lookback: CONTEXT_CANDLE_LOOKBACK,
     };
 
-    // Awaited before the reads below: the shared 5m warm-up fetch every spec's own getIndicator call is then served from.
+    // Awaited before the reads below: the shared 5m warm-up fetch every spec's own getIndicator call is then served from
     const technicalBars = await input.market_data.getBars(signal.asset, technicalWindow, asOf);
 
     const lastCandle = technicalBars.at(-1);
@@ -630,7 +630,7 @@ export const technicalAnalyst: Analyst = {
       return undefined;
     };
 
-    // Order matters only for the rendered line order, which follows the axis order the summary reports.
+    // Order matters only for the rendered line order, which follows the axis order the summary reports
     const macd = readValue(macdRead, 'momentum', 'macd_histogram');
     const participationBars = technicalBars.slice(-PARTICIPATION_LOOKBACK);
     let participation: number | null | undefined;
@@ -657,8 +657,8 @@ export const technicalAnalyst: Analyst = {
       { macd, adx, squeeze, donchian, participation },
     );
 
-    // Session-anchored VWAP, informational only: no vote, no cap, no change to `assessAxes`'s arithmetic.
-    // Reuses `technicalBars` rather than issuing its own fetch; a calendar that cannot answer is as fatal as a misordered bar feed.
+    // Session-anchored VWAP, informational only: no vote, no cap, no change to `assessAxes`'s arithmetic
+    // Reuses `technicalBars` rather than issuing its own fetch; a calendar that cannot answer is as fatal as a misordered bar feed
     const session = computeSessionVwap(technicalBars, input.calendar, asOf);
     const sessionLine =
       session.vwap === null
@@ -667,7 +667,7 @@ export const technicalAnalyst: Analyst = {
           `${(session.distance_from_vwap as number) >= 0 ? '+' : ''}${session.distance_from_vwap} from it`;
 
     // RVOL, informational only — see `rvolLine`'s doc comment. A SEPARATE, WIDER window than `technicalBars` (see `RVOL_5M_LOOKBACK`),
-    // awaited on its own since a concurrent fetch for the same instrument+timeframe would race on the store write.
+    // awaited on its own since a concurrent fetch for the same instrument+timeframe would race on the store write
     const rvolBars = await input.market_data.getBars(
       signal.asset,
       { timeframe: INDICATOR_TIMEFRAME, lookback: RVOL_5M_LOOKBACK },
@@ -676,7 +676,7 @@ export const technicalAnalyst: Analyst = {
     const rvol = computeRvol(rvolBars, input.calendar, asOf);
     const rvolText = rvolLine(signal.asset, rvol, screeningInstrumentFor(signal.asset));
 
-    // No fallback numeric on purpose: reporting "avg volume 0" for an empty read would be a fabricated claim, not an approximation.
+    // No fallback numeric on purpose: reporting "avg volume 0" for an empty read would be a fabricated claim, not an approximation
     const contextLine =
       candles.length === 0
         ? `Context (${CONTEXT_TIMEFRAME}): unavailable`

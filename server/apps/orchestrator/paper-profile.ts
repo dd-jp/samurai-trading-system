@@ -327,7 +327,7 @@ export function d5EnvelopeFor(
   /**
    * The declared book this envelope's fractions resolve against, in GBP —
    * `LIVE_BOOK_GBP` for live, `undefined` for paper/backtest/tests, meaning
-   * "no ceiling": the fraction resolves against raw `portfolio.equity`.
+   * "no ceiling": the fraction resolves against raw `portfolio.equity`
    */
   bookCeilingGbp?: number,
 ): SubclassDeploymentCap | undefined {
@@ -569,7 +569,7 @@ const MAX_CONCURRENT_INSTRUMENTS = 6;
 export function buildStartingProfileConfigs(
   /**
    * The universe this profile's gates are keyed to AND the list the run
-   * ticks — one argument, so they cannot become two lists (#739).
+   * ticks — one argument, so they cannot become two lists (#739)
    */
   universe: readonly UniverseInstrument[] = DEFAULT_UNIVERSE,
   /**
@@ -595,7 +595,7 @@ export function buildStartingProfileConfigs(
   // with a fallback, but this profile must leave nothing to a fallback nobody
   // chose. `stocksTradingWindow` falls back to `?? true` (whole LSE session,
   // scheduler.ts:74) if dropped; `maxConcurrentInstruments` falls back to `?? 1`
-  // (serial walk, production.ts:2701) — both silent regressions, not documented defaults.
+  // (serial walk, production.ts:2701) — both silent regressions, not documented defaults
   Required<
     Pick<
       ProductionConfig,
@@ -651,7 +651,7 @@ export function buildStartingProfileConfigs(
       // DERIVED — equal to the crypto asset-class cap: a correlated cluster
       // should not exceed what a single asset class may hold (spec step 6)
       cap_fraction_of_equity: RISK_CAP_EQUITY_FRACTIONS.concentration_cap_fraction_of_equity,
-      // UNSOURCED — 0.7 is the conventional |r| boundary for "strongly correlated".
+      // UNSOURCED — 0.7 is the conventional |r| boundary for "strongly correlated"
       // No longer inert (#381): DEFAULT_UNIVERSE gives it a second held instrument to compare against
       threshold: 0.7,
     },
@@ -707,7 +707,7 @@ export function buildStartingProfileConfigs(
     automation_level: { crypto: 'auto', stocks: 'auto' },
     // UNSOURCED (ms) — the gate reads OrderIntent.decided_at (#1190), a wall-clock
     // timestamp read at intent-build time, not the bar-floored decision_timestamp — so
-    // bar position no longer affects measured signal age (fixed a #616/#687 staleness bug).
+    // bar position no longer affects measured signal age (fixed a #616/#687 staleness bug)
     // 5 min crypto / 15 min stocks: crypto re-prices 24/7, equities move in session
     // structure and are caught by the market_closed gate first when stale overnight
     max_signal_age: { crypto: 5 * 60_000, stocks: 15 * 60_000 },
@@ -862,7 +862,7 @@ export function buildStartingProfileConfigs(
 
   return {
     // DECIDED (David, 2026-08-06) — the 14-day soak may spend $50 total on LLM calls
-    // (ADR-0008), enforced by SqliteSpendCap over cumulative llm_spend; does not refill.
+    // (ADR-0008), enforced by SqliteSpendCap over cumulative llm_spend; does not refill
     // A hard ceiling behind the cadence choice below, not instead of it — covers what
     // cadence cannot (a retry storm, extra debate rounds, a provider price change)
     llmBudgetUsd: 50,
@@ -892,7 +892,7 @@ export function buildStartingProfileConfigs(
      */
     maxConcurrentInstruments: MAX_CONCURRENT_INSTRUMENTS,
     // SPEC — equities enter only inside the LSE/US overlap (#706): 14:30-15:45
-    // London, the first 75 min of the US session (matching R2's entry-offset grid).
+    // London, the first 75 min of the US session (matching R2's entry-offset grid)
     // UK/US DST transitions disagree ~3 weeks/year, sliding this an hour later
     // against the US tape (trading-window.test.ts pins it, not corrected — see ADR
     // note if it matters). Cuts entries per session (~7 to 2) but not exits, which
@@ -1036,7 +1036,7 @@ export function paperStartingProfile(
     // never bounds paper sizing to LIVE_BOOK_GBP, ~100x over. Stated in the
     // account's own currency (#1180): USD for the Alpaca account (LIVE_BOOK_SIZING_USD,
     // converted, with the rate carried alongside in capitalCeilingUsdPerGbp so
-    // the two can't be read apart) or GBP raw for a GBP-native account (#1400).
+    // the two can't be read apart) or GBP raw for a GBP-native account (#1400)
     // Scoped to paper only — backtest reads portfolio.equity unclamped by design
     ...(mode === 'paper'
       ? bookCurrency === 'GBP'
@@ -1050,8 +1050,8 @@ export function paperStartingProfile(
     // keeps `configs.traderConfig` verbatim, same scoping rationale as
     // DERIVED (#1112/#1137) — stocks risk multiplier retuned to 1.9x for the
     // generic ATR sizing path (DEFAULT_UNIVERSE has no D5 subclass entries),
-    // targeting D5's 25%/$250 single-stock reference at one measured tick.
-    // Paper only — this key does not exist on liveStartingProfile's return.
+    // targeting D5's 25%/$250 single-stock reference at one measured tick
+    // Paper only — this key does not exist on liveStartingProfile's return
     // CAVEAT (#1136 measured, still open): this path has NO code-enforced
     // deployment ceiling — at full conviction and the tightest ATR-floor
     // stop, deployment can reach ~712% of equity at 1.9x. 1.9x bounds only

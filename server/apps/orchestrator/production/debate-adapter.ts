@@ -79,7 +79,7 @@ import {
 } from './llm-failure-rate-guard.js';
 import { RateLimitedLlmClient } from './rate-limited-llm-client.js';
 
-/** `buildDebateStep`'s #1396 dependency bundle; omitted, `checkLlmFailureRate` is skipped entirely. */
+/** `buildDebateStep`'s #1396 dependency bundle; omitted, `checkLlmFailureRate` is skipped entirely */
 export interface LlmFailureRateGuardDeps {
   windowSource: LlmFailureRateWindowSource;
   monitor: LlmFailureRateMonitor;
@@ -95,7 +95,7 @@ export interface GateRefusalRateGuardDeps {
   windowSource: GateRefusalWindowSource;
   monitor: GateRefusalRateMonitor;
   alertChannel: GateRefusalRateAlertChannel | undefined;
-  /** Required, unlike the rest of this bundle: supplying it means refusals should be counted. */
+  /** Required, unlike the rest of this bundle: supplying it means refusals should be counted */
   gateRefusalSink: LlmGateRefusalSink;
 }
 
@@ -125,12 +125,12 @@ function checkGateRefusalRateIfConfigured(
  * pass the result straight to `runDebate`.
  */
 export interface DebatePersonasWithState extends DebatePersonas {
-  /** Last completed round's synthesis, or `undefined` if the budget fired before any round finished. */
+  /** Last completed round's synthesis, or `undefined` if the budget fired before any round finished */
   getCurrentState: () => PartialDebateState | undefined;
   /**
    * The round cap these personas were built for, echoed back so the caller
    * passes the same value to `runDebate` (#581) — reading it off this object
-   * instead of a second argument keeps the two caps from drifting.
+   * instead of a second argument keeps the two caps from drifting
    */
   maxRounds: number;
 }
@@ -145,15 +145,15 @@ export function buildDebatePersonas(
   llmClient: LlmClient,
   trace_id: string,
   clock: Clock,
-  /** Debate every LLM call is billed to (#326); optional so existing tests without one meter as unattributed. */
+  /** Debate every LLM call is billed to (#326); optional so existing tests without one meter as unattributed */
   debate_id?: string,
   /**
    * The round cap this debate runs under (#581), echoed back on
    * `DebatePersonasWithState.maxRounds` so the caller reads it from there
-   * rather than repeating the value.
+   * rather than repeating the value
    */
   maxRounds: number = MAX_ROUNDS,
-  /** Reaches only `detectDisagreements` (#1394), which previously swallowed failures silently. */
+  /** Reaches only `detectDisagreements` (#1394), which previously swallowed failures silently */
   logger?: Logger,
 ): DebatePersonasWithState {
   let lastBull: PersonaResponse | undefined;
@@ -230,12 +230,12 @@ export function buildDebatePersonas(
 
       // response.stance passed as a participant so the debate can move
       // conviction at all (#625 defect 2) — without it, conviction was a pure
-      // function of the analyst views regardless of debate outcome.
+      // function of the analyst views regardless of debate outcome
       const confidence = computeConvictionScore(context.views, accumulatedStances, response.stance);
       roundVerdicts.push({ round: context.round, direction: response.stance, confidence });
 
       // Only recorded once debate_id exists, so a persona set built without
-      // one reports no state rather than an id that won't match debate_log.
+      // one reports no state rather than an id that won't match debate_log
       if (debate_id !== undefined) {
         currentState = {
           synthesis: response.rationale,
@@ -245,7 +245,7 @@ export function buildDebatePersonas(
           disagreement_summary: disagreement.summary,
           // A non-converged result must carry non-empty open_items so
           // Trader/Risk apply caution; the disagreement summary is empty on
-          // every non-final round, so it can't be the fallback here.
+          // every non-final round, so it can't be the fallback here
           open_items:
             disagreement.conflicts.length > 0
               ? disagreement.conflicts.map((conflict) => conflict.nature)
@@ -253,7 +253,7 @@ export function buildDebatePersonas(
           rounds_completed: context.round,
           direction: response.stance,
           // Snapshot, not the live array — an old `currentState` must not
-          // see rounds `roundVerdicts` grows to later.
+          // see rounds `roundVerdicts` grows to later
           round_verdicts: [...roundVerdicts],
           debate_id,
         };
@@ -265,7 +265,7 @@ export function buildDebatePersonas(
         synthesis: {
           synthesis: response.rationale,
           // The one genuine invention in this adapter; not load-bearing —
-          // Trader reads only direction/confidence.
+          // Trader reads only direction/confidence
           position: `${response.stance}: ${response.rationale}`,
           confidence,
           direction: response.stance,
@@ -330,14 +330,14 @@ export function persistDebateLog(params: {
 
     // Handed back so the caller converges on the stored row rather than
     // returning its own discarded sample — else Feedback Loop attributes the
-    // trade to the winner's row while sizing was done on the loser's.
+    // trade to the winner's row while sizing was done on the loser's
     return winner;
   }
 
   const written_at = clock.now();
   // One transaction: the FK on debate_round_log always resolves since
   // debate_log commits first inside it, and a throw from either write leaves
-  // neither row.
+  // neither row
   store.writeLogWithRounds(
     buildDebateLog(result, instrument, written_at, trace_id),
     buildDebateRoundLogRows(result, written_at),
@@ -357,7 +357,7 @@ export const WORST_CASE_LLM_CALLS_PER_DEBATE = llmCallsPerDebate(MAX_ROUNDS);
 /**
  * Same worst case at the asset class's round cap (#581) — crypto is capped
  * at one round, so reserving the global worst case would starve later
- * debates of admission for calls that cannot happen.
+ * debates of admission for calls that cannot happen
  */
 export function worstCaseLlmCallsForAssetClass(assetClass: AssetClass): number {
   return llmCallsPerDebate(MAX_ROUNDS_BY_ASSET_CLASS[assetClass]);
@@ -384,7 +384,7 @@ function rateLimitedDebateResult(debate_id: string, bar: Date, reason: string): 
     latency_ms: 0,
     direction: 'neutral',
     debate_id,
-    // The bar this tick belongs to, even though no debate ran (#687).
+    // The bar this tick belongs to, even though no debate ran (#687)
     bar_timestamp: bar,
     read: true,
     rate_limited: { reason },
@@ -440,7 +440,7 @@ function replayedDebateResult(persisted: ReplayableDebateLog): DebateResult {
     direction: persisted.direction,
     debate_id: persisted.debate_id,
     bar_timestamp: persisted.bar_timestamp,
-    // Hardcoded: `debate_log` has no `read` column to read back (#1418).
+    // Hardcoded: `debate_log` has no `read` column to read back (#1418)
     read: true,
   };
 }
@@ -477,12 +477,12 @@ function isReplayable(persisted: DebateLog | undefined): persisted is Replayable
 
 export function buildDebateStep(
   llmClient: LlmClient,
-  /** Required, not optional: #364 was a store that existed and had no caller. */
+  /** Required, not optional: #364 was a store that existed and had no caller */
   debateLog: DebateLogStore,
   /**
    * Required and positional third so an omission is a compile error, not a
    * silently unpaced run: #388 found `RateLimiter` implemented and exported
-   * but constructed nowhere in production.
+   * but constructed nowhere in production
    */
   rateLimiter: RateLimiter,
   /** The hard dollar ceiling (ADR-0008). `UNCAPPED_SPEND` states "no ceiling" explicitly at the call site. */
@@ -492,7 +492,7 @@ export function buildDebateStep(
   analystWeights?: AnalystWeightSource,
   /** #1396 llm-failure-rate bundle. Optional so existing callers keep compiling unchanged. */
   llmFailureRateGuard?: LlmFailureRateGuardDeps,
-  /** #1533 gate-refusal-rate bundle — a separate signal from `llmFailureRateGuard`. */
+  /** #1533 gate-refusal-rate bundle — a separate signal from `llmFailureRateGuard` */
   gateRefusalRateGuard?: GateRefusalRateGuardDeps,
 ): TickSteps['debate'] {
   /**
@@ -511,11 +511,11 @@ export function buildDebateStep(
     // Computed ahead of the debate (#326): personas attribute spend rows
     // while the debate is still running, and a throw partway still billed
     // for the calls it made. Uses the gate's own bar, not a fresh floor
-    // (#743/#687) — see `floorToBar` for the hour grid.
+    // (#743/#687) — see `floorToBar` for the hour grid
     const debate_id = computeDebateId(instrument, bar, views);
 
     // Checked before the content gate below since it is immune to the
-    // within-bar view drift #742 introduced (5m technical reads).
+    // within-bar view drift #742 introduced (5m technical reads)
     function replayFromSameBarMemo(): DebateResult | undefined {
       const resolved = resolvedBarByInstrument.get(instrument);
       if (resolved !== undefined && resolved.barMs === bar.getTime()) {
@@ -544,11 +544,11 @@ export function buildDebateStep(
 
     // SAME-BAR SHORT-CIRCUIT (#617): debates are keyed to 1h bars, and this
     // covers the crash-retry/restart-within-a-bar case (the tick/decision
-    // split, #743, already runs this step at most once per bar otherwise).
+    // split, #743, already runs this step at most once per bar otherwise)
     // Returning the persisted debate keeps the Trader's input stable within a
     // bar rather than re-running an identical question and risking a
     // confidence drift that opens an extra lot on the same bar. A row from
-    // before migration 0026 has no replay fields and falls through to re-run.
+    // before migration 0026 has no replay fields and falls through to re-run
     function replayFromDebateLog(): DebateResult | undefined {
       const persisted = debateLog.getByDebateId(debate_id);
       if (isReplayable(persisted)) {
@@ -578,7 +578,7 @@ export function buildDebateStep(
     // debate needs. This check is a pure read with no reservation, so
     // concurrent instruments can all pass it before any spend is recorded —
     // an accepted, financially trivial overshoot (#1013 fix-up M2, ~$0.024
-    // worst case at today's concurrency).
+    // worst case at today's concurrency)
     function checkSpendCap(): DebateResult | undefined {
       const spend = spendCap.check();
       if (!spend.admitted) {
@@ -639,7 +639,7 @@ export function buildDebateStep(
     }
 
     // Round cap per asset class (#581): crypto runs one round to fit its
-    // latency budget; stocks keep the 3-round hybrid termination.
+    // latency budget; stocks keep the 3-round hybrid termination
     const personas = buildDebatePersonas(
       new RateLimitedLlmClient(llmClient, rateLimiter, asset_class),
       trace_id,
@@ -654,7 +654,7 @@ export function buildDebateStep(
     // took, uncapped over a 14-day soak. Per asset class (crypto 30s, stocks
     // 60s — crypto moved 15s -> 30s alongside the 1-round cap, #581). A
     // timed-out debate still resolves (partial synthesis or low-confidence
-    // fallback) and flows into `persistDebateLog` like any other.
+    // fallback) and flows into `persistDebateLog` like any other
     let result: DebateResult;
     try {
       result = await enforceLatencyBudget({
@@ -680,7 +680,7 @@ export function buildDebateStep(
 
     // Gate refused this debate a permit (#1080) — degrade, not fault. Skips
     // `resolvedBarByInstrument.set` below, same as the rate-limiter refusal,
-    // so a later pass may still run a real debate.
+    // so a later pass may still run a real debate
     function handleDebateFailure(cause: unknown): DebateResult | undefined {
       if (cause instanceof LlmAdmissionRefusedError) {
         logger?.log({
@@ -706,7 +706,7 @@ export function buildDebateStep(
         });
         // No `debate_log` row for this debate, so this is the only place a
         // refusal is counted (#1533). Own try/catch: a bad write here must
-        // not turn a degrade-not-fault refusal into an unhandled failure.
+        // not turn a degrade-not-fault refusal into an unhandled failure
         if (gateRefusalRateGuard !== undefined) {
           try {
             gateRefusalRateGuard.gateRefusalSink.recordGateRefusal(clock.now());
@@ -732,7 +732,7 @@ export function buildDebateStep(
 
     // Applied after `runDebate` so `debate_id` keeps meaning "identity of the
     // debate's inputs" (#435/#377); the weighted result is what gets logged,
-    // so replay restores the conviction the Trader actually sized on.
+    // so replay restores the conviction the Trader actually sized on
     const weighted =
       analystWeights === undefined
         ? result
@@ -748,11 +748,11 @@ export function buildDebateStep(
     });
 
     // Recorded after the write so a debate that threw never marks its bar
-    // resolved, leaving the crash-retry path open (#743).
+    // resolved, leaving the crash-retry path open (#743)
     resolvedBarByInstrument.set(instrument, { barMs: bar.getTime(), debate_id });
 
     // Fire-and-forget: `checkLlmFailureRate` never throws; `void` keeps its
-    // alert POST off this tick's critical path (#1396).
+    // alert POST off this tick's critical path (#1396)
     if (llmFailureRateGuard !== undefined) {
       void checkLlmFailureRate(
         {
@@ -766,12 +766,12 @@ export function buildDebateStep(
     }
 
     // Also called on the success path so the ratio can fall — a window read
-    // only on refusal could never observe refusals ageing out (#1533).
+    // only on refusal could never observe refusals ageing out (#1533)
     checkGateRefusalRateIfConfigured(gateRefusalRateGuard, logger, clock.now());
 
     // Lost the write race: return the winner's row so the Trader sizes on
     // the same bytes Feedback Loop will later attribute. Falls back to the
-    // fresh result if the raced row isn't fully replayable.
+    // fresh result if the raced row isn't fully replayable
     if (isReplayable(raced)) {
       return replayedDebateResult(raced);
     }

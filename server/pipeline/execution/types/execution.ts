@@ -29,13 +29,13 @@ import type {
 
 /**
  * Deliberately omits the spec's cadence/retry/throttle knobs: the Simulated
- * adapter raises no transient errors, so `execute()` has nothing to back off from.
+ * adapter raises no transient errors, so `execute()` has nothing to back off from
  */
 export interface ExecutionConfig {
   simulated: SimulatedAdapterConfig;
 }
 
-/** Config, not hardcoded constants — exact values are tuned in paper trading. */
+/** Config, not hardcoded constants — exact values are tuned in paper trading */
 export interface SimulatedAdapterConfig {
   /** Indicator read for `MarketState.volatility` (e.g. ATR at the bar). */
   volatility_indicator: IndicatorSpec;
@@ -64,7 +64,7 @@ export interface ExecutionInput {
   store: SharedStore;
   /**
    * Read only by `execute()`'s submit-time snapshot (#1001) to price the same way
-   * the Simulated adapter prices a fill; the adapter itself holds its own handles, not this.
+   * the Simulated adapter prices a fill; the adapter itself holds its own handles, not this
    */
   costModel: CostModel;
   /** Same single reader as `costModel`: the quote and `MarketState` inputs of the submit snapshot */
@@ -157,7 +157,7 @@ export type ResidualReflattenInput = Pick<
 
 /**
  * `ingestFills()`'s fill poll and everything `maybeRearmResidual` re-arms through,
- * including `reflattenResidual` when a venue can't re-arm at all.
+ * including `reflattenResidual` when a venue can't re-arm at all
  */
 export type FillIngestInput = Pick<
   ExecutionInput,
@@ -177,7 +177,7 @@ export type FillIngestInput = Pick<
 
 /**
  * `reconcile()`'s startup/periodic settle, which also runs both sweeps below
- * inside its pass — this is the union of their inputs plus its own `flattenReconcileAlerts`.
+ * inside its pass — this is the union of their inputs plus its own `flattenReconcileAlerts`
  */
 export type ReconcileInput = Pick<
   ExecutionInput,
@@ -201,7 +201,7 @@ export type ReconcileInput = Pick<
 
 /**
  * `sweepResidualProtection()`'s #549 re-arm retry, plus #1214's re-flatten when
- * the venue can't re-arm at all.
+ * the venue can't re-arm at all
  */
 export type ResidualSweepInput = Pick<
   ExecutionInput,
@@ -211,7 +211,7 @@ export type ResidualSweepInput = Pick<
     store: FillReader & ResidualMarkers;
   };
 
-/** `sweepWedgedZeroFillLots()`: no `broker` here is the type-level form of "no venue call, ever". */
+/** `sweepWedgedZeroFillLots()`: no `broker` here is the type-level form of "no venue call, ever" */
 export type WedgedSweepInput = Pick<ExecutionInput, 'trace_id' | 'clock' | 'logger'> & {
   store: PositionReader & LotRetirement;
 };
@@ -236,7 +236,7 @@ export interface ExecutionResult {
  * Widened rather than forked into a sibling type to also carry a
  * `flatten_submissions` row's divergence (#519) — the fields already fit
  * (a flatten's `status` maps onto `OrderState` cleanly), so a second type
- * would add nothing.
+ * would add nothing
  */
 
 /**
@@ -307,7 +307,7 @@ export interface ResidualProtectionSweepResult {
 export interface ReconcileReport {
   /**
    * Includes unresolved `flatten_submissions` rows alongside in-flight lots (#519) —
-   * otherwise a startup log could read "checked 0" while divergences landed uncounted.
+   * otherwise a startup log could read "checked 0" while divergences landed uncounted
    */
   checked: number;
   /** Lots and flatten rows whose store record reconcile wrote to */

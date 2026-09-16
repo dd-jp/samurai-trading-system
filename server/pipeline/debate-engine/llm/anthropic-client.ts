@@ -1,4 +1,4 @@
-/** Concrete `LlmClient` (#31): the wire client is injected, mirroring `AlpacaBrokerClient`/`CcxtBrokerClient` — connection provisioning is an ops concern, not this file's. */
+/** Concrete `LlmClient` (#31): the wire client is injected, mirroring `AlpacaBrokerClient`/`CcxtBrokerClient` — connection provisioning is an ops concern, not this file's */
 
 import { type RetryAttemptReport, withRetry } from '../../../shared/index.js';
 import type { AnthropicUsage } from '../../../shared/llm/index.js';
@@ -50,27 +50,27 @@ export interface AnthropicMessageResponse {
   usage?: AnthropicUsage;
   /**
    * Set to `'refusal'` when the provider declined (#1391) — read here so a refusal doesn't fall through
-   * to `parseResponse` as empty text and become a retryable `LlmMalformedResponseError`.
+   * to `parseResponse` as empty text and become a retryable `LlmMalformedResponseError`
    */
   stop_reason?: string;
-  /** Model that actually served the request (may differ from `config.model` via server-side fallback) — preferred for pricing so the meter bills what ran. */
+  /** Model that actually served the request (may differ from `config.model` via server-side fallback) — preferred for pricing so the meter bills what ran */
   model?: string;
-  /** Time-to-first-byte (#1012), optional for the same structural-interface reason as `usage`. */
+  /** Time-to-first-byte (#1012), optional for the same structural-interface reason as `usage` */
   ttfb_ms?: number;
 }
 
-/** Per-call transport options (#347), separate from the wire body `AnthropicMessageRequest` — a signal isn't serialized. */
+/** Per-call transport options (#347), separate from the wire body `AnthropicMessageRequest` — a signal isn't serialized */
 export interface AnthropicMessageOptions {
   /** Aborts the underlying request. Wire clients that can honour it should. */
   signal?: AbortSignal | undefined;
-  /** Names this call on the in-flight gate's log lines (#1533); a client that ignores it just labels every call `'debate'`. */
+  /** Names this call on the in-flight gate's log lines (#1533); a client that ignores it just labels every call `'debate'` */
   stage?: string | undefined;
 }
 
 export interface AnthropicMessagesClient {
   /**
    * Second, OPTIONAL parameter rather than a request-body field: TS lets an implementation take fewer
-   * params, so existing structural doubles (`createMessage(request)`) still satisfy the interface unchanged.
+   * params, so existing structural doubles (`createMessage(request)`) still satisfy the interface unchanged
    */
   createMessage(
     request: AnthropicMessageRequest,
@@ -78,7 +78,7 @@ export interface AnthropicMessagesClient {
   ): Promise<AnthropicMessageResponse>;
 }
 
-/** One retried attempt, reported to `onRetryAttempt` (#1080), with the identity fields only this client holds. */
+/** One retried attempt, reported to `onRetryAttempt` (#1080), with the identity fields only this client holds */
 interface LlmRetryAttemptReport extends RetryAttemptReport {
   model: string;
   trace_id: string | undefined;
@@ -86,7 +86,7 @@ interface LlmRetryAttemptReport extends RetryAttemptReport {
   debate_id: string | undefined;
 }
 
-/** One abandoned call, reported to `onCallFailed` (#1394); `failure_cause` classified here so every caller reports the same word. */
+/** One abandoned call, reported to `onCallFailed` (#1394); `failure_cause` classified here so every caller reports the same word */
 export interface LlmCallFailureReport {
   failure_cause: FailureCause;
   /** The thrown value itself, so the observer can render it as it sees fit */
@@ -118,7 +118,7 @@ export interface AnthropicLlmClientConfig {
 
 /**
  * `request.context.analyst_views` carries the same ingested free text as `request.prompt` — wrapping it
- * here (#208, prompt-safety.ts) makes the mitigation hold on the actual wire content, not just `personas.ts`'s prompt.
+ * here (#208, prompt-safety.ts) makes the mitigation hold on the actual wire content, not just `personas.ts`'s prompt
  */
 /**
  * The half of `LlmRequestContext` the model may see, selected by reading `LLM_CONTEXT_FIELD_KIND` (PR #387) —
@@ -177,7 +177,7 @@ function extractText(response: AnthropicMessageResponse): string {
     .join('');
 }
 
-/** Duck-types the injected client's thrown errors via the SDK's conventional `status` field rather than importing its error classes, keeping `AnthropicMessagesClient` structural. */
+/** Duck-types the injected client's thrown errors via the SDK's conventional `status` field rather than importing its error classes, keeping `AnthropicMessagesClient` structural */
 function classifyProviderError(error: unknown): Error {
   if (
     error instanceof LlmTimeoutError ||
@@ -257,7 +257,7 @@ export class AnthropicLlmClient implements LlmClient {
     });
   }
 
-  /** Returns `error` unchanged — the observer is a side channel; a throw from a logger must not reclassify the failure. */
+  /** Returns `error` unchanged — the observer is a side channel; a throw from a logger must not reclassify the failure */
   private reportFailure<T>(request: LlmRequest<T>, error: unknown): unknown {
     const onCallFailed = this.config.onCallFailed;
     if (onCallFailed === undefined) return error;
@@ -319,7 +319,7 @@ export class AnthropicLlmClient implements LlmClient {
   /**
    * A call that times out or throws never reaches here, so its tokens are missing from the total even
    * though the provider may have billed them — a known floor, not an oversight (#1080 measured it at
-   * ~$0.090 of $0.2595 metered spend across two soak sessions; ADR-0008 carries the working).
+   * ~$0.090 of $0.2595 metered spend across two soak sessions; ADR-0008 carries the working)
    */
   private recordSpend<T>(
     request: LlmRequest<T>,
@@ -355,7 +355,7 @@ export class AnthropicLlmClient implements LlmClient {
   /**
    * Races the wire call against `config.timeoutMs` and, since #347, CANCELS the loser rather than
    * abandoning it — a timed-out call used to keep running and get retried underneath itself, holding
-   * multiple concurrent requests open and billing for all of them.
+   * multiple concurrent requests open and billing for all of them
    */
   private async callWithTimeout(
     content: string,

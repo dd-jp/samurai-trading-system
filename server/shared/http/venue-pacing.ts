@@ -43,7 +43,7 @@ export const VENUE_DOCUMENTED_CEILING_PER_SECOND: Partial<Record<VenueKey, numbe
    * Exceeding it closes the TWS connection while a bracket is live.
    */
   ibkr: 50,
-  /** Saxo OpenAPI: 120 req/min per service group, tightest published figure (#1032); orders additionally capped at 1/sec/session. */
+  /** Saxo OpenAPI: 120 req/min per service group, tightest published figure (#1032); orders additionally capped at 1/sec/session */
   saxo: 120 / 60,
   // ccxt: deliberately absent. See DEFAULT_VENUE_PACING.ccxt.
 };
@@ -202,7 +202,7 @@ function resolveBucketPacing(
   documentedCeiling: number | undefined,
 ): TokenBucketConfig {
   return {
-    // Capacity under 1 token never satisfies `acquire()`'s `tokens >= 1` test.
+    // Capacity under 1 token never satisfies `acquire()`'s `tokens >= 1` test
     capacity: readPositive(env, names.capacity, fallback.capacity, {
       min: 1,
       minLabel: 'at least 1 (a bucket under one token never releases a call)',
