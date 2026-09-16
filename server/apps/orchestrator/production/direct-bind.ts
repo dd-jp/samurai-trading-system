@@ -445,11 +445,11 @@ export function buildTraderSteps(deps: TraderStepDeps): {
 }
 
 /**
- * The #698/#710 diagnostic reporting, shared by both Trader step bindings.
- * Every diagnostic feeds the throttle (even non-alerting ones, since
- * `observe` is what clears a run), but the log writes on EVERY observation
- * while the alert is throttled separately (#710) — they used to be one call,
- * and the log inherited the alert's throttle and went quiet for 7 ticks in 8.
+ * The diagnostic reporting shared by both Trader step bindings. Every
+ * diagnostic feeds the throttle (even non-alerting ones, since `observe` is
+ * what clears a run), but the log writes on EVERY observation while the
+ * alert is throttled separately — they used to be one call, and the log
+ * inherited the alert's throttle and went quiet for 7 ticks in 8.
  */
 function escalateTraderDiagnostics(
   deps: TraderStepDeps,
@@ -478,9 +478,9 @@ function escalateTraderDiagnostics(
 
     if (!observed.alert) continue;
 
-    // NOT awaited (#710): this step's return value is what Risk and
-    // Execution act on, so awaiting a slow send here would put the transport
-    // in front of the order — including the flat-by-close exit
+    // NOT awaited: this step's return value is what Risk and Execution act
+    // on, so awaiting a slow send here would put the transport in front of
+    // the order — including the flat-by-close exit.
     void postTraderDiagnosticAlert(deps, trace_id, {
       instrument,
       diagnostic,
@@ -495,9 +495,9 @@ function escalateTraderDiagnostics(
 
 /**
  * Posts one diagnostic alert, never letting the transport take the tick down
- * with it (#698). The caller already logs at `error` before calling this, so
- * the condition is never silent even log-only. `traceId` is the tick's own,
- * so a soak post-mortem can join this line to the debate/verdict for the same tick.
+ * with it. The caller already logs at `error` before calling this, so the
+ * condition is never silent even log-only. `traceId` is the tick's own, so a
+ * soak post-mortem can join this line to the debate/verdict for the same tick.
  */
 async function postTraderDiagnosticAlert(
   deps: TraderStepDeps,

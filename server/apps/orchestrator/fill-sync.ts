@@ -291,9 +291,9 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
       for (const key of lastReconcileAction.keys()) {
         if (!reportedThisPass.has(key)) lastReconcileAction.delete(key);
       }
-      // #1088: same trace `runStartupReconcile` logs above — the sweep is
-      // not a divergence and runs on every pass, so it needs its own
-      // operator-visible line, logged only when it deleted something
+      // Same trace `runStartupReconcile` logs above — the sweep is not a
+      // divergence and runs on every pass, so it needs its own
+      // operator-visible line, logged only when it deleted something.
       if (report.swept > 0) {
         deps.logger.log({
           trace_id: deps.reconcileTraceId,
