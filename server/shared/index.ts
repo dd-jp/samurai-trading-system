@@ -9,19 +9,14 @@
 export { BOOK_CURRENCY, isBookCurrency, isPenceCurrency } from './book-currency.js';
 export type { Clock } from './clock.js';
 export { SimulatedClock, SystemClock } from './clock.js';
-export type {
-  RiskDecisionRecord,
-  RiskLogStore,
-  TraderDecisionRecord,
-  TraderLogStore,
-} from './decision-records.js';
+export type { RiskLogStore, TraderLogStore } from './decision-records.js';
 export { digest } from './digest.js';
 export { nonEmpty, positiveIntegerFromEnv, requireIntegerAtLeast } from './env-integer.js';
 // #568: the one fill-record arithmetic every exit-sizing and flatness
 // judgement runs — Trader, Execution and the residual sweep — so the three
 // can never disagree on what a lot still holds
-export { type EscalationCadence, escalatesAt } from './escalation-cadence.js';
-export type { ExitFill, LotHeldQuantity, RecordedHeldQuantity } from './held-quantity.js';
+export { escalatesAt } from './escalation-cadence.js';
+export type { ExitFill, LotHeldQuantity } from './held-quantity.js';
 export {
   coversQty,
   heldQuantitiesFor,
@@ -37,7 +32,6 @@ export { delay } from './http/delay.js';
 export { fetchWithTimeout } from './http/fetch-with-timeout.js';
 export {
   classifyStatus,
-  type HttpErrorKind,
   isServerErrorStatus,
   isTimeoutAbort,
   MAX_ERROR_BODY_CHARS,
@@ -48,7 +42,7 @@ export {
 } from './http/response-errors.js';
 export type { RetryAttemptReport, RetryConfig } from './http/retry.js';
 export { withRetry, worstCaseFetchMs } from './http/retry.js';
-export type { TokenBucketConfig, TokenBucketTelemetry } from './http/token-bucket.js';
+export type { TokenBucketConfig } from './http/token-bucket.js';
 export { TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS, TokenBucket } from './http/token-bucket.js';
 // Only what has a real cross-module consumer: `DEFAULT_VENUE_PACING` for the
 // three broker adapters' constructor defaults, `resolveVenuePacing` +
@@ -87,19 +81,13 @@ export {
   safeLog,
 } from './safe-log.js';
 export { maskAndCap, maskCredentials, sanitizeLogText } from './sanitize-log-text.js';
-export type {
-  ContinueOnFaultEffects,
-  ErrorStream,
-  ProcessFault,
-  StdoutStream,
-} from './stdout-fault-guard.js';
+export type { ContinueOnFaultEffects, ErrorStream, StdoutStream } from './stdout-fault-guard.js';
 export { guardedWrite, installContinueOnFault, watchStdoutErrors } from './stdout-fault-guard.js';
 // #638: the in-code clamp on the kill-line and breaker thresholds. Exported
 // from the shared barrel because the three paths that can put a threshold into
 // force — boot-time construction, the tuning store's write, and the Risk
 // Manager's live read — sit in three different packages and must consult ONE
 // bounds table, or the clamp drifts apart into three that disagree
-export type { GuardedThresholdName, ThresholdBound } from './threshold-bounds.js';
 export {
   assertThresholdsWithinBounds,
   assertThresholdWithinBounds,
@@ -130,7 +118,6 @@ export type {
   LogLevel,
   OpenPosition,
   OrderIntent,
-  OrderIntentMetadata,
   OrderState,
   SetupNeighbor,
   SetupStore,

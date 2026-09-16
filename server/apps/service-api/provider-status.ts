@@ -53,15 +53,11 @@ import { fetchWithTimeout } from '../../shared/index.js';
  * `server/pipeline/execution/`, so moving it would have dragged the broker adapter types
  * into the client's TypeScript program — the opposite of the point.
  */
-export type {
-  AlpacaTile,
-  PolygonTile,
-  ProviderState,
-  ProviderStatusPanel,
-} from '../../../contracts/index.js';
+export type { ProviderStatusPanel } from '../../../contracts/index.js';
 
-// Imported as well as re-exported above: `export … from` publishes a name
-// without binding it locally, and the poller below annotates with all four
+// `export … from` above publishes ProviderStatusPanel without binding it
+// locally, so it's imported again here alongside the types the poller
+// itself annotates with but doesn't re-export
 import type {
   AlpacaTile,
   PolygonTile,

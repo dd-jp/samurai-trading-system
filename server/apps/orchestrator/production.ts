@@ -230,7 +230,6 @@ export const BENCHMARK_INSTRUMENTS: ReadonlySet<string> = new Set(
 export type {
   AlertChannelSlots,
   DailyMetricsConfig,
-  DailyMetricsSourceDeps,
   FeedbackCycleConfig,
   ProductionConfig,
 } from './production/config.js';
