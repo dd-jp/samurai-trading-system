@@ -2840,16 +2840,9 @@ function readSmokeObservations(
           'no_go_detail_bound_ms FROM verdict_log ORDER BY rowid',
       )
       .all() as SmokeObservations['verdicts'],
-    // #1028: ordered by content (`arm`/`idempotency_key`/`leg`), not `rowid`
-    // `rowid` reflects insertion order, which for these two tables is
-    // insertion-timing-dependent — `open_positions` rows are written by
-    // whichever arm's Trader stage reaches the store first, and `fills`
-    // rows are written by whichever arm's independently-scheduled
-    // `startFillSync()` poll ingests first (production.ts). Both races are
-    // real but harmless to outcome; a content-based order makes the
-    // readback describe *what* was recorded rather than *when*, so
-    // `runSmoke()`'s determinism check compares stable results instead of
-    // an accidental scheduling order
+    // #1028: ordered by content, not `rowid` — insertion order across arms
+    // is scheduling-dependent, and this makes the readback describe what
+    // was recorded rather than when.
     positions: db
       .prepare(
         'SELECT idempotency_key, instrument, side, requested_size, filled_size, avg_entry_price, ' +
@@ -2862,11 +2855,7 @@ function readSmokeObservations(
           'ORDER BY idempotency_key, leg, rowid',
       )
       .all() as SmokeObservations['fills'],
-    // #1028: same content-based ordering as `positions`/`fills` above — `closed_trades`
-    // rows are also written per-arm, on whichever arm's exit path (round-trip-to-flat,
-    // #82/#83) reaches the store first, so `rowid` order is the same insertion-timing
-    // race. `idempotency_key` is `closed_trades`' PRIMARY KEY (migration 0031), so
-    // ordering by it after `arm` is a total, stable order
+    // Same content-based ordering as `positions`/`fills` above (#1028)
     closedTrades: db
       .prepare(
         'SELECT idempotency_key, realized_pnl_net, close_reason, arm FROM closed_trades ' +
@@ -2877,13 +2866,9 @@ function readSmokeObservations(
       .prepare('SELECT idempotency_key, instrument, status FROM flatten_submissions ORDER BY rowid')
       .all() as SmokeObservations['flattenSubmissions'],
     gdeltRowsArchived: miArchive?.rawRows(SOURCE_GDELT).length ?? 0,
-    // Counted across every leg of `SMOKE_TEST_UNIVERSE` — the same list
-    // `SMOKE_GDELT_EXPECTED_AGGREGATES` is sized from, so the observation and
-    // the expectation cannot drift apart — because the pass derives per asset
-    // class and a per-class read would hide a leg that stopped deriving. The
-    // 24h window is `fundamental`'s own (`MI_CONTEXT_WINDOW_MS`), on the same
-    // store instance, so this counts what the analyst would have seen rather
-    // than what was merely written
+    // Counted across every leg of SMOKE_TEST_UNIVERSE with fundamental's own
+    // 24h window (MI_CONTEXT_WINDOW_MS), so this counts what the analyst
+    // would have seen rather than what was merely written.
     gdeltAggregateItems: SMOKE_GDELT_ASSET_CLASSES.reduce(
       (total, asset_class) =>
         total +
@@ -2893,29 +2878,18 @@ function readSmokeObservations(
       0,
     ),
     polymarketRowsArchived: miArchive?.rawRows(SOURCE_POLYMARKET).length ?? 0,
-    // #835: the ITEMS table, not the raw one. This source wrote `[]` for its
-    // items, which no raw-row count could see, and `hydrate()` deliberately
-    // does not read them back — so without this line nothing in the gate would
-    // notice them going missing again
+    // #835: the items table, not the raw one — this source wrote `[]` for
+    // its items, which no raw-row count could see.
     polymarketItemsArchived:
       miArchive?.itemsKnownAt(POLYMARKET_ASSET_CLASS, SMOKE_RUN_INSTANT, [SOURCE_POLYMARKET])
         .length ?? 0,
-    // The SAME 24h window `fundamental` reads (`MI_CONTEXT_WINDOW_MS`), on the
-    // same store instance, AND entity-scoped like every analyst read is
-    // (`resolveMiSubject(signal.asset)`, #914/#960) — so this counts what the
-    // analyst would have seen. Unscoped it did not: a curated market is filed
-    // under a macro series name, so an item missing `scope: 'asset_class'`
-    // reached this count and no analyst, and the gate stayed green while the
-    // whole feed was dark. The ticker is arbitrary — a class-wide item is
-    // admitted for any entity, and one filed per entity is admitted for none
-    // #1164: class-wide Polymarket items route to `intel`, not `news`
+    // Entity-scoped like every analyst read (resolveMiSubject, #914/#960) —
+    // unscoped, a curated market filed under a macro series name would reach
+    // this count with no analyst seeing it (#1164).
     polymarketIntelItems:
       marketIntelligence
         ?.getContext(POLYMARKET_ASSET_CLASS, 24 * 60 * 60 * 1000, 'smoke', undefined, 'SPY')
         .intel.filter((item) => item.source === SOURCE_POLYMARKET).length ?? 0,
-    // #430. Each of these is a mechanism that was, at some point, fully built,
-    // fully unit-tested and called by nothing in production. The table row is
-    // the only evidence that a caller exists
     cosineSetups: db
       .prepare('SELECT debate_id, instrument FROM cosine_setups')
       .all() as SmokeObservations['cosineSetups'],
@@ -2997,9 +2971,7 @@ function makeExitProbeInput(overrides: Partial<OrderIntent> = {}) {
         portfolio: { known: true as const, pct: 0 },
       },
       consecutive_losses: 0,
-      // #841: a fully-valued book, which is what this probe is about — the
-      // clamp, not the valuation. A non-empty list here would make the ENTRY
-      // half of the probe pass for the wrong reason
+      // #841: a fully-valued book — this probe is about the clamp, not the valuation
       unvalued_instruments: [],
     },
     breakers: {
@@ -3015,17 +2987,9 @@ function makeExitProbeInput(overrides: Partial<OrderIntent> = {}) {
 }
 
 /**
- * The exit/flatten side of #766: with a live `risk_thresholds` row out of
- * bounds, does an EXIT intent still reach Execution, or does it abort the
- * same as an entry would? Drives the REAL `RiskManagerImpl.evaluate()` —
- * the same class `buildRiskStep` (direct-bind.ts) wraps — rather than a
- * reimplementation, so a regression in the exit-bypass ordering
- * (risk-manager/index.ts) fails this probe exactly the way it would fail in
- * production.
- *
- * Also probes the ENTRY side, which MUST still throw: a probe that only
- * checked "exit does not throw" could not tell a working clamp from one that
- * silently stopped enforcing anything at all.
+ * #766 — drives the real `RiskManagerImpl.evaluate()`. Also probes the entry
+ * side, which must still throw: a probe that only checked "exit does not
+ * throw" couldn't tell a working clamp from one that stopped enforcing at all.
  */
 function probeExitBypassesLiveClamp(riskConfig: RiskConfig): boolean {
   const badThresholds = { getRiskThresholds: () => ({ max_pbo: 0.5 }) };
@@ -3051,29 +3015,15 @@ function probeExitBypassesLiveClamp(riskConfig: RiskConfig): boolean {
  * REFUSAL that actually happened at a real seam, not that a validator exists.
  */
 export interface ThresholdClampEvidence {
-  /**
-   * The guarded names this probe drove. Compared against
-   * `GUARDED_THRESHOLD_NAMES` by the gate, so deleting a row from the bounds
-   * table turns the gate red instead of quietly shrinking what is covered.
-   */
+  /** Compared against `GUARDED_THRESHOLD_NAMES` so a deleted bounds-table row turns the gate red */
   probedNames: readonly string[];
-  /** Guarded names the LIVE `risk_thresholds` read accepted out of bounds */
   liveReadAccepted: readonly string[];
-  /** Guarded names the Feedback Loop's write door accepted out of bounds */
   writeDoorAccepted: readonly string[];
-  /** The breaker constructor refused an out-of-bound drawdown pair */
   breakerConstructionRefused: boolean;
-  /** The kill-line boot check refused a softened PBO line */
   killLineCheckRefused: boolean;
-  /** The SHIPPED paper values still boot — the clamp bounds a dial, not forbids one */
+  /** The shipped paper values still boot — the clamp bounds a dial, not forbids one */
   shippedConfigAccepted: boolean;
-  /**
-   * #766: with a live `risk_thresholds` row out of bounds, an EXIT intent
-   * reached `RiskManagerImpl.evaluate()`'s `approved` bypass and an ENTRY
-   * intent was still refused — see `probeExitBypassesLiveClamp`. False means
-   * either the exit path is stranded behind the clamp (ADR-0014's flat-by-
-   * close invariant at risk) or the clamp stopped refusing entries at all.
-   */
+  /** #766 — see `probeExitBypassesLiveClamp`; false means the exit path is stranded or the clamp stopped enforcing */
   exitBypassesLiveClamp: boolean;
 }
 
@@ -3093,31 +3043,17 @@ function refuses(probe: () => void): boolean {
     probe();
     return false;
   } catch (error) {
-    // Only a BOUNDS refusal counts. Any other throw — a TypeError from a
-    // changed shape, say — would otherwise read as the clamp working while the
-    // probe never reached it, which is the shape of defect this gate exists
-    // to catch. `isThresholdBoundViolation` (#766) is the same single-vs-
-    // aggregate-shaped match both alert seams gate on — sharing it here means
-    // this probe and the two catch sites can never drift apart on what counts
-    // as "the clamp"
+    // Only a bounds refusal counts — any other throw would read as the clamp
+    // working while the probe never reached it.
     return isThresholdBoundViolation(error);
   }
 }
 
 /**
- * The threshold-clamp scenario (#638) — negative probes through the REAL seams.
- *
- * ADR-0013 makes the numeric thresholds the only stop left: nothing re-arms by
- * hand and nothing gates a loosening, so a config edit — or, since #736, the
- * Feedback Loop on its own — is the entire distance between the running system
- * and an arbitrary risk limit. Wiring a mechanism means adding its
- * enforcement assertion here (#430), and the enforcement being asserted is a
- * REFUSAL: for every guarded name, an out-of-bound value is pushed at each seam
- * that can put a number into force, and the seam must reject it.
- *
- * The live read is the one that matters. `RiskManagerImpl.evaluate()`
- * re-resolves its config from the `risk_thresholds` table on every call, so a
- * boot-only clamp would constrain nothing the loop does between two ticks.
+ * #638 — negative probes through the real seams. The live read is the one
+ * that matters: `RiskManagerImpl.evaluate()` re-resolves its config from
+ * `risk_thresholds` on every call, so a boot-only clamp would constrain
+ * nothing the loop does between two ticks.
  */
 function runThresholdClampScenario(
   breakerConfig: BreakerConfig,
@@ -3147,9 +3083,6 @@ function runThresholdClampScenario(
         () =>
           new CircuitBreakers({
             ...breakerConfig,
-            // The pair the pre-existing relative width check happily accepts:
-            // 0.90 is strictly below 0.95, so ordering passes and the drawdown
-            // breaker never fires
             max_drawdown_pct: 0.95,
             auto_rearm: { ...breakerConfig.auto_rearm, recovery_drawdown_pct: 0.9 },
           }),
