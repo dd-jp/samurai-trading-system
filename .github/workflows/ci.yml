@@ -48,17 +48,25 @@ jobs:
           args: --boundary-violations
           auto-changed-since: false
 
-      - name: Fallow dead code (advisory)
+      # Grandfathers the pre-existing backlog (fallow-baselines/dead-code.json,
+      # captured 2026-09-17) so this gates only NEW findings, not the ~57 that
+      # predate the gate. Re-save the baseline after deliberately clearing part
+      # of the backlog: `npm run fallow:dead-code -- --save-baseline fallow-baselines/dead-code.json`.
+      - name: Fallow dead code
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        continue-on-error: true
         uses: fallow-rs/fallow@4f3bd9720ca6b22c8547adb7f1d225f57fc502d4 # v3
         with:
           command: dead-code
+          baseline: fallow-baselines/dead-code.json
           auto-changed-since: false
 
+      # Findings still surface as annotations, but neither step below can
+      # actually fail on them today: dupes only fails past --threshold
+      # (unset, so 0 = no limit) and health --css's hotspots/refactoring
+      # targets are advisory-only by design (never gate an exit code). This
+      # step still catches the action itself erroring.
       - name: Fallow duplication (advisory)
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        continue-on-error: true
         uses: fallow-rs/fallow@4f3bd9720ca6b22c8547adb7f1d225f57fc502d4 # v3
         with:
           command: dupes
@@ -66,7 +74,6 @@ jobs:
 
       - name: Fallow design-system drift (advisory)
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        continue-on-error: true
         uses: fallow-rs/fallow@4f3bd9720ca6b22c8547adb7f1d225f57fc502d4 # v3
         with:
           command: health
