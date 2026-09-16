@@ -4423,9 +4423,13 @@ describe('buildProductionOrchestrator', () => {
     const ranAt = async (now: Date, pinLse = true): Promise<boolean> => {
       const config = windowedConfig(now, pinLse);
       // The tail is `flatten_before_close_ms` wide, so 16:26 is only inside it
-      // while that is 5 minutes. Asserted, not assumed — a stub drifting to a
+      // while that is 5 minutes. Checked, not assumed — a stub drifting to a
       // narrower window would make the positive case below silently vacuous
-      expect(config.traderConfig.flatten_before_close_ms).toBe(5 * 60_000);
+      if (config.traderConfig.flatten_before_close_ms !== 5 * 60_000) {
+        throw new Error(
+          `expected flatten_before_close_ms to be 300000, got ${config.traderConfig.flatten_before_close_ms}`,
+        );
+      }
 
       const orchestrator = buildProductionOrchestrator(config);
       const runSpy = vi
