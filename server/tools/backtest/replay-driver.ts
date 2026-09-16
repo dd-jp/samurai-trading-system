@@ -1,45 +1,9 @@
 /**
- * Stage 2 replay driver (ticket #243) — see
- * docs/specs/stage2-validation-execution-spec.md ("Module: Replay Driver")
- * and wayfinder map #154 (decision #158).
- *
- * Steps the mechanical proxy strategy (#242) bar-by-bar through the ingested
- * historical bars (#241) and hands the result to `EvalExecutorImpl` through
- * the ports it already declares (`ReplayTradeSource` in `eval-types.ts`,
- * `ReplayTimeline` in `types.ts`). Neither of those files, nor
- * `eval-executor.ts`, changes for this module: the driver adapts to them.
- *
- * **What this path deliberately does NOT do.** It never calls
- * `BrokerAdapter`, `Trader.decide`, `RiskManagerImpl.evaluate` or
- * `VerdictImpl.decide` — enforced structurally, by not importing any of them
- * (there is a test asserting the import list stays clean). The proxy strategy
- * is a complete stand-in for the whole pipeline here, not just for
- * Analysts/Debate: this pass validates the *harness's honesty* (costs, no
- * lookahead, survivorship), not the live gate sequence, which the Backtest
- * Harness (#88) exercises over the real stage chain. Nothing here touches
- * Execution's live write path.
- *
- * **Why fills go straight to `CostModel.fill`.** `BrokerAdapter` has no
- * flatten/cancel method, so a signal exit cannot be routed through it — and
- * routing entries through it while exits bypass it would price the two legs
- * by different models. Both legs therefore call `CostModel.fill` directly,
- * and every produced `Fill` carries the resulting `cost_breakdown` (mirroring
- * the Simulated adapter's `CostModelResult` → `Fill` mapping, shared/types.ts)
- * so `eval-executor.ts`'s `assertCostModelPriced` attestation passes without
- * this path being special-cased.
- *
- * **Gaps are not wished away.** A stop or target exit is priced against the
- * price the market actually offered: the bar's open when it already gapped
- * through the level, otherwise the level itself. Assuming a fill at the exact
- * stop through a gap is the flattering lie this whole component exists to
- * prevent. `CostModel.fill` then moves that reference adversely, as it does
- * for any fill.
- *
- * **`debate_id` on this path is synthetic.** There is no debate — it is
- * derived deterministically from the lot's idempotency key purely so the
- * `ClosedTrade` record is well-formed. Nothing here writes to `SetupStore` or
- * `DebateLogStore`, so the "exactly once per setup" join invariant
- * (cross-spec-contracts.md registry #1) is untouched by this module.
+ * Stage 2 replay driver (#243). Never calls `BrokerAdapter`, `Trader.decide`,
+ * `RiskManagerImpl.evaluate` or `VerdictImpl.decide` — enforced structurally by
+ * not importing any of them (a test asserts the import list stays clean). Both
+ * legs price through `CostModel.fill` directly, since `BrokerAdapter` has no
+ * flatten/cancel method a signal exit could route through.
  */
 
 import type { Bar, TradingCalendar } from '../../providers/market-data-service/index.js';
@@ -86,51 +50,32 @@ export interface ReplayDriverDeps {
   clock: SimulatedClock;
   universe: readonly ReplayInstrument[];
   /**
-   * Notional committed per entry; `size = capitalPerTrade / reference price`.
-   *
-   * Deliberately a dependency and not a field on `ProxyStrategyConfig`: the
-   * spec pins the trial grid at exactly 12 configs, and `config_hash` is that
-   * config's identity. Widening it with a sizing knob would make N ambiguous.
+   * Notional committed per entry. Deliberately a dependency, not a
+   * `ProxyStrategyConfig` field — the spec pins the trial grid at exactly 12
+   * configs, and widening it with a sizing knob would make that N ambiguous.
    */
   capitalPerTrade: number;
   /** Bars of volume averaged into `MarketState.adv`. Default 20. */
   advWindow?: number;
   /**
-   * The timeframe the replayed bars are on — `'1d'`, `'1m'`, `'5m'` (#664).
-   *
-   * REQUIRED, not defaulted to `'1d'`. A default is how a parameter becomes
-   * the thing this repo calls a "tested mechanism nothing calls": every
-   * existing caller would keep compiling, keep replaying daily, and the
-   * intraday path would exist only in its own test. Required, the compiler
-   * enumerates every construction.
-   *
-   * Checked against each bar's own `Bar.timeframe` as the cursor loads it, so
-   * a store serving a different resolution than the driver was told fails the
-   * run instead of mislabelling every indicator and every session boundary.
+   * The replayed bars' timeframe (#664). REQUIRED, not defaulted — a default
+   * would let every caller keep compiling against daily data while the
+   * intraday path exists only in its own test. Checked against each bar's own
+   * `Bar.timeframe` as the cursor loads it.
    */
   timeframe: string;
   /**
-   * The venue calendar this replay's session boundaries come from (#664).
-   *
-   * `UsEquityRegularHoursCalendar` for US equities, `AlwaysOpenCalendar` for a
-   * 24/7 venue. Required for the same anti-inertness reason as `timeframe`:
-   * flat-by-close (ADR-0014) is the recorded thesis, and a defaulted
-   * always-open calendar would silently disable it.
-   *
-   * Consulted ONLY on intraday timeframes — see `flattenBoundary`.
+   * The venue calendar session boundaries come from (#664) — required for the
+   * same reason as `timeframe`, since a defaulted always-open calendar would
+   * silently disable flat-by-close (ADR-0014). Consulted only on intraday
+   * timeframes — see `flattenBoundary`.
    */
   sessionCalendar: TradingCalendar;
   /**
-   * The flat-by-close window, as an offset before the session close.
-   *
-   * Defaults to `TRADER_CONFIG_DEFAULTS.flatten_before_close_ms`'s five
-   * minutes, which is the live rule ADR-0014 records and
-   * `trader/decide.ts`'s `withinFlattenWindow` enforces. Duplicated as a
-   * number rather than imported from `server/pipeline/trader`: this module
-   * documents that it imports nothing from the live pipeline, and a test
-   * asserting the two agree is cheaper than breaking that.
-   *
-   * WIDENED to one bar when the timeframe is coarser than this — see `run`.
+   * The flat-by-close window before session close. Defaults to the live
+   * ADR-0014 rule, duplicated rather than imported since this module imports
+   * nothing from the live pipeline (a test asserts the two agree). WIDENED to
+   * one bar when the timeframe is coarser — see `run`.
    */
   flattenBeforeCloseMs?: number;
 }
@@ -191,12 +136,9 @@ interface OpenLot {
   fees: number;
   opened_at: Date;
   /**
-   * The close of the session this lot was opened in, or `null` where the
-   * question does not arise (daily replay, or a venue with no close).
-   *
-   * Carried on the lot rather than recomputed, so the flat-by-close INVARIANT
-   * can be checked directly: a lot whose bar has moved past this instant
-   * survived a session close, which ADR-0014 forbids. See `run`.
+   * The close of the session this lot opened in, or null where that doesn't
+   * apply. Carried on the lot (not recomputed) so the flat-by-close invariant
+   * can be checked directly — see `run`.
    */
   session_end: Date | null;
 }
