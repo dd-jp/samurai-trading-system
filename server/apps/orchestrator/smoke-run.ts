@@ -4607,18 +4607,9 @@ export interface PromptTierWarningEvidence {
  * Only the INPUT — "the provider reported this many prompt tokens" — is
  * fabricated here, the same relationship `FixtureDataSource` has to the
  * indicators computed over its bars: the mechanism under test runs for real,
- * for a real tiered model (`x-ai/grok-4.5`, pricing.ts), against a real
- * `:memory:` `llm_spend` table, through the real `crossesPromptTier` and the
- * real throttle, into a channel double that only counts calls — the same
- * "hand-rolled alert channel" shape `runArmComparisonProbe` above uses for
- * `postArmDivergenceAlert`.
- *
- * Two crossing calls, not one: the FIRST call alone cannot distinguish a
- * throttle that fires once from one deleted outright (both would show
- * `alertsFired: 1` after a single call), which is exactly the "vacuous either
- * way" shape #1155's own instructions warn against. The second call, on the
- * SAME model, must be suppressed — `alertsFired` staying at 1 proves the
- * throttle ran, not just that a crossing was dispatched once.
+ * for a real tiered model (`x-ai/grok-4.5`, pricing.ts) through the real `crossesPromptTier`.
+ * Two crossing calls, not one: a single call can't distinguish a throttle that fires once
+ * from one deleted outright — the second, on the same model, must be suppressed.
  */
 function runPromptTierWarningScenario(): PromptTierWarningEvidence {
   const db = openSharedStore(':memory:');
@@ -4630,9 +4621,7 @@ function runPromptTierWarningScenario(): PromptTierWarningEvidence {
       },
     });
 
-    // 200,001 prompt tokens against x-ai/grok-4.5's published 200,000-token
-    // large-prompt tier (pricing.ts) — one token over, the same fixture
-    // pricing.test.ts pins `crossesPromptTier`'s own answer against
+    // One token over x-ai/grok-4.5's published 200,000-token large-prompt tier (pricing.ts)
     const crossingUsage = { input_tokens: 200_001, output_tokens: 1_000 };
     const record = () =>
       store.record({
@@ -4661,19 +4650,13 @@ function runPromptTierWarningScenario(): PromptTierWarningEvidence {
   }
 }
 
-/**
- * #1155. `crossesPromptTier` (pricing.ts) had a test and no production caller;
- * no metered call this run's own LLM clients make carries a `usage` field, so
- * nothing else here could ever exercise `SqliteLlmSpendStore.record`'s dispatch.
- */
+/** #1155 — `crossesPromptTier` (pricing.ts) had a test and no production caller. */
 const promptTierWarningProbe: Probe<'promptTierWarning'> = {
   run() {
     return runPromptTierWarningScenario();
   },
   verdict(promptTierWarning) {
     const failures: string[] = [];
-    // #1155 — the prompt-tier crossing warning, asserted on its DURABLE effect
-    // through the real `SqliteLlmSpendStore`. See `runPromptTierWarningScenario`.
     if (promptTierWarning.spendRows !== 2) {
       failures.push(
         `the prompt-tier scenario's two metered calls wrote ${promptTierWarning.spendRows} ` +
@@ -4725,26 +4708,11 @@ interface LlmSpendCapEvidence {
 }
 
 /**
- * One entry per probe, every one required.
- *
- * Found by mutation, not by argument: with the rate-limiter snapshot optional,
- * deleting the one line in `runSmoke` that passed it left its check vacuously
- * true — `npm run smoke` exited 0 and the whole suite stayed green. A backstop
- * that can be switched off by omitting an argument is the no-caller defect
- * class (#327, #364, #366, #371, #374, #379, #388, #432, #433 — each a
- * complete, tested mechanism with no production caller, invisible to unit
- * tests by construction) reproduced inside the gate. So: wiring a new
- * mechanism means adding a probe here, and `PROBES` (a mapped type over these
- * keys) then refuses to compile until it has a run and a verdict and appears
- * in both orders.
- *
- * #1083's token-bucket wait telemetry has deliberately NO probe. Every entry
- * here reads back a DURABLE effect a fixture-driven run produces for free;
- * #1083 is a log line with no row, and producing it needs a real wait past
- * `TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS` (`delay()` is real `setTimeout` by
- * design), so asserting its presence would spend wall-clock seconds pacing
- * this gate and asserting its absence is vacuously green. It is enforced in
- * `production/rate-limit-wiring.test.ts` under fake timers instead.
+ * One entry per probe, every one required — wiring a new mechanism means adding a probe here,
+ * and `PROBES` (a mapped type over these keys) refuses to compile until it has a run and a
+ * verdict. #1083's token-bucket wait telemetry has deliberately NO probe: it needs a real wait
+ * past `TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS`, so it's enforced under fake timers in
+ * `production/rate-limit-wiring.test.ts` instead.
  */
 export interface SmokeEvidence {
   tickLoop: TickLoopEvidence;
@@ -4795,18 +4763,10 @@ interface VerdictContext<After extends ProbeId> {
 }
 
 /**
- * A probe owns one mechanism end to end: producing its evidence, judging it,
- * and (optionally) printing it.
- *
- * Verdicts are aimed at ENFORCEMENT: each asserts the mechanism's own durable
- * EFFECT — a row only that mechanism writes — not that an object was
- * constructed and not that a log line was emitted. A check on construction
- * passes for a component nothing calls, which is the defect itself. Returned
- * lines are gate failures; there are no warnings.
- *
- * `After` names the probes whose evidence this one reads, in `run` or in
- * `verdict`; they must precede it in `PROBE_RUN_ORDER`, which `runProbes`
- * checks before calling `run`.
+ * A probe owns one mechanism end to end. Verdicts assert the mechanism's own DURABLE effect,
+ * never just that an object was constructed — a construction-only check passes for a component
+ * nothing calls. `After` names probes whose evidence this one reads; they must precede it in
+ * `PROBE_RUN_ORDER`, which `runProbes` checks before calling `run`.
  */
 interface Probe<Id extends ProbeId, After extends ProbeId = never> {
   after?: readonly After[];
@@ -4826,12 +4786,9 @@ function summariseVerdicts(verdicts: SmokeObservations['verdicts']): string {
 }
 
 /**
- * The loop-health slice of `tickLoopProbe`'s verdict: the wire client stayed
- * unreached, the loop completed its expected ticks, and at least one got past
- * Analysts. Whether anything reached `UnreachableAlpacaClient` is checked
- * here rather than left to the throw: `startTickLoop` catches everything a
- * tick throws and logs it, so a run that tried to reach the network would
- * otherwise fail for a downstream symptom and never name the cause.
+ * Checked explicitly rather than left to the throw: `startTickLoop` catches everything a tick
+ * throws and logs it, so a run that reached the network would otherwise fail for a downstream
+ * symptom and never name the cause.
  */
 function tickLoopWireAndTickFailures(
   evidence: TickLoopEvidence,
@@ -4868,15 +4825,9 @@ function tickLoopWireAndTickFailures(
 }
 
 /**
- * One `debate_log` row is required, not one per tick: the clock is frozen and
- * the fixture views identical every tick, so all ticks hash to the same
- * `debate_id` and the writer's first-write-wins guard collapses them.
- *
- * #1081: every row `buildDebateLog` writes must classify itself — the whole
- * point of the fix is that no `debate_log` row can be silently ambiguous
- * between a converged/non-converged debate and one the latency budget cut
- * short. Hung off `debates.length` for the same reason as 3b above: a run
- * with no rows at all fails on the check above, naming the real cause
+ * One `debate_log` row is required, not one per tick: the frozen clock and identical fixture
+ * views mean every tick hashes to the same `debate_id`, collapsed by the writer's
+ * first-write-wins guard. #1081: every row must classify itself (`termination` non-null).
  */
 function tickLoopDebateLogFailures(observations: SmokeObservations): string[] {
   const failures: string[] = [];
@@ -4903,22 +4854,9 @@ function tickLoopDebateLogFailures(observations: SmokeObservations): string[] {
 }
 
 /**
- * #753 — falsifier arm 2 has a production caller
- *
- * Hung off "a tick reached Execution" rather than standing alone, so a run
- * that never traded at all fails on the checks above naming the real cause
- * Given that the live arm transacted over this tape, the control arm saw the
- * same tape on the same tick and must have left its own row: the arms are
- * matched by construction on name, bracket, stop and conviction floor, and
- * the control's entry is the same deterministic axis vote the live arm's
- * Analysts stage produced
- *
- * This is the ONLY check anywhere that the control arm has a caller. Every
- * one of its units can pass while `TickSteps.controlArm` is unbound in
- * `production.ts` — the member is optional, so unbinding it is not even a
- * compile error — and the soak would then run for its whole duration with no
- * matched control, which is the exact thing ADR-0014 amendment 2 forbids and
- * the repo's dominant defect class (a tested mechanism nothing calls)
+ * #753 — falsifier arm 2. The ONLY check anywhere that the control arm has a caller: every
+ * unit can pass while `TickSteps.controlArm` is unbound in `production.ts` (the member is
+ * optional, not a compile error), leaving a soak with no matched control (ADR-0014 amendment 2).
  */
 function tickLoopControlArmFailures(observations: SmokeObservations): string[] {
   const failures: string[] = [];
