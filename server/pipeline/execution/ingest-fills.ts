@@ -153,6 +153,54 @@ export const UNATTRIBUTED_FLATTEN_FILL_PERSIST_FAILED =
  */
 const NO_MODELLED_LOT_COSTS: ModelledLotCosts = { entry: null, protectiveExit: null };
 
+async function markSweptFlattens(
+  input: FillIngestInput,
+  flattenNamedLots: ReadonlyMap<string, ReadonlySet<string>>,
+  failedLotKeys: ReadonlySet<string>,
+  now: Date,
+  failures: ContainedFailure[],
+): Promise<void> {
+  for (const [flattenKey, lotKeys] of flattenNamedLots) {
+    if ([...lotKeys].some((lotKey) => failedLotKeys.has(lotKey))) continue;
+    try {
+      await input.store.markFlattenFillsSwept(flattenKey, now);
+    } catch (error) {
+      // NOT correctness-critical the way a 'flatten-attribution'/'lot-advance'
+      // failure is (#519/#526): a missed mark only means the
+      // row stays exactly where it already was — unswept, and so still found
+      // by `getUnresolvedFlattens()` — which is `reconcile()`'s own designed
+      // recovery for it, not data this poll lost. `throwContainedFailures`
+      // in `ingestFills` is gated accordingly: this scope alone does not
+      // reject the poll's promise. It still travels in `failures`, so it is
+      // NAMED in the AggregateError whenever a genuinely correctness-critical
+      // failure ALSO happened this same poll — nothing here hides it from
+      // that report
+      // Only a mark failure entirely on its own resolves without REJECTING the
+      // poll's promise (#519/#526's gate below) — but not SILENTLY (#573):
+      // this module carries a `Logger` (`ExecutionInput.logger`), so the row
+      // staying unswept gets a local trace even when nothing else this poll
+      // failed to name it in an AggregateError. `warn`, not `error`: the
+      // self-healing next-reconcile() recovery this comment already
+      // describes is exactly why this is not an operator escalation
+      logCaughtFailure(
+        input.logger,
+        {
+          trace_id: input.trace_id,
+          stage: 'execution',
+          event: 'flatten_sweep_mark_failed',
+          level: 'warn',
+          message:
+            'markFlattenFillsSwept failed — the row stays unswept and will be found again by ' +
+            "the next reconcile() pass (SharedStore.getUnresolvedFlattens()'s own designed recovery)",
+        },
+        error,
+        { flatten_key: flattenKey },
+      );
+      failures.push({ scope: 'flatten-sweep-mark', key: flattenKey, instrument: null, error });
+    }
+  }
+}
+
 export async function ingestFills(input: FillIngestInput): Promise<void> {
   const { clock, broker, store } = input;
 
@@ -226,10 +274,9 @@ export async function ingestFills(input: FillIngestInput): Promise<void> {
   const flattenNamedLots = await redistributeFlattenFills(input, byLot, positions, failures);
   // The flat union `advanceLot`'s per-lot re-arm check reads (#525) — a lot
   // named by ANY flatten this poll, independent of which one
-  const flattenTargetedLots = new Set<string>();
-  for (const lotKeys of flattenNamedLots.values()) {
-    for (const lotKey of lotKeys) flattenTargetedLots.add(lotKey);
-  }
+  const flattenTargetedLots = new Set(
+    Array.from(flattenNamedLots.values()).flatMap((lotKeys) => [...lotKeys]),
+  );
 
   for (const position of positions) {
     // Every lot is independent work: whether one lot's store write or broker
@@ -261,44 +308,7 @@ export async function ingestFills(input: FillIngestInput): Promise<void> {
   const failedLotKeys = new Set(
     failures.filter((failure) => failure.scope === 'lot-advance').map((failure) => failure.key),
   );
-  for (const [flattenKey, lotKeys] of flattenNamedLots) {
-    if ([...lotKeys].some((lotKey) => failedLotKeys.has(lotKey))) continue;
-    try {
-      await input.store.markFlattenFillsSwept(flattenKey, now);
-    } catch (error) {
-      // NOT correctness-critical the way a 'flatten-attribution'/'lot-advance'
-      // failure is (#519/#526): a missed mark only means the
-      // row stays exactly where it already was — unswept, and so still found
-      // by `getUnresolvedFlattens()` — which is `reconcile()`'s own designed
-      // recovery for it, not data this poll lost. `throwContainedFailures`
-      // below is gated accordingly: this scope alone does not reject the
-      // poll's promise. It still travels in `failures`, so it is NAMED in the
-      // AggregateError whenever a genuinely correctness-critical failure ALSO
-      // happened this same poll — nothing here hides it from that report
-      // Only a mark failure entirely on its own resolves without REJECTING the
-      // poll's promise (#519/#526's gate below) — but not SILENTLY (#573):
-      // this module carries a `Logger` (`ExecutionInput.logger`), so the row
-      // staying unswept gets a local trace even when nothing else this poll
-      // failed to name it in an AggregateError. `warn`, not `error`: the
-      // self-healing next-reconcile() recovery this comment already
-      // describes is exactly why this is not an operator escalation
-      logCaughtFailure(
-        input.logger,
-        {
-          trace_id: input.trace_id,
-          stage: 'execution',
-          event: 'flatten_sweep_mark_failed',
-          level: 'warn',
-          message:
-            'markFlattenFillsSwept failed — the row stays unswept and will be found again by ' +
-            "the next reconcile() pass (SharedStore.getUnresolvedFlattens()'s own designed recovery)",
-        },
-        error,
-        { flatten_key: flattenKey },
-      );
-      failures.push({ scope: 'flatten-sweep-mark', key: flattenKey, instrument: null, error });
-    }
-  }
+  await markSweptFlattens(input, flattenNamedLots, failedLotKeys, now, failures);
 
   // Last, once no unit of work is left to lose: reporting must not cost
   // progress, and progress must not buy silence. Scoped to the
@@ -561,6 +571,7 @@ async function redistributeFlattenFills(
  * makes the caller's containment a clean skip rather than a partial write.
  * `namedLots` is the caller's per-bucket set, discarded on a throw.
  */
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: all-or-nothing contract over byLot — split, over-fill-warn, persist-unattributed, mark-residuals-unprotected, delete-last are each ordering-critical (see inline comments); extracting risks silently reordering a step relative to the final byLot.delete
 async function redistributeOneFlatten(
   input: FillIngestInput,
   byLot: Map<string, NormalizedFill[]>,
