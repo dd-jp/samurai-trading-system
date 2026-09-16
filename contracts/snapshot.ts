@@ -1,4 +1,4 @@
-/** Dashboard wire model — the JSON payload `GET /api/snapshot` returns; `Date` fields serialize to ISO strings at the HTTP boundary (`buildSnapshot`) */
+/** Dashboard wire model — the JSON payload `GET /api/snapshot` returns; timestamps serialize to ISO strings at the HTTP boundary (`buildSnapshot`) */
 
 import type { MetricsSuite, ProfitFactorWire } from './metrics.js';
 import type { PipelineStage, PipelineView } from './pipeline.js';
