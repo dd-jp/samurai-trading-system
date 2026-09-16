@@ -105,7 +105,7 @@ export async function markResidualsUnprotected(
  * fresh and derives `filledSize`/`exitQty`, or — on a store-read failure —
  * does everything that failure requires (mark-unprotected, alert with the
  * upper-bound `requested_size`) and reports `'handled'` so the caller knows
- * to stop rather than reads that sentinel as a residual to act on.
+ * to stop rather than reads that sentinel as a residual to act on
  */
 async function resolveResidualFillState(
   input: RearmInput,
@@ -219,7 +219,7 @@ async function alreadyPagedForUnsupportedRearm(
 /**
  * `broker.rearmProtectiveLegs`'s catch — the last thing `maybeRearmResidual`
  * does, so every early `return` here is equivalent to the caller's function
- * ending, not to skipping work the caller still had left to do.
+ * ending, not to skipping work the caller still had left to do
  */
 async function handleRearmFailure(
   input: RearmInput,

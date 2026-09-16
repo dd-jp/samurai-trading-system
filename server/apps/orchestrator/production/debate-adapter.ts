@@ -226,7 +226,7 @@ export interface DebatePersonasWithState extends DebatePersonas {
 // complexity down — a pure computation over already-resolved round data, with
 // no ordering dependency on anything else in the round (the caller still
 // computes `disagreement`/`confidence` first and calls this after, exactly as
-// the inline version did).
+// the inline version did)
 function buildPartialDebateState(
   debate_id: string,
   context: RoundContext,
@@ -248,7 +248,7 @@ function buildPartialDebateState(
     // disagreement summary — is empty on every non-final round
     // (`detectDisagreements` runs once per debate), so falling back to it
     // here would satisfy the invariant with an empty string. This says what
-    // actually happened instead.
+    // actually happened instead
     open_items:
       disagreement.conflicts.length > 0
         ? disagreement.conflicts.map((conflict) => conflict.nature)

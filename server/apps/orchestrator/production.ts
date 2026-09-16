@@ -1009,7 +1009,7 @@ function resolveProductionBootConfig(
 // `buildLlmAndMarketIntelligenceLayer` purely to keep that function's
 // cognitive complexity down. Independent of the sentiment/LLM layer below —
 // see the inline comments on each agent for why neither depends on Nous
-// credentials or on the other agent.
+// credentials or on the other agent
 function buildMacroIntelligenceLayer(deps: {
   config: ProductionConfig;
   marketIntelligence: MarketIntelligenceStore;
@@ -1099,15 +1099,10 @@ function buildMacroIntelligenceLayer(deps: {
   return { gdeltIngestAgent, gdeltScoringPass, polymarketAgent };
 }
 
-// The LLM client, the in-flight/spend metering it shares with the sentiment
-// agent, and the news/social market-intelligence writers. Split out of
-// `buildLlmAndMarketIntelligenceLayer` for the same reason as
-// `buildMacroIntelligenceLayer` above — every branch below turns on the
-// sentiment/Nous credentials state, none of it on the macro layer's state.
 // The `GrokAgent` (or its absence) plus the one warning that reports why it
 // is absent, split out of `buildSentimentIntelligenceLayer` purely to keep
 // that function's cognitive complexity down — the retrieval-vs-scoring
-// client choice below is the only nested branch in the whole file.
+// client choice below is the only nested branch in the whole file
 function buildSentimentGrokAgent(deps: {
   sentimentCredentials: ReturnType<typeof tryNousCredentials>;
   sentimentRetrieval: boolean;
@@ -1164,7 +1159,7 @@ function buildSentimentGrokAgent(deps: {
           ...sentimentCredentials,
           gate: llmInFlightGate,
           // The credentials' model is the PINNED `x-ai/grok-4.5`, on which
-          // `x_search` 400s ("supported only on OpenRouter-routed models").
+          // `x_search` 400s ("supported only on OpenRouter-routed models")
           // The routed alias is not a preference here, it is the only thing
           // that works — see `X_SEARCH_MODEL`
           model: X_SEARCH_MODEL,
@@ -1190,6 +1185,11 @@ function buildSentimentGrokAgent(deps: {
   });
 }
 
+// The LLM client, the in-flight/spend metering it shares with the sentiment
+// agent, and the news/social market-intelligence writers. Split out of
+// `buildLlmAndMarketIntelligenceLayer` for the same reason as
+// `buildMacroIntelligenceLayer` above — every branch below turns on the
+// sentiment/Nous credentials state, none of it on the macro layer's state
 function buildSentimentIntelligenceLayer(deps: {
   config: ProductionConfig;
   clock: Clock;
@@ -1481,7 +1481,6 @@ function buildLlmAndMarketIntelligenceLayer(deps: {
 // against each other
 function buildBreakerStateDeps(deps: {
   config: ProductionConfig;
-  clock: Clock;
   logger: Logger;
   brokerClient: () => AlpacaBrokerClient;
   marketData: MarketDataService;
@@ -1493,7 +1492,6 @@ function buildBreakerStateDeps(deps: {
 }) {
   const {
     config,
-    clock,
     logger,
     brokerClient,
     marketData,
@@ -1773,7 +1771,6 @@ function buildExecutionAndRiskInfra(deps: {
 
   const breakerStateDeps = buildBreakerStateDeps({
     config,
-    clock,
     logger,
     brokerClient,
     marketData,
@@ -2366,7 +2363,7 @@ function buildVerdictStepDepsFor(deps: {
 // indistinguishable from the number alone. `derived_by_conversion` is the
 // field that separates them: a live ceiling stamped with a rate it was never
 // converted at would misattribute the figure. No-op when there is no ceiling
-// to report.
+// to report
 function logCapitalCeilingResolved(
   logger: Logger,
   ceiling: number | undefined,
@@ -2456,7 +2453,7 @@ export function buildProductionComponents(config: ProductionConfig): ProductionC
    */
   const logger = config.logger ?? new JsonLogger();
 
-  // #1180 — which rate produced which ceiling, on the stream a soak keeps.
+  // #1180 — which rate produced which ceiling, on the stream a soak keeps
   // Split into its own function purely to keep `buildProductionComponents`'s
   // cognitive complexity down — a pure logging side effect, no ordering
   // dependency on anything else in this function

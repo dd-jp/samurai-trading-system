@@ -996,7 +996,7 @@ async function verifyFundingCurrency(
  * composition root builds from — precedence order matches the spread order
  * `startFromEnvironment` used inline before this was pulled out: `injected`
  * overrides the resolved alert channels, and the resolved Saxo/currency/risk
- * fields only apply when the caller did not already supply their own.
+ * fields only apply when the caller did not already supply their own
  */
 function resolveProductionConfig(deps: {
   injected: Partial<ProductionConfig>;

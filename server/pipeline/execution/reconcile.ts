@@ -318,7 +318,7 @@ export async function reconcile(input: ReconcileInput): Promise<ReconcileReport>
   const wedgedZeroFillSweep = await sweepWedgedZeroFillLots(input);
   divergences.push(...wedgedZeroFillSweep.divergences);
 
-  // `undetermined` deliberately wrote nothing, so it is not a correction.
+  // `undetermined` deliberately wrote nothing, so it is not a correction
   // Snapshotted HERE, before `findUnrecordedVenuePositions` below: that scan
   // only ever REPORTS (#429's "nothing was written: adopting it would mean
   // inventing the bracket, stop and debate_id it has none of"), so its

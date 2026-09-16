@@ -305,7 +305,7 @@ export function buildAnalystsStep(
 
 // Split out of `buildAnalystsStep`'s returned closure purely to keep its
 // cognitive complexity down — a pure logging side effect over `result`, with
-// no ordering dependency on anything else in the tick.
+// no ordering dependency on anything else in the tick
 function logAnalystFailures(
   logger: Logger | undefined,
   trace_id: string,
@@ -343,7 +343,7 @@ function logAnalystFailures(
 // Split out of `buildAnalystsStep`'s returned closure purely to keep its
 // cognitive complexity down. Must run AFTER the skipKind set above (see that
 // call site's #1080 comment) — the caller preserves that by calling this
-// immediately after, not by anything internal to this function.
+// immediately after, not by anything internal to this function
 async function recordSkipOutcome(
   consecutiveSkips: Map<string, number>,
   options: AnalystsStepOptions,

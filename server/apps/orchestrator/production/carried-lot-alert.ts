@@ -247,7 +247,7 @@ export function buildCarriedLotReporter(deps: CarriedLotReporterDeps): () => Pro
 // its cognitive complexity down. "Durable first, audible second" —
 // `TraderDiagnosticAlertChannel`'s port doc, and the #710 correction that the
 // log must not sit behind the throttle that gates the channel — stays intact
-// because the log call is still the first statement in this function's body.
+// because the log call is still the first statement in this function's body
 async function reportCarriedLot(
   deps: Pick<
     CarriedLotReporterDeps,

@@ -374,7 +374,7 @@ type ConditionClassification =
  * and every drop reason stay in the same declared-precedence order they had
  * inline: `acceptedCount` is `accepted.length` at the moment this element is
  * reached, so `over_cap` still only fires once an on-merits-valid condition
- * would be the one to overflow the cap.
+ * would be the one to overflow the cap
  */
 function classifyRawCondition(
   candidate: RawCondition,
