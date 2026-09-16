@@ -47,19 +47,19 @@
  * ## No re-derivation
  *
  * A bar served by the fallback is NOT replaced when the primary recovers —
- * explicitly decided in #562, not overlooked. `bars.source` makes a
+ * explicitly decided, not overlooked. `bars.source` makes a
  * fallback-sourced row detectable at any later time, so a re-derivation pass
  * is a separate, resumable job rather than something this wrapper must do
  * inline on a live tick; doing it inline would mean re-fetching history from
  * the vendor that just stalled, on the tick path, to fix a row that is
  * already usable.
  *
- * ## Circuit breaker on the primary (#824)
+ * ## Circuit breaker on the primary
  *
  * Failing over is cheap ONCE and ruinous as a steady state. A stalled Alpaca
  * bar read is not a fast error: `AlpacaHttpDataClient` retries three times at
  * a 10s per-attempt timeout with backoff between, so ONE stalled read costs
- * ~30s of wall clock before the fallback is even attempted — and #562 exists
+ * ~30s of wall clock before the fallback is even attempted — and this exists
  * for a FOURTEEN-DAY UNATTENDED SOAK, where a stall lasts hours and every
  * instrument pays that on every tick. The tick loop's budget was never sized
  * for `universe.length x ~30s` per tick.
@@ -76,7 +76,7 @@
  * **This does not by itself make a sustained stall affordable.** It moves the
  * cost: an open circuit routes the whole universe onto a Polygon bucket sized
  * — `venue-pacing.ts` says so in its own margin derivation — for OCCASIONAL
- * use. #828 owns that steady-state budget. This breaker caps the PRIMARY-side
+ * use; that steady-state budget is a separate concern. This breaker caps the PRIMARY-side
  * cost of BAR reads only: `fetchMark` has no fallback by design (see above)
  * and therefore no breaker, so a mark on an open position still pays the full
  * primary timeout every tick for as long as the stall lasts. That is the
@@ -93,8 +93,8 @@
  * tick's reads skip the primary.
  *
  * "The rest of that tick" was exact when the tick loop walked the universe
- * one instrument at a time (`maxConcurrentInstruments: 1`). #1013 set paper
- * and live to an explicit `6` (`paper-profile.ts`); smoke and backtest still
+ * one instrument at a time (`maxConcurrentInstruments: 1`). Paper and live
+ * are now set to an explicit `6` (`paper-profile.ts`); smoke and backtest still
  * run at 1, but now by explicit override rather than by the `?? 1` fallback
  * production.ts once relied on — `smoke-run.ts` sets it directly, and
  * `paperStartingProfile`'s `mode === 'backtest'` branch pins it back to 1 for
@@ -166,7 +166,7 @@ export interface FailoverDataSourceConfig {
    */
   alert: FailoverAlerter;
   /**
-   * The clock the circuit breaker's cooldown is measured on (#824). Defaults
+   * The clock the circuit breaker's cooldown is measured on. Defaults
    * to wall time; the composition root passes the orchestrator's own `Clock`
    * so a soak, a simulated run and a test all age the cooldown on the same
    * clock the tick loop runs on.
@@ -175,7 +175,7 @@ export interface FailoverDataSourceConfig {
 }
 
 /**
- * How many CONSECUTIVE primary failures on a leg open its circuit (#824).
+ * How many CONSECUTIVE primary failures on a leg open its circuit.
  *
  * Three, not one: a single failure is what the failover already handles well
  * and is not evidence of a stall — Alpaca returns transient 5xx, and
@@ -190,7 +190,7 @@ export const FAILOVER_CIRCUIT_FAILURE_THRESHOLD = 3;
 
 /**
  * How long an open circuit skips the primary before admitting a half-open
- * probe (#824).
+ * probe.
  *
  * Sized against the TICK CADENCE, not against a vendor SLA: five minutes is
  * strictly less than the 15-minute live cadence (ADR-0008), so every tick
@@ -325,7 +325,7 @@ export class FailoverDataSource implements DataSource {
     if (fallback === undefined) {
       // No fallback to route to, so there is nothing to break the circuit
       // TOWARDS: skipping the primary here would turn a slow read into a
-      // guaranteed failure. The instrument keeps its pre-#562 behaviour
+      // guaranteed failure. The instrument keeps its original behaviour
       // exactly
       return this.#config.primary.fetchBars(instrument, window, asOf);
     }

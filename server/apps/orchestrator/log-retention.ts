@@ -3,120 +3,65 @@
  * `SAMURAI_LOG_FILE` names; everything else left in `logs/` (redirected
  * stdout/stderr, hand-run `> logs/*.log` output, a standalone dashboard's
  * `service-api.log`) grows unbounded on a host meant to run unattended for
- * weeks. This boot-time sweep reaches those hand-named files too, which a
- * second rotated sink — which only ever bounds the one file it is told to
- * write — could not.
+ * weeks. This boot-time sweep reaches those hand-named files too.
  *
- * ## What is even a candidate
- *
- * Two structural filters run before age is consulted at all, since both
- * failure modes below are unrecoverable:
- * - **The directory must not be the process's own cwd.** A `SAMURAI_LOG_FILE`
- *   with no directory component resolves to the repo root, which holds
- *   `.env.local`. This is a cwd check rather than a "must be named `logs`"
- *   check, since `/var/log/samurai` is a legitimate log directory too; the
- *   name rule below is what keeps non-log files ineligible regardless of path.
- * - **The name must be archival-shaped**: a `RotatingFileSink` generation
- *   (`orchestrator.log.1`) or a datestamped artefact
- *   (`orchestrator-20260902-1842.log`, or a bare date with no time
- *   component, `soak-20260825.log`). This rule is one-directional: an
- *   undated bare name (`orchestrator.log`, `service-api.log`,
- *   `soak-boot.out`) is never unlinked on age, whatever its mtime — this is
- *   what makes `.env.local` and every non-log file structurally ineligible
- *   for unlinking, not merely usually excluded. The converse does not hold:
- *   an archival-shaped name is not proof a file is finished, so liveness is
- *   still checked below.
- *
- * ## Liveness rule
+ * Two structural filters run before age is consulted, since both failure
+ * modes are unrecoverable: the directory must not be the process's own cwd
+ * (a `SAMURAI_LOG_FILE` with no directory component resolves to the repo
+ * root, which holds `.env.local`), and the name must be archival-shaped (a
+ * `RotatingFileSink` generation or a datestamped artefact). That second rule
+ * is one-directional: an undated bare name is never unlinked on age
+ * whatever its mtime, which is what makes `.env.local` structurally
+ * ineligible — but an archival-shaped name is not proof a file is finished,
+ * so liveness is still checked.
  *
  * A wrong sweep deletes evidence of a run still producing it, so age alone
  * never triggers removal on the unlink path. Two independent signals gate
- * it, since no one signal covers every process writing into `logs/`:
- * - **Descriptor identity.** This process's own fd 1/2 may BE one of these
- *   files — directly under a shell redirect, or indirectly through the
- *   supervisor's `stdio: 'inherit'`, which passes descriptors to a spawned
- *   child verbatim. `fstatSync` on fd 1/2 and comparing `{dev, ino}` against
- *   each candidate catches both without knowing either filename in advance.
- * - **Recency**, for anything descriptor identity can't reach — most
- *   concretely a sibling process's own redirect target (`service-api.log`
- *   from a standalone dashboard). A process still appending keeps moving its
- *   mtime forward, so "unmodified within the window" is the operative
- *   definition of dead here.
- *
- *   Mtime alone is not sufficient even with a generous window: a barely-used
- *   writer can hold a file open for far longer than any reasonable window.
- *   Unlinking that is worse than losing the file — the writer keeps
- *   appending to the now-detached inode, so the space stays allocated but
- *   invisible until the writer exits, turning "unbounded growth" into
- *   "invisible unbounded growth". A bare name is already excluded from this
- *   path entirely by the name rule above (see "Bare live names" for what
- *   reaches it instead); for a datestamped name written by an unidentified
- *   sibling, `SAMURAI_LOG_RETENTION_KEEP` is the operator's own escape hatch.
+ * it: descriptor identity (this process's own fd 1/2 may BE one of these
+ * files, directly or via the supervisor's `stdio: 'inherit'` — `fstatSync`
+ * and comparing `{dev, ino}` catches both without knowing the filename), and
+ * recency for anything descriptor identity can't reach (a sibling process's
+ * own redirect target, e.g. `service-api.log`). Mtime alone with a generous
+ * window is not enough for that second case either: unlinking a file a
+ * barely-used writer still holds open leaves it appending to a detached,
+ * invisible inode, turning unbounded growth into INVISIBLE unbounded
+ * growth — `SAMURAI_LOG_RETENTION_KEEP` is the operator's escape hatch for
+ * an unidentified sibling's datestamped file.
  *
  * `protectedPaths` is a third, deterministic backstop: the caller's own
- * active sink file and its rotation generations are excluded regardless of
+ * active sink file and rotation generations are excluded regardless of
  * mtime, since `RotatingFileSink` owns their retirement on its own
  * count-based policy and an age-based sweep reaching into that set would
- * fight it. This tracks the *currently configured* rotation count, not
- * whatever produced the files on disk — an orphaned generation left behind
- * by a lowered `SAMURAI_LOG_MAX_FILES` falls out of `protectedPaths` and is
- * correctly left to the age window instead, since the sink will never
- * revisit it either.
+ * fight it. It tracks the *currently configured* rotation count, so an
+ * orphaned generation left behind by a lowered `SAMURAI_LOG_MAX_FILES`
+ * correctly falls out of it and back onto the age window.
  *
- * `keepNames` (`SAMURAI_LOG_RETENTION_KEEP`) is the operator's own version of
- * that backstop, for a file this process has no way to identify on its own.
- * Basenames only, never paths — the sweep never reaches outside its own
- * directory.
- *
- * ## Bare live names: truncated, not deleted
- *
- * An undated bare name is permanently ineligible for unlink by the name
- * rule above — correct, since it's what makes the descriptor gap closeable
- * at all, but it leaves a bare artefact like `soak-boot.out` itself
- * unbounded. `bareTruncateBytes` gives eligible bare names a
- * disk-allocation-based path instead: past a size threshold,
- * `truncateSync(path, 0)` rather than `remove(path)`. This is safe on a file
- * a writer still holds open in a way unlink is not — truncate changes only
- * length, never the descriptor's position, so the writer's next write lands
- * by path again rather than on a stranded inode. That safety is also why
- * this path carries none of the age/descriptor liveness gates above:
- * allocation alone decides eligibility, live or not. It carries no
- * evidence-loss protection either — `SAMURAI_LOG_RETENTION_KEEP` is how an
- * operator exempts a specific bare file from it.
- *
- * `isBareLogName` shape alone is not narrow enough to scope this path — any
- * undated `.log`/`.out` file in the swept directory matches it, unlike the
- * unlink path where an archival shape rarely collides with an unrelated
- * tool's own files (`install.log`, `wifi.log`). `bareTruncateNames`
- * (`SAMURAI_LOG_BARE_TRUNCATE_NAMES`) narrows it by an explicit basename
- * allowlist instead, defaulting to `DEFAULT_BARE_TRUNCATE_NAMES`
- * (`soak-boot.out`, the one file this mechanism exists for) — so unrelated
- * bare logs are unreachable by construction, not by an operator remembering
- * to opt in. The variable only ever extends the set, never shrinks it below
- * the default — `SAMURAI_LOG_RETENTION_KEEP` already covers exempting a
- * specific file from every path in this sweep. `protectedPaths`/`keepNames`
- * still apply on top, since `SAMURAI_LOG_FILE` itself is usually a bare name.
- *
- * Truncation is boot-time, like the rest of this sweep — a growing file is
- * only capped on a boot that happens to land after it crosses the threshold,
- * not continuously while a process keeps running.
+ * Bare live names are truncated, not deleted: `bareTruncateBytes` gives an
+ * eligible bare name (e.g. `soak-boot.out`) a disk-allocation path instead —
+ * past a size threshold, `truncateSync(path, 0)` rather than `remove(path)`.
+ * Safe on a file a writer still holds open, unlike unlink: truncate changes
+ * only length, never the descriptor's position, so the writer's next write
+ * lands by path again rather than on a stranded inode — which is also why
+ * this path carries none of the age/liveness gates above; allocation alone
+ * decides eligibility, live or not. `bareTruncateNames`
+ * (`SAMURAI_LOG_BARE_TRUNCATE_NAMES`) narrows candidates by an explicit
+ * basename allowlist, since `isBareLogName` shape alone would match any
+ * undated `.log`/`.out` file, not just the ones this mechanism is for.
+ * Truncation is boot-time like the rest of this sweep: a growing file is
+ * only capped on a boot landing after it crosses the threshold.
  *
  * Eligibility and `bytesReclaimed` are measured in disk allocation
  * (`stat.blocks * 512`), never `stat.size`: a plain-redirect (`>`, not
- * `>>`) writer's fd has no `O_APPEND` and keeps its own unmoved write
- * offset, so after a truncate its next write lands past the new end of file
- * and leaves a sparse hole — `stat.size` climbs back toward its
- * pre-truncation figure on that very write even though the hole's blocks
- * stay unallocated. Gating on `stat.size` would re-truncate on every
- * subsequent boot and destroy everything appended since the last one;
- * `stat.blocks` does not have that failure mode (verified on both macOS
- * APFS and Linux ext4 — see `log-retention.test.ts`'s hole test). A side
- * effect: a truncated-then-appended file's sparse hole reads back as `\0`
- * bytes, so a plain `grep` reports it as binary — use `grep -a` or `tail -c`.
- * A removed (unlinked) file contributes its `stat.size` instead, since there
- * the whole file is gone and apparent length and disk freed agree.
- *
- * ## Failure posture
+ * `>>`) writer's fd keeps its own unmoved write offset, so after a truncate
+ * its next write leaves a sparse hole and `stat.size` climbs back toward
+ * its pre-truncation figure even though the hole's blocks stay unallocated.
+ * Gating on `stat.size` would re-truncate every subsequent boot and destroy
+ * everything appended since the last one; `stat.blocks` does not have that
+ * failure mode (verified on macOS APFS and Linux ext4 — see
+ * `log-retention.test.ts`'s hole test). Side effect: the sparse hole reads
+ * back as `\0` bytes, so a plain `grep` reports it as binary — use `grep -a`
+ * or `tail -c`. A removed (unlinked) file contributes its `stat.size`
+ * instead, since there the whole file is gone.
  *
  * A malformed `SAMURAI_LOG_*` environment value throws at boot — retention
  * policy nobody chose is worse than a named refusal. A refused directory,

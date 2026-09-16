@@ -163,13 +163,13 @@ export function resolveLiveCapitalCeilingUsd(
  * The same bounds as `resolveLiveCapitalCeilingUsd`, applied to a number that
  * did not come from the environment.
  *
- * Split from the parse (#511 review) for one reason: `liveStartingProfile`
- * accepts an injected ceiling, and re-validating it by round-tripping through
- * the env parser produced a message blaming `SAMURAI_LIVE_MAX_CAPITAL_USD` for
- * a value that variable never held. `source` is what the caller is asked to
- * fix, so the message names the real culprit either way. It is a variable name
- * or an argument name — never a credential, and the ceiling itself is not
- * secret, so quoting it back is what makes a typo visible.
+ * Split from the parse for one reason: `liveStartingProfile` accepts an
+ * injected ceiling, and re-validating it by round-tripping through the env
+ * parser produced a message blaming `SAMURAI_LIVE_MAX_CAPITAL_USD` for a
+ * value that variable never held. `source` is what the caller is asked to
+ * fix, so the message names the real culprit either way — never a
+ * credential, and the ceiling itself is not secret, so quoting it back is
+ * what makes a typo visible.
  */
 function assertLiveCapitalCeilingUsd(value: number, source: string): CapitalCeilingUsd {
   const ceiling = toCapitalCeilingUsd(value, source);
@@ -191,7 +191,7 @@ function assertLiveCapitalCeilingUsd(value: number, source: string): CapitalCeil
 
 /**
  * How close a declared ceiling may sit to `LIVE_BOOK_GBP`'s bare number
- * before it looks unconverted (#1441). A distinct binding from
+ * before it looks unconverted. A distinct binding from
  * `D5_BOOK_REFUSE_ABOVE_TOLERANCE` (paper-profile.ts) on purpose: that one
  * bounds how far funded EQUITY may drift from the book before a Risk
  * Manager guard refuses; this bounds how close a DECLARED CEILING may sit to
@@ -203,18 +203,16 @@ const CEILING_LOOKS_LIKE_UNCONVERTED_BOOK_TOLERANCE = 0.05;
 
 /**
  * True when a declared USD ceiling sits close enough to `LIVE_BOOK_GBP`'s
- * bare number to be more likely a typo than a coincidence (#1441) — the one
- * input #1180's fix does not touch. See `LIVE_MAX_CAPITAL_ENV_VAR`'s docblock
- * above for why the ceiling is never converted for the operator.
+ * bare number to be more likely a typo than a coincidence. See
+ * `LIVE_MAX_CAPITAL_ENV_VAR`'s docblock above for why the ceiling is never
+ * converted for the operator.
  *
- * **USD-account premise, still current.** This only makes sense while the
- * live account is USD-denominated (Alpaca). #1400 wired a Saxo adapter into
- * the composition root, but it did not move this premise: the venue is opt-in
- * (`SAMURAI_BROKER`, unset means Alpaca) and refuses `live` outright, so every
- * run that reaches this function is still a USD one. Revisit when — and only
- * when — a GBP-native venue can actually reach live: on that path
- * `LIVE_BOOK_GBP`'s bare number is the correct figure, not a plausible typo,
- * and warning on it would be warning on a right answer.
+ * USD-account premise, still current: this only makes sense while the live
+ * account is USD-denominated (Alpaca). The Saxo venue is opt-in
+ * (`SAMURAI_BROKER`, unset means Alpaca) and refuses `live` outright, so
+ * every run that reaches this function is still a USD one. Revisit when a
+ * GBP-native venue can actually reach live — on that path `LIVE_BOOK_GBP`'s
+ * bare number is the correct figure, not a plausible typo.
  */
 function ceilingLooksLikeUnconvertedBookGbp(ceilingUsd: number): boolean {
   return (
@@ -248,9 +246,8 @@ export function liveStartingProfile(
   // may be perfectly well set
   const ceiling = assertLiveCapitalCeilingUsd(ceilingUsd, 'liveStartingProfile(ceilingUsd)');
 
-  // A warn, not a refusal — #511's scope is to make the switch work. The
-  // operator asked for live; they are told what they are getting, once, on the
-  // stream a soak actually keeps
+  // A warn, not a refusal: the operator asked for live; they are told what
+  // they are getting, once, on the stream a soak actually keeps
   logger?.log({
     trace_id: 'startup',
     stage: 'orchestrator',
@@ -287,11 +284,11 @@ export function liveStartingProfile(
   }
 
   return {
-    // #888 — `LIVE_BOOK_GBP` is passed through explicitly here, and ONLY
-    // here: this is the one caller for whom the declared book is the account
-    // being sized. `paperStartingProfile` calls `buildStartingProfileConfigs`
-    // with no book, deliberately, so D5's ceiling never clamps Alpaca's
-    // simulated paper balance. See `d5EnvelopeFor`'s docstring (paper-profile.ts).
+    // `LIVE_BOOK_GBP` is passed through explicitly here, and ONLY here: this
+    // is the one caller for whom the declared book is the account being
+    // sized. `paperStartingProfile` calls `buildStartingProfileConfigs` with
+    // no book, deliberately, so D5's ceiling never clamps Alpaca's simulated
+    // paper balance. See `d5EnvelopeFor`'s docstring (paper-profile.ts).
     ...buildStartingProfileConfigs(undefined, LIVE_BOOK_GBP),
     mode: 'live',
     capitalCeilingUsd: ceiling,

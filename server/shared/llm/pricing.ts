@@ -176,10 +176,10 @@ export const MODEL_RATES: Readonly<Record<string, ModelRate>> = Object.freeze({
  * tokens, and 0.1x would have under-counted the cap against the published
  * 0.4/M rate). `CACHE_READ_MULTIPLIER` is the fallback for rows without one.
  *
- * #1010 measured whether "nothing requests caching" was itself worth
- * fixing and found it moot for the pinned debate model on token size alone
- * — every debate-stage request measures well under the model's cache
- * minimum (`prompt-caching.test.ts` has the figures).
+ * Whether "nothing requests caching" was itself worth fixing was measured
+ * and found moot for the pinned debate model on token size alone — every
+ * debate-stage request measures well under the model's cache minimum
+ * (`prompt-caching.test.ts` has the figures).
  *
  * The 1-hour-TTL write multiplier is absent for the same reason: nothing
  * requests a 1h TTL, and the usage block doesn't distinguish the two TTLs
