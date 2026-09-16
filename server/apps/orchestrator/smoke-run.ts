@@ -1255,37 +1255,16 @@ async function runExitPathScenarios(input: {
       config: executionConfig,
       sessionCalendars: EXIT_PATH_SESSION_CALENDARS,
       residualExposureAlerts: residualAlerts,
-      // #527: not recorded/gated like `residualAlerts` above — no scenario
-      // here is expected to over-fill a flatten, and wiring a gate check for
-      // it is out of this ticket's scope (see `FlattenOverfillAlertChannel`'s
-      // doc for why this channel has no phone-reaching counterpart yet
-      // either)
+      // #527: not gated — no scenario here over-fills a flatten
       flattenOverfillAlerts: { postFlattenOverfillWarning: async () => {} },
       flattenReconcileAlerts,
-      // #1550: not recorded/gated, for the reason `flattenOverfillAlerts`
-      // above gives — every scenario in this harness drives the venue through
-      // the same `SimulatedBrokerAdapter` the store is written from, so its
-      // book and the store's can never disagree about which instruments are
-      // held, and the unrecorded shape is unreachable here by construction
+      // #1550: not gated — the venue and store share one SimulatedBrokerAdapter,
+      // so they can never disagree about which instruments are held
       unrecordedVenuePositionAlerts: { postUnrecordedVenuePositionAlert: async () => {} },
       unrecordedVenuePositionThrottle: new UnrecordedVenuePositionThrottle(),
       logger,
-      // #1087: NOT recorded/gated on THIS harness's own evidence, unlike
-      // `residualAlerts`/`flattenReconcileAlerts` above. `FILLED_WITH_ZERO_SIZE`
-      // fires only when a broker violates the "no fill predates its own
-      // lot's `opened_at`" invariant — the exact defect #1087 fixed at the
-      // source — and none of the exit-path scenarios above scripts that
-      // violation: they all share one `innerBroker` (`SimulatedBrokerAdapter`)
-      // through this one composition root, so wedging a lot here would mean
-      // reintroducing the fixed defect rather than exercising it honestly
-      // #1125 gates the mechanism instead, through its OWN dedicated broker
-      // and composition root — see `runFilledZeroSizeWedgeScenario` and
-      // `SmokeWedgedLotBroker` below, and `evaluateSmokeGate`'s
-      // `filledZeroSizeWedge` check. Targeted regression coverage also lives
-      // in simulated-adapter.test.ts and ingest-fills.test.ts, and
-      // `filled-zero-size-wiring.test.ts` separately proves the throttle
-      // instance is SHARED across every surface this same
-      // `buildExecutionSurface` binding builds
+      // #1087: not gated here — that invariant violation is exercised by its
+      // own dedicated broker/composition root; see `runFilledZeroSizeWedgeScenario`
       filledZeroSizeThrottle: new FilledZeroSizeThrottle(),
     },
     'smoke-exit-path',
@@ -1298,11 +1277,6 @@ async function runExitPathScenarios(input: {
 
   const positionStore = new SqliteExecutionStore(db);
 
-  /**
-   * Drives `order` through the REAL Verdict and then Execution, asserting it
-   * actually reached the broker (#894 — the `go` is decided here, not
-   * fabricated)
-   */
   const submit = async (order: OrderIntent, step: string): Promise<void> => {
     const verdict = await exitPathVerdict(order, { marketData, positionStore, clock }, step);
     assertSubmitted(await execution.execute(verdict), step);
@@ -1329,35 +1303,21 @@ async function runExitPathScenarios(input: {
   const twoLotFlatten = await runTwoLotFlattenScenario(ctx);
   const crashRestartLot = await enterCrashRestartLotAheadOfResidualSweep(ctx);
   const residualSweep = await runResidualSweepScenario(ctx);
-  // #549/#1228: the Simulated feed re-offers a flatten's fill on every poll,
-  // so an extra `ingestFills()` before the restart would retry (and heal)
-  // this failed re-arm in-process. `PostSweepScenarioContext` makes that
-  // call unreachable inside the three functions below. It does not close a
-  // statement added directly in THIS function between here and the restart
-  // — the bare `execution` local above (not just `ctx`) is still in scope,
-  // so no context type could close this route — but that route is caught by
-  // the runtime #549 gate assertion below: a healed-in-process residual
-  // still clears the marker and protects the right quantity on its own, so
-  // only `residualSweep.sweepDivergenceAction`/`sweepDivergenceReason`
-  // (`findSweepDivergence`, above) discriminate, not the compiler
+  // #549/#1228: an extra `ingestFills()` before the restart would retry (and
+  // heal) this failed re-arm in-process; `PostSweepScenarioContext` guards
+  // the scenario functions against that, and `sweepDivergenceAction`/
+  // `sweepDivergenceReason` below catch it if it happens anyway.
   await exitCrashRestartLotWithoutSweep(ctx, crashRestartLot.exitKey);
   const terminalSweepKey = await seedTerminalSweepRow(ctx);
   const { restarted, restartReconcile } = await restartExecutionAndReconcile(ctx);
   await restarted.ingestFills();
 
-  // Scenario 5's evidence, read AFTER the restarted reconcile+ingest: the
-  // sweep's own divergence keys on the LOT (a flatten's divergence keys on
-  // the flatten's own id, so the lookup cannot collide), the venue-side
-  // protection off the delegate adapter, and the marker column raw off the
-  // store — the durable effect the gate exists to enforce (#430)
   const lot5MarkerRow = db
     .prepare('SELECT residual_unprotected_since FROM open_positions WHERE idempotency_key = ?')
     .get(residualSweep.lotKey) as { residual_unprotected_since: string | null } | undefined;
   const sweepDivergence = findSweepDivergence(restartReconcile.divergences, residualSweep.lotKey);
 
-  // #1088: the seeded row's fate, read the same way — raw SQL rather than
-  // `getOpenPositions()`, which would never have shown a terminal row either
-  // way and so cannot distinguish "swept" from "was never open"
+  // Raw SQL, not getOpenPositions() — that can't distinguish "swept" from "never open" (#1088)
   const terminalSweepRow = db
     .prepare('SELECT 1 FROM open_positions WHERE idempotency_key = ?')
     .get(terminalSweepKey);
@@ -1384,9 +1344,6 @@ async function runExitPathScenarios(input: {
       protectedQty: broker.getProtectedQty(residualSweep.lotKey),
       markerCleared:
         lot5MarkerRow !== undefined && lot5MarkerRow.residual_unprotected_since === null,
-      // ONE lookup, both fields below read off its result (#1285 B2) — see
-      // `findSweepDivergence`'s doc for why a second, independently-keyed
-      // lookup would not close the wrong-key hole this guards against
       sweepDivergenceAction: sweepDivergence?.action,
       sweepDivergenceReason: sweepDivergence?.reason,
     },
@@ -1398,9 +1355,6 @@ async function runExitPathScenarios(input: {
   };
 }
 
-// #508/#516: the write-ahead journal must exist and every row must have
-// resolved — an unresolved row means an exit was journalled and then the
-// broker call was refused or left ambiguous
 function exitPathFlattenSubmissionFailures(observations: SmokeObservations): string[] {
   const failures: string[] = [];
   const { flattenSubmissions } = observations;
@@ -1423,21 +1377,10 @@ function exitPathFlattenSubmissionFailures(observations: SmokeObservations): str
 }
 
 /**
- * #516 — ORDERING, not merely that both calls happened: every `submitFlatten`
- * must have a `cancel` recorded FRESH since the previous `submitFlatten` (or
- * the start of the run), not merely "somewhere earlier in the sequence" —
- * that weaker form would report the FIRST flatten's own missing cancel and
- * then stop, because every later flatten's window contains SOME earlier
- * cancel and (wrongly) reads as satisfied
- *
- * What this window scoping does NOT do: verify the cancel it finds belongs
- * to the SAME lot the flatten is closing. A resting bracket leg cancelled
- * after the flatten (or never) can fire into the now-flat position and open
- * a reverse one, and this check catches that for the FIRST flatten a
- * regression touches — sufficient in practice because `executeExit` cancels
- * and flattens through one uniform code path applied to every exit, so a
- * real regression of #516's ordering shows up on the first flatten, not
- * selectively on a later one
+ * #516 — ordering, not merely that both calls happened: each `submitFlatten`
+ * must have a `cancel` since the PREVIOUS `submitFlatten`, not merely
+ * somewhere earlier in the sequence (the weaker form would let every later
+ * flatten's window wrongly borrow an earlier cancel).
  */
 function exitPathCancelBeforeFlattenFailures(evidence: ExitPathEvidence): string[] {
   const failures: string[] = [];
@@ -1469,9 +1412,6 @@ function exitPathCancelBeforeFlattenFailures(evidence: ExitPathEvidence): string
   return failures;
 }
 
-// #508/#517: every exit must eventually round-trip a lot to `closed` with
-// a `ClosedTrade` — see `SmokeObservations.closedTrades`'s doc for why this
-// was NOT required before #576
 function exitPathClosedTradesFailures(observations: SmokeObservations): string[] {
   const failures: string[] = [];
   if (observations.closedTrades.length === 0) {
@@ -1484,13 +1424,7 @@ function exitPathClosedTradesFailures(observations: SmokeObservations): string[]
   return failures;
 }
 
-/**
- * Scoped to scenario 1's OWN lot, not just the aggregate above: scenario 3
- * alone closes two lots, so an aggregate-only check stays green if
- * scenario 1 regresses in isolation (e.g. a reintroduced #517
- * misattribution confined to its instrument) while scenario 3 still
- * closes normally. Same pattern the #571 check below uses for its own lots.
- */
+/** Scoped to scenario 1's own lot so an isolated regression there can't hide behind scenario 3's aggregate count */
 function exitPathFullExitLotFailures(
   evidence: ExitPathEvidence,
   positions: SmokeObservations['positions'],
@@ -1513,13 +1447,9 @@ function exitPathFullExitLotFailures(
 }
 
 /**
- * #525 — the residual left by a partial flatten must be RE-ARMED (not left
- * naked), and re-arming must not have needed the fallback alert: a
- * successful re-arm posts nothing (residual-exposure-alert.ts)
- *
- * Scoped since #549: scenario 5 DELIBERATELY fails one re-arm, so exactly
- * its one inline alert is expected — any OTHER lot alerting still means a
- * re-arm failed on a deterministic offline broker
+ * #525 — a partial flatten's residual must be re-armed without needing the
+ * fallback alert. Scoped since #549: scenario 5 deliberately fails one
+ * re-arm, so any OTHER lot alerting still means a genuine failure.
  */
 function exitPathPartialFlattenFailures(evidence: ExitPathEvidence): string[] {
   const failures: string[] = [];
@@ -1551,56 +1481,12 @@ function exitPathPartialFlattenFailures(evidence: ExitPathEvidence): string[] {
 }
 
 /**
- * #549 — the residual-protection sweep's ENFORCEMENT assertions (#430's
- * convention, mirroring #519/#526's above): scenario 5's observing-poll
- * re-arm was scripted to fail, so ONLY the durable marker + the restarted
- * reconcile()'s sweep can have re-established protection. Each check below
- * catches a real way the #549 mechanism can regress on its OWN terms — the
- * dedup breaking, the sweep settling on the wrong action, the marker
- * surviving, the qty coming out wrong — but they are not four independent
- * witnesses to the SAME failure. Measured (#1228/#1285): an extra
- * `ingestFills()` ahead of the restart heals the deliberately-failed re-arm
- * in-process, through `maybeRearmResidual`'s mark-unprotected ->
- * rearmProtectiveLegs -> confirm-protected path (ingest-fills.ts). A
- * GENUINE restart-sweep heal takes a different path — `sweepOne`
- * (residual-protection-sweep.ts), which never writes mark-unprotected (the
- * marker is already set) and clears via `store.confirmResidualProtected`
- * directly. What makes the two indistinguishable to the other three checks
- * is not a shared code path but `sweepOne`'s own doc'd choice to recompute
- * off the SAME `heldQuantityFromFills`/`isFlat` expressions
- * `maybeRearmResidual` uses, so both leave an identical marker/qty/alert
- * footprint. The `scenario5Alerts` count check below, and the
- * `markerCleared`/`protectedQty` checks further below, all read a healed-
- * in-process residual as indistinguishable from a genuinely swept one
- * `sweepDivergenceAction === undefined` (`findSweepDivergence`, above
- * `runExitPathScenarios`) sees that the restarted sweep itself found
- * nothing left to do — positive evidence the RESTARTED sweep, not an
- * earlier poll, did the healing. `.action` alone is not sufficient,
- * though (#1285 B2, round-1 review): a wrong-key mutation at the
- * `findSweepDivergence` call site can read a DIFFERENT scenario's
- * divergence whose `.action` also happens to be `'adopted'` — measured
- * concretely by substituting scenario 4's `crashRestartLot.exitKey` for
- * this lot's key, which reads scenario 4's flatten-reconcile divergence
- * (`reconcileFlatten`, reconcile.ts) instead, itself `'adopted'`
- * `sweepDivergenceReason` is the same lookup's `reason` text, so it cannot
- * silently disagree with `sweepDivergenceAction` about which divergence was
- * found — and only `sweepOne`'s own re-arm reason
- * (`'... for residual N by the #549 sweep …'`, residual-protection-sweep.ts)
- * can produce the text this check requires. That excludes more than
- * flatten-reconcile divergences: `sweepOne` itself has a SECOND
- * `action: 'adopted'` return — the `coversQty` flat-path no-op, taken when
- * the persisted fill record already reads flat, whose reason ("marked lot
- * reads flat on the persisted fill record…") never names the #549 sweep
- * either. So this check discriminates WITHIN `sweepOne`, not only against
- * other mechanisms: only its own re-arm branch — the one that actually
- * retried `broker.rearmProtectiveLegs` — satisfies it. Since #1285 N3
- * (round-2 review), the matched text is also bound to THIS lot's own
- * `expectedResidual`, not just the literal `'by the #549 sweep'` suffix —
- * narrowing the aperture the B2 fix left open: a future scenario adding a
- * second lot through `sweepOne`'s real re-arm branch would otherwise also
- * produce `'adopted'` text naming the #549 sweep, and a wrong-key lookup
- * landing on THAT lot's divergence would pass B2's check without also
- * matching this lot's own residual quantity
+ * #549 — scenario 5's observing-poll re-arm was scripted to fail, so only the
+ * durable marker plus the restarted reconcile()'s sweep can re-establish
+ * protection. The reason-text match below (not just `.action === 'adopted'`)
+ * is load-bearing: a wrong-key lookup can land on a different scenario's
+ * divergence that also reads `'adopted'`, and only `sweepOne`'s own re-arm
+ * reason, bound to this lot's `expectedResidual`, rules that out (#1285 B2/N3).
  */
 function exitPathResidualSweepFailures(evidence: ExitPathEvidence): string[] {
   const failures: string[] = [];
@@ -1664,8 +1550,6 @@ function exitPathResidualSweepFailures(evidence: ExitPathEvidence): string[] {
   return failures;
 }
 
-// #571 — neither lot named by a multi-lot flatten may be left phantom-open:
-// both must have reached `order_state: 'closed'` in `open_positions`
 function exitPathTwoLotFlattenFailures(
   evidence: ExitPathEvidence,
   positions: SmokeObservations['positions'],
@@ -1686,13 +1570,10 @@ function exitPathTwoLotFlattenFailures(
 }
 
 /**
- * #519/#526 — the ENFORCEMENT assertions for the flatten-journal sweep
- * (#430's convention: a durable EFFECT only the new mechanism produces,
- * not that an object was constructed). A regression that deletes
- * `reconcile()`'s flatten sweep, or reverts `resumeFlatten` to a no-op,
- * leaves scenario 4's lot open forever — `ingestFills()` alone never polls
- * an order the process-local `flattens` map has forgotten, so nothing
- * short of the sweep itself can close it
+ * #519/#526 — a regression that deletes `reconcile()`'s flatten sweep, or
+ * reverts `resumeFlatten` to a no-op, leaves scenario 4's lot open forever:
+ * `ingestFills()` alone never polls an order the process-local `flattens`
+ * map has forgotten.
  */
 function exitPathCrashRestartFailures(
   evidence: ExitPathEvidence,
