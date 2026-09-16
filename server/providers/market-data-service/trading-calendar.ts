@@ -528,39 +528,14 @@ export const LSE_TABLE_COVERAGE_END = earlierOf(
 
 /**
  * London Stock Exchange regular trading hours: Mon-Fri, 08:00-16:30 London,
- * with UK bank holidays and 12:30 half-day closes (#668).
+ * with UK bank holidays and 12:30 half-day closes. This is the calendar the
+ * LIVE equity leg (Saxo, GBP LSE-listed ETFs/ETCs) runs on.
  *
- * This is the calendar the LIVE equity leg runs on. #659 put that leg on
- * GBP LSE-listed ETFs/ETCs (venue: Saxo Capital Markets UK, GIA, since the
- * 2026-08-30 ADR-0015 amendment; this comment said "Trading 212 ISA" until
- * #946), so the US 16:00 ET boundary the repo previously had is the PAPER
- * venue's, not the live one's —
- * and #656 measured that the two sessions overlap by only two hours, which is
- * why the flatten rule had to be an offset resolved through the instrument's
- * own calendar rather than a shared wall-clock constant.
- *
- * Holidays are modelled here and, since #696, in
- * `UsEquityRegularHoursCalendar` too. This class had them from the start
- * because it shipped with #668 already driving the flatten; the US one was
- * written earlier, for ingestion, and kept a permissive posture that #668
- * silently invalidated. Both are hand-entered tables ending at their own
- * `*_TABLE_COVERAGE_END` — #684 was scoped to the US table only (its own
- * body: "The LSE side has no equivalent free endpoint and stays a table").
- * These hand-entered tables are the source of truth for the LSE session; a
- * venue session feed, where one exists, is a cross-check run against them,
- * not a replacement for them.
- *
- * `#closeMinutesFor` stays TOTAL past `LSE_TABLE_COVERAGE_END` — it does not
- * throw, unlike `UsEquityRegularHoursCalendar`'s. That is deliberate, not a
- * gap: this method backs `isOpen`/`sessionStart`/`sessionEnd`, all on the
- * flatten path, so an unconditional throw past a static coverage cliff would
- * fire on every tick from that date forward and no position could ever be
- * closed again (this repo has already shipped that shape of bug once — a
- * guard placed above an early return blocked exits, not just entries). The
- * coverage boundary is instead enforced once, at boot, by
- * `assertLseCalendarCoverage` (`production/lse-calendar-coverage-guard.ts`),
- * while no position exists yet to strand — see `coversCloseFor` below for
- * how a caller can ask the question this method itself will not raise.
+ * `#closeMinutesFor` stays TOTAL past `LSE_TABLE_COVERAGE_END` rather than
+ * throwing like the US calendar does — this backs `isOpen`/`sessionStart`/
+ * `sessionEnd` on the flatten path, so throwing here would block every future
+ * tick from closing a position. Coverage is enforced once at boot instead,
+ * by `assertLseCalendarCoverage`, before a live position exists to strand.
  */
 export class LseRegularHoursCalendar implements TradingCalendar {
   isOpen(instant: Date): boolean {
@@ -641,15 +616,8 @@ export class LseRegularHoursCalendar implements TradingCalendar {
 
   /**
    * Can this instant's close be TRUSTED against the hand-entered tables?
-   * `false` past `LSE_TABLE_COVERAGE_END` — not a throw, because
-   * `#closeMinutesFor` stays total (see the class doc). This is the answer a
-   * caller reads instead: `assertLseCalendarCoverage` calls it at boot, and a
-   * test can call it directly to prove a date past coverage is a GUESS, not a
-   * verified 16:30, without needing the calendar itself to raise anything.
-   *
-   * Keyed on the civil date, same as `#closeMinutesFor`, for the same reason:
-   * whether today's close is trustworthy cannot depend on the time of day
-   * the question is asked.
+   * `false` past `LSE_TABLE_COVERAGE_END`, rather than a throw, since
+   * `#closeMinutesFor` stays total — `assertLseCalendarCoverage` reads this at boot.
    */
   coversCloseFor(instant: Date): boolean {
     return civilDateKey(toCivilDate(instant, LONDON_ZONE)) <= LSE_TABLE_COVERAGE_END;
@@ -670,35 +638,16 @@ const OVERLAP_WINDOW_LAST_ENTRY_MINUTES = 15 * 60 + 45;
 
 /**
  * A London wall-clock predicate for `SchedulerConfig.stocksTradingWindow`.
- *
- * **This narrows a session; it does not define one.** It answers "may an
- * equity be entered at this instant", and the Scheduler only consults it once
- * the calendar has already said the venue is open — so holidays, half-days,
- * weekends and DST stay the calendar's business, resolved through the same
- * `Intl` machinery every other boundary in this file uses.
- *
- * Kept here rather than in the orchestrator precisely so it CANNOT drift from
- * that machinery: a window that did its own timezone arithmetic would be right
- * for eight months of the year.
- *
- * Defaults are the overlap-only window (#706): entries armed 14:30-15:45
- * London. #656 measured LSE 08:00-16:30 against US 14:30-21:00 — a two-hour
- * overlap — and every measurement the intraday product rests on is computed on
- * US tape, because no free LSE intraday history exists.
- *
- * Half-open at the top (`< end`), matching `isOpen`: 15:45:00 exactly is past
- * the last entry, so the two boundaries compose without an off-by-one minute.
+ * Narrows a session; does not define one — the Scheduler consults this only
+ * once the calendar says the venue is open. Defaults to the LSE/US overlap
+ * window, 14:30-15:45 London (#706), since intraday measurements are on US tape.
  */
 export function londonEntryWindow(
   startMinutes: number = OVERLAP_WINDOW_OPEN_MINUTES,
   endMinutes: number = OVERLAP_WINDOW_LAST_ENTRY_MINUTES,
 ): (instant: Date) => boolean {
-  // Ordering alone is not enough. `minutesSinceMidnight` is always in [0, 1440),
-  // so a clock-style `1545` (meant as 15:45) or a negative offset passes an
-  // ordering check and yields a window that is silently ALWAYS or NEVER true —
-  // the first arms entries for the whole session, the second deletes them, and
-  // both look like a working config. Reject the out-of-range value at
-  // construction, where the caller still knows what it meant
+  // Reject out-of-range minute values here: a clock-style `1545` (meant as
+  // 15:45) would pass an ordering check but silently produce an always/never window
   for (const [name, value] of [
     ['startMinutes', startMinutes],
     ['endMinutes', endMinutes],
