@@ -1,121 +1,16 @@
 /**
- * Offline end-to-end smoke run (ticket #350) — the pre-soak gate. See
- * [ADR-0004](../../docs/adr/0004-production-composition-root.md) §5 and
- * docs/specs/orchestrator-spec.md (story 19, "Testing Decisions" §
- * "Composition root seam").
+ * Offline end-to-end smoke run — the pre-soak gate. Runs the real entrypoint
+ * assembly (`startFromEnvironment` -> `buildProductionOrchestrator`) over
+ * fixtures and a simulated broker; NOT a substitute for the credentialed
+ * wiring-validated bar (ADR-0004 §5) since it never touches Alpaca.
  *
- * ## Where this sits against the spec's two done-bars
+ * Not reachable from the real entrypoint by omission: separate module/npm
+ * script, `mode` hard-coded to `'paper'`, the Alpaca client throws on every
+ * method, and alerting is injected as log-only rather than read from env.
  *
- * ADR-0004 §5 and orchestrator-spec.md story 19 define two: **wiring
- * validated** (one clean automated tick end-to-end through all six stages
- * against real Alpaca paper, correctly audit-logged) and **paper trading
- * achieved** (the 14-day unattended soak, #238). The spec's Testing Decisions
- * are explicit that the first is "the manual/CI-gated E2E check, not a unit
- * test ... run once per environment, not on every commit".
- *
- * This run does **not** replace that bar and must not be read as clearing it:
- * it never touches Alpaca, so it proves nothing about credentials, venue
- * semantics or live market data. What it does is make the same six-stage
- * assertion — every stage reached, a `go` recorded, an order submitted, a fill
- * ingested — cheaply, offline, and on every commit, so the credentialed run
- * and the soak start from a process that has already been seen to transact.
- * It also satisfies the spec's determinism story ("same injected simulated
- * clock + fixed universe -> byte-identical rows across two runs") at the
- * composition-root level rather than the tick-runner level; see
- * `smoke-run.test.ts`.
- *
- * ## The exit path (#576)
- *
- * The six-stage assertion above only ever exercises ENTRY — nothing about a
- * fixed bullish fixture makes the pipeline reach an `exit` intent honestly.
- * Six merged fixes (#508/#516/#517/#525/#568/#571) live entirely in
- * `Execution`'s exit path, downstream of that intent, and this gate could
- * pass with every one of them regressed. `runExitPathScenarios` closes that
- * gap by composing `ExecutionImpl` directly (via the same production binding
- * helper the tick loop itself uses) and driving three scenarios — a full
- * exit, a partial flatten, and a two-lot flatten — against a deterministic
- * offline broker. See that function's own doc for why it does not go through
- * `startFromEnvironment`, and `exitPathProbe`'s verdict for what it now
- * requires.
- *
- * ## What this is for
- *
- * Before #350 there was no way to run the pipeline **as a process** without
- * live credentials. `npm run orchestrator` needs Alpaca + Anthropic keys, spends
- * money per debate round, and depends on live market conditions to reach an
- * interesting branch — observed with dummy credentials it reaches
- * `analysts: quorum_skip` on tick 1 and goes no further, so every stage after
- * Analysts is unexercised at process level. `npm run test`'s
- * `composed tick chain (integration)` case does drive one instrument through
- * all six steps, but inside vitest with hand-built parts: it proves the stage
- * wiring, not the shipped binary's composition root, timers, shutdown path,
- * logging or store round-trip over repeated ticks.
- *
- * This module closes that gap. It starts the REAL entrypoint assembly —
- * `startFromEnvironment` -> `buildProductionOrchestrator` — over fixtures and a
- * simulated broker, runs a bounded number of ticks, reads back what the
- * pipeline actually did from the shared store, prints it, and exits non-zero
- * if the pipeline never transacted. Run it before starting the 14-day soak
- * (#238): starting that soak without ever having seen the pipeline transact
- * end to end in a real process means discovering a wiring gap on day 1, and —
- * since alerting depends on config that is easy to omit — possibly not
- * discovering it at all.
- *
- * ## No second composition root
- *
- * The one constraint that makes this evidence rather than decoration: it calls
- * `startFromEnvironment` (orchestrator/index.ts), which builds the config the
- * shipped entrypoint builds and hands it to `buildProductionOrchestrator`. A
- * smoke run that assembled its own parallel wiring would prove nothing about
- * what ships. Everything below is supplied through `ProductionConfig`'s
- * already-documented override seams (`broker`, `dataSource`, `llmClient`,
- * `accountState`, the four alert channels) — the same seams whose doc comments
- * name `SimulatedBrokerAdapter` and `FixtureDataSource` as the intended
- * bindings. Nothing here is a new branch inside the composition root.
- *
- * Two things are unavoidably constructed here rather than reached through the
- * root, both noted where they appear: a second `MarketDataServiceImpl` for the
- * simulated broker (the broker is a constructor argument to the root, so it
- * cannot be handed the root's own instance), and an `AccountStateProvider`
- * (the only in-repo implementation is Alpaca-backed).
- *
- * ## Safety posture (#293/#320/#324)
- *
- * The fake/simulated mode is explicitly named and is **not reachable by
- * omission from the real entrypoint**:
- *
- * - This is a separate module with its own entrypoint guard and its own npm
- *   script (`npm run smoke`). `orchestrator/index.ts` does not import it, and it
- *   is not on the package's export surface, so no path from
- *   `npm run orchestrator` can select fixtures or the simulated broker.
- * - `mode` is hard-coded to `'paper'`. `SAMURAI_MODE` is never read, so this
- *   process cannot be steered towards `live`.
- * - The Alpaca wire client is injected as `UnreachableAlpacaClient`, which
- *   throws on every method. There is no code path from here to a broker, a
- *   market-data feed, or an LLM provider: no `fetch` is reachable at all.
- * - Alerting is named as log-only by injecting the four log stand-ins
- *   directly, which is exactly what `SAMURAI_ALERTS=log-only` resolves to
- *   (alert-transport.ts). It is not read from the environment, so a supervised
- *   offline gate can neither page anyone nor fall back to silence by omission.
- *
- * ## Determinism
- *
- * The clock is a `SimulatedClock` frozen at `SMOKE_RUN_INSTANT`, and every
- * fixture bar, mark and quote is anchored to that same instant, so the run
- * reproduces byte for byte. The tick loop, fill poll, heartbeat and shutdown
- * still run on real `setTimeout`/`setInterval` wall-clock timers — those are
- * precisely the process-level behaviours this run exists to exercise; only
- * `Clock.now()` is frozen.
- *
- * Freezing it is also load-bearing, not just tidy. `SimulatedBrokerAdapter`
- * dates its modelled entry fill at the MARK's observation time
- * (`MarketState.timestamp`), while `ExecutionImpl` stamps `OpenPosition.opened_at`
- * with `clock.now()` at submit time, and `ingestFills()` only asks the venue
- * for fills at or after the earliest `opened_at`. Against a fixture whose mark
- * is a fixed instant and a running wall clock, every modelled fill would be
- * dated strictly before the lot that owns it and would be filtered out
- * forever — the run would submit orders and never ingest a fill. One frozen
- * instant for both collapses that gap to zero.
+ * The clock is a `SimulatedClock` frozen at `SMOKE_RUN_INSTANT` — load-bearing,
+ * not just tidy: a running wall clock would date every modelled fill before
+ * the lot's `opened_at` and it would never be ingested.
  */
 import {
   existsSync,
@@ -302,29 +197,12 @@ const SMOKE_GDELT_SEEDED_ROWS =
   SMOKE_GDELT_SEED_BUCKETS * SMOKE_GDELT_SEED_PER_BUCKET + SMOKE_GDELT_SEED_SIGNAL_ROWS;
 
 /**
- * Puts 25 hours of GDELT history in the archive before the run starts.
- *
- * Without it this gate could only ever observe the scoring pass REFUSING: a
- * smoke run holds one canned batch at one instant, and the pass leads the
- * signal by a full 24h baseline by design (`gdelt-scoring-pass.ts`). A gate
- * that asserted the refusal would pass just as happily for a pass that is
- * built and never called, which is the defect the archive-half-with-no-reader
- * state WAS.
- *
- * These rows are written directly rather than served through
- * `smokeGdeltClient`, and that is not a shortcut around the decode path: the
- * client serves ONE batch (GDELT publishes one file per 15 minutes and the
- * fetcher's cursor takes the latest), so 25 hours of history cannot be
- * fetched inside one run at all. The decode path stays covered by the canned
- * batch; this covers the derivation over an archive that has run for a day.
- *
- * A MACRO theme, which is on every leg's watchlist, so whatever classes
- * `SMOKE_TEST_UNIVERSE` carries derive — one today, crypto, per
- * `SMOKE_GDELT_EXPECTED_AGGREGATES`, which states what that leaves uncovered.
- * The tones are flat across the baseline and one point higher in the signal
- * hour, so the derived aggregate is a modest positive with a deterministic
- * confidence rather than an extreme that would dominate whatever else reaches
- * `fundamental`.
+ * Puts 25 hours of GDELT history in the archive before the run starts, so
+ * this gate can observe the scoring pass firing rather than only refusing —
+ * a smoke run otherwise holds one canned batch at one instant, short of the
+ * pass's 24h baseline lead by design. Written directly rather than through
+ * `smokeGdeltClient`, which serves only ONE batch and cannot supply 25 hours
+ * of history in one run.
  */
 function seedSmokeGdeltBaseline(archive: MiArchiveStore): void {
   const bar = floorToBar(SMOKE_RUN_INSTANT, DEBATE_BAR_TIMEFRAME_MS);
@@ -362,43 +240,16 @@ function seedSmokeGdeltBaseline(archive: MiArchiveStore): void {
   archive.write(rows, []);
 }
 
-/**
- * How many rows the archive should hold: the seed above, plus the one canned
- * batch row `smokeGdeltClient`'s theme filter keeps.
- *
- * Named because the gate below and the fixture above are the same fact stated
- * twice: edit the fixture to carry three matching rows and a hardcoded number
- * in the gate turns a correct run red, or worse, keeps passing for the wrong
- * reason.
- */
+/** The seed above, plus the one canned batch row `smokeGdeltClient`'s theme filter keeps — named so the fixture and gate stay one fact, not two. */
 export const SMOKE_GDELT_EXPECTED_ROWS = SMOKE_GDELT_SEEDED_ROWS + 1;
 
 /**
- * The asset classes the scoring pass derives for on a smoke run, and the
- * aggregates it should therefore produce from the seeded baseline: one each.
- *
- * Derived from `SMOKE_TEST_UNIVERSE` rather than written as a literal, for
- * `SMOKE_GDELT_EXPECTED_ROWS`' reason — `production.ts` passes the pass the
- * universe's own classes, so adding an equity name to that fixture would
- * otherwise turn a correct run red. The seed carries a MACRO theme, which is
- * on both legs' watchlists (`gdelt-themes.ts`), so every leg present derives
- * one. A zero here means the pass is built and never called, which is the
- * exact defect the archive-half-with-no-reader state was.
- *
- * **What this gate does NOT cover, stated because the count reads like it
- * does:** `SMOKE_TEST_UNIVERSE` is BTC-USD alone, so only the CRYPTO leg is
- * exercised end-to-end here. Two consequences. First, the equities leg's
- * derivation is covered by `gdelt-scoring-pass.test.ts` and the composition-
- * root wiring test only. Second, the aggregate this gate observes reaches no
- * analyst that scores it: `fundamentalAnalyst.applies_to` is stocks-only and
- * no other analyst scores `MarketContext.intel` (the technical analyst only
- * quotes its count into `key_points`, #1164), so on a crypto universe the
- * item is stored and served but never voted on. The gate asserts the pass is
- * CALLED and its item reaches the store — not that an analyst consumed it.
- * Adding an equity leg to the fixture is not the fix: `SMOKE_TEST_UNIVERSE`
- * is crypto-only on purpose, because crypto bypasses `UniverseScheduler`'s
- * calendar gate and a stock leg would make the whole gate hostage to US
- * market hours.
+ * The asset classes the scoring pass derives for on a smoke run: one
+ * aggregate each. Derived from `SMOKE_TEST_UNIVERSE` rather than a literal so
+ * a universe change cannot silently turn a correct run red. Only the CRYPTO
+ * leg is exercised end-to-end here (`SMOKE_TEST_UNIVERSE` is BTC-USD alone,
+ * deliberately, since crypto bypasses `UniverseScheduler`'s calendar gate);
+ * the equities leg's derivation is covered by `gdelt-scoring-pass.test.ts` only.
  */
 const SMOKE_GDELT_ASSET_CLASSES: readonly AssetClass[] = [
   ...new Set(SMOKE_TEST_UNIVERSE.map((instrument) => instrument.asset_class)),
@@ -407,33 +258,16 @@ const SMOKE_GDELT_ASSET_CLASSES: readonly AssetClass[] = [
 export const SMOKE_GDELT_EXPECTED_AGGREGATES = SMOKE_GDELT_ASSET_CLASSES.length;
 
 /**
- * A GDELT client serving one canned batch, over a real deflate zip.
- *
- * Built rather than mocked so the gate exercises the WHOLE decode path — zip
- * header, inflate, TSV split, theme filter, tone parse — offline. A hand-rolled
- * fake returning parsed records would leave exactly the parsing this module is
- * mostly made of untested in the one gate that runs the real composition root.
- *
- * Two rows: one carrying a watched theme, one not, so the run's archived count
- * is 1 and a filter that has stopped filtering shows up as 2.
- *
- * The `lastupdate.txt` fixture is GDELT's real three-line shape (export /
- * mentions / gkg, each `size md5 url`), not the one-line stub this used to be
- * (#713 item 4): `GdeltGkgClient.latestBatchUrl` selects the gkg entry by
- * `.gkg.csv.zip` suffix out of three lines, per the client's own unit tests,
- * and a one-line manifest here would still pass smoke if the client
- * regressed to "parse line N". This does not cover every such regression —
- * "parse the LAST line" would still happen to select the right entry, since
- * gkg is listed last both here and in the real manifest — the reordered case
- * is covered by `gdelt-gkg-client.test.ts`'s "selects the gkg file by
- * suffix, not by line position", not by smoke.
+ * A GDELT client serving one canned batch, over a real deflate zip — built
+ * rather than mocked so the gate exercises the WHOLE decode path offline.
+ * Two rows, one carrying a watched theme and one not, so the archived count
+ * is 1 and a filter that has stopped filtering shows up as 2. The
+ * `lastupdate.txt` fixture is GDELT's real three-line shape (export /
+ * mentions / gkg), not a one-line stub, so a client regression to "parse
+ * line N" would still be caught here.
  */
 function smokeGdeltClient(): GdeltGkgClient {
-  // Fifteen minutes before `SMOKE_RUN_INSTANT`, which is what a live poll
-  // sees. It has to be NEWER than `seedSmokeGdeltBaseline`'s rows or the
-  // fetcher's cursor (`latestUpdatedAt`) skips the download as already held,
-  // and the whole decode path — zip, inflate, TSV split, theme filter, tone
-  // parse — would stop being exercised the moment the archive was seeded
+  // Fifteen minutes before `SMOKE_RUN_INSTANT` — must be NEWER than `seedSmokeGdeltBaseline`'s rows or the fetcher's cursor skips the download.
   const stamp = '20260804114500';
   const url = `http://data.gdeltproject.org/gdeltv2/${stamp}.gkg.csv.zip`;
   const lastupdate = [
@@ -477,31 +311,19 @@ function smokeGdeltClient(): GdeltGkgClient {
 }
 
 /**
- * How many Polymarket macro items the canned wire should produce (#504).
- *
- * Named for `SMOKE_GDELT_EXPECTED_ROWS`' reason — the fixture below and the
- * gate are one fact stated twice, and a hardcoded number in the gate would
- * either turn a correct fixture change red or, worse, keep passing for the
- * wrong reason. ONE: the fixture serves a healthy market for the first curated
- * row, a thin-volume market for the second, and a rotted (empty) event for
- * every other row. So 0 means the poller never ran from the composition root,
- * and 2 means the fail-closed volume guard stopped biting.
+ * How many Polymarket macro items the canned wire should produce: ONE. The
+ * fixture serves a healthy market for the first curated row, a thin-volume
+ * market for the second, and a rotted (empty) event for every other row —
+ * 0 means the poller never ran, 2 means the fail-closed volume guard stopped biting.
  */
 const SMOKE_POLYMARKET_EXPECTED_ITEMS = 1;
 
 /**
- * A Polymarket client serving canned Gamma and CLOB responses.
- *
  * A REAL `PolymarketClient` behind a fake `fetchImpl`, not a hand-rolled fake
- * returning parsed objects — `smokeGdeltClient`'s header has the argument, and
- * it applies with equal force here: Gamma serialises `outcomes`,
- * `outcomePrices` and `clobTokenIds` as JSON-encoded STRINGS, and that decode
- * is most of what this client is. A fake returning ready-made objects would
- * leave it unexercised in the one gate that runs the real composition root.
- *
- * The event payloads are derived from `CURATED_MACRO_MARKETS` rather than
- * restating slugs, so the shipped table and this fixture cannot drift: a row
- * re-pointed at a new slug keeps working here without an edit.
+ * returning parsed objects — Gamma serialises `outcomes`/`outcomePrices`/
+ * `clobTokenIds` as JSON-encoded STRINGS, and that decode is most of what
+ * this client is. Event payloads are derived from `CURATED_MACRO_MARKETS`
+ * rather than restating slugs, so the two cannot drift.
  */
 function smokePolymarketClient(): PolymarketClient {
   const [healthy, thin] = CURATED_MACRO_MARKETS;
@@ -525,20 +347,14 @@ function smokePolymarketClient(): PolymarketClient {
       return [{ slug, markets: [marketFor(healthy.marketSlug, 533_307)] }];
     }
     if (thin !== undefined && slug === thin.eventSlug) {
-      // Below `MIN_VOLUME_24H_USD`, so the agent must refuse it — the negative
-      // half of this probe, and the reason the expected count is 1 and not 2
+      // Below `MIN_VOLUME_24H_USD`, so the agent must refuse it — the reason the expected count is 1, not 2.
       return [{ slug, markets: [marketFor(thin.marketSlug, 5)] }];
     }
-    // Every other curated row reads as rotted: Gamma answers with an empty
-    // array for a slug that no longer exists, which is the shape the agent
-    // logs a warn for and ingests nothing on
+    // Every other curated row reads as rotted: Gamma answers with an empty array, which the agent warns on and ingests nothing from.
     return [];
   };
 
-  // A 24h hourly series ending at the frozen run instant, rising 0.60 -> 0.66
-  // A +0.06 delta clears the ±0.02 dead band, so the item is `sentiment: 1`
-  // with `confidence` 0.30 — a real direction rather than a dead-band zero,
-  // which would pass the gate while proving less
+  // A 24h hourly series rising 0.60 -> 0.66; +0.06 clears the ±0.02 dead band, giving a real direction rather than a dead-band zero.
   const history = Array.from({ length: 25 }, (_, index) => ({
     t: Math.floor((SMOKE_RUN_INSTANT.getTime() - (24 - index) * 60 * 60_000) / 1000),
     p: 0.6 + (0.06 * index) / 24,
@@ -558,26 +374,13 @@ function smokePolymarketClient(): PolymarketClient {
 
 /**
  * The instant the whole run is frozen at — clock, bars, mark and quote alike.
- * A fixed literal rather than `new Date()` so two runs of `npm run smoke` produce
- * identical fixtures and identical decisions.
- *
- * **2026-08-17 (#738) — this instant is NOT inside US equity regular hours**
- * (`UsEquityRegularHoursCalendar().isOpen(SMOKE_RUN_INSTANT)` is `false`;
- * measured, not assumed). That used to be irrelevant: crypto bypassed
- * `UniverseScheduler`'s calendar gate entirely, so `SMOKE_TEST_UNIVERSE`'s
- * BTC-USD ticked regardless of wall-clock time. `UniverseScheduler` is now
- * asset-class-blind — every instrument, crypto included, is gated on
- * whatever calendar `ProductionConfig.tradingCalendar` resolves to — so this
- * run injects its own `AlwaysOpenCalendar` override below rather than
- * depending on `SMOKE_RUN_INSTANT` falling inside a real session. Nothing
- * else in the offline path compares against real wall-clock time.
- *
- * The exact-hour alignment is LOAD-BEARING for the Polymarket gate (#504).
- * Items are stamped at the ingest instant (#782), and
- * `MarketIntelligenceStore.getContext()` floors its window end to the debate
- * bar, so an item stamped at 12:00:00.000 is visible while one stamped at
- * 12:00:00.001 is not until 13:00. Do not nudge this constant off the hour
- * without expecting `intel items served: 0` with a row still archived.
+ * A fixed literal so two runs produce identical fixtures and decisions. NOT
+ * inside US equity regular hours (measured) — this run injects its own
+ * `AlwaysOpenCalendar` override rather than depending on real session hours,
+ * since `UniverseScheduler` gates every instrument, crypto included. The
+ * exact-hour alignment is load-bearing for the Polymarket gate: items are
+ * stamped at the ingest instant and `getContext()` floors its window end to
+ * the debate bar, so nudging this off the hour silently zeroes served intel.
  */
 export const SMOKE_RUN_INSTANT = new Date('2026-08-04T12:00:00.000Z');
 
@@ -585,40 +388,15 @@ export const SMOKE_RUN_INSTANT = new Date('2026-08-04T12:00:00.000Z');
 const SMOKE_INSTRUMENT = SMOKE_TEST_UNIVERSE[0]?.asset ?? 'BTC-USD';
 
 /**
- * The fixture bar series, per timeframe. Each count is a floor forced by
- * something downstream, not a round number:
- *
- * - `5m` x 60 — the technical analyst's `SMA_SPEC`/`RSI_SPEC` (#742 moved the
- *   technical read from `1h` to `5m`, retaining `1h` only as context — see
- *   below). #319's minimum-length guard in `computeIndicator` rejects a
- *   window shorter than `period + 1`, so `RSI_SPEC`'s period-14 arithmetic
- *   needs 15 bars as a HARD floor; `RSI_SPEC`'s own lookback is the converged
- *   warm-up of **57** (`recommendedWarmupFor`), and 60 clears it by three —
- *   but 57 is a SOFT floor: below it the RSI silently computes over a shorter
- *   warm-up rather than throwing, so shrinking this series would degrade the
- *   analyst's read without failing anything. `WARMUP_5M` (260) asks for more
- *   than this series holds; `FixtureDataSource` returns however many exist
- *   rather than padding, and `MarketDataServiceImpl.cachedBars`'s route 1
- *   still collapses `SMA_SPEC`/`RSI_SPEC` to the one fetch this makes, since
- *   60 already clears `RSI_SPEC.lookback`.
- * - `1h` x 60 — the Trader's ATR stop (`atr_timeframe: '1h'`,
- *   `atr_lookback: 14`, unchanged by #742) and the volatility breaker's
- *   ATR(14) — `period + 1` = 15-bar HARD floor as above, but both now ask
- *   for the converged warm-up of **57** (`recommendedWarmupFor`, #757), same
- *   soft-floor shape as `RSI_SPEC`'s: 60 clears it by three, and below 57
- *   the ATR silently computes over a shorter warm-up rather than throwing.
- *   Also now the technical analyst's 1h CONTEXT read
- *   (`CONTEXT_CANDLE_LOOKBACK`, 20) — 60 clears that too.
- * - `1m` x 60 — the short-timeframe reads the Analysts take.
- * - `1d` x 40 — the widest daily consumers: `adv_window` (`{'1d', 20}`,
- *   `executionConfig.simulated`) and `correlationConfig` (`{'1d', 30}` with
- *   `min_bars: 20`). 30 would satisfy both; 40 leaves headroom.
- *
- * Short-changing any of these does not produce a loud failure — it produces a
- * stage that quietly degrades and a smoke run that skips instead of trading,
- * which is exactly what the gate below exists to catch. `smoke-run.test.ts`
- * pins these against the profile's own lookbacks so a profile change that
- * outgrows the fixtures fails a test rather than the gate.
+ * The fixture bar series, per timeframe. Each count is a floor forced by a
+ * downstream consumer, not a round number: `5m` x 60 clears `RSI_SPEC`'s
+ * converged warm-up (57) by three; `1h` x 60 clears the Trader's ATR stop and
+ * volatility breaker's own converged warm-up the same way; `1m` x 60 serves
+ * the Analysts' short-timeframe reads; `1d` x 40 clears the widest daily
+ * consumers (ADV window 20, correlation window 30) with headroom.
+ * Short-changing any of these degrades a stage silently rather than failing
+ * loud, which is what the gate below exists to catch — `smoke-run.test.ts`
+ * pins these against the profile's own lookbacks.
  */
 const SMOKE_BAR_SERIES: readonly { timeframe: string; count: number; stepMs: number }[] = [
   { timeframe: '5m', count: 60, stepMs: 5 * 60 * 1_000 },
