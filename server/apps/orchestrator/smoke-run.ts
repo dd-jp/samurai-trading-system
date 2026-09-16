@@ -4331,9 +4331,6 @@ async function runFilledZeroSizeWedgeScenario(
             throw new Error('SmokeWedgedLotBroker: this scenario never flattens');
           },
         },
-        // #1550: this broker's `getOpenPositions()` answers with the wedged
-        // lot's own instrument, so the scan finds nothing unrecorded — the
-        // same throw-if-reached shape the two channels above take
         unrecordedVenuePositionAlerts: {
           postUnrecordedVenuePositionAlert: async () => {
             throw new Error('SmokeWedgedLotBroker: the venue holds only the wedged lot');
@@ -4357,20 +4354,13 @@ async function runFilledZeroSizeWedgeScenario(
   }
 }
 
-/**
- * #1125. The second broker/harness surface #1096's review deferred, so a
- * genuinely wedged lot drives the real gate instead of only
- * `filled-zero-size-wiring.test.ts`'s unit proof.
- */
+/** #1125 — drives a genuinely wedged lot through the real gate, not just the unit-test proof. */
 const filledZeroSizeWedgeProbe: Probe<'filledZeroSizeWedge'> = {
   run({ logger }) {
     return runFilledZeroSizeWedgeScenario(logger);
   },
   verdict(evidence) {
     const failures: string[] = [];
-    // #1125 — the FILLED_WITH_ZERO_SIZE wedge scenario's enforcement assertion,
-    // on its DURABLE effect (the warning payload) through the real
-    // `buildExecutionSurface` binding. See `runFilledZeroSizeWedgeScenario`.
     const wedge = evidence;
     if (wedge.warnings.length !== 1) {
       failures.push(
@@ -4392,16 +4382,9 @@ const filledZeroSizeWedgeProbe: Probe<'filledZeroSizeWedge'> = {
         warning.instrument !== FILLED_ZERO_SIZE_WEDGE_INSTRUMENT ||
         warning.order_state !== 'filled' ||
         warning.consecutive !== ALERT_AFTER_CONSECUTIVE_ZERO_SIZE ||
-        // Exact, not `> 0` (#1125 review round 2, finding 1): under
-        // `SimulatedClock`, `stuck_ms` is `now - position.opened_at` computed
-        // at a FIXED clock reading (no poll advances it), so it is
-        // deterministic — `FILLED_ZERO_SIZE_WEDGE_OPENED_BEFORE_MS` exactly
-        // A `> 0` check cannot catch `ingest-fills.ts` reading
-        // `decision_timestamp` instead of `opened_at`: the two are only 5s
-        // apart against a 1h `stuck_ms`, so the wrong field still passes
-        // `> 0`. Measured: swapping that field yields `stuck_ms: 3605000`
-        // and this exact equality check catches it (`3605000 !==
-        // 3600000`), where `> 0` did not
+        // Exact match, not `> 0` (#1125 review round 2 finding 1): a `> 0` check would
+        // still pass if `ingest-fills.ts` read `decision_timestamp` instead of `opened_at`
+        // (only 5s apart against a 1h stuck_ms) — this equality catches that swap
         warning.stuck_ms !== FILLED_ZERO_SIZE_WEDGE_OPENED_BEFORE_MS
       ) {
         failures.push(
@@ -4430,22 +4413,10 @@ export interface RiskCriticEvidence {
 }
 
 /**
- * The one LLM double in the smoke process, answering BOTH call sites (#994).
- *
- * The shared debate fixture does not satisfy the critic's parser, so before
- * the fold the critic could only ever be observed failing open. That is enough
- * to prove the producer is wired, and NOT enough to prove the invalidation
- * half runs: a conditions block that is never emitted is measured by nothing,
- * and "conditions never fire" is precisely this repo's dominant defect shape.
- *
- * So this client branches on the attribution stage the producer already sets
- * for metering, and hands the critic call one well-formed condition whose
- * outcome is FIXED BY THE FIXTURE: the mark is `SMOKE_MARK_PRICE`, the
- * threshold sits one unit above it, and `<` on a `buy` is the coherent
- * direction — so a correctly wired evaluator must measure `breached`, and
- * `evaluate()` must reject under its own constraint. Nothing here asserts a
- * state; the state is measured from the same fixture feed the rest of the run
- * uses.
+ * The one LLM double in the smoke process, answering BOTH call sites (#994). Branches on the
+ * attribution stage and hands the critic call one condition whose outcome is fixed by the
+ * fixture (mark == SMOKE_MARK_PRICE, threshold one unit above) so a correctly wired evaluator
+ * must measure `breached` and reject — nothing here asserts the state, the fixture forces it.
  */
 class SmokeLlmClient implements LlmClient {
   readonly #debate = new ConstantResponseLlmClient();
@@ -4484,26 +4455,10 @@ class SmokeLlmClient implements LlmClient {
 }
 
 /**
- * The risk critic's enforcement assertion (#957), per the standard that wiring
- * a mechanism means asserting it HERE (#430).
- *
- * Driven through the REAL `buildProductionComponents` — the composition root
- * that owns the one `critic:` line — and asserted on the DURABLE effect: a
- * `risk_critic_log` row for the intent's `debate_id`. Delete that line and this
- * scenario records nothing and the gate FAILS, which is the whole point: this
- * repo's dominant defect class is a built, tested, wired mechanism nothing
- * external ever asserts fires (#388, #364, #562), and step 7 spent its entire
- * life so far in exactly that state (docs/reviews/triage-2026-08-06.md F-5).
- *
- * The fold (#994) is asserted too, not just the wiring. `SmokeLlmClient`
- * answers the `risk_critic` stage — and only that stage — with a `pass` prose
- * verdict carrying one condition the fixture mark already violates
- * (`mark < SMOKE_MARK_PRICE + 1`, against a fixture mark of
- * `SMOKE_MARK_PRICE`). So the gate can assert content without drifting with
- * the shared debate fixture: the persisted condition must read `breached`,
- * proving deterministic code measured it rather than trusting the model, and
- * the decision's binding constraint must be `risk_critic:invalidated`, proving
- * a measured breach rejects an intent whose prose verdict said `pass`.
+ * The risk critic's enforcement assertion (#957), driven through the REAL `buildProductionComponents`
+ * and asserted on the DURABLE effect: a `risk_critic_log` row. Also asserts the fold (#994):
+ * `SmokeLlmClient` answers `pass` with one condition the fixture mark already violates, so the
+ * persisted condition must read `breached` and the binding constraint must be `risk_critic:invalidated`.
  */
 async function runRiskCriticScenario(logger: Logger): Promise<RiskCriticEvidence> {
   const db = openSharedStore(':memory:');
@@ -4536,12 +4491,8 @@ async function runRiskCriticScenario(logger: Logger): Promise<RiskCriticEvidence
       llmClient: new SmokeLlmClient(),
     });
 
-    // A viable ENTRY — the population #955's cadence names. An exit would
-    // bypass the entry gates and never reach step 7, so it would prove
-    // nothing about the wiring. Size 1 rather than a dust lot on purpose: at
-    // `SMOKE_MARK_PRICE` that is $160 of notional, clear of the profile's own
-    // `min_viable_size` floor, which rejects ABOVE step 7 (a 0.01 lot bound on
-    // `min_viable_size` here and the critic was correctly never asked)
+    // A viable entry, not an exit — an exit would bypass step 7 entirely. Size 1 clears the
+    // profile's `min_viable_size` floor, which rejects above step 7 before the critic is asked
     const intent = exitPathOrder(
       SMOKE_INSTRUMENT,
       'smoke-risk-critic-entry',
@@ -4580,11 +4531,8 @@ async function runRiskCriticScenario(logger: Logger): Promise<RiskCriticEvidence
 }
 
 /**
- * #957. The six-stage run cannot stand in for this — it has produced zero
- * approved entries historically (#625), so a critic that never fired would be
- * indistinguishable from one never wired. Deleting the one `critic:` line in
- * `production.ts` returns step 7 to the never-run state with every unit test
- * green; only this notices.
+ * #957 — the six-stage run can't stand in for this: it has produced zero approved entries
+ * historically (#625), so a never-fired critic is indistinguishable from an unwired one.
  */
 const riskCriticProbe: Probe<'riskCritic'> = {
   run({ logger }) {
@@ -4592,8 +4540,6 @@ const riskCriticProbe: Probe<'riskCritic'> = {
   },
   verdict(evidence) {
     const failures: string[] = [];
-    // #957 — check-pipeline step 7's producer, asserted on its DURABLE effect
-    // through the real composition root. See `runRiskCriticScenario`.
     const critic = evidence;
     if (critic.stepError !== null) {
       failures.push(
@@ -4612,11 +4558,8 @@ const riskCriticProbe: Probe<'riskCritic'> = {
       );
     }
 
-    // #994: the fold's own enforcement assertion. The fixture pins the outcome
-    // — a mark of SMOKE_MARK_PRICE against a threshold one unit above it — so a
-    // measured `breached` and the reject that follows are the ONLY correct
-    // result. Delete the `marketData:` line from `buildRiskCriticProducer`, or
-    // the `breachedConditions` block from `evaluate()`, and this fails
+    // #994: the fixture pins the outcome (mark == SMOKE_MARK_PRICE, threshold one unit above),
+    // so a measured `breached` is the only correct result
     if (!critic.conditionStates.includes('breached')) {
       failures.push(
         'the risk critic emitted a well-formed invalidation condition and no persisted ' +
