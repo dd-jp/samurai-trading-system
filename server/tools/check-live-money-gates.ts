@@ -42,7 +42,10 @@ import { promisify } from 'node:util';
 // Imported from the module rather than the orchestrator barrel: this is a CLI, and
 // pulling `apps/orchestrator/index.js` would drag the whole runtime in to read two
 // constants
-import { LIVE_MONEY_GATES, LIVE_MONEY_GATES_VERIFIED_ON } from '../apps/orchestrator/index.js';
+import {
+  LIVE_MONEY_GATES,
+  LIVE_MONEY_GATES_VERIFIED_ON,
+} from '../apps/orchestrator/live-money-gates.js';
 
 const execFileAsync = promisify(execFile);
 

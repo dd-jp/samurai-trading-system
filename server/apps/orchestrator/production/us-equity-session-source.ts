@@ -36,21 +36,23 @@ import type {
   AlpacaCalendarClient,
   TradingCalendar,
 } from '../../../providers/market-data-service/index.js';
+import {
+  AlpacaEquitySessionCalendar,
+  AlpacaHttpCalendarClient,
+  buildAlpacaSessionTable,
+  US_TABLE_COVERAGE_END,
+  UsEquityRegularHoursCalendar,
+} from '../../../providers/market-data-service/index.js';
 // Reached directly rather than through the barrel: these are the internal
 // Eastern-civil-date helpers `trading-calendar.ts` exports for exactly this
 // caller (see `ET_ZONE`'s own doc comment) — not part of the package's public
 // surface, so they stay off `providers/market-data-service/index.ts`
 import {
-  AlpacaEquitySessionCalendar,
-  AlpacaHttpCalendarClient,
-  buildAlpacaSessionTable,
   civilDateKey,
   ET_ZONE,
   toCivilDate,
-  US_TABLE_COVERAGE_END,
-  UsEquityRegularHoursCalendar,
   type ZonedCivilDate,
-} from '../../../providers/market-data-service/index.js';
+} from '../../../providers/market-data-service/trading-calendar.js';
 import { loggingAlertChannel } from '../alert-catalogue.js';
 import type { Logger } from '../types.js';
 import type { CalendarFallbackAlertChannel } from './calendar-fallback-alert.js';
