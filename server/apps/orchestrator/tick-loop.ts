@@ -48,9 +48,8 @@ import type { Clock } from '../../shared/index.js';
 // "a log call inside a catch must not itself throw" guarantee this file
 // worked out first (#507) — see that file's doc for the full reasoning,
 // unchanged by the move
-import { describeThrown, safeLog } from '../../shared/index.js';
+import { describeThrown, digest, safeLog } from '../../shared/index.js';
 import type { DecisionGate } from './decision-bar-gate.js';
-import { digest } from './digest.js';
 import type {
   AuditLog,
   CurrentTickStore,
