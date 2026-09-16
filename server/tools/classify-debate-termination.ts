@@ -171,7 +171,7 @@ export const MAX_INTER_LINE_GAP_MS = 15 * 60_000;
 /**
  * Records `record`'s `debate_id` into `timeoutIds` when `record` is a
  * `debate.timeout` line — a thin extraction of `parseLogCoverage`'s direct
- * timeout-matching branch, independent of the span-coverage reasoning below.
+ * timeout-matching branch, independent of the span-coverage reasoning below
  */
 function recordTimeoutId(record: Record<string, unknown>, timeoutIds: Set<string>): void {
   if (record.message !== 'debate.timeout') return;
@@ -355,7 +355,7 @@ export interface ClassificationResult {
 /**
  * One row's classification, per `classifyRows`' rules above — `'uncovered'`
  * and `'indeterminate'` name the same two non-classified outcomes the
- * `ClassificationResult` buckets report.
+ * `ClassificationResult` buckets report
  */
 function classifyRowTermination(
   row: DebateLogTerminationRow,

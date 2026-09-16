@@ -523,7 +523,8 @@ function zeroCapEmptyState(capUsd: number): string {
 }
 
 function spendEmptyState(reason: CapReason, cap: number | null, zeroCapBreached: boolean): string {
-  if (reason === 'capped') return ''; // 'capped' means capUsd > 0, which CapMeter always draws
+  // 'capped' means capUsd > 0, which CapMeter always draws
+  if (reason === 'capped') return '';
   if (reason === 'zero') {
     return `${zeroCapEmptyState(cap ?? 0)}${zeroCapBreached ? ' · already over' : ''}`;
   }

@@ -496,7 +496,7 @@ export class PolymarketAgent {
   /**
    * One curated row's contribution to a pass: whether it ANSWERED (read,
    * refused, or rotted alike — everything but a transport failure) and, when
-   * it produced a usable signal, the item and its raw archive row.
+   * it produced a usable signal, the item and its raw archive row
    */
   async #processEntry(
     trace_id: string,

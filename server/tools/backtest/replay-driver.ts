@@ -457,7 +457,7 @@ export class ReplayDriver {
     return cursors;
   }
 
-  /** One (instrument, timestamp) step of the replay loop — see `run`. */
+  /** One (instrument, timestamp) step of the replay loop — see `run` */
   private stepInstrument(
     state: RunState,
     instrument: ReplayInstrument,
@@ -529,7 +529,7 @@ export class ReplayDriver {
     );
   }
 
-  /** An already-open lot's exit check for this bar — see `run`. */
+  /** An already-open lot's exit check for this bar — see `run` */
   private handleOpenLot(
     state: RunState,
     instrument: ReplayInstrument,
@@ -835,7 +835,7 @@ function longBracketExit(
   return undefined;
 }
 
-/** A short lot's bracket exit, if this bar produced one — mirrors `longBracketExit`. */
+/** A short lot's bracket exit, if this bar produced one — mirrors `longBracketExit` */
 function shortBracketExit(
   lot: OpenLot,
   bar: Bar,

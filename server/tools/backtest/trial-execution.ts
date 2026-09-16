@@ -461,7 +461,7 @@ async function runOneAssetClassTrial(
 /**
  * Logs `config_hash` in `ConfigTrialLog` — called exactly once per config,
  * regardless of how many asset classes it is scored against (see this
- * module's header, "12 configs, not 12 reports").
+ * module's header, "12 configs, not 12 reports")
  */
 function logTrial(configTrialLog: ConfigTrialLog, config_hash: string): void {
   const backtestReport: BacktestReport = {

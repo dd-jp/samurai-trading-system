@@ -715,7 +715,7 @@ function armPollTimeout(deps: {
 // Idempotent and reachable from BOTH the timeout arm and the caller's
 // `finally` (#606 item 3) — aborting a controller does not settle a request
 // that ignores its signal, so a `finally`-only release leaves `inFlight`
-// true forever after a hang.
+// true forever after a hang
 function createReleaser(
   controllers: Set<AbortController>,
   controller: AbortController,

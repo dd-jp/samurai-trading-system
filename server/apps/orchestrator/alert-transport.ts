@@ -252,7 +252,7 @@ function logAlertsLogOnly(logger: Logger): void {
 
 // Branched, not boilerplate: on the injected path this module reads no
 // heartbeat chat id and builds no adapter, so claiming the beat goes to
-// `TELEGRAM_HEARTBEAT_CHAT_ID` would name a destination no heartbeat reaches.
+// `TELEGRAM_HEARTBEAT_CHAT_ID` would name a destination no heartbeat reaches
 // This is what an operator checks their alerting against before an
 // unattended soak, and a confidently wrong destination is worse than none
 function heartbeatRoutingClause(heartbeatChatId: string | undefined): string {

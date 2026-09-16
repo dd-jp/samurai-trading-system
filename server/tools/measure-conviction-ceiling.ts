@@ -149,7 +149,7 @@ export interface LatticePoint {
  * The innermost three axes of the lattice sweep (donchian/adx/squeeze),
  * assessed for one fixed `lastClose`/`rsi`/`macd`/`participation` — split out
  * of `enumerateTechnicalLattice` purely to keep that function's nesting
- * shallow; the grid it sweeps is unchanged.
+ * shallow; the grid it sweeps is unchanged
  */
 function collectLatticePointsFor(
   lastClose: number,

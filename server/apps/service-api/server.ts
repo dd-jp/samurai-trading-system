@@ -370,7 +370,7 @@ export function createDashboardServer(opts: DashboardServerOptions): DashboardSe
    * `GET /api/snapshot`, split out of the request handler below so that
    * handler stays a flat method-guard → parse → route dispatch — the auth
    * check, arm parsing, and the build-or-500 try/catch are all specific to
-   * this one route, not to dispatching in general.
+   * this one route, not to dispatching in general
    */
   function handleSnapshotRequest(req: IncomingMessage, res: ServerResponse, parsedUrl: URL) {
     // #1038: verified before buildSnapshot ever runs, so a request with no

@@ -18,7 +18,7 @@ function overlaps(a: DateRange, b: DateRange): boolean {
 /**
  * Train must sit wholly outside [test.start - embargo, test.end + embargo]:
  * adjacent bars share label information with the test set, so leaving them
- * in leaks it into training.
+ * in leaks it into training
  */
 function isClearOfEmbargo(train: DateRange, test: DateRange, embargoMs: number): boolean {
   const clearBefore = train.end.getTime() <= test.start.getTime() - embargoMs;

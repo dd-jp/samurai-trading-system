@@ -633,7 +633,7 @@ async function sampleBucketSpread(
 
 /**
  * Fetches one session's minute bars and samples each `SESSION_BUCKETS` window
- * within it, folding the results into `perBucket`.
+ * within it, folding the results into `perBucket`
  */
 async function sampleSessionForDate(
   symbol: string,

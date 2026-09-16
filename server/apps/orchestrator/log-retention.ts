@@ -742,7 +742,8 @@ function sweepOneEntry(
 
   if (isArchivedLogName(entry.name)) {
     const stat = safeStat(path);
-    if (stat === undefined) return; // Vanished between listing and stat — not this sweep's problem
+    // Vanished between listing and stat — not this sweep's problem
+    if (stat === undefined) return;
     const outcome = tryRemoveArchivedLogEntry(
       path,
       stat,
@@ -774,7 +775,8 @@ function sweepOneEntry(
   }
 
   const stat = safeStat(path);
-  if (stat === undefined) return; // Vanished between listing and stat — not this sweep's problem
+  // Vanished between listing and stat — not this sweep's problem
+  if (stat === undefined) return;
   const outcome = tryTruncateBareLogEntry(path, stat, ctx.bareTruncateBytes, ctx.truncate);
   if (outcome.truncated) {
     result.filesTruncated += 1;

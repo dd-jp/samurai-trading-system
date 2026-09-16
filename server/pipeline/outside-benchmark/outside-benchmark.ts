@@ -233,7 +233,7 @@ function commonCloseTimeline(
  * Walks the blended index across `timeline`, seeded at 1 on each leg's
  * anchor — see `buildOutsideBenchmark`'s blending note for why each step is
  * the weighted sum of the legs' simple daily returns rather than a
- * drift-weighted blend.
+ * drift-weighted blend
  */
 function blendIndexSeries(
   perLeg: readonly ResolvedBenchmarkLeg[],

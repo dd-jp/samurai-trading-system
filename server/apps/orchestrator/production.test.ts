@@ -828,7 +828,7 @@ describe('universe resolution is a single site (#1167)', () => {
    * One token of `stripCommentsAndStrings`'s scan starting at `i`: the index
    * to resume at, and what that token contributes to the stripped output —
    * `''` for a stripped comment, `' '` for a stripped string/template
-   * literal, or the character itself otherwise.
+   * literal, or the character itself otherwise
    */
   function scanToken(source: string, i: number, n: number): { nextIndex: number; append: string } {
     const c = source[i];
@@ -5100,7 +5100,7 @@ describe('buildProductionOrchestrator', () => {
     /**
      * Answers `GET /v2/stocks/{symbol}/bars` with `buildDailyBars` — the only
      * endpoint this path reaches (`getDailyCloses` never marks, so
-     * `/quotes/latest` is never requested).
+     * `/quotes/latest` is never requested)
      */
     function stocksBarsFetchMock() {
       return vi.fn(async (url: string) => {

@@ -38,7 +38,7 @@ export function stripLineComments(sql: string): string {
  *    `contracts/boundary.test.ts` instead checks the property it actually
  *    depends on directly, on its own output — see the comment there.
  */
-/** One step inside a `'`/`"`/`` ` `` literal: how much of `source` to consume and append. */
+/** One step inside a `'`/`"`/`` ` `` literal: how much of `source` to consume and append */
 function stepQuoted(
   source: string,
   i: number,
@@ -54,7 +54,7 @@ function stepQuoted(
   return { nextIndex: i + 1, appended: ch, quoteAfter: ch === quote ? null : quote };
 }
 
-/** `//` runs to end of line (or end of source); nothing here is appended to the output. */
+/** `//` runs to end of line (or end of source); nothing here is appended to the output */
 function stepLineComment(source: string, i: number): number {
   const nl = source.indexOf('\n', i);
   return nl === -1 ? source.length : nl;

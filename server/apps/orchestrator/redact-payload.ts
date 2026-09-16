@@ -189,14 +189,14 @@ function walkArray(value: unknown[], depth: number, budget: WalkBudget, walk: Wa
 // Error and Date have custom prototypes that would not survive a key walk in
 // a recognisable shape, so each is rendered the way `JSON.stringify` renders
 // it and then masked as text. Errors are the case that actually occurs here,
-// and their `message` is exactly the free text `maskCredentials` exists for.
+// and their `message` is exactly the free text `maskCredentials` exists for
 //
 // Other exotic prototypes are NOT special-cased: a Map or a Set has no own
 // enumerable properties, so it falls through to `walkObject` and comes out
 // as `{}` — the same thing `JSON.stringify` would have produced for it
 // unredacted, and lossy either way. Nothing in this system logs one; if
-// something starts to, it needs a branch here rather than silence.
-// `undefined` means "not one of these two" — never itself a rendered value.
+// something starts to, it needs a branch here rather than silence
+// `undefined` means "not one of these two" — never itself a rendered value
 function renderSpecialObject(value: object): unknown | undefined {
   if (value instanceof Error) return maskCredentials(`${value.name}: ${value.message}`);
   if (value instanceof Date) return value.toISOString();

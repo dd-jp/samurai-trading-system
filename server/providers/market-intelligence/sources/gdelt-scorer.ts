@@ -257,7 +257,7 @@ function collectGdeltWindowTones(
   return { signalTones, baselineTones, populated };
 }
 
-/** The `IntelligenceItem` for an already-established, non-zero `toneDelta`. */
+/** The `IntelligenceItem` for an already-established, non-zero `toneDelta` */
 function buildGdeltItem(
   params: GdeltDeriveParams,
   windows: GdeltWindows,

@@ -80,7 +80,7 @@ function assertValidOverrideFields(
  * rather than flow through `resolveAssetConfig`'s merge and silently
  * corrupt `fill_price` via `Math.max(override, floor)`, exactly the failure
  * mode the floor validation above exists to prevent, just via a different
- * door.
+ * door
  */
 function assertValidVenueOverrides(venues: CostConfig['venues']): void {
   if (!venues) return;
