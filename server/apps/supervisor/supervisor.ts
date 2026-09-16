@@ -45,7 +45,7 @@
  */
 import { type ChildProcess, spawn as nodeSpawn } from 'node:child_process';
 import { openSharedStore, sharedStorePath } from '../../shared/store/index.js';
-import { JsonLogger } from '../orchestrator/logger.js';
+import { JsonLogger } from '../orchestrator/index.js';
 
 /** The subset of `child_process.spawn` this module uses, so tests can inject */
 export type SpawnFn = (command: string, args: readonly string[]) => ChildProcess;

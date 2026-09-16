@@ -61,10 +61,13 @@
  * `submitted` while the venue fills, so the restart's reconcile adopts it.
  */
 import { randomUUID } from 'node:crypto';
-import { assertStorePathMatchesMode, loggingAlertChannel } from '../apps/orchestrator/index.js';
-import { JsonLogger } from '../apps/orchestrator/logger.js';
+import {
+  assertStorePathMatchesMode,
+  buildDefaultAlpacaBrokerClient,
+  JsonLogger,
+  loggingAlertChannel,
+} from '../apps/orchestrator/index.js';
 import { resolveUsEquitySessionCalendar } from '../apps/orchestrator/production/us-equity-session-source.js';
-import { buildDefaultAlpacaBrokerClient } from '../apps/orchestrator/production.js';
 import {
   ALPACA_CREDENTIAL_ENV_VARS,
   AlpacaBrokerAdapter,

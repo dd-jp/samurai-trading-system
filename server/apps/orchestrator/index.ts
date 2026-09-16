@@ -185,6 +185,7 @@ export {
   buildAnalystsStep,
 } from './production/analysts-adapter.js';
 export { buildDebatePersonas, buildDebateStep } from './production/debate-adapter.js';
+export { buildDefaultAlpacaBrokerClient } from './production/defaults.js';
 export {
   type AccountStateProvider,
   buildExecutionStep,

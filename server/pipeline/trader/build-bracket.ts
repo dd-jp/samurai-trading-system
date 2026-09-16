@@ -9,7 +9,7 @@ import type { OrderIntent } from '../../shared/index.js';
 // The same type-only carve-out `decide.ts` takes for `DebateResult`: a bare
 // `import type` is erased, so this does not pull the debate engine's module
 // graph into the Trader
-import type { Direction } from '../debate-engine/types.js';
+import type { Direction } from '../debate-engine/index.js';
 import { riskFractionFor, type SubclassBracket } from './subclass-bracket.js';
 import type { AssetClass, TraderConfig, TraderReasonDetail, TraderSkipReason } from './types.js';
 

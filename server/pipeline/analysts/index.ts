@@ -18,11 +18,15 @@ export {
   DEFAULT_ANALYST_TIMEOUT_MS,
 } from './orchestrator.js';
 export { sentimentAnalyst } from './sentiment-analyst.js';
+export type { AxisAssessment } from './technical-analyst.js';
 export {
   type AxisVote,
+  assessAxes,
+  LOW_CONVICTION_CAP,
   MACD_SPEC,
   momentumVote,
   RSI_SPEC,
+  RVOL_5M_LOOKBACK,
   technicalAnalyst,
 } from './technical-analyst.js';
 export type {

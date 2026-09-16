@@ -9,7 +9,7 @@
  * `analyst-contribution.ts`.
  */
 import { type Logger, safeLog } from '../../shared/index.js';
-import { hashPromptTemplate } from '../../shared/llm/prompt-template-hash.js';
+import { hashPromptTemplate } from '../../shared/llm/index.js';
 import { classifyFailureCause } from './llm/failure-cause.js';
 import { BARE_JSON_INSTRUCTION, unwrapFencedJson } from './llm/json-response.js';
 import type { LlmClient } from './llm/types.js';

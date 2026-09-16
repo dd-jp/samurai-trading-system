@@ -30,9 +30,9 @@
  * unbounded bill is not.
  */
 
+import type { Logger } from '../../../shared/index.js';
 import { currentTraceId, describeThrownSafely } from '../../../shared/index.js';
 import type { StoreHandle } from '../../../shared/store/index.js';
-import type { Logger } from '../../../shared/types.js';
 
 /** The three refusal kinds `#refuse` stamps and escalates (see its doc) */
 export type SpendCapRefusalKind = 'budget' | 'corrupt_ledger' | 'read_fault';

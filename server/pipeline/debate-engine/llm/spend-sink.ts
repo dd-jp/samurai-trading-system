@@ -20,6 +20,7 @@
  * trading decision.
  */
 
+import type { Logger } from '../../../shared/index.js';
 import { maskAndCap } from '../../../shared/index.js';
 import {
   type AnthropicUsage,
@@ -28,10 +29,9 @@ import {
   priceUsage,
   promptTokensOf,
   rateFor,
-} from '../../../shared/llm/pricing.js';
+} from '../../../shared/llm/index.js';
 import type { StoreHandle } from '../../../shared/store/index.js';
 import { toStoredTimestamp } from '../../../shared/store/index.js';
-import type { Logger } from '../../../shared/types.js';
 import { type PromptTierAlertChannel, PromptTierCrossingThrottle } from './prompt-tier-alert.js';
 
 /** One metered API call, as handed to the sink */

@@ -93,7 +93,7 @@ import type { MarketDataService } from '../../providers/market-data-service/inde
 import { INDICATOR_KINDS } from '../../providers/market-data-service/index.js';
 import type { LogEventCode, Logger, OrderIntent } from '../../shared/index.js';
 import { describeThrownSafely } from '../../shared/index.js';
-import { hashPromptTemplate } from '../../shared/llm/prompt-template-hash.js';
+import { hashPromptTemplate } from '../../shared/llm/index.js';
 import type { FailureCause, LlmClient, SpendCap } from '../debate-engine/index.js';
 import {
   BARE_JSON_INSTRUCTION,

@@ -11,9 +11,11 @@
  * `dashboard` scripts, which would each start their own `tsc`.
  */
 import { pathToFileURL } from 'node:url';
-import { JsonLogger } from '../orchestrator/logger.js';
+import { JsonLogger } from '../orchestrator/index.js';
 import { installSupervisorContinueOnFault, watchSupervisorStdout } from './fault-guard.js';
 import { startSupervisor } from './supervisor.js';
+
+export { installSupervisorContinueOnFault, watchSupervisorStdout };
 
 // Entrypoint guard, matching orchestrator/index.ts: this file is importable,
 // and importing it must not spawn two processes

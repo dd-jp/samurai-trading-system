@@ -36,7 +36,7 @@ import {
 // engine. This module does not re-derive the decision bar — it takes the bar
 // coordinate from `DebateResult`. Do not import `floorToBar` or
 // `DEBATE_BAR_TIMEFRAME_MS` here to recompute it (#687)
-import type { DebateResult } from '../debate-engine/types.js';
+import type { DebateResult } from '../debate-engine/index.js';
 // #1089: the ONE typed dependency this otherwise risk-manager-free module
 // takes, and only for `instanceof` discrimination (coding-standards.md
 // "Typed errors only where a caller branches" — the same posture

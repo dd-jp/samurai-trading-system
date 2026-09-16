@@ -16,14 +16,14 @@
  */
 
 import type { PipelineStage } from '../../../contracts/index.js';
+import type { AnalystContribution } from '../../pipeline/debate-engine/index.js';
 // Imported from the concrete module, not the `debate-engine` barrel: the
 // barrel re-exports `SqliteDebateLogStore`, the Anthropic/Nous LLM clients
 // etc., and a value import of the barrel would drag every one of those
 // runtime dependencies into a fixture module that has none today
 // `computeInfluenceScore` itself has no imports beyond `./types.js`, so this
 // stays a type-only-equivalent, zero-side-effect import
-import { computeInfluenceScore } from '../../pipeline/debate-engine/analyst-contribution.js';
-import type { AnalystContribution } from '../../pipeline/debate-engine/index.js';
+import { computeInfluenceScore } from '../../pipeline/debate-engine/index.js';
 import {
   MIN_TRADES_PER_ARM_FOR_DIVERGENCE,
   type PersistedArmComparisonSample,
