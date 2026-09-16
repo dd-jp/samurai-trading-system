@@ -61,7 +61,6 @@
  * the boot-time check into a periodic one in practice.
  */
 import type { LseRegularHoursCalendar } from '../../../providers/market-data-service/index.js';
-import { LSE_TABLE_COVERAGE_END } from '../../../providers/market-data-service/index.js';
 // Reached directly rather than through the barrel: these are the internal
 // London-civil-date helpers `trading-calendar.ts` exports for exactly this
 // caller (see `LONDON_ZONE`'s own doc comment) — not part of the package's
@@ -69,8 +68,9 @@ import { LSE_TABLE_COVERAGE_END } from '../../../providers/market-data-service/i
 import {
   civilDateKey,
   LONDON_ZONE,
+  LSE_TABLE_COVERAGE_END,
   toCivilDate,
-} from '../../../providers/market-data-service/trading-calendar.js';
+} from '../../../providers/market-data-service/index.js';
 import { loggingAlertChannel } from '../alert-catalogue.js';
 import type { Logger } from '../types.js';
 import type { LseCalendarCoverageAlertChannel } from './lse-calendar-coverage-alert.js';

@@ -9,8 +9,8 @@
  */
 
 import { type RetryAttemptReport, withRetry } from '../../../shared/index.js';
-import type { AnthropicUsage } from '../../../shared/llm/pricing.js';
-import { hashPromptTemplate } from '../../../shared/llm/prompt-template-hash.js';
+import type { AnthropicUsage } from '../../../shared/llm/index.js';
+import { hashPromptTemplate } from '../../../shared/llm/index.js';
 import {
   LlmAdmissionRefusedError,
   LlmCancelledError,

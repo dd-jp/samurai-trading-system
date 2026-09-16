@@ -3,11 +3,17 @@
  * Implemented ticket-by-ticket starting with #24.
  */
 
+export type {
+  DebateLog,
+  DebateLogStore,
+  DebateRoundLogEntry,
+  DebateTermination,
+} from '../../shared/index.js';
 // Re-exported from `shared/llm` rather than owned here: the sentiment agent
 // prices against the same table, and `shared/llm/nous-config.ts` reads it to
 // refuse an unpriced model at startup. Kept on this barrel because the debate
 // engine's spend meter is still its principal consumer
-export type { AnthropicUsage, ModelRate } from '../../shared/llm/pricing.js';
+export type { AnthropicUsage, ModelRate } from '../../shared/llm/index.js';
 export {
   CACHE_READ_MULTIPLIER,
   CACHE_WRITE_MULTIPLIER,
@@ -15,18 +21,12 @@ export {
   pricedModels,
   priceUsage,
   rateFor,
-} from '../../shared/llm/pricing.js';
-export type {
-  DebateLog,
-  DebateLogStore,
-  DebateRoundLogEntry,
-  DebateTermination,
-} from '../../shared/types.js';
+} from '../../shared/llm/index.js';
 export type { AnalystRoundStance } from './analyst-contribution.js';
-export { buildAnalystContributions } from './analyst-contribution.js';
+export { buildAnalystContributions, computeInfluenceScore } from './analyst-contribution.js';
 export type { AnalystCollectionResult, ExpectedAnalyst } from './analyst-response-collector.js';
 export { collectAnalystViews, validateAnalystView } from './analyst-response-collector.js';
-export { computeConvictionScore } from './conviction-score.js';
+export { computeConvictionScore, EVIDENCE_WEIGHT } from './conviction-score.js';
 export { computeDebateId } from './debate-id.js';
 export {
   buildDebateLog,

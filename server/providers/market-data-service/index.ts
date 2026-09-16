@@ -124,6 +124,8 @@ export { closeTimeOf, isDailyTimeframe, timeframeToMs } from './timeframe.js';
 export type { TradingCalendar, ZonedCivilDate } from './trading-calendar.js';
 export {
   AlwaysOpenCalendar,
+  civilDateKey,
+  ET_ZONE,
   // #1524 — the Saxo weekly re-login reminder's own DST-safe wall-clock
   // arithmetic (production/saxo-weekly-reminder-alert.ts) is built on these
   // three rather than re-deriving the `Intl` fixpoint this file already has

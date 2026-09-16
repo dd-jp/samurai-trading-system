@@ -98,14 +98,11 @@ import {
   type AxisAssessment,
   assessAxes,
   LOW_CONVICTION_CAP,
-} from '../pipeline/analysts/technical-analyst.js';
-import { NO_DATA_MARKER } from '../pipeline/analysts/types.js';
-import {
-  computeConvictionScore,
-  EVIDENCE_WEIGHT,
-} from '../pipeline/debate-engine/conviction-score.js';
-import type { AnalystView, Direction } from '../pipeline/debate-engine/types.js';
-import { DEFAULT_TRADER_CONFIG } from '../pipeline/trader/types.js';
+  NO_DATA_MARKER,
+} from '../pipeline/analysts/index.js';
+import type { AnalystView, Direction } from '../pipeline/debate-engine/index.js';
+import { computeConvictionScore, EVIDENCE_WEIGHT } from '../pipeline/debate-engine/index.js';
+import { DEFAULT_TRADER_CONFIG } from '../pipeline/trader/index.js';
 
 /** Which branch the sentiment/fundamental pair is on for a given debate */
 export type DeskShape = 'absent' | 'hydrated-split' | 'hydrated-neutral' | 'hydrated-aligned';

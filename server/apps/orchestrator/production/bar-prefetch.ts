@@ -82,7 +82,7 @@
  * that already self-heals. Refusing to boot because one instrument's `1d`
  * window was short would trade a slow first tick for no trading at all.
  */
-import { RVOL_5M_LOOKBACK } from '../../../pipeline/analysts/technical-analyst.js';
+import { RVOL_5M_LOOKBACK } from '../../../pipeline/analysts/index.js';
 import type { BarWindow, MarketDataService } from '../../../providers/market-data-service/index.js';
 import { describeThrownSafely } from '../../../shared/index.js';
 import type { Logger, UniverseInstrument } from '../types.js';

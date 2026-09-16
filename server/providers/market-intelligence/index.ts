@@ -9,10 +9,7 @@
 // `debate-log-store.ts` is imported directly instead of the debate-engine
 // barrel so this provider does not pull the engine's module graph; the file
 // itself has only type imports
-import {
-  DEBATE_BAR_TIMEFRAME_MS,
-  floorToBar,
-} from '../../pipeline/debate-engine/debate-log-store.js';
+import { DEBATE_BAR_TIMEFRAME_MS, floorToBar } from '../../pipeline/debate-engine/index.js';
 import type { Clock } from '../../shared/index.js';
 import type {
   AgentIntelligence,

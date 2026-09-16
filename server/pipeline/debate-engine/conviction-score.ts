@@ -16,7 +16,7 @@
  * it stays a named constant below to retune without touching that logic.
  */
 
-import { NO_DATA_MARKER } from '../analysts/types.js';
+import { NO_DATA_MARKER } from '../analysts/index.js';
 import type { AnalystRoundStance } from './analyst-contribution.js';
 import type { AnalystView, Direction } from './types.js';
 

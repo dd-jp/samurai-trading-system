@@ -170,9 +170,13 @@ import type {
   ResidualExposureAlert,
   ResidualExposureAlertChannel,
 } from '../../pipeline/execution/index.js';
+// #1125: not re-exported through the barrel above (see ingest-fills.ts's own
+// exports) — imported directly, the same way `filled-zero-size-wiring.test.ts`
+// already does
 import {
   ALERT_AFTER_CONSECUTIVE_ZERO_SIZE,
   AlpacaBrokerAdapter,
+  FILLED_WITH_ZERO_SIZE,
   FilledZeroSizeThrottle,
   SimulatedBrokerAdapter,
   SqliteBrokerStateStore,
@@ -180,10 +184,6 @@ import {
   TERMINAL_SWEEP_AGE_MS,
   UnrecordedVenuePositionThrottle,
 } from '../../pipeline/execution/index.js';
-// #1125: not re-exported through the barrel above (see ingest-fills.ts's own
-// exports) — imported directly, the same way `filled-zero-size-wiring.test.ts`
-// already does
-import { FILLED_WITH_ZERO_SIZE } from '../../pipeline/execution/ingest-fills.js';
 import {
   assertKillThresholdsWithinBounds,
   DEFAULT_ARM_COMPARISON_WINDOW_MS,
@@ -267,10 +267,7 @@ import {
   watchDashboardStdout,
 } from '../service-api/fault-guard.js';
 import { SqliteQueryStore } from '../service-api/sqlite-query-store.js';
-import {
-  installSupervisorContinueOnFault,
-  watchSupervisorStdout,
-} from '../supervisor/fault-guard.js';
+import { installSupervisorContinueOnFault, watchSupervisorStdout } from '../supervisor/index.js';
 import { loggingAlertChannel } from './alert-catalogue.js';
 import type { AlertChannels } from './alert-transport.js';
 import {

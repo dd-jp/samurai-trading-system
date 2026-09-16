@@ -98,7 +98,7 @@
  *    skipped for the life of the process; the file carries the run.
  */
 import type { LogEntry, LogEventCode } from '../../shared/index.js';
-import { maskCredentials } from '../../shared/sanitize-log-text.js';
+import { maskCredentials } from '../../shared/index.js';
 import { redactPayload } from './redact-payload.js';
 import {
   type FileSinkConfig,

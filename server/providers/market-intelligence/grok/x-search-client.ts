@@ -73,8 +73,8 @@
  */
 
 import type { Logger } from '../../../shared/index.js';
-import type { LlmInFlightGate } from '../../../shared/llm/in-flight-gate.js';
-import { type NousCitation, nousResponses } from '../../../shared/llm/nous-responses.js';
+import type { LlmInFlightGate } from '../../../shared/llm/index.js';
+import { type NousCitation, nousResponses } from '../../../shared/llm/index.js';
 import type { IntelligenceItem } from '../types.js';
 import type { GrokSentimentClient } from './grok-agent.js';
 

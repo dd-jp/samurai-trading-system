@@ -84,9 +84,8 @@
  */
 
 import type { Logger } from '../../../shared/index.js';
-import type { LlmInFlightGate } from '../../../shared/llm/in-flight-gate.js';
-import type { NousChatResult } from '../../../shared/llm/nous-chat.js';
-import { NousRefusalError, nousChat } from '../../../shared/llm/nous-chat.js';
+import type { LlmInFlightGate, NousChatResult } from '../../../shared/llm/index.js';
+import { NousRefusalError, nousChat } from '../../../shared/llm/index.js';
 import type { IntelligenceItem } from '../types.js';
 import type { GrokSentimentClient } from './grok-agent.js';
 

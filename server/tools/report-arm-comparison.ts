@@ -49,8 +49,7 @@
  */
 
 import { isAbsolute, resolve } from 'node:path';
-import { assertStorePathMatchesMode } from '../apps/orchestrator/index.js';
-import { LIVE_BOOK_SIZING_USD } from '../apps/orchestrator/paper-profile.js';
+import { assertStorePathMatchesMode, LIVE_BOOK_SIZING_USD } from '../apps/orchestrator/index.js';
 import {
   type ArmComparison,
   buildArmComparison,

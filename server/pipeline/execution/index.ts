@@ -122,6 +122,7 @@ export type {
   FlattenReconcileAlert,
   FlattenReconcileAlertChannel,
 } from './flatten-reconcile-alert.js';
+export { FILLED_WITH_ZERO_SIZE } from './ingest-fills.js';
 export type {
   LegResizeUnverifiedAlert,
   LegResizeUnverifiedAlertChannel,

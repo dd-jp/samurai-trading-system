@@ -28,7 +28,7 @@ import {
   resolveStoreMode,
   sharedStorePath,
 } from '../../shared/store/index.js';
-import { JsonLogger } from '../orchestrator/logger.js';
+import { JsonLogger } from '../orchestrator/index.js';
 import { DASHBOARD_CREDENTIAL_ENV_VAR } from './bind-guard.js';
 import { installDashboardContinueOnFault, watchDashboardStdout } from './fault-guard.js';
 import { ProviderStatusPoller } from './provider-status.js';

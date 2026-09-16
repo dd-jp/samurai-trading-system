@@ -9,7 +9,7 @@
  * and termination (#34) build on top of these, not the other way around.
  */
 
-import { hashPromptTemplate } from '../../shared/llm/prompt-template-hash.js';
+import { hashPromptTemplate } from '../../shared/llm/index.js';
 import { BARE_JSON_INSTRUCTION, unwrapFencedJson } from './llm/json-response.js';
 import { wrapUntrusted } from './llm/prompt-safety.js';
 import type { LlmClient, LlmRequestContext } from './llm/types.js';

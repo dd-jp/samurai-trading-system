@@ -58,10 +58,7 @@
 
 // The bar grid, from its one defining module — `index.ts` in this directory
 // imports it the same way and states why the barrel is bypassed
-import {
-  DEBATE_BAR_TIMEFRAME_MS,
-  floorToBar,
-} from '../../pipeline/debate-engine/debate-log-store.js';
+import { DEBATE_BAR_TIMEFRAME_MS, floorToBar } from '../../pipeline/debate-engine/index.js';
 import type { AssetClass, Clock, LogEntry, LogEntryTemplate, Logger } from '../../shared/index.js';
 import { logCaughtFailure, safeLog } from '../../shared/index.js';
 import type { MiArchiveStore, RawArchiveRow } from './archive/mi-archive-store.js';

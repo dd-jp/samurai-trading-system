@@ -21,10 +21,13 @@
  * `content` block array `extractText` and `recordSpend` already read.
  */
 
-import type { LlmInFlightGate } from '../../../shared/llm/in-flight-gate.js';
-import { LlmInFlightRefusedError } from '../../../shared/llm/index.js';
-import type { NousChatResult } from '../../../shared/llm/nous-chat.js';
-import { NousRefusalError, NousTruncatedError, nousChat } from '../../../shared/llm/nous-chat.js';
+import type { LlmInFlightGate, NousChatResult } from '../../../shared/llm/index.js';
+import {
+  LlmInFlightRefusedError,
+  NousRefusalError,
+  NousTruncatedError,
+  nousChat,
+} from '../../../shared/llm/index.js';
 import type {
   AnthropicMessageOptions,
   AnthropicMessageRequest,

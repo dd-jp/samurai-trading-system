@@ -45,13 +45,24 @@ export {
   nousEnvVars,
   tryNousCredentials,
 } from './nous-config.js';
+export type {
+  NousCitation,
+  NousResponsesOptions,
+  NousResponsesRequest,
+  NousResponsesResult,
+  NousServerTool,
+} from './nous-responses.js';
+export { nousResponses } from './nous-responses.js';
 export type { AnthropicUsage, ModelRate } from './pricing.js';
 export {
   CACHE_READ_MULTIPLIER,
   CACHE_WRITE_MULTIPLIER,
+  crossesPromptTier,
   MODEL_RATES,
   pricedModels,
+  priceServerToolCalls,
   priceUsage,
+  promptTokensOf,
   rateFor,
 } from './pricing.js';
 export { hashPromptTemplate } from './prompt-template-hash.js';

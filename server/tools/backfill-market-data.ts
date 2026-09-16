@@ -131,6 +131,7 @@
  * overlapping window can never double-write a bar.
  */
 
+import type { Logger } from '../apps/orchestrator/index.js';
 import {
   buildAlertChannels,
   DEFAULT_UNIVERSE,
@@ -144,7 +145,6 @@ import type {
   DataFailoverAlert,
   DataFailoverAlertChannel,
 } from '../apps/orchestrator/production/data-failover.js';
-import type { Logger } from '../apps/orchestrator/types.js';
 import {
   AlpacaHttpDataClient,
   type Bar,
