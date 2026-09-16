@@ -32,7 +32,7 @@ import { fileURLToPath } from 'node:url';
 import type { SaxoTradingEnvironment } from './saxo-environment.js';
 import type { SaxoTokenResponse } from './saxo-oauth.js';
 
-export class SaxoTokenFileError extends Error {}
+class SaxoTokenFileError extends Error {}
 
 /**
  * `server/pipeline/execution/adapters/` → repo root, four levels up — with the

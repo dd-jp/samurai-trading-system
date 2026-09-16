@@ -25,12 +25,12 @@
 
 import { pricedModels, rateFor } from './pricing.js';
 
-export const NOUS_ROLES = ['debate', 'sentiment'] as const;
+const NOUS_ROLES = ['debate', 'sentiment'] as const;
 export type NousRole = (typeof NOUS_ROLES)[number];
 
-export const NOUS_BASE_URL_ENV_VAR = 'NOUS_BASE_URL';
-export const NOUS_API_KEY_ENV_VAR = 'NOUS_API_KEY';
-export const NOUS_MODEL_ENV_VAR = 'NOUS_MODEL';
+const NOUS_BASE_URL_ENV_VAR = 'NOUS_BASE_URL';
+const NOUS_API_KEY_ENV_VAR = 'NOUS_API_KEY';
+const NOUS_MODEL_ENV_VAR = 'NOUS_MODEL';
 
 /**
  * Defaults, chosen against the constraints each role actually has.
@@ -105,7 +105,7 @@ export interface NousCredentials {
 }
 
 /** The role-specific env vars, exported so the startup pre-flight can name them without duplicating the convention */
-export function nousEnvVars(role: NousRole): { model: string; apiKey: string } {
+function nousEnvVars(role: NousRole): { model: string; apiKey: string } {
   const prefix = `NOUS_${role.toUpperCase()}`;
   return { model: `${prefix}_MODEL`, apiKey: `${prefix}_API_KEY` };
 }

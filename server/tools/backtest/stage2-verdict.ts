@@ -29,7 +29,7 @@
  * rejects. None of them is a fabricated number.
  */
 
-import { deflatedSharpe, minbtl, minbtlGuard, pbo } from './overfitting.js';
+import { deflatedSharpe, minbtlGuard, pbo } from './overfitting.js';
 import type { TrialGridResult } from './trial-execution.js';
 import type { DateRange } from './universe.js';
 import type { MinBtlVerdict, PboVerdict } from './validation-types.js';
@@ -71,7 +71,7 @@ export interface ConfigKillLineCheck {
  * Why DSR/PBO could not be rendered for a config/asset-class group — a typed
  * refusal rather than a fabricated number. See the module doc comment.
  */
-export type NotComputableReason =
+type NotComputableReason =
   | 'no_real_trial_data'
   | 'cscv_pass_not_run'
   | 'cscv_pass_failed'
@@ -79,7 +79,7 @@ export type NotComputableReason =
   | 'dsr_variance_term_non_positive';
 
 /** PBO outcome for one asset class (or a global refusal when there's nothing to group) */
-export type PboOutcome =
+type PboOutcome =
   | { result: PboVerdict; asset_class: 'crypto' | 'stocks' }
   | { error: NotComputableReason; detail: string; asset_class?: 'crypto' | 'stocks' };
 
@@ -87,7 +87,7 @@ export type PboOutcome =
  * The deflated Sharpe of the config a researcher would actually have picked,
  * and the trial count it was deflated by
  */
-export interface DsrResult {
+interface DsrResult {
   /** The selected config — highest OOS Sharpe in its asset class */
   config_hash: string;
   /** N the Sharpe was deflated by — `ConfigTrialLog.distinctTrialCount()` */
@@ -102,7 +102,7 @@ export interface DsrResult {
 }
 
 /** DSR outcome for one asset class (or a global refusal when there's nothing to group) */
-export type DsrOutcome =
+type DsrOutcome =
   | { result: DsrResult; asset_class: 'crypto' | 'stocks' }
   | { error: NotComputableReason; detail: string; asset_class?: 'crypto' | 'stocks' };
 
@@ -404,6 +404,4 @@ function mean(values: readonly number[]): number {
   }
   return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
-
 /** Re-exported for callers that only need the MinBTL number (no trial data required) */
-export { minbtl };

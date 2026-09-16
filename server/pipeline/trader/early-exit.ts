@@ -144,7 +144,7 @@ export const DEFAULT_EARLY_EXIT_CONFIG: EarlyExitConfig = {
  * be read at all". The two are the same row otherwise, and only one of them is
  * the system working.
  */
-export type SignalDecayVerdict = 'decayed' | 'holds' | 'signal_unavailable';
+type SignalDecayVerdict = 'decayed' | 'holds' | 'signal_unavailable';
 
 export interface SignalDecayRead {
   verdict: SignalDecayVerdict;

@@ -126,7 +126,7 @@ import type {
  * p50 (`shared/llm/nous-config.ts`), and expiring costs only the critic: the
  * decision continues on the mechanical steps with `risk_critic: skipped`.
  */
-export const DEFAULT_CRITIC_BUDGET_MS = 10_000;
+const DEFAULT_CRITIC_BUDGET_MS = 10_000;
 
 /**
  * NOTE on the response budget: `max_tokens` belongs to the injected
@@ -145,7 +145,7 @@ export const DEFAULT_CRITIC_BUDGET_MS = 10_000;
 const MAX_REASONING_CHARS = 400;
 
 /** One held position, as the critic sees it */
-export interface CriticHeldPosition {
+interface CriticHeldPosition {
   instrument: string;
   notional: number;
 }

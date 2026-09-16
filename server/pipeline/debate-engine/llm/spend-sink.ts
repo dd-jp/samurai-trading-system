@@ -129,7 +129,7 @@ export interface LlmSpendRecord {
  * non-binding on the shape the system actually produces and fires only on a
  * pathological prompt — which is the case where a bound is worth having.
  */
-export const MAX_CAPTURED_PROMPT_CHARS = 16_384;
+const MAX_CAPTURED_PROMPT_CHARS = 16_384;
 
 /**
  * How much of a response is persisted.
@@ -138,7 +138,7 @@ export const MAX_CAPTURED_PROMPT_CHARS = 16_384;
  * chars per token, so it is non-binding on any response the model is permitted
  * to produce. If `max_tokens` is ever raised, raise this with it.
  */
-export const MAX_CAPTURED_RESPONSE_CHARS = 4_096;
+const MAX_CAPTURED_RESPONSE_CHARS = 4_096;
 
 export interface LlmSpendSink {
   record(entry: LlmSpendRecord): void;

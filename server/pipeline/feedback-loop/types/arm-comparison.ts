@@ -133,15 +133,12 @@ export interface ArmComparisonSample {
  * `null` means "computed before this column existed"; all-zero counts mean "FL
  * counted, and nothing was excluded".
  */
-export type PersistedArmPerformance = Omit<
-  ArmPerformance,
-  'refused_pass_count' | 'cost_basis_drops'
-> & {
+type PersistedArmPerformance = Omit<ArmPerformance, 'refused_pass_count' | 'cost_basis_drops'> & {
   refused_pass_count: number | null;
   cost_basis_drops: ExitClassDropCounts | null;
 };
 
-export interface PersistedArmComparison extends Omit<ArmComparison, 'live' | 'control'> {
+interface PersistedArmComparison extends Omit<ArmComparison, 'live' | 'control'> {
   live: PersistedArmPerformance;
   control: PersistedArmPerformance;
 }

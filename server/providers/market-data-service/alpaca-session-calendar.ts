@@ -110,7 +110,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * carrying the wrong type, fails loudly here rather than producing a
  * calendar that silently answers `undefined` for a real trading day.
  */
-export function validateAlpacaCalendarDays(body: unknown, context: string): AlpacaCalendarDay[] {
+function validateAlpacaCalendarDays(body: unknown, context: string): AlpacaCalendarDay[] {
   if (!Array.isArray(body)) {
     throw new AlpacaCalendarFetchError(
       `Alpaca calendar response was not an array (${context}): ${truncateForError(JSON.stringify(body))}`,

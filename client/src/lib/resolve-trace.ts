@@ -47,7 +47,7 @@ import {
  * fallback is approximate, so `{ by: 'instrument', exact: true }` does not
  * type-check and no resolver can pass a guess off as a key match.
  */
-export type JoinProvenance =
+type JoinProvenance =
   | { by: 'debate_id'; exact: true }
   | { by: 'trace_id'; exact: true }
   | { by: 'instrument'; exact: false };

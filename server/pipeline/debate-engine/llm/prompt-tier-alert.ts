@@ -48,7 +48,7 @@ import { escalatesAt } from '../../../shared/index.js';
  * reasoning `ALERT_AFTER_CONSECUTIVE_DEGRADED_TICKS` (tick-skip-alert.ts)
  * draws for a materially degraded pass
  */
-export const ALERT_AFTER_CONSECUTIVE_PROMPT_TIER_CROSSINGS = 1;
+const ALERT_AFTER_CONSECUTIVE_PROMPT_TIER_CROSSINGS = 1;
 
 /**
  * How often the alert repeats while the SAME model keeps crossing on

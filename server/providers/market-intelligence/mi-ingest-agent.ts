@@ -545,6 +545,6 @@ export class MiIngestAgent {
  * found'. Converting here rather than at the call site keeps that knowledge in
  * the one module that talks to this vendor.
  */
-export function wireSymbol(instrument: string): string {
+function wireSymbol(instrument: string): string {
   return instrument.replace(/-/g, '');
 }

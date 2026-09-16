@@ -63,9 +63,9 @@ export type MiSourceId = (typeof MI_SOURCES)[keyof typeof MI_SOURCES];
  * - `archive-only` — the items are archived for replay and offline
  *   re-derivation, but must NOT be pushed into the live store at boot.
  */
-export type MiHydrationPolicy = 'hydrate' | 'archive-only';
+type MiHydrationPolicy = 'hydrate' | 'archive-only';
 
-export const MI_SOURCE_HYDRATION: Record<MiSourceId, MiHydrationPolicy> = {
+const MI_SOURCE_HYDRATION: Record<MiSourceId, MiHydrationPolicy> = {
   // Publisher-dated articles with stored scores. A restart that dropped them
   // is the exact defect `hydrate()` was built for (#554)
   [MI_SOURCES.alpacaNews]: 'hydrate',

@@ -119,8 +119,8 @@ import {
 import type { UniverseInstrument } from '../types.js';
 
 /** The vendor names this wiring can name in an alert; matches the `bars.source` values each client stamps */
-export const EQUITIES_PRIMARY_VENDOR = 'alpaca';
-export const EQUITIES_FALLBACK_VENDOR = 'polygon';
+const EQUITIES_PRIMARY_VENDOR = 'alpaca';
+const EQUITIES_FALLBACK_VENDOR = 'polygon';
 
 /**
  * One live failover event, as the operator escalation sees it. A widened
@@ -198,7 +198,7 @@ export function resolveFallbackPacing(logger: Logger, env: NodeJS.ProcessEnv = p
  * take the whole book offline to avoid a stall the fallback exists to
  * survive. Loud in the startup log, at boot, before any stall.
  */
-export function guardFallbackPacing(pacing: TokenBucketConfig, logger: Logger): TokenBucketConfig {
+function guardFallbackPacing(pacing: TokenBucketConfig, logger: Logger): TokenBucketConfig {
   const reserve = pacing.reserveForPriority ?? 0;
   const wedges =
     pacing.refillPerSecond <= 0 ||

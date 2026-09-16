@@ -894,7 +894,7 @@ async function computeCurrentPortfolioAndBreakers(deps: BreakerStateDeps, clock:
 }
 
 /** One tick's exit valuation, and what it had to leave out to produce one (#841) */
-export interface ExitValuationDegradation {
+interface ExitValuationDegradation {
   /** The held instruments left unvalued — never empty when this object exists */
   unvalued_instruments: readonly string[];
   /** The strict refusal's own message, naming each dark instrument and why */
@@ -1100,7 +1100,7 @@ function reportExitValuationDegraded(
  * provider. `Pick` rather than a fresh interface so a change to the class's
  * signature still propagates here instead of quietly diverging.
  */
-export type CiiScoreSource = Pick<CiiConsumer, 'getScores'>;
+type CiiScoreSource = Pick<CiiConsumer, 'getScores'>;
 
 export interface RiskStepDeps extends BreakerStateDeps {
   config: RiskConfig;

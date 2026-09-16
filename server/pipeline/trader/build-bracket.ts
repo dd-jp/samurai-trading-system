@@ -25,12 +25,12 @@ export function sideFor(direction: TradeDirection): 'buy' | 'sell' {
   return direction === 'bullish' ? 'buy' : 'sell';
 }
 
-export type BracketSkipReason = Extract<
+type BracketSkipReason = Extract<
   TraderSkipReason,
   'stop_distance_not_positive' | 'size_not_finite' | 'rounds_to_zero_shares' | 'below_min_notional'
 >;
 
-export interface BracketSkip {
+interface BracketSkip {
   reason: BracketSkipReason;
   reason_detail: TraderReasonDetail | null;
 }
@@ -114,7 +114,7 @@ export interface SizeBracketInput {
   >;
 }
 
-export interface SizedBracket {
+interface SizedBracket {
   /** The quantity to submit — floored to whole shares when the venue demands it */
   size: number;
   sizing: OrderIntent['metadata']['sizing'];

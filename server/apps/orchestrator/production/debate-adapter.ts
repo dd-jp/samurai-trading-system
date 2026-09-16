@@ -601,11 +601,7 @@ export function worstCaseLlmCallsForAssetClass(assetClass: AssetClass): number {
  * `accumulateCredit` cannot distinguish from a real debate in which no analyst
  * took a stance.
  */
-export function rateLimitedDebateResult(
-  debate_id: string,
-  bar: Date,
-  reason: string,
-): DebateResult {
+function rateLimitedDebateResult(debate_id: string, bar: Date, reason: string): DebateResult {
   return {
     synthesis: `Debate not started: ${reason}`,
     position: 'No position — the debate was not admitted under the LLM rate-limit budget.',
@@ -641,11 +637,7 @@ export function rateLimitedDebateResult(
  * already understands as "the debate was not admitted"; the reason string is
  * what distinguishes them.
  */
-export function spendCappedDebateResult(
-  debate_id: string,
-  bar: Date,
-  reason: string,
-): DebateResult {
+function spendCappedDebateResult(debate_id: string, bar: Date, reason: string): DebateResult {
   return {
     ...rateLimitedDebateResult(debate_id, bar, reason),
     position: 'No position — the debate was not admitted under the LLM spend cap.',
@@ -688,11 +680,7 @@ export function spendCappedDebateResult(
  * `not_admitted` (`debateDecisionWord`), distinct from both `no_trade` and
  * `crashed`.
  */
-export function gateRefusedDebateResult(
-  debate_id: string,
-  bar: Date,
-  reason: string,
-): DebateResult {
+function gateRefusedDebateResult(debate_id: string, bar: Date, reason: string): DebateResult {
   return {
     ...rateLimitedDebateResult(debate_id, bar, reason),
     position: 'No position — the debate was not admitted under the in-flight LLM cap.',
@@ -729,7 +717,7 @@ export function gateRefusedDebateResult(
  * bug, and two sources of truth for the id the Trader, Verdict and Feedback Loop
  * all join on is not a trade worth making.
  */
-export function replayedDebateResult(persisted: ReplayableDebateLog): DebateResult {
+function replayedDebateResult(persisted: ReplayableDebateLog): DebateResult {
   return {
     synthesis: persisted.synthesis,
     position: persisted.position,
@@ -759,7 +747,7 @@ export function replayedDebateResult(persisted: ReplayableDebateLog): DebateResu
 }
 
 /** A `DebateLog` carrying every replay field the Trader consumes */
-export type ReplayableDebateLog = DebateLog & Required<Pick<DebateLog, ReplayField>>;
+type ReplayableDebateLog = DebateLog & Required<Pick<DebateLog, ReplayField>>;
 
 type ReplayField =
   | 'confidence'
@@ -792,7 +780,7 @@ const REPLAY_FIELDS: readonly ReplayField[] = [
  * All six or none: a partial row falls through and the debate re-runs, which is
  * the same degradation path a pre-0026 row already takes.
  */
-export function isReplayable(persisted: DebateLog | undefined): persisted is ReplayableDebateLog {
+function isReplayable(persisted: DebateLog | undefined): persisted is ReplayableDebateLog {
   return persisted !== undefined && REPLAY_FIELDS.every((field) => persisted[field] !== undefined);
 }
 

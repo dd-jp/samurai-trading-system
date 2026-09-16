@@ -219,7 +219,7 @@ export interface CoverageRow {
  * (#612 (2)) this constant does not touch. Crypto is refused outright above
  * (never fetched), so there is no crypto source to quarantine.
  */
-export const QUARANTINED_BAR_SOURCES: ReadonlySet<string> = new Set(['polygon']);
+const QUARANTINED_BAR_SOURCES: ReadonlySet<string> = new Set(['polygon']);
 
 export interface BackfillMarketDataDeps {
   store: MarketDataStore;

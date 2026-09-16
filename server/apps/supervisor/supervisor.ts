@@ -51,7 +51,7 @@ import { JsonLogger } from '../orchestrator/index.js';
 export type SpawnFn = (command: string, args: readonly string[]) => ChildProcess;
 
 /** The subset of a spawned child this module observes */
-export type SupervisedChild = Pick<ChildProcess, 'kill'> & {
+type SupervisedChild = Pick<ChildProcess, 'kill'> & {
   once(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): void;
   once(event: 'error', listener: (error: Error) => void): void;
 };

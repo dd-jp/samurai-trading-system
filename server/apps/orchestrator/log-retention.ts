@@ -481,7 +481,7 @@ export function logRetentionKeepNamesFromEnvironment(
 }
 
 /** Enough of `fs.Stats` to identify an open descriptor's target file */
-export interface FileIdentity {
+interface FileIdentity {
   dev: number;
   ino: number;
 }

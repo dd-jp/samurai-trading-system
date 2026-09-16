@@ -110,7 +110,7 @@ export const LLM_FAILURE_RATE_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const LLM_FAILURE_RATE_THRESHOLD = 0.25;
 
 /** Mirrors `MIN_TRADES_PER_ARM_FOR_DIVERGENCE` — below this many truncations, a rate is noise, not a measurement */
-export const MIN_TRUNCATIONS_FOR_LLM_FAILURE_RATE = 5;
+const MIN_TRUNCATIONS_FOR_LLM_FAILURE_RATE = 5;
 
 /** How often `llm_failure_rate_check_failed` repeats while the window read keeps failing (review round 2 finding 8) */
 export const CHECK_FAILURE_LOG_EVERY = 20;

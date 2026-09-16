@@ -29,7 +29,7 @@ import {
 } from '@contracts';
 import type { WireSnapshot } from './hooks/useSnapshot.ts';
 
-export const AS_OF = '2026-08-07T12:00:00.000Z';
+const AS_OF = '2026-08-07T12:00:00.000Z';
 
 function spendWindow(overrides: Partial<LlmSpendWindow> = {}): LlmSpendWindow {
   return {

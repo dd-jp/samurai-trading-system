@@ -466,93 +466,46 @@ export class MarketIntelligenceStore {
 // `MarketIntelligenceStore`, replacing a retrieval design that ingests `[]` by
 // construction
 export {
-  type ArchivedItem,
-  type ArchiveFidelity,
   DEFAULT_MI_ARCHIVE_RETENTION_DAYS,
   MiArchiveStore,
   miArchivePath,
   type RawArchiveRow,
 } from './archive/mi-archive-store.js';
-export {
-  HYDRATING_MI_SOURCES,
-  MI_SOURCE_HYDRATION,
-  MI_SOURCES,
-  type MiHydrationPolicy,
-  type MiSourceId,
-} from './archive/mi-sources.js';
+export { MI_SOURCES } from './archive/mi-sources.js';
 export {
   GdeltIngestAgent,
-  type GdeltIngestAgentDeps,
   SOURCE_GDELT,
 } from './gdelt-ingest-agent.js';
-export { GdeltScoringPass, type GdeltScoringPassDeps } from './gdelt-scoring-pass.js';
+export { GdeltScoringPass } from './gdelt-scoring-pass.js';
 export {
-  floorToRefreshBucket,
   GROK_REFRESH_MS,
   GrokAgent,
-  type GrokAgentDeps,
-  type GrokSentimentClient,
-  type GrokSpendSink,
 } from './grok/grok-agent.js';
-export {
-  NousSentimentClient,
-  type NousSentimentClientOptions,
-} from './grok/nous-sentiment-client.js';
+export { NousSentimentClient } from './grok/nous-sentiment-client.js';
 export {
   DEFAULT_MAX_SEARCH_RESULTS,
   MAX_SEARCH_RESULTS_CEILING,
-  parseStatusUrl,
   X_SEARCH_MODEL,
   XSearchClient,
-  type XSearchClientOptions,
 } from './grok/x-search-client.js';
-export { MiIngestAgent, type MiIngestAgentDeps, wireSymbol } from './mi-ingest-agent.js';
+export { MiIngestAgent } from './mi-ingest-agent.js';
 // The Polymarket macro/event path (#504) — an `intel` writer (#1164: routed
 // there by `scope`, not filed as `news`), added for the measured LSE-ETP
 // coverage hole rather than for an empty bucket
+export { CURATED_MACRO_MARKETS } from './polymarket/curated-markets.js';
 export {
-  CURATED_MACRO_MARKETS,
-  type CuratedMacroMarket,
-  type PolymarketOutcome,
-} from './polymarket/curated-markets.js';
-export {
-  floorToPolymarketBucket,
   POLYMARKET_ASSET_CLASS,
-  POLYMARKET_REFRESH_MS,
   PolymarketAgent,
-  type PolymarketAgentDeps,
   type PolymarketWireClient,
   SOURCE_POLYMARKET,
 } from './polymarket/polymarket-agent.js';
+export { PolymarketClient } from './polymarket/polymarket-client.js';
+export { AlpacaNewsClient } from './sources/alpaca-news-client.js';
 export {
-  PolymarketClient,
-  type PolymarketClientOptions,
-  type PolymarketMarket,
-  type PolymarketPricePoint,
-} from './polymarket/polymarket-client.js';
-export { type ScorableItem, scoreItems, UNSCORED } from './scoring/item-scorer.js';
-export { type AlpacaNewsArticle, AlpacaNewsClient } from './sources/alpaca-news-client.js';
-export {
-  batchTimeFromUrl,
-  type GdeltGkgBatch,
   GdeltGkgClient,
-  type GdeltGkgClientOptions,
-  type GdeltGkgRecord,
   // Exported here, not just from the module: a stored `payload` is a projection,
   // and anything re-parsing one has to read its shape from this constant rather
   // than assume GKG column order
   PROJECTED_COLUMNS,
 } from './sources/gdelt-gkg-client.js';
-export {
-  CONFIDENCE_HALF_POINT_TONE,
-  confidenceFromToneDelta,
-  DEFAULT_GDELT_WINDOWS,
-  deriveGdeltAggregate,
-  GDELT_MACRO_ENTITY,
-  type GdeltAggregateStats,
-  type GdeltDerivation,
-  type GdeltRefusalReason,
-  type GdeltWindows,
-  parseGdeltProjection,
-} from './sources/gdelt-scorer.js';
-export { allWatchedThemes, themesFor } from './sources/gdelt-themes.js';
+export { GDELT_MACRO_ENTITY } from './sources/gdelt-scorer.js';

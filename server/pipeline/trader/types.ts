@@ -17,7 +17,6 @@ import type {
   Clock,
   InstrumentSubclass,
   OpenPosition,
-  OrderIntent,
   SetupStore,
   TradingArm,
 } from '../../shared/index.js';
@@ -479,20 +478,10 @@ export interface UnresolvedFlatten {
 }
 
 /** One mandatory flatten built without a mark (#826) */
-export interface UnpricedFlattenReport {
+interface UnpricedFlattenReport {
   instrument: string;
   /** The mark read's own failure, rendered — the only form a thrown value survives in */
   reason: string;
-}
-
-/** The single test seam. `decide` in ./decide.ts is its implementation. */
-export interface Trader {
-  /**
-   * null = skip / no-trade. A projection of `decideWithReason`, which is what
-   * production calls: this signature drops the skip reason, and nineteen
-   * distinct causes of "no order" collapse into one `null` here.
-   */
-  decide(input: TraderInput): Promise<OrderIntent | null>;
 }
 
 /**

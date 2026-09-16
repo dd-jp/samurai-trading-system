@@ -62,7 +62,7 @@ export type VenueKey = 'alpaca' | 'ccxt' | 'ibkr' | 'saxo';
 
 export type VenuePacingConfig = Record<VenueKey, TokenBucketConfig>;
 
-export const VENUE_KEYS: readonly VenueKey[] = ['alpaca', 'ccxt', 'ibkr', 'saxo'];
+const VENUE_KEYS: readonly VenueKey[] = ['alpaca', 'ccxt', 'ibkr', 'saxo'];
 
 /**
  * The venue's own published hard limit, in requests per second, where one

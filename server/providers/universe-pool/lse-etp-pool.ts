@@ -361,7 +361,7 @@
 import { type AssetClass, type InstrumentSubclass, isBookCurrency } from '../../shared/index.js';
 
 /** Long/short stance the ETP itself carries — separate from any debate direction */
-export type EtpDirection = 'long' | 'short';
+type EtpDirection = 'long' | 'short';
 
 /**
  * Tri-state Saxo tradeability. `true`/`false` are a verified claim, sourced
@@ -373,7 +373,7 @@ export type EtpDirection = 'long' | 'short';
  * `LseEtpPoolRow.saxo_tradeable` and `liquidityGateStatus` for how a caller
  * must read this.
  */
-export type SaxoTradeability = true | false | 'unverified';
+type SaxoTradeability = true | false | 'unverified';
 
 /**
  * One LSE line as Saxo's `GET /ref/v1/instruments` returns it. `symbol` is
@@ -383,7 +383,7 @@ export type SaxoTradeability = true | false | 'unverified';
  * endpoint on `ExchangeId=LSE` returns NOTHING for these, which is why the
  * capture keyed on symbol/ISIN and recorded the exchange it found instead.
  */
-export interface SaxoInstrumentLine {
+interface SaxoInstrumentLine {
   readonly symbol: string;
   readonly uic: number;
   readonly asset_type: 'Etn' | 'Etf' | 'Etc';
@@ -418,7 +418,7 @@ export interface SaxoInstrumentLine {
  * are identical. Re-verify against `gateway.saxobank.com/openapi` before the
  * live ramp.
  */
-export interface SaxoInstrumentEvidence {
+interface SaxoInstrumentEvidence {
   readonly verified_on: string;
   readonly gateway: 'sim';
   readonly line: SaxoInstrumentLine | null;
@@ -432,7 +432,7 @@ export interface SaxoInstrumentEvidence {
  * claim (ticker existing, ISIN, currency line, T212 listing) came from which
  * fetch.
  */
-export interface RowProvenance {
+interface RowProvenance {
   /** ISIN of the ETP, as stated by the issuer/aggregator source below */
   readonly isin: string;
   /** One of the three named issuers: 'Leverage Shares' | 'WisdomTree' | 'GraniteShares' */

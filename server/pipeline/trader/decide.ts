@@ -1159,7 +1159,7 @@ async function buildFlattenExit(
  * `null` on any outcome that is not a skip: an emitted order has nothing to
  * classify.
  */
-export type TraderDecisionClass = 'declined_on_signal' | 'could_not_decide' | 'input_unusable';
+type TraderDecisionClass = 'declined_on_signal' | 'could_not_decide' | 'input_unusable';
 
 /**
  * The BASELINE classification for every `TraderSkipReason`, before

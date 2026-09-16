@@ -47,7 +47,7 @@ export interface RoundContext {
 }
 
 /** One persona's contribution to a single round */
-export interface DebateArgument {
+interface DebateArgument {
   persona: 'bull' | 'bear';
   round: number;
   /** Free-text argument this persona made this round */

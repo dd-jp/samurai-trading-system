@@ -1046,9 +1046,9 @@ export class LseRegularHoursCalendar implements TradingCalendar {
 const MINUTES_PER_DAY = 24 * 60;
 
 /** 14:30 London — the US cash open, and the start of the overlap (#706) */
-export const OVERLAP_WINDOW_OPEN_MINUTES = 14 * 60 + 30;
+const OVERLAP_WINDOW_OPEN_MINUTES = 14 * 60 + 30;
 /** 15:45 London — last entry, leaving 40 minutes to the 16:25 flatten (#706) */
-export const OVERLAP_WINDOW_LAST_ENTRY_MINUTES = 15 * 60 + 45;
+const OVERLAP_WINDOW_LAST_ENTRY_MINUTES = 15 * 60 + 45;
 
 /**
  * A London wall-clock predicate for `SchedulerConfig.stocksTradingWindow`.

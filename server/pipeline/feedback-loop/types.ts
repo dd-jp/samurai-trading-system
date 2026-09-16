@@ -10,22 +10,14 @@
  */
 
 export type {
-  ArmComparisonCycleInput,
   ArmComparisonSample,
   ArmComparisonSampleStore,
-  ArmComparisonSource,
-  ArmDivergenceAlert,
   ArmDivergenceAlertChannel,
-  ArmDivergenceThresholds,
-  ArmDivergenceVerdict,
-  PersistedArmComparison,
   PersistedArmComparisonSample,
-  PersistedArmPerformance,
 } from './types/arm-comparison.js';
 export type {
   DailyCycleInput,
   DailyCycleResult,
-  FeedbackLoop,
   OnTradeCloseInput,
 } from './types/cycle.js';
 export type {
@@ -38,12 +30,7 @@ export type {
   MetricsReport,
   RevalidationSnapshot,
 } from './types/metrics.js';
-export type {
-  OutsideBenchmarkCycleInput,
-  OutsideBenchmarkCycleResult,
-  OutsideBenchmarkSampleStore,
-  UnmeasuredOutsideBenchmark,
-} from './types/outside-benchmark.js';
+export type { OutsideBenchmarkSampleStore } from './types/outside-benchmark.js';
 export type {
   Adjustment,
   AdjustmentLog,

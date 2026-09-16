@@ -75,7 +75,7 @@ import {
 const SOURCE_GDELT = MI_SOURCES.gdeltGkg;
 
 /** Refuse loudly once, then every Nth consecutive poll — `mi-coverage.ts`'s `shouldAlertAt` convention */
-export const REFUSAL_LOG_AFTER_CONSECUTIVE = 1;
+const REFUSAL_LOG_AFTER_CONSECUTIVE = 1;
 
 /**
  * How many further consecutive refusals pass before the log repeats.

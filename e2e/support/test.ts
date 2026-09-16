@@ -43,7 +43,7 @@ const LOCAL_SCHEMES = ['data:', 'blob:', 'about:'];
  * off-origin rather than waved through: a guard that opens when it is confused
  * is not a guard.
  */
-export function isLocalUrl(url: string, origin: string): boolean {
+function isLocalUrl(url: string, origin: string): boolean {
   // Scheme first, and a prefix check is right HERE: these carry no host, and
   // `new URL('data:…').origin` is the string "null", so an origin comparison
   // would reject the very URLs that never touch the network

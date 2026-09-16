@@ -101,7 +101,7 @@ export interface AccountFundingSource {
  * constant here so that fact is one greppable place rather than an assumption
  * spread across the risk manager.
  */
-export const ALPACA_ACCOUNT_CURRENCY = 'USD';
+const ALPACA_ACCOUNT_CURRENCY = 'USD';
 
 export function alpacaFunding(client: AlpacaBrokerClient): AccountFundingSource {
   return {

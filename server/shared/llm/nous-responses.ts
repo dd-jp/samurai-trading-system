@@ -67,7 +67,7 @@ import type { AnthropicUsage } from './pricing.js';
  * file to use a tool it has no other opinion about. The CALLER states the
  * shape it needs — see `x-search-client.ts`'s `XSearchTool`.
  */
-export interface NousServerTool {
+interface NousServerTool {
   type: string;
   [option: string]: unknown;
 }
