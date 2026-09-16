@@ -401,15 +401,16 @@ export interface Fill {
    */
   flatten_idempotency_key?: string;
   /**
-   * Venue-reported fee currency, verbatim, never converted. Per David's
-   * 2026-09-08 ruling a non-sterling fee is a CONTRADICTION (not an FX term)
-   * since `tradeableUniverse` excludes non-sterling — `ingestFills()` flags it but still writes the row.
+   * Venue-reported fee currency, verbatim, never converted. A non-sterling
+   * fee is a contradiction, not an FX term — `tradeableUniverse` excludes
+   * non-sterling instruments, so `ingestFills()` flags it but still writes
+   * the row.
    */
   fee_currency?: string;
   /**
-   * Venue-applied conversion rate to GBP, when reported. VERIFIED absent
-   * from Saxo's fill feed (SIM, 2026-09-14) — exists for a future surface
-   * that can report one. See `fx_rate_to_gbp_source` for why it's absent elsewhere.
+   * Venue-applied conversion rate to GBP, when reported. Absent from
+   * Saxo's fill feed — exists for a future surface that can report one.
+   * See `fx_rate_to_gbp_source` for why it's absent elsewhere.
    */
   fx_rate_to_gbp?: number;
   /**

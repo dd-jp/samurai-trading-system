@@ -1,84 +1,29 @@
 /**
  * The fill-sync loop — the scheduled caller for Execution's two non-tick
- * surfaces, `reconcile()` (#86) and `ingestFills()` (#83).
+ * surfaces, `reconcile()` and `ingestFills()`. Without a scheduled caller a
+ * lot's lifecycle stops dead at `submitted`: `filled_size` never advances,
+ * Risk sizes against a portfolio that never grows, and no `ClosedTrade` is
+ * ever emitted.
  *
- * ## Why this exists
+ * Self-schedules a `setTimeout` after each pass settles rather than
+ * `setInterval`, mirroring `startTickLoop`: `ingestFills()` is async and a
+ * fixed-period timer firing before the previous pass finished would let two
+ * passes race on `resizeProtectiveLegs` for the same mid-fill lot.
  *
- * Both surfaces were implemented and neither was ever scheduled: nothing in
- * #234–#237 wired them, and `production.ts` said so in its own doc comment.
- * The consequence is not "fills arrive late" — it is that a lot's lifecycle
- * stops dead at `submitted`. `updatePositionFill` is only reached from
- * `ingestFills`, so `filled_size` stays 0; `computePortfolioView` derives
- * exposure from `filled_size`, so Risk sizes every subsequent decision
- * against a portfolio that never grows; and `writeClosedTrade` is only
- * reached from `ingestFills`, so no `ClosedTrade` is ever emitted and the
- * Feedback Loop has nothing to attribute. One missing caller, four silent
- * failures.
+ * `start()` awaits `reconcile()` once before the tick loop AND before the
+ * first ingest — both load-bearing. Before the tick loop, so Risk never sizes
+ * against a store that still disagrees with the venue after a crash. Before
+ * the first ingest, because the live adapters' bracket registry is
+ * process-local, so `fetchNewFills` polls nothing until `getOrder`
+ * repopulates it. `runPoll` below repeats this same reconcile-before-ingest
+ * ordering on every recurring pass, not just at startup, in its own
+ * try/catch so a reconcile failure cannot block or mask that pass's ingest.
  *
- * ## Why a self-scheduling timeout, not `setInterval`
- *
- * `startFillSync` below re-arms a `setTimeout` after each pass settles. The
- * rejected alternative was `setInterval`, and this paragraph describes that
- * hypothetical, not the code:
- *
- * `ingestFills()` is async and makes N broker calls — one `getOrder` per open
- * bracket, paced by the adapter's token bucket. A `setInterval` fires on a
- * fixed period regardless of whether the previous pass has finished, so a poll
- * slower than its own period would re-enter: two passes would both read
- * `getOpenPositions()` and both call `resizeProtectiveLegs`, racing on the
- * protective quantity of a lot that is mid-fill. The tick loop
- * (`startTickLoop`) already solved this — `setTimeout` re-armed only after
- * the previous pass settles, plus an `inFlight` guard — and this mirrors it
- * deliberately rather than inventing a second concurrency posture.
- *
- * Contrast the feedback cycle's own `scheduleFeedbackCycle` (production.ts),
- * which ALSO now self-reschedules a `setTimeout` — but for a different
- * reason (#1110): `runDailyCycle` is synchronous, so it cannot overlap
- * itself the way `ingestFills()` can, and its re-arming exists to recompute a
- * wall-clock boundary on every fire, not to guard against re-entrancy. This
- * loop's re-arming is the re-entrancy guard itself; that precedent does not
- * transfer here.
- *
- * ## Ordering: reconcile before the tick loop, and before every ingest
- *
- * `start()` awaits `reconcile()` once, before the tick loop and before the
- * first ingest (`runStartupReconcile`, awaited by the caller in
- * `production.ts`). Both orderings are load-bearing:
- *
- * - **Before the tick loop** — reconcile adopts broker truth for lots a crash
- *   stranded in `pending`/`submitted`. Letting `execute()` write ahead first
- *   would have Risk sizing against a store that still disagrees with the
- *   venue.
- * - **Before the first ingest** — `reconcile.ts` states this itself: on the
- *   live adapters the bracket registry is process-local (`brackets` map), so
- *   after a restart `fetchNewFills` polls nothing until `getOrder` repopulates
- *   it, and reconcile is what calls `getOrder`.
- *
- * **#921: `reconcile()` is no longer startup-only.** `runPoll` below (the
- * body of every recurring pass `startFillSync` schedules) now calls
- * `reconcile()` again, before that pass's `ingestFills()`, for the SAME
- * "before every ingest" reason the startup call exists — a lost ack between
- * polls (e.g. a `submitFlatten` response dropped, leaving a
- * `flatten_submissions` row at `'submitting'` with the adapter's in-memory
- * worklist never populated) would otherwise sit unrecovered until the next
- * process restart, which on an always-on host may be arbitrarily far away.
- * Wrapped in its own try/catch so a reconcile failure — the venue briefly
- * unreachable, say — can neither block nor mask that pass's `ingestFills()`,
- * mirroring the posture the residual-protection sweep already takes in its
- * own `finally`-block try/catch below. Reported divergences are deduped
- * per-episode (`lastReconcileAction`, the same #342 "repeated-line lesson"
- * `lastSweepAction` already applies) so a divergence that persists across
- * many polls logs once, not once per poll.
- *
- * ## What this does NOT fix
- *
- * Reconcile only visits `IN_FLIGHT_ORDER_STATES` (`pending` /
- * `submitted`). A lot already `partially_filled` or `filled` at restart is
- * never passed to `getOrder`, so its bracket id is never re-learned, so its
- * exit-leg fills stay invisible to `fetchNewFills` for the rest of the
- * process's life. Scheduling reconcile does not close that — durable bracket
- * state does, which is #295/#287. Do not read this module as making the
- * adapters restart-safe.
+ * Reconcile only visits in-flight (`pending`/`submitted`) orders. A lot
+ * already `partially_filled` or `filled` at restart never has its bracket id
+ * re-learned, so its exit-leg fills stay invisible to `fetchNewFills` for the
+ * rest of the process's life — durable bracket state would close that, this
+ * loop does not.
  */
 import type {
   ReconcileDivergence,
@@ -90,69 +35,30 @@ import { describeThrownSafely } from '../../shared/index.js';
 import type { Logger } from './types.js';
 
 /**
- * Log level for one `reconcile()` divergence (#1122, follow-up to #1096's
- * `submitted -> filled` benign-race noise).
+ * Log level for one `reconcile()` divergence. `undetermined` and
+ * `unrecorded` warn — the first needs a human because the adapter could not
+ * answer, the second because it is an unhedged exposure Risk cannot see and
+ * no other detector reports.
  *
- * `undetermined` still warns — the adapter could not answer and a human must
- * look. A bracket lot's `adopted` transition to `filled`/`partially_filled`
- * demotes to `debug`: `reconcile.ts`'s own doc on `reconcileLot` states the
- * adopted lot "stays in `getOpenPositions()` and the very next `ingestFills()`
- * supplies the quantity" — and that same call, in the SAME poll (this file's
- * "Ordering" doc: reconcile before ingest, every pass), is exactly what
- * `FilledZeroSizeThrottle` (filled-zero-size-throttle.ts, #1087) watches,
- * warning with `stuck_ms`/`consecutive` at `ALERT_AFTER_CONSECUTIVE_ZERO_SIZE`
- * (3) polls if the lot never actually fills. So nothing is lost by quieting
- * this one-shot breadcrumb: a genuine wedge is still reported, by the
- * purpose-built detector rather than this line.
+ * A bracket lot's `adopted` transition to `filled`/`partially_filled`
+ * demotes to `debug`: the same poll's `ingestFills()` supplies the quantity
+ * right after, and `FilledZeroSizeThrottle` already watches for the case
+ * where it never actually fills — so nothing is lost quieting this one-shot
+ * breadcrumb.
  *
- * `unrecorded` warns too (#1506). `findUnrecordedVenuePositions`
- * (reconcile.ts) raises it for "the venue holds a position no open lot in the
- * store explains" — an unhedged, unsized exposure the Risk Manager cannot see
- * and no other detector reports, which is the opposite of informational. It
- * sat at `info` because this docblock grouped it with `rejected` as "carries
- * no backstop either"; having no backstop is the argument for raising it, not
- * for leaving it quiet.
+ * A flatten's benign `adopted` stays at `info` rather than being demoted the
+ * same way: it is the only record that a flatten was reconciled at all
+ * (measured well below the noise level that justified the bracket demotion),
+ * and a wrong adopt still escalates to an operator via
+ * `cancelWedgedFlatten`/`judgeTerminalUnsweptFlatten` within a bounded
+ * window regardless. `rejected` stays `info` too — the venue refused the
+ * order, so no position exists to be exposed.
  *
- * Every other case stays at `info`, deliberately. A flatten's `adopted`
- * (`kind: 'flatten'`) writes no `OpenPosition`, so the throttle above cannot
- * see it — but since #1214/#1500 it does not need to, and #1411 measured that
- * there is nothing here worth quieting anyway. `getUnresolvedFlattens`
- * (sqlite-shared-store.ts) is bounded by resolution, not age, so an unresolved
- * row is re-read every poll forever; the benign `adopted` is the only branch of
- * `reconcileFlatten` that leaves the row unresolved without any
- * `FlattenReconcileAlert` ever having been posted for it. Other branches are
- * silent too, and neither shape is a hole: both `rejected` returns resolve the
- * row on the spot so it leaves the worklist, and a throttled
- * `cancelWedgedFlatten`/`cancelNeverConfirmedFlatten` pass
- * (`FLATTEN_CANCEL_RETRY_EVERY_MS`) is a re-entry on a row whose first pass
- * already paged. The benign `adopted` is reachable only inside
- * `UNRESOLVABLE_FLATTEN_MAX_AGE_MS` (5min, then `cancelWedgedFlatten` pages) or
- * `UNSWEPT_TERMINAL_FLATTEN_MAX_AGE_MS` (30min, then
- * `judgeTerminalUnsweptFlatten` pages). A wrong flatten-adopt escalates to an
- * operator within 30 minutes or stops being unresolved. Demoting it would
- * still be a bad trade: #1411 measured this shape at 0.38% of structured log
- * lines, one line per flatten episode with no repeats (`lastReconcileAction`
- * below having already collapsed the poll's re-reads), against the 29.4% flood
- * that justified the bracket demotion. `logs/` is a rolling soak artifact, so
- * the raw counts behind those ratios live in the dated 2026-09-15 (#1411)
- * amendment in docs/specs/execution-spec.md, not here. One line per flatten is
- * the only record that a flatten was reconciled at all. `rejected` carries no
- * backstop either, but it describes an order the venue refused — no position
- * exists, so nothing is exposed. `debug` is dropped unless
- * `SAMURAI_LOG_LEVEL=debug` (logger.ts) — using it anywhere the throttle
- * doesn't independently cover would be silent deletion, which #1096
- * explicitly refused ("suppressing it wholesale would have hidden the one
- * real anomaly among the benign ones").
- *
- * `warn` is a LOG level, not a page: this feeds `logger.log` and nothing
- * escalates off it. That is no longer the whole story for the unrecorded
- * shape — #1550 gave it an `AlertChannelSlots` channel
- * (`UnrecordedVenuePositionAlertChannel`) raised by
- * `findUnrecordedVenuePositions` itself, throttled per instrument, so the page
- * exists independently of what this function returns. The `warn` here is still
- * the log-side record, and the two are deliberately separate: the page fires
- * once per instrument per re-page window, this line once per poll per
- * divergence (collapsed by `lastReconcileAction` below).
+ * `warn` here is a LOG level, not a page — the unrecorded-position page is a
+ * separate `AlertChannelSlots` channel raised independently by
+ * `findUnrecordedVenuePositions`, throttled per instrument, while this line
+ * logs once per poll per divergence (collapsed by `lastReconcileAction`
+ * below).
  */
 function reconcileDivergenceLevel(divergence: ReconcileDivergence): LogLevel {
   if (divergence.action === 'undetermined' || divergence.action === 'unrecorded') return 'warn';
@@ -167,23 +73,13 @@ function reconcileDivergenceLevel(divergence: ReconcileDivergence): LogLevel {
 }
 
 /**
- * `lastReconcileAction`'s comparison value (#1577, widened #1585). `action`
- * alone collapses two different rows onto one dedup state: `cancelWedgedFlatten`'s
- * escalated cancel shares `action: 'adopted'` with the benign flatten adopt one
- * pass earlier, and `cancelNeverConfirmedFlatten`'s three blocking outcomes all
- * share `action: 'undetermined'` with the SAME row's own prior-pass state
- * (reconcile.ts) — in both cases differing only in `reason`, which this
- * function does not compare. Folding the named `escalation` in (rather than a
- * bare boolean, #1585) gives every one of those four events its own dedup
- * value, distinct from the benign action AND from each other — a row cancelled
- * and still short of coverage is not the same fact as the same row merely
- * throttled from an earlier cancel.
- *
- * Shared with `lastSweepAction`'s loop below (#1615): `sweepResidualProtection`'s
- * (residual-protection-sweep.ts) push sites are the identical collision for a
- * different source — see `ReconcileEscalation`'s doc (execution.ts) for the
- * full site count and why one of them needs two values. One function, so the
- * two loops cannot drift on what "same dedup state" means.
+ * `lastReconcileAction`'s comparison value. `action` alone collapses distinct
+ * events onto one dedup state — e.g. an escalated cancel shares `action:
+ * 'adopted'` with the prior pass's benign flatten adopt, differing only in
+ * `reason`. Folding `escalation` in gives each event its own value. Shared
+ * with `lastSweepAction`'s loop below since `sweepResidualProtection` hits
+ * the identical collision, so the two loops cannot drift on what "same dedup
+ * state" means.
  */
 function reconcileDedupState(divergence: ReconcileDivergence): string {
   return divergence.escalation
@@ -194,9 +90,8 @@ function reconcileDedupState(divergence: ReconcileDivergence): string {
 /**
  * The `error`-level messages this loop writes when a pass rejects — one per
  * `catch` below. Exported because the smoke gate's `FillSyncFailureRecorder`
- * (smoke-run.ts, #1049) matches on them: a reworded literal here with a stale
- * copy there would leave the recorder capturing nothing and the gate green,
- * which is the invisible-failure hole that gate check exists to close.
+ * (smoke-run.ts) matches on them: a reworded literal here with a stale copy
+ * there would leave the recorder capturing nothing and the gate green.
  */
 export const FILL_SYNC_RECONCILE_FAILED = 'periodic reconcile failed' as const;
 export const FILL_SYNC_SWEEP_FAILED = 'residual-protection sweep failed' as const;
@@ -207,14 +102,12 @@ export interface FillSyncSurface {
   reconcile(): Promise<ReconcileReport>;
   ingestFills(): Promise<void>;
   /**
-   * The #549 residual-protection sweep's within-process cadence — run after
-   * every fill poll (see `runOnce`), so a re-arm failure the process
-   * survives must not wait for the next restart to be retried. This runs
-   * ALONGSIDE `reconcile()`'s own periodic call (#921), not in place of it:
-   * `reconcile()`'s pass is scoped to `IN_FLIGHT_ORDER_STATES` bracket/
-   * flatten rows, while this sweep is scoped to lots already marked
-   * `#549`-unprotected — two different worklists, both worth revisiting
-   * every poll. Cheap when healthy: an empty marker worklist makes no
+   * The residual-protection sweep's within-process cadence — run after every
+   * fill poll, so a re-arm failure the process survives must not wait for
+   * the next restart to be retried. Runs ALONGSIDE `reconcile()`'s own
+   * periodic call, not in place of it: the two are scoped to different
+   * worklists (in-flight bracket/flatten rows vs. lots already marked
+   * unprotected). Cheap when healthy: an empty marker worklist makes no
    * broker call.
    */
   sweepResidualProtection(): Promise<ResidualProtectionSweepResult>;
@@ -227,31 +120,26 @@ export interface FillSyncDeps {
   /** Gap between the END of one poll and the start of the next */
   fillPollIntervalMs: number;
   /**
-   * `trace_id` for this loop's periodic `reconcile()` log lines (divergence,
-   * completion, sweep). Required rather than defaulted, matching
-   * `buildExecutionSurface`'s own `traceId` parameter (#1321) — this loop is
-   * shared by both arms (production.ts), and a default here is exactly what
-   * let both arms log under one literal (`RECONCILE_TRACE_ID`) despite the
-   * control arm's execution surface already carrying its own
-   * `CONTROL_RECONCILE_TRACE_ID`.
+   * `trace_id` for this loop's periodic `reconcile()` log lines. Required
+   * rather than defaulted, matching `buildExecutionSurface`'s own `traceId`
+   * parameter — this loop is shared by both arms (production.ts), and a
+   * default here would let both arms log under one literal despite the
+   * control arm carrying its own `CONTROL_RECONCILE_TRACE_ID`.
    */
   reconcileTraceId: string;
   /** `trace_id` for this loop's own fill-poll log lines. Same reasoning as `reconcileTraceId`. */
   fillSyncTraceId: string;
   /**
-   * #1389: reports a lot still open after ADR-0014's flatten grace expired
-   * (`buildCarriedLotReporter`).
-   *
-   * It rides on THIS loop because there is nowhere else it could: the tick
-   * scheduler has already stopped for the day by the time the grace expires,
-   * and this loop has no market-hours gate. A NAMED hook rather than a generic
-   * `afterPoll` callback, so what runs here is visible at the type and a
-   * future caller cannot quietly hang unrelated work off the fill poll.
+   * Reports a lot still open after ADR-0014's flatten grace expired
+   * (`buildCarriedLotReporter`). Rides on THIS loop because there is nowhere
+   * else it could: the tick scheduler has already stopped for the day by the
+   * time the grace expires, and this loop has no market-hours gate. A NAMED
+   * hook rather than a generic `afterPoll` callback, so a future caller
+   * cannot quietly hang unrelated work off the fill poll.
    *
    * Optional because the backtest harness and every fixture drive this loop
-   * without a calendar; the production root wires it on BOTH arms — the
-   * 2026-09-08 lots that motivated #1389 were CONTROL-arm lots, so a live-only
-   * detector would leave the reproduced incident unalerted.
+   * without a calendar; the production root wires it on BOTH arms, since a
+   * carried lot can occur on either.
    *
    * Must not throw; it is called inside the poll and is wrapped anyway.
    */
@@ -261,9 +149,7 @@ export interface FillSyncDeps {
 /**
  * The live arm's canonical trace ids, passed explicitly by production.ts —
  * see `FillSyncDeps.reconcileTraceId`/`fillSyncTraceId` above for why these
- * are no longer read directly by this module. Also the `traceId` production.ts
- * passes to `buildExecutionSurface` for the live arm's own execution-surface
- * writes, which is a separate labelling and unaffected by #1321.
+ * are no longer read directly by this module.
  */
 export const FILL_SYNC_TRACE_ID = 'fill-sync';
 export const RECONCILE_TRACE_ID = 'reconcile';
@@ -282,10 +168,10 @@ export async function runStartupReconcile(deps: {
   execution: FillSyncSurface;
   logger: Logger;
   /**
-   * `trace_id` for this call's own log lines — see `FillSyncDeps.reconcileTraceId`
-   * (#1321). The caller supplies its arm's constant (`RECONCILE_TRACE_ID` for
-   * the live arm, `CONTROL_RECONCILE_TRACE_ID` for the control arm) rather
-   * than this module defaulting to one value for both.
+   * `trace_id` for this call's own log lines — see `FillSyncDeps.reconcileTraceId`.
+   * The caller supplies its arm's constant (`RECONCILE_TRACE_ID` for the live
+   * arm, `CONTROL_RECONCILE_TRACE_ID` for the control arm) rather than this
+   * module defaulting to one value for both.
    */
   traceId: string;
 }): Promise<ReconcileReport> {
@@ -310,12 +196,10 @@ export async function runStartupReconcile(deps: {
     payload: { checked: report.checked, corrected: report.corrected },
   });
 
-  // #1088: `sweepTerminalPositions` runs unconditionally on every
-  // `reconcile()` pass, so it needs its own operator-visible trace even
-  // though it isn't a divergence — otherwise a DELETE against
-  // `open_positions` happens on every startup with no line anywhere to show
-  // it. Only when it actually deleted something, matching every other
-  // dedup/no-spam convention in this file
+  // `sweepTerminalPositions` runs unconditionally on every `reconcile()`
+  // pass, so it needs its own operator-visible trace even though it isn't a
+  // divergence. Logged only when it deleted something, matching every other
+  // dedup/no-spam convention in this file.
   if (report.swept > 0) {
     deps.logger.log({
       trace_id: deps.traceId,
@@ -340,64 +224,49 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
   let inFlight: Promise<void> | undefined;
   let handle: NodeJS.Timeout | undefined;
   /**
-   * Per-lot dedup for the sweep-divergence log line (#549 review, #342's
-   * repeated-line lesson): a lot stuck `undetermined` is returned by EVERY
-   * pass, and a warn re-fired on every poll cadence indefinitely is a line
-   * nobody reads. Logged on first observation and on state TRANSITIONS only;
-   * a lot that leaves the sweep's report is forgotten here, so a LATER
-   * episode on the same lot logs afresh — the same episode scoping the
-   * durable alert dedup uses. In-memory deliberately: this dedups a log
-   * line, not the page, and a restart re-logging current state once is a
+   * Per-lot dedup for the sweep-divergence log line: a lot stuck
+   * `undetermined` is returned by EVERY pass, and a warn re-fired every poll
+   * indefinitely is a line nobody reads. Logged on first observation and on
+   * state TRANSITIONS only; a lot that leaves the sweep's report is
+   * forgotten here, so a later episode logs afresh. In-memory deliberately —
+   * this dedups a log line, not a page, and a restart re-logging once is a
    * feature.
    *
-   * Keyed on `reconcileDedupState()` (#1615), not bare `action`, for the
-   * same reason `lastReconcileAction` below is: `sweepResidualProtection`'s
-   * (residual-protection-sweep.ts) push sites all share `action:
-   * 'undetermined'` — see `ReconcileEscalation`'s doc (execution.ts) for the
-   * site count — so a bare-`action` key logs only the first of whichever one
-   * a lot hit first and stays silent through every later, distinct one: the
-   * transition this map exists to report. One dedup-state shape, matching
-   * `lastReconcileAction`'s.
+   * Keyed on `reconcileDedupState()`, not bare `action`: several push sites
+   * share `action: 'undetermined'`, so a bare-`action` key would mask every
+   * transition after the first.
    */
   const lastSweepAction = new Map<string, string>();
   /**
-   * The same per-episode dedup as `lastSweepAction`, above, but for the
-   * periodic `reconcile()` call's own divergences (#921) — a SEPARATE Map
-   * rather than one shared namespace, because the two worklists overlap in
-   * shape (`ReconcileDivergence`) but not in membership, and a shared Map's
-   * "delete every key not reported this pass" cleanup (see both loops below)
-   * would otherwise evict one call's entries on a poll where only the OTHER
-   * call reported anything.
+   * The same per-episode dedup as `lastSweepAction` above, but for the
+   * periodic `reconcile()` call's own divergences — a SEPARATE Map because
+   * the two worklists overlap in shape but not membership, and a shared
+   * Map's "delete every key not reported this pass" cleanup would otherwise
+   * evict one call's entries on a poll where only the other call reported.
    *
    * Keyed on `idempotency_key || instrument`, not `idempotency_key` alone:
-   * `findUnrecordedVenuePositions` (reconcile.ts) reports an `unrecorded`
-   * divergence with `idempotency_key: ''` for every such position — an empty
-   * string is not a distinguishing key, so keying on it bare would collapse
-   * every unrecorded-venue-position divergence onto one dedup slot and mask
-   * all but the first from ever logging. `instrument` is populated on every
-   * `ReconcileDivergence` shape (bracket, flatten, and unrecorded alike), so
-   * it is always a safe fallback.
+   * `findUnrecordedVenuePositions` reports an `unrecorded` divergence with
+   * `idempotency_key: ''` for every such position, so keying on it bare
+   * would collapse them all onto one dedup slot.
    */
   const lastReconcileAction = new Map<string, string>();
 
   /**
-   * One pass: `reconcile()`, then the fill poll, then the #549
-   * residual-protection sweep.
+   * One pass: `reconcile()`, then the fill poll, then the residual-protection
+   * sweep.
    *
-   * `reconcile()` runs FIRST and in its OWN try/catch (#921) — the same
+   * `reconcile()` runs FIRST and in its OWN try/catch — the same
    * "before every ingest" ordering `runStartupReconcile` establishes at
-   * startup (see this module's top-of-file doc), now repeated on cadence so
-   * a lost ack between polls does not sit unrecovered until the next
-   * restart. Caught independently of `ingestFills()` so a reconcile failure
-   * (the venue briefly unreachable, say) can neither block nor mask that
-   * pass's ingest — log-and-continue, the same posture the sweep's own
-   * try/catch below already takes for its failure mode.
+   * startup, repeated on cadence so a lost ack between polls does not sit
+   * unrecovered until the next restart. Caught independently of
+   * `ingestFills()` so a reconcile failure cannot block or mask that pass's
+   * ingest.
    *
-   * The #549 sweep runs in a `finally` — even when the poll itself failed,
-   * and ESPECIALLY then: a residual whose re-arm the failed poll never
-   * confirmed is exactly the durable marker it retries. Its own failure is
-   * contained to a log line so it can neither mask the poll's error nor add
-   * a second failure mode to a loop whose posture is log-and-poll-again.
+   * The sweep runs in a `finally` — even when the poll itself failed, and
+   * ESPECIALLY then: a residual whose re-arm the failed poll never confirmed
+   * is exactly the durable marker it retries. Its own failure is contained
+   * to a log line so it cannot mask the poll's error or add a second failure
+   * mode to a loop whose posture is log-and-poll-again.
    */
   const runPoll = async (): Promise<void> => {
     try {
@@ -464,15 +333,9 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
             stage: 'execution',
             event: 'residual_sweep_divergence',
             // Deliberately its own plain 2-way split, not
-            // `reconcileDivergenceLevel()`. This is a SECOND log line for
-            // the same sweep row `runPoll`'s `report.divergences` loop
-            // above already routed through that function (reconcile()
-            // merges sweep divergences in — see `ReconcileDivergence.kind`'s
-            // doc) — pre-existing duplicate logging (#1122 review round 3),
-            // not introduced here. `reconcileDivergenceLevel()` never
-            // demotes a sweep row either way (`kind !== 'bracket'`), so
-            // this inline split and that function agree on every case; it
-            // just doesn't call it a second time to reach the same answer
+            // `reconcileDivergenceLevel()`: that function never demotes a
+            // sweep row anyway (`kind !== 'bracket'`), so this agrees with it
+            // on every case without calling it a second time.
             level: divergence.action === 'undetermined' ? 'warn' : 'info',
             message: 'residual-protection sweep divergence',
             payload: { ...divergence },
@@ -494,11 +357,10 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
         });
       }
 
-      // #1389, and it runs AFTER the ingest+sweep in the same `finally` — even
-      // when the poll failed. The lots it reports are exactly the ones a failed
-      // poll did not retire, and its own failure is contained to a log line for
-      // the reason the sweep's is: this loop's posture is log-and-poll-again,
-      // and a detector must not add a second way to end the run
+      // Runs AFTER the ingest+sweep in the same `finally` — even when the
+      // poll failed, since the lots it reports are exactly the ones a failed
+      // poll did not retire. Its own failure is contained to a log line, same
+      // posture as the sweep's.
       try {
         await deps.reportCarriedLots?.();
       } catch (carriedLotError) {

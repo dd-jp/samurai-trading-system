@@ -1,110 +1,46 @@
 /**
- * The #549 residual-protection sweep — the durable, cadence-driven retry for
- * a partial-flatten residual whose protective legs were never CONFIRMED
- * re-armed.
+ * Durable, cadence-driven retry for a partial-flatten residual whose
+ * protective legs were never CONFIRMED re-armed.
  *
- * ## Why this exists
+ * The observing poll's re-arm fires only when it directly witnesses the
+ * residual, and the venue's fill feed does not re-offer that fill forever —
+ * so a crash between the exit fill persisting and the re-arm confirming (or
+ * a re-arm failure the process survives) would otherwise leave the residual
+ * naked with no retry. This sweep is the alternative to a retry loop on the
+ * order-submitting path: a durable marker, written the moment the residual is
+ * first known, checked idempotently until cleared.
  *
- * `ingestFills()`'s #525 re-arm fires only on the poll that OBSERVES the
- * residual — both of its triggers (`ingestedExit`, `flattenTargetedThisPoll`)
- * are poll-scoped, and the venue's fill feed does not re-offer forever
- * (`AlpacaBrokerAdapter` prunes a flatten's order after the poll that offers
- * its fill). A crash between the exit fill persisting and the re-arm
- * confirming — or a re-arm failure the process survives — therefore left the
- * residual naked indefinitely, with no retry and (in the crash case) no
- * alert, because the fallback alert lives inside the attempt that never runs
- * again. The recorded #525 decision rejected a retry LOOP on the
- * order-submitting poll path; this sweep is the accepted alternative — a
- * durable marker (migration 0024, written by `residual-protection.ts` the
- * moment the residual is first known) checked idempotently on an ongoing basis.
- *
- * ## When it runs
- *
- * Twice-wired, mirroring #603's flatten-journal sweep:
- *
- * - `reconcile()` calls it (reconcile.ts) — startup and any future reconcile
- *   cadence, which is what covers a crash: the restarted process's first
- *   reconcile finds the marker and retries.
- * - `startFillSync`'s poll loop calls it (orchestrator/fill-sync.ts) via
- *   `Execution.sweepResidualProtection` — the WITHIN-PROCESS cadence, which
- *   is what covers a re-arm failure the process survived: this codebase has
- *   no recurring `reconcile()` schedule today (fill-sync.ts's file doc), so
- *   without this leg the retry would wait for the next restart.
- *
- * Cheap when healthy: `getUnprotectedResidualLots()` returns nothing, and
- * the sweep makes no broker call at all.
- *
- * ## Idempotency
+ * Wired from both `reconcile()` (covers a crash — restart finds the marker)
+ * and `startFillSync`'s poll loop (covers a re-arm failure the process
+ * survived, since there is no recurring `reconcile()` schedule otherwise).
+ * Cheap when healthy: an empty worklist makes no broker call.
  *
  * A retry must tolerate a re-arm that actually SUCCEEDED venue-side before a
- * crash lost its confirmation. Every `rearmProtectiveLegs` path does:
- * equities adopt-or-place over the lot's derived re-arm wire ids
- * (`AlpacaBrokerAdapter`, the #600/#603 posture — the walk is attempt-indexed
- * because Alpaca consumes a `client_order_id` permanently, #1346); the crypto
- * emulation
- * retires its previous episode's legs before arming a fresh journalled
- * episode (`AlpacaCryptoLegEmulation.rearm`); the Simulated adapter re-sets
- * the same protected quantity. So the sweep retries through the SAME broker
- * seam the observing poll uses, and "confirmed" means exactly what it means
- * there: the call resolved.
+ * crash lost its confirmation — every adapter's `rearmProtectiveLegs` is
+ * itself idempotent (adopt-or-place, or re-set the same protected quantity),
+ * so the sweep retries through the SAME broker seam the observing poll uses.
  *
- * ## Escalation
+ * A marker whose retry FAILS pages `ResidualExposureAlertChannel` once per
+ * unprotected EPISODE, not once per pass — deduped by a durable `alerted_at`
+ * on the marker. One retry before paging, deliberately: a naked residual is
+ * live exposure, waiting more sweeps buys nothing, and a retry that would
+ * have succeeded anyway clears the marker and the operator also learns it
+ * happened.
  *
- * A marker whose sweep retry FAILS pages `ResidualExposureAlertChannel` —
- * from the sweep, not only the observing poll — once per unprotected
- * EPISODE, not once per pass (#342's repeated-line lesson): the dedup is the
- * durable `alerted_at` on the marker itself, set by whichever surface alerts
- * first and cleared only with the marker. N = 1 retry before paging,
- * deliberately: a naked residual is live venue exposure, waiting more sweeps
- * buys nothing, and a retry that would have succeeded on pass 2 clears the
- * marker then anyway — the operator just also knows it happened. Every
- * attempt, alerted or not, still leaves a trace: failures via
- * `logCaughtFailure` (#608), outcomes via the `ReconcileDivergence`s this
- * returns, which both callers log per entry.
+ * Some venues/lots can never re-arm at all (Saxo lacks OCO support; Alpaca
+ * exhausts its re-arm wire-id budget per lot) — `protective-rearm-unsupported.ts`
+ * is what this sweep branches on. In that case the residual is CLOSED rather
+ * than protected: `reflattenResidual` submits a bounded, session-gated market
+ * order, and only when that stands down or fails does this pass page. This
+ * sweep runs after `ingestFills` has swept the originating flatten's fills,
+ * so it — unlike the observing poll — can tell "the daily flatten is still in
+ * flight" from "it finished and left this residual behind".
  *
- * ## When no pass can ever re-arm the lot (#1214)
- *
- * The Idempotency section above lists three adapters that CAN re-arm. Saxo
- * cannot: every LSE pool line reports `IsOcoOrderSupported: false` (doc 43),
- * so an entry-less stop+target pair is inexpressible and
- * `SaxoBrokerAdapter.rearmProtectiveLegs` refuses before it reaches the
- * venue (`ProtectiveRearmUnsupportedError`). The attempt is still made on
- * every pass — deliberately: a venue capability is re-read on each attempt
- * rather than cached here, and it costs no venue call.
- *
- * The Alpaca adapter raises the SAME error for a per-LOT reason (#1346/#1570):
- * a `client_order_id` is consumed permanently, so once a lot has spent every
- * re-arm wire id `MAX_REARM_ATTEMPTS` allows it, no later pass can place one
- * either. Both are "no retry of this call can protect this residual", which is
- * all this sweep branches on — see `protective-rearm-unsupported.ts`.
- *
- * What the refusal now triggers is the recorded decision (David, 2026-09-08,
- * option 2): the residual is CLOSED rather than protected —
- * `reflattenResidual` (residual-reflatten.ts) submits a bounded, session-
- * gated market order for it, and only when that stands down or fails does
- * this pass page. The page is not weakened: every non-submitting outcome
- * still reaches `alertResidualExposureOnce` exactly as before, and a residual
- * the re-flatten cannot close within its attempt budget ends up alerted the
- * same way it is today.
- *
- * This sweep, rather than the observing poll, is where that decision does its
- * work: a pass runs after `ingestFills` has swept the originating flatten's
- * fills, so the journal can distinguish "the daily flatten is still in
- * flight" from "it is finished and left this residual behind". `maybeRearm-
- * Residual` calls the same helper, and on the observing poll it usually
- * stands down on exactly that gate and defers to the next pass here.
- *
- * The bound on the exposure meanwhile is still ADR-0014's flat-by-close, and
- * it is a bound with a stated edge rather than a guarantee. A marked lot is
- * still an open position, so `buildExitIntent` (trader/decide.ts) targets it
- * like any other — but only on a TICK inside the flatten window, which runs
- * from `flatten_before_close_ms` before the close to `flatten_after_close_ms`
- * after it (#1389). Past that grace nothing targets the lot again until the
- * next session's window, and the residual is carried overnight unprotected;
- * the carried-lot alert (`orchestrator/production/carried-lot-alert.ts`) is
- * what makes that outcome audible. This sweep's own re-flatten is not bound by
- * that window at all — it fires on any pass while the venue is open, which is
- * the point of closing the residual rather than waiting for the daily flatten.
+ * The exposure is still bounded by ADR-0014's flat-by-close, but only within
+ * the flatten window; past that grace the residual is carried overnight
+ * unprotected and the carried-lot alert is what makes that audible. This
+ * sweep's own re-flatten is not bound by that window — it fires on any pass
+ * while the venue is open.
  */
 
 import {
@@ -145,11 +81,9 @@ export async function sweepResidualProtection(
       const divergence = await sweepOne(input, row);
       if (divergence !== null) divergences.push(divergence);
     } catch (error) {
-      // `sweepOne` handles its own known failure modes; this catch is the
-      // outer boundary for the writes it makes on its success paths (the
-      // confirm/alert-dedup store writes). The marker's own durability is
-      // the recovery: whatever failed, the row is still marked and the next
-      // pass retries it
+      // Outer boundary for `sweepOne`'s success-path writes (confirm/alert
+      // dedup). The marker's own durability is the recovery: the row stays
+      // marked and the next pass retries it.
       logCaughtFailure(
         input.logger,
         {
@@ -171,15 +105,11 @@ export async function sweepResidualProtection(
         broker_state: null,
         action: 'undetermined',
         kind: 'sweep',
-        // An IDENTIFIER-only message plus the error's own text. On CREDENTIALS
-        // that is `reconcileLot`'s reason: #297's H1 has every adapter convert
-        // what its client threw into a curated `BrokerError` before it is
-        // visible, and store errors are this codebase's own curated messages
-        // On RENDERING it is not — see `describeThrownSafely`'s doc and #1262:
-        // this render sits inside a per-lot catch inside the `for` loop above,
-        // so a value whose `message`/`toString` throws would abort the WHOLE
-        // pass here and leave every later marked lot naked, which is the one
-        // thing this loop's containment exists to prevent
+        // `describeThrownSafely`, not the raw error: this render sits inside a
+        // per-lot catch inside the `for` loop above, so a value whose
+        // `message`/`toString` throws would abort the WHOLE pass and leave
+        // every later marked lot naked — the one thing this loop's
+        // containment exists to prevent.
         reason: `residual-protection sweep failed: ${describeThrownSafely(error)}`,
         escalation: 'residual_sweep_lot_unsettled',
       });
@@ -209,10 +139,9 @@ async function sweepOne(
   try {
     ({ filledSize, exitQty } = heldQuantityFromFills(await store.getFills(key)));
   } catch (error) {
-    // The exact residual is unknowable without this read — the same
-    // upper-bound escalation `maybeRearmResidual`'s own store-read catch
-    // takes (#569's flag), because the conservative direction for an
-    // operator is over-stating what is at risk. Marker stays.
+    // The exact residual is unknowable without this read; alert with the
+    // upper bound instead, since over-stating what is at risk is the
+    // conservative direction for an operator. Marker stays.
     logCaughtFailure(
       input.logger,
       {
@@ -245,12 +174,12 @@ async function sweepOne(
   }
 
   // Entry fill still outstanding: nothing open to protect yet, nothing to
-  // report — the marker stays for the pass after the entry lands
+  // report — the marker stays for the pass after the entry lands.
   if (filledSize === 0) return null;
 
-  // Flat by the persisted record: the residual is gone (a later fill closed
-  // it), so "not yet confirmed protected" is settled — there is nothing left
-  // to protect. Clearing here is what makes crash window (d) a no-op sweep.
+  // Flat by the persisted record: a later fill closed the residual, so
+  // "not yet confirmed protected" is moot. Clearing here makes the sweep
+  // a no-op once the position is gone.
   if (isFlat({ filledSize, exitQty })) {
     await store.confirmResidualProtected(key);
     return {
@@ -268,14 +197,12 @@ async function sweepOne(
 
   const residual = filledSize - exitQty;
 
-  // Fail-closed, `maybeRearmResidual`'s own guard verbatim: a garbage
-  // residual while `isFlat` says "not flat" is a store divergence to
-  // surface, never a quantity to hand the broker — and never a quantity to
-  // hand the OPERATOR either (#549 review, round 3): NaN serializes to null
-  // in the page payload and a negative reads as nonsense, so the alert
-  // carries the upper-bound `requested_size` with the upper-bound flag, the
-  // same shape as the fill-read-failure path above. The divergence reason
-  // below still names the real recomputed value for diagnosis
+  // Fail-closed: a garbage residual while `isFlat` says "not flat" is a store
+  // divergence to surface, never a quantity to hand the broker or the
+  // operator (NaN serializes to null in the page payload) — alert with the
+  // upper-bound `requested_size` instead, same shape as the read-failure path
+  // above. The divergence reason below still names the real value for
+  // diagnosis.
   if (!(residual > 0) || !Number.isFinite(residual)) {
     await alertResidualExposureOnce(input, row, position.requested_size, now, {
       residualQtyIsUpperBound: true,
@@ -304,17 +231,15 @@ async function sweepOne(
       position.target,
     );
   } catch (error) {
-    // #1214: a permanent gap is not a failed retry. Where an ordinary failure
-    // is retried on the next pass, this one is REPLACED — the residual is
-    // closed rather than protected, below, per the file doc's own section
+    // A permanent gap is not a failed retry: where an ordinary failure is
+    // retried on the next pass, this one is REPLACED — the residual is
+    // closed rather than protected, below.
     const unsupported = isProtectiveRearmUnsupported(error);
-    // Every attempt leaves a trace (#608); the PAGE is once per episode —
-    // see the file doc's escalation section
     logCaughtFailure(
       input.logger,
       // Two whole entries rather than one with a conditional `event`: every
       // logged code must be a bare snake_case literal, greppable from the
-      // source (`log-event-code.test.ts`)
+      // source (`log-event-code.test.ts`).
       unsupported
         ? {
             trace_id: input.trace_id,
@@ -339,20 +264,19 @@ async function sweepOne(
       { idempotency_key: key, residual_qty: residual },
     );
 
-    // #1214's recorded remedy. This sweep is the cadence that owns it: by the
-    // time a pass reads a marked lot, `ingestFills` has already swept the
-    // originating flatten's fills, so the journal gate in `reflattenResidual`
-    // can tell "the daily flatten is still in flight" from "it is done and
-    // left this residual behind" — which the observing poll, running with its
-    // own flatten row still unswept, cannot
+    // This sweep is the cadence that owns the close-instead-of-protect
+    // remedy: by the time a pass reads a marked lot, `ingestFills` has
+    // already swept the originating flatten's fills, so the journal gate in
+    // `reflattenResidual` can tell "the daily flatten is still in flight"
+    // from "it is done and left this residual behind" — which the observing
+    // poll, running with its own flatten row still unswept, cannot.
     if (unsupported) {
       const reflatten = await reflattenResidual(input, position, residual, now);
-      // #1214 review, finding 4: a pass that finds THIS lot's own re-flatten
-      // still working is the same state as the pass that sent it — the
-      // residual is being closed — so it suppresses the page for the same
-      // reason. Paging here would say "could not be closed" of a lot with a
-      // live closing order, and its remedy (manual venue action) would be a
-      // third submitter. See `standDown` for why the exposure stays watched.
+      // A pass that finds THIS lot's own re-flatten still working is the same
+      // state as the pass that sent it — the residual is being closed — so it
+      // suppresses the page for the same reason. Paging here would say
+      // "could not be closed" of a lot with a live closing order, and its
+      // remedy (manual venue action) would be a third submitter.
       if (reflatten.kind === 'skipped' && reflatten.reason === 'own_reflatten_in_flight') {
         return {
           idempotency_key: key,
@@ -367,9 +291,9 @@ async function sweepOne(
       }
       if (reflatten.kind === 'submitted') {
         // No page: the residual is being CLOSED, and the marker stays until
-        // the fill lands and the lot reads flat (the `isFlat` branch above)
+        // the fill lands and the lot reads flat (the `isFlat` branch above).
         // If the order does not close it, the next pass lands here again and
-        // pages once the attempt budget is spent
+        // pages once the attempt budget is spent.
         return {
           idempotency_key: key,
           instrument: position.instrument,
