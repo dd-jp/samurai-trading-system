@@ -43,9 +43,13 @@ jobs:
       # doesn't hide a test break; the job still fails if any of them fail.
       # Gating on the install's outcome keeps a failed install from producing
       # four cascading "command not found" failures instead of one clear one.
-      - name: Lint
+      - name: Oxlint
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: npm run lint
+        run: npm run lint:oxlint
+
+      - name: Biome
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run lint:biome
 
       # Blocking: enforces the client/server/contracts split CLAUDE.md states as an
       # invariant ("neither runtime imports the other; both import contracts/").
