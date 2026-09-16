@@ -242,6 +242,50 @@ export class CircuitBreakers {
     const { portfolio, volatility, mode, clock } = input;
     const armed: string[] = [];
 
+    armed.push(...this.evaluateHardDrawdownBreaker(portfolio, clock, mode));
+
+    if (this.killSwitchEngaged) {
+      armed.push(this.killSwitchReason ? `kill_switch:${this.killSwitchReason}` : 'kill_switch');
+    }
+
+    const dailyLoss = this.evaluateDailyLossBreakers(portfolio);
+    armed.push(...dailyLoss.armed);
+
+    const consecutiveLossTripped =
+      portfolio.consecutive_losses >= this.config.max_consecutive_losses;
+    if (consecutiveLossTripped) {
+      armed.push('consecutive_loss_cooldown');
+    }
+
+    const vol = this.evaluateVolatilityBreakers(volatility);
+    armed.push(...vol.armed);
+
+    const portfolioTripped =
+      this.hardTripped ||
+      this.killSwitchEngaged ||
+      dailyLoss.dailyLossTripped ||
+      dailyLoss.dailyUnknown ||
+      consecutiveLossTripped;
+
+    return {
+      portfolio_tripped: portfolioTripped,
+      asset_class_tripped: {
+        crypto: vol.cryptoVolTripped || dailyLoss.classTripped.crypto,
+        stocks: vol.stocksVolTripped || dailyLoss.classTripped.stocks,
+      },
+      armed_breakers: armed,
+    };
+  }
+
+  /**
+   * Trips (or auto-clears) the hard peak-to-trough drawdown breaker and
+   * returns its `armed_breakers` marker, if any
+   */
+  private evaluateHardDrawdownBreaker(
+    portfolio: PortfolioView,
+    clock: Clock,
+    mode: BreakerEvalInput['mode'],
+  ): string[] {
     if (!this.hardTripped && portfolio.drawdown_pct >= this.config.max_drawdown_pct) {
       this.hardTripped = true;
       this.hardTrippedAt = clock.now();
@@ -256,44 +300,53 @@ export class CircuitBreakers {
     if (this.hardTripped) {
       this.maybeAutoReArm(portfolio, clock, mode);
     }
-    if (this.hardTripped) {
-      armed.push('portfolio_drawdown_hard');
-    }
+    return this.hardTripped ? ['portfolio_drawdown_hard'] : [];
+  }
 
-    if (this.killSwitchEngaged) {
-      armed.push(this.killSwitchReason ? `kill_switch:${this.killSwitchReason}` : 'kill_switch');
-    }
+  /**
+   * Portfolio-level and per-asset-class daily loss/unknown breakers (#332,
+   * #333 decision 4). Portfolio-level figure is UTC-bounded and narrowed
+   * explicitly rather than compared directly: an unknown must never reach the
+   * threshold test, where a coerced `0 <= -daily_loss_pct` would read a
+   * figure nobody has as a flat day and leave this breaker un-tripped through
+   * a real loss.
+   *
+   * Unknown BLOCKS, as of #333 — it no longer arms an advisory marker only,
+   * and it is NOT mode-gated here even though decision 5 is a mode-gated
+   * decision. Rationale in risk-manager-spec.md, "Module: Circuit Breakers"
+   * ("Unknown daily figure blocks"); the one-line version is that
+   * `AccountStateProvider.nonPositiveBase` returns unknown in every mode, so
+   * a `paper` run can present one and this breaker must not assume otherwise.
+   *
+   * A live cold start therefore blocks new entries until the next session
+   * boundary this process is up for, which after a mid-session restart can be
+   * the rest of the session. That is decision 5 as written — "live refuses
+   * new entries until a real snapshot exists" — and exits are unaffected,
+   * since `RiskManagerImpl` passes them before reaching this gate.
+   *
+   * The per-class tier judges each class over its own session against its
+   * own threshold, and a breach halts THAT CLASS ONLY — crypto can stop while
+   * stocks keep trading. Same narrowing discipline and same unknown-blocks
+   * rule as the portfolio figure above.
+   */
+  private evaluateDailyLossBreakers(portfolio: PortfolioView): {
+    dailyLossTripped: boolean;
+    dailyUnknown: boolean;
+    classTripped: { crypto: boolean; stocks: boolean };
+    armed: string[];
+  } {
+    const armed: string[] = [];
 
-    // Portfolio-level figure, UTC-bounded (#332). Narrowed explicitly rather
-    // than compared directly: an unknown must never reach the threshold test,
-    // where a coerced `0 <= -daily_loss_pct` would read a figure nobody has as
-    // a flat day and leave this breaker un-tripped through a real loss
     const dailyPnl = portfolio.daily_pnl.portfolio;
     const dailyLossTripped = dailyPnl.known && dailyPnl.pct <= -this.config.daily_loss_pct;
     if (dailyLossTripped) {
       armed.push('daily_loss_soft');
     }
-    // Unknown BLOCKS, as of #333 — it no longer arms an advisory marker only,
-    // and it is NOT mode-gated here even though decision 5 is a mode-gated
-    // decision. Rationale in risk-manager-spec.md, "Module: Circuit Breakers"
-    // ("Unknown daily figure blocks"); the one-line version is that
-    // `AccountStateProvider.nonPositiveBase` returns unknown in every mode, so
-    // a `paper` run can present one and this breaker must not assume otherwise
-    //
-    // A live cold start therefore blocks new entries until the next session
-    // boundary this process is up for, which after a mid-session restart can be
-    // the rest of the session. That is decision 5 as written — "live refuses
-    // new entries until a real snapshot exists" — and exits are unaffected,
-    // since `RiskManagerImpl` passes them before reaching this gate
     const dailyUnknown = !dailyPnl.known;
     if (dailyUnknown) {
       armed.push(`daily_pnl_unknown:portfolio (${dailyPnl.reason})`);
     }
 
-    // The per-class tier (#333, decision 4). Each class is judged over its own
-    // session against its own threshold, and a breach halts THAT CLASS ONLY —
-    // crypto can stop while stocks keep trading. Same narrowing discipline and
-    // same unknown-blocks rule as the portfolio figure above
     const classTripped = { crypto: false, stocks: false };
     for (const asset_class of ['crypto', 'stocks'] as const) {
       const pnl = portfolio.daily_pnl[asset_class];
@@ -308,11 +361,15 @@ export class CircuitBreakers {
       }
     }
 
-    const consecutiveLossTripped =
-      portfolio.consecutive_losses >= this.config.max_consecutive_losses;
-    if (consecutiveLossTripped) {
-      armed.push('consecutive_loss_cooldown');
-    }
+    return { dailyLossTripped, dailyUnknown, classTripped, armed };
+  }
+
+  private evaluateVolatilityBreakers(volatility: BreakerEvalInput['volatility']): {
+    cryptoVolTripped: boolean;
+    stocksVolTripped: boolean;
+    armed: string[];
+  } {
+    const armed: string[] = [];
 
     const cryptoVolTripped =
       volatility.crypto >
@@ -328,21 +385,7 @@ export class CircuitBreakers {
       armed.push('volatility_halt:stocks');
     }
 
-    const portfolioTripped =
-      this.hardTripped ||
-      this.killSwitchEngaged ||
-      dailyLossTripped ||
-      dailyUnknown ||
-      consecutiveLossTripped;
-
-    return {
-      portfolio_tripped: portfolioTripped,
-      asset_class_tripped: {
-        crypto: cryptoVolTripped || classTripped.crypto,
-        stocks: stocksVolTripped || classTripped.stocks,
-      },
-      armed_breakers: armed,
-    };
+    return { cryptoVolTripped, stocksVolTripped, armed };
   }
 
   private maybeAutoReArm(

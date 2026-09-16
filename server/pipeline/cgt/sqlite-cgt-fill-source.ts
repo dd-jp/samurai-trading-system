@@ -113,80 +113,105 @@ export class SqliteCgtFillSource {
     const legs: CgtFillLeg[] = [];
     const unconverted: UnconvertedCgtFill[] = [];
     for (const row of rows) {
-      const instrument = row.c_instrument ?? row.o_instrument;
-      const assetClass = row.c_asset_class ?? row.o_asset_class;
-      const side = row.c_side ?? row.o_side;
-      const arm = row.c_arm ?? row.o_arm;
-
-      if (instrument === null || assetClass === null || side === null || arm === null) {
-        throw new Error(
-          `CGT: fill ${row.idempotency_key}/${row.broker_fill_id} names no instrument — it is in ` +
-            `neither closed_trades nor open_positions, so it cannot be reported.`,
-        );
-      }
-      if (arm !== 'live' || assetClass !== 'stocks') continue;
-      if (side !== 'buy') {
-        throw new Error(
-          `CGT: fill ${row.idempotency_key}/${row.broker_fill_id} is on a side='${side}' lot — ` +
-            `short-sale CGT treatment differs from this long-only matcher and is not implemented.`,
-        );
-      }
-
-      const fill = fromFillRow(row);
-      const kind = fill.leg === 'entry' ? 'acquisition' : 'disposal';
-      const currency = (row.fee_currency ?? BOOK_CURRENCY).trim();
-      const rawGrossAmount = fill.price * fill.qty;
-      const rawCharges = fill.fee;
-
-      // Pence FIRST — see this file's header on why a case-insensitive GBP
-      // comparison run first would swallow `GBp` and 100x it
-      const divisor = isPenceCurrency(currency)
-        ? PENCE_PER_GBP
-        : currency.toUpperCase() === BOOK_CURRENCY
-          ? 1
-          : undefined;
-
-      if (divisor !== undefined) {
-        legs.push(toLeg(fill, instrument, kind, rawGrossAmount / divisor, rawCharges / divisor));
-      } else if (fill.fx_rate_to_gbp !== undefined && fill.fx_rate_to_gbp > 0) {
-        // #1521: the venue's own rate, applied verbatim — never re-derived,
-        // never blended with a spot lookup. See this file's header.
-        legs.push(
-          toLeg(
-            fill,
-            instrument,
-            kind,
-            rawGrossAmount * fill.fx_rate_to_gbp,
-            rawCharges * fill.fx_rate_to_gbp,
-          ),
-        );
-      } else {
-        // A stored rate that is zero or negative is not a rate this module
-        // will multiply by (round 1 review, recorded not fixed) — a zero
-        // silently zeroes a real disposal, a negative flips its sign, and
-        // both would confidently misreport a live CGT event. Fall through to
-        // unconverted instead of trusting a value that fails a sign check no
-        // real exchange rate can fail
-        const fxRateToGbpSource =
-          fill.fx_rate_to_gbp !== undefined
-            ? `invalid_stored_rate:${fill.fx_rate_to_gbp}`
-            : (fill.fx_rate_to_gbp_source ?? 'no_rate_stored');
-        unconverted.push({
-          instrument,
-          kind,
-          date: fill.timestamp,
-          quantity: fill.qty,
-          grossAmount: rawGrossAmount,
-          charges: rawCharges,
-          currency,
-          fxRateToGbpSource,
-          idempotency_key: fill.idempotency_key,
-          broker_fill_id: fill.broker_fill_id,
-        });
-      }
+      const classified = classifyFillRow(row);
+      if (classified === null) continue;
+      if ('leg' in classified) legs.push(classified.leg);
+      else unconverted.push(classified.unconverted);
     }
     return { legs, unconverted };
   }
+}
+
+/** Returns `null` for a row outside this report's scope (see this file's header) */
+function classifyFillRow(
+  row: FillJoinRow,
+): { leg: CgtFillLeg } | { unconverted: UnconvertedCgtFill } | null {
+  const instrument = row.c_instrument ?? row.o_instrument;
+  const assetClass = row.c_asset_class ?? row.o_asset_class;
+  const side = row.c_side ?? row.o_side;
+  const arm = row.c_arm ?? row.o_arm;
+
+  if (instrument === null || assetClass === null || side === null || arm === null) {
+    throw new Error(
+      `CGT: fill ${row.idempotency_key}/${row.broker_fill_id} names no instrument — it is in ` +
+        `neither closed_trades nor open_positions, so it cannot be reported.`,
+    );
+  }
+  if (arm !== 'live' || assetClass !== 'stocks') return null;
+  if (side !== 'buy') {
+    throw new Error(
+      `CGT: fill ${row.idempotency_key}/${row.broker_fill_id} is on a side='${side}' lot — ` +
+        `short-sale CGT treatment differs from this long-only matcher and is not implemented.`,
+    );
+  }
+
+  const fill = fromFillRow(row);
+  const kind = fill.leg === 'entry' ? 'acquisition' : 'disposal';
+  return priceFillInGbp(fill, instrument, kind);
+}
+
+/**
+ * `null` guard-clause conditions live in `classifyFillRow`; this only decides
+ * HOW to price an already-scoped fill in sterling — see this file's header
+ */
+function priceFillInGbp(
+  fill: Fill,
+  instrument: string,
+  kind: CgtFillLeg['kind'],
+): { leg: CgtFillLeg } | { unconverted: UnconvertedCgtFill } {
+  const currency = (fill.fee_currency ?? BOOK_CURRENCY).trim();
+  const rawGrossAmount = fill.price * fill.qty;
+  const rawCharges = fill.fee;
+
+  // Pence FIRST — see this file's header on why a case-insensitive GBP
+  // comparison run first would swallow `GBp` and 100x it
+  const divisor = isPenceCurrency(currency)
+    ? PENCE_PER_GBP
+    : currency.toUpperCase() === BOOK_CURRENCY
+      ? 1
+      : undefined;
+
+  if (divisor !== undefined) {
+    return { leg: toLeg(fill, instrument, kind, rawGrossAmount / divisor, rawCharges / divisor) };
+  }
+  if (fill.fx_rate_to_gbp !== undefined && fill.fx_rate_to_gbp > 0) {
+    // #1521: the venue's own rate, applied verbatim — never re-derived,
+    // never blended with a spot lookup. See this file's header
+    return {
+      leg: toLeg(
+        fill,
+        instrument,
+        kind,
+        rawGrossAmount * fill.fx_rate_to_gbp,
+        rawCharges * fill.fx_rate_to_gbp,
+      ),
+    };
+  }
+
+  // A stored rate that is zero or negative is not a rate this module
+  // will multiply by (round 1 review, recorded not fixed) — a zero
+  // silently zeroes a real disposal, a negative flips its sign, and
+  // both would confidently misreport a live CGT event. Fall through to
+  // unconverted instead of trusting a value that fails a sign check no
+  // real exchange rate can fail
+  const fxRateToGbpSource =
+    fill.fx_rate_to_gbp !== undefined
+      ? `invalid_stored_rate:${fill.fx_rate_to_gbp}`
+      : (fill.fx_rate_to_gbp_source ?? 'no_rate_stored');
+  return {
+    unconverted: {
+      instrument,
+      kind,
+      date: fill.timestamp,
+      quantity: fill.qty,
+      grossAmount: rawGrossAmount,
+      charges: rawCharges,
+      currency,
+      fxRateToGbpSource,
+      idempotency_key: fill.idempotency_key,
+      broker_fill_id: fill.broker_fill_id,
+    },
+  };
 }
 
 /** ISO 4217 minor unit: 100 pence (GBX/gbx/GBp/p, see `isPenceCurrency`) makes 1 GBP */

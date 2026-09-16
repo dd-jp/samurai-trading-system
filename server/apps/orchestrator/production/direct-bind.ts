@@ -1219,24 +1219,28 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
     // The ENTRY path is untouched: `snapshotForTick` still refuses outright,
     // and `RiskManagerImpl.evaluate` refuses any entry whose view carries a
     // non-empty `unvalued_instruments` besides
-    const { snapshot, degradation } =
-      intent.intent_type === 'exit'
-        ? await snapshotForExit(deps, clock, () => snapshotForTick(deps, clock, trace_id))
-        : { snapshot: await snapshotForTick(deps, clock, trace_id), degradation: null };
-    const { portfolio, breakers } = snapshot;
-    deps.portfolioSnapshots.delete(trace_id);
-    if (degradation !== null) {
-      reportExitValuationDegraded(
-        deps,
-        'risk',
-        { trace_id, instrument: intent.instrument, clock },
-        degradation,
-      );
+    async function resolveSnapshot() {
+      const { snapshot, degradation } =
+        intent.intent_type === 'exit'
+          ? await snapshotForExit(deps, clock, () => snapshotForTick(deps, clock, trace_id))
+          : { snapshot: await snapshotForTick(deps, clock, trace_id), degradation: null };
+      const { portfolio, breakers } = snapshot;
+      deps.portfolioSnapshots.delete(trace_id);
+      if (degradation !== null) {
+        reportExitValuationDegraded(
+          deps,
+          'risk',
+          { trace_id, instrument: intent.instrument, clock },
+          degradation,
+        );
+      }
+      // Taken off the snapshot, not re-read here (#1019 gap 2) — see
+      // `PortfolioSnapshot.next_breaker_state` for what a second read after the
+      // `await` above could attribute to this instrument
+      const next_breaker_state: PersistedBreakerState[] = snapshot.next_breaker_state;
+      return { portfolio, breakers, next_breaker_state };
     }
-    // Taken off the snapshot, not re-read here (#1019 gap 2) — see
-    // `PortfolioSnapshot.next_breaker_state` for what a second read after the
-    // `await` above could attribute to this instrument
-    const next_breaker_state: PersistedBreakerState[] = snapshot.next_breaker_state;
+    const { portfolio, breakers, next_breaker_state } = await resolveSnapshot();
 
     const otherInstruments = Object.keys(portfolio.exposure_by_instrument).filter(
       (instrument) => instrument !== intent.instrument,
@@ -1262,6 +1266,17 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
     // reason, with the mechanical steps as the safety net, exactly as before
     // (docs/reviews/triage-2026-08-06.md F-5)
     const daily = portfolio.daily_pnl;
+    function dailyPnlLogFields() {
+      // Null pct rather than 0 when unknown (#333). Recording an absent
+      // figure as flat here would reintroduce, in the audit trail, the exact
+      // confusion the breaker's tagged union exists to prevent
+      return {
+        daily_pnl_portfolio_pct: daily.portfolio.known ? daily.portfolio.pct : null,
+        daily_pnl_crypto_pct: daily.crypto.known ? daily.crypto.pct : null,
+        daily_pnl_stocks_pct: daily.stocks.known ? daily.stocks.pct : null,
+        daily_pnl_unknown_reason: daily.portfolio.known ? null : daily.portfolio.reason,
+      };
+    }
     const riskLogBase = {
       trace_id,
       instrument: intent.instrument,
@@ -1276,19 +1291,27 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
         drawdown_pct: portfolio.drawdown_pct,
         gross_exposure: portfolio.gross_exposure,
         consecutive_losses: portfolio.consecutive_losses,
-        // Null pct rather than 0 when unknown (#333). Recording an absent
-        // figure as flat here would reintroduce, in the audit trail, the exact
-        // confusion the breaker's tagged union exists to prevent
-        daily_pnl_portfolio_pct: daily.portfolio.known ? daily.portfolio.pct : null,
-        daily_pnl_crypto_pct: daily.crypto.known ? daily.crypto.pct : null,
-        daily_pnl_stocks_pct: daily.stocks.known ? daily.stocks.pct : null,
-        daily_pnl_unknown_reason: daily.portfolio.known ? null : daily.portfolio.reason,
+        ...dailyPnlLogFields(),
       },
       created_at: clock.now(),
     };
 
-    let decision: RiskDecision;
-    try {
+    // TWO PASSES, and the first one is what fixes the cadence
+    //
+    // #955 specifies the critic firing on every intent that REACHES step 7 —
+    // every viable entry that survived the exit bypass, the unvalued-book
+    // refusal, the breaker gate and the `min_viable_size` reject. Nothing
+    // outside `evaluate()` knows which of those an intent will survive, and
+    // `evaluate()` must stay pure and synchronous (#642), so it cannot ask
+    // the model itself. So: evaluate once with NO verdict — cheap, pure, no
+    // I/O — and let the pipeline itself answer the question. Reaching step 7
+    // with no verdict is exactly what pushes `RISK_CRITIC_SKIPPED_REASON`,
+    // so that reason IS the "step 7 was reached" signal, read from the same
+    // exported constant the pipeline pushes.
+    //
+    // Only the SECOND decision is logged and returned; the dry run is
+    // discarded, so one intent still produces exactly one `risk_log` row
+    async function evaluateWithCriticTwoPass(): Promise<RiskDecision> {
       const evaluateWith = (critic?: RiskCriticVerdict): RiskDecision =>
         riskManager.evaluate({
           trace_id,
@@ -1303,40 +1326,27 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
           ...(critic === undefined ? {} : { critic }),
         });
 
-      // TWO PASSES, and the first one is what fixes the cadence
-      //
-      // #955 specifies the critic firing on every intent that REACHES step 7 —
-      // every viable entry that survived the exit bypass, the unvalued-book
-      // refusal, the breaker gate and the `min_viable_size` reject. Nothing
-      // outside `evaluate()` knows which of those an intent will survive, and
-      // `evaluate()` must stay pure and synchronous (#642), so it cannot ask
-      // the model itself. So: evaluate once with NO verdict — cheap, pure, no
-      // I/O — and let the pipeline itself answer the question. Reaching step 7
-      // with no verdict is exactly what pushes `RISK_CRITIC_SKIPPED_REASON`,
-      // so that reason IS the "step 7 was reached" signal, read from the same
-      // exported constant the pipeline pushes.
-      //
-      // Only the SECOND decision is logged and returned; the dry run is
-      // discarded, so one intent still produces exactly one `risk_log` row
       const dryRun = evaluateWith();
       const reachedCritic = dryRun.reasons.includes(RISK_CRITIC_SKIPPED_REASON);
       const verdict =
         reachedCritic && deps.critic !== undefined
           ? await criticVerdictFor(deps, { trace_id, intent, portfolio, clock })
           : undefined;
-      decision = verdict === undefined ? dryRun : evaluateWith(verdict);
-    } catch (error) {
-      // #726: `perSubclassDeploymentCap` (risk-manager/index.ts) is the only
-      // entry gate that throws rather than returning a decision — deliberately,
-      // per that gate's own doc comment, so a half-populated pool file cannot
-      // look like a quiet market with no setups. But a throw skips the
-      // `riskLog.write` below entirely, so the refused instrument left NO
-      // `risk_log` row at all, only the durable-but-separate `audit_log` row
-      // and log line #507's catch in `tick-loop.ts` produces one level up
-      // This is the fix: write the row HERE, from the catch, naming the
-      // unresolved subclass when the error is the one this gate throws — then
-      // RE-THROW UNCHANGED. The throw itself must still reach #507's catch;
-      // this only adds a durable record beside it, it does not replace it
+      return verdict === undefined ? dryRun : evaluateWith(verdict);
+    }
+
+    // #726: `perSubclassDeploymentCap` (risk-manager/index.ts) is the only
+    // entry gate that throws rather than returning a decision — deliberately,
+    // per that gate's own doc comment, so a half-populated pool file cannot
+    // look like a quiet market with no setups. But a throw skips the
+    // `riskLog.write` below entirely, so the refused instrument left NO
+    // `risk_log` row at all, only the durable-but-separate `audit_log` row
+    // and log line #507's catch in `tick-loop.ts` produces one level up
+    // This is the fix: write the row HERE, from the catch, naming the
+    // unresolved subclass when the error is the one this gate throws — then
+    // RE-THROW UNCHANGED. The throw itself must still reach #507's catch;
+    // this only adds a durable record beside it, it does not replace it
+    function recordRiskEvaluationError(error: unknown): void {
       const binding_constraint =
         error instanceof PerSubclassCapUnresolvableError
           ? error.bindingConstraint
@@ -1368,7 +1378,7 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
       // would trade "3USL has no subclass" for an opaque SQLite failure and
       // destroy the exact diagnostic this fix exists to preserve. A failure
       // here is logged, not silently dropped, then the ORIGINAL error still
-      // propagates unconditionally via the outer `throw error;` below
+      // propagates unconditionally via the outer `throw error;` in the caller
       try {
         deps.riskLog?.write({
           ...riskLogBase,
@@ -1396,6 +1406,13 @@ export function buildRiskStep(deps: RiskStepDeps): TickSteps['risk'] {
           });
         }
       }
+    }
+
+    let decision: RiskDecision;
+    try {
+      decision = await evaluateWithCriticTwoPass();
+    } catch (error) {
+      recordRiskEvaluationError(error);
       throw error;
     }
 

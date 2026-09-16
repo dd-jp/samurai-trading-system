@@ -241,6 +241,35 @@ function trimToAllowed(
   return { notional: cap, changed: true };
 }
 
+/**
+ * Runs `ENTRY_CAP_GATES` in declared order against `notional`, trimming as
+ * each binds (monotonic — `trimToAllowed` only ever trims). Pushes onto
+ * `reasons` in gate order, same as the inline loop it replaces.
+ */
+function applyEntryCapGates(
+  config: RiskConfig,
+  intent: RiskInput['intent'],
+  portfolio: PortfolioView,
+  correlation: RiskInput['correlation'],
+  notional: number,
+  reasons: string[],
+): { notional: number; bindingConstraint: string | null } {
+  let bindingConstraint: string | null = null;
+  for (const gate of ENTRY_CAP_GATES) {
+    const cap = gate(config, intent, portfolio, correlation);
+    if (cap === null) continue;
+    const { notional: trimmed, changed } = trimToAllowed(
+      notional,
+      cap.allowedAdditional,
+      cap.name,
+      reasons,
+    );
+    notional = trimmed;
+    if (changed) bindingConstraint = cap.name;
+  }
+  return { notional, bindingConstraint };
+}
+
 export class RiskManagerImpl implements RiskManager {
   /**
    * `thresholds` is the live `risk_thresholds` table (#433). Optional, because
@@ -437,18 +466,9 @@ export class RiskManagerImpl implements RiskManager {
       return config.whole_share_sizing ? Math.floor(raw) : raw;
     };
 
-    for (const gate of ENTRY_CAP_GATES) {
-      const cap = gate(config, intent, portfolio, correlation);
-      if (cap === null) continue;
-      const { notional: trimmed, changed } = trimToAllowed(
-        notional,
-        cap.allowedAdditional,
-        cap.name,
-        reasons,
-      );
-      notional = trimmed;
-      if (changed) bindingConstraint = cap.name;
-    }
+    const gatesResult = applyEntryCapGates(config, intent, portfolio, correlation, notional, reasons);
+    notional = gatesResult.notional;
+    if (gatesResult.bindingConstraint !== null) bindingConstraint = gatesResult.bindingConstraint;
 
     // Deliberately NOT quantised: this is the reported pre-quantisation size,
     // and flooring it here would move a number the caps reason about as a side
@@ -462,49 +482,12 @@ export class RiskManagerImpl implements RiskManager {
       return rejected('min_viable_size', reasons);
     }
 
-    // Risk-critic review (#204; producer built by #957 in `critic.ts`)
-    if (critic === undefined) {
-      // Fails open BY RECORD, not silently (review 2026-08-06 B3): a decision
-      // the critic never saw must stay distinguishable from one it actually
-      // passed. Since #957 this is the producer's failure path — a provider
-      // error, a spend-cap refusal, an unreadable answer, or a backtest
-      // replaying history the critic never saw — rather than the permanent
-      // state it used to be. The mechanical steps above remain the safety net.
-      reasons.push(RISK_CRITIC_SKIPPED_REASON);
+    const criticReview = this.applyCriticReview(critic, notional, reasons);
+    if (criticReview.rejectedBinding !== null) {
+      return rejected(criticReview.rejectedBinding, reasons);
     }
-    if (critic) {
-      // The invalidation half (#994), recorded BEFORE the prose branch acts so
-      // that the condition states and every validator drop reason land on
-      // `reasons` on every path — a clean pass, a trim, a prose reject and a
-      // breach reject alike. Ordering then decides only which
-      // `binding_constraint` wins, never what is audited
-      reasons.push(...invalidationReasons(critic));
-
-      const criticTrim = applyCritic(critic, notional, reasons);
-      if (criticTrim.rejected) {
-        return rejected('risk_critic:reject', reasons);
-      }
-      // #997 Q2b: a MEASURED breach rejects even when the prose said `pass`
-      // The producer never pre-computes this — it reports `verdict: 'pass'`
-      // beside a `breached` condition and `evaluate()` holds the authority,
-      // which is ADR-0003's seam exactly and keeps the persisted row honest
-      // about what the model actually said. The constraint is its own, so
-      // "how often do prose and predicates disagree?" stays answerable: this
-      // line is reached only when the prose verdict did NOT itself reject
-      //
-      // `unevaluable` is deliberately absent from this test. A data gap must
-      // never block a trade (`devils-advocate-spec.md`:94), and an absent or
-      // empty `conditions` list — a pre-fold row, or a malformed conditions
-      // half — yields no breaches and therefore no effect at all
-      const breached = breachedConditions(critic);
-      if (breached.length > 0) {
-        return rejected(INVALIDATED_BINDING_CONSTRAINT, reasons);
-      }
-      if (criticTrim.changed) {
-        notional = criticTrim.notional;
-        bindingConstraint = 'risk_critic:trim';
-      }
-    }
+    notional = criticReview.notional;
+    if (criticReview.bindingConstraint !== null) bindingConstraint = criticReview.bindingConstraint;
 
     const approvedSize = submittableSize(notional);
 
@@ -557,6 +540,67 @@ export class RiskManagerImpl implements RiskManager {
       reasons,
       ...decisionBase,
     };
+  }
+
+  /**
+   * Risk-critic review (#204; producer built by #957 in `critic.ts`). Pushes
+   * onto `reasons` in the same order as the inline block it replaces — the
+   * invalidation half (#994) is recorded BEFORE the prose branch acts so that
+   * the condition states and every validator drop reason land on `reasons`
+   * on every path, a clean pass, a trim, a prose reject and a breach reject
+   * alike. Ordering then decides only which `binding_constraint` wins, never
+   * what is audited.
+   *
+   * Returns `rejectedBinding` non-null when the caller must reject outright;
+   * otherwise `notional`/`bindingConstraint` carry the (possibly trimmed)
+   * result, with `bindingConstraint: null` meaning "no change".
+   */
+  private applyCriticReview(
+    critic: RiskCriticVerdict | undefined,
+    notional: number,
+    reasons: string[],
+  ): { rejectedBinding: string | null; notional: number; bindingConstraint: string | null } {
+    if (critic === undefined) {
+      // Fails open BY RECORD, not silently (review 2026-08-06 B3): a decision
+      // the critic never saw must stay distinguishable from one it actually
+      // passed. Since #957 this is the producer's failure path — a provider
+      // error, a spend-cap refusal, an unreadable answer, or a backtest
+      // replaying history the critic never saw — rather than the permanent
+      // state it used to be. The mechanical steps above remain the safety net.
+      reasons.push(RISK_CRITIC_SKIPPED_REASON);
+      return { rejectedBinding: null, notional, bindingConstraint: null };
+    }
+
+    reasons.push(...invalidationReasons(critic));
+
+    const criticTrim = applyCritic(critic, notional, reasons);
+    if (criticTrim.rejected) {
+      return { rejectedBinding: 'risk_critic:reject', notional, bindingConstraint: null };
+    }
+    // #997 Q2b: a MEASURED breach rejects even when the prose said `pass`
+    // The producer never pre-computes this — it reports `verdict: 'pass'`
+    // beside a `breached` condition and `evaluate()` holds the authority,
+    // which is ADR-0003's seam exactly and keeps the persisted row honest
+    // about what the model actually said. The constraint is its own, so
+    // "how often do prose and predicates disagree?" stays answerable: this
+    // line is reached only when the prose verdict did NOT itself reject
+    //
+    // `unevaluable` is deliberately absent from this test. A data gap must
+    // never block a trade (`devils-advocate-spec.md`:94), and an absent or
+    // empty `conditions` list — a pre-fold row, or a malformed conditions
+    // half — yields no breaches and therefore no effect at all
+    const breached = breachedConditions(critic);
+    if (breached.length > 0) {
+      return { rejectedBinding: INVALIDATED_BINDING_CONSTRAINT, notional, bindingConstraint: null };
+    }
+    if (criticTrim.changed) {
+      return {
+        rejectedBinding: null,
+        notional: criticTrim.notional,
+        bindingConstraint: 'risk_critic:trim',
+      };
+    }
+    return { rejectedBinding: null, notional, bindingConstraint: null };
   }
 }
 

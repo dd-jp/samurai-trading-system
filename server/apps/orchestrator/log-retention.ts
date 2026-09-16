@@ -269,7 +269,15 @@
  * declining to act, and aborting a trading process over housekeeping is the
  * one outcome this module must never cause.
  */
-import { type Dirent, fstatSync, readdirSync, rmSync, statSync, truncateSync } from 'node:fs';
+import {
+  type Dirent,
+  fstatSync,
+  readdirSync,
+  rmSync,
+  type Stats,
+  statSync,
+  truncateSync,
+} from 'node:fs';
 import { join, resolve } from 'node:path';
 import { nonEmpty, positiveIntegerFromEnv } from '../../shared/index.js';
 import type { Logger } from './types.js';
@@ -567,6 +575,119 @@ function defaultActiveDescriptors(): readonly FileIdentity[] {
   return identities;
 }
 
+/** `statSync`, tolerating a file that vanished between listing and stat (not this sweep's problem) */
+function safeStat(path: string): Stats | undefined {
+  try {
+    return statSync(path);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The unlink path's own liveness + age gate and the `remove` call, pulled out
+ * of `sweepStaleLogs`'s loop — see the module doc's "Liveness rule" for why
+ * both descriptor identity and mtime are checked, and in that order
+ */
+function tryRemoveArchivedLogEntry(
+  path: string,
+  stat: Stats,
+  liveIdentities: readonly FileIdentity[],
+  cutoff: number,
+  remove: (path: string) => void,
+): { removed: boolean; bytesReclaimed: number } {
+  if (liveIdentities.some((id) => id.dev === stat.dev && id.ino === stat.ino)) {
+    return { removed: false, bytesReclaimed: 0 };
+  }
+  if (stat.mtimeMs >= cutoff) {
+    return { removed: false, bytesReclaimed: 0 };
+  }
+  try {
+    remove(path);
+  } catch {
+    // Permission error, already gone, or a platform quirk — tolerated by design
+    return { removed: false, bytesReclaimed: 0 };
+  }
+  return { removed: true, bytesReclaimed: stat.size };
+}
+
+/**
+ * The truncate path's own name-based narrowing (#1206 review, round 2) — see
+ * `LogRetentionOptions.bareTruncateNames`'s doc for why `isBareLogName` shape
+ * alone is not narrow enough on its own
+ */
+function isBareTruncateCandidateName(name: string, truncateNameSet: ReadonlySet<string>): boolean {
+  return isBareLogName(name) && truncateNameSet.has(name);
+}
+
+/**
+ * The truncate path's own allocation gate and the `truncate` call, pulled out
+ * of `sweepStaleLogs`'s loop — see the module doc's "Bare live names" section
+ * for why this is gated on `stat.blocks`, not `stat.size`
+ */
+function tryTruncateBareLogEntry(
+  path: string,
+  stat: Stats,
+  bareTruncateBytes: number,
+  truncate: (path: string) => void,
+): { truncated: boolean; bytesReclaimed: number } {
+  const allocatedBytes = stat.blocks * STAT_BLOCK_BYTES;
+  if (allocatedBytes <= bareTruncateBytes) {
+    return { truncated: false, bytesReclaimed: 0 };
+  }
+  try {
+    truncate(path);
+  } catch {
+    // Permission error, already gone, or a platform quirk — tolerated by design
+    return { truncated: false, bytesReclaimed: 0 };
+  }
+  return { truncated: true, bytesReclaimed: allocatedBytes };
+}
+
+/** `LogRetentionOptions` with every optional field defaulted, resolved once up front */
+interface ResolvedSweepOptions {
+  directory: string;
+  maxAgeMs: number;
+  bareTruncateBytes: number | undefined;
+  protectedPaths: readonly string[];
+  keepNames: readonly string[];
+  bareTruncateNames: readonly string[];
+  now: () => number;
+  cwd: () => string;
+  activeDescriptors: () => readonly FileIdentity[];
+  remove: (path: string) => void;
+  truncate: (path: string) => void;
+}
+
+function resolveSweepOptions(options: LogRetentionOptions): ResolvedSweepOptions {
+  const {
+    directory,
+    maxAgeMs,
+    protectedPaths = [],
+    keepNames = [],
+    bareTruncateBytes,
+    bareTruncateNames = [],
+    now = Date.now,
+    cwd = process.cwd,
+    activeDescriptors = defaultActiveDescriptors,
+    remove = (path: string) => rmSync(path),
+    truncate = (path: string) => truncateSync(path, 0),
+  } = options;
+  return {
+    directory,
+    maxAgeMs,
+    bareTruncateBytes,
+    protectedPaths,
+    keepNames,
+    bareTruncateNames,
+    now,
+    cwd,
+    activeDescriptors,
+    remove,
+    truncate,
+  };
+}
+
 /**
  * Deletes archival-shaped files in `directory` whose mtime is older than
  * `maxAgeMs`. Never recurses, never follows a symlink, never touches a name
@@ -585,16 +706,16 @@ export function sweepStaleLogs(options: LogRetentionOptions): LogRetentionResult
   const {
     directory,
     maxAgeMs,
-    protectedPaths = [],
-    keepNames = [],
+    protectedPaths,
+    keepNames,
     bareTruncateBytes,
-    bareTruncateNames = [],
-    now = Date.now,
-    cwd = process.cwd,
-    activeDescriptors = defaultActiveDescriptors,
-    remove = (path: string) => rmSync(path),
-    truncate = (path: string) => truncateSync(path, 0),
-  } = options;
+    bareTruncateNames,
+    now,
+    cwd,
+    activeDescriptors,
+    remove,
+    truncate,
+  } = resolveSweepOptions(options);
 
   const result: LogRetentionResult = { filesRemoved: 0, bytesReclaimed: 0, filesTruncated: 0 };
   const root = resolve(directory);
@@ -633,24 +754,14 @@ export function sweepStaleLogs(options: LogRetentionOptions): LogRetentionResult
     if (protectedSet.has(resolve(path))) continue;
 
     if (isArchivedLogName(entry.name)) {
-      let stat: ReturnType<typeof statSync>;
-      try {
-        stat = statSync(path);
-      } catch {
-        continue; // Vanished between listing and stat — not this sweep's problem
+      const stat = safeStat(path);
+      if (stat === undefined) continue;
+
+      const outcome = tryRemoveArchivedLogEntry(path, stat, liveIdentities, cutoff, remove);
+      if (outcome.removed) {
+        result.filesRemoved += 1;
+        result.bytesReclaimed += outcome.bytesReclaimed;
       }
-
-      if (liveIdentities.some((id) => id.dev === stat.dev && id.ino === stat.ino)) continue;
-      if (stat.mtimeMs >= cutoff) continue;
-
-      try {
-        remove(path);
-      } catch {
-        continue; // Permission error, already gone, or a platform quirk — tolerated by design
-      }
-
-      result.filesRemoved += 1;
-      result.bytesReclaimed += stat.size;
       continue;
     }
 
@@ -665,18 +776,13 @@ export function sweepStaleLogs(options: LogRetentionOptions): LogRetentionResult
     // `soak-boot.out`
     if (
       bareTruncateBytes === undefined ||
-      !isBareLogName(entry.name) ||
-      !truncateNameSet.has(entry.name)
+      !isBareTruncateCandidateName(entry.name, truncateNameSet)
     ) {
       continue;
     }
 
-    let stat: ReturnType<typeof statSync>;
-    try {
-      stat = statSync(path);
-    } catch {
-      continue; // Vanished between listing and stat — not this sweep's problem
-    }
+    const stat = safeStat(path);
+    if (stat === undefined) continue;
 
     // Gated on DISK ALLOCATION (`stat.blocks`), not apparent length
     // (`stat.size`): a live, non-`O_APPEND` writer leaves a sparse hole
@@ -691,17 +797,11 @@ export function sweepStaleLogs(options: LogRetentionOptions): LogRetentionResult
     // cycle — verified interactively on macOS APFS (deployment), and by the
     // "does not re-truncate" regression test below passing on Linux ext4 in
     // this PR's own CI (`ubuntu-latest`, `.github/workflows/ci.yml`)
-    const allocatedBytes = stat.blocks * STAT_BLOCK_BYTES;
-    if (allocatedBytes <= bareTruncateBytes) continue;
-
-    try {
-      truncate(path);
-    } catch {
-      continue; // Permission error, already gone, or a platform quirk — tolerated by design
+    const outcome = tryTruncateBareLogEntry(path, stat, bareTruncateBytes, truncate);
+    if (outcome.truncated) {
+      result.filesTruncated += 1;
+      result.bytesReclaimed += outcome.bytesReclaimed;
     }
-
-    result.filesTruncated += 1;
-    result.bytesReclaimed += allocatedBytes;
   }
 
   return result;

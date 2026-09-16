@@ -103,6 +103,53 @@ function buildUserPrompt() {
 
 const USER_PROMPT = buildUserPrompt();
 
+// Mutates `state` (chunkCount, contentLength, finishReason, ttftMs) from one
+// SSE "event" (the lines between a `\n\n` pair) -- split out of the reader
+// loop below purely to keep callOnceStreaming's branch count readable, same
+// per-line skip/parse rules as before
+function applySseEvent(rawEvent, dispatchedAt, state) {
+  for (const line of rawEvent.split('\n')) {
+    if (!line.startsWith('data:')) continue;
+    const payload = line.slice(5).trim();
+    if (payload === '[DONE]') continue;
+    state.chunkCount++;
+    try {
+      const parsed = JSON.parse(payload);
+      const delta = parsed.choices?.[0]?.delta;
+      const fr = parsed.choices?.[0]?.finish_reason;
+      if (fr) state.finishReason = fr;
+      if (delta?.content) {
+        state.contentLength += delta.content.length;
+        if (state.ttftMs === null) state.ttftMs = performance.now() - dispatchedAt;
+      }
+    } catch {
+      // Not every chunk is guaranteed parseable JSON (keep-alive
+      // comments, partial frames); skip rather than fail the probe
+    }
+  }
+}
+
+// Drains the SSE body, applying each complete event as it arrives. Returns
+// {chunkCount, contentLength, finishReason, ttftMs} -- `totalMs` is stamped
+// by the caller once this resolves, matching the original inline timing
+async function readSseBody(res, dispatchedAt) {
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  const state = { chunkCount: 0, contentLength: 0, finishReason: null, ttftMs: null };
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    for (let idx = buf.indexOf('\n\n'); idx !== -1; idx = buf.indexOf('\n\n')) {
+      const rawEvent = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      applySseEvent(rawEvent, dispatchedAt, state);
+    }
+  }
+  return state;
+}
+
 /**
  * POSTs one streaming chat completion and times three points on the wire:
  * dispatch -> response headers (ttfb, matches #1021's non-streaming metric),
@@ -149,37 +196,11 @@ async function callOnceStreaming() {
     } else if (!res.body) {
       errorMsg = 'response ok but no readable body (non-streaming fallback?)';
     } else {
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = '';
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        for (let idx = buf.indexOf('\n\n'); idx !== -1; idx = buf.indexOf('\n\n')) {
-          const rawEvent = buf.slice(0, idx);
-          buf = buf.slice(idx + 2);
-          for (const line of rawEvent.split('\n')) {
-            if (!line.startsWith('data:')) continue;
-            const payload = line.slice(5).trim();
-            if (payload === '[DONE]') continue;
-            chunkCount++;
-            try {
-              const parsed = JSON.parse(payload);
-              const delta = parsed.choices?.[0]?.delta;
-              const fr = parsed.choices?.[0]?.finish_reason;
-              if (fr) finishReason = fr;
-              if (delta?.content) {
-                contentLength += delta.content.length;
-                if (ttftMs === null) ttftMs = performance.now() - dispatchedAt;
-              }
-            } catch {
-              // Not every chunk is guaranteed parseable JSON (keep-alive
-              // comments, partial frames); skip rather than fail the probe
-            }
-          }
-        }
-      }
+      const streamed = await readSseBody(res, dispatchedAt);
+      chunkCount = streamed.chunkCount;
+      contentLength = streamed.contentLength;
+      finishReason = streamed.finishReason;
+      ttftMs = streamed.ttftMs;
       totalMs = performance.now() - dispatchedAt;
     }
   } catch (err) {

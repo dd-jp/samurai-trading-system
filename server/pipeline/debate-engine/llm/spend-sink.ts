@@ -196,74 +196,8 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
 
   record(entry: LlmSpendRecord): void {
     try {
-      // Priced at WRITE time, not read time, so the row keeps the rate that
-      // was in force when the call happened. Pricing at read time would make
-      // every historical row silently reprice the next time the table in
-      // pricing.ts is edited, quietly rewriting spend history that an
-      // operator may have already looked at
-      const tokenCost = priceUsage(entry.model, entry.usage);
-      const toolCalls = entry.server_tool_calls ?? 0;
-      const toolCost = priceServerToolCalls(toolCalls);
-
-      // The two halves are priced independently, and the tool half is recorded
-      // EVEN WHEN THE TOKEN HALF IS NOT (#476). Discarding a charge we know
-      // exactly, because a different charge is missing from a rate table,
-      // would under-count the cap for the same reason the phantom `grok-4`
-      // rate over-counted it — a number we hold and throw away is the worst of
-      // the three options. Such a row stays recognisable: `server_tool_calls`
-      // is non-zero while `cost_usd` is too small to cover the tokens
-      const cost = tokenCost === null ? (toolCost > 0 ? toolCost : null) : tokenCost + toolCost;
-
-      if (tokenCost === null) {
-        // The gap #476 named: nothing used to say when a call that cost money
-        // went unpriced. A silent null is how a cap stops being a cap.
-        this.logger?.log({
-          trace_id: entry.trace_id,
-          stage: 'orchestrator',
-          event: 'llm_model_unpriced',
-          level: 'warn',
-          message:
-            `llm spend: model '${entry.model}' is not in MODEL_RATES, so its TOKEN cost is ` +
-            'unpriced and does not count against the budget cap. Add a rate for it in ' +
-            'pricing.ts. ' +
-            (toolCost > 0
-              ? `The ${toolCalls} server-side tool invocation(s) on this call ARE priced and ` +
-                'recorded, so the row is not empty — but it understates the true cost.'
-              : 'This call contributes nothing to the cap total.'),
-          payload: { model: entry.model, server_tool_calls: toolCalls },
-        });
-      }
-
-      const spendRow = this.db
-        .prepare(
-          `INSERT INTO llm_spend (
-             trace_id, stage, debate_id, model,
-             input_tokens, output_tokens,
-             cache_creation_input_tokens, cache_read_input_tokens,
-             cost_usd, server_tool_calls, latency_ms, ttfb_ms, timestamp,
-             prompt_template_hash
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          entry.trace_id,
-          entry.stage,
-          // `?? null`, not the raw `undefined`: better-sqlite3 refuses to bind
-          // `undefined` ("Invalid value"), so an unattributed call would throw
-          // into the swallowing catch below and lose the row entirely — a
-          // metering bug that would look exactly like a quiet dashboard
-          entry.debate_id ?? null,
-          entry.model,
-          entry.usage.input_tokens,
-          entry.usage.output_tokens,
-          entry.usage.cache_creation_input_tokens ?? 0,
-          entry.usage.cache_read_input_tokens ?? 0,
-          cost,
-          toolCalls,
-          entry.latency_ms,
-          entry.ttfb_ms ?? null,
-          toStoredTimestamp(entry.timestamp),
-          entry.prompt_template_hash ?? null,
-        );
+      const { cost, toolCalls } = this.priceCall(entry);
+      const spendRow = this.insertSpendRow(entry, cost, toolCalls);
 
       // Reached only once the spend row has landed, so `spend_id` is always a
       // real rowid. It gets its OWN catch rather than falling into the outer
@@ -271,39 +205,13 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
       // spend total, which would be false here — the spend row is written and
       // safe, and only the text was lost. A capture failure reported as a
       // metering failure would send an operator to look at the wrong thing
-      try {
-        this.recordText(entry, Number(spendRow.lastInsertRowid));
-      } catch (error) {
-        this.logger?.log({
-          trace_id: entry.trace_id,
-          stage: 'orchestrator',
-          event: 'llm_call_capture_failed',
-          level: 'warn',
-          message:
-            'llm call text capture failed — the API call and its spend row are unaffected, ' +
-            'but this call has no prompt/response recorded in llm_call_log',
-          payload: { error: error instanceof Error ? error.message : String(error) },
-        });
-      }
+      this.tryRecordText(entry, Number(spendRow.lastInsertRowid));
 
       // Its OWN catch, for the same reason `recordText`'s is separate: the
       // spend row is already written and safe by this point, so a channel
       // that throws must not turn into an `llm_spend_write_failed` line that
       // falsely claims the row is missing
-      try {
-        this.maybeAlertPromptTierCrossing(entry);
-      } catch (error) {
-        this.logger?.log({
-          trace_id: entry.trace_id,
-          stage: 'orchestrator',
-          event: 'llm_prompt_tier_alert_failed',
-          level: 'error',
-          message:
-            'prompt-tier crossing alert failed — the API call and its spend row are ' +
-            'unaffected, but a large-prompt-tier cost step is unreported',
-          payload: { error: error instanceof Error ? error.message : String(error) },
-        });
-      }
+      this.tryAlertPromptTierCrossing(entry);
     } catch (error) {
       // See the module doc comment: a metering failure must not surface as a
       // failed LLM call. Logged rather than silent so a persistently broken
@@ -316,6 +224,120 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
         message:
           'llm spend metering write failed — the API call itself succeeded and is unaffected, ' +
           'but this call is missing from the dashboard spend total',
+        payload: { error: error instanceof Error ? error.message : String(error) },
+      });
+    }
+  }
+
+  /**
+   * Prices one call's token and server-tool-call cost, warning when the
+   * token half is unpriced. Split out of `record` purely for cyclomatic
+   * complexity — same computation, same order, same logging.
+   */
+  private priceCall(entry: LlmSpendRecord): { cost: number | null; toolCalls: number } {
+    // Priced at WRITE time, not read time, so the row keeps the rate that
+    // was in force when the call happened. Pricing at read time would make
+    // every historical row silently reprice the next time the table in
+    // pricing.ts is edited, quietly rewriting spend history that an
+    // operator may have already looked at
+    const tokenCost = priceUsage(entry.model, entry.usage);
+    const toolCalls = entry.server_tool_calls ?? 0;
+    const toolCost = priceServerToolCalls(toolCalls);
+
+    // The two halves are priced independently, and the tool half is recorded
+    // EVEN WHEN THE TOKEN HALF IS NOT (#476). Discarding a charge we know
+    // exactly, because a different charge is missing from a rate table,
+    // would under-count the cap for the same reason the phantom `grok-4`
+    // rate over-counted it — a number we hold and throw away is the worst of
+    // the three options. Such a row stays recognisable: `server_tool_calls`
+    // is non-zero while `cost_usd` is too small to cover the tokens
+    const cost = tokenCost === null ? (toolCost > 0 ? toolCost : null) : tokenCost + toolCost;
+
+    if (tokenCost === null) {
+      // The gap #476 named: nothing used to say when a call that cost money
+      // went unpriced. A silent null is how a cap stops being a cap.
+      this.logger?.log({
+        trace_id: entry.trace_id,
+        stage: 'orchestrator',
+        event: 'llm_model_unpriced',
+        level: 'warn',
+        message:
+          `llm spend: model '${entry.model}' is not in MODEL_RATES, so its TOKEN cost is ` +
+          'unpriced and does not count against the budget cap. Add a rate for it in ' +
+          'pricing.ts. ' +
+          (toolCost > 0
+            ? `The ${toolCalls} server-side tool invocation(s) on this call ARE priced and ` +
+              'recorded, so the row is not empty — but it understates the true cost.'
+            : 'This call contributes nothing to the cap total.'),
+        payload: { model: entry.model, server_tool_calls: toolCalls },
+      });
+    }
+
+    return { cost, toolCalls };
+  }
+
+  private insertSpendRow(entry: LlmSpendRecord, cost: number | null, toolCalls: number) {
+    return this.db
+      .prepare(
+        `INSERT INTO llm_spend (
+           trace_id, stage, debate_id, model,
+           input_tokens, output_tokens,
+           cache_creation_input_tokens, cache_read_input_tokens,
+           cost_usd, server_tool_calls, latency_ms, ttfb_ms, timestamp,
+           prompt_template_hash
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        entry.trace_id,
+        entry.stage,
+        // `?? null`, not the raw `undefined`: better-sqlite3 refuses to bind
+        // `undefined` ("Invalid value"), so an unattributed call would throw
+        // into the swallowing catch below and lose the row entirely — a
+        // metering bug that would look exactly like a quiet dashboard
+        entry.debate_id ?? null,
+        entry.model,
+        entry.usage.input_tokens,
+        entry.usage.output_tokens,
+        entry.usage.cache_creation_input_tokens ?? 0,
+        entry.usage.cache_read_input_tokens ?? 0,
+        cost,
+        toolCalls,
+        entry.latency_ms,
+        entry.ttfb_ms ?? null,
+        toStoredTimestamp(entry.timestamp),
+        entry.prompt_template_hash ?? null,
+      );
+  }
+
+  private tryRecordText(entry: LlmSpendRecord, spendId: number): void {
+    try {
+      this.recordText(entry, spendId);
+    } catch (error) {
+      this.logger?.log({
+        trace_id: entry.trace_id,
+        stage: 'orchestrator',
+        event: 'llm_call_capture_failed',
+        level: 'warn',
+        message:
+          'llm call text capture failed — the API call and its spend row are unaffected, ' +
+          'but this call has no prompt/response recorded in llm_call_log',
+        payload: { error: error instanceof Error ? error.message : String(error) },
+      });
+    }
+  }
+
+  private tryAlertPromptTierCrossing(entry: LlmSpendRecord): void {
+    try {
+      this.maybeAlertPromptTierCrossing(entry);
+    } catch (error) {
+      this.logger?.log({
+        trace_id: entry.trace_id,
+        stage: 'orchestrator',
+        event: 'llm_prompt_tier_alert_failed',
+        level: 'error',
+        message:
+          'prompt-tier crossing alert failed — the API call and its spend row are ' +
+          'unaffected, but a large-prompt-tier cost step is unreported',
         payload: { error: error instanceof Error ? error.message : String(error) },
       });
     }

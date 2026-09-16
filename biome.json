@@ -20,6 +20,14 @@
       "preset": "recommended",
       "correctness": {
         "noUnusedVariables": "off"
+      },
+      "complexity": {
+        "noExcessiveCognitiveComplexity": {
+          "level": "warn",
+          "options": {
+            "maxAllowedComplexity": 12
+          }
+        }
       }
     }
   },

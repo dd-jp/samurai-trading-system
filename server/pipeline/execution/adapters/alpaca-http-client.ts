@@ -220,8 +220,14 @@ function validateAlpacaOrderLeg(raw: unknown, context: string, body: unknown): v
  * repo's `AlpacaOrder` does not declare, and a caller that has always received
  * the raw object must keep receiving it.
  */
-function validateAlpacaOrder(body: unknown, context: string): AlpacaOrder {
-  if (!isRecord(body)) failValidation(context, 'expected an object', body);
+/**
+ * The scalar/string-shaped fields of an Alpaca order response — everything
+ * `validateAlpacaOrder` checks except `legs` (which has its own nested
+ * validation and array iteration). Split out purely to keep
+ * `validateAlpacaOrder` under the cyclomatic-complexity gate; same
+ * fail-fast-via-`failValidation` behavior as before, same order.
+ */
+function validateAlpacaOrderCoreFields(body: Record<string, unknown>, context: string): void {
   const {
     id,
     client_order_id,
@@ -233,7 +239,6 @@ function validateAlpacaOrder(body: unknown, context: string): AlpacaOrder {
     filled_qty,
     filled_avg_price,
     filled_at,
-    legs,
   } = body;
   if (typeof id !== 'string') failValidation(context, 'id must be a string', body);
   // Declared but unread-off-a-response (see doc comment): checked only when
@@ -263,6 +268,12 @@ function validateAlpacaOrder(body: unknown, context: string): AlpacaOrder {
   if (filled_at !== null && typeof filled_at !== 'string') {
     failValidation(context, 'filled_at must be a string or null', body);
   }
+}
+
+function validateAlpacaOrder(body: unknown, context: string): AlpacaOrder {
+  if (!isRecord(body)) failValidation(context, 'expected an object', body);
+  validateAlpacaOrderCoreFields(body, context);
+  const { legs } = body;
   // `null` is ABSENT here, not a malformed array (#921). Alpaca returns
   // `"legs": null` on every order that has no attached legs — which is every
   // plain market order, i.e. every flatten this adapter ever submits, and

@@ -32,30 +32,50 @@ const samples = [];
 const byTicker = new Map();
 const started = Date.now();
 
-ws.onmessage = (ev) => {
-  let d;
+function parseJetstreamEvent(ev) {
   try {
-    d = JSON.parse(ev.data);
+    return JSON.parse(ev.data);
   } catch {
-    return;
+    return undefined;
   }
+}
+
+// null when this event isn't a create of an app.bsky.feed.post -- callers skip it
+function extractPostRecord(d) {
   const rec = d?.commit?.record;
-  if (d?.commit?.operation !== 'create' || !rec || rec.$type !== 'app.bsky.feed.post') return;
+  if (d?.commit?.operation !== 'create' || !rec || rec.$type !== 'app.bsky.feed.post') return null;
+  return rec;
+}
+
+function matchTicker(t, upper) {
+  const hasCash = new RegExp(`\\$${t}\\b`).test(upper);
+  const hasBare = new RegExp(`(?<![A-Z$])${t}(?![A-Z])`).test(upper);
+  return { hasCash, hasBare };
+}
+
+function recordTickerHit(t, text, upper, fin) {
+  const { hasCash, hasBare } = matchTicker(t, upper);
+  if (!hasCash && !hasBare) return;
+  if (hasCash) cashtagHits++;
+  if (hasBare) bareHits++;
+  if (hasBare && fin) bareFinHits++;
+  byTicker.set(t, (byTicker.get(t) || 0) + 1);
+  if ((hasCash || fin) && samples.length < 25) {
+    samples.push({ t, cash: hasCash, fin, text: text.slice(0, 140).replace(/\n/g, ' ') });
+  }
+}
+
+ws.onmessage = (ev) => {
+  const d = parseJetstreamEvent(ev);
+  if (d === undefined) return;
+  const rec = extractPostRecord(d);
+  if (rec === null) return;
   posts++;
   const text = rec.text || '';
   const upper = text.toUpperCase();
   const fin = FIN.test(upper);
   for (const t of TICKERS) {
-    const hasCash = new RegExp(`\\$${t}\\b`).test(upper);
-    const hasBare = new RegExp(`(?<![A-Z$])${t}(?![A-Z])`).test(upper);
-    if (!hasCash && !hasBare) continue;
-    if (hasCash) cashtagHits++;
-    if (hasBare) bareHits++;
-    if (hasBare && fin) bareFinHits++;
-    byTicker.set(t, (byTicker.get(t) || 0) + 1);
-    if ((hasCash || fin) && samples.length < 25) {
-      samples.push({ t, cash: hasCash, fin, text: text.slice(0, 140).replace(/\n/g, ' ') });
-    }
+    recordTickerHit(t, text, upper, fin);
   }
 };
 ws.onerror = (e) => console.error('WS ERROR', e.message || String(e));

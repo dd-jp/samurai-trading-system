@@ -233,6 +233,103 @@ export interface BackfillMarketDataDeps {
 }
 
 /**
+ * Resolves `rows`/`fetchError` for one (instrument, window) pair — the crypto
+ * refusal, the "already warm" skip, and the fetch-then-reread-on-throw path.
+ * Split out of `backfillMarketData` purely to keep that function's
+ * cyclomatic complexity readable; same branches, same order, same catch
+ * behavior.
+ */
+async function resolvePairCoverage(
+  deps: BackfillMarketDataDeps,
+  instrument: UniverseInstrument,
+  window: BarWindow,
+  existing: Bar[],
+  isCrypto: boolean,
+): Promise<{ rows: Bar[]; fetchError: string | undefined }> {
+  let rows = existing;
+  let fetchError: string | undefined;
+
+  // Unconditional, checked before the "is the store already warm" branch
+  // below: stale bars from before #1157 must not satisfy a crypto row
+  if (isCrypto) {
+    fetchError =
+      "backfillMarketData: crypto backfill is not supported — crypto left Samurai's " +
+      "scope 2026-08-16 (ADR-0015's amendment) and #1157 removed this script's " +
+      'Coinbase/Bitstamp fetch leg';
+  } else if (existing.length < window.lookback) {
+    // A thrown fetch (a rate-limit hiccup, a genuinely sparse window)
+    // must not abort the whole run — every OTHER pair, and every pair
+    // already fetched this run, has already durably persisted its bars
+    // via `appendBars` above, so aborting here would throw that progress
+    // away from the OPERATOR's view even though the store itself kept
+    // it. Caught here, turned into a SHORT row instead (AC: "so a short
+    // backfill is visible rather than silent") — never rethrown, so this
+    // catch cannot itself throw out of the loop
+    try {
+      const fetched = await deps.fetchEquityBars(instrument.asset, window, deps.asOf);
+      deps.store.appendBars(fetched);
+      rows = deps.store.readBars(instrument.asset, window.timeframe, deps.asOf, window.lookback);
+    } catch (error) {
+      fetchError = describeThrownSafely(error);
+      // Re-read rather than falling back to `existing`. `appendBars` is
+      // `INSERT OR IGNORE` per bar, so a throw partway through leaves the
+      // bars it already wrote durably in the store — reporting the
+      // pre-fetch count would under-report real coverage and send the
+      // operator back to re-fetch bars that are already there
+      //
+      // Guarded, because this runs inside a catch: if the store read
+      // ALSO fails, keep the pre-fetch rows and say so, rather than
+      // throwing out of the handler and aborting every remaining pair —
+      // which is the abort this catch exists to prevent
+      try {
+        rows = deps.store.readBars(instrument.asset, window.timeframe, deps.asOf, window.lookback);
+      } catch (readError) {
+        fetchError += ` (coverage may under-report: re-read failed: ${
+          readError instanceof Error ? readError.message : String(readError)
+        })`;
+      }
+    }
+  }
+
+  return { rows, fetchError };
+}
+
+/** Assembles the `CoverageRow` for one pair from its resolved `rows`/`fetchError` */
+function buildCoverageRow(
+  instrument: UniverseInstrument,
+  window: BarWindow,
+  rows: Bar[],
+  fetchError: string | undefined,
+  isCrypto: boolean,
+): CoverageRow {
+  return {
+    instrument: instrument.asset,
+    timeframe: window.timeframe,
+    rows: rows.length,
+    required: window.lookback,
+    first_bar: rows[0]?.close_time.toISOString(),
+    last_bar: rows.at(-1)?.close_time.toISOString(),
+    satisfied: !isCrypto && rows.length >= window.lookback,
+    error: fetchError,
+    source: rows.at(-1)?.source,
+    quarantined: rows.some((bar) => QUARANTINED_BAR_SOURCES.has(bar.source)),
+  };
+}
+
+/** Formats one `CoverageRow` as the printed coverage-table line */
+function formatCoverageLine(row: CoverageRow): string {
+  return (
+    `  ${row.instrument.padEnd(8)} ${row.timeframe.padEnd(3)} ` +
+    `${String(row.rows).padStart(3)}/${row.required} bars` +
+    (row.first_bar && row.last_bar ? `  (${row.first_bar} .. ${row.last_bar})` : '  (none)') +
+    (row.source !== undefined ? `  source=${row.source}` : '') +
+    (row.satisfied ? '' : '  SHORT') +
+    (row.quarantined ? '  QUARANTINED' : '') +
+    (row.error !== undefined ? `  (fetch failed: ${row.error})` : '')
+  );
+}
+
+/**
  * Fills `deps.store` for every (instrument, window) pair, skipping any pair
  * the store already covers, then returns a per-pair coverage report (AC:
  * "reports per-instrument coverage — first bar, last bar, row count")
@@ -253,84 +350,19 @@ export async function backfillMarketData(deps: BackfillMarketDataDeps): Promise<
         window.lookback,
       );
 
-      let rows = existing;
-      let fetchError: string | undefined;
       const isCrypto = instrument.asset_class === 'crypto';
-      // Unconditional, checked before the "is the store already warm" branch
-      // below: stale bars from before #1157 must not satisfy a crypto row
-      if (isCrypto) {
-        fetchError =
-          "backfillMarketData: crypto backfill is not supported — crypto left Samurai's " +
-          "scope 2026-08-16 (ADR-0015's amendment) and #1157 removed this script's " +
-          'Coinbase/Bitstamp fetch leg';
-      } else if (existing.length < window.lookback) {
-        // A thrown fetch (a rate-limit hiccup, a genuinely sparse window)
-        // must not abort the whole run — every OTHER pair, and every pair
-        // already fetched this run, has already durably persisted its bars
-        // via `appendBars` above, so aborting here would throw that progress
-        // away from the OPERATOR's view even though the store itself kept
-        // it. Caught here, turned into a SHORT row instead (AC: "so a short
-        // backfill is visible rather than silent") — never rethrown, so this
-        // catch cannot itself throw out of the loop
-        try {
-          const fetched = await deps.fetchEquityBars(instrument.asset, window, deps.asOf);
-          deps.store.appendBars(fetched);
-          rows = deps.store.readBars(
-            instrument.asset,
-            window.timeframe,
-            deps.asOf,
-            window.lookback,
-          );
-        } catch (error) {
-          fetchError = describeThrownSafely(error);
-          // Re-read rather than falling back to `existing`. `appendBars` is
-          // `INSERT OR IGNORE` per bar, so a throw partway through leaves the
-          // bars it already wrote durably in the store — reporting the
-          // pre-fetch count would under-report real coverage and send the
-          // operator back to re-fetch bars that are already there
-          //
-          // Guarded, because this runs inside a catch: if the store read
-          // ALSO fails, keep the pre-fetch rows and say so, rather than
-          // throwing out of the handler and aborting every remaining pair —
-          // which is the abort this catch exists to prevent
-          try {
-            rows = deps.store.readBars(
-              instrument.asset,
-              window.timeframe,
-              deps.asOf,
-              window.lookback,
-            );
-          } catch (readError) {
-            fetchError += ` (coverage may under-report: re-read failed: ${
-              readError instanceof Error ? readError.message : String(readError)
-            })`;
-          }
-        }
-      }
+      const { rows, fetchError } = await resolvePairCoverage(
+        deps,
+        instrument,
+        window,
+        existing,
+        isCrypto,
+      );
 
-      const row: CoverageRow = {
-        instrument: instrument.asset,
-        timeframe: window.timeframe,
-        rows: rows.length,
-        required: window.lookback,
-        first_bar: rows[0]?.close_time.toISOString(),
-        last_bar: rows.at(-1)?.close_time.toISOString(),
-        satisfied: !isCrypto && rows.length >= window.lookback,
-        error: fetchError,
-        source: rows.at(-1)?.source,
-        quarantined: rows.some((bar) => QUARANTINED_BAR_SOURCES.has(bar.source)),
-      };
+      const row = buildCoverageRow(instrument, window, rows, fetchError, isCrypto);
       coverage.push(row);
 
-      print(
-        `  ${row.instrument.padEnd(8)} ${row.timeframe.padEnd(3)} ` +
-          `${String(row.rows).padStart(3)}/${row.required} bars` +
-          (row.first_bar && row.last_bar ? `  (${row.first_bar} .. ${row.last_bar})` : '  (none)') +
-          (row.source !== undefined ? `  source=${row.source}` : '') +
-          (row.satisfied ? '' : '  SHORT') +
-          (row.quarantined ? '  QUARANTINED' : '') +
-          (row.error !== undefined ? `  (fetch failed: ${row.error})` : ''),
-      );
+      print(formatCoverageLine(row));
     }
   }
 

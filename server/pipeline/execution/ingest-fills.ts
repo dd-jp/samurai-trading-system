@@ -1033,37 +1033,26 @@ async function entryTotalShares(
   return new Map(lotKeys.map((lotKey) => [lotKey, entrySizes.get(lotKey) ?? 0]));
 }
 
-/**
- * `fills` is this lot's bucket already — keyed on `client_order_id` by the
- * caller. `flattenTargetedThisPoll` (#525) is true when a flatten named
- * this lot and resolved this poll, independent of whether `fills` itself is
- * non-empty — see `redistributeFlattenFills`'s doc for why a lot can be
- * named with zero share.
- */
-async function advanceLot(
+async function collectNewFillsForLot(
   input: FillIngestInput,
   position: OpenPosition,
-  fills: readonly NormalizedFill[],
-  now: Date,
-  flattenTargetedThisPoll: boolean,
-): Promise<void> {
-  const { broker, store } = input;
-
-  // No lookahead: in a backtest the feed is the whole simulated future, and a
-  // fill dated past T has not happened yet. This stays HERE rather than moving
-  // into the caller's bucketing pass — it is per-call semantics against this
-  // call's `now`, not a grouping key
-  const lotFills = fills.filter((fill) => fill.timestamp.getTime() <= now.getTime());
-
+  lotFills: readonly NormalizedFill[],
+): Promise<{
+  newFills: Fill[];
+  cumulativeReoffers: NormalizedFill[];
+  ingestedEntry: boolean;
+  ingestedExit: boolean;
+}> {
+  const { store } = input;
   const newFills: Fill[] = [];
   /**
    * #842: fills the dedup gate rejected that may STILL owe this lot quantity.
    * A `qty_is_cumulative` feed (Alpaca — see `NormalizedFill`'s field doc)
    * re-uses one id, the ORDER id, for every observation of a running
    * `filled_qty`, so "we already have this id" does NOT mean "we already have
-   * this quantity". Collected here and reconciled below rather than inline so
-   * the reconciliation needs ONE store read for the whole call, however many
-   * fills the feed re-offered.
+   * this quantity". Collected here and reconciled by the caller rather than
+   * inline so the reconciliation needs ONE store read for the whole call,
+   * however many fills the feed re-offered.
    */
   const cumulativeReoffers: NormalizedFill[] = [];
   // #1001/#1301: read once per call, reused by every `toFill`/`cumulativeTopUp`
@@ -1091,10 +1080,26 @@ async function advanceLot(
     ingestedEntry ||= fill.leg === 'entry';
     ingestedExit ||= fill.leg === 'exit';
   }
+  return { newFills, cumulativeReoffers, ingestedEntry, ingestedExit };
+}
+
+async function reconcileCumulativeReoffers(
+  input: FillIngestInput,
+  position: OpenPosition,
+  collected: {
+    newFills: Fill[];
+    cumulativeReoffers: NormalizedFill[];
+    ingestedEntry: boolean;
+    ingestedExit: boolean;
+  },
+): Promise<{ persisted: Fill[] | null; ingestedEntry: boolean; ingestedExit: boolean }> {
+  const { store } = input;
+  const { cumulativeReoffers, newFills } = collected;
+  let { ingestedEntry, ingestedExit } = collected;
 
   /**
-   * The lot's persisted record, read AT MOST ONCE per call and reused by
-   * `recorded` below rather than read twice.
+   * The lot's persisted record, read AT MOST ONCE per call and reused by the
+   * caller's `recorded` rather than read twice.
    *
    * The honest cost, stated rather than buried: on Alpaca every open lot's
    * entry order is re-offered on EVERY poll (that is what a cumulative feed
@@ -1128,68 +1133,108 @@ async function advanceLot(
       ingestedExit ||= topUp.leg === 'exit';
     }
   }
+  return { persisted, ingestedEntry, ingestedExit };
+}
+
+async function handleLotWithNoNewFills(
+  input: FillIngestInput,
+  position: OpenPosition,
+  now: Date,
+  flattenTargetedThisPoll: boolean,
+): Promise<void> {
+  // #525: normally "the lot is exactly as the last poll left it" — but a
+  // flatten can name this lot and resolve this poll while handing it ZERO
+  // share (an earlier-opened sibling absorbed the whole partial fill), in
+  // which case there is no new fill here at all yet the lot's legs were
+  // still cancelled by the SAME `executeExit` call that cancelled every
+  // held lot's legs before submitting the flatten. Nothing else runs for a
+  // lot with no new fill, so the re-arm check has to happen here, off the
+  // fuller persisted record rather than this poll's (empty) one
+  if (flattenTargetedThisPoll) {
+    await maybeRearmResidual(input, position, now);
+  }
+
+  // #1087: `reconcile()` runs immediately before this call, same poll (see
+  // `fill-sync.ts`'s `runPoll`), and adopts the broker's `order_state`
+  // without touching `filled_size` (`reconcile.ts`'s own doc) — so a lot
+  // reconcile just adopted as `filled`/`partially_filled` but whose fill
+  // was never ingested lands HERE, with nothing new to advance, and would
+  // otherwise return in total silence
+  //
+  // This is a WARNING, not necessarily a defect: on the live arm, Alpaca
+  // can report `filled_qty > 0` on the order a poll or two before its
+  // separate fill feed catches up, so a lot can legitimately pass through
+  // this branch once or twice and self-clear on the next poll once
+  // `ingestFills` sees the fill. `stuck_ms` (from `opened_at`, no new
+  // tracked state needed — a lot in this state can only have been wedged
+  // since close to when it opened) is what tells the two apart: a poll or
+  // two of propagation lag looks nothing like the hours-long, monotonically
+  // growing `stuck_ms` of a genuinely wedged lot (#1087's META case, caused
+  // at the source — see `simulated-adapter.ts` — by a fill excluded forever
+  // from every subsequent poll's `since` floor)
+  //
+  // Throttled (`filledZeroSizeThrottle`, filled-zero-size-throttle.ts):
+  // unthrottled, a lot wedged for hours logs an identical line on every
+  // 15-second poll. `consecutive` rides in the payload alongside `stuck_ms`
+  // so an ANNOUNCED line still carries how long the condition has held —
+  // both the one-time `warn` and every later low-cadence `info`
+  // re-announcement while the lot stays wedged
+  if (isWedgedZeroFillLot(position)) {
+    const { announce, consecutive } = input.filledZeroSizeThrottle.observe(
+      position.idempotency_key,
+      now,
+    );
+    if (announce !== null) {
+      safeLog(input.logger, {
+        trace_id: input.trace_id,
+        stage: 'execution',
+        event: 'fill_priced_at_zero_size',
+        level: announce,
+        message: FILLED_WITH_ZERO_SIZE,
+        payload: {
+          idempotency_key: position.idempotency_key,
+          instrument: position.instrument,
+          order_state: position.order_state,
+          stuck_ms: now.getTime() - position.opened_at.getTime(),
+          consecutive,
+        },
+      });
+    }
+  }
+}
+
+/**
+ * `fills` is this lot's bucket already — keyed on `client_order_id` by the
+ * caller. `flattenTargetedThisPoll` (#525) is true when a flatten named
+ * this lot and resolved this poll, independent of whether `fills` itself is
+ * non-empty — see `redistributeFlattenFills`'s doc for why a lot can be
+ * named with zero share.
+ */
+async function advanceLot(
+  input: FillIngestInput,
+  position: OpenPosition,
+  fills: readonly NormalizedFill[],
+  now: Date,
+  flattenTargetedThisPoll: boolean,
+): Promise<void> {
+  const { broker, store } = input;
+
+  // No lookahead: in a backtest the feed is the whole simulated future, and a
+  // fill dated past T has not happened yet. This stays HERE rather than moving
+  // into the caller's bucketing pass — it is per-call semantics against this
+  // call's `now`, not a grouping key
+  const lotFills = fills.filter((fill) => fill.timestamp.getTime() <= now.getTime());
+
+  const collected = await collectNewFillsForLot(input, position, lotFills);
+  const { newFills } = collected;
+  const { persisted, ingestedEntry, ingestedExit } = await reconcileCumulativeReoffers(
+    input,
+    position,
+    collected,
+  );
 
   if (newFills.length === 0) {
-    // #525: normally "the lot is exactly as the last poll left it" — but a
-    // flatten can name this lot and resolve this poll while handing it ZERO
-    // share (an earlier-opened sibling absorbed the whole partial fill), in
-    // which case there is no new fill here at all yet the lot's legs were
-    // still cancelled by the SAME `executeExit` call that cancelled every
-    // held lot's legs before submitting the flatten. Nothing else in this
-    // function runs for a lot with no new fill, so the re-arm check has to
-    // happen here, off the fuller persisted record rather than this poll's
-    // (empty) one
-    if (flattenTargetedThisPoll) {
-      await maybeRearmResidual(input, position, now);
-    }
-
-    // #1087: `reconcile()` runs immediately before this call, same poll (see
-    // `fill-sync.ts`'s `runPoll`), and adopts the broker's `order_state`
-    // without touching `filled_size` (`reconcile.ts`'s own doc) — so a lot
-    // reconcile just adopted as `filled`/`partially_filled` but whose fill
-    // was never ingested lands HERE, with nothing new to advance, and would
-    // otherwise return in total silence
-    //
-    // This is a WARNING, not necessarily a defect: on the live arm, Alpaca
-    // can report `filled_qty > 0` on the order a poll or two before its
-    // separate fill feed catches up, so a lot can legitimately pass through
-    // this branch once or twice and self-clear on the next poll once
-    // `ingestFills` sees the fill. `stuck_ms` (from `opened_at`, no new
-    // tracked state needed — a lot in this state can only have been wedged
-    // since close to when it opened) is what tells the two apart: a poll or
-    // two of propagation lag looks nothing like the hours-long, monotonically
-    // growing `stuck_ms` of a genuinely wedged lot (#1087's META case, caused
-    // at the source — see `simulated-adapter.ts` — by a fill excluded forever
-    // from every subsequent poll's `since` floor)
-    //
-    // Throttled (`filledZeroSizeThrottle`, filled-zero-size-throttle.ts):
-    // unthrottled, a lot wedged for hours logs an identical line on every
-    // 15-second poll. `consecutive` rides in the payload alongside `stuck_ms`
-    // so an ANNOUNCED line still carries how long the condition has held —
-    // both the one-time `warn` and every later low-cadence `info`
-    // re-announcement while the lot stays wedged
-    if (isWedgedZeroFillLot(position)) {
-      const { announce, consecutive } = input.filledZeroSizeThrottle.observe(
-        position.idempotency_key,
-        now,
-      );
-      if (announce !== null) {
-        safeLog(input.logger, {
-          trace_id: input.trace_id,
-          stage: 'execution',
-          event: 'fill_priced_at_zero_size',
-          level: announce,
-          message: FILLED_WITH_ZERO_SIZE,
-          payload: {
-            idempotency_key: position.idempotency_key,
-            instrument: position.instrument,
-            order_state: position.order_state,
-            stuck_ms: now.getTime() - position.opened_at.getTime(),
-            consecutive,
-          },
-        });
-      }
-    }
+    await handleLotWithNoNewFills(input, position, now, flattenTargetedThisPoll);
     return;
   }
 

@@ -1896,6 +1896,376 @@ async function runExitPathScenarios(input: {
   };
 }
 
+// #508/#516: the write-ahead journal must exist and every row must have
+// resolved — an unresolved row means an exit was journalled and then the
+// broker call was refused or left ambiguous
+function exitPathFlattenSubmissionFailures(observations: SmokeObservations): string[] {
+  const failures: string[] = [];
+  const { flattenSubmissions } = observations;
+  if (flattenSubmissions.length === 0) {
+    failures.push(
+      "no row in flatten_submissions — no exit ever reached executeExit()'s write-ahead journal " +
+        "(#508), so #516's cancel-before-flatten guard was never exercised",
+    );
+  } else {
+    const unresolved = flattenSubmissions.filter((row) => row.status !== 'submitted');
+    if (unresolved.length > 0) {
+      failures.push(
+        `flatten_submissions has ${unresolved.length} row(s) not resolved to 'submitted' ` +
+          `(${unresolved.map((row) => `${row.idempotency_key}:${row.status}`).join(', ')}) — an ` +
+          'exit was journalled but its flatten never reached, or was refused by, the broker',
+      );
+    }
+  }
+  return failures;
+}
+
+/**
+ * #516 — ORDERING, not merely that both calls happened: every `submitFlatten`
+ * must have a `cancel` recorded FRESH since the previous `submitFlatten` (or
+ * the start of the run), not merely "somewhere earlier in the sequence" —
+ * that weaker form would report the FIRST flatten's own missing cancel and
+ * then stop, because every later flatten's window contains SOME earlier
+ * cancel and (wrongly) reads as satisfied
+ *
+ * What this window scoping does NOT do: verify the cancel it finds belongs
+ * to the SAME lot the flatten is closing. A resting bracket leg cancelled
+ * after the flatten (or never) can fire into the now-flat position and open
+ * a reverse one, and this check catches that for the FIRST flatten a
+ * regression touches — sufficient in practice because `executeExit` cancels
+ * and flattens through one uniform code path applied to every exit, so a
+ * real regression of #516's ordering shows up on the first flatten, not
+ * selectively on a later one
+ */
+function exitPathCancelBeforeFlattenFailures(evidence: ExitPathEvidence): string[] {
+  const failures: string[] = [];
+  const { brokerCallSequence } = evidence;
+  let sincePreviousFlatten = 0;
+  const flattensWithoutPriorCancel: string[] = [];
+  for (const [index, call] of brokerCallSequence.entries()) {
+    if (!call.startsWith('submitFlatten:')) continue;
+    const window = brokerCallSequence.slice(sincePreviousFlatten, index);
+    if (!window.some((entry) => entry.startsWith('cancel:'))) {
+      flattensWithoutPriorCancel.push(call);
+    }
+    sincePreviousFlatten = index + 1;
+  }
+  if (flattensWithoutPriorCancel.length > 0) {
+    failures.push(
+      `broker call(s) ${flattensWithoutPriorCancel.join(', ')} have no 'cancel' call recorded ` +
+        `before them (full sequence: ${brokerCallSequence.join(' -> ') || '(empty)'}) — a resting ` +
+        'bracket leg cancelled after the flatten (or never) can fire into the now-flat position ' +
+        'and open a reverse one (#516)',
+    );
+  }
+  if (!brokerCallSequence.some((call) => call.startsWith('submitFlatten:'))) {
+    failures.push(
+      'the exit-path harness recorded no submitFlatten call at all — exits never reached ' +
+        'submitFlatten (#508)',
+    );
+  }
+  return failures;
+}
+
+// #508/#517: every exit must eventually round-trip a lot to `closed` with
+// a `ClosedTrade` — see `SmokeObservations.closedTrades`'s doc for why this
+// was NOT required before #576
+function exitPathClosedTradesFailures(observations: SmokeObservations): string[] {
+  const failures: string[] = [];
+  if (observations.closedTrades.length === 0) {
+    failures.push(
+      'no row in closed_trades — the exit-path scenarios never round-tripped a lot to flat, so ' +
+        "either a flatten's fill was never attributed back to the lot it closed (#517) or " +
+        'ingestFills() never reached its round-trip-to-flat branch at all',
+    );
+  }
+  return failures;
+}
+
+/**
+ * Scoped to scenario 1's OWN lot, not just the aggregate above: scenario 3
+ * alone closes two lots, so an aggregate-only check stays green if
+ * scenario 1 regresses in isolation (e.g. a reintroduced #517
+ * misattribution confined to its instrument) while scenario 3 still
+ * closes normally. Same pattern the #571 check below uses for its own lots.
+ */
+function exitPathFullExitLotFailures(
+  evidence: ExitPathEvidence,
+  positions: SmokeObservations['positions'],
+): string[] {
+  const failures: string[] = [];
+  const fullExitLot = positions.find(
+    (position) => position.idempotency_key === evidence.fullExit.lotKey,
+  );
+  if (fullExitLot === undefined || fullExitLot.order_state !== 'closed') {
+    failures.push(
+      `lot '${evidence.fullExit.lotKey}' (scenario 1's full exit) never reached ` +
+        `order_state 'closed' (${
+          fullExitLot === undefined
+            ? 'no row in open_positions'
+            : `state=${fullExitLot.order_state}`
+        }) — the #508/#517 exit path did not round-trip it to flat`,
+    );
+  }
+  return failures;
+}
+
+/**
+ * #525 — the residual left by a partial flatten must be RE-ARMED (not left
+ * naked), and re-arming must not have needed the fallback alert: a
+ * successful re-arm posts nothing (residual-exposure-alert.ts)
+ *
+ * Scoped since #549: scenario 5 DELIBERATELY fails one re-arm, so exactly
+ * its one inline alert is expected — any OTHER lot alerting still means a
+ * re-arm failed on a deterministic offline broker
+ */
+function exitPathPartialFlattenFailures(evidence: ExitPathEvidence): string[] {
+  const failures: string[] = [];
+  const { partialFlatten, residualAlerts, residualSweep } = evidence;
+  if (partialFlatten.protectedQty === null) {
+    failures.push(
+      `lot '${partialFlatten.idempotencyKey}' has no protective legs armed after its partial ` +
+        "flatten — the #525 residual re-arm never ran, leaving the lot's residual naked",
+    );
+  } else if (partialFlatten.protectedQty !== partialFlatten.expectedResidual) {
+    failures.push(
+      `lot '${partialFlatten.idempotencyKey}' has ${partialFlatten.protectedQty} protected after ` +
+        `its partial flatten, expected the residual ${partialFlatten.expectedResidual} — the ` +
+        're-arm (#525) sized the wrong quantity',
+    );
+  }
+  const strayResidualAlerts = residualAlerts.filter(
+    (alert) => alert.idempotency_key !== residualSweep.lotKey,
+  );
+  if (strayResidualAlerts.length > 0) {
+    failures.push(
+      `${strayResidualAlerts.length} residual-exposure alert(s) fired during the smoke run ` +
+        `(lot(s): ${strayResidualAlerts.map((alert) => alert.idempotency_key).join(', ')}) — a ` +
+        'successful re-arm posts nothing (residual-exposure-alert.ts); an alert here means the ' +
+        '#525 re-arm failed on a deterministic offline broker',
+    );
+  }
+  return failures;
+}
+
+/**
+ * #549 — the residual-protection sweep's ENFORCEMENT assertions (#430's
+ * convention, mirroring #519/#526's above): scenario 5's observing-poll
+ * re-arm was scripted to fail, so ONLY the durable marker + the restarted
+ * reconcile()'s sweep can have re-established protection. Each check below
+ * catches a real way the #549 mechanism can regress on its OWN terms — the
+ * dedup breaking, the sweep settling on the wrong action, the marker
+ * surviving, the qty coming out wrong — but they are not four independent
+ * witnesses to the SAME failure. Measured (#1228/#1285): an extra
+ * `ingestFills()` ahead of the restart heals the deliberately-failed re-arm
+ * in-process, through `maybeRearmResidual`'s mark-unprotected ->
+ * rearmProtectiveLegs -> confirm-protected path (ingest-fills.ts). A
+ * GENUINE restart-sweep heal takes a different path — `sweepOne`
+ * (residual-protection-sweep.ts), which never writes mark-unprotected (the
+ * marker is already set) and clears via `store.confirmResidualProtected`
+ * directly. What makes the two indistinguishable to the other three checks
+ * is not a shared code path but `sweepOne`'s own doc'd choice to recompute
+ * off the SAME `heldQuantityFromFills`/`isFlat` expressions
+ * `maybeRearmResidual` uses, so both leave an identical marker/qty/alert
+ * footprint. The `scenario5Alerts` count check below, and the
+ * `markerCleared`/`protectedQty` checks further below, all read a healed-
+ * in-process residual as indistinguishable from a genuinely swept one
+ * `sweepDivergenceAction === undefined` (`findSweepDivergence`, above
+ * `runExitPathScenarios`) sees that the restarted sweep itself found
+ * nothing left to do — positive evidence the RESTARTED sweep, not an
+ * earlier poll, did the healing. `.action` alone is not sufficient,
+ * though (#1285 B2, round-1 review): a wrong-key mutation at the
+ * `findSweepDivergence` call site can read a DIFFERENT scenario's
+ * divergence whose `.action` also happens to be `'adopted'` — measured
+ * concretely by substituting scenario 4's `crashRestartLot.exitKey` for
+ * this lot's key, which reads scenario 4's flatten-reconcile divergence
+ * (`reconcileFlatten`, reconcile.ts) instead, itself `'adopted'`
+ * `sweepDivergenceReason` is the same lookup's `reason` text, so it cannot
+ * silently disagree with `sweepDivergenceAction` about which divergence was
+ * found — and only `sweepOne`'s own re-arm reason
+ * (`'... for residual N by the #549 sweep …'`, residual-protection-sweep.ts)
+ * can produce the text this check requires. That excludes more than
+ * flatten-reconcile divergences: `sweepOne` itself has a SECOND
+ * `action: 'adopted'` return — the `coversQty` flat-path no-op, taken when
+ * the persisted fill record already reads flat, whose reason ("marked lot
+ * reads flat on the persisted fill record…") never names the #549 sweep
+ * either. So this check discriminates WITHIN `sweepOne`, not only against
+ * other mechanisms: only its own re-arm branch — the one that actually
+ * retried `broker.rearmProtectiveLegs` — satisfies it. Since #1285 N3
+ * (round-2 review), the matched text is also bound to THIS lot's own
+ * `expectedResidual`, not just the literal `'by the #549 sweep'` suffix —
+ * narrowing the aperture the B2 fix left open: a future scenario adding a
+ * second lot through `sweepOne`'s real re-arm branch would otherwise also
+ * produce `'adopted'` text naming the #549 sweep, and a wrong-key lookup
+ * landing on THAT lot's divergence would pass B2's check without also
+ * matching this lot's own residual quantity
+ */
+function exitPathResidualSweepFailures(evidence: ExitPathEvidence): string[] {
+  const failures: string[] = [];
+  const { residualAlerts, residualSweep } = evidence;
+  const scenario5Alerts = residualAlerts.filter(
+    (alert) => alert.idempotency_key === residualSweep.lotKey,
+  );
+  if (scenario5Alerts.length !== 1) {
+    failures.push(
+      `scenario 5's residual episode alerted ${scenario5Alerts.length} time(s), expected exactly 1 ` +
+        "(the observing poll's inline #525 alert) — 0 means the failed re-arm no longer pages at " +
+        'all; more than 1 means the once-per-episode dedup (#549/#342, ' +
+        'open_positions.residual_rearm_alerted_at) regressed and the sweep re-pages every pass',
+    );
+  }
+  if (residualSweep.sweepDivergenceAction === undefined) {
+    failures.push(
+      `the restarted Execution's reconcile() report named no divergence for scenario 5's lot ` +
+        `'${residualSweep.lotKey}' — the durable residual-protection marker (migration 0024) was ` +
+        'never written by the observing poll, or SharedStore.getUnprotectedResidualLots() found ' +
+        'nothing, so the #549 sweep either never ran or had nothing to find',
+    );
+  } else if (residualSweep.sweepDivergenceAction !== 'adopted') {
+    failures.push(
+      `the restarted Execution's residual-protection sweep settled scenario 5's lot with action ` +
+        `'${residualSweep.sweepDivergenceAction}', not 'adopted' — the retry against a healthy ` +
+        'deterministic broker should have re-armed and confirmed; anything else means the sweep ' +
+        'could not settle a marker it should have (#549)',
+    );
+  } else if (
+    !residualSweep.sweepDivergenceReason?.includes(
+      `for residual ${residualSweep.expectedResidual} by the #549 sweep`,
+    )
+  ) {
+    failures.push(
+      `the lookup keyed on scenario 5's lot '${residualSweep.lotKey}' returned a divergence ` +
+        `reading 'adopted', but its reason ('${residualSweep.sweepDivergenceReason}') does not ` +
+        `name the #549 sweep re-arming this lot's OWN residual ` +
+        `(${residualSweep.expectedResidual}) — this is the #1285 ` +
+        'B2/N3 case: a lookup keyed on the WRONG lot could still land on a divergence reading ' +
+        "'adopted' (another scenario's flatten-reconcile, or sweepOne's own coversQty flat-path " +
+        "no-op), and binding the match to this lot's own residual quantity closes that even for a " +
+        "future scenario adding a second lot through sweepOne's real re-arm branch; only " +
+        "sweepOne's re-arm of THIS residual (residual-protection-sweep.ts) can satisfy this text",
+    );
+  }
+  if (!residualSweep.markerCleared) {
+    failures.push(
+      `scenario 5's residual-protection marker (open_positions.residual_unprotected_since, lot ` +
+        `'${residualSweep.lotKey}') is still set after the restarted reconcile() — protection was ` +
+        'never CONFIRMED, so the lot would be re-swept forever (#549)',
+    );
+  }
+  if (residualSweep.protectedQty !== residualSweep.expectedResidual) {
+    failures.push(
+      `lot '${residualSweep.lotKey}' has ${residualSweep.protectedQty ?? 'no'} protected after ` +
+        `the #549 sweep's retry, expected the residual ${residualSweep.expectedResidual} — the ` +
+        'sweep either never re-armed (the lot is naked) or sized the wrong quantity',
+    );
+  }
+  return failures;
+}
+
+// #571 — neither lot named by a multi-lot flatten may be left phantom-open:
+// both must have reached `order_state: 'closed'` in `open_positions`
+function exitPathTwoLotFlattenFailures(
+  evidence: ExitPathEvidence,
+  positions: SmokeObservations['positions'],
+): string[] {
+  const failures: string[] = [];
+  const phantomOpen = evidence.twoLotFlatten.lotKeys.filter((key) => {
+    const row = positions.find((position) => position.idempotency_key === key);
+    return row === undefined || row.order_state !== 'closed';
+  });
+  if (phantomOpen.length > 0) {
+    failures.push(
+      `lot(s) ${phantomOpen.join(', ')} were named by a two-lot flatten but never reached ` +
+        "order_state 'closed' — the #571 fill split left quantity unaccounted for on at least " +
+        'one sibling lot',
+    );
+  }
+  return failures;
+}
+
+/**
+ * #519/#526 — the ENFORCEMENT assertions for the flatten-journal sweep
+ * (#430's convention: a durable EFFECT only the new mechanism produces,
+ * not that an object was constructed). A regression that deletes
+ * `reconcile()`'s flatten sweep, or reverts `resumeFlatten` to a no-op,
+ * leaves scenario 4's lot open forever — `ingestFills()` alone never polls
+ * an order the process-local `flattens` map has forgotten, so nothing
+ * short of the sweep itself can close it
+ */
+function exitPathCrashRestartFailures(
+  evidence: ExitPathEvidence,
+  positions: SmokeObservations['positions'],
+): string[] {
+  const failures: string[] = [];
+  const { crashRestart, flattenReconcileAlerts: flattenReconcileAlertsFired } = evidence;
+  const crashRestartDivergence = crashRestart.reconcileReport.divergences.find(
+    (divergence) => divergence.idempotency_key === crashRestart.flattenKey,
+  );
+  if (crashRestartDivergence === undefined) {
+    failures.push(
+      `the restarted Execution's reconcile() report named no divergence for scenario 4's ` +
+        `flatten '${crashRestart.flattenKey}' (lot '${crashRestart.lotKey}') — ` +
+        'SharedStore.getUnresolvedFlattens() found nothing to resolve, so the journal sweep ' +
+        '(#519) either never ran or the row was not recognised as unresolved ' +
+        `(checked=${crashRestart.reconcileReport.checked}, ` +
+        `divergences=${crashRestart.reconcileReport.divergences.length})`,
+    );
+  } else if (crashRestartDivergence.action !== 'adopted') {
+    failures.push(
+      `the restarted Execution's reconcile() settled scenario 4's flatten with action ` +
+        `'${crashRestartDivergence.action}', not 'adopted' (reason: ` +
+        `${crashRestartDivergence.reason}) — the venue genuinely acked this flatten, so anything ` +
+        "other than 'adopted' means reconcile() mis-settled a row it should have resolved cleanly",
+    );
+  }
+  const crashRestartLot = positions.find(
+    (position) => position.idempotency_key === crashRestart.lotKey,
+  );
+  if (crashRestartLot === undefined || crashRestartLot.order_state !== 'closed') {
+    failures.push(
+      `lot '${crashRestart.lotKey}' (scenario 4's crash-restart flatten) never reached ` +
+        `order_state 'closed' after the restarted Execution's reconcile() + ingestFills() ` +
+        `(${crashRestartLot === undefined ? 'no row in open_positions' : `state=${crashRestartLot.order_state}`}) ` +
+        "— reconcile()'s flatten sweep did not re-establish the fill-sweep worklist the way " +
+        '#519/#526 require',
+    );
+  }
+  if (flattenReconcileAlertsFired.length > 0) {
+    failures.push(
+      `${flattenReconcileAlertsFired.length} flatten-reconcile alert(s) fired during the smoke ` +
+        `run (flatten(s): ${flattenReconcileAlertsFired.map((alert) => alert.idempotency_key).join(', ')}) ` +
+        "— scenario 4's flatten resolves cleanly against a deterministic offline broker; an " +
+        'alert here means reconcile() could not settle a row it should have',
+    );
+  }
+  return failures;
+}
+
+/**
+ * #1088 — the terminal-row sweep's ENFORCEMENT assertion (#430's
+ * convention again): scenario 6 seeded a `rejected`, `filled_size = 0`
+ * `open_positions` row already older than `TERMINAL_SWEEP_AGE_MS`. Nothing
+ * else in this run ever reads or clears that row — `getOpenPositions()`
+ * already excluded it from every other check above by virtue of being
+ * terminal — so its continued presence after the restarted `reconcile()`
+ * can only mean `sweepTerminalPositions` was deleted, stopped being
+ * called from `reconcile()`, or regressed its own predicate
+ */
+function exitPathTerminalSweepFailures(evidence: ExitPathEvidence): string[] {
+  const failures: string[] = [];
+  const { terminalSweep } = evidence;
+  if (terminalSweep.rowPresentAfterSweep) {
+    failures.push(
+      `open_positions row '${terminalSweep.seededKey}' (seeded 'rejected', filled_size 0, ` +
+        `decision_timestamp past TERMINAL_SWEEP_AGE_MS) is STILL present after the restarted ` +
+        `reconcile() (swept=${terminalSweep.swept}) — the #1088 terminal-row sweep either never ` +
+        'ran or no longer deletes what it should; a table this leaves growing forever is the ' +
+        'exact defect #1088 closed',
+    );
+  }
+  return failures;
+}
+
 /**
  * #576. Runs after the tick loop has stopped and drained: it shares `db` and
  * `clock` with the six-stage run but drives its own instruments
@@ -1918,324 +2288,20 @@ const exitPathProbe: Probe<'exitPath'> = {
     };
   },
   verdict(evidence, { observations }) {
-    const failures: string[] = [];
-    const { positions } = observations;
     // #576 — the exit path, unconditional: `runExitPathScenarios` always runs,
     // so every one of these is expected on every healthy smoke run, the same
     // way `tickLoopProbe`'s `positions`/`fills` checks are
-
-    // #508/#516: the write-ahead journal must exist and every row must have
-    // resolved — an unresolved row means an exit was journalled and then the
-    // broker call was refused or left ambiguous
-    if (observations.flattenSubmissions.length === 0) {
-      failures.push(
-        "no row in flatten_submissions — no exit ever reached executeExit()'s write-ahead journal " +
-          "(#508), so #516's cancel-before-flatten guard was never exercised",
-      );
-    } else {
-      const unresolved = observations.flattenSubmissions.filter(
-        (row) => row.status !== 'submitted',
-      );
-      if (unresolved.length > 0) {
-        failures.push(
-          `flatten_submissions has ${unresolved.length} row(s) not resolved to 'submitted' ` +
-            `(${unresolved.map((row) => `${row.idempotency_key}:${row.status}`).join(', ')}) — an ` +
-            'exit was journalled but its flatten never reached, or was refused by, the broker',
-        );
-      }
-    }
-
-    // #516 — ORDERING, not merely that both calls happened: every `submitFlatten`
-    // must have a `cancel` recorded FRESH since the previous `submitFlatten` (or
-    // the start of the run), not merely "somewhere earlier in the sequence" —
-    // that weaker form would report the FIRST flatten's own missing cancel and
-    // then stop, because every later flatten's window contains SOME earlier
-    // cancel and (wrongly) reads as satisfied
-    //
-    // What this window scoping does NOT do: verify the cancel it finds belongs
-    // to the SAME lot the flatten is closing. A resting bracket leg cancelled
-    // after the flatten (or never) can fire into the now-flat position and open
-    // a reverse one, and this check catches that for the FIRST flatten a
-    // regression touches — sufficient in practice because `executeExit` cancels
-    // and flattens through one uniform code path applied to every exit, so a
-    // real regression of #516's ordering shows up on the first flatten, not
-    // selectively on a later one
-    const { brokerCallSequence } = evidence;
-    let sincePreviousFlatten = 0;
-    const flattensWithoutPriorCancel: string[] = [];
-    for (const [index, call] of brokerCallSequence.entries()) {
-      if (!call.startsWith('submitFlatten:')) continue;
-      const window = brokerCallSequence.slice(sincePreviousFlatten, index);
-      if (!window.some((entry) => entry.startsWith('cancel:'))) {
-        flattensWithoutPriorCancel.push(call);
-      }
-      sincePreviousFlatten = index + 1;
-    }
-    if (flattensWithoutPriorCancel.length > 0) {
-      failures.push(
-        `broker call(s) ${flattensWithoutPriorCancel.join(', ')} have no 'cancel' call recorded ` +
-          `before them (full sequence: ${brokerCallSequence.join(' -> ') || '(empty)'}) — a resting ` +
-          'bracket leg cancelled after the flatten (or never) can fire into the now-flat position ' +
-          'and open a reverse one (#516)',
-      );
-    }
-    if (!brokerCallSequence.some((call) => call.startsWith('submitFlatten:'))) {
-      failures.push(
-        'the exit-path harness recorded no submitFlatten call at all — exits never reached ' +
-          'submitFlatten (#508)',
-      );
-    }
-
-    // #508/#517: every exit must eventually round-trip a lot to `closed` with
-    // a `ClosedTrade` — see `SmokeObservations.closedTrades`'s doc for why this
-    // was NOT required before #576
-    if (observations.closedTrades.length === 0) {
-      failures.push(
-        'no row in closed_trades — the exit-path scenarios never round-tripped a lot to flat, so ' +
-          "either a flatten's fill was never attributed back to the lot it closed (#517) or " +
-          'ingestFills() never reached its round-trip-to-flat branch at all',
-      );
-    }
-
-    // Scoped to scenario 1's OWN lot, not just the aggregate above: scenario 3
-    // alone closes two lots, so an aggregate-only check stays green if
-    // scenario 1 regresses in isolation (e.g. a reintroduced #517
-    // misattribution confined to its instrument) while scenario 3 still
-    // closes normally. Same pattern the #571 check below uses for its own lots.
-    const fullExitLot = positions.find(
-      (position) => position.idempotency_key === evidence.fullExit.lotKey,
-    );
-    if (fullExitLot === undefined || fullExitLot.order_state !== 'closed') {
-      failures.push(
-        `lot '${evidence.fullExit.lotKey}' (scenario 1's full exit) never reached ` +
-          `order_state 'closed' (${
-            fullExitLot === undefined
-              ? 'no row in open_positions'
-              : `state=${fullExitLot.order_state}`
-          }) — the #508/#517 exit path did not round-trip it to flat`,
-      );
-    }
-
-    // #525 — the residual left by a partial flatten must be RE-ARMED (not left
-    // naked), and re-arming must not have needed the fallback alert: a
-    // successful re-arm posts nothing (residual-exposure-alert.ts)
-    const { partialFlatten, residualAlerts } = evidence;
-    if (partialFlatten.protectedQty === null) {
-      failures.push(
-        `lot '${partialFlatten.idempotencyKey}' has no protective legs armed after its partial ` +
-          "flatten — the #525 residual re-arm never ran, leaving the lot's residual naked",
-      );
-    } else if (partialFlatten.protectedQty !== partialFlatten.expectedResidual) {
-      failures.push(
-        `lot '${partialFlatten.idempotencyKey}' has ${partialFlatten.protectedQty} protected after ` +
-          `its partial flatten, expected the residual ${partialFlatten.expectedResidual} — the ` +
-          're-arm (#525) sized the wrong quantity',
-      );
-    }
-    // Scoped since #549: scenario 5 DELIBERATELY fails one re-arm, so exactly
-    // its one inline alert is expected — any OTHER lot alerting still means a
-    // re-arm failed on a deterministic offline broker
-    const { residualSweep } = evidence;
-    const strayResidualAlerts = residualAlerts.filter(
-      (alert) => alert.idempotency_key !== residualSweep.lotKey,
-    );
-    if (strayResidualAlerts.length > 0) {
-      failures.push(
-        `${strayResidualAlerts.length} residual-exposure alert(s) fired during the smoke run ` +
-          `(lot(s): ${strayResidualAlerts.map((alert) => alert.idempotency_key).join(', ')}) — a ` +
-          'successful re-arm posts nothing (residual-exposure-alert.ts); an alert here means the ' +
-          '#525 re-arm failed on a deterministic offline broker',
-      );
-    }
-
-    // #549 — the residual-protection sweep's ENFORCEMENT assertions (#430's
-    // convention, mirroring #519/#526's above): scenario 5's observing-poll
-    // re-arm was scripted to fail, so ONLY the durable marker + the restarted
-    // reconcile()'s sweep can have re-established protection. Each check below
-    // catches a real way the #549 mechanism can regress on its OWN terms — the
-    // dedup breaking, the sweep settling on the wrong action, the marker
-    // surviving, the qty coming out wrong — but they are not four independent
-    // witnesses to the SAME failure. Measured (#1228/#1285): an extra
-    // `ingestFills()` ahead of the restart heals the deliberately-failed re-arm
-    // in-process, through `maybeRearmResidual`'s mark-unprotected ->
-    // rearmProtectiveLegs -> confirm-protected path (ingest-fills.ts). A
-    // GENUINE restart-sweep heal takes a different path — `sweepOne`
-    // (residual-protection-sweep.ts), which never writes mark-unprotected (the
-    // marker is already set) and clears via `store.confirmResidualProtected`
-    // directly. What makes the two indistinguishable to the other three checks
-    // is not a shared code path but `sweepOne`'s own doc'd choice to recompute
-    // off the SAME `heldQuantityFromFills`/`isFlat` expressions
-    // `maybeRearmResidual` uses, so both leave an identical marker/qty/alert
-    // footprint. The `scenario5Alerts` count check below, and the
-    // `markerCleared`/`protectedQty` checks further below, all read a healed-
-    // in-process residual as indistinguishable from a genuinely swept one
-    // `sweepDivergenceAction === undefined` (`findSweepDivergence`, above
-    // `runExitPathScenarios`) sees that the restarted sweep itself found
-    // nothing left to do — positive evidence the RESTARTED sweep, not an
-    // earlier poll, did the healing. `.action` alone is not sufficient,
-    // though (#1285 B2, round-1 review): a wrong-key mutation at the
-    // `findSweepDivergence` call site can read a DIFFERENT scenario's
-    // divergence whose `.action` also happens to be `'adopted'` — measured
-    // concretely by substituting scenario 4's `crashRestartLot.exitKey` for
-    // this lot's key, which reads scenario 4's flatten-reconcile divergence
-    // (`reconcileFlatten`, reconcile.ts) instead, itself `'adopted'`
-    // `sweepDivergenceReason` is the same lookup's `reason` text, so it cannot
-    // silently disagree with `sweepDivergenceAction` about which divergence was
-    // found — and only `sweepOne`'s own re-arm reason
-    // (`'... for residual N by the #549 sweep …'`, residual-protection-sweep.ts)
-    // can produce the text this check requires. That excludes more than
-    // flatten-reconcile divergences: `sweepOne` itself has a SECOND
-    // `action: 'adopted'` return — the `coversQty` flat-path no-op, taken when
-    // the persisted fill record already reads flat, whose reason ("marked lot
-    // reads flat on the persisted fill record…") never names the #549 sweep
-    // either. So this check discriminates WITHIN `sweepOne`, not only against
-    // other mechanisms: only its own re-arm branch — the one that actually
-    // retried `broker.rearmProtectiveLegs` — satisfies it. Since #1285 N3
-    // (round-2 review), the matched text is also bound to THIS lot's own
-    // `expectedResidual`, not just the literal `'by the #549 sweep'` suffix —
-    // narrowing the aperture the B2 fix left open: a future scenario adding a
-    // second lot through `sweepOne`'s real re-arm branch would otherwise also
-    // produce `'adopted'` text naming the #549 sweep, and a wrong-key lookup
-    // landing on THAT lot's divergence would pass B2's check without also
-    // matching this lot's own residual quantity
-    const scenario5Alerts = residualAlerts.filter(
-      (alert) => alert.idempotency_key === residualSweep.lotKey,
-    );
-    if (scenario5Alerts.length !== 1) {
-      failures.push(
-        `scenario 5's residual episode alerted ${scenario5Alerts.length} time(s), expected exactly 1 ` +
-          "(the observing poll's inline #525 alert) — 0 means the failed re-arm no longer pages at " +
-          'all; more than 1 means the once-per-episode dedup (#549/#342, ' +
-          'open_positions.residual_rearm_alerted_at) regressed and the sweep re-pages every pass',
-      );
-    }
-    if (residualSweep.sweepDivergenceAction === undefined) {
-      failures.push(
-        `the restarted Execution's reconcile() report named no divergence for scenario 5's lot ` +
-          `'${residualSweep.lotKey}' — the durable residual-protection marker (migration 0024) was ` +
-          'never written by the observing poll, or SharedStore.getUnprotectedResidualLots() found ' +
-          'nothing, so the #549 sweep either never ran or had nothing to find',
-      );
-    } else if (residualSweep.sweepDivergenceAction !== 'adopted') {
-      failures.push(
-        `the restarted Execution's residual-protection sweep settled scenario 5's lot with action ` +
-          `'${residualSweep.sweepDivergenceAction}', not 'adopted' — the retry against a healthy ` +
-          'deterministic broker should have re-armed and confirmed; anything else means the sweep ' +
-          'could not settle a marker it should have (#549)',
-      );
-    } else if (
-      !residualSweep.sweepDivergenceReason?.includes(
-        `for residual ${residualSweep.expectedResidual} by the #549 sweep`,
-      )
-    ) {
-      failures.push(
-        `the lookup keyed on scenario 5's lot '${residualSweep.lotKey}' returned a divergence ` +
-          `reading 'adopted', but its reason ('${residualSweep.sweepDivergenceReason}') does not ` +
-          `name the #549 sweep re-arming this lot's OWN residual ` +
-          `(${residualSweep.expectedResidual}) — this is the #1285 ` +
-          'B2/N3 case: a lookup keyed on the WRONG lot could still land on a divergence reading ' +
-          "'adopted' (another scenario's flatten-reconcile, or sweepOne's own coversQty flat-path " +
-          "no-op), and binding the match to this lot's own residual quantity closes that even for a " +
-          "future scenario adding a second lot through sweepOne's real re-arm branch; only " +
-          "sweepOne's re-arm of THIS residual (residual-protection-sweep.ts) can satisfy this text",
-      );
-    }
-    if (!residualSweep.markerCleared) {
-      failures.push(
-        `scenario 5's residual-protection marker (open_positions.residual_unprotected_since, lot ` +
-          `'${residualSweep.lotKey}') is still set after the restarted reconcile() — protection was ` +
-          'never CONFIRMED, so the lot would be re-swept forever (#549)',
-      );
-    }
-    if (residualSweep.protectedQty !== residualSweep.expectedResidual) {
-      failures.push(
-        `lot '${residualSweep.lotKey}' has ${residualSweep.protectedQty ?? 'no'} protected after ` +
-          `the #549 sweep's retry, expected the residual ${residualSweep.expectedResidual} — the ` +
-          'sweep either never re-armed (the lot is naked) or sized the wrong quantity',
-      );
-    }
-
-    // #571 — neither lot named by a multi-lot flatten may be left phantom-open:
-    // both must have reached `order_state: 'closed'` in `open_positions`
-    const phantomOpen = evidence.twoLotFlatten.lotKeys.filter((key) => {
-      const row = positions.find((position) => position.idempotency_key === key);
-      return row === undefined || row.order_state !== 'closed';
-    });
-    if (phantomOpen.length > 0) {
-      failures.push(
-        `lot(s) ${phantomOpen.join(', ')} were named by a two-lot flatten but never reached ` +
-          "order_state 'closed' — the #571 fill split left quantity unaccounted for on at least " +
-          'one sibling lot',
-      );
-    }
-
-    // #519/#526 — the ENFORCEMENT assertions for the flatten-journal sweep
-    // (#430's convention: a durable EFFECT only the new mechanism produces,
-    // not that an object was constructed). A regression that deletes
-    // `reconcile()`'s flatten sweep, or reverts `resumeFlatten` to a no-op,
-    // leaves scenario 4's lot open forever — `ingestFills()` alone never polls
-    // an order the process-local `flattens` map has forgotten, so nothing
-    // short of the sweep itself can close it
-    const { crashRestart, flattenReconcileAlerts: flattenReconcileAlertsFired } = evidence;
-    const crashRestartDivergence = crashRestart.reconcileReport.divergences.find(
-      (divergence) => divergence.idempotency_key === crashRestart.flattenKey,
-    );
-    if (crashRestartDivergence === undefined) {
-      failures.push(
-        `the restarted Execution's reconcile() report named no divergence for scenario 4's ` +
-          `flatten '${crashRestart.flattenKey}' (lot '${crashRestart.lotKey}') — ` +
-          'SharedStore.getUnresolvedFlattens() found nothing to resolve, so the journal sweep ' +
-          '(#519) either never ran or the row was not recognised as unresolved ' +
-          `(checked=${crashRestart.reconcileReport.checked}, ` +
-          `divergences=${crashRestart.reconcileReport.divergences.length})`,
-      );
-    } else if (crashRestartDivergence.action !== 'adopted') {
-      failures.push(
-        `the restarted Execution's reconcile() settled scenario 4's flatten with action ` +
-          `'${crashRestartDivergence.action}', not 'adopted' (reason: ` +
-          `${crashRestartDivergence.reason}) — the venue genuinely acked this flatten, so anything ` +
-          "other than 'adopted' means reconcile() mis-settled a row it should have resolved cleanly",
-      );
-    }
-    const crashRestartLot = positions.find(
-      (position) => position.idempotency_key === crashRestart.lotKey,
-    );
-    if (crashRestartLot === undefined || crashRestartLot.order_state !== 'closed') {
-      failures.push(
-        `lot '${crashRestart.lotKey}' (scenario 4's crash-restart flatten) never reached ` +
-          `order_state 'closed' after the restarted Execution's reconcile() + ingestFills() ` +
-          `(${crashRestartLot === undefined ? 'no row in open_positions' : `state=${crashRestartLot.order_state}`}) ` +
-          "— reconcile()'s flatten sweep did not re-establish the fill-sweep worklist the way " +
-          '#519/#526 require',
-      );
-    }
-    if (flattenReconcileAlertsFired.length > 0) {
-      failures.push(
-        `${flattenReconcileAlertsFired.length} flatten-reconcile alert(s) fired during the smoke ` +
-          `run (flatten(s): ${flattenReconcileAlertsFired.map((alert) => alert.idempotency_key).join(', ')}) ` +
-          "— scenario 4's flatten resolves cleanly against a deterministic offline broker; an " +
-          'alert here means reconcile() could not settle a row it should have',
-      );
-    }
-
-    // #1088 — the terminal-row sweep's ENFORCEMENT assertion (#430's
-    // convention again): scenario 6 seeded a `rejected`, `filled_size = 0`
-    // `open_positions` row already older than `TERMINAL_SWEEP_AGE_MS`. Nothing
-    // else in this run ever reads or clears that row — `getOpenPositions()`
-    // already excluded it from every other check above by virtue of being
-    // terminal — so its continued presence after the restarted `reconcile()`
-    // can only mean `sweepTerminalPositions` was deleted, stopped being
-    // called from `reconcile()`, or regressed its own predicate
-    const { terminalSweep } = evidence;
-    if (terminalSweep.rowPresentAfterSweep) {
-      failures.push(
-        `open_positions row '${terminalSweep.seededKey}' (seeded 'rejected', filled_size 0, ` +
-          `decision_timestamp past TERMINAL_SWEEP_AGE_MS) is STILL present after the restarted ` +
-          `reconcile() (swept=${terminalSweep.swept}) — the #1088 terminal-row sweep either never ` +
-          'ran or no longer deletes what it should; a table this leaves growing forever is the ' +
-          'exact defect #1088 closed',
-      );
-    }
+    const { positions } = observations;
+    const failures: string[] = [];
+    failures.push(...exitPathFlattenSubmissionFailures(observations));
+    failures.push(...exitPathCancelBeforeFlattenFailures(evidence));
+    failures.push(...exitPathClosedTradesFailures(observations));
+    failures.push(...exitPathFullExitLotFailures(evidence, positions));
+    failures.push(...exitPathPartialFlattenFailures(evidence));
+    failures.push(...exitPathResidualSweepFailures(evidence));
+    failures.push(...exitPathTwoLotFlattenFailures(evidence, positions));
+    failures.push(...exitPathCrashRestartFailures(evidence, positions));
+    failures.push(...exitPathTerminalSweepFailures(evidence));
     return failures;
   },
 };
@@ -5967,6 +6033,371 @@ function summariseVerdicts(verdicts: SmokeObservations['verdicts']): string {
 }
 
 /**
+ * The loop-health slice of `tickLoopProbe`'s verdict: the wire client stayed
+ * unreached, the loop completed its expected ticks, and at least one got past
+ * Analysts. Whether anything reached `UnreachableAlpacaClient` is checked
+ * here rather than left to the throw: `startTickLoop` catches everything a
+ * tick throws and logs it, so a run that tried to reach the network would
+ * otherwise fail for a downstream symptom and never name the cause.
+ */
+function tickLoopWireAndTickFailures(
+  evidence: TickLoopEvidence,
+  observations: SmokeObservations,
+): string[] {
+  const failures: string[] = [];
+  const { ticks } = observations;
+  if (evidence.alpacaWireClientReached) {
+    failures.push(
+      'the Alpaca wire client was reached during an offline run — this run is credential-free ' +
+        'and must make no network call. The composition root now needs the wire client for ' +
+        'something the smoke run overrides; see UnreachableAlpacaClient',
+    );
+  }
+
+  if (ticks.length < evidence.minTicks) {
+    failures.push(
+      `the tick loop completed ${ticks.length} of ${evidence.minTicks} expected ticks — the ` +
+        'loop, the scheduler or the shutdown drain did not behave over repeated ticks',
+    );
+  }
+
+  const pastAnalysts = ticks.filter((tick) =>
+    tick.stages.some((entry) => entry.stage !== 'analysts'),
+  );
+  if (pastAnalysts.length === 0) {
+    failures.push(
+      'no tick got past Analysts — every pass short-circuited at the quorum gate, so Debate, ' +
+        'Trader, Risk, Verdict and Execution were never exercised at all (this is exactly what ' +
+        'a credential-less real run does today, and the reason #350 exists)',
+    );
+  }
+  return failures;
+}
+
+/**
+ * One `debate_log` row is required, not one per tick: the clock is frozen and
+ * the fixture views identical every tick, so all ticks hash to the same
+ * `debate_id` and the writer's first-write-wins guard collapses them.
+ *
+ * #1081: every row `buildDebateLog` writes must classify itself — the whole
+ * point of the fix is that no `debate_log` row can be silently ambiguous
+ * between a converged/non-converged debate and one the latency budget cut
+ * short. Hung off `debates.length` for the same reason as 3b above: a run
+ * with no rows at all fails on the check above, naming the real cause
+ */
+function tickLoopDebateLogFailures(observations: SmokeObservations): string[] {
+  const failures: string[] = [];
+  const { debates } = observations;
+  if (debates.length === 0) {
+    failures.push(
+      'no row in debate_log — a tick got past Analysts but no resolved debate was persisted, so ' +
+        "the Feedback Loop's weight attribution (attribution.ts joins closed_trades.debate_id " +
+        'against debate_log) has no input and the debate itself is unreconstructable after the ' +
+        'fact (audit_log holds digests only). This is the #364 defect exactly',
+    );
+  }
+
+  const unclassified = debates.filter((debate) => debate.termination == null);
+  if (debates.length > 0 && unclassified.length > 0) {
+    failures.push(
+      `${unclassified.length} of ${debates.length} debate_log row(s) have a NULL termination — ` +
+        'buildDebateLog (debate-log-store.ts) stopped setting it. That reopens #1081: a debate ' +
+        'the latency budget truncated becomes indistinguishable, in the stored record, from one ' +
+        'the analysts genuinely could not agree on.',
+    );
+  }
+  return failures;
+}
+
+/**
+ * #753 — falsifier arm 2 has a production caller
+ *
+ * Hung off "a tick reached Execution" rather than standing alone, so a run
+ * that never traded at all fails on the checks above naming the real cause
+ * Given that the live arm transacted over this tape, the control arm saw the
+ * same tape on the same tick and must have left its own row: the arms are
+ * matched by construction on name, bracket, stop and conviction floor, and
+ * the control's entry is the same deterministic axis vote the live arm's
+ * Analysts stage produced
+ *
+ * This is the ONLY check anywhere that the control arm has a caller. Every
+ * one of its units can pass while `TickSteps.controlArm` is unbound in
+ * `production.ts` — the member is optional, so unbinding it is not even a
+ * compile error — and the soak would then run for its whole duration with no
+ * matched control, which is the exact thing ADR-0014 amendment 2 forbids and
+ * the repo's dominant defect class (a tested mechanism nothing calls)
+ */
+function tickLoopControlArmFailures(observations: SmokeObservations): string[] {
+  const failures: string[] = [];
+  const { ticks, positions } = observations;
+  const transactedThisRun = ticks.some((tick) =>
+    tick.stages.some((entry) => entry.stage === 'execution'),
+  );
+  if (transactedThisRun) {
+    const controlLots = positions.filter((position) => position.arm === 'control');
+    if (controlLots.length === 0) {
+      failures.push(
+        "a tick reached Execution but not one `open_positions` row carries `arm = 'control'` — " +
+          'falsifier arm 2 (#753) did not run against the tape the live arm just traded. Either ' +
+          '`TickSteps.controlArm` is unbound in the composition root or the control arm threw ' +
+          'and was swallowed; a soak in this state produces a live track with no matched ' +
+          'control, which ADR-0014 amendment 2 and ADR-0017 both require',
+      );
+    }
+    const liveKeys = new Set(
+      positions.filter((position) => position.arm === 'live').map((row) => row.idempotency_key),
+    );
+    const collided = controlLots.filter((row) => liveKeys.has(row.idempotency_key));
+    if (collided.length > 0) {
+      failures.push(
+        `${collided.length} control lot(s) share an idempotency key with a live lot — \`arm\` has ` +
+          'stopped being a hash input to `computeIdempotencyKey`, so on every bar the two arms ' +
+          "agree on, Execution's `findByKey` gate silently drops the control order. The " +
+          'comparison would then be biased on exactly the subset it is most sensitive to',
+      );
+    }
+  }
+  return failures;
+}
+
+/**
+ * The per-stage durable-record checks (#430's convention): cosine retrieval
+ * (#432), `risk_thresholds` seeding (#433), `trader_log` (#328), `risk_log`,
+ * `analyst_weights` (#371) and `breaker_state`'s sticky tiers (review
+ * 2026-08-06 B1) each own a table nothing else in this gate reads
+ */
+function tickLoopDownstreamRecordFailures(observations: SmokeObservations): string[] {
+  const failures: string[] = [];
+  const { debates } = observations;
+  if (debates.length > 0 && observations.cosineSetups.length === 0) {
+    failures.push(
+      'a debate resolved and reached the Trader, but no row in cosine_setups — `decide()` did ' +
+        'not write the setup it embedded, so cosine retrieval has nothing to find and every ' +
+        'position takes the permanent 0.75x no-precedent haircut. This is the #432 defect ' +
+        'exactly: retrieval (#75) and the store (#198) both existed and `decide()` called ' +
+        'neither, while the whole unit suite passed',
+    );
+  }
+
+  if (observations.riskThresholds.length === 0) {
+    failures.push(
+      'no row in risk_thresholds — the composition root did not seed the dials, so ' +
+        "`autoTighten` has no current value to step from and the Feedback Loop's defensive " +
+        'response to a kill-line breach tightens nothing. This is the #433 defect: the write ' +
+        'end existed and the read end did not, and nothing failed',
+    );
+  }
+
+  // #328. Anchored on `debates.length > 0` for the same reason the
+  // cosine_setups check is: a run where no debate resolved never reached the
+  // Trader, and demanding a row then would fail for a reason that is not this
+  // one. Once a debate HAS resolved, a row is unconditional — the Trader
+  // writes on a skip and Risk on a rejection, so "nothing traded" is not an
+  // explanation for an empty table
+  if (debates.length > 0 && observations.traderDecisions.length === 0) {
+    failures.push(
+      'a debate resolved and reached the Trader, but no row in trader_log — the decision ' +
+        'record is not wired, so why a size came out at N (or why nothing traded at all) is ' +
+        'reconstructable only from an `audit_log` digest and ephemeral stdout. Note the ' +
+        'Trader writes on a SKIP too, so this cannot be explained by a quiet tick',
+    );
+  }
+
+  if (observations.traderDecisions.length > 0 && observations.riskDecisions.length === 0) {
+    failures.push(
+      'the Trader produced an intent but no row in risk_log — Risk evaluated it and left no ' +
+        'record of what portfolio state it sized against or which gate bound. A rejected ' +
+        'intent never reaches Verdict, so with this unwired a rejection has no durable ' +
+        'record anywhere in the system',
+    );
+  }
+
+  if (observations.analystWeights.length === 0) {
+    failures.push(
+      'no row in analyst_weights — the startup seeder did not run, so `runDailyCycle` skips ' +
+        'every analyst it cannot find a row for and the loop attributes nothing while reporting ' +
+        'a clean run. This is the #371 defect',
+    );
+  }
+
+  const breakerTiers = new Set(observations.breakerStates.map((row) => row.tier));
+  if (!breakerTiers.has('portfolio_drawdown') || !breakerTiers.has('kill_switch')) {
+    failures.push(
+      'breaker_state is missing a tier row — the tick path never persisted the sticky ' +
+        "breakers' state, so a tripped hard-drawdown breaker or kill switch re-arms itself on " +
+        'restart. Under ADR-0007 the breakers are the only remaining stop; this table sat ' +
+        'unwritten behind a doc comment claiming "the caller persists this" (review 2026-08-06 B1)',
+    );
+  }
+  return failures;
+}
+
+/**
+ * #1111: the two gates whose refusal is a number against a bound must write
+ * that number. A column written by `buildVerdictLog` and never read back is
+ * the same defect one table over — the reason a `staleness` row could not be
+ * diagnosed without joining to `debate_log` in the first place
+ *
+ * This is the only #1111 assertion this gate carries. It does not, and
+ * cannot, assert on the `readAt` coordinate itself: a smoke run's fixture
+ * marks stay fresh by construction. The six-stage run's fixture mark is
+ * frozen at `SMOKE_RUN_INSTANT`, and the run's total wall-clock span
+ * (default 3 ticks at 250ms, see `tickIntervalMs`'s own doc, which sizes
+ * that gap against `max_signal_age`) stays far below `max_mark_age` too —
+ * its smaller value here is 2 minutes (paper-profile.ts, crypto); the
+ * exit-path harness instead overrides `max_mark_age` to 24h because it
+ * advances its own clock between phases. Either way, no staleness/
+ * stale_feed verdict is ever produced here to check the detail on. The
+ * one structural guard on `readAt` reaching a real caller is
+ * `PortfolioAccountingInput.clock` being a required (non-optional) field —
+ * a compile-time check, not a runtime one — so a caller that regresses to
+ * threading `asOf` through both parameters would still type-check and this
+ * gate would not see it
+ */
+function tickLoopVerdictFailures(observations: SmokeObservations): string[] {
+  const failures: string[] = [];
+  const { verdicts } = observations;
+  const undetailedStaleness = verdicts.filter(
+    (verdict) =>
+      (verdict.no_go_reason === 'staleness' || verdict.no_go_reason === 'stale_feed') &&
+      (verdict.no_go_detail_measured_ms == null || verdict.no_go_detail_bound_ms == null),
+  );
+  if (undetailedStaleness.length > 0) {
+    failures.push(
+      `${undetailedStaleness.length} verdict_log row(s) refused on staleness/stale_feed without ` +
+        `recording what was measured (${undetailedStaleness
+          .map((verdict) => `${verdict.instrument}:${verdict.no_go_reason}`)
+          .join(', ')}) — the cause is unrecoverable from the row, which is what #1111 fixed`,
+    );
+  }
+
+  if (!verdicts.some((verdict) => verdict.status === 'go')) {
+    failures.push(
+      `no GO verdict was recorded in verdict_log (${verdicts.length} verdict row(s): ` +
+        `${summariseVerdicts(verdicts)}) — the pipeline never authorised a trade`,
+    );
+  }
+  return failures;
+}
+
+/** Execution actually ran: a `submitted` tick, a written-ahead lot, and an ingested entry fill */
+function tickLoopExecutionFailures(observations: SmokeObservations): string[] {
+  const failures: string[] = [];
+  const { ticks, positions, fills } = observations;
+  const submitted = ticks.flatMap((tick) =>
+    tick.stages.filter((entry) => entry.stage === 'execution' && entry.decision === 'submitted'),
+  );
+  if (submitted.length === 0) {
+    failures.push(
+      'no tick reached Execution with a `submitted` result — nothing was ever handed to the ' +
+        'broker adapter',
+    );
+  }
+
+  if (positions.length === 0) {
+    failures.push(
+      'no row in open_positions — Execution never wrote a lot ahead of the broker call, so ' +
+        'there is nothing for reconcile() or the fill poll to advance',
+    );
+  }
+
+  if (!fills.some((fill) => fill.leg === 'entry')) {
+    failures.push(
+      'no entry fill in fills — the order was submitted but no fill was ever ingested, so the ' +
+        'fill-sync poll (ingestFills) is not draining the venue feed',
+    );
+  }
+  return failures;
+}
+
+/**
+ * The seeded 25h baseline plus the canned batch's one row on a watched
+ * theme (the batch carries two, one off-watchlist). Asserted rather than
+ * merely printed, because the two ways this can be wrong are the two this
+ * observation exists to catch and neither shows up anywhere else: the seed
+ * count alone means the poller never fired from the composition root (the
+ * no-caller defect this repo keeps producing), and one more than expected
+ * means the theme filter stopped filtering and the archive is taking the
+ * whole world's news
+ *
+ * #1086, and the half the line above cannot see: bytes in the archive are
+ * not intelligence until something derives them. This is the scoring pass
+ * observed through the store the analysts read, on the real composition
+ * root — 0 means it is built and never called, which is the state #556's
+ * archive half shipped in
+ */
+function tickLoopGdeltFailures(observations: SmokeObservations): string[] {
+  const failures: string[] = [];
+  if (observations.gdeltRowsArchived !== SMOKE_GDELT_EXPECTED_ROWS) {
+    failures.push(
+      `GDELT archived ${observations.gdeltRowsArchived} macro rows, expected exactly ` +
+        `${SMOKE_GDELT_EXPECTED_ROWS} — ` +
+        `${SMOKE_GDELT_SEEDED_ROWS} means the poller never ran from the composition root, ` +
+        `${SMOKE_GDELT_EXPECTED_ROWS + 1} means the theme filter matched both canned rows and ` +
+        'is no longer filtering (#556)',
+    );
+  }
+
+  if (observations.gdeltAggregateItems !== SMOKE_GDELT_EXPECTED_AGGREGATES) {
+    failures.push(
+      `GDELT scoring derived ${observations.gdeltAggregateItems} macro aggregates, expected ` +
+        `exactly ${SMOKE_GDELT_EXPECTED_AGGREGATES} (one per asset class) — 0 means the ` +
+        'scoring pass never ran from the composition root, or refused on a baseline the seed ' +
+        'was supposed to have filled (#1086)',
+    );
+  }
+  return failures;
+}
+
+/**
+ * #504/#430. Two counts, because they answer different questions: the
+ * archive row says a fetch reached the vendor path, the store item says the
+ * fundamental analyst could actually see the result. A mechanism that
+ * fetches and stores nothing readable is the shape this repo keeps shipping
+ *
+ * What these two cover is the STARTUP refresh only — `start()` fires
+ * `void polymarketAgent.refresh('startup')` once, and the repeating
+ * `setInterval` behind it runs at DEFAULT_POLYMARKET_POLL_INTERVAL_MS
+ * (15 minutes) against a smoke run that finishes in seconds, so it provably
+ * never fires here. The recurring poll is UNCOVERED by this gate; only the
+ * composition-root wiring of the first refresh is
+ */
+function tickLoopPolymarketFailures(observations: SmokeObservations): string[] {
+  const failures: string[] = [];
+  if (observations.polymarketRowsArchived !== SMOKE_POLYMARKET_EXPECTED_ITEMS) {
+    failures.push(
+      `Polymarket archived ${observations.polymarketRowsArchived} macro rows, expected exactly ` +
+        `${SMOKE_POLYMARKET_EXPECTED_ITEMS} — 0 means the startup refresh never ran from the ` +
+        'composition root, more means the fail-closed guard stopped refusing the thin-volume ' +
+        'market the fixture serves (#504)',
+    );
+  }
+  if (observations.polymarketItemsArchived !== SMOKE_POLYMARKET_EXPECTED_ITEMS) {
+    failures.push(
+      `Polymarket archived ${observations.polymarketItemsArchived} items in mi_items, expected ` +
+        `exactly ${SMOKE_POLYMARKET_EXPECTED_ITEMS} — 0 with rows archived means the source is ` +
+        'back to writing raw bytes with no items, which makes it unreplayable as items (#835)',
+    );
+  }
+  if (observations.polymarketIntelItems !== SMOKE_POLYMARKET_EXPECTED_ITEMS) {
+    failures.push(
+      `Polymarket put ${observations.polymarketIntelItems} items in the intel bucket, expected ` +
+        `exactly ${SMOKE_POLYMARKET_EXPECTED_ITEMS} — 0 with rows archived means the items ` +
+        'never reached MarketIntelligenceStore, were dropped by the entity filter, or were ' +
+        'stamped outside the debate bar the analysts query. This read is ENTITY-SCOPED like ' +
+        "every analyst read, so an item that lost `scope: 'asset_class'` reads 0 here with " +
+        'a row archived: filed under a macro series name, it matches no ticker (#914/#960), ' +
+        "and #1164's routing (`scope: 'asset_class'` -> `intel`, not `news`) would also read " +
+        '0 here if that predicate broke. Items also carry the INGEST INSTANT (#782), and ' +
+        'getContext floors its window to the hour, so this count depends on SMOKE_RUN_INSTANT ' +
+        'being exactly hour-aligned — a smoke clock that drifts off the hour before the ' +
+        'startup refresh lands would read 0 here with a row archived (#504, #782)',
+    );
+  }
+  return failures;
+}
+
+/**
  * The six-stage run itself, read back from the shared store. "Transacted" is a
  * conjunction of independently-observable effects rather than one summary
  * flag, because each is a different wiring defect: the loop ran at all
@@ -5992,300 +6423,14 @@ const tickLoopProbe: Probe<'tickLoop'> = {
   },
   verdict(evidence, { observations }) {
     const failures: string[] = [];
-    const { ticks, debates, verdicts, positions, fills } = observations;
-    if (evidence.alpacaWireClientReached) {
-      failures.push(
-        'the Alpaca wire client was reached during an offline run — this run is credential-free ' +
-          'and must make no network call. The composition root now needs the wire client for ' +
-          'something the smoke run overrides; see UnreachableAlpacaClient',
-      );
-    }
-
-    if (ticks.length < evidence.minTicks) {
-      failures.push(
-        `the tick loop completed ${ticks.length} of ${evidence.minTicks} expected ticks — the ` +
-          'loop, the scheduler or the shutdown drain did not behave over repeated ticks',
-      );
-    }
-
-    const pastAnalysts = ticks.filter((tick) =>
-      tick.stages.some((entry) => entry.stage !== 'analysts'),
-    );
-    if (pastAnalysts.length === 0) {
-      failures.push(
-        'no tick got past Analysts — every pass short-circuited at the quorum gate, so Debate, ' +
-          'Trader, Risk, Verdict and Execution were never exercised at all (this is exactly what ' +
-          'a credential-less real run does today, and the reason #350 exists)',
-      );
-    }
-
-    if (debates.length === 0) {
-      failures.push(
-        'no row in debate_log — a tick got past Analysts but no resolved debate was persisted, so ' +
-          "the Feedback Loop's weight attribution (attribution.ts joins closed_trades.debate_id " +
-          'against debate_log) has no input and the debate itself is unreconstructable after the ' +
-          'fact (audit_log holds digests only). This is the #364 defect exactly',
-      );
-    }
-
-    // #1081: every row `buildDebateLog` writes must classify itself — the whole
-    // point of the fix is that no `debate_log` row can be silently ambiguous
-    // between a converged/non-converged debate and one the latency budget cut
-    // short. Hung off `debates.length` for the same reason as 3b above: a run
-    // with no rows at all fails on the check above, naming the real cause
-    const unclassified = debates.filter((debate) => debate.termination == null);
-    if (debates.length > 0 && unclassified.length > 0) {
-      failures.push(
-        `${unclassified.length} of ${debates.length} debate_log row(s) have a NULL termination — ` +
-          'buildDebateLog (debate-log-store.ts) stopped setting it. That reopens #1081: a debate ' +
-          'the latency budget truncated becomes indistinguishable, in the stored record, from one ' +
-          'the analysts genuinely could not agree on.',
-      );
-    }
-
-    // #753 — falsifier arm 2 has a production caller
-    //
-    // Hung off "a tick reached Execution" rather than standing alone, so a run
-    // that never traded at all fails on the checks above naming the real cause
-    // Given that the live arm transacted over this tape, the control arm saw the
-    // same tape on the same tick and must have left its own row: the arms are
-    // matched by construction on name, bracket, stop and conviction floor, and
-    // the control's entry is the same deterministic axis vote the live arm's
-    // Analysts stage produced
-    //
-    // This is the ONLY check anywhere that the control arm has a caller. Every
-    // one of its units can pass while `TickSteps.controlArm` is unbound in
-    // `production.ts` — the member is optional, so unbinding it is not even a
-    // compile error — and the soak would then run for its whole duration with no
-    // matched control, which is the exact thing ADR-0014 amendment 2 forbids and
-    // the repo's dominant defect class (a tested mechanism nothing calls)
-    const transactedThisRun = ticks.some((tick) =>
-      tick.stages.some((entry) => entry.stage === 'execution'),
-    );
-    if (transactedThisRun) {
-      const controlLots = positions.filter((position) => position.arm === 'control');
-      if (controlLots.length === 0) {
-        failures.push(
-          "a tick reached Execution but not one `open_positions` row carries `arm = 'control'` — " +
-            'falsifier arm 2 (#753) did not run against the tape the live arm just traded. Either ' +
-            '`TickSteps.controlArm` is unbound in the composition root or the control arm threw ' +
-            'and was swallowed; a soak in this state produces a live track with no matched ' +
-            'control, which ADR-0014 amendment 2 and ADR-0017 both require',
-        );
-      }
-      const liveKeys = new Set(
-        positions.filter((position) => position.arm === 'live').map((row) => row.idempotency_key),
-      );
-      const collided = controlLots.filter((row) => liveKeys.has(row.idempotency_key));
-      if (collided.length > 0) {
-        failures.push(
-          `${collided.length} control lot(s) share an idempotency key with a live lot — \`arm\` has ` +
-            'stopped being a hash input to `computeIdempotencyKey`, so on every bar the two arms ' +
-            "agree on, Execution's `findByKey` gate silently drops the control order. The " +
-            'comparison would then be biased on exactly the subset it is most sensitive to',
-        );
-      }
-    }
-
-    if (debates.length > 0 && observations.cosineSetups.length === 0) {
-      failures.push(
-        'a debate resolved and reached the Trader, but no row in cosine_setups — `decide()` did ' +
-          'not write the setup it embedded, so cosine retrieval has nothing to find and every ' +
-          'position takes the permanent 0.75x no-precedent haircut. This is the #432 defect ' +
-          'exactly: retrieval (#75) and the store (#198) both existed and `decide()` called ' +
-          'neither, while the whole unit suite passed',
-      );
-    }
-
-    if (observations.riskThresholds.length === 0) {
-      failures.push(
-        'no row in risk_thresholds — the composition root did not seed the dials, so ' +
-          "`autoTighten` has no current value to step from and the Feedback Loop's defensive " +
-          'response to a kill-line breach tightens nothing. This is the #433 defect: the write ' +
-          'end existed and the read end did not, and nothing failed',
-      );
-    }
-
-    // #328. Anchored on `debates.length > 0` for the same reason the
-    // cosine_setups check is: a run where no debate resolved never reached the
-    // Trader, and demanding a row then would fail for a reason that is not this
-    // one. Once a debate HAS resolved, a row is unconditional — the Trader
-    // writes on a skip and Risk on a rejection, so "nothing traded" is not an
-    // explanation for an empty table
-    if (debates.length > 0 && observations.traderDecisions.length === 0) {
-      failures.push(
-        'a debate resolved and reached the Trader, but no row in trader_log — the decision ' +
-          'record is not wired, so why a size came out at N (or why nothing traded at all) is ' +
-          'reconstructable only from an `audit_log` digest and ephemeral stdout. Note the ' +
-          'Trader writes on a SKIP too, so this cannot be explained by a quiet tick',
-      );
-    }
-
-    if (observations.traderDecisions.length > 0 && observations.riskDecisions.length === 0) {
-      failures.push(
-        'the Trader produced an intent but no row in risk_log — Risk evaluated it and left no ' +
-          'record of what portfolio state it sized against or which gate bound. A rejected ' +
-          'intent never reaches Verdict, so with this unwired a rejection has no durable ' +
-          'record anywhere in the system',
-      );
-    }
-
-    if (observations.analystWeights.length === 0) {
-      failures.push(
-        'no row in analyst_weights — the startup seeder did not run, so `runDailyCycle` skips ' +
-          'every analyst it cannot find a row for and the loop attributes nothing while reporting ' +
-          'a clean run. This is the #371 defect',
-      );
-    }
-
-    const breakerTiers = new Set(observations.breakerStates.map((row) => row.tier));
-    if (!breakerTiers.has('portfolio_drawdown') || !breakerTiers.has('kill_switch')) {
-      failures.push(
-        'breaker_state is missing a tier row — the tick path never persisted the sticky ' +
-          "breakers' state, so a tripped hard-drawdown breaker or kill switch re-arms itself on " +
-          'restart. Under ADR-0007 the breakers are the only remaining stop; this table sat ' +
-          'unwritten behind a doc comment claiming "the caller persists this" (review 2026-08-06 B1)',
-      );
-    }
-
-    // #1111: the two gates whose refusal is a number against a bound must write
-    // that number. A column written by `buildVerdictLog` and never read back is
-    // the same defect one table over — the reason a `staleness` row could not be
-    // diagnosed without joining to `debate_log` in the first place
-    //
-    // This is the only #1111 assertion this gate carries. It does not, and
-    // cannot, assert on the `readAt` coordinate itself: a smoke run's fixture
-    // marks stay fresh by construction. The six-stage run's fixture mark is
-    // frozen at `SMOKE_RUN_INSTANT`, and the run's total wall-clock span
-    // (default 3 ticks at 250ms, see `tickIntervalMs`'s own doc, which sizes
-    // that gap against `max_signal_age`) stays far below `max_mark_age` too —
-    // its smaller value here is 2 minutes (paper-profile.ts, crypto); the
-    // exit-path harness instead overrides `max_mark_age` to 24h because it
-    // advances its own clock between phases. Either way, no staleness/
-    // stale_feed verdict is ever produced here to check the detail on. The
-    // one structural guard on `readAt` reaching a real caller is
-    // `PortfolioAccountingInput.clock` being a required (non-optional) field —
-    // a compile-time check, not a runtime one — so a caller that regresses to
-    // threading `asOf` through both parameters would still type-check and this
-    // gate would not see it
-    const undetailedStaleness = verdicts.filter(
-      (verdict) =>
-        (verdict.no_go_reason === 'staleness' || verdict.no_go_reason === 'stale_feed') &&
-        (verdict.no_go_detail_measured_ms == null || verdict.no_go_detail_bound_ms == null),
-    );
-    if (undetailedStaleness.length > 0) {
-      failures.push(
-        `${undetailedStaleness.length} verdict_log row(s) refused on staleness/stale_feed without ` +
-          `recording what was measured (${undetailedStaleness
-            .map((verdict) => `${verdict.instrument}:${verdict.no_go_reason}`)
-            .join(', ')}) — the cause is unrecoverable from the row, which is what #1111 fixed`,
-      );
-    }
-
-    if (!verdicts.some((verdict) => verdict.status === 'go')) {
-      failures.push(
-        `no GO verdict was recorded in verdict_log (${verdicts.length} verdict row(s): ` +
-          `${summariseVerdicts(verdicts)}) — the pipeline never authorised a trade`,
-      );
-    }
-
-    const submitted = ticks.flatMap((tick) =>
-      tick.stages.filter((entry) => entry.stage === 'execution' && entry.decision === 'submitted'),
-    );
-    if (submitted.length === 0) {
-      failures.push(
-        'no tick reached Execution with a `submitted` result — nothing was ever handed to the ' +
-          'broker adapter',
-      );
-    }
-
-    if (positions.length === 0) {
-      failures.push(
-        'no row in open_positions — Execution never wrote a lot ahead of the broker call, so ' +
-          'there is nothing for reconcile() or the fill poll to advance',
-      );
-    }
-
-    if (!fills.some((fill) => fill.leg === 'entry')) {
-      failures.push(
-        'no entry fill in fills — the order was submitted but no fill was ever ingested, so the ' +
-          'fill-sync poll (ingestFills) is not draining the venue feed',
-      );
-    }
-
-    // The seeded 25h baseline plus the canned batch's one row on a watched
-    // theme (the batch carries two, one off-watchlist). Asserted rather than
-    // merely printed, because the two ways this can be wrong are the two this
-    // observation exists to catch and neither shows up anywhere else: the seed
-    // count alone means the poller never fired from the composition root (the
-    // no-caller defect this repo keeps producing), and one more than expected
-    // means the theme filter stopped filtering and the archive is taking the
-    // whole world's news
-    if (observations.gdeltRowsArchived !== SMOKE_GDELT_EXPECTED_ROWS) {
-      failures.push(
-        `GDELT archived ${observations.gdeltRowsArchived} macro rows, expected exactly ` +
-          `${SMOKE_GDELT_EXPECTED_ROWS} — ` +
-          `${SMOKE_GDELT_SEEDED_ROWS} means the poller never ran from the composition root, ` +
-          `${SMOKE_GDELT_EXPECTED_ROWS + 1} means the theme filter matched both canned rows and ` +
-          'is no longer filtering (#556)',
-      );
-    }
-
-    // #1086, and the half the line above cannot see: bytes in the archive are
-    // not intelligence until something derives them. This is the scoring pass
-    // observed through the store the analysts read, on the real composition
-    // root — 0 means it is built and never called, which is the state #556's
-    // archive half shipped in
-    if (observations.gdeltAggregateItems !== SMOKE_GDELT_EXPECTED_AGGREGATES) {
-      failures.push(
-        `GDELT scoring derived ${observations.gdeltAggregateItems} macro aggregates, expected ` +
-          `exactly ${SMOKE_GDELT_EXPECTED_AGGREGATES} (one per asset class) — 0 means the ` +
-          'scoring pass never ran from the composition root, or refused on a baseline the seed ' +
-          'was supposed to have filled (#1086)',
-      );
-    }
-
-    // #504/#430. Two counts, because they answer different questions: the
-    // archive row says a fetch reached the vendor path, the store item says the
-    // fundamental analyst could actually see the result. A mechanism that
-    // fetches and stores nothing readable is the shape this repo keeps shipping
-    //
-    // What these two cover is the STARTUP refresh only — `start()` fires
-    // `void polymarketAgent.refresh('startup')` once, and the repeating
-    // `setInterval` behind it runs at DEFAULT_POLYMARKET_POLL_INTERVAL_MS
-    // (15 minutes) against a smoke run that finishes in seconds, so it provably
-    // never fires here. The recurring poll is UNCOVERED by this gate; only the
-    // composition-root wiring of the first refresh is
-    if (observations.polymarketRowsArchived !== SMOKE_POLYMARKET_EXPECTED_ITEMS) {
-      failures.push(
-        `Polymarket archived ${observations.polymarketRowsArchived} macro rows, expected exactly ` +
-          `${SMOKE_POLYMARKET_EXPECTED_ITEMS} — 0 means the startup refresh never ran from the ` +
-          'composition root, more means the fail-closed guard stopped refusing the thin-volume ' +
-          'market the fixture serves (#504)',
-      );
-    }
-    if (observations.polymarketItemsArchived !== SMOKE_POLYMARKET_EXPECTED_ITEMS) {
-      failures.push(
-        `Polymarket archived ${observations.polymarketItemsArchived} items in mi_items, expected ` +
-          `exactly ${SMOKE_POLYMARKET_EXPECTED_ITEMS} — 0 with rows archived means the source is ` +
-          'back to writing raw bytes with no items, which makes it unreplayable as items (#835)',
-      );
-    }
-    if (observations.polymarketIntelItems !== SMOKE_POLYMARKET_EXPECTED_ITEMS) {
-      failures.push(
-        `Polymarket put ${observations.polymarketIntelItems} items in the intel bucket, expected ` +
-          `exactly ${SMOKE_POLYMARKET_EXPECTED_ITEMS} — 0 with rows archived means the items ` +
-          'never reached MarketIntelligenceStore, were dropped by the entity filter, or were ' +
-          'stamped outside the debate bar the analysts query. This read is ENTITY-SCOPED like ' +
-          "every analyst read, so an item that lost `scope: 'asset_class'` reads 0 here with " +
-          'a row archived: filed under a macro series name, it matches no ticker (#914/#960), ' +
-          "and #1164's routing (`scope: 'asset_class'` -> `intel`, not `news`) would also read " +
-          '0 here if that predicate broke. Items also carry the INGEST INSTANT (#782), and ' +
-          'getContext floors its window to the hour, so this count depends on SMOKE_RUN_INSTANT ' +
-          'being exactly hour-aligned — a smoke clock that drifts off the hour before the ' +
-          'startup refresh lands would read 0 here with a row archived (#504, #782)',
-      );
-    }
+    failures.push(...tickLoopWireAndTickFailures(evidence, observations));
+    failures.push(...tickLoopDebateLogFailures(observations));
+    failures.push(...tickLoopControlArmFailures(observations));
+    failures.push(...tickLoopDownstreamRecordFailures(observations));
+    failures.push(...tickLoopVerdictFailures(observations));
+    failures.push(...tickLoopExecutionFailures(observations));
+    failures.push(...tickLoopGdeltFailures(observations));
+    failures.push(...tickLoopPolymarketFailures(observations));
     return failures;
   },
   report(_evidence, observations) {
