@@ -4891,12 +4891,7 @@ function tickLoopControlArmFailures(observations: SmokeObservations): string[] {
   return failures;
 }
 
-/**
- * The per-stage durable-record checks (#430's convention): cosine retrieval
- * (#432), `risk_thresholds` seeding (#433), `trader_log` (#328), `risk_log`,
- * `analyst_weights` (#371) and `breaker_state`'s sticky tiers (review
- * 2026-08-06 B1) each own a table nothing else in this gate reads
- */
+/** The per-stage durable-record checks (#430's convention) — each owns a table nothing else in this gate reads */
 function tickLoopDownstreamRecordFailures(observations: SmokeObservations): string[] {
   const failures: string[] = [];
   const { debates } = observations;
@@ -4919,12 +4914,7 @@ function tickLoopDownstreamRecordFailures(observations: SmokeObservations): stri
     );
   }
 
-  // #328. Anchored on `debates.length > 0` for the same reason the
-  // cosine_setups check is: a run where no debate resolved never reached the
-  // Trader, and demanding a row then would fail for a reason that is not this
-  // one. Once a debate HAS resolved, a row is unconditional — the Trader
-  // writes on a skip and Risk on a rejection, so "nothing traded" is not an
-  // explanation for an empty table
+  // #328 — once a debate resolves, a trader_log row is unconditional (written on skip too)
   if (debates.length > 0 && observations.traderDecisions.length === 0) {
     failures.push(
       'a debate resolved and reached the Trader, but no row in trader_log — the decision ' +
@@ -4964,26 +4954,10 @@ function tickLoopDownstreamRecordFailures(observations: SmokeObservations): stri
 }
 
 /**
- * #1111: the two gates whose refusal is a number against a bound must write
- * that number. A column written by `buildVerdictLog` and never read back is
- * the same defect one table over — the reason a `staleness` row could not be
- * diagnosed without joining to `debate_log` in the first place
- *
- * This is the only #1111 assertion this gate carries. It does not, and
- * cannot, assert on the `readAt` coordinate itself: a smoke run's fixture
- * marks stay fresh by construction. The six-stage run's fixture mark is
- * frozen at `SMOKE_RUN_INSTANT`, and the run's total wall-clock span
- * (default 3 ticks at 250ms, see `tickIntervalMs`'s own doc, which sizes
- * that gap against `max_signal_age`) stays far below `max_mark_age` too —
- * its smaller value here is 2 minutes (paper-profile.ts, crypto); the
- * exit-path harness instead overrides `max_mark_age` to 24h because it
- * advances its own clock between phases. Either way, no staleness/
- * stale_feed verdict is ever produced here to check the detail on. The
- * one structural guard on `readAt` reaching a real caller is
- * `PortfolioAccountingInput.clock` being a required (non-optional) field —
- * a compile-time check, not a runtime one — so a caller that regresses to
- * threading `asOf` through both parameters would still type-check and this
- * gate would not see it
+ * #1111: the two gates whose refusal is a number against a bound must write that number.
+ * This gate never produces a staleness/stale_feed verdict to check the detail on (fixture marks
+ * stay fresh by construction) — the only structural guard on `readAt` reaching a real caller is
+ * `PortfolioAccountingInput.clock` being a required field, a compile-time check this gate can't see.
  */
 function tickLoopVerdictFailures(observations: SmokeObservations): string[] {
   const failures: string[] = [];
@@ -5042,20 +5016,10 @@ function tickLoopExecutionFailures(observations: SmokeObservations): string[] {
 }
 
 /**
- * The seeded 25h baseline plus the canned batch's one row on a watched
- * theme (the batch carries two, one off-watchlist). Asserted rather than
- * merely printed, because the two ways this can be wrong are the two this
- * observation exists to catch and neither shows up anywhere else: the seed
- * count alone means the poller never fired from the composition root (the
- * no-caller defect this repo keeps producing), and one more than expected
- * means the theme filter stopped filtering and the archive is taking the
- * whole world's news
- *
- * #1086, and the half the line above cannot see: bytes in the archive are
- * not intelligence until something derives them. This is the scoring pass
- * observed through the store the analysts read, on the real composition
- * root — 0 means it is built and never called, which is the state #556's
- * archive half shipped in
+ * The seeded baseline plus the canned batch's one row on a watched theme. Asserted, not merely
+ * printed: the seed count alone means the poller never fired (no-caller defect), one more than
+ * expected means the theme filter stopped filtering. #1086: 0 aggregates means the scoring pass
+ * is built and never called (the state #556's archive half shipped in).
  */
 function tickLoopGdeltFailures(observations: SmokeObservations): string[] {
   const failures: string[] = [];
@@ -5081,17 +5045,9 @@ function tickLoopGdeltFailures(observations: SmokeObservations): string[] {
 }
 
 /**
- * #504/#430. Two counts, because they answer different questions: the
- * archive row says a fetch reached the vendor path, the store item says the
- * fundamental analyst could actually see the result. A mechanism that
- * fetches and stores nothing readable is the shape this repo keeps shipping
- *
- * What these two cover is the STARTUP refresh only — `start()` fires
- * `void polymarketAgent.refresh('startup')` once, and the repeating
- * `setInterval` behind it runs at DEFAULT_POLYMARKET_POLL_INTERVAL_MS
- * (15 minutes) against a smoke run that finishes in seconds, so it provably
- * never fires here. The recurring poll is UNCOVERED by this gate; only the
- * composition-root wiring of the first refresh is
+ * #504/#430. Two counts answer different questions: the archive row says a fetch reached the
+ * vendor path, the store item says the fundamental analyst could see the result. Covers only the
+ * STARTUP refresh — the recurring 15-minute poll never fires inside a smoke run and is uncovered here.
  */
 function tickLoopPolymarketFailures(observations: SmokeObservations): string[] {
   const failures: string[] = [];
@@ -5129,24 +5085,10 @@ function tickLoopPolymarketFailures(observations: SmokeObservations): string[] {
 }
 
 /**
- * The six-stage run itself, read back from the shared store. "Transacted" is a
- * conjunction of independently-observable effects rather than one summary
- * flag, because each is a different wiring defect: the loop ran at all
- * (timers, scheduler, shutdown); some tick got past Analysts — the literal
- * condition #350 names, and the one a credentialed run against a 401ing feed
- * fails; a resolved debate reached `debate_log` (#364); a `go` reached
- * `verdict_log`; Execution reported `submitted`; a lot was written ahead to
- * `open_positions`; a fill came back through the fill-sync poll — the only
- * thing that proves `ingestFills()` is scheduled and draining.
- *
- * One `debate_log` row is required, not one per tick: the clock is frozen and
- * the fixture views identical every tick, so all ticks hash to the same
- * `debate_id` and the writer's first-write-wins guard collapses them.
- *
- * Whether anything reached `UnreachableAlpacaClient` is checked here rather
- * than left to the throw: `startTickLoop` catches everything a tick throws
- * and logs it, so a run that tried to reach the network would otherwise fail
- * for a downstream symptom and never name the cause.
+ * The six-stage run, read back from the shared store. "Transacted" is a conjunction of
+ * independently-observable effects rather than one summary flag, because each is a different
+ * wiring defect (loop ran; a tick got past Analysts, #350; debate reached `debate_log`, #364;
+ * a `go` reached `verdict_log`; Execution submitted; a fill came back through `ingestFills()`).
  */
 const tickLoopProbe: Probe<'tickLoop'> = {
   run({ targetTicks, alpacaBrokerClient }) {
