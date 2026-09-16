@@ -251,7 +251,7 @@ async function readMarks(
   // Taken once after the whole batch resolves, and applied to every mark —
   // this is the instant the view VALUES the book, not an approximation of a
   // per-mark read time. Judging each mark at its own arrival would call a
-  // price fresh that no longer is by the time it reaches the exposure math.
+  // price fresh that no longer is by the time it reaches the exposure math
   const readAt = clock.now();
 
   const marks = new Map<string, number>();
@@ -262,7 +262,7 @@ async function readMarks(
     if (read === undefined) {
       // Omitted from the batch response — treated the same as a read
       // failure since either way the book has an unvalued position. Typed
-      // as `MarkReadError` so a `BookValuationError` narrow still catches it.
+      // as `MarkReadError` so a `BookValuationError` narrow still catches it
       failures.push(
         new MarkReadError(
           instrument,
@@ -276,7 +276,7 @@ async function readMarks(
       // Re-wrapped, not re-thrown as-is: a source error need not name the
       // instrument ('request timed out'), and the operator needs to know
       // which position is unvalued. Reason folded into the MESSAGE, not left
-      // to `cause` — `describeThrown` prints the message alone.
+      // to `cause` — `describeThrown` prints the message alone
       failures.push(
         new MarkReadError(
           instrument,
@@ -291,7 +291,7 @@ async function readMarks(
     // Fail closed on a STALE mark too, not just a missing one — a mark
     // arriving isn't evidence the feed is alive (TTL cache, halted/thin
     // instrument repeating its last trade). Collected rather than thrown on
-    // sight, so one stale name doesn't hide a second dark one from the report.
+    // sight, so one stale name doesn't hide a second dark one from the report
     const assetClass = classByInstrument.get(instrument) ?? read.mark.asset_class;
     const freshness = classifyMarkFreshness(read.mark, readAt, max_mark_age[assetClass]);
     if (freshness.status !== 'fresh') {
@@ -306,7 +306,7 @@ async function readMarks(
 
   // EXIT policy: same reads and staleness judgement as above, just returned
   // instead of thrown. Caller must make the degradation audible — see
-  // `ExitValuationDegradedAlertChannel` (orchestrator/production).
+  // `ExitValuationDegradedAlertChannel` (orchestrator/production)
   if (policy === 'exclude') {
     return { marks, unvalued };
   }
@@ -317,7 +317,7 @@ async function readMarks(
   if (failures.length > 1) {
     const named = unvalued.map((instrument) => `'${instrument}'`).join(', ');
     // Folded in for the same reason as the single-failure wrap:
-    // `AggregateError.errors` is never printed, so reasons must be in the message.
+    // `AggregateError.errors` is never printed, so reasons must be in the message
     const reasons = failures.map((failure) => failure.message).join('; ');
     throw new AggregateError(
       failures,
@@ -351,7 +351,7 @@ export async function computePortfolioView(
 
   // Taken from POSITIONS, not the returned `Mark.asset_class` — the freshness
   // bound is a property of what we hold; reading it off the source's own
-  // answer would let a mis-classified mark pick the more permissive bound.
+  // answer would let a mis-classified mark pick the more permissive bound
   const classByInstrument = new Map<string, AssetClass>(
     positions.map((position) => [position.instrument, position.asset_class]),
   );
@@ -377,12 +377,12 @@ export async function computePortfolioView(
     // An unvalued position contributes NOTHING to any figure — understated,
     // not conservative — which is why `unvalued_instruments` travels on the
     // view and why `RiskManagerImpl.evaluate` refuses an ENTRY that sees a
-    // non-empty one.
+    // non-empty one
     if (unvalued.includes(position.instrument)) continue;
     // Cross-spec Freeze §4: VALUATION is always filled_size, never
-    // requested_size — an unfilled lot is worth nothing to equity/PnL.
+    // requested_size — an unfilled lot is worth nothing to equity/PnL
     // RESERVATION (below) asks a different question of the same row; see
-    // `PortfolioView.reserved_exposure_by_instrument`.
+    // `PortfolioView.reserved_exposure_by_instrument`
     const mark = markFor(marks, position.instrument);
     const notional = position.filled_size * mark;
     exposure_by_instrument[position.instrument] =

@@ -297,7 +297,7 @@ function truncationReason(body: ResponsesBody): string | null {
 /**
  * POSTs one non-streaming Responses call to Nous and normalises the reply,
  * behind the account-wide in-flight gate (#1080) — same slot discipline and
- * account queue as `nousChat`.
+ * account queue as `nousChat`
  */
 export async function nousResponses(
   options: NousResponsesOptions,
@@ -408,7 +408,7 @@ async function dispatchResponses(
 
   // Nous's `usage` block carries tokens only, no search count, so part of
   // this is an estimate — deliberately biased high, since a spend cap fed an
-  // under-count is not a cap.
+  // under-count is not a cap
   //
   // `countServerToolCalls` is a REPORTED FACT and is never clamped: the
   // provider will bill for what it says it did regardless of
@@ -416,7 +416,7 @@ async function dispatchResponses(
   // provider that omits call items would otherwise bill zero even for a
   // search that ran and found nothing; it IS clamped by `maxServerToolCalls`,
   // since one call can return up to that many citations. Taking the max of
-  // the two keeps both properties.
+  // the two keeps both properties
   const toolCalls = countServerToolCalls(parsed);
   const ceiling = options.maxServerToolCalls;
   const estimatedFromCitations =

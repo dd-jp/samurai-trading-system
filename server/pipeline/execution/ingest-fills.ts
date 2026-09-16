@@ -84,7 +84,7 @@ async function markSweptFlattens(
       // `getUnresolvedFlattens()` on the next `reconcile()` pass. Logged at
       // `warn`, not `error`, and still travels in `failures` so it is named
       // in the AggregateError if a correctness-critical failure also occurred
-      // this poll — but on its own it does not reject the poll's promise.
+      // this poll — but on its own it does not reject the poll's promise
       logCaughtFailure(
         input.logger,
         {

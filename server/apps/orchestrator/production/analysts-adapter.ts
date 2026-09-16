@@ -171,7 +171,7 @@ export function buildAnalystsStep(
    * Consecutive skips per instrument, in memory and restart-clean: a process
    * that just restarted has no evidence about the previous process's ticks,
    * and persisting this would make the first tick after a crash-restart
-   * inherit a run it did not observe.
+   * inherit a run it did not observe
    */
   const consecutiveSkips = new Map<string, number>();
 
@@ -180,7 +180,7 @@ export function buildAnalystsStep(
     // `AnalystsStepOptions.marketIntelligence`. Still awaited: enqueuing
     // costs a map insert, no LLM call runs on this stack, and awaiting keeps
     // the ordering with the coverage check below deterministic. Never
-    // throws — an MI outage must degrade to NO_DATA_MARKER, not fail the tick.
+    // throws — an MI outage must degrade to NO_DATA_MARKER, not fail the tick
     await options.marketIntelligence?.refresh(trace_id, signal.asset, signal.asset_class);
 
     // After the refresh, so the freshest write for this tick is what the
@@ -202,7 +202,7 @@ export function buildAnalystsStep(
     // The tick boundary is here, not inside `runAnalysts`, which knows
     // nothing about consecutive ticks. Set before the alerting below: the
     // runner reads this immediately after the step returns, so a throw from
-    // the alert transport must not cost the audit row its reason.
+    // the alert transport must not cost the audit row its reason
     const skipKind = skipKindOf(result.skipped, result.failures);
     if (skipKind !== undefined) {
       options.skipKinds?.set(trace_id, skipKind);
@@ -324,7 +324,7 @@ async function postSkipAlert(
       // The tick's own id, not a category label — joins the
       // `analyst_panel_degraded` line above. Deliberately not the same call
       // as `analystSkipAlerts` (alert-catalogue.ts): that line reports the
-      // multi-tick condition, this one reports one delivery failing.
+      // multi-tick condition, this one reports one delivery failing
       trace_id,
       stage: 'analysts',
       event: 'analyst_skip_alert_send_failed',

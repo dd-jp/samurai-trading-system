@@ -160,7 +160,7 @@ const CLOSED_TRADES: ClosedTrade[] = [
     // modelled-cost mechanism COVERS was charged. Not "both legs": these two
     // rows close on `'target'` and `'stop'`, and a protective leg is outside
     // coverage (`modelledCostCharged`, ingest-fills.ts), so the flag is true
-    // on the entry leg alone.
+    // on the entry leg alone
     modelled_cost_charged: true,
   },
   {
@@ -523,7 +523,7 @@ const ATTRIBUTION: Record<string, AttributionSummary> = {
   'sentiment-analyst': { analyst_id: 'sentiment-analyst', rolling_r: -0.47, window_days: 30 },
 };
 
-/** Zero — the fixture's baseline is a healthy alert channel, like every other tile here. */
+/** Zero — the fixture's baseline is a healthy alert channel, like every other tile here */
 const ALERT_DELIVERY_FAILURE_COUNT = 0;
 
 const TICK_STATUS: TickStatus = {
@@ -933,7 +933,7 @@ export class InMemoryQueryStore implements DashboardQueryStore {
     return ARM_COMPARISONS.slice(0, limit).map((sample) => ({ ...sample }));
   }
 
-  /** `limit` counts rows, not cycles — see the port's doc. */
+  /** `limit` counts rows, not cycles — see the port's doc */
   getOutsideBenchmarks(limit: number, _asOf: Date): OutsideBenchmarkSample[] {
     return OUTSIDE_BENCHMARKS.slice(0, limit).map((sample) => ({ ...sample }));
   }

@@ -640,7 +640,7 @@ function resolveProductionBootConfig(
 }
 
 // Independent of the sentiment/LLM layer below — see each agent's own
-// comment for why neither depends on Nous credentials or on the other.
+// comment for why neither depends on Nous credentials or on the other
 function buildMacroIntelligenceLayer(deps: {
   config: ProductionConfig;
   marketIntelligence: MarketIntelligenceStore;
@@ -748,7 +748,7 @@ function buildSentimentGrokAgent(deps: {
   return new GrokAgent({
     // The ONE construction-time difference between a sentiment stage that fills
     // `social` and one that never does — everything downstream (spend gate,
-    // evidence guard, bucket cache) is identical, per grok-agent.ts's claim.
+    // evidence guard, bucket cache) is identical, per grok-agent.ts's claim
     client: sentimentRetrieval
       ? new XSearchClient({
           ...sentimentCredentials,
@@ -780,7 +780,7 @@ function buildSentimentGrokAgent(deps: {
 }
 
 // Every branch below turns on sentiment/Nous credentials state, none of it
-// on the macro layer's state (see buildMacroIntelligenceLayer).
+// on the macro layer's state (see buildMacroIntelligenceLayer)
 function buildSentimentIntelligenceLayer(deps: {
   config: ProductionConfig;
   clock: Clock;
@@ -1070,7 +1070,7 @@ function buildBreakerStateDeps(deps: {
 
 // The fill-sync loop binds `reconcile()`/`ingestFills()` from this same
 // object, so Execution cannot gain a dependency on the tick path and
-// silently miss it on the poll path.
+// silently miss it on the poll path
 function buildExecutionStepDeps(deps: {
   config: ProductionConfig;
   clock: Clock;

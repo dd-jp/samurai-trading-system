@@ -986,7 +986,7 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
    * Cancelling off `open.legs` here — rather than the role-deduped
    * `orderIdList(open.ids)` — matches `clearLegs`' own behavior on the mirror
    * branch and does not silently drop a duplicate row under one leg's
-   * reference (#1215 round 3).
+   * reference (#1215 round 3)
    */
   private async resolveActivatedLegsLookup(
     open: LookedUpActivatedLegsOrder,

@@ -246,7 +246,7 @@ function unzipFirstEntry(buffer: Buffer): string {
     // Stored data is NOT self-terminating: `body` runs to the end of the whole
     // buffer, so returning it verbatim appends the central directory and EOCD
     // as binary garbage. The local header's compressed size bounds it; zero
-    // there means the size is in a trailing descriptor this decoder can't read.
+    // there means the size is in a trailing descriptor this decoder can't read
     const compressedSize = buffer.readUInt32LE(18);
     if (compressedSize === 0) {
       throw new Error(
@@ -255,7 +255,7 @@ function unzipFirstEntry(buffer: Buffer): string {
     }
     // `subarray` CLAMPS rather than throwing, so a truncated download would
     // otherwise yield a short CSV `parseBatch` reads as complete with rows
-    // silently missing — worse than an error, since a batch is allowed to be small.
+    // silently missing — worse than an error, since a batch is allowed to be small
     if (compressedSize > body.length) {
       throw new Error(
         `GdeltGkgClient: stored zip entry declares ${compressedSize} bytes but only ` +
@@ -273,7 +273,7 @@ function unzipFirstEntry(buffer: Buffer): string {
   // and declined: it travels the SAME channel `pinToBaseUrl` already treats
   // as untrusted, so a hostile manifest could name a matching hostile md5
   // too. The zip's own CRC-32 is checked against the bytes actually inflated
-  // instead.
+  // instead
   const actualCrc = crc32(inflated);
   if (actualCrc !== declaredCrc) {
     throw new Error(
@@ -348,7 +348,7 @@ export class GdeltGkgClient {
       );
     }
     // Refused BEFORE `text()` where the server declares a length, mirroring
-    // `fetchBatch`'s two-step guard on `MAX_ARCHIVE_BYTES`.
+    // `fetchBatch`'s two-step guard on `MAX_ARCHIVE_BYTES`
     const declaredLength = Number(response.headers.get('content-length'));
     if (Number.isFinite(declaredLength) && declaredLength > MAX_MANIFEST_BYTES) {
       throw new Error(
@@ -365,7 +365,7 @@ export class GdeltGkgClient {
       );
     }
     // Three lines — export, mentions, gkg. Matched on suffix rather than line
-    // index: the order is conventional, not contractual.
+    // index: the order is conventional, not contractual
     for (const line of text.split('\n')) {
       const url = line.trim().split(/\s+/).at(2);
       if (url?.endsWith('.gkg.csv.zip') === true) return this.pinToBaseUrl(url);
@@ -415,7 +415,7 @@ export class GdeltGkgClient {
     // Pinned here too, since this method is public and a caller-assembled URL
     // must not reach a host we never configured. Re-pinning is a no-op.
     // `url`, not `fileUrl`, in every diagnostic below: the request goes to
-    // the pinned rewrite, so citing the pre-pin argument would be wrong.
+    // the pinned rewrite, so citing the pre-pin argument would be wrong
     const url = this.pinToBaseUrl(fileUrl);
     const batchTime = batchTimeFromUrl(url);
     if (batchTime === undefined) {
@@ -431,7 +431,7 @@ export class GdeltGkgClient {
     }
     // Refused BEFORE `arrayBuffer()` where the server declares a length, so
     // an oversized body is never materialised. A missing/lying header falls
-    // through to the post-allocation check below.
+    // through to the post-allocation check below
     const declared = Number(response.headers.get('content-length'));
     if (Number.isFinite(declared) && declared > MAX_ARCHIVE_BYTES) {
       throw new Error(

@@ -232,7 +232,7 @@ export class SqliteLlmSpendStore implements LlmSpendSink {
     const cost = tokenCost === null ? (toolCost > 0 ? toolCost : null) : tokenCost + toolCost;
 
     if (tokenCost === null) {
-      // A silent null here is how a spend cap stops being a cap.
+      // A silent null here is how a spend cap stops being a cap
       this.logger?.log({
         trace_id: entry.trace_id,
         stage: 'orchestrator',

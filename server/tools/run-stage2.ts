@@ -527,7 +527,7 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
   const assetClasses = buildAssetClasses(ctx, timeframe);
 
   // Sizing is stated POSITIVELY before the run, not as `exceeded: true` after
-  // trials are already spent — a reader should see what the cap constrained.
+  // trials are already spent — a reader should see what the cap constrained
   const results = await runTrialGrid({
     assetClasses,
     window: effective,
@@ -663,7 +663,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // what it was written against and only a direct run picks up the
   // calibrated cost config, a persisted bars store, and the SHARED selections
   // store the Feedback Loop reads at runtime (a verdict frozen to research
-  // scratch would be unactionable).
+  // scratch would be unactionable)
   const shared = openSharedStore(sharedStorePath());
   runStage2({
     polygonClient,

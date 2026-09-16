@@ -267,13 +267,13 @@ export class MiIngestAgent {
     // against its own entity, since a headline can be bullish for one and
     // bearish for another. The pipeline's own id (`miSubject`), not the
     // vendor's wire symbol, is what the item is filed under, so downstream
-    // joins and an LSE ETP's resolution see the pipeline's id.
+    // joins and an LSE ETP's resolution see the pipeline's id
     //
     // Keyed on `hasScoredItem` (`mi_items`), not `hasItem` (`mi_archive_raw`,
     // used for `newRaws` above): a raw row with no scored item means an
     // earlier refresh's batch degraded and never scored it, and that
     // article must stay a scoring candidate for as long as it is inside the
-    // lookback window.
+    // lookback window
     const unscored = articles
       .filter((article) => article.symbols.some((symbol) => symbols.includes(symbol)))
       .filter(
@@ -413,13 +413,13 @@ export class MiIngestAgent {
 
     // `scoreItems` always returns exactly one score per supplied item, so
     // `scores[index]` should never be undefined here; treated the same as
-    // an explicit `omitted: true` if it ever is.
+    // an explicit `omitted: true` if it ever is
     //
     // An item the model's response omitted an index for is not archived:
     // its raw bytes are already on disk, but writing a fabricated unscored
     // item to `mi_items` would make `hasScoredItem` return true for that key
     // forever — `write`'s `INSERT OR IGNORE` means the row could never later
-    // be upgraded to a real score.
+    // be upgraded to a real score
     const scoredPairs = pairs
       .map(({ article, entity }, index) => ({ article, entity, score: scores[index] }))
       .filter(

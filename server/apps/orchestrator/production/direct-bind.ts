@@ -399,7 +399,7 @@ export function buildTraderSteps(deps: TraderStepDeps): {
 
 // The three branches are mutually exclusive outcomes of one
 // `checkExitsWithReason` call, not an ordered sequence — see the inline
-// comments for why each branch's own throttle bookkeeping is shaped as it is.
+// comments for why each branch's own throttle bookkeeping is shaped as it is
 function recordExitCheckOutcome(
   deps: TraderStepDeps,
   exitSkipThrottle: ExitSkipWriteThrottle,

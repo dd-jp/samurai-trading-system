@@ -262,7 +262,7 @@ export function buildFailoverDataSource(deps: LiveDataFailoverDeps): DataSource 
   // Only resolve (and possibly warn about) Polygon pacing when the default
   // Polygon fetcher is actually selected — an injected fetcher must never
   // consult a variable it won't use. Built here rather than inside the
-  // returned closure so it still resolves at boot, not on first failover.
+  // returned closure so it still resolves at boot, not on first failover
   let rawFallbackBarFetcher: BarFetcher;
   if (deps.equitiesFallbackBarFetcher !== undefined) {
     rawFallbackBarFetcher = deps.equitiesFallbackBarFetcher;

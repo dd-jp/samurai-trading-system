@@ -350,7 +350,7 @@ export class Stage2HistoricalStore implements ReplayTimeline, InstrumentRegistry
     // (98,280 rows) takes ~25.9s to persist since each `run()` outside a
     // transaction commits on its own — ten years across four symbols is ~4M
     // rows, ~17 hours for a backfill whose network side is minutes. Batched,
-    // the same rows take well under a second.
+    // the same rows take well under a second
     //
     // Invisible at daily resolution (2,500 rows/symbol committed one at a
     // time is under a second), which is why it survived until intraday made

@@ -65,7 +65,7 @@ interface EmulatedBracket {
    * PROCESS-LOCAL, deliberately not persisted: detection re-derives the
    * condition from venue state every sweep, so losing this flag to a
    * restart costs one repeated alert — better than a durable flag whose
-   * write could race the alert and lose it outright.
+   * write could race the alert and lose it outright
    */
   doubleFillAlerted: boolean;
   /**
@@ -259,7 +259,7 @@ export class AlpacaCryptoLegEmulation {
     }
 
     // The claim. `stop`/`target` are folded into the journalled request so
-    // recovery re-places from exactly what this episode records.
+    // recovery re-places from exactly what this episode records
     bracket.request = { ...bracket.request, stop, target };
     bracket.phase = 'arming';
     bracket.armingQty = qty;
@@ -323,10 +323,10 @@ export class AlpacaCryptoLegEmulation {
   async sweep(since: Date, fills: NormalizedFill[], failures: unknown[]): Promise<number> {
     let failed = 0;
     // Read once for the whole sweep — see `fetchNewFills`'s `observedAt` in
-    // alpaca-adapter.ts.
+    // alpaca-adapter.ts
     const observedAt = this.deps.clock.now();
 
-    // Snapshot against mid-iteration mutation, as every other sweep in this adapter does.
+    // Snapshot against mid-iteration mutation, as every other sweep in this adapter does
     // oxlint-disable-next-line unicorn/no-useless-spread -- the copy itself is the point, see comment above
     for (const bracket of [...this.brackets.values()]) {
       if (bracket.donePolling) continue;
@@ -489,7 +489,7 @@ export class AlpacaCryptoLegEmulation {
     }
 
     // WRITE-AHEAD: `arming` is durable BEFORE the first leg order — a crash
-    // there is recovered by `resumeArming` in whatever process comes next.
+    // there is recovered by `resumeArming` in whatever process comes next
     bracket.phase = 'arming';
     bracket.armingQty = filledQty;
     bracket.inFlight = true;
@@ -517,7 +517,7 @@ export class AlpacaCryptoLegEmulation {
   /**
    * Refuse-rather-than-guess recovery: an inconclusive venue answer throws
    * and leaves the bracket `arming` for the next sweep rather than risking
-   * two live protective legs on one lot.
+   * two live protective legs on one lot
    */
   private async recoverArming(bracket: EmulatedBracket): Promise<void> {
     const qty = bracket.armingQty;
@@ -646,7 +646,7 @@ export class AlpacaCryptoLegEmulation {
           stop_price: String(request.stop),
           // Crypto has no plain stop type, so the post-trigger limit is set
           // AT the stop level — a gapping market can leave it unfilled, the
-          // trade-off any stop-limit carries.
+          // trade-off any stop-limit carries
           limit_price: String(request.stop),
           time_in_force: 'gtc',
           client_order_id: clientOrderId,
@@ -672,7 +672,7 @@ export class AlpacaCryptoLegEmulation {
   /**
    * Deterministic per-episode leg ids: within one episode the venue's
    * duplicate-client-order-id rejection is the recovery safety net; across
-   * episodes a fresh suffix avoids it.
+   * episodes a fresh suffix avoids it
    */
   private legClientOrderId(bracket: EmulatedBracket, leg: 'stop' | 'target'): string {
     const suffix = bracket.armAttempt === 0 ? '' : `:r${bracket.armAttempt}`;
