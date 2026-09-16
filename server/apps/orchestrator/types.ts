@@ -92,17 +92,9 @@ export type TickStage =
   | 'execution';
 
 /**
- * The debate bar a decision pass runs for (#743) — THE single source of the
- * bar coordinate for that pass.
- *
- * Produced by the decision gate (`decision-bar-gate.ts`) when a tick is the
- * first to land in a new debate bar, and passed DOWN: the Debate step keys
- * `debate_id` on `open_time` instead of flooring its own `clock.now()`, the
- * resulting `DebateResult.bar_timestamp` carries the same value, and the
- * Trader inherits it from there (#687). Nothing on the decision path derives
- * the bar a second time, which is what makes a gate/Trader disagreement
- * structural rather than a matter of two clock reads landing luckily in the
- * same hour.
+ * The debate bar a decision pass runs for — THE single source of the bar
+ * coordinate, produced once by the decision gate and passed down so nothing
+ * else floors its own `clock.now()` for it.
  */
 export interface DecisionBar {
   /** Stable identity for logs: `<open_time ISO>@<timeframe_ms>` */
@@ -114,10 +106,9 @@ export interface DecisionBar {
 }
 
 /**
- * The disposable per-instrument progress row (#96, resolves
- * cross-spec-contracts.md GAP-K). Not a system-of-record: losing it on crash
- * costs nothing but a stale progress indicator, since the row is re-upserted
- * next tick (orchestrator-spec.md story 15).
+ * The disposable per-instrument progress row. Not a system-of-record: losing
+ * it on crash costs nothing but a stale indicator, since it's re-upserted
+ * next tick.
  */
 export interface CurrentTick {
   instrument: string;
@@ -128,10 +119,9 @@ export interface CurrentTick {
 }
 
 /**
- * shared_store.current_tick port (#96). One row per instrument: `upsert`
- * overwrites any existing row for that instrument (a stale row from a
- * crashed prior tick is safely clobbered, per orchestrator-spec.md's
- * "disposable, best-effort" framing), `delete` clears it on tick completion.
+ * One row per instrument: `upsert` overwrites any existing row (a stale row
+ * from a crashed prior tick is safely clobbered), `delete` clears it on
+ * completion.
  */
 export interface CurrentTickStore {
   upsert(row: CurrentTick): void;
@@ -151,67 +141,20 @@ export interface TickContext {
   /** shared_store.current_tick writer (#96); upserted before each stage, deleted on completion */
   currentTickStore: CurrentTickStore;
   /**
-   * Set only when this tick opens a new debate bar (#743). Present => the
-   * runner runs the DECISION path (Analysts → Debate → Trader → Risk →
-   * Verdict → Execution) for this bar. Absent => tick path only (the
-   * position-facing exit check).
-   *
-   * Claimed from the `DecisionGate` by the tick loop, per instrument, BEFORE
-   * `runInstrument` — so the gate's bookkeeping lives outside the runner and a
-   * crashed pass can be rescinded for the next tick to retry.
+   * Present => runner runs the DECISION path for this bar. Absent => tick
+   * path only (position-facing exit check). Claimed from `DecisionGate` by
+   * the tick loop BEFORE `runInstrument`, so a crashed pass can be rescinded
+   * for the next tick to retry.
    */
   decision_bar?: DecisionBar;
   /**
-   * The phase split's turnstile (#1040). Awaited by the runner immediately
-   * before the pass's FIRST PORTFOLIO READ, and resolved by the tick loop when
-   * it is this instrument's turn, in PLAN order.
-   *
-   * ## What it separates
-   *
-   * A pass has a portfolio-free head and a portfolio-facing tail, and the
-   * boundary sits at the first read of book state — which is NOT the same
-   * point on the two paths:
-   *
-   *   decision path — head is Analysts + Debate (neither step's input carries
-   *                   portfolio state, and neither stage references it); the
-   *                   tail opens at Trader, which sizes against equity, and
-   *                   runs Trader -> Risk -> Verdict -> Execution.
-   *   tick path     — the exit check is head too: it skips `snapshotForTick`
-   *                   deliberately, because an exit sizes to the held quantity
-   *                   and never to equity (#743). The tail opens only once the
-   *                   check has produced an intent bound for Risk, so the ~29
-   *                   of 30 passes that produce none never take a turn at all.
-   *
-   * Heads may safely overlap across instruments; tails may not.
-   *
-   * `RiskManager.evaluate()` reads a portfolio SNAPSHOT — `gross_exposure`,
-   * `exposure_by_class`, `drawdown_pct`. Two instruments evaluating
-   * concurrently each read PRE-TRADE exposure, each pass the gross cap, and
-   * the book breaches it combined (#1019). That race is live today: #1013 set
-   * `maxConcurrentInstruments: 6` for paper and live, so whole pipelines
-   * already overlap. This field is what makes the tail serial again while the
-   * expensive head stays fanned out.
-   *
-   * ## Why a turnstile rather than a lock
-   *
-   * Turns are granted in PLAN index order, never in head-completion order.
-   * ADR-0003 §2's replay-from-log needs a backtest to reproduce a live run; if
-   * phase-1 completion order leaked into tail sequencing, cap allocation would
-   * vary run to run. A mutex would grant in arrival order and lose exactly
-   * that. So phase 1's scheduling is not observable downstream.
-   *
-   * ## Optional, and absent means "run now"
-   *
-   * Absent for every caller that is already serial by construction: the
-   * backtest harness's bar loop, the smoke run, the control arm's own runner
-   * (which builds its own context), and the direct-construction unit tests. A
-   * caller with one pass in flight has no siblings to order against, so an
-   * un-awaited tail there IS the serial tail. `runTickPlan` always supplies it
-   * — including at `max_concurrent_instruments: 1`, where every turn is
-   * already free when it is asked for and the await is inert.
-   *
-   * Idempotent per pass: a second call after the turn is granted resolves
-   * immediately, so an added call site cannot deadlock a pass against itself.
+   * Turnstile serializing the portfolio-facing tail (Trader onward) across
+   * concurrently-fanned-out instruments — `RiskManager.evaluate()` reads a
+   * pre-trade snapshot, so two instruments evaluating at once could each pass
+   * the gross cap and breach it combined. Granted in PLAN index order (not
+   * head-completion order) so cap allocation stays reproducible under replay.
+   * Absent for callers already serial by construction (backtest harness,
+   * smoke run, control arm, unit tests); idempotent per pass.
    */
   beginPortfolioTail?: () => Promise<void>;
 }
@@ -219,88 +162,49 @@ export interface TickContext {
 export interface TickOutcome {
   trace_id: string;
   /**
-   * Absent only when `error` is set (#507). `SequentialTickRunner.runInstrument`
-   * always resolves to one of the seven `TickStage` names above — but a pass that
-   * THREW never reached a `return`, so tick-loop.ts's per-worker catch has no
-   * stage to report. Fabricating one (e.g. defaulting to the first stage)
-   * would misrepresent where the pipeline actually died; an absent field is
-   * the honest record, not a fabricated one — same posture production.ts's
-   * doc comment takes on injected seams ("an honest injected seam beats a
-   * fabricated implementation").
+   * Absent only when `error` is set — a pass that threw never reached a
+   * `return`, so there's no stage to report. Left absent rather than
+   * fabricated (e.g. defaulting to the first stage), which would misrepresent
+   * where the pipeline died.
    */
   final_stage?: TickStage;
   verdict_status?: 'go' | 'no_go';
   /** Only present on a Verdict `go` — Execution is not called otherwise */
   execution_result?: ExecutionResult;
   /**
-   * `true` when a TICK-PATH pass's exit check produced an exit intent — the
-   * flat-by-close flatten, including a close already past (#691/#743). Never set on a
-   * decision pass, where the Trader's own routing carries the flatten and the
-   * intent's `intent_type: 'exit'` is the record. Present so a flatten whose
-   * Verdict said `no_go` is still visible as a flatten that FIRED — the
-   * anomaly reads as `flatten_fired: true, final_stage: 'verdict'`.
+   * `true` on a tick-path flatten intent. Never set on a decision pass (the
+   * Trader's own `intent_type: 'exit'` is the record there). Present so a
+   * flatten whose Verdict said `no_go` still reads as fired, not as no-trade.
    */
   flatten_fired?: boolean;
   /**
-   * `true` when a TICK-PATH pass's exit check produced an INDICATOR-BASED
-   * EARLY EXIT (#748) — the momentum axis no longer supports the held side, at
-   * a price that touched neither bracket.
-   *
-   * Its own flag rather than a widened `flatten_fired`, and mutually exclusive
-   * with it: the two are different events with different causes (time versus
-   * signal), and a soak that cannot tell them apart cannot tell a session
-   * ending from a thesis dying. Present for exactly the reason `flatten_fired`
-   * is — a release whose Verdict said `no_go` must stay visible as a release
-   * that FIRED (`early_exit_fired: true, final_stage: 'verdict'`) rather than
-   * reading as a healthy no-trade tick.
+   * `true` on a tick-path indicator-based early exit — its own flag rather
+   * than a widened `flatten_fired`, since the two have different causes (time
+   * vs. signal) and must stay distinguishable.
    */
   early_exit_fired?: boolean;
   /**
-   * Set only when the instrument's pipeline pass threw instead of returning
-   * normally (#507: a failed tick declaring itself finished while sibling
-   * workers kept running). Caught in tick-loop.ts's worker — never here in
-   * `runInstrument` itself, which deliberately has no try/catch (see
-   * tick-runner.ts's doc comment: a crash must leave the `current_tick` row
-   * stale for the next tick to safely clobber, not be swallowed and cleaned
-   * up). Presence of this field IS the failure signal; `final_stage`,
-   * `verdict_status` and `execution_result` are all absent alongside it.
+   * Set only when the pass threw instead of returning. Caught in
+   * tick-loop.ts's worker, never in `runInstrument` itself (a crash must
+   * leave `current_tick` stale for the next tick to clobber, not be
+   * swallowed). Presence IS the failure signal; the other fields stay absent.
    */
   error?: string;
 }
 
 /**
  * The six pipeline steps as bound callables — the TickRunner's only
- * dependency, and the primary test seam.
- *
- * Why callables rather than the stage objects themselves: the stages are
- * inconsistent about how they take dependencies, and each needs ancillary
- * deps the tick chain never touches. Closing those over at composition
- * time keeps this module to sequencing — orchestrator-spec.md's
- * "assert wiring, not stage logic" — and keeps the short-circuit test to
- * faking six functions.
- *
- * `analysts` and `debate` bind through a thin adapter rather than directly:
- * `AnalystOrchestrator.runAnalysts`/`runDebate` don't match this shape 1:1
- * (extra positional args, a richer return type) — see
- * `server/apps/orchestrator/production/analysts-adapter.ts` and `debate-adapter.ts`
- * (ticket #235, ADR-0004 §3).
+ * dependency, and the primary test seam (fake six functions, not six stages).
+ * `analysts`/`debate` bind through a thin adapter since
+ * `AnalystOrchestrator.runAnalysts`/`runDebate` don't match this shape 1:1.
  */
 export interface TickSteps {
   /**
-   * The tick path's position-facing exit check (#743): the Trader's exit-only
-   * entry point, run on every tick that is NOT a decision pass. Reachable
-   * WITHOUT an `AnalystView[]` or a `DebateResult` by construction — its
-   * input carries neither — which is the "exits must not read analyst
-   * output" constraint stated as an interface requirement
-   * (orchestrator-spec.md, "The tick/decision split", constraint 4).
-   *
-   * `bar` is the tick's debate-bar coordinate (the runner floors it once per
-   * tick pass): the grid the exit intent's idempotency key dedupes on, so
-   * repeated flatten checks within one bar re-key to the same order.
-   *
-   * Returns the flatten exit intent when one is due, else null. A non-null
-   * intent flows through the same Risk → Verdict → Execution tail as a
-   * decision-path intent.
+   * The tick path's position-facing exit check, run on every tick that is
+   * NOT a decision pass. Takes no `AnalystView[]`/`DebateResult` by
+   * construction — the "exits must not read analyst output" constraint,
+   * stated as an interface shape. `bar` is the grid the exit intent's
+   * idempotency key dedupes on.
    */
   exitCheck(input: {
     trace_id: string;
@@ -313,58 +217,35 @@ export interface TickSteps {
     signal: Signal;
     clock: Clock;
     /**
-     * The decision bar's opening boundary, passed down from
-     * `TickContext.decision_bar` (#811) — the same value `debate`'s `bar`
-     * field below carries, and the SAME derivation (the gate's `claim`, not a
-     * second `floorToBar(clock.now())` taken here or inside an analyst).
-     * `AnalystOrchestrator.runAnalysts` threads it onto every `AnalystInput`
-     * unchanged, and `MarketIntelligenceStore.getContext` floors its window to
-     * it rather than to a fresh clock read — closing the residual #782 left
-     * (a pass straddling the bar boundary floored MI to a different bar than
-     * the debate it fed).
+     * Passed down from `TickContext.decision_bar`, the SAME derivation
+     * `debate`'s `bar` field below carries — never a second
+     * `floorToBar(clock.now())` taken here or inside an analyst.
      */
     bar: Date;
   }): Promise<AnalystView[]>;
   /**
-   * Why the pass just handed to `analysts` produced no views (#1080), read
-   * once, immediately after that call, and only when the view set is empty.
-   *
-   * Optional because only the production adapter can answer it:
-   * `AnalystOrchestrator` returns its failures, `TickSteps.analysts` narrows
-   * them away, and this is the seam that carries the one bit back. Absent
-   * means the runner records the undifferentiated `quorum_skip` it always did
-   * — see `analystsSkipDecisionWord` for why that is the honest fallback for
-   * the control arm and the backtest rather than a hole.
+   * Why the preceding `analysts` call produced no views, read once when the
+   * view set is empty. Optional — only the production adapter can answer it;
+   * absent means the runner records the undifferentiated `quorum_skip`.
    */
   analystSkipKind?(trace_id: string): AnalystSkipKind | undefined;
   debate(input: {
     trace_id: string;
     instrument: string;
     /**
-     * The instrument's asset class, forwarded from the tick's `Signal` (#388).
-     *
-     * Added because the Debate Engine's per-asset-class controls are keyed on
-     * it and none could be wired without it: `RateLimiter`'s `perAssetClass`
-     * limits, `LATENCY_BUDGET_MS`'s crypto-30s/stocks-60s hard timeout (#374),
-     * and `MAX_ROUNDS_BY_ASSET_CLASS`'s round cap (#581) — all live in
-     * `debate-adapter.ts`.
-     *
-     * Carried on the step input rather than resolved from a universe map
-     * inside the adapter: the runner already holds `Signal.asset_class` as
-     * authoritative fact, and a second lookup table keyed on instrument name
-     * is a place for the two to disagree.
+     * Forwarded from the tick's `Signal`, not re-resolved from a universe map
+     * inside the adapter — a second lookup keyed on instrument name is a
+     * place for the two to disagree. Feeds `debate-adapter.ts`'s
+     * per-asset-class rate limits, latency budget and round cap.
      */
     asset_class: AssetClass;
     views: AnalystView[];
     clock: Clock;
     /**
-     * The decision bar's opening boundary, passed down from
-     * `TickContext.decision_bar` (#743). The step keys `debate_id` and the
-     * row's `bar_timestamp` on THIS value rather than flooring its own
-     * `clock.now()` — a debate that straddles a bar boundary (LLM round
-     * trips, retries) stays keyed to the bar the gate opened, and the Trader
-     * inherits the same value via `DebateResult.bar_timestamp` (#687). One
-     * derivation per pass, at the gate; everything below receives it.
+     * Passed down from `TickContext.decision_bar`; keys `debate_id` and
+     * `bar_timestamp` on this value rather than flooring a fresh
+     * `clock.now()`, so a debate straddling a bar boundary stays keyed to the
+     * bar the gate opened.
      */
     bar: Date;
   }): Promise<DebateResult>;
@@ -381,35 +262,16 @@ export interface TickSteps {
     risk_decision: RiskDecision;
     clock: Clock;
   }): Promise<VerdictDecision>;
-  /** Called only on a Verdict `go` (orchestrator-spec.md story 7) */
+  /** Called only on a Verdict `go`. */
   execution(verdict: VerdictDecision): Promise<ExecutionResult>;
   /**
-   * Falsifier arm 2, run in parallel with this pass (#753) — the mandated
-   * matched control from ADR-0014 amendment 2 and ADR-0017 §Consequences.
-   *
-   * Invoked on EVERY pass through `runInstrument`, both cadences: on a decision
-   * pass with the live arm's own `AnalystView[]` (so the control decides from
-   * the same views on the same bar), and on a tick pass with none (so the
-   * control runs its own position-facing exit check and its lots reach
-   * ADR-0014's mandatory flat-by-close). "In parallel from the first soak day"
-   * is the ticket's ordering constraint, and calling this from the one method
-   * every real tick goes through is what makes it structural rather than a
-   * separately scheduled job that could be started late.
-   *
-   * **Optional, and this is the one place in the file where optional is not the
-   * lesser choice.** A required member would break every existing `TickSteps`
-   * construction — the backtest replay driver, the smoke run, and several
-   * hundred tests — to express something none of them measure: a replayed or
-   * fixture-driven pass has no soak to control for. The risk that optionality
-   * usually carries here (this repo's dominant defect: a tested mechanism
-   * nothing calls) is closed where it belongs, at the composition root, by a
-   * test that drives the real `buildProductionComponents(...)` and asserts the
-   * member is bound — the same remedy #752's counter-unwired mutation uses.
-   *
-   * Resolves when the control pass has finished or has been contained. It never
-   * rejects: a failure in the measurement must not take down the arm that
-   * trades the book, and the containment lives in the implementation rather than
-   * in the runner, whose lack of a try/catch is a deliberate invariant.
+   * Falsifier arm 2 (ADR-0014's mandated matched control), invoked on EVERY
+   * pass through `runInstrument` so it's structural rather than a
+   * separately-scheduled job that could start late. Optional because a
+   * required member would break every replay/fixture-driven `TickSteps`
+   * construction, which has no soak to control for; wiring is asserted at the
+   * composition root instead. Never rejects — a failure in the measurement
+   * must not take down the arm that trades the book.
    */
   controlArm?(input: {
     signal: Signal;
