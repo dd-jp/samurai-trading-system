@@ -46,86 +46,45 @@ import { NOOP_ANALYST_TELEMETRY } from './types.js';
 const ALL_PERSONAS: Analyst[] = [technicalAnalyst, fundamentalAnalyst, sentimentAnalyst];
 
 /**
- * The "short timeout" of analysts-spec.md story 19, as a number.
- *
- * What a persona waits on is market data over HTTP, not an LLM — the personas
- * are mechanical (technical reads indicators, fundamental returns a constant,
- * sentiment reads an in-memory store) — and specifically it waits on the QUEUE
- * in front of that HTTP. Bar fetches take `acquireBackground()` on the Alpaca
- * token bucket shared with the order path (`shared/http/venue-pacing.ts`),
- * which holds 20 tokens above the order path's reserve and refills at 2.0/s,
- * while one sweep of the 20-instrument universe reaches the venue for up to
- * four distinct windows per instrument — a WARM-STORE count. A first-ever tick
- * against an empty store reaches the venue for more than that and pays them
- * serially, which this deadline does not cover; #1543 closed that by warming
- * the store at boot rather than by widening this number (analysts-spec.md,
- * "Module: Failure Handling"). A fetch that cannot get a token has not
- * started, so a deadline under the drain times the back of every sweep out by
- * construction — the 2026-09-10 19:56 burst measured 91 of 133 fetches past
- * 10,000ms with a median of 21,338ms, which is #1080's instance 2: `technical
- * did not answer within 10000ms` on 57% of main-arm runs, with no fault logged
- * anywhere because there was none.
+ * What a persona waits on is market data over HTTP, not an LLM (the
+ * personas are mechanical), and specifically the QUEUE in front of that
+ * HTTP: bar fetches take `acquireBackground()` on the Alpaca token bucket
+ * shared with the order path, which refills at 2.0/s, while one sweep of
+ * the universe reaches the venue for up to four windows per instrument at
+ * warm-store steady state. A first-ever tick against an empty store reaches
+ * the venue for more and is not covered here — warm the store at boot
+ * instead of widening this number.
  *
  * 30,000ms is that drain, derived rather than chosen: `(20 instruments *
- * 4 windows - 20 tokens of headroom) / 2.0 per second`. The derivation is
- * pinned from the pacing side by `production/rate-limit-wiring.test.ts`, which
- * is where the bucket's constants live. `ATTEMPTS_PER_PERSONA` is 2, so the
- * per-persona wall clock is up to `ANALYST_STAGE_WALL_CLOCK_MS`, which is what
- * `paper-profile.test.ts`'s pass-duration arithmetic consumes. Those
- * two attempts may be waiting on the SAME fetch: the retry carries no
- * `AbortSignal`, so attempt 1's request is still in flight and attempt 2 joins
- * it through `MarketDataServiceImpl.inFlightBarFetches` instead of re-asking
- * the venue. Against a queue — which is what this deadline is sized for — that
- * is the right trade; liveness against a stuck fetch comes from
- * `fetchWithTimeout`, not from the retry.
+ * 4 windows - 20 tokens of headroom) / 2.0 per second`, pinned from the
+ * pacing side by `production/rate-limit-wiring.test.ts`. The two
+ * `ATTEMPTS_PER_PERSONA` retries may be waiting on the SAME fetch: the
+ * retry carries no `AbortSignal`, so attempt 2 joins attempt 1's
+ * still-in-flight request via `MarketDataServiceImpl.inFlightBarFetches`
+ * instead of re-asking the venue — the right trade against a queue;
+ * liveness against a genuinely stuck fetch comes from `fetchWithTimeout`.
  *
- * The other half of #1080's instance 2 is upstream of this number: concurrent
- * callers asking for the SAME window no longer each spend a token
- * (`MarketDataServiceImpl.inFlightBarFetches`), which removed 74% of the
- * measured burst. This deadline covers what remains after that.
+ * The point of a timeout at all: `Promise.all` below has no deadline of its
+ * own, so one persona whose fetch never settles hangs the whole stage.
  *
- * The point of having a timeout at all is that `Promise.all` below has no
- * deadline of its own: one persona whose fetch never settles hangs the whole
- * analyst stage forever, and an unattended run has nobody to notice.
- *
- * **There is no enclosing analyst-stage budget for this number to be divided
- * out of, and #1104 resolves that deliberately rather than inventing one.**
- * The debate arm's per-attempt timeout is a division: a logical LLM call runs
- * inside `LATENCY_BUDGET_MS`, so `maxAttempts x (timeoutMs + maxDelayMs) <=
- * LATENCY_BUDGET_MS.stocks` fixes it from above. Nothing downstream measures
- * the analyst stage's wall clock, and specifically not the two gates
- * `paper-profile.ts`'s `maxConcurrentInstruments` comment names: Verdict's
- * gate 1 measures `now - orderIntent.decided_at` (verdict/index.ts), and
- * `decided_at` is `clock.now()` read inside that instrument's OWN Trader step
- * (decide.ts, `const asOf = clock.now()`), so an instrument's position in the
- * `ceil(universe / width)` walk does not enter it; gate 2 measures
- * `Mark.observed_at` on a mark `getMark` re-reads at gate time
- * (verdict/index.ts, `marketData.getMark(orderIntent.instrument, now)`) behind
- * a 5,000ms TTL (`MarketDataServiceImpl`'s `markTtlMs`, passed explicitly in
- * production.ts), so it too carries no walk position. A pass therefore
- * overruns the 120,000ms tick cadence by design (#1080) with no gate to catch
- * it. So this deadline is sized against the data source alone, and
- * `ANALYST_STAGE_WALL_CLOCK_MS` below is an OUTPUT of that sizing, not a
- * ceiling imposed on it. The human tripwire on `maxConcurrentInstruments` is
- * what is left, which is why that comment still says to revisit rather than
- * assume.
+ * There is no enclosing analyst-stage budget this divides out of, and that
+ * is deliberate — unlike the debate arm's per-attempt timeout, which IS a
+ * division of `LATENCY_BUDGET_MS`. Nothing downstream measures the analyst
+ * stage's wall clock, so `ANALYST_STAGE_WALL_CLOCK_MS` below is an OUTPUT
+ * of this sizing, not a ceiling imposed on it.
  */
 /**
  * This literal is `deriveAnalystDrainMs`'s DRAIN term alone
  * (`server/shared/http/venue-pacing.ts`), not the full `deriveAnalystTimeoutMs`
- * a real deployment runs — that also adds a fetch-bound floor (#1542), so the
- * true per-attempt deadline at even the CHECKED-IN Alpaca defaults is already
- * ~60,750ms, not this 30,000ms. This constant stays a static fallback ON
- * PURPOSE (#1542 review, Finding 3): it is what a caller gets who constructs
- * `AnalystOrchestrator` directly without an explicit `timeout_ms` (tests,
- * offline paths), and what `ANALYST_STAGE_WALL_CLOCK_MS` below and
- * `paper-profile.ts`'s pass-duration tripwire comments are sized against.
- * Making it track the resolved pacing live would cascade into re-deriving a
- * chain of unrelated static tripwires (`paper-profile.test.ts`'s 172s/688s
- * pass-duration figures, `pollIntervalMs` bounds) for a minor finding — see
- * `docs/specs/analysts-spec.md`'s matching amendment for the full accounting.
- * An operator relying on this figure as a true ceiling must re-run
- * `deriveAnalystTimeoutMs` against the RESOLVED pacing by hand.
+ * a real deployment runs — that also floors at a fetch-bound term, so the
+ * true per-attempt deadline at even the checked-in Alpaca defaults is
+ * already ~60,750ms, not this 30,000ms. Kept a static fallback ON PURPOSE:
+ * it is what a caller gets who constructs `AnalystOrchestrator` directly
+ * without an explicit `timeout_ms` (tests, offline paths), and what
+ * `ANALYST_STAGE_WALL_CLOCK_MS` below and `paper-profile.ts`'s
+ * pass-duration tripwire comments are sized against. An operator relying on
+ * this figure as a true ceiling must re-run `deriveAnalystTimeoutMs`
+ * against the RESOLVED pacing by hand.
  */
 export const DEFAULT_ANALYST_TIMEOUT_MS = 30_000;
 
@@ -133,23 +92,14 @@ export const DEFAULT_ANALYST_TIMEOUT_MS = 30_000;
 const ATTEMPTS_PER_PERSONA = 2;
 
 /**
- * The analyst stage's worst-case wall clock (#1104) — the figure
- * `paper-profile.test.ts`'s pass-duration arithmetic and `paper-profile.ts`'s
- * tripwire comment each used to restate by hand as
- * "`DEFAULT_ANALYST_TIMEOUT_MS` twice".
- *
- * Exact rather than an upper bound, because `runAnalysts` fans the personas out
- * under one `Promise.all`: the stage settles when the slowest persona does, and
- * the slowest possible persona is one that exhausts every attempt. Pinned
- * behaviourally by `analyst-stage-wall-clock.test.ts` so a change to the fan-out
- * shape or the attempt count cannot leave this constant describing code that no
- * longer exists.
- *
- * Inherits `DEFAULT_ANALYST_TIMEOUT_MS`'s staleness (#1542 review, Finding 3 —
- * see that constant's doc comment): this is `ATTEMPTS_PER_PERSONA` times the
- * static DRAIN-only literal, not the real per-attempt deadline a production
- * boot wires (which also floors at a fetch-bound term), so the real worst-case
- * wall clock at even the checked-in defaults already exceeds this figure.
+ * The analyst stage's worst-case wall clock. Exact rather than an upper
+ * bound, because `runAnalysts` fans the personas out under one
+ * `Promise.all`: the stage settles when the slowest persona does, and the
+ * slowest possible persona exhausts every attempt. Pinned behaviourally by
+ * `analyst-stage-wall-clock.test.ts` so a change to the fan-out shape or the
+ * attempt count cannot leave this constant describing code that no longer
+ * exists. Inherits `DEFAULT_ANALYST_TIMEOUT_MS`'s staleness — see that
+ * constant's doc comment.
  */
 export const ANALYST_STAGE_WALL_CLOCK_MS = ATTEMPTS_PER_PERSONA * DEFAULT_ANALYST_TIMEOUT_MS;
 
@@ -157,38 +107,32 @@ export interface AnalystOrchestratorDeps {
   market_intelligence: MarketIntelligenceStore;
   market_data: MarketDataService;
   /**
-   * Per-asset-class trading calendars (#746), threaded straight onto every
-   * `AnalystInput` below — this class does not itself compute anything from
-   * them, only resolves `signal.asset_class` to the right one.
+   * Per-asset-class trading calendars, threaded straight onto every
+   * `AnalystInput` below — this class only resolves `signal.asset_class` to
+   * the right one, it computes nothing from them.
    *
    * Optional and defaults to a pair of `AlwaysOpenCalendar`s: the SAFE
    * default is "no session to anchor to" for every asset class
    * (`session-features.ts` reads that as a real `null`, never a fabricated
    * value), not a guessed-at real calendar a caller happened not to supply.
-   * `production.ts` already resolves the real pair for the flatten rule
-   * (`sessionCalendars`, ADR-0014) and reuses it here rather than deriving a
-   * second one — a second derivation inherits bugs independently of the
-   * first, exactly what #696 found for `UsEquityRegularHoursCalendar`.
-   * `production.test.ts` asserts the composition root supplies the real pair,
-   * mirroring the #745 telemetry-wiring test for the same defect class (a
-   * mechanism nothing calls).
+   * `production.ts` reuses its own resolved pair here rather than deriving
+   * a second one — a second derivation inherits bugs independently of the
+   * first.
    */
   sessionCalendars?: Record<AssetClass, TradingCalendar>;
   /**
-   * Where an analyst's counters go (#745). Threaded straight onto every
-   * `AnalystInput` below — this class neither reads nor aggregates it, because
+   * Where an analyst's counters go. Threaded straight onto every
+   * `AnalystInput` below — this class neither reads nor aggregates it, since
    * the counter is per-read and this layer only sees per-persona outcomes.
    * Optional here (tests and the backtest omit it); `production.ts` supplies
-   * the real sink. `AnalystInput.telemetry` itself is non-optional (#790), so
-   * a missing dep falls back to `NOOP_ANALYST_TELEMETRY` rather than the
-   * field going missing on the input every persona receives.
+   * the real sink, falling back to `NOOP_ANALYST_TELEMETRY` since
+   * `AnalystInput.telemetry` itself is non-optional.
    */
   telemetry?: AnalystTelemetry;
   /**
-   * Where the cause behind a stage failure goes (#1114). Threaded the same
-   * way `telemetry` above is: optional here, with a safe no-op default
-   * (`NOOP_LOGGER`) rather than a missing field, so a caller that omits it
-   * gets silence, not a crash, and `production.ts` wires the real one.
+   * Where the cause behind a stage failure goes. Optional here, with a safe
+   * no-op default (`NOOP_LOGGER`), so a caller that omits it gets silence,
+   * not a crash, and `production.ts` wires the real one.
    */
   logger?: Logger;
 }
@@ -211,15 +155,11 @@ const NOOP_LOGGER: Logger = {
 
 /**
  * Renders a caught value's name, message, stack and cause into a bounded,
- * credential-safe payload (#1114).
- *
- * `describeThrown` alone collapses an `Error` to its `.message` — exactly the
- * information loss the ticket exists to close (a soak's `stage=analysts
- * level=error` line named a timeout with no way to tell an HTTP timeout from
- * a 429 from a malformed body). This keeps `name`/`stack`/`cause` too, masked
- * and capped the same way `analysts-adapter.ts` already treats every other
- * upstream-controlled failure string — a stack frame can carry a URL with
- * query params, and `cause` is arbitrary.
+ * credential-safe payload. `describeThrown` alone collapses an `Error` to
+ * its `.message`, losing the ability to tell an HTTP timeout from a 429
+ * from a malformed body — this keeps `name`/`stack`/`cause` too, masked and
+ * capped the same way `analysts-adapter.ts` treats every other
+ * upstream-controlled failure string.
  */
 function renderErrorDetail(error: unknown): Record<string, unknown> {
   try {
@@ -228,9 +168,9 @@ function renderErrorDetail(error: unknown): Record<string, unknown> {
     // Guards the RENDER, which `safeLog` cannot: a hostile value's throwing
     // `toString`/`Symbol.toPrimitive` (or a lazy `message` getter) throws
     // while the payload is still being built, before `safeLog`'s own
-    // try/catch is ever entered — `logCaughtFailure`'s doc comment describes
-    // the same hole. On the late-settlement path the escape would reject a
-    // derived promise nobody holds, which Node 22 turns into process exit
+    // try/catch is entered. On the late-settlement path the escape would
+    // reject a derived promise nobody holds, which Node 22 turns into
+    // process exit.
     return { message: '[unrenderable error]' };
   }
 }
@@ -272,11 +212,11 @@ export interface AnalystOrchestratorOptions {
 }
 
 /**
- * #1114's late-arrival observer for one persona attempt inside `withTimeout`:
- * this fires strictly after the tick has already moved on from that attempt
- * (it lost the race to the deadline). Logged only — see `withTimeout`'s doc
- * comment for why the invariant "a late arrival is logged, never applied"
- * holds structurally, not by convention.
+ * Late-arrival observer for one persona attempt inside `withTimeout`: fires
+ * strictly after the tick has already moved on from that attempt (it lost
+ * the race to the deadline). Logged only — see `withTimeout`'s doc comment
+ * for why "a late arrival is logged, never applied" holds structurally, not
+ * by convention.
  */
 function logLatePersonaSettlement(
   logger: Logger,
@@ -304,14 +244,12 @@ function logLatePersonaSettlement(
 }
 
 /**
- * Classifies one failed persona attempt into a reason string and failure kind
- * (analysts-spec.md story 20), and logs the non-timeout case — #1114's cheap
- * half: a genuine (non-timeout) rejection already carries a full `Error` right
- * here, and the caller's bookkeeping collapses it to a bare reason string, the
- * same loss the ticket names, just without `withTimeout`'s abandoned-promise
- * problem. Logged in addition to, never instead of, the caller's own
- * `reason`/`kind` bookkeeping and the error/warn line `analysts-adapter.ts`
- * builds from it.
+ * Classifies one failed persona attempt into a reason string and failure
+ * kind, and logs the non-timeout case: a genuine (non-timeout) rejection
+ * already carries a full `Error` right here, and the caller's bookkeeping
+ * collapses it to a bare reason string. Logged in addition to, never
+ * instead of, the caller's own `reason`/`kind` bookkeeping and the
+ * error/warn line `analysts-adapter.ts` builds from it.
  */
 function classifyPersonaAttemptFailure(
   logger: Logger,
@@ -324,26 +262,16 @@ function classifyPersonaAttemptFailure(
   try {
     reason = describeThrown(error);
   } catch {
-    // `describeThrown` (safe-log.ts) now coerces a non-string
-    // `message` through its own JSON.stringify/String ladder
-    // rather than returning it verbatim, but that ladder can still
-    // throw for a value hostile enough to defeat BOTH steps — its
-    // own doc comment says so — and a plain `message` getter that
-    // throws outright never reaches the ladder at all. Nor does a
-    // `Proxy` with a throwing `getPrototypeOf` trap: `describeThrown`'s
-    // own `error instanceof Error` check runs before either surface
-    // and throws there instead. Any of these throwing here would
-    // escape this catch — which exists to HANDLE the persona's
-    // failure — and reject the `Promise.all` below, turning a
-    // handled analyst failure into a failed tick before any of this
-    // loop's own logging runs. This is the same try/catch/placeholder
-    // shape `logCaughtFailure` (safe-log.ts) uses for that residual
-    // case
+    // `describeThrown` can still throw for a value hostile enough to defeat
+    // its own fallback ladder (a throwing `message` getter, or a `Proxy`
+    // with a throwing `getPrototypeOf` trap). Left uncaught here it would
+    // escape this catch — which exists to HANDLE the persona's failure —
+    // and reject the `Promise.all` below, turning a handled analyst failure
+    // into a failed tick before any of this loop's own logging runs.
     reason = '[unrenderable error]';
   }
-  // `AnalystTimeoutError` is named explicitly rather than left to
-  // the classifier: it is this class's own deadline, not a provider's
-  // (#1394)
+  // Named explicitly rather than left to the classifier: it is this
+  // class's own deadline, not a provider's
   const kind: AnalystFailureKind =
     error instanceof AnalystTimeoutError ? 'timeout' : classifyFailureCause(error);
   if (kind !== 'timeout') {
@@ -371,20 +299,17 @@ class AnalystTimeoutError extends Error {
 }
 
 /**
- * Races `work` against a deadline. The timer is always cleared: an uncleared
- * `setTimeout` keeps the Node event loop alive, which in a 15-minute-cadence
- * process means a run that will not exit for as long as the longest timeout it
- * ever armed.
+ * Races `work` against a deadline. The timer is always cleared: an
+ * uncleared `setTimeout` keeps the Node event loop alive, which in a
+ * 15-minute-cadence process means a run that will not exit for as long as
+ * the longest timeout it ever armed.
  *
- * A timed-out attempt's promise keeps running in the background — there is no
- * `AbortSignal` on the `Analyst` port to cancel it with. That is acceptable
- * here and deliberately not papered over: the personas have no side effects,
- * so a late arrival is discarded, not applied.
- *
- * `onLateSettlement` (#1114) is how that discarded arrival is still OBSERVED.
- * It fires at most once, only on the timeout branch, with whatever `work`
- * eventually does — logged by the caller, never fed back into this
- * function's return value or anything downstream of it.
+ * A timed-out attempt's promise keeps running in the background — there is
+ * no `AbortSignal` on the `Analyst` port to cancel it with. That is
+ * deliberate: the personas have no side effects, so a late arrival is
+ * discarded, not applied. `onLateSettlement` is how that discarded arrival
+ * is still OBSERVED — it fires at most once, only on the timeout branch,
+ * logged by the caller, never fed back into this function's return value.
  */
 async function withTimeout<T>(
   work: Promise<T>,
@@ -401,21 +326,14 @@ async function withTimeout<T>(
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => {
           // Reaching this callback means `work` genuinely has not settled
-          // yet: `Promise.race` resolves via whichever side settles first,
-          // and a `work` that had already settled would have won the race in
-          // an earlier microtask checkpoint, before this macrotask-scheduled
-          // callback could run. So it is safe — and correct — to attach
-          // observers to `work` here, and only here: attaching eagerly at
-          // call time would fire on every attempt, not only the abandoned
-          // one this branch already knows was abandoned
-          //
-          // This does not change what `Promise.race` does with `work`'s
-          // eventual rejection: `Promise.race` already attaches its own
-          // handler to every promise it's given, so a late rejection here is
-          // handled-and-ignored the same way latency-budget.ts's identical
-          // situation documents — `onLateSettlement` only lets the caller
-          // learn what happened, it is not what prevents an unhandled
-          // rejection
+          // yet: a `work` that had already settled would have won the race
+          // in an earlier microtask checkpoint, before this
+          // macrotask-scheduled callback could run — so it's safe to attach
+          // observers to `work` here, and only here (attaching eagerly at
+          // call time would fire on every attempt, not just the abandoned
+          // one). `Promise.race` already attaches its own handler to every
+          // promise it's given, so a late rejection is handled-and-ignored
+          // regardless; `onLateSettlement` only lets the caller observe it.
           if (onLateSettlement !== undefined) {
             work.then(
               (value) => onLateSettlement({ status: 'fulfilled', value }),

@@ -558,7 +558,7 @@ function readListStrict<T>(
 }
 
 /**
- * Parses a persisted `conditions` list ELEMENT-WISE (#1068): a malformed
+ * Parses a persisted `conditions` list ELEMENT-WISE: a malformed
  * element is dropped, the well-formed survivors are kept, and the result is
  * `undefined` (= `no_conditions`) only when NOTHING survives — never a hard
  * reject on a partially-corrupt row, and never enforcement built on an
