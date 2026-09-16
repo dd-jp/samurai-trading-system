@@ -378,6 +378,39 @@ function unzipFirstEntry(buffer: Buffer): string {
   return inflated.toString('utf8');
 }
 
+function parseGkgLine(
+  line: string,
+  themes: ReadonlySet<string>,
+  batchTime: Date,
+): GdeltGkgRecord | null {
+  const fields = line.split('\t');
+  if (fields.length < MIN_COLUMNS) return null;
+
+  const lineThemes = (fields[COL.themes] ?? '').split(';').filter((theme) => theme.length > 0);
+  if (!lineThemes.some((theme) => themes.has(theme))) return null;
+
+  // V1.5TONE is `tone,positive,negative,polarity,…`; only the first field is
+  // the average tone #556 scores on
+  const tone = Number.parseFloat((fields[COL.tone] ?? '').split(',')[0] ?? '');
+  if (!Number.isFinite(tone)) return null;
+
+  const nativeId = fields[COL.recordId] ?? '';
+  if (nativeId.length === 0) return null;
+
+  // Column 1 is the row's own stamp. It equals the file stamp in every
+  // sampled batch; the FILE's stamp wins when they disagree, because that
+  // is the one the archive's cursor and the replay window are keyed on
+  return {
+    native_id: nativeId,
+    batch_time: batchTime,
+    source_name: fields[COL.sourceName] ?? '',
+    document_url: fields[COL.documentUrl] ?? '',
+    themes: lineThemes,
+    tone,
+    payload: PROJECTED_COLUMNS.map((column) => fields[column] ?? '').join('\t'),
+  };
+}
+
 export class GdeltGkgClient {
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
@@ -558,32 +591,8 @@ export class GdeltGkgClient {
     for (const line of csv.split('\n')) {
       if (line.length === 0) continue;
       scanned++;
-      const fields = line.split('\t');
-      if (fields.length < MIN_COLUMNS) continue;
-
-      const themes = (fields[COL.themes] ?? '').split(';').filter((theme) => theme.length > 0);
-      if (!themes.some((theme) => this.themes.has(theme))) continue;
-
-      // V1.5TONE is `tone,positive,negative,polarity,…`; only the first field is
-      // the average tone #556 scores on
-      const tone = Number.parseFloat((fields[COL.tone] ?? '').split(',')[0] ?? '');
-      if (!Number.isFinite(tone)) continue;
-
-      const nativeId = fields[COL.recordId] ?? '';
-      if (nativeId.length === 0) continue;
-
-      // Column 1 is the row's own stamp. It equals the file stamp in every
-      // sampled batch; the FILE's stamp wins when they disagree, because that
-      // is the one the archive's cursor and the replay window are keyed on
-      records.push({
-        native_id: nativeId,
-        batch_time: batchTime,
-        source_name: fields[COL.sourceName] ?? '',
-        document_url: fields[COL.documentUrl] ?? '',
-        themes,
-        tone,
-        payload: PROJECTED_COLUMNS.map((column) => fields[column] ?? '').join('\t'),
-      });
+      const record = parseGkgLine(line, this.themes, batchTime);
+      if (record !== null) records.push(record);
     }
 
     return { batch_time: batchTime, file_url: fileUrl, records, scanned };

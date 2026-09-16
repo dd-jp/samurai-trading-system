@@ -312,6 +312,7 @@ function confidenceOfDelta(delta: number): number {
 type Refusal = string | undefined;
 
 /** The book-quality half of the fail-closed guard */
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: a flat sequence of independent fail-closed gates, each naming the one condition it refuses; splitting them apart would obscure that every gate is a peer of every other, not a nested decision.
 function refuseOnBook(market: PolymarketMarket, now: Date): Refusal {
   if (market.closed) return 'the market is closed';
   if (market.updatedAt === undefined) return 'the market carries no updatedAt stamp';
@@ -492,6 +493,72 @@ export class PolymarketAgent {
     await this.#current?.catch(() => undefined);
   }
 
+  /**
+   * One curated row's contribution to a pass: whether it ANSWERED (read,
+   * refused, or rotted alike — everything but a transport failure) and, when
+   * it produced a usable signal, the item and its raw archive row
+   */
+  async #processEntry(
+    trace_id: string,
+    entry: CuratedMacroMarket,
+    now: Date,
+    bucketAt: Date,
+  ): Promise<{ answered: boolean; item?: IntelligenceItem; raw?: RawArchiveRow }> {
+    let market: PolymarketMarket | undefined;
+    try {
+      market = await this.#deps.client.fetchEventMarket(entry.eventSlug, entry.marketSlug);
+    } catch (error) {
+      // Transport failure: transient, so it does NOT count as answered and
+      // the bucket stays unmarked, which is what makes the next tick retry
+      this.#logFailure(
+        {
+          trace_id,
+          stage: 'market_intelligence',
+          event: 'polymarket_market_fetch_failed',
+          level: 'warn',
+          message:
+            `polymarket: fetching '${entry.id}' failed; it contributes nothing this refresh. ` +
+            'The bucket is not marked, so the next pass retries.',
+        },
+        error,
+        { source: SOURCE_POLYMARKET, curated_id: entry.id },
+      );
+      return { answered: false };
+    }
+
+    if (market === undefined) {
+      // Slug rot, and the loudest case in this file. A decayed table degrades
+      // to silent zero-ingest — the exact mute-analyst state this source
+      // exists to relieve — so it is a warn naming the row to edit, never an
+      // info nobody greps for
+      this.#log({
+        trace_id,
+        stage: 'market_intelligence',
+        event: 'polymarket_curated_row_rotted',
+        level: 'warn',
+        message:
+          `polymarket: curated row '${entry.id}' resolves to no open market ` +
+          `(event '${entry.eventSlug}', market '${entry.marketSlug}'). Polymarket mints a ` +
+          'NEW slug when an event resolves, so this row has almost certainly rotted and ' +
+          'needs re-pointing in curated-markets.ts. Ingesting nothing for it.',
+        payload: {
+          source: SOURCE_POLYMARKET,
+          curated_id: entry.id,
+          event_slug: entry.eventSlug,
+          market_slug: entry.marketSlug,
+        },
+      });
+      // Gamma ANSWERED — with "there is no such market". A decayed table is a
+      // durable state, not an outage, so re-asking inside the hour repeats it
+      return { answered: true };
+    }
+
+    const built = await this.#buildItem(trace_id, entry, market, now, bucketAt);
+    if (built.outcome === 'transport-failed') return { answered: false };
+    if (built.outcome === 'refused') return { answered: true };
+    return { answered: true, item: built.item, raw: built.raw };
+  }
+
   async #pass(trace_id: string): Promise<boolean> {
     const now = this.#deps.clock.now();
     const bucketAt = floorToPolymarketBucket(now, this.#refreshMs);
@@ -504,63 +571,13 @@ export class PolymarketAgent {
     let answered = 0;
 
     for (const entry of this.#table) {
-      let market: PolymarketMarket | undefined;
-      try {
-        market = await this.#deps.client.fetchEventMarket(entry.eventSlug, entry.marketSlug);
-      } catch (error) {
-        // Transport failure: transient, so it does NOT count as answered and
-        // the bucket stays unmarked, which is what makes the next tick retry
-        this.#logFailure(
-          {
-            trace_id,
-            stage: 'market_intelligence',
-            event: 'polymarket_market_fetch_failed',
-            level: 'warn',
-            message:
-              `polymarket: fetching '${entry.id}' failed; it contributes nothing this refresh. ` +
-              'The bucket is not marked, so the next pass retries.',
-          },
-          error,
-          { source: SOURCE_POLYMARKET, curated_id: entry.id },
-        );
-        continue;
+      const outcome = await this.#processEntry(trace_id, entry, now, bucketAt);
+      if (outcome.answered) answered += 1;
+      if (outcome.item !== undefined && outcome.raw !== undefined) {
+        items.push(outcome.item);
+        raws.push(outcome.raw);
+        archivedItems.push(toArchivedItem(outcome.item, outcome.raw));
       }
-
-      if (market === undefined) {
-        // Slug rot, and the loudest case in this file. A decayed table degrades
-        // to silent zero-ingest — the exact mute-analyst state this source
-        // exists to relieve — so it is a warn naming the row to edit, never an
-        // info nobody greps for
-        this.#log({
-          trace_id,
-          stage: 'market_intelligence',
-          event: 'polymarket_curated_row_rotted',
-          level: 'warn',
-          message:
-            `polymarket: curated row '${entry.id}' resolves to no open market ` +
-            `(event '${entry.eventSlug}', market '${entry.marketSlug}'). Polymarket mints a ` +
-            'NEW slug when an event resolves, so this row has almost certainly rotted and ' +
-            'needs re-pointing in curated-markets.ts. Ingesting nothing for it.',
-          payload: {
-            source: SOURCE_POLYMARKET,
-            curated_id: entry.id,
-            event_slug: entry.eventSlug,
-            market_slug: entry.marketSlug,
-          },
-        });
-        // Gamma ANSWERED — with "there is no such market". A decayed table is a
-        // durable state, not an outage, so re-asking inside the hour repeats it
-        answered += 1;
-        continue;
-      }
-
-      const built = await this.#buildItem(trace_id, entry, market, now, bucketAt);
-      if (built.outcome === 'transport-failed') continue;
-      answered += 1;
-      if (built.outcome === 'refused') continue;
-      items.push(built.item);
-      raws.push(built.raw);
-      archivedItems.push(toArchivedItem(built.item, built.raw));
     }
 
     if (items.length === 0) {

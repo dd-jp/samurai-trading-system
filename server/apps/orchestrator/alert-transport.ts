@@ -238,6 +238,88 @@ export function resolveAlertsMode(injected: Partial<ProductionConfig>): AlertsMo
  * token, a retry budget and Telegram's ~30 messages/second ceiling, and
  * separate clients would each believe they owned the whole allowance.
  */
+function logAlertsLogOnly(logger: Logger): void {
+  logger.log({
+    trace_id: 'startup',
+    stage: 'orchestrator',
+    event: 'alerts_log_only',
+    level: 'warn',
+    message:
+      `${ENV_VAR}=log-only — every operator alert (heartbeat, orphaned go verdict, stuck ` +
+      'unpriced fill, unprotected residual position, kill-threshold breach, proposed ' +
+      'risk-threshold loosening) is a log line, and nothing will reach a phone. Correct for ' +
+      `an ATTENDED run only; an unattended soak (#238) needs ${ENV_VAR}=telegram.`,
+    payload: { alerts: 'log-only' },
+  });
+}
+
+// Branched, not boilerplate: on the injected path this module reads no
+// heartbeat chat id and builds no adapter, so claiming the beat goes to
+// `TELEGRAM_HEARTBEAT_CHAT_ID` would name a destination no heartbeat reaches
+// This is what an operator checks their alerting against before an
+// unattended soak, and a confidently wrong destination is worse than none
+function heartbeatRoutingClause(heartbeatChatId: string | undefined): string {
+  if (heartbeatChatId === undefined) {
+    return (
+      'The heartbeat is not routed here at all: ProductionConfig.heartbeatChannel was ' +
+      `supplied by the caller, so where the beat goes is that channel's decision and ` +
+      `${TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR} is neither read nor required (#342).`
+    );
+  }
+  return (
+    `The heartbeat goes to ${TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR} instead (#342), so that ` +
+    'muting the beat cannot mute an escalation.'
+  );
+}
+
+function logAlertsTelegram(logger: Logger, heartbeatChatId: string | undefined): void {
+  logger.log({
+    trace_id: 'startup',
+    stage: 'orchestrator',
+    level: 'info',
+    message:
+      `${ENV_VAR}=telegram — orphaned go verdicts, stuck unpriced fills, unprotected residual ` +
+      'positions, unresolved flatten reconciliations, kill-threshold breaches and APPLIED ' +
+      `risk-threshold loosenings will be pushed to the escalation chat (TELEGRAM_CHAT_ID). ` +
+      `${heartbeatRoutingClause(heartbeatChatId)} ` +
+      'Keep the escalation chat unmuted. Nothing is read back from Telegram: the loosening ' +
+      'notice is outbound-only — it reports a dial the Feedback Loop already moved on its own ' +
+      'authority, inside the hard bounds, and no reply to it is read (#366/#736).',
+    // Never the token, and never either chat id: none is a secret worth a log
+    // line, and the token is a bearer credential for the entire bot. The
+    // heartbeat field is the machine-readable form of the clause above — two
+    // values, because there are two real paths
+    payload: {
+      alerts: 'telegram',
+      heartbeat: heartbeatChatId === undefined ? 'caller-supplied' : 'separate-chat',
+    },
+  });
+}
+
+function populateAlertChannels(
+  channels: AlertChannels,
+  injected: Partial<ProductionConfig>,
+  telegram: TelegramBotApiClient,
+  chatId: string,
+  heartbeatChatId: string | undefined,
+  logger: Logger,
+): void {
+  for (const id of ALERT_IDS) {
+    if (injected[id] !== undefined) continue;
+    if (id === 'heartbeatChannel') {
+      if (heartbeatChatId !== undefined) {
+        channels.heartbeatChannel = tradeChannelAlert(id, {
+          telegram,
+          chatId: heartbeatChatId,
+          logger,
+        });
+      }
+      continue;
+    }
+    assign(channels, id, tradeChannelAlert(id, { telegram, chatId, logger }));
+  }
+}
+
 export function buildAlertChannels(deps: {
   alertsMode: AlertsMode;
   injected: Partial<ProductionConfig>;
@@ -245,18 +327,7 @@ export function buildAlertChannels(deps: {
   logger: Logger;
 }): AlertChannels {
   if (deps.alertsMode === 'log-only') {
-    deps.logger.log({
-      trace_id: 'startup',
-      stage: 'orchestrator',
-      event: 'alerts_log_only',
-      level: 'warn',
-      message:
-        `${ENV_VAR}=log-only — every operator alert (heartbeat, orphaned go verdict, stuck ` +
-        'unpriced fill, unprotected residual position, kill-threshold breach, proposed ' +
-        'risk-threshold loosening) is a log line, and nothing will reach a phone. Correct for ' +
-        `an ATTENDED run only; an unattended soak (#238) needs ${ENV_VAR}=telegram.`,
-      payload: { alerts: 'log-only' },
-    });
+    logAlertsLogOnly(deps.logger);
     return {};
   }
 
@@ -282,57 +353,10 @@ export function buildAlertChannels(deps: {
     logger: deps.logger,
   });
 
-  // The heartbeat clause is branched, not boilerplate: on the injected path
-  // this module reads no heartbeat chat id and builds no adapter, so claiming
-  // the beat goes to `TELEGRAM_HEARTBEAT_CHAT_ID` would name a destination no
-  // heartbeat reaches. This line is what an operator checks their alerting
-  // against before an unattended soak, and a confidently wrong destination is
-  // worse than no claim at all
-  const heartbeatClause =
-    heartbeatChatId === undefined
-      ? 'The heartbeat is not routed here at all: ProductionConfig.heartbeatChannel was ' +
-        `supplied by the caller, so where the beat goes is that channel's decision and ` +
-        `${TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR} is neither read nor required (#342).`
-      : `The heartbeat goes to ${TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR} instead (#342), so that ` +
-        'muting the beat cannot mute an escalation.';
-
-  deps.logger.log({
-    trace_id: 'startup',
-    stage: 'orchestrator',
-    level: 'info',
-    message:
-      `${ENV_VAR}=telegram — orphaned go verdicts, stuck unpriced fills, unprotected residual ` +
-      'positions, unresolved flatten reconciliations, kill-threshold breaches and APPLIED ' +
-      `risk-threshold loosenings will be pushed to the escalation chat (TELEGRAM_CHAT_ID). ` +
-      `${heartbeatClause} ` +
-      'Keep the escalation chat unmuted. Nothing is read back from Telegram: the loosening ' +
-      'notice is outbound-only — it reports a dial the Feedback Loop already moved on its own ' +
-      'authority, inside the hard bounds, and no reply to it is read (#366/#736).',
-    // Never the token, and never either chat id: none is a secret worth a log
-    // line, and the token is a bearer credential for the entire bot. The
-    // heartbeat field is the machine-readable form of the clause above — two
-    // values, because there are two real paths
-    payload: {
-      alerts: 'telegram',
-      heartbeat: heartbeatChatId === undefined ? 'caller-supplied' : 'separate-chat',
-    },
-  });
+  logAlertsTelegram(deps.logger, heartbeatChatId);
 
   const channels: AlertChannels = {};
-  for (const id of ALERT_IDS) {
-    if (deps.injected[id] !== undefined) continue;
-    if (id === 'heartbeatChannel') {
-      if (heartbeatChatId !== undefined) {
-        channels.heartbeatChannel = tradeChannelAlert(id, {
-          telegram,
-          chatId: heartbeatChatId,
-          logger: deps.logger,
-        });
-      }
-      continue;
-    }
-    assign(channels, id, tradeChannelAlert(id, { telegram, chatId, logger: deps.logger }));
-  }
+  populateAlertChannels(channels, deps.injected, telegram, chatId, heartbeatChatId, deps.logger);
   if (deps.injected.verdictAlerts === undefined) {
     channels.verdictAlerts = new TelegramChannel(telegram, chatId);
   }

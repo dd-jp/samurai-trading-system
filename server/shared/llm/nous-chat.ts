@@ -177,6 +177,7 @@ export async function nousChat(
   }
 }
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: a flat sequence of independent response-shape guards translating one wire failure (bad JSON, missing choices, truncation, refusal) at a time into a typed error; splitting the checks apart would scatter this one wire contract across several functions.
 async function dispatch(
   options: NousChatOptions,
   request: NousChatRequest,

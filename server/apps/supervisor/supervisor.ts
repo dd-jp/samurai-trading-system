@@ -138,6 +138,33 @@ const DEFAULT_NODE_ARGS = ['--env-file=.env.local'] as const;
  */
 const REQUESTED_STOP: ReadonlySet<string> = new Set(['SIGINT', 'SIGTERM']);
 
+function isRequestedStop(shuttingDown: boolean, signal: NodeJS.Signals | null): boolean {
+  return shuttingDown || (signal !== null && REQUESTED_STOP.has(signal));
+}
+
+/**
+ * The exit code `serve` reports for one child's exit, given the code so far.
+ *
+ * An exit nobody asked for is a failure of `serve` itself, whichever half it
+ * was: what survives is half a system. Note the floor at 1 — a child that
+ * exits *cleanly* on its own (`kill -TERM` aimed at the orchestrator alone,
+ * which drains and returns 0) is still a failure of `serve`, and reporting
+ * success while logging "stopping the other" would strand a `npm run serve
+ * || alert` caller with no alert.
+ *
+ * A requested stop that failed to drain cleanly still has to reach the shell
+ * as a non-zero status.
+ */
+function exitCodeForChildExit(code: number | null, requested: boolean, exitCode: number): number {
+  if (!requested) {
+    return code === null || code === 0 ? 1 : code;
+  }
+  if (code !== null && code !== 0 && exitCode === 0) {
+    return code;
+  }
+  return exitCode;
+}
+
 /**
  * Migrates the store, spawns both children, and returns the handle the
  * entrypoint drives.
@@ -226,26 +253,15 @@ export function startSupervisor(effects: SupervisorEffects = {}): Supervisor {
         child.once('exit', (code, signal) => {
           // Read before `settle` calls `shutdown` and flips it, so the first
           // child's death is judged against the state that preceded it
-          const requested = shuttingDown || (signal !== null && REQUESTED_STOP.has(signal));
+          const requested = isRequestedStop(shuttingDown, signal);
 
           // When already settled the `'error'` path has accounted for this
           // child; its code must not be overwritten
           if (!settled) {
             if (!requested) {
-              // An exit nobody asked for is a failure of `serve` itself,
-              // whichever half it was: what survives is half a system. Note
-              // the floor at 1 — a child that exits *cleanly* on its own
-              // (`kill -TERM` aimed at the orchestrator alone, which drains
-              // and returns 0) is still a failure of `serve`, and reporting
-              // success while logging "stopping the other" would strand a
-              // `npm run serve || alert` caller with no alert
-              exitCode = code === null || code === 0 ? 1 : code;
               log(`${name} exited (${signal ?? `code ${code ?? 'unknown'}`}); stopping the other.`);
-            } else if (code !== null && code !== 0 && exitCode === 0) {
-              // A requested stop that failed to drain cleanly still has to
-              // reach the shell as a non-zero status
-              exitCode = code;
             }
+            exitCode = exitCodeForChildExit(code, requested, exitCode);
           }
 
           settle();

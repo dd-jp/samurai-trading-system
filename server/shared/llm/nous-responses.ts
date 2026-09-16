@@ -223,20 +223,27 @@ interface OutputItem {
  * than concatenated: they are not the answer, and folding a reasoning summary
  * into the JSON the caller is about to parse would break it.
  */
+function textPartsOf(item: OutputItem): string[] {
+  if (item?.type !== undefined && item.type !== 'message') return [];
+  if (!Array.isArray(item?.content)) return [];
+
+  const parts: string[] = [];
+  for (const content of item.content as OutputContent[]) {
+    // `output_text` is the content-part type name; a `refusal` part is not
+    // answer text and must not be parsed as though it were
+    if (content?.type !== undefined && content.type !== 'output_text') continue;
+    if (typeof content?.text === 'string') parts.push(content.text);
+  }
+  return parts;
+}
+
 function extractText(body: ResponsesBody): string {
   if (typeof body.output_text === 'string') return body.output_text;
   if (!Array.isArray(body.output)) return '';
 
   const parts: string[] = [];
   for (const item of body.output as OutputItem[]) {
-    if (item?.type !== undefined && item.type !== 'message') continue;
-    if (!Array.isArray(item?.content)) continue;
-    for (const content of item.content as OutputContent[]) {
-      // `output_text` is the content-part type name; a `refusal` part is not
-      // answer text and must not be parsed as though it were
-      if (content?.type !== undefined && content.type !== 'output_text') continue;
-      if (typeof content?.text === 'string') parts.push(content.text);
-    }
+    parts.push(...textPartsOf(item));
   }
   return parts.join('');
 }
@@ -289,6 +296,19 @@ function countServerToolCalls(body: ResponsesBody): number {
   return calls;
 }
 
+function citationsFromItem(item: OutputItem): NousCitation[] {
+  if (!Array.isArray(item?.content)) return [];
+  const citations: NousCitation[] = [];
+  for (const content of item.content as OutputContent[]) {
+    if (!Array.isArray(content?.annotations)) continue;
+    for (const annotation of content.annotations) {
+      const citation = toCitation(annotation);
+      if (citation !== null) citations.push(citation);
+    }
+  }
+  return citations;
+}
+
 function extractCitations(body: ResponsesBody): NousCitation[] {
   const seen = new Set<string>();
   const citations: NousCitation[] = [];
@@ -301,11 +321,7 @@ function extractCitations(body: ResponsesBody): NousCitation[] {
 
   if (Array.isArray(body.output)) {
     for (const item of body.output as OutputItem[]) {
-      if (!Array.isArray(item?.content)) continue;
-      for (const content of item.content as OutputContent[]) {
-        if (!Array.isArray(content?.annotations)) continue;
-        for (const annotation of content.annotations) push(toCitation(annotation));
-      }
+      for (const candidate of citationsFromItem(item)) push(candidate);
     }
   }
 
@@ -362,6 +378,7 @@ export async function nousResponses(
   }
 }
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: a flat sequence of independent response-shape guards translating one wire failure (bad JSON, missing body, missing output, truncation) at a time into a typed error; splitting the checks apart would scatter this one wire contract across several functions.
 async function dispatchResponses(
   options: NousResponsesOptions,
   request: NousResponsesRequest,

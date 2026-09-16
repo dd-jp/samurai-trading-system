@@ -3308,6 +3308,179 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       expect(venue.resting().map((row) => row.qty)).toEqual(['2']);
     });
 
+    const PRIOR_STATUS_SHAPES = [
+      'resting-match',
+      'resting-mismatch',
+      'partially_filled',
+      'filled',
+      'filled-undersized',
+      'canceled',
+      'pending_cancel',
+    ] as const;
+    type PriorStatusShape = (typeof PRIOR_STATUS_SHAPES)[number];
+
+    // Prefixes over the non-absent shapes: the walk stops at the first gap,
+    // so a sequence is fully described by what sits below that gap
+    function buildPriorStatusSequences(maxDepth: number): PriorStatusShape[][] {
+      let sequences: PriorStatusShape[][] = [[]];
+      let frontier: PriorStatusShape[][] = [[]];
+      for (let depth = 0; depth < maxDepth; depth += 1) {
+        frontier = frontier.flatMap((prefix) =>
+          PRIOR_STATUS_SHAPES.map((shape) => [...prefix, shape]),
+        );
+        sequences = [...sequences, ...frontier];
+      }
+      return sequences;
+    }
+
+    // The reset on reaching the named row makes this a running total of
+    // "this call's qty, plus every seed ABOVE the named one". A freshly
+    // placed `oco-*` id names no seed, so the loop resets nowhere and
+    // sums all of them — unreachable rather than wrong: a fresh OCO
+    // rests, and `covers` is only read where nothing is resting
+    function observedResidualFloor(
+      namedId: string | null | undefined,
+      qty: number,
+      sequenceLength: number,
+      seededQty: Map<string, number>,
+    ): number {
+      let observed = qty;
+      for (let above = 0; above < sequenceLength; above += 1) {
+        const id = `seed-${above}`;
+        const size = seededQty.get(id);
+        if (id === namedId) observed = qty;
+        else if (size !== undefined) observed = Math.max(observed, size);
+      }
+      return observed;
+    }
+
+    // 2. A normal return must never leave the lot NAKED after this walk
+    // destroyed protection that was working when it started. The caller
+    // clears the #549 marker on that return, so a naked residual here is
+    // also an UNWATCHED one
+    //
+    // Zero working legs is only acceptable when the row the bookkeeping
+    // NAMES accounts for every share the lot was OBSERVED to hold — that
+    // lot is flat, not unprotected. `status === 'filled'` alone is not
+    // that test (#1573): a full fill of a size the lot has since
+    // outgrown closes only part of the residual, and excusing it here is
+    // what let the sweep pass over a naked return
+    //
+    // The size that must be covered is read off the SEEDS, not off the
+    // adapter's own running total (#1581): this call's `qty`, and the
+    // size of every attempt allocated ABOVE the named row — those shares
+    // existed after the named row filled, so its fill cannot have closed
+    // them. Deriving it from the sweep's own construction is what gives
+    // the later-attempt half of the discriminator coverage here at all;
+    // against a hardcoded 6 it had none
+    //
+    // Scoped to normal returns deliberately: the last-index destructive
+    // cancel throws, which is recorded finding 4, not this clause's
+    // business
+    function nakedClearViolation(
+      where: string,
+      workingAtEntry: Set<string>,
+      workingAtExit: AlpacaOrder[],
+      venue: ReturnType<typeof measuredAlpacaVenue>,
+      namedId: string | null | undefined,
+      qty: number,
+      sequenceLength: number,
+      seededQty: Map<string, number>,
+    ): string | null {
+      const destroyed = [...workingAtEntry].some(
+        (id) => !workingAtExit.some((row) => row.id === id),
+      );
+      if (!destroyed || workingAtExit.length !== 0) return null;
+
+      const named = [...venue.rows.values()].find((row) => row.id === namedId);
+      const observed = observedResidualFloor(namedId, qty, sequenceLength, seededQty);
+      const covers = named?.status === 'filled' && Number(named.filled_qty) >= observed;
+      if (covers) return null;
+
+      return (
+        `${where} destroyed working protection and left none; ` +
+        `bookkeeping names ${String(namedId)} ` +
+        `(${String(named?.status)} ${String(named?.filled_qty)}/${observed})`
+      );
+    }
+
+    // 3. Finding 2's original signature, asserted structurally: the
+    // bookkeeping `cancel()` later trusts must name the leg that is
+    // actually live, never a terminal one from a lower index
+    function misnamedBookkeepingViolation(
+      where: string,
+      workingAtExit: AlpacaOrder[],
+      namedId: string | null | undefined,
+    ): string | null {
+      if (workingAtExit.length !== 1) return null;
+      if (namedId === workingAtExit[0]?.id) return null;
+      return `${where} bookkeeping names ${String(namedId)}, working leg is ${workingAtExit[0]?.id}`;
+    }
+
+    async function runPriorStatusSequenceCase(
+      qty: number,
+      sequence: PriorStatusShape[],
+      seed: (attempt: number, shape: PriorStatusShape) => AlpacaOrder,
+    ): Promise<string[]> {
+      const where = `[${sequence.join(', ')}] @ qty ${qty}`;
+      const violations: string[] = [];
+
+      const venue = measuredAlpacaVenue();
+      const seededQty = new Map<string, number>();
+      sequence.forEach((shape, attempt) => {
+        const row = seed(attempt, shape);
+        venue.rows.set(row.client_order_id, row);
+        seededQty.set(row.id, Number(row.qty));
+      });
+      const state = new InMemoryBrokerStateStore();
+      // A hand-rolled wrapper, not `vi.spyOn`: every spy stays registered
+      // for teardown, and 8403 of them cost more than the sweep itself
+      let namedId: string | null | undefined;
+      const record = state.recordBracketOrderIds.bind(state);
+      state.recordBracketOrderIds = (venueName, key, ids) => {
+        namedId = ids.target_order_id;
+        record(venueName, key, ids);
+      };
+      const adapter = new AlpacaBrokerAdapter({
+        client: makeClient(venue),
+        rateLimiter: permissiveLimiter(),
+        unpricedFillAlerts: recordingAlerts(),
+        ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
+        logger: recordingLogger(),
+        state,
+      });
+
+      const workingAtEntry = new Set(venue.resting().map((row) => row.id));
+      const threw = await adapter
+        .rearmProtectiveLegs('key-1', 'AAPL', 'buy', qty, 95, 110)
+        .then(() => false)
+        .catch(() => true);
+
+      const workingAtExit = venue.resting();
+
+      // 1. #516 DIRECTLY: never two legs that can still fire on one lot.
+      if (workingAtExit.length > 1) violations.push(`${where} two working legs`);
+
+      if (threw) return violations;
+
+      const naked = nakedClearViolation(
+        where,
+        workingAtEntry,
+        workingAtExit,
+        venue,
+        namedId,
+        qty,
+        sequence.length,
+        seededQty,
+      );
+      if (naked) violations.push(naked);
+
+      const misnamed = misnamedBookkeepingViolation(where, workingAtExit, namedId);
+      if (misnamed) violations.push(misnamed);
+
+      return violations;
+    }
+
     /**
      * WHY A SWEEP AND NOT MORE HAND-BUILT CASES.
      *
@@ -3344,28 +3517,11 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
      * `#1581` tests below exercise that path directly.
      */
     it('holds the money invariants across every reachable prior-status sequence', async () => {
-      const SHAPES = [
-        'resting-match',
-        'resting-mismatch',
-        'partially_filled',
-        'filled',
-        'filled-undersized',
-        'canceled',
-        'pending_cancel',
-      ] as const;
-      type Shape = (typeof SHAPES)[number];
-
-      // Prefixes over the non-absent shapes: the walk stops at the first gap,
-      // so a sequence is fully described by what sits below that gap
-      let sequences: Shape[][] = [[]];
-      let frontier: Shape[][] = [[]];
-      for (let depth = 0; depth < 4; depth += 1) {
-        frontier = frontier.flatMap((prefix) => SHAPES.map((shape) => [...prefix, shape]));
-        sequences = [...sequences, ...frontier];
-      }
+      const sequences = buildPriorStatusSequences(4);
       expect(sequences).toHaveLength(2801);
 
-      function seed(attempt: number, shape: Shape): AlpacaOrder {
+      // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: flat per-shape dispatch — one guard clause per fixture shape, not a decision tree
+      function seed(attempt: number, shape: PriorStatusShape): AlpacaOrder {
         const row: AlpacaOrder = {
           ...acceptedOrder(),
           id: `seed-${attempt}`,
@@ -3410,104 +3566,7 @@ describe('AlpacaBrokerAdapter — intervention path (#429)', () => {
       const violations: string[] = [];
       for (const qty of REQUESTS) {
         for (const sequence of sequences) {
-          const venue = measuredAlpacaVenue();
-          const seededQty = new Map<string, number>();
-          sequence.forEach((shape, attempt) => {
-            const row = seed(attempt, shape);
-            venue.rows.set(row.client_order_id, row);
-            seededQty.set(row.id, Number(row.qty));
-          });
-          const state = new InMemoryBrokerStateStore();
-          // A hand-rolled wrapper, not `vi.spyOn`: every spy stays registered
-          // for teardown, and 8403 of them cost more than the sweep itself
-          let namedId: string | null | undefined;
-          const record = state.recordBracketOrderIds.bind(state);
-          state.recordBracketOrderIds = (venueName, key, ids) => {
-            namedId = ids.target_order_id;
-            record(venueName, key, ids);
-          };
-          const adapter = new AlpacaBrokerAdapter({
-            client: makeClient(venue),
-            rateLimiter: permissiveLimiter(),
-            unpricedFillAlerts: recordingAlerts(),
-            ocoDoubleFillAlerts: recordingDoubleFillAlerts(),
-            logger: recordingLogger(),
-            state,
-          });
-
-          const workingAtEntry = new Set(venue.resting().map((row) => row.id));
-          const threw = await adapter
-            .rearmProtectiveLegs('key-1', 'AAPL', 'buy', qty, 95, 110)
-            .then(() => false)
-            .catch(() => true);
-
-          const workingAtExit = venue.resting();
-          const where = `[${sequence.join(', ')}] @ qty ${qty}`;
-
-          // 1. #516 DIRECTLY: never two legs that can still fire on one lot.
-          if (workingAtExit.length > 1) violations.push(`${where} two working legs`);
-
-          if (threw) continue;
-
-          // 2. A normal return must never leave the lot NAKED after this walk
-          // destroyed protection that was working when it started. The caller
-          // clears the #549 marker on that return, so a naked residual here is
-          // also an UNWATCHED one
-          //
-          // Zero working legs is only acceptable when the row the bookkeeping
-          // NAMES accounts for every share the lot was OBSERVED to hold — that
-          // lot is flat, not unprotected. `status === 'filled'` alone is not
-          // that test (#1573): a full fill of a size the lot has since
-          // outgrown closes only part of the residual, and excusing it here is
-          // what let the sweep pass over a naked return
-          //
-          // The size that must be covered is read off the SEEDS, not off the
-          // adapter's own running total (#1581): this call's `qty`, and the
-          // size of every attempt allocated ABOVE the named row — those shares
-          // existed after the named row filled, so its fill cannot have closed
-          // them. Deriving it from the sweep's own construction is what gives
-          // the later-attempt half of the discriminator coverage here at all;
-          // against a hardcoded 6 it had none
-          //
-          // Scoped to normal returns deliberately: the last-index destructive
-          // cancel throws, which is recorded finding 4, not this clause's
-          // business
-          const destroyed = [...workingAtEntry].some(
-            (id) => !workingAtExit.some((row) => row.id === id),
-          );
-          const named = [...venue.rows.values()].find((row) => row.id === namedId);
-          // The reset on reaching the named row makes this a running total of
-          // "this call's qty, plus every seed ABOVE the named one". A freshly
-          // placed `oco-*` id names no seed, so the loop resets nowhere and
-          // sums all of them — unreachable rather than wrong: a fresh OCO
-          // rests, and `covers` is only read where nothing is resting
-          let observed = qty;
-          for (let above = 0; above < sequence.length; above += 1) {
-            const id = `seed-${above}`;
-            const size = seededQty.get(id);
-            if (id === namedId) observed = qty;
-            else if (size !== undefined) observed = Math.max(observed, size);
-          }
-          const covers = named?.status === 'filled' && Number(named.filled_qty) >= observed;
-          if (destroyed && workingAtExit.length === 0 && !covers) {
-            violations.push(
-              `${where} destroyed working protection and left none; ` +
-                `bookkeeping names ${String(namedId)} ` +
-                `(${String(named?.status)} ${String(named?.filled_qty)}/${observed})`,
-            );
-          }
-
-          // 3. Finding 2's original signature, asserted structurally: the
-          // bookkeeping `cancel()` later trusts must name the leg that is
-          // actually live, never a terminal one from a lower index
-          if (workingAtExit.length === 1) {
-            if (namedId !== workingAtExit[0]?.id) {
-              violations.push(
-                `${where} bookkeeping names ${String(namedId)}, ` +
-                  `working leg is ${workingAtExit[0]?.id}`,
-              );
-            }
-          }
+          violations.push(...(await runPriorStatusSequenceCase(qty, sequence, seed)));
         }
       }
 

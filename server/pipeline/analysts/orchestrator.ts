@@ -278,6 +278,97 @@ export interface AnalystOrchestratorOptions {
   timeout_ms?: number;
 }
 
+/**
+ * #1114's late-arrival observer for one persona attempt inside `withTimeout`:
+ * this fires strictly after the tick has already moved on from that attempt
+ * (it lost the race to the deadline). Logged only — see `withTimeout`'s doc
+ * comment for why the invariant "a late arrival is logged, never applied"
+ * holds structurally, not by convention.
+ */
+function logLatePersonaSettlement(
+  logger: Logger,
+  trace_id: string,
+  persona: Analyst,
+  attempt: number,
+  timeout_ms: number,
+  outcome: { status: 'fulfilled'; value: AnalystView } | { status: 'rejected'; error: unknown },
+): void {
+  safeLog(logger, {
+    trace_id,
+    stage: 'analysts',
+    level: 'debug',
+    message:
+      `analysts: ${persona.analyst_type} attempt ${attempt} settled after its ` +
+      `${timeout_ms}ms deadline had already been reported as a timeout — the ` +
+      `cause below, discarded rather than applied to this tick`,
+    payload: {
+      analyst_type: persona.analyst_type,
+      attempt,
+      outcome: outcome.status,
+      ...(outcome.status === 'rejected' ? renderErrorDetail(outcome.error) : {}),
+    },
+  });
+}
+
+/**
+ * Classifies one failed persona attempt into a reason string and failure kind
+ * (analysts-spec.md story 20), and logs the non-timeout case — #1114's cheap
+ * half: a genuine (non-timeout) rejection already carries a full `Error` right
+ * here, and the caller's bookkeeping collapses it to a bare reason string, the
+ * same loss the ticket names, just without `withTimeout`'s abandoned-promise
+ * problem. Logged in addition to, never instead of, the caller's own
+ * `reason`/`kind` bookkeeping and the error/warn line `analysts-adapter.ts`
+ * builds from it.
+ */
+function classifyPersonaAttemptFailure(
+  logger: Logger,
+  trace_id: string,
+  persona: Analyst,
+  attempt: number,
+  error: unknown,
+): { reason: string; kind: AnalystFailureKind } {
+  let reason: string;
+  try {
+    reason = describeThrown(error);
+  } catch {
+    // `describeThrown` (safe-log.ts) now coerces a non-string
+    // `message` through its own JSON.stringify/String ladder
+    // rather than returning it verbatim, but that ladder can still
+    // throw for a value hostile enough to defeat BOTH steps — its
+    // own doc comment says so — and a plain `message` getter that
+    // throws outright never reaches the ladder at all. Nor does a
+    // `Proxy` with a throwing `getPrototypeOf` trap: `describeThrown`'s
+    // own `error instanceof Error` check runs before either surface
+    // and throws there instead. Any of these throwing here would
+    // escape this catch — which exists to HANDLE the persona's
+    // failure — and reject the `Promise.all` below, turning a
+    // handled analyst failure into a failed tick before any of this
+    // loop's own logging runs. This is the same try/catch/placeholder
+    // shape `logCaughtFailure` (safe-log.ts) uses for that residual
+    // case
+    reason = '[unrenderable error]';
+  }
+  // `AnalystTimeoutError` is named explicitly rather than left to
+  // the classifier: it is this class's own deadline, not a provider's
+  // (#1394)
+  const kind: AnalystFailureKind =
+    error instanceof AnalystTimeoutError ? 'timeout' : classifyFailureCause(error);
+  if (kind !== 'timeout') {
+    safeLog(logger, {
+      trace_id,
+      stage: 'analysts',
+      level: 'debug',
+      message: `analysts: ${persona.analyst_type} attempt ${attempt} rejected — cause below`,
+      payload: {
+        analyst_type: persona.analyst_type,
+        attempt,
+        ...renderErrorDetail(error),
+      },
+    });
+  }
+  return { reason, kind };
+}
+
 /** Marker for the timeout path, so the logged reason names it as a timeout rather than an error */
 class AnalystTimeoutError extends Error {
   constructor(analyst_type: string, timeout_ms: number) {
@@ -429,76 +520,25 @@ export class AnalystOrchestrator {
               }),
               this.timeoutMs,
               persona.analyst_type,
-              (outcome) => {
-                // #1114: this fires strictly after the tick has already moved
-                // on from this attempt (it lost the race to the deadline
-                // above). Logged only — see `withTimeout`'s doc comment for
-                // why the invariant "a late arrival is logged, never applied"
-                // holds structurally, not by convention
-                safeLog(this.logger, {
+              (outcome) =>
+                logLatePersonaSettlement(
+                  this.logger,
                   trace_id,
-                  stage: 'analysts',
-                  level: 'debug',
-                  message:
-                    `analysts: ${persona.analyst_type} attempt ${attempt} settled after its ` +
-                    `${this.timeoutMs}ms deadline had already been reported as a timeout — the ` +
-                    `cause below, discarded rather than applied to this tick`,
-                  payload: {
-                    analyst_type: persona.analyst_type,
-                    attempt,
-                    outcome: outcome.status,
-                    ...(outcome.status === 'rejected' ? renderErrorDetail(outcome.error) : {}),
-                  },
-                });
-              },
+                  persona,
+                  attempt,
+                  this.timeoutMs,
+                  outcome,
+                ),
             );
             return { persona, status: 'fulfilled' as const, view };
           } catch (error) {
-            try {
-              lastReason = describeThrown(error);
-            } catch {
-              // `describeThrown` (safe-log.ts) now coerces a non-string
-              // `message` through its own JSON.stringify/String ladder
-              // rather than returning it verbatim, but that ladder can still
-              // throw for a value hostile enough to defeat BOTH steps — its
-              // own doc comment says so — and a plain `message` getter that
-              // throws outright never reaches the ladder at all. Nor does a
-              // `Proxy` with a throwing `getPrototypeOf` trap: `describeThrown`'s
-              // own `error instanceof Error` check runs before either surface
-              // and throws there instead. Any of these throwing here would
-              // escape this catch — which exists to HANDLE the persona's
-              // failure — and reject the `Promise.all` below, turning a
-              // handled analyst failure into a failed tick before any of this
-              // loop's own logging runs. This is the same try/catch/placeholder
-              // shape `logCaughtFailure` (safe-log.ts) uses for that residual
-              // case
-              lastReason = '[unrenderable error]';
-            }
-            // `AnalystTimeoutError` is named explicitly rather than left to
-            // the classifier: it is this class's own deadline, not a provider's
-            // (#1394)
-            lastKind =
-              error instanceof AnalystTimeoutError ? 'timeout' : classifyFailureCause(error);
-            // #1114's cheap half: a genuine (non-timeout) rejection already
-            // carries a full `Error` right here, and the line above collapses
-            // it to `lastReason`'s bare message — the same loss the ticket
-            // names, just without `withTimeout`'s abandoned-promise problem
-            // Logged in addition to, never instead of, the existing
-            // `lastReason`/`lastKind` bookkeeping and the error/warn line
-            // `analysts-adapter.ts` builds from it
-            if (lastKind !== 'timeout') {
-              safeLog(this.logger, {
-                trace_id,
-                stage: 'analysts',
-                level: 'debug',
-                message: `analysts: ${persona.analyst_type} attempt ${attempt} rejected — cause below`,
-                payload: {
-                  analyst_type: persona.analyst_type,
-                  attempt,
-                  ...renderErrorDetail(error),
-                },
-              });
-            }
+            ({ reason: lastReason, kind: lastKind } = classifyPersonaAttemptFailure(
+              this.logger,
+              trace_id,
+              persona,
+              attempt,
+              error,
+            ));
           }
         }
         // The reason says the retry happened, so a log line cannot be read as

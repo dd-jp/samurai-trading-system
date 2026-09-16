@@ -134,6 +134,24 @@ function validateAlpacaCalendarDays(body: unknown, context: string): AlpacaCalen
   });
 }
 
+async function classifyCalendarResponseError(
+  response: Response,
+  context: string,
+): Promise<AlpacaCalendarFetchError> {
+  let bodyText = '';
+  try {
+    bodyText = truncateForError(await response.text());
+  } catch {
+    // Best-effort context only; the status is the load-bearing fact
+  }
+  return new AlpacaCalendarFetchError(
+    `Alpaca calendar request failed (${context}): ${response.status} ` +
+      `${response.statusText} ${bodyText}`,
+    // 429/5xx are transient; a 4xx (bad key, bad params) will not fix itself on retry
+    response.status === 429 || isServerErrorStatus(response.status),
+  );
+}
+
 /**
  * Real HTTP implementation against Alpaca's Trading API, same auth headers
  * and `fetchWithTimeout`/`withRetry` boilerplate as
@@ -211,18 +229,7 @@ export class AlpacaHttpCalendarClient implements AlpacaCalendarClient {
         }
 
         if (!response.ok) {
-          let bodyText = '';
-          try {
-            bodyText = truncateForError(await response.text());
-          } catch {
-            // Best-effort context only; the status is the load-bearing fact
-          }
-          throw new AlpacaCalendarFetchError(
-            `Alpaca calendar request failed (${context}): ${response.status} ` +
-              `${response.statusText} ${bodyText}`,
-            // 429/5xx are transient; a 4xx (bad key, bad params) will not fix itself on retry
-            response.status === 429 || isServerErrorStatus(response.status),
-          );
+          throw await classifyCalendarResponseError(response, context);
         }
 
         let parsed: unknown;

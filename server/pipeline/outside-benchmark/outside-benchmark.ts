@@ -154,6 +154,105 @@ export interface OutsideBenchmarkSample {
   performance: OutsideBenchmarkPerformance;
 }
 
+interface ResolvedBenchmarkLeg {
+  leg: BenchmarkLeg;
+  anchor: BenchmarkObservation;
+  inWindow: BenchmarkObservation[];
+}
+
+function resolveBenchmarkLeg(
+  benchmark: OutsideBenchmarkId,
+  leg: BenchmarkLeg,
+  observations: readonly BenchmarkObservation[],
+  from: Date,
+  to: Date,
+): ResolvedBenchmarkLeg {
+  const sorted = [...observations].sort((a, b) => a.close_time.getTime() - b.close_time.getTime());
+
+  const anchor = sorted.filter((o) => o.close_time.getTime() <= from.getTime()).at(-1);
+  if (anchor === undefined) {
+    throw new Error(
+      `buildOutsideBenchmark(${benchmark}): leg ${leg.instrument} has no close at or ` +
+        `before the window start ${from.toISOString()}, so the window's first daily ` +
+        'return has no denominator. Refusing rather than measuring a shorter window than ' +
+        'the arms were measured over.',
+    );
+  }
+
+  const inWindow = sorted.filter(
+    (o) => o.close_time.getTime() > from.getTime() && o.close_time.getTime() <= to.getTime(),
+  );
+  if (inWindow.length === 0) {
+    throw new Error(
+      `buildOutsideBenchmark(${benchmark}): leg ${leg.instrument} has no closes inside ` +
+        `(${from.toISOString()}, ${to.toISOString()}]. There is nothing to measure.`,
+    );
+  }
+
+  if (anchor.close <= 0 || inWindow.some((o) => o.close <= 0)) {
+    throw new Error(
+      `buildOutsideBenchmark(${benchmark}): leg ${leg.instrument} carries a ` +
+        'non-positive close. A price of zero or less is bad data, not a bad day.',
+    );
+  }
+
+  return { leg, anchor, inWindow };
+}
+
+function commonCloseTimeline(
+  benchmark: OutsideBenchmarkId,
+  perLeg: readonly ResolvedBenchmarkLeg[],
+): number[] {
+  const perLegTimes = perLeg.map(
+    (entry) => new Set(entry.inWindow.map((o) => o.close_time.getTime())),
+  );
+  const timeline = [...(perLegTimes[0] ?? new Set<number>())]
+    .filter((time) => perLegTimes.every((times) => times.has(time)))
+    .sort((a, b) => a - b);
+  if (timeline.length === 0) {
+    throw new Error(
+      `buildOutsideBenchmark(${benchmark}): the legs share no common close time inside ` +
+        'the window, so no blended observation can be formed.',
+    );
+  }
+  return timeline;
+}
+
+function blendIndexSeries(
+  perLeg: readonly ResolvedBenchmarkLeg[],
+  timeline: readonly number[],
+): { index: number; maxDrawdown: number } {
+  let index = 1;
+  let peak = 1;
+  let maxDrawdown = 0;
+  const previousClose = new Map(perLeg.map((entry) => [entry.leg.instrument, entry.anchor.close]));
+
+  for (const time of timeline) {
+    let blendedReturn = 0;
+    for (const entry of perLeg) {
+      const observation = entry.inWindow.find((o) => o.close_time.getTime() === time);
+      // Unreachable: `time` comes from the intersection of every leg's own
+      // close times, so each leg has this observation by construction. Kept as
+      // a `continue` rather than a throw: the narrowing is what `find`'s type
+      // requires, and skipping a leg cannot produce a wrong number here since
+      // the branch is unreachable
+      if (observation === undefined) continue;
+      const previous = previousClose.get(entry.leg.instrument) ?? observation.close;
+      blendedReturn += entry.leg.weight * (observation.close / previous - 1);
+      previousClose.set(entry.leg.instrument, observation.close);
+    }
+
+    index *= 1 + blendedReturn;
+    if (index > peak) peak = index;
+    // Drawdown is RELATIVE to the running peak, not to the seed: a benchmark
+    // that doubled and then halved fell 50%, not 0%
+    const drawdown = (peak - index) / peak;
+    if (drawdown > maxDrawdown) maxDrawdown = drawdown;
+  }
+
+  return { index, maxDrawdown };
+}
+
 /**
  * Builds one benchmark's performance from its legs' daily closes.
  *
@@ -218,91 +317,21 @@ export function buildOutsideBenchmark(input: {
 
   // Per leg: the anchor close (last at or before `from`) and the in-window
   // closes, keyed by close time so the legs can be intersected below
-  const perLeg = input.legs.map(({ leg, observations }) => {
-    const sorted = [...observations].sort(
-      (a, b) => a.close_time.getTime() - b.close_time.getTime(),
-    );
-
-    const anchor = sorted.filter((o) => o.close_time.getTime() <= input.from.getTime()).at(-1);
-    if (anchor === undefined) {
-      throw new Error(
-        `buildOutsideBenchmark(${input.benchmark}): leg ${leg.instrument} has no close at or ` +
-          `before the window start ${input.from.toISOString()}, so the window's first daily ` +
-          'return has no denominator. Refusing rather than measuring a shorter window than ' +
-          'the arms were measured over.',
-      );
-    }
-
-    const inWindow = sorted.filter(
-      (o) =>
-        o.close_time.getTime() > input.from.getTime() &&
-        o.close_time.getTime() <= input.to.getTime(),
-    );
-    if (inWindow.length === 0) {
-      throw new Error(
-        `buildOutsideBenchmark(${input.benchmark}): leg ${leg.instrument} has no closes inside ` +
-          `(${input.from.toISOString()}, ${input.to.toISOString()}]. There is nothing to measure.`,
-      );
-    }
-
-    if (anchor.close <= 0 || inWindow.some((o) => o.close <= 0)) {
-      throw new Error(
-        `buildOutsideBenchmark(${input.benchmark}): leg ${leg.instrument} carries a ` +
-          'non-positive close. A price of zero or less is bad data, not a bad day.',
-      );
-    }
-
-    return { leg, anchor, inWindow };
-  });
+  const perLeg = input.legs.map(({ leg, observations }) =>
+    resolveBenchmarkLeg(input.benchmark, leg, observations, input.from, input.to),
+  );
 
   // The legs are intersected on close time before blending. SPY and AGG share
   // the US equity calendar so this is normally a no-op — but a vendor gap in ONE
   // leg must not silently become a day on which the blend was 60% invested. A
   // day either has every leg's close or it is not a day of this benchmark
-  const perLegTimes = perLeg.map(
-    (entry) => new Set(entry.inWindow.map((o) => o.close_time.getTime())),
-  );
-  const timeline = [...(perLegTimes[0] ?? new Set<number>())]
-    .filter((time) => perLegTimes.every((times) => times.has(time)))
-    .sort((a, b) => a - b);
-  if (timeline.length === 0) {
-    throw new Error(
-      `buildOutsideBenchmark(${input.benchmark}): the legs share no common close time inside ` +
-        'the window, so no blended observation can be formed.',
-    );
-  }
+  const timeline = commonCloseTimeline(input.benchmark, perLeg);
 
   // The blended index, seeded at 1 on the anchor. Each step is the
   // weighted sum of the legs' SIMPLE daily returns — which is what
   // "daily-rebalanced fixed weight" means: the weights are restored to
   // BENCHMARK_COMPOSITION every day rather than drifting with performance
-  let index = 1;
-  let peak = 1;
-  let maxDrawdown = 0;
-  const previousClose = new Map(perLeg.map((entry) => [entry.leg.instrument, entry.anchor.close]));
-
-  for (const time of timeline) {
-    let blendedReturn = 0;
-    for (const entry of perLeg) {
-      const observation = entry.inWindow.find((o) => o.close_time.getTime() === time);
-      // Unreachable: `time` comes from the intersection of every leg's own
-      // close times, so each leg has this observation by construction. Kept as
-      // a `continue` rather than a throw: the narrowing is what `find`'s type
-      // requires, and skipping a leg cannot produce a wrong number here since
-      // the branch is unreachable
-      if (observation === undefined) continue;
-      const previous = previousClose.get(entry.leg.instrument) ?? observation.close;
-      blendedReturn += entry.leg.weight * (observation.close / previous - 1);
-      previousClose.set(entry.leg.instrument, observation.close);
-    }
-
-    index *= 1 + blendedReturn;
-    if (index > peak) peak = index;
-    // Drawdown is RELATIVE to the running peak, not to the seed: a benchmark
-    // that doubled and then halved fell 50%, not 0%
-    const drawdown = (peak - index) / peak;
-    if (drawdown > maxDrawdown) maxDrawdown = drawdown;
-  }
+  const { index, maxDrawdown } = blendIndexSeries(perLeg, timeline);
 
   return {
     benchmark: input.benchmark,

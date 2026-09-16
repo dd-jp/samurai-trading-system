@@ -214,6 +214,7 @@ describe('spec vs migrated DB — shared-sqlite-store-spec.md column/index/CHECK
 
   const migratedTables = tablesOf(migratedDb);
   for (const table of migratedTables) {
+    // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: one table's full schema-parity assertion — columns, then indexes, then the normalized CREATE TABLE text for CHECKs — is one coherent check against both DBs; splitting it into helpers would scatter a single test's assertions with no gain in readability.
     it(`${table}: spec DDL matches the migrated DB's columns, indexes, and CHECKs`, () => {
       const specTables = tablesOf(specDb);
       expect(specTables, `${table} is missing from the spec entirely`).toContain(table);

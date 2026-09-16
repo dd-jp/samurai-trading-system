@@ -728,6 +728,7 @@ describe('SaxoHttpBrokerClient priority lane (#1419)', () => {
   };
 
   function routedFetch(): ReturnType<typeof vi.fn> {
+    // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: flat method+path dispatch, one branch per mocked endpoint
     return vi.fn(async (url: string | URL, init?: RequestInit) => {
       const parsed = new URL(String(url));
       const method = init?.method ?? 'GET';

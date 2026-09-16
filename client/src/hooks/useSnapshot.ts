@@ -673,6 +673,166 @@ function describeError(cause: unknown): string {
   return String(cause);
 }
 
+// Omitted entirely when there is no token, rather than sent as an
+// empty/blank `Authorization` header (#1038) — the no-token request this
+// dashboard sends by default must stay byte-for-byte the same shape it was
+// before this option existed
+function buildAuthHeaders(token: string | null | undefined): { Authorization: string } | undefined {
+  return token !== undefined && token !== null && token !== ''
+    ? { Authorization: `Bearer ${token}` }
+    : undefined;
+}
+
+/**
+ * Releasing the poll slot on a timeout is idempotent and reachable from BOTH
+ * this timer and the caller's `finally` (#606 item 3) — aborting a
+ * controller does not settle a request that ignores its signal, so a
+ * `finally`-only release leaves `inFlight` true forever after a hang.
+ * Returns `isTimedOut`, which is per POLL INVOCATION, not per effect (PR
+ * #607 review round 1): a fresh one is created on every call, so one poll
+ * being declared dead cannot discard the NEXT poll's payload.
+ */
+function armPollTimeout(deps: {
+  timeoutMs: number;
+  controller: AbortController;
+  release: () => void;
+  isCancelled: () => boolean;
+  setState: (updater: (prev: FeedState) => FeedState) => void;
+}): { timeout: ReturnType<typeof setTimeout>; isTimedOut: () => boolean } {
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    deps.controller.abort();
+    deps.release();
+    if (deps.isCancelled()) return;
+    const message = `snapshot request timed out after ${deps.timeoutMs}ms`;
+    deps.setState((prev) => (prev.error === message ? prev : { ...prev, error: message }));
+  }, deps.timeoutMs);
+  return { timeout, isTimedOut: () => timedOut };
+}
+
+// Idempotent and reachable from BOTH the timeout arm and the caller's
+// `finally` (#606 item 3) — aborting a controller does not settle a request
+// that ignores its signal, so a `finally`-only release leaves `inFlight`
+// true forever after a hang
+function createReleaser(
+  controllers: Set<AbortController>,
+  controller: AbortController,
+  setInFlight: (value: boolean) => void,
+): () => void {
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    controllers.delete(controller);
+    setInFlight(false);
+  };
+}
+
+function handlePollFailure(
+  cause: unknown,
+  deps: {
+    isCancelled: () => boolean;
+    isAborted: () => boolean;
+    setState: (updater: (prev: FeedState) => FeedState) => void;
+  },
+): void {
+  // An abort is either this effect tearing down or the timeout above, and
+  // the timeout has already named itself in `error`
+  if (deps.isCancelled() || deps.isAborted()) return;
+  // Deliberately leaves `snapshot` and `contractMismatch` untouched: the
+  // numbers stay on screen and the watchdog decides when they are stale; a
+  // prior mismatch stays a mismatch until a validating poll clears it,
+  // rather than being papered over by an unrelated network error's message
+  const message = describeError(cause);
+  deps.setState((prev) => (prev.error === message ? prev : { ...prev, error: message }));
+}
+
+async function attemptPollFetch(deps: {
+  doFetch: typeof fetch;
+  url: string;
+  arm: TradingArmWire | undefined;
+  authToken: string | null | undefined;
+  controller: AbortController;
+  isCancelled: () => boolean;
+  isTimedOut: () => boolean;
+  now: () => number;
+  setState: (updater: (prev: FeedState) => FeedState) => void;
+}): Promise<number | null> {
+  const headers = buildAuthHeaders(deps.authToken);
+  const response = await deps.doFetch(snapshotUrl(deps.url, deps.arm), {
+    cache: 'no-store',
+    signal: deps.controller.signal,
+    ...(headers !== undefined ? { headers } : {}),
+  });
+  return resolveSnapshotResponse(response, {
+    isCancelled: deps.isCancelled,
+    isTimedOut: deps.isTimedOut,
+    now: deps.now,
+    setState: deps.setState,
+  });
+}
+
+/**
+ * Returns the new `lastSuccessMs` on a snapshot that landed, `null` on
+ * anything that isn't a fresh, trustworthy snapshot (a discarded stale
+ * response or a contract mismatch) — `poll()` only advances its own
+ * `lastSuccessMs` on non-null.
+ */
+async function resolveSnapshotResponse(
+  response: Response,
+  deps: {
+    isCancelled: () => boolean;
+    isTimedOut: () => boolean;
+    now: () => number;
+    setState: (updater: (prev: FeedState) => FeedState) => void;
+  },
+): Promise<number | null> {
+  if (!response.ok) throw new Error(`snapshot request failed: HTTP ${response.status}`);
+  const body: unknown = await response.json();
+  // `timedOut` is checked after BOTH awaits, so a response whose headers
+  // arrived in time but whose body hung is discarded too: a payload this
+  // poll has already been declared dead over must not land later and
+  // rewrite the page from a snapshot the page never showed
+  if (deps.isCancelled() || deps.isTimedOut()) return null;
+  // Checked BEFORE `toWireSnapshot`/`hasWireShape`, deliberately
+  // (#1316): a renamed or dropped field would also fail the structural
+  // check below, and the generic "did not match the wire shape" error
+  // that path throws reads like a proxy/captive-portal fault, not what
+  // it actually is. `readServerContractVersion` only needs `body` to be
+  // an object — it makes no other claim about shape — so this check
+  // runs on strictly less trust than the structural one and is meant to
+  // win the race to explain a bad payload
+  const serverVersion = readServerContractVersion(body);
+  if (serverVersion !== CONTRACT_VERSION) {
+    // Deliberately does NOT advance `lastSuccessMs` and does NOT touch
+    // `snapshot`: this poll produced nothing this client can trust the
+    // shape of, so it is not a success by either measure the rest of
+    // this hook uses — see `FeedState.contractMismatch`'s doc comment
+    const message =
+      serverVersion === undefined
+        ? `served bundle disagrees with the server's wire contract (server sent no contract_version; this client expects ${CONTRACT_VERSION})`
+        : `served bundle disagrees with the server's wire contract (server ${serverVersion}, client ${CONTRACT_VERSION})`;
+    deps.setState((prev) =>
+      prev.contractMismatch && prev.error === message
+        ? prev
+        : { ...prev, contractMismatch: true, error: message },
+    );
+    return null;
+  }
+  const snapshot = toWireSnapshot(body);
+  if (snapshot === null) throw new Error('snapshot payload did not match the wire shape');
+  const lastSuccessMs = deps.now();
+  deps.setState(() => ({
+    snapshot,
+    watchdogStale: false,
+    contractMismatch: false,
+    lastSuccessAt: new Date(lastSuccessMs).toISOString(),
+    error: null,
+  }));
+  return lastSuccessMs;
+}
+
 export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
   const {
     url = SNAPSHOT_URL,
@@ -720,105 +880,36 @@ export function useSnapshot(options: UseSnapshotOptions = {}): SnapshotFeed {
       controllers.add(controller);
       const doFetch = optionsRef.current.fetchImpl ?? globalThis.fetch;
 
-      // Per POLL INVOCATION, not per effect (PR #607 review round 1, which
-      // read it as effect-scoped): a fresh `timedOut` is created on every call,
-      // so one poll being declared dead cannot discard the NEXT poll's payload
-      // The flag reaching the guard below is always the one belonging to the
-      // request whose response is being examined
-      let timedOut = false;
-      // Releasing the poll slot is idempotent and reachable from BOTH the
-      // timeout and the `finally` (#606 item 3). Aborting a controller does
-      // not settle a request that ignores its signal, so a `finally`-only
-      // release leaves `inFlight` true forever after a hang — every later
-      // `poll()` returns at the guard above, no retry is ever issued, and the
-      // page merely looks stale while having silently stopped polling
-      let released = false;
-      const release = () => {
-        if (released) return;
-        released = true;
-        controllers.delete(controller);
-        inFlight = false;
-      };
-      const timeout = setTimeout(() => {
-        timedOut = true;
-        controller.abort();
-        release();
-        if (cancelled) return;
-        const message = `snapshot request timed out after ${timeoutMs}ms`;
-        setState((prev) => (prev.error === message ? prev : { ...prev, error: message }));
-      }, timeoutMs);
+      const release = createReleaser(controllers, controller, (value) => {
+        inFlight = value;
+      });
+      const { timeout, isTimedOut } = armPollTimeout({
+        timeoutMs,
+        controller,
+        release,
+        isCancelled: () => cancelled,
+        setState,
+      });
 
       try {
-        const { authToken: token } = optionsRef.current;
-        // Omitted entirely when there is no token, rather than sent as an
-        // empty/blank `Authorization` header (#1038) — the no-token request
-        // this dashboard sends by default must stay byte-for-byte the same
-        // shape it was before this option existed
-        const headers =
-          token !== undefined && token !== null && token !== ''
-            ? { Authorization: `Bearer ${token}` }
-            : undefined;
-        const response = await doFetch(
-          snapshotUrl(optionsRef.current.url, optionsRef.current.arm),
-          {
-            cache: 'no-store',
-            signal: controller.signal,
-            ...(headers !== undefined ? { headers } : {}),
-          },
-        );
-        if (!response.ok) throw new Error(`snapshot request failed: HTTP ${response.status}`);
-        const body: unknown = await response.json();
-        // `timedOut` is checked after BOTH awaits, so a response whose headers
-        // arrived in time but whose body hung is discarded too: a payload this
-        // poll has already been declared dead over must not land later and
-        // rewrite the page from a snapshot the page never showed
-        if (cancelled || timedOut) return;
-        // Checked BEFORE `toWireSnapshot`/`hasWireShape`, deliberately
-        // (#1316): a renamed or dropped field would also fail the structural
-        // check below, and the generic "did not match the wire shape" error
-        // that path throws reads like a proxy/captive-portal fault, not what
-        // it actually is. `readServerContractVersion` only needs `body` to be
-        // an object — it makes no other claim about shape — so this check
-        // runs on strictly less trust than the structural one and is meant to
-        // win the race to explain a bad payload
-        const serverVersion = readServerContractVersion(body);
-        if (serverVersion !== CONTRACT_VERSION) {
-          // Deliberately does NOT advance `lastSuccessMs` and does NOT touch
-          // `snapshot`: this poll produced nothing this client can trust the
-          // shape of, so it is not a success by either measure the rest of
-          // this hook uses — see `FeedState.contractMismatch`'s doc comment
-          const message =
-            serverVersion === undefined
-              ? `served bundle disagrees with the server's wire contract (server sent no contract_version; this client expects ${CONTRACT_VERSION})`
-              : `served bundle disagrees with the server's wire contract (server ${serverVersion}, client ${CONTRACT_VERSION})`;
-          setState((prev) =>
-            prev.contractMismatch && prev.error === message
-              ? prev
-              : { ...prev, contractMismatch: true, error: message },
-          );
-          return;
-        }
-        const snapshot = toWireSnapshot(body);
-        if (snapshot === null) throw new Error('snapshot payload did not match the wire shape');
-        lastSuccessMs = optionsRef.current.now();
-        setState(() => ({
-          snapshot,
-          watchdogStale: false,
-          contractMismatch: false,
-          lastSuccessAt: new Date(lastSuccessMs).toISOString(),
-          error: null,
-        }));
+        const resolvedSuccessMs = await attemptPollFetch({
+          doFetch,
+          url: optionsRef.current.url,
+          arm: optionsRef.current.arm,
+          authToken: optionsRef.current.authToken,
+          controller,
+          isCancelled: () => cancelled,
+          isTimedOut,
+          now: () => optionsRef.current.now(),
+          setState,
+        });
+        if (resolvedSuccessMs !== null) lastSuccessMs = resolvedSuccessMs;
       } catch (cause) {
-        // An abort is either this effect tearing down or the timeout above,
-        // and the timeout has already named itself in `error`
-        if (cancelled || controller.signal.aborted) return;
-        // Deliberately leaves `snapshot` and `contractMismatch` untouched:
-        // the numbers stay on screen and the watchdog decides when they are
-        // stale; a prior mismatch stays a mismatch until a validating poll
-        // clears it, rather than being papered over by an unrelated network
-        // error's message
-        const message = describeError(cause);
-        setState((prev) => (prev.error === message ? prev : { ...prev, error: message }));
+        handlePollFailure(cause, {
+          isCancelled: () => cancelled,
+          isAborted: () => controller.signal.aborted,
+          setState,
+        });
       } finally {
         clearTimeout(timeout);
         release();

@@ -522,6 +522,34 @@ function zeroCapEmptyState(capUsd: number): string {
   return `LLM spend cap is ${formatUsd(capUsd)} — meter not drawable`;
 }
 
+function spendEmptyState(reason: CapReason, cap: number | null, zeroCapBreached: boolean): string {
+  // 'capped' means capUsd > 0, which CapMeter always draws
+  if (reason === 'capped') return '';
+  if (reason === 'zero') {
+    return `${zeroCapEmptyState(cap ?? 0)}${zeroCapBreached ? ' · already over' : ''}`;
+  }
+  return CAP_EMPTY_STATE[reason];
+}
+
+function spendFootnoteNote(input: {
+  over: boolean;
+  zeroCapBreached: boolean;
+  unpriced: number;
+  unattributed: number;
+  reason: CapReason;
+  armedAt: string | null | undefined;
+}): string {
+  const { over, zeroCapBreached, unpriced, unattributed, reason, armedAt } = input;
+  const overPrefix = over || zeroCapBreached ? 'over cap · ' : '';
+  const base = unpriced > 0 ? `floor — ${unpriced} unpriced calls` : 'all time, metered locally';
+  const unattributedSuffix = unattributed > 0 ? ` · ${unattributed} calls carry no debate id` : '';
+  const armedSuffix =
+    (reason === 'uncapped' || reason === 'zero') && typeof armedAt === 'string'
+      ? ` · armed ${formatClockUtc(armedAt)}`
+      : '';
+  return `${overPrefix}${base}${unattributedSuffix}${armedSuffix}`;
+}
+
 function SpendBlock({ snapshot }: { snapshot: WireSnapshot }) {
   const allTime = snapshot.llm_spend?.all_time;
   const spent = allTime?.cost_usd;
@@ -551,15 +579,7 @@ function SpendBlock({ snapshot }: { snapshot: WireSnapshot }) {
       cap={capForMeter}
       format={formatUsd}
       tone="cyan"
-      emptyState={
-        // The 'capped' arm is empty because `capped` means capUsd > 0, which
-        // CapMeter always draws
-        reason === 'capped'
-          ? ''
-          : reason === 'zero'
-            ? `${zeroCapEmptyState(cap ?? 0)}${zeroCapBreached ? ' · already over' : ''}`
-            : CAP_EMPTY_STATE[reason]
-      }
+      emptyState={spendEmptyState(reason, capForMeter, zeroCapBreached)}
       trackLabel={(fraction, _value, cap) =>
         `LLM budget used: ${formatPercent(fraction)} of the ${formatUsd(cap)} cap`
       }
@@ -573,12 +593,7 @@ function SpendBlock({ snapshot }: { snapshot: WireSnapshot }) {
             </span>
           )}
           <span className="rail-note">
-            {over || zeroCapBreached ? 'over cap · ' : ''}
-            {unpriced > 0 ? `floor — ${unpriced} unpriced calls` : 'all time, metered locally'}
-            {unattributed > 0 ? ` · ${unattributed} calls carry no debate id` : ''}
-            {(reason === 'uncapped' || reason === 'zero') && typeof armedAt === 'string'
-              ? ` · armed ${formatClockUtc(armedAt)}`
-              : ''}
+            {spendFootnoteNote({ over, zeroCapBreached, unpriced, unattributed, reason, armedAt })}
           </span>
         </>
       )}

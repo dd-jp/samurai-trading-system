@@ -255,7 +255,145 @@ interface SpreadCalibrationDeps {
   print?: (line: string) => void;
 }
 
-async function runSpreadCalibration(deps: SpreadCalibrationDeps = {}): Promise<SpreadCalibration> {
+async function ingestSymbolBars(
+  store: Stage2HistoricalStore,
+  symbols: readonly string[],
+  window: DateRange,
+): Promise<Map<string, Bar[]>> {
+  const bars = new Map<string, Bar[]>();
+  for (const symbol of symbols) {
+    await store.ingest(symbol, window);
+    bars.set(symbol, store.bars(symbol, window));
+  }
+  return bars;
+}
+
+interface DateSpreadSample {
+  end: Date;
+  quoteCount: number;
+  daySpread: number;
+  dayBps: number | undefined;
+}
+
+async function sampleDateSpread(
+  symbol: string,
+  isCrypto: boolean,
+  date: Date,
+  quotes: AlpacaQuoteClient,
+  print: (line: string) => void,
+): Promise<DateSpreadSample | undefined> {
+  // Stocks: the last minutes of the regular session, stopping short of the
+  // bell. Crypto: the same UTC day boundary its daily bars close on.
+  const end = isCrypto
+    ? new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 23, 59))
+    : usEquityCloseUtc(date);
+  const start = new Date(end.getTime() - SAMPLE_MINUTES * 60_000);
+
+  let page: AlpacaQuote[];
+  try {
+    page = isCrypto
+      ? await quotes.cryptoQuotes(symbol, start, end)
+      : await quotes.stockQuotes(symbol, start, end);
+  } catch (error) {
+    print(`  ${symbol} ${date.toISOString().slice(0, 10)}: ${String(error)}`);
+    return undefined;
+  }
+
+  const spreads = page.map(spreadOf).filter((s): s is number => s !== undefined);
+  // An empty page is a market holiday or weekend, not an error — skip it
+  // rather than recording a zero that would drag the median down
+  if (spreads.length === 0) return undefined;
+
+  const mids = page.filter((q) => q.ap > 0 && q.bp > 0).map((q) => (q.ap + q.bp) / 2);
+  const daySpread = median(spreads);
+  const dayMid = median(mids);
+
+  return {
+    end,
+    quoteCount: spreads.length,
+    daySpread,
+    dayBps: dayMid > 0 ? (daySpread / dayMid) * 10_000 : undefined,
+  };
+}
+
+async function sampleSymbolSpreads(
+  symbol: string,
+  isCrypto: boolean,
+  dates: readonly Date[],
+  symbolBars: Bar[],
+  quotes: AlpacaQuoteClient,
+  print: (line: string) => void,
+): Promise<SymbolSpreadStats> {
+  const dailySpreads: number[] = [];
+  const dailyBps: number[] = [];
+  const dailyRatios: number[] = [];
+  let quotesSampled = 0;
+
+  for (const date of dates) {
+    const sample = await sampleDateSpread(symbol, isCrypto, date, quotes, print);
+    if (sample === undefined) continue;
+
+    quotesSampled += sample.quoteCount;
+    dailySpreads.push(sample.daySpread);
+    if (sample.dayBps !== undefined) dailyBps.push(sample.dayBps);
+
+    const atr = atrAt(symbolBars, sample.end, DEFAULT_STAGE2_TIMEFRAME);
+    if (atr !== undefined) dailyRatios.push(sample.daySpread / atr);
+  }
+
+  return {
+    symbol,
+    asset_class: isCrypto ? 'crypto' : 'stocks',
+    days_sampled: dailySpreads.length,
+    quotes_sampled: quotesSampled,
+    days_with_atr: dailyRatios.length,
+    median_spread: median(dailySpreads),
+    median_spread_bps: median(dailyBps),
+    p90_spread_bps: percentile(dailyBps, 0.9),
+    median_spread_over_atr: median(dailyRatios),
+    p90_spread_over_atr: percentile(dailyRatios, 0.9),
+  };
+}
+
+function fitCoefficientFor(
+  symbols: readonly SymbolSpreadStats[],
+  assetClass: 'crypto' | 'stocks',
+): number {
+  return median(
+    symbols
+      .filter((s) => s.asset_class === assetClass && Number.isFinite(s.median_spread_over_atr))
+      .map((s) => s.median_spread_over_atr),
+  );
+}
+
+function printSpreadTable(
+  symbols: readonly SymbolSpreadStats[],
+  print: (line: string) => void,
+): void {
+  print('');
+  print('=== Measured spread, at the bar close ===');
+  for (const s of symbols) {
+    print(
+      `[${s.asset_class}] ${s.symbol.padEnd(8)} days=${s.days_sampled} (atr=${s.days_with_atr}) quotes=${s.quotes_sampled} ` +
+        `median=${s.median_spread_bps.toFixed(2)}bps p90=${s.p90_spread_bps.toFixed(2)}bps ` +
+        `spread/ATR median=${s.median_spread_over_atr.toFixed(4)} p90=${s.p90_spread_over_atr.toFixed(4)}`,
+    );
+  }
+}
+
+function printFittedCoefficients(
+  fitted: SpreadCalibration['fitted'],
+  print: (line: string) => void,
+): void {
+  print('');
+  print('=== Fitted spreadVolatilityCoefficient (from medians) ===');
+  print(`  stocks: ${fitted.stocks.toFixed(4)}   (fixture: 0.1)`);
+  print(`  crypto: ${fitted.crypto.toFixed(4)}   (fixture: 0.5)`);
+}
+
+async function runSpreadCalibration(
+  deps: SpreadCalibrationDeps = {},
+): Promise<SpreadCalibration> {
   const print = deps.print ?? console.log;
   const window = deps.window ?? CALIBRATION_WINDOW;
   const keyId = process.env.ALPACA_API_KEY;
@@ -273,11 +411,8 @@ async function runSpreadCalibration(deps: SpreadCalibrationDeps = {}): Promise<S
   });
   const quotes = new AlpacaQuoteClient(keyId, secret);
 
-  const bars = new Map<string, Bar[]>();
-  for (const symbol of [...STOCK_SYMBOLS, ...CRYPTO_SYMBOLS]) {
-    await store.ingest(symbol, window);
-    bars.set(symbol, store.bars(symbol, window));
-  }
+  const allSymbols = [...STOCK_SYMBOLS, ...CRYPTO_SYMBOLS];
+  const bars = await ingestSymbolBars(store, allSymbols, window);
 
   const dates = sampleDates(window, deps.sampleDays ?? DEFAULT_SAMPLE_DAYS);
   print(
@@ -286,88 +421,22 @@ async function runSpreadCalibration(deps: SpreadCalibrationDeps = {}): Promise<S
 
   const symbols: SymbolSpreadStats[] = [];
 
-  for (const symbol of [...STOCK_SYMBOLS, ...CRYPTO_SYMBOLS]) {
+  for (const symbol of allSymbols) {
     const isCrypto = (CRYPTO_SYMBOLS as readonly string[]).includes(symbol);
     const symbolBars = bars.get(symbol) ?? [];
-    const dailySpreads: number[] = [];
-    const dailyBps: number[] = [];
-    const dailyRatios: number[] = [];
-    let quotesSampled = 0;
-
-    for (const date of dates) {
-      // Stocks: the last minutes of the regular session, stopping short of the
-      // bell. Crypto: the same UTC day boundary its daily bars close on.
-      const end = isCrypto
-        ? new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 23, 59))
-        : usEquityCloseUtc(date);
-      const start = new Date(end.getTime() - SAMPLE_MINUTES * 60_000);
-
-      let page: AlpacaQuote[];
-      try {
-        page = isCrypto
-          ? await quotes.cryptoQuotes(symbol, start, end)
-          : await quotes.stockQuotes(symbol, start, end);
-      } catch (error) {
-        print(`  ${symbol} ${date.toISOString().slice(0, 10)}: ${String(error)}`);
-        continue;
-      }
-
-      const spreads = page.map(spreadOf).filter((s): s is number => s !== undefined);
-      // An empty page is a market holiday or weekend, not an error — skip it
-      // rather than recording a zero that would drag the median down
-      if (spreads.length === 0) continue;
-
-      const mids = page.filter((q) => q.ap > 0 && q.bp > 0).map((q) => (q.ap + q.bp) / 2);
-      const daySpread = median(spreads);
-      const dayMid = median(mids);
-      quotesSampled += spreads.length;
-      dailySpreads.push(daySpread);
-      if (dayMid > 0) dailyBps.push((daySpread / dayMid) * 10_000);
-
-      const atr = atrAt(symbolBars, end, DEFAULT_STAGE2_TIMEFRAME);
-      if (atr !== undefined) dailyRatios.push(daySpread / atr);
-    }
-
-    symbols.push({
-      symbol,
-      asset_class: isCrypto ? 'crypto' : 'stocks',
-      days_sampled: dailySpreads.length,
-      quotes_sampled: quotesSampled,
-      days_with_atr: dailyRatios.length,
-      median_spread: median(dailySpreads),
-      median_spread_bps: median(dailyBps),
-      p90_spread_bps: percentile(dailyBps, 0.9),
-      median_spread_over_atr: median(dailyRatios),
-      p90_spread_over_atr: percentile(dailyRatios, 0.9),
-    });
+    symbols.push(await sampleSymbolSpreads(symbol, isCrypto, dates, symbolBars, quotes, print));
   }
-
-  const fitFor = (assetClass: 'crypto' | 'stocks'): number =>
-    median(
-      symbols
-        .filter((s) => s.asset_class === assetClass && Number.isFinite(s.median_spread_over_atr))
-        .map((s) => s.median_spread_over_atr),
-    );
 
   const calibration: SpreadCalibration = {
     symbols,
-    fitted: { stocks: fitFor('stocks'), crypto: fitFor('crypto') },
+    fitted: {
+      stocks: fitCoefficientFor(symbols, 'stocks'),
+      crypto: fitCoefficientFor(symbols, 'crypto'),
+    },
   };
 
-  print('');
-  print('=== Measured spread, at the bar close ===');
-  for (const s of symbols) {
-    print(
-      `[${s.asset_class}] ${s.symbol.padEnd(8)} days=${s.days_sampled} (atr=${s.days_with_atr}) quotes=${s.quotes_sampled} ` +
-        `median=${s.median_spread_bps.toFixed(2)}bps p90=${s.p90_spread_bps.toFixed(2)}bps ` +
-        `spread/ATR median=${s.median_spread_over_atr.toFixed(4)} p90=${s.p90_spread_over_atr.toFixed(4)}`,
-    );
-  }
-
-  print('');
-  print('=== Fitted spreadVolatilityCoefficient (from medians) ===');
-  print(`  stocks: ${calibration.fitted.stocks.toFixed(4)}   (fixture: 0.1)`);
-  print(`  crypto: ${calibration.fitted.crypto.toFixed(4)}   (fixture: 0.5)`);
+  printSpreadTable(symbols, print);
+  printFittedCoefficients(calibration.fitted, print);
 
   return calibration;
 }
@@ -524,6 +593,171 @@ async function sessionBars(
  *
  * Usage: `node dist/server/tools/run-spread-calibration.js --intraday`
  */
+type SessionBucketCell = { ratios: number[]; bps: number[]; quotes: number };
+
+interface BucketSpreadSample {
+  quoteCount: number;
+  bps: number | undefined;
+  ratio: number | undefined;
+}
+
+async function sampleBucketSpread(
+  symbol: string,
+  date: Date,
+  bucket: (typeof SESSION_BUCKETS)[number],
+  minuteBars: Bar[],
+  quotes: AlpacaQuoteClient,
+  print: (line: string) => void,
+): Promise<BucketSpreadSample | undefined> {
+  const end = bucketSampleEnd(date, bucket.minutesAfterOpen);
+  const start = new Date(end.getTime() - 60_000);
+  let page: AlpacaQuote[];
+  try {
+    page = await quotes.stockQuotes(symbol, start, end);
+  } catch (error) {
+    print(`  ${symbol} ${end.toISOString()}: ${String(error)}`);
+    return undefined;
+  }
+  const spreads = page.map(spreadOf).filter((s): s is number => s !== undefined);
+  if (spreads.length === 0) return undefined;
+  const mids = page.filter((q) => q.ap > 0 && q.bp > 0).map((q) => (q.ap + q.bp) / 2);
+  const spread = median(spreads);
+  const mid = median(mids);
+  const atr = atrAt(minuteBars, end, INTRADAY_CALIBRATION_TIMEFRAME);
+  return {
+    quoteCount: spreads.length,
+    bps: mid > 0 ? (spread / mid) * 10_000 : undefined,
+    ratio: atr !== undefined ? spread / atr : undefined,
+  };
+}
+
+async function sampleSessionForDate(
+  symbol: string,
+  date: Date,
+  perBucket: Map<SessionBucketName, SessionBucketCell>,
+  bars: FreeStackAggregatesClient,
+  quotes: AlpacaQuoteClient,
+  print: (line: string) => void,
+): Promise<void> {
+  // Only the sampled session is fetched, not the whole ten-year window: a
+  // decade of 1-minute bars for four symbols is millions of rows for three
+  // readings a day. See `sessionBars`.
+  const sessionOpen = usEquityOpenUtc(date);
+  const sessionWindow: DateRange = {
+    // A full ATR14 needs 15 prior minute bars; an hour of lead-in covers
+    // that with room for a halt or a thin opening
+    start: new Date(sessionOpen.getTime() - 60 * 60_000),
+    end: usEquityCloseUtc(date),
+  };
+  let minuteBars: Bar[];
+  try {
+    minuteBars = await sessionBars(bars, symbol, sessionWindow);
+  } catch (error) {
+    print(`  ${symbol} ${date.toISOString().slice(0, 10)} bars: ${String(error)}`);
+    return;
+  }
+  // A holiday or a weekend serves nothing. Skipping is right; recording a
+  // zero would drag the median toward a flattering number
+  if (minuteBars.length === 0) return;
+
+  for (const bucket of SESSION_BUCKETS) {
+    const sample = await sampleBucketSpread(symbol, date, bucket, minuteBars, quotes, print);
+    const cell = perBucket.get(bucket.name);
+    if (cell === undefined || sample === undefined) continue;
+    cell.quotes += sample.quoteCount;
+    if (sample.bps !== undefined) cell.bps.push(sample.bps);
+    if (sample.ratio !== undefined) cell.ratios.push(sample.ratio);
+  }
+}
+
+function buildBucketStats(
+  perBucket: Map<SessionBucketName, SessionBucketCell>,
+): IntradayBucketStats[] {
+  return SESSION_BUCKETS.map((b) => {
+    const cell = perBucket.get(b.name) ?? { ratios: [], bps: [], quotes: 0 };
+    return {
+      bucket: b.name,
+      samples: cell.ratios.length,
+      quotes_sampled: cell.quotes,
+      median_spread_bps: median(cell.bps),
+      median_spread_over_atr: median(cell.ratios),
+      p90_spread_over_atr: percentile(cell.ratios, 0.9),
+    };
+  });
+}
+
+function buildIntradaySymbolStats(
+  symbol: string,
+  perBucket: Map<SessionBucketName, SessionBucketCell>,
+): IntradaySymbolStats {
+  const buckets = buildBucketStats(perBucket);
+
+  const pooledRatios = buckets.flatMap((b) => {
+    const cell = perBucket.get(b.bucket);
+    return cell === undefined ? [] : cell.ratios;
+  });
+  const pooledBps = buckets.flatMap((b) => {
+    const cell = perBucket.get(b.bucket);
+    return cell === undefined ? [] : cell.bps;
+  });
+
+  return {
+    symbol,
+    buckets,
+    samples: pooledRatios.length,
+    median_spread_bps: median(pooledBps),
+    p90_spread_bps: percentile(pooledBps, 0.9),
+    median_spread_over_atr: median(pooledRatios),
+    p90_spread_over_atr: percentile(pooledRatios, 0.9),
+  };
+}
+
+function buildIntradayCalibration(symbols: IntradaySymbolStats[]): IntradaySpreadCalibration {
+  const perSymbol = symbols
+    .map((s) => s.median_spread_over_atr)
+    .filter((value) => Number.isFinite(value));
+  return {
+    timeframe: INTRADAY_CALIBRATION_TIMEFRAME,
+    symbols,
+    fitted_stocks: median(perSymbol),
+    p90_stocks: percentile(perSymbol, 0.9),
+  };
+}
+
+function printIntradayTable(
+  symbols: readonly IntradaySymbolStats[],
+  print: (line: string) => void,
+): void {
+  print('');
+  print(`=== Measured spread vs ATR14 on ${INTRADAY_CALIBRATION_TIMEFRAME} bars ===`);
+  for (const s of symbols) {
+    print(
+      `${s.symbol.padEnd(6)} n=${s.samples} median=${s.median_spread_bps.toFixed(3)}bps ` +
+        `p90=${s.p90_spread_bps.toFixed(3)}bps spread/ATR median=${s.median_spread_over_atr.toFixed(4)} ` +
+        `p90=${s.p90_spread_over_atr.toFixed(4)}`,
+    );
+    for (const b of s.buckets) {
+      print(
+        `  ${b.bucket.padEnd(7)} n=${b.samples} quotes=${b.quotes_sampled} ` +
+          `median=${b.median_spread_bps.toFixed(3)}bps spread/ATR median=${b.median_spread_over_atr.toFixed(4)} ` +
+          `p90=${b.p90_spread_over_atr.toFixed(4)}`,
+      );
+    }
+  }
+}
+
+function printIntradayFitted(
+  calibration: IntradaySpreadCalibration,
+  print: (line: string) => void,
+): void {
+  print('');
+  print('=== Fitted intraday spreadVolatilityCoefficient (stocks, from medians) ===');
+  print(
+    `  stocks: ${calibration.fitted_stocks.toFixed(4)}   ` +
+      `(p90 across symbols: ${calibration.p90_stocks.toFixed(4)}; daily-fitted: 0.0037)`,
+  );
+}
+
 async function runIntradaySpreadCalibration(
   deps: IntradaySpreadCalibrationDeps = {},
 ): Promise<IntradaySpreadCalibration> {
@@ -553,122 +787,21 @@ async function runIntradaySpreadCalibration(
   const symbols: IntradaySymbolStats[] = [];
 
   for (const symbol of STOCK_SYMBOLS) {
-    const perBucket = new Map<
-      SessionBucketName,
-      { ratios: number[]; bps: number[]; quotes: number }
-    >(SESSION_BUCKETS.map((b) => [b.name, { ratios: [], bps: [], quotes: 0 }]));
+    const perBucket = new Map<SessionBucketName, SessionBucketCell>(
+      SESSION_BUCKETS.map((b) => [b.name, { ratios: [], bps: [], quotes: 0 }]),
+    );
 
     for (const date of dates) {
-      // Only the sampled session is fetched, not the whole ten-year window: a
-      // decade of 1-minute bars for four symbols is millions of rows for three
-      // readings a day. See `sessionBars`.
-      const sessionOpen = usEquityOpenUtc(date);
-      const sessionWindow: DateRange = {
-        // A full ATR14 needs 15 prior minute bars; an hour of lead-in covers
-        // that with room for a halt or a thin opening
-        start: new Date(sessionOpen.getTime() - 60 * 60_000),
-        end: usEquityCloseUtc(date),
-      };
-      let minuteBars: Bar[];
-      try {
-        minuteBars = await sessionBars(bars, symbol, sessionWindow);
-      } catch (error) {
-        print(`  ${symbol} ${date.toISOString().slice(0, 10)} bars: ${String(error)}`);
-        continue;
-      }
-      // A holiday or a weekend serves nothing. Skipping is right; recording a
-      // zero would drag the median toward a flattering number
-      if (minuteBars.length === 0) continue;
-
-      for (const bucket of SESSION_BUCKETS) {
-        const end = bucketSampleEnd(date, bucket.minutesAfterOpen);
-        const start = new Date(end.getTime() - 60_000);
-        let page: AlpacaQuote[];
-        try {
-          page = await quotes.stockQuotes(symbol, start, end);
-        } catch (error) {
-          print(`  ${symbol} ${end.toISOString()}: ${String(error)}`);
-          continue;
-        }
-        const spreads = page.map(spreadOf).filter((s): s is number => s !== undefined);
-        if (spreads.length === 0) continue;
-        const mids = page.filter((q) => q.ap > 0 && q.bp > 0).map((q) => (q.ap + q.bp) / 2);
-        const spread = median(spreads);
-        const mid = median(mids);
-        const atr = atrAt(minuteBars, end, INTRADAY_CALIBRATION_TIMEFRAME);
-        const cell = perBucket.get(bucket.name);
-        if (cell === undefined) continue;
-        cell.quotes += spreads.length;
-        if (mid > 0) cell.bps.push((spread / mid) * 10_000);
-        if (atr !== undefined) cell.ratios.push(spread / atr);
-      }
+      await sampleSessionForDate(symbol, date, perBucket, bars, quotes, print);
     }
 
-    const buckets: IntradayBucketStats[] = SESSION_BUCKETS.map((b) => {
-      const cell = perBucket.get(b.name) ?? { ratios: [], bps: [], quotes: 0 };
-      return {
-        bucket: b.name,
-        samples: cell.ratios.length,
-        quotes_sampled: cell.quotes,
-        median_spread_bps: median(cell.bps),
-        median_spread_over_atr: median(cell.ratios),
-        p90_spread_over_atr: percentile(cell.ratios, 0.9),
-      };
-    });
-
-    const pooledRatios = buckets.flatMap((b) => {
-      const cell = perBucket.get(b.bucket);
-      return cell === undefined ? [] : cell.ratios;
-    });
-    const pooledBps = buckets.flatMap((b) => {
-      const cell = perBucket.get(b.bucket);
-      return cell === undefined ? [] : cell.bps;
-    });
-
-    symbols.push({
-      symbol,
-      buckets,
-      samples: pooledRatios.length,
-      median_spread_bps: median(pooledBps),
-      p90_spread_bps: percentile(pooledBps, 0.9),
-      median_spread_over_atr: median(pooledRatios),
-      p90_spread_over_atr: percentile(pooledRatios, 0.9),
-    });
+    symbols.push(buildIntradaySymbolStats(symbol, perBucket));
   }
 
-  const perSymbol = symbols
-    .map((s) => s.median_spread_over_atr)
-    .filter((value) => Number.isFinite(value));
-  const calibration: IntradaySpreadCalibration = {
-    timeframe: INTRADAY_CALIBRATION_TIMEFRAME,
-    symbols,
-    fitted_stocks: median(perSymbol),
-    p90_stocks: percentile(perSymbol, 0.9),
-  };
+  const calibration = buildIntradayCalibration(symbols);
 
-  print('');
-  print(`=== Measured spread vs ATR14 on ${INTRADAY_CALIBRATION_TIMEFRAME} bars ===`);
-  for (const s of symbols) {
-    print(
-      `${s.symbol.padEnd(6)} n=${s.samples} median=${s.median_spread_bps.toFixed(3)}bps ` +
-        `p90=${s.p90_spread_bps.toFixed(3)}bps spread/ATR median=${s.median_spread_over_atr.toFixed(4)} ` +
-        `p90=${s.p90_spread_over_atr.toFixed(4)}`,
-    );
-    for (const b of s.buckets) {
-      print(
-        `  ${b.bucket.padEnd(7)} n=${b.samples} quotes=${b.quotes_sampled} ` +
-          `median=${b.median_spread_bps.toFixed(3)}bps spread/ATR median=${b.median_spread_over_atr.toFixed(4)} ` +
-          `p90=${b.p90_spread_over_atr.toFixed(4)}`,
-      );
-    }
-  }
-
-  print('');
-  print('=== Fitted intraday spreadVolatilityCoefficient (stocks, from medians) ===');
-  print(
-    `  stocks: ${calibration.fitted_stocks.toFixed(4)}   ` +
-      `(p90 across symbols: ${calibration.p90_stocks.toFixed(4)}; daily-fitted: 0.0037)`,
-  );
+  printIntradayTable(symbols, print);
+  printIntradayFitted(calibration, print);
 
   return calibration;
 }

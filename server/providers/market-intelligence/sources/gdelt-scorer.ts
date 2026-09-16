@@ -208,24 +208,27 @@ function mean(values: readonly number[]): number | undefined {
   return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
+interface GdeltWindowTones {
+  signalTones: number[];
+  baselineTones: number[];
+  /** Baseline bucket indices (0 = OLDEST) that carry at least one record */
+  populated: Set<number>;
+}
+
 /**
- * Derives at most one class-wide macro aggregate from archived GKG rows.
- *
  * Rows outside the two windows are ignored, so a caller may pass a wider slice
  * than it needs; rows at or after `windowEnd` are ignored too, which is what
  * keeps the open bar out of the read.
  */
-export function deriveGdeltAggregate(
+function collectGdeltWindowTones(
   rows: readonly RawArchiveRow[],
-  params: GdeltDeriveParams,
-): GdeltDerivation {
-  const windows = params.windows ?? DEFAULT_GDELT_WINDOWS;
-  const windowEnd = params.windowEnd.getTime();
-  const signalStart = windowEnd - windows.signalWindowMs;
-  const baselineStart = signalStart - windows.baselineWindowMs;
-  const buckets = Math.ceil(windows.baselineWindowMs / windows.signalWindowMs);
-  const watched = new Set(themesFor(params.asset_class));
-
+  asset_class: AssetClass,
+  baselineStart: number,
+  signalStart: number,
+  windowEnd: number,
+  signalWindowMs: number,
+): GdeltWindowTones {
+  const watched = new Set(themesFor(asset_class));
   const signalTones: number[] = [];
   const baselineTones: number[] = [];
   const populated = new Set<number>();
@@ -245,8 +248,75 @@ export function deriveGdeltAggregate(
       continue;
     }
     baselineTones.push(parsed.tone);
-    populated.add(Math.floor((at - baselineStart) / windows.signalWindowMs));
+    populated.add(Math.floor((at - baselineStart) / signalWindowMs));
   }
+
+  return { signalTones, baselineTones, populated };
+}
+
+function buildGdeltItem(
+  params: GdeltDeriveParams,
+  windows: GdeltWindows,
+  toneDelta: number,
+  signalMean: number,
+  baselineMean: number,
+  signalRecords: number,
+  baselineRecords: number,
+  populatedBuckets: number,
+  buckets: number,
+): IntelligenceItem {
+  const sentiment = signOf(toneDelta);
+  const direction = sentiment === 1 ? 'improving' : sentiment === -1 ? 'deteriorating' : 'flat';
+  const hours = (ms: number): string => `${(ms / (60 * 60 * 1000)).toFixed(0)}h`;
+
+  return {
+    // Deterministic in (source, class, window end): replaying the same archive
+    // derives the same id, so `MarketIntelligenceStore.ingest`'s dedupe makes a
+    // repeat within one bar a no-op rather than a second vote
+    id: `${MI_SOURCES.gdeltGkg}:${params.asset_class}:${params.windowEnd.toISOString()}`,
+    source: MI_SOURCES.gdeltGkg,
+    type: 'news',
+    timestamp: params.windowEnd,
+    entity: GDELT_MACRO_ENTITY,
+    scope: 'asset_class',
+    headline: `GDELT macro tone ${direction} (${toneDelta >= 0 ? '+' : ''}${toneDelta.toFixed(2)} vs ${hours(windows.baselineWindowMs)} baseline)`,
+    sentiment,
+    confidence: confidenceFromToneDelta(toneDelta),
+    summary:
+      `${hours(windows.signalWindowMs)} mean tone ${signalMean.toFixed(2)} against a trailing ` +
+      `${hours(windows.baselineWindowMs)} baseline mean of ${baselineMean.toFixed(2)} ` +
+      `(delta ${toneDelta.toFixed(2)}), over ${signalRecords} signal and ` +
+      `${baselineRecords} baseline records across ${populatedBuckets}/${buckets} populated ` +
+      'buckets. Vendor tone is a feature, not ground truth: the delta is the signal, the level ' +
+      'is context.',
+  };
+}
+
+/**
+ * Derives at most one class-wide macro aggregate from archived GKG rows.
+ *
+ * Rows outside the two windows are ignored, so a caller may pass a wider slice
+ * than it needs; rows at or after `windowEnd` are ignored too, which is what
+ * keeps the open bar out of the read.
+ */
+export function deriveGdeltAggregate(
+  rows: readonly RawArchiveRow[],
+  params: GdeltDeriveParams,
+): GdeltDerivation {
+  const windows = params.windows ?? DEFAULT_GDELT_WINDOWS;
+  const windowEnd = params.windowEnd.getTime();
+  const signalStart = windowEnd - windows.signalWindowMs;
+  const baselineStart = signalStart - windows.baselineWindowMs;
+  const buckets = Math.ceil(windows.baselineWindowMs / windows.signalWindowMs);
+
+  const { signalTones, baselineTones, populated } = collectGdeltWindowTones(
+    rows,
+    params.asset_class,
+    baselineStart,
+    signalStart,
+    windowEnd,
+    windows.signalWindowMs,
+  );
 
   const signalMean = mean(signalTones);
   const baselineMean = mean(baselineTones);
@@ -289,32 +359,17 @@ export function deriveGdeltAggregate(
     );
   }
 
-  const toneDelta = stats.tone_delta;
-  const sentiment = signOf(toneDelta);
-  const direction = sentiment === 1 ? 'improving' : sentiment === -1 ? 'deteriorating' : 'flat';
-  const hours = (ms: number): string => `${(ms / (60 * 60 * 1000)).toFixed(0)}h`;
-
-  const item: IntelligenceItem = {
-    // Deterministic in (source, class, window end): replaying the same archive
-    // derives the same id, so `MarketIntelligenceStore.ingest`'s dedupe makes a
-    // repeat within one bar a no-op rather than a second vote
-    id: `${MI_SOURCES.gdeltGkg}:${params.asset_class}:${params.windowEnd.toISOString()}`,
-    source: MI_SOURCES.gdeltGkg,
-    type: 'news',
-    timestamp: params.windowEnd,
-    entity: GDELT_MACRO_ENTITY,
-    scope: 'asset_class',
-    headline: `GDELT macro tone ${direction} (${toneDelta >= 0 ? '+' : ''}${toneDelta.toFixed(2)} vs ${hours(windows.baselineWindowMs)} baseline)`,
-    sentiment,
-    confidence: confidenceFromToneDelta(toneDelta),
-    summary:
-      `${hours(windows.signalWindowMs)} mean tone ${signalMean.toFixed(2)} against a trailing ` +
-      `${hours(windows.baselineWindowMs)} baseline mean of ${baselineMean.toFixed(2)} ` +
-      `(delta ${toneDelta.toFixed(2)}), over ${signalTones.length} signal and ` +
-      `${baselineTones.length} baseline records across ${populated.size}/${buckets} populated ` +
-      'buckets. Vendor tone is a feature, not ground truth: the delta is the signal, the level ' +
-      'is context.',
-  };
+  const item = buildGdeltItem(
+    params,
+    windows,
+    stats.tone_delta,
+    signalMean,
+    baselineMean,
+    signalTones.length,
+    baselineTones.length,
+    populated.size,
+    buckets,
+  );
 
   return { emitted: true, item, stats };
 }

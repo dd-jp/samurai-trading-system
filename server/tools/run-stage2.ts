@@ -333,6 +333,26 @@ export function universeFor(timeframe: string): readonly string[] {
 }
 
 /**
+ * Bar bounds are computed by min/max rather than by taking `bars[0]` and
+ * `bars.at(-1)`: `Stage2HistoricalStore.bars` does `ORDER BY close_time ASC`
+ * today, but this function's structural parameter type cannot state that, and
+ * a store that ever returned bars unordered would silently mis-narrow the
+ * window rather than fail.
+ */
+function firstAndLastBar(
+  bars: readonly { close_time: Date }[],
+): { first: Date; last: Date } | undefined {
+  let first: Date | undefined;
+  let last: Date | undefined;
+  for (const bar of bars) {
+    if (first === undefined || bar.close_time.getTime() < first.getTime()) first = bar.close_time;
+    if (last === undefined || bar.close_time.getTime() > last.getTime()) last = bar.close_time;
+  }
+  if (first === undefined || last === undefined) return undefined;
+  return { first, last };
+}
+
+/**
  * The sub-window of `requested` that EVERY symbol actually has bars for.
  *
  * Intersected, not unioned: the grid replays one universe per asset class, and
@@ -348,12 +368,6 @@ export function universeFor(timeframe: string): readonly string[] {
  * Returning an inverted range there would hand replay/folds/MinBTL a window
  * they cannot sample, reproducing the same opaque `toReturnSeries` abort this
  * function exists to prevent, just one layer further down.
- *
- * Bar bounds are computed by min/max rather than by taking `bars[0]` and
- * `bars.at(-1)`: `Stage2HistoricalStore.bars` does `ORDER BY close_time ASC`
- * today, but the structural parameter type above cannot state that, and a
- * store that ever returned bars unordered would silently mis-narrow the
- * window rather than fail.
  */
 export function effectiveWindow(
   store: { bars: (symbol: string, window: DateRange) => Array<{ close_time: Date }> },
@@ -366,13 +380,8 @@ export function effectiveWindow(
 
   for (const symbol of symbols) {
     const bars = store.bars(symbol, requested);
-    let first: Date | undefined;
-    let last: Date | undefined;
-    for (const bar of bars) {
-      if (first === undefined || bar.close_time.getTime() < first.getTime()) first = bar.close_time;
-      if (last === undefined || bar.close_time.getTime() > last.getTime()) last = bar.close_time;
-    }
-    if (first === undefined || last === undefined) {
+    const bounds = firstAndLastBar(bars);
+    if (bounds === undefined) {
       throw new Error(
         `runStage2: ${symbol} has no bars in ${requested.start.toISOString()} .. ` +
           `${requested.end.toISOString()}, so the 12-config grid cannot be evaluated over the ` +
@@ -381,8 +390,8 @@ export function effectiveWindow(
       );
     }
 
-    if (first.getTime() > start.getTime()) start = first;
-    if (last.getTime() < end.getTime()) end = last;
+    if (bounds.first.getTime() > start.getTime()) start = bounds.first;
+    if (bounds.last.getTime() < end.getTime()) end = bounds.last;
   }
 
   if (start.getTime() >= end.getTime()) {

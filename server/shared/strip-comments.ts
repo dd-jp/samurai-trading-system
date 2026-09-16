@@ -38,27 +38,60 @@ export function stripLineComments(sql: string): string {
  *    `contracts/boundary.test.ts` instead checks the property it actually
  *    depends on directly, on its own output — see the comment there.
  */
+function stepQuoted(
+  source: string,
+  i: number,
+  ch: string,
+  quote: string,
+): { nextIndex: number; appended: string; quoteAfter: string | null } {
+  if (ch === '\n' && quote !== '`') {
+    return { nextIndex: i + 1, appended: ch, quoteAfter: null };
+  }
+  if (ch === '\\' && i + 1 < source.length) {
+    return { nextIndex: i + 2, appended: ch + source[i + 1], quoteAfter: quote };
+  }
+  return { nextIndex: i + 1, appended: ch, quoteAfter: ch === quote ? null : quote };
+}
+
+function stepLineComment(source: string, i: number): number {
+  const nl = source.indexOf('\n', i);
+  return nl === -1 ? source.length : nl;
+}
+
+/**
+ * `/* ... *\/`, throwing on the unterminated case — see `stripComments`'s doc
+ * comment for what this throw does and does not catch.
+ */
+function stepBlockComment(source: string, i: number): { nextIndex: number; appended: string } {
+  const end = source.indexOf('*/', i + 2);
+  if (end === -1) {
+    throw new Error(
+      "stripComments: unterminated '/*' — valid source can't have one, so this is almost " +
+        'certainly a regex literal (or similar) mis-parsed as a comment opener.',
+    );
+  }
+  const removed = source.slice(i + 2, end);
+  const newlines = removed.split('\n').length - 1;
+  // A comment spanning lines leaves its newlines in place, so a `^`-anchored
+  // pattern still sees the same line breaks around it; a single-line comment
+  // leaves a space instead of nothing, so the tokens on either side of it
+  // (`import`/*c*/`type`) don't fuse into one word
+  return { nextIndex: end + 2, appended: newlines > 0 ? '\n'.repeat(newlines) : ' ' };
+}
+
 export function stripComments(source: string): string {
   let out = '';
   let quote: string | null = null;
   let i = 0;
   while (i < source.length) {
-    const ch = source[i];
+    // `noUncheckedIndexedAccess` types this `string | undefined`; the loop
+    // bound above guarantees it's defined
+    const ch = source[i] as string;
     if (quote) {
-      if (ch === '\n' && quote !== '`') {
-        quote = null;
-        out += ch;
-        i += 1;
-        continue;
-      }
-      out += ch;
-      if (ch === '\\' && i + 1 < source.length) {
-        out += source[i + 1];
-        i += 2;
-      } else {
-        if (ch === quote) quote = null;
-        i += 1;
-      }
+      const step = stepQuoted(source, i, ch, quote);
+      out += step.appended;
+      i = step.nextIndex;
+      quote = step.quoteAfter;
       continue;
     }
     if (ch === '"' || ch === "'" || ch === '`') {
@@ -68,26 +101,13 @@ export function stripComments(source: string): string {
       continue;
     }
     if (ch === '/' && source[i + 1] === '/') {
-      const nl = source.indexOf('\n', i);
-      i = nl === -1 ? source.length : nl;
+      i = stepLineComment(source, i);
       continue;
     }
     if (ch === '/' && source[i + 1] === '*') {
-      const end = source.indexOf('*/', i + 2);
-      if (end === -1) {
-        throw new Error(
-          "stripComments: unterminated '/*' — valid source can't have one, so this is almost " +
-            'certainly a regex literal (or similar) mis-parsed as a comment opener.',
-        );
-      }
-      const removed = source.slice(i + 2, end);
-      const newlines = removed.split('\n').length - 1;
-      // A comment spanning lines leaves its newlines in place, so a `^`-anchored
-      // pattern still sees the same line breaks around it; a single-line comment
-      // leaves a space instead of nothing, so the tokens on either side of it
-      // (`import`/*c*/`type`) don't fuse into one word
-      out += newlines > 0 ? '\n'.repeat(newlines) : ' ';
-      i = end + 2;
+      const step = stepBlockComment(source, i);
+      out += step.appended;
+      i = step.nextIndex;
       continue;
     }
     out += ch;

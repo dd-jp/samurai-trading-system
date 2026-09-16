@@ -252,6 +252,7 @@ export interface RunLoginDeps {
   tokenPath?: string;
 }
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: a single sequential auth flow (resolve deps, open browser, await callback, exchange code, write token, verify) where each step's `deps.x ?? default` is an independent fallback, not nested logic; splitting the steps into sub-functions would risk silently reordering a real OAuth login flow for no readability gain.
 export async function runLogin(
   environment: SaxoTradingEnvironment,
   deps: RunLoginDeps = {},
