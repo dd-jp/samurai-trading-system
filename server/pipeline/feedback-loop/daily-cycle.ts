@@ -136,7 +136,6 @@ function tuneAnalystWeights(
   }
 }
 
-/** One proposal's guarded dial move: resolve, apply-or-skip, record, and (for a threshold loosening) announce */
 function applyTuningProposal(
   proposal: TuningProposal,
   input: DailyCycleInput,

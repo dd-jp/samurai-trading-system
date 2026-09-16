@@ -199,7 +199,6 @@ function scaleVenues(
   return copy;
 }
 
-/** Ingests every symbol over `window`, printing the bar count each lands with */
 async function ingestSymbols(
   store: Stage2HistoricalStore,
   symbols: readonly string[],
@@ -213,8 +212,6 @@ async function ingestSymbols(
 }
 
 /**
- * Pairs each net-pass result with its gross-pass counterpart into one row.
- *
  * The three arrays are aligned by construction — `runTrialGrid` calls
  * `makeEvaluator` exactly once per pushed result, in grid order, and both
  * passes iterate the same grid over the same asset classes. Asserted rather
@@ -268,7 +265,6 @@ async function buildDecompositionRows(
   return rows;
 }
 
-/** Re-runs the 12-config grid at each `COST_SCALES` rung, reporting the pass count and mean bps per asset class */
 async function sweepCostSensitivity(
   store: Stage2HistoricalStore,
   window: DateRange,

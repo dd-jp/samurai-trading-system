@@ -208,7 +208,6 @@ function mean(values: readonly number[]): number | undefined {
   return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
-/** One window's worth of tone rows, sorted into the signal/baseline buckets `deriveGdeltAggregate` scores */
 interface GdeltWindowTones {
   signalTones: number[];
   baselineTones: number[];
@@ -217,8 +216,6 @@ interface GdeltWindowTones {
 }
 
 /**
- * Sorts archived rows into the signal window, the baseline window, or neither.
- *
  * Rows outside the two windows are ignored, so a caller may pass a wider slice
  * than it needs; rows at or after `windowEnd` are ignored too, which is what
  * keeps the open bar out of the read.
@@ -257,7 +254,6 @@ function collectGdeltWindowTones(
   return { signalTones, baselineTones, populated };
 }
 
-/** The `IntelligenceItem` for an already-established, non-zero `toneDelta` */
 function buildGdeltItem(
   params: GdeltDeriveParams,
   windows: GdeltWindows,

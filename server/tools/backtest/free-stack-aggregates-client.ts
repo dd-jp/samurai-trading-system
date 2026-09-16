@@ -238,11 +238,6 @@ export class FreeStackAggregatesClient implements PolygonClient {
       : this.fetchAlpaca(symbol, window, timeframe);
   }
 
-  /**
-   * Fetches and validates one Coinbase chunk (the `fetchCoinbase` loop body,
-   * split out to keep that function's nesting flat). Returns the chunk's raw
-   * candle array, already checked against Coinbase's per-request cap.
-   */
   private async fetchCoinbaseChunk(
     symbol: string,
     cursor: number,
@@ -335,11 +330,6 @@ export class FreeStackAggregatesClient implements PolygonClient {
     return [...byTime.values()].sort((a, b) => a.t - b.t);
   }
 
-  /**
-   * Fetches and validates one Alpaca page (the `fetchAlpaca` loop body, split
-   * out to keep that function's nesting flat). Returns the page's raw bars
-   * array and the next page token, if any.
-   */
   private async fetchAlpacaPage(
     symbol: string,
     alpacaTimeframe: string,

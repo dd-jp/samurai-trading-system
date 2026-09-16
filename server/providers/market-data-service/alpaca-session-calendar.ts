@@ -134,7 +134,6 @@ export function validateAlpacaCalendarDays(body: unknown, context: string): Alpa
   });
 }
 
-/** Builds the `AlpacaCalendarFetchError` for a non-ok response, reading the body for context */
 async function classifyCalendarResponseError(
   response: Response,
   context: string,

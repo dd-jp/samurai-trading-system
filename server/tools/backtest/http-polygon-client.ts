@@ -173,11 +173,6 @@ export class HttpPolygonClient implements PolygonClient {
     this.rateLimiter = options.rateLimiter ?? new TokenBucket(resolvePolygonPacing());
   }
 
-  /**
-   * Fetches and validates one page of the aggregates endpoint (the
-   * `fetchAggregates` loop body, split out to keep that function's nesting
-   * flat). Returns the page's validated rows and the next page's URL, if any.
-   */
   private async fetchPage(
     url: string,
     symbol: string,

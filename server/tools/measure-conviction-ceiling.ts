@@ -145,12 +145,6 @@ export interface LatticePoint {
   keyPoints: number;
 }
 
-/**
- * The innermost three axes of the lattice sweep (donchian/adx/squeeze),
- * assessed for one fixed `lastClose`/`rsi`/`macd`/`participation` — split out
- * of `enumerateTechnicalLattice` purely to keep that function's nesting
- * shallow; the grid it sweeps is unchanged
- */
 function collectLatticePointsFor(
   lastClose: number,
   rsi: number,
@@ -343,7 +337,6 @@ function format(value: number): string {
   return value.toFixed(4);
 }
 
-/** The "Ceiling per desk shape and mediator stance" table's rows, plus the overall ceiling they reveal */
 function buildCeilingTable(
   samples: readonly ConvictionSample[],
   floor: number,
@@ -371,7 +364,6 @@ function buildCeilingTable(
   return { lines, overallCeiling };
 }
 
-/** The "Gated tape" section's bullet lines — capped-tape ceiling per desk shape, mediator pinned to `agrees` */
 function buildGatedTapeSection(samples: readonly ConvictionSample[], floor: number): string[] {
   const lines: string[] = [];
   for (const shape of DESK_SHAPES) {
@@ -391,7 +383,6 @@ function buildGatedTapeSection(samples: readonly ConvictionSample[], floor: numb
   return lines;
 }
 
-/** The "Exact ties at the floor" section — what the strict `<` gate admits */
 function buildTiesSection(samples: readonly ConvictionSample[], floor: number): string[] {
   const lines: string[] = [];
   const ties = samples.filter(
@@ -429,7 +420,6 @@ function buildTiesSection(samples: readonly ConvictionSample[], floor: number): 
   return lines;
 }
 
-/** The pre-declared PASS/NEAR-HALT/TOTAL-HALT verdict — see the module doc comment's criterion */
 function computeVerdict(overallCeiling: number, floor: number, belowOneCount: number): string {
   if (overallCeiling < floor) {
     return 'TOTAL HALT — no stock can clear the floor at any signal strength';

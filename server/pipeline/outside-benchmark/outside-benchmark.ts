@@ -154,18 +154,12 @@ export interface OutsideBenchmarkSample {
   performance: OutsideBenchmarkPerformance;
 }
 
-/** One leg's anchor close and in-window closes — see `buildOutsideBenchmark`'s "anchor" and "missing data" sections */
 interface ResolvedBenchmarkLeg {
   leg: BenchmarkLeg;
   anchor: BenchmarkObservation;
   inWindow: BenchmarkObservation[];
 }
 
-/**
- * One leg's anchor close (last at or before `from`) and its in-window closes.
- * Throws on any of the three ways a leg can fail to cover the window — see
- * `buildOutsideBenchmark`'s "anchor" and "missing data is refused" sections.
- */
 function resolveBenchmarkLeg(
   benchmark: OutsideBenchmarkId,
   leg: BenchmarkLeg,
@@ -205,11 +199,6 @@ function resolveBenchmarkLeg(
   return { leg, anchor, inWindow };
 }
 
-/**
- * The legs' shared in-window close times, intersected before blending — see
- * `buildOutsideBenchmark`'s intersection note. A vendor gap in one leg must
- * not silently become a day the blend was partially invested.
- */
 function commonCloseTimeline(
   benchmark: OutsideBenchmarkId,
   perLeg: readonly ResolvedBenchmarkLeg[],
@@ -229,12 +218,6 @@ function commonCloseTimeline(
   return timeline;
 }
 
-/**
- * Walks the blended index across `timeline`, seeded at 1 on each leg's
- * anchor — see `buildOutsideBenchmark`'s blending note for why each step is
- * the weighted sum of the legs' simple daily returns rather than a
- * drift-weighted blend
- */
 function blendIndexSeries(
   perLeg: readonly ResolvedBenchmarkLeg[],
   timeline: readonly number[],

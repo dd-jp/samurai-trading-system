@@ -129,7 +129,6 @@ function previousShapeOf(view: AnalystView): AnalystView {
   };
 }
 
-/** Every import/export line across `sources` in `dir` that names an LLM/persona seam */
 function findLlmImportOffenders(dir: string, sources: string[]): string[] {
   const offenders: string[] = [];
   for (const name of sources) {

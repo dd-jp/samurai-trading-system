@@ -684,14 +684,13 @@ function buildAuthHeaders(token: string | null | undefined): { Authorization: st
 }
 
 /**
- * Starts one poll's timeout arm. Releasing the poll slot on a timeout is
- * idempotent and reachable from BOTH this timer and the caller's `finally`
- * (#606 item 3) — aborting a controller does not settle a request that
- * ignores its signal, so a `finally`-only release leaves `inFlight` true
- * forever after a hang. Returns `isTimedOut`, which is per POLL INVOCATION,
- * not per effect (PR #607 review round 1): a fresh one is created on every
- * call, so one poll being declared dead cannot discard the NEXT poll's
- * payload.
+ * Releasing the poll slot on a timeout is idempotent and reachable from BOTH
+ * this timer and the caller's `finally` (#606 item 3) — aborting a
+ * controller does not settle a request that ignores its signal, so a
+ * `finally`-only release leaves `inFlight` true forever after a hang.
+ * Returns `isTimedOut`, which is per POLL INVOCATION, not per effect (PR
+ * #607 review round 1): a fresh one is created on every call, so one poll
+ * being declared dead cannot discard the NEXT poll's payload.
  */
 function armPollTimeout(deps: {
   timeoutMs: number;
@@ -775,11 +774,10 @@ async function attemptPollFetch(deps: {
 }
 
 /**
- * The success half of one poll, pulled out of `useSnapshot`'s effect so that
- * function's cognitive complexity stays legible. Returns the new
- * `lastSuccessMs` on a snapshot that landed, `null` on anything that isn't a
- * fresh, trustworthy snapshot (a discarded stale response or a contract
- * mismatch) — `poll()` only advances its own `lastSuccessMs` on non-null.
+ * Returns the new `lastSuccessMs` on a snapshot that landed, `null` on
+ * anything that isn't a fresh, trustworthy snapshot (a discarded stale
+ * response or a contract mismatch) — `poll()` only advances its own
+ * `lastSuccessMs` on non-null.
  */
 async function resolveSnapshotResponse(
   response: Response,

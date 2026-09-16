@@ -244,7 +244,6 @@ function matchSameDay(
   return results;
 }
 
-/** One disposal's remainder against `acquisitions` strictly AFTER it within its 30-day window, earliest acquisition first (FIFO) */
 function matchDisposalWithinThirtyDayWindow(
   instrument: string,
   disp: DayLot,
@@ -294,7 +293,6 @@ interface Section104Pool {
   cost: number;
 }
 
-/** Tops the pool up from one acquisition day-lot's full remaining quantity */
 function applyAcquisitionToPool(pool: Section104Pool, lot: DayLot): void {
   const qty = lot.remaining;
   if (qty <= 0) return;
@@ -303,7 +301,6 @@ function applyAcquisitionToPool(pool: Section104Pool, lot: DayLot): void {
   pool.cost += amount + charges;
 }
 
-/** Draws one disposal day-lot's full remaining quantity from the pool at its running average cost */
 function applyDisposalToPool(
   instrument: string,
   pool: Section104Pool,

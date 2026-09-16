@@ -168,11 +168,6 @@ export const MAX_INTER_LINE_GAP_MS = 15 * 60_000;
  * The debates that fell in a closed gap are not something this log can vouch
  * for either way, so the span must not claim to cover them.
  */
-/**
- * Records `record`'s `debate_id` into `timeoutIds` when `record` is a
- * `debate.timeout` line — a thin extraction of `parseLogCoverage`'s direct
- * timeout-matching branch, independent of the span-coverage reasoning below
- */
 function recordTimeoutId(record: Record<string, unknown>, timeoutIds: Set<string>): void {
   if (record.message !== 'debate.timeout') return;
   const payload = record.payload;
@@ -351,11 +346,6 @@ export interface ClassificationResult {
  * run of this same tool) is skipped entirely — this function only proposes
  * values for what migration 0041 left indeterminate, never reclassifies a
  * row already settled.
- */
-/**
- * One row's classification, per `classifyRows`' rules above — `'uncovered'`
- * and `'indeterminate'` name the same two non-classified outcomes the
- * `ClassificationResult` buckets report
  */
 function classifyRowTermination(
   row: DebateLogTerminationRow,

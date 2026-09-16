@@ -333,10 +333,6 @@ export function universeFor(timeframe: string): readonly string[] {
 }
 
 /**
- * The earliest and latest `close_time` across `bars`, or `undefined` for an
- * empty array — split out of `effectiveWindow` purely to keep that function's
- * nesting shallow.
- *
  * Bar bounds are computed by min/max rather than by taking `bars[0]` and
  * `bars.at(-1)`: `Stage2HistoricalStore.bars` does `ORDER BY close_time ASC`
  * today, but this function's structural parameter type cannot state that, and

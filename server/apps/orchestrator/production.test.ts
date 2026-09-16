@@ -795,21 +795,18 @@ describe('universe resolution is a single site (#1167)', () => {
    * when it also unbalances braces, which the likely shape of this defect
    * (see `KNOWN_STRIPPER_DESYNCS`'s doc comment) typically will not do.
    */
-  /** Index just past a `//` line comment starting at `i`, or `n` if it runs to EOF */
   function skipLineComment(source: string, i: number, n: number): number {
     i += 2;
     while (i < n && source[i] !== '\n') i++;
     return i;
   }
 
-  /** Index just past a block comment starting at `i` (past EOF when unterminated) */
   function skipBlockComment(source: string, i: number, n: number): number {
     i += 2;
     while (i < n && !(source[i] === '*' && source[i + 1] === '/')) i++;
     return i + 2;
   }
 
-  /** Index just past the closing `quote` for a string/template literal starting at `i` */
   function skipStringLiteral(source: string, i: number, n: number, quote: string): number {
     i++;
     while (i < n && source[i] !== quote) {
@@ -819,17 +816,10 @@ describe('universe resolution is a single site (#1167)', () => {
     return i + 1;
   }
 
-  /** Whether `c` opens a string or template literal */
   function isQuoteChar(c: string): boolean {
     return c === "'" || c === '"' || c === '`';
   }
 
-  /**
-   * One token of `stripCommentsAndStrings`'s scan starting at `i`: the index
-   * to resume at, and what that token contributes to the stripped output —
-   * `''` for a stripped comment, `' '` for a stripped string/template
-   * literal, or the character itself otherwise
-   */
   function scanToken(source: string, i: number, n: number): { nextIndex: number; append: string } {
     const c = source[i];
     const c2 = source[i + 1];

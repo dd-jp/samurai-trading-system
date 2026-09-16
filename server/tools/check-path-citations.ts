@@ -301,7 +301,6 @@ function markerOn(line: string): { reason: string; note: string } | null {
   return { reason: match[1] ?? '', note: (match[2] ?? '').trim() };
 }
 
-/** One step of the fence state machine: given the current fence and a line, what to emit and the next fence */
 function stepFence(line: string, fence: string | null): { output: string; fence: string | null } {
   const opener = /^\s*(```+|~~~+)/.exec(line);
   if (fence === null) {
@@ -344,7 +343,6 @@ function stripFencedBlocks(lines: readonly string[]): string[] {
  * upstream blanked every later comment in the file, including this function's own doc
  * comment.
  */
-/** Consumes a run of block-comment text starting at `i`; a close-comment token ends it, end-of-line does not */
 function consumeBlockComment(
   line: string,
   i: number,
@@ -354,7 +352,6 @@ function consumeBlockComment(
   return { text: line.slice(i, end), i: end + 2, inBlock: false };
 }
 
-/** Consumes one character of a string/template opened by `delim`, honoring `\` escapes */
 function consumeStringChar(
   line: string,
   i: number,
@@ -366,7 +363,6 @@ function consumeStringChar(
   return { i: i + 1, delim };
 }
 
-/** Consumes one step of code (neither in a block comment nor a string), dispatching on what opens next */
 function consumeCode(
   line: string,
   i: number,
@@ -504,7 +500,6 @@ export interface ExtractOptions {
  * a marker written outside a fence or a comment still attaches to the citation on its
  * line
  */
-/** Every backticked citation on one line, matched against `contentLine` but marker-read from `rawLine` */
 function citationsOnLine(
   rawLine: string,
   contentLine: string,
@@ -664,8 +659,6 @@ export interface CheckOptions {
 }
 
 /**
- * Which extractor applies to `file`, or `null` when it is neither markdown nor code.
- *
  * Reachable as `null` only via the `files` option (the default file set is always `.md` or
  * `CODE_EXTENSION_RE`): a file matching neither is skipped, not counted scanned —
  * `filesScanned` stays a fact about files this run actually extracted citations from.
@@ -678,7 +671,6 @@ function extractorFor(
   return null;
 }
 
-/** Checks every citation on one file against `tree`, folding the result into `violations`/`exemptByMarker` */
 function recordCitations(
   citations: readonly Citation[],
   tree: TreeResolver,

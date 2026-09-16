@@ -776,7 +776,6 @@ function trendReading(core: CoreReads): AxisReading {
   };
 }
 
-/** The RSI band `momentumReading`'s line and `AxisReading.band` report */
 function rsiBandFor(rsi: number): string {
   return rsi >= RSI_OVERBOUGHT
     ? 'overbought'
@@ -789,7 +788,6 @@ function rsiBandFor(rsi: number): string {
           : 'at midline';
 }
 
-/** The MACD histogram clause `momentumReading`'s line appends when MACD is readable */
 function macdPartFor(macd: number | undefined): string {
   return macd === undefined
     ? ''

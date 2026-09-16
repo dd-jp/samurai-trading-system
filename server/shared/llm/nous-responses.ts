@@ -223,7 +223,6 @@ interface OutputItem {
  * than concatenated: they are not the answer, and folding a reasoning summary
  * into the JSON the caller is about to parse would break it.
  */
-/** The text parts of one `message`-type output item, or `[]` for anything else */
 function textPartsOf(item: OutputItem): string[] {
   if (item?.type !== undefined && item.type !== 'message') return [];
   if (!Array.isArray(item?.content)) return [];
@@ -297,7 +296,6 @@ function countServerToolCalls(body: ResponsesBody): number {
   return calls;
 }
 
-/** Every citation in one output item's content annotations, in first-seen order within the item */
 function citationsFromItem(item: OutputItem): NousCitation[] {
   if (!Array.isArray(item?.content)) return [];
   const citations: NousCitation[] = [];

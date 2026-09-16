@@ -378,14 +378,6 @@ function unzipFirstEntry(buffer: Buffer): string {
   return inflated.toString('utf8');
 }
 
-/**
- * One GKG line, parsed into a record — or `null` for a line that is malformed,
- * off the theme watchlist, or carries no usable tone.
- *
- * Split out of `parseBatch` so the loop there stays about counting rows
- * (`scanned`) and collecting the ones this returns non-null for; this function
- * owns every per-row rejection reason.
- */
 function parseGkgLine(
   line: string,
   themes: ReadonlySet<string>,

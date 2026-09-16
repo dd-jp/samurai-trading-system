@@ -49,9 +49,6 @@ function assertPositiveFloor(name: keyof CostFloors, value: number): void {
 }
 
 /**
- * Validates one venue's override fields (the `assertValidVenueOverrides`
- * inner loop, split out to keep that function's nesting flat).
- *
  * Unlike a floor, an `AssetClassCostConfig` rate (e.g. `commissionRate: 0`
  * for Alpaca's commission-free US equities, `cost-model.test.ts`) is
  * legitimately zero, so this only requires finite and `>= 0`, not `> 0`.

@@ -109,11 +109,6 @@ function retryAfterHintMs(error: unknown, config: RetryConfig): number | undefin
 }
 
 /**
- * The catch-block half of one `withRetry` attempt: decides whether `error` is
- * worth another attempt and, if so, reports it (`onRetry`) and sleeps the
- * backoff. Rethrows `error` itself when it is not retryable or attempts are
- * exhausted, which is what tells the loop in `withRetry` to stop.
- *
  * A throwing `onRetry` is contained rather than allowed to replace `error`:
  * this loop is on the path of every LLM and HTTP call in the system, and a
  * telemetry sink that fails must not convert a recoverable timeout into an

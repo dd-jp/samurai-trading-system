@@ -138,7 +138,6 @@ const DEFAULT_NODE_ARGS = ['--env-file=.env.local'] as const;
  */
 const REQUESTED_STOP: ReadonlySet<string> = new Set(['SIGINT', 'SIGTERM']);
 
-/** Whether a child's exit was asked for, whoever asked — see `REQUESTED_STOP`'s doc comment */
 function isRequestedStop(shuttingDown: boolean, signal: NodeJS.Signals | null): boolean {
   return shuttingDown || (signal !== null && REQUESTED_STOP.has(signal));
 }

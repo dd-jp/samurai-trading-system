@@ -383,11 +383,6 @@ export interface TrialGridRunDeps {
   announceSizing?: (sizing: TrialGridSizing) => void;
 }
 
-/**
- * One (config, asset class) pair's walk-forward (and optional CSCV) scoring.
- * Split out of `runTrialGrid` so the grid's two nested loops stay readable —
- * this is the whole body of the inner one.
- */
 async function runOneAssetClassTrial(
   config: ProxyStrategyConfig,
   config_hash: string,

@@ -154,7 +154,6 @@ function isCredentialKey(key: string): boolean {
   return CREDENTIAL_KEYS.has(key.toLowerCase().replace(/[-_\s]/g, ''));
 }
 
-/** One counter for the whole walk, not per level — shared across recursive `walk` calls */
 interface WalkBudget {
   visited: number;
 }

@@ -162,13 +162,6 @@ export class AlpacaNewsClient {
     this.rateLimiter = options.rateLimiter ?? new TokenBucket(DEFAULT_PACING);
   }
 
-  /**
-   * Fetches and validates one page of `/v1beta1/news`, rate-limited.
-   *
-   * Split out of `fetchNews` so the pagination loop there stays about the
-   * page count and the accumulated map; this owns one HTTP round trip's shape
-   * checks (non-2xx, non-JSON, non-object body) and per-article validation.
-   */
   async #fetchNewsPage(
     symbols: readonly string[],
     start: Date,
