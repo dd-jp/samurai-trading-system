@@ -129,6 +129,19 @@ function previousShapeOf(view: AnalystView): AnalystView {
   };
 }
 
+function findLlmImportOffenders(dir: string, sources: string[]): string[] {
+  const offenders: string[] = [];
+  for (const name of sources) {
+    const text = readFileSync(join(dir, name), 'utf8');
+    for (const line of text.split('\n')) {
+      if (!/^\s*(import|export)\b.*\bfrom\b/.test(line)) continue;
+      if (/llm|nous|anthropic|openai|personas/i.test(line))
+        offenders.push(`${name}: ${line.trim()}`);
+    }
+  }
+  return offenders;
+}
+
 describe('the analyst layer makes no LLM call (#745)', () => {
   it('imports no LLM client, prompt builder or model config anywhere in pipeline/analysts', () => {
     // A source scan, because the property is "there is no seam", and a
@@ -140,17 +153,7 @@ describe('the analyst layer makes no LLM call (#745)', () => {
     );
     expect(sources.length).toBeGreaterThan(3);
 
-    const offenders: string[] = [];
-    for (const name of sources) {
-      const text = readFileSync(join(HERE, name), 'utf8');
-      for (const line of text.split('\n')) {
-        if (!/^\s*(import|export)\b.*\bfrom\b/.test(line)) continue;
-        if (/llm|nous|anthropic|openai|personas/i.test(line))
-          offenders.push(`${name}: ${line.trim()}`);
-      }
-    }
-
-    expect(offenders).toEqual([]);
+    expect(findLlmImportOffenders(HERE, sources)).toEqual([]);
   });
 
   it('and records no LLM request while producing a full five-axis view', async () => {

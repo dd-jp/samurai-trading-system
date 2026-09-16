@@ -104,6 +104,7 @@ function jsonResponse(body: unknown, status = 200): Response {
  * what each endpoint returns
  */
 function routedFetch(openOrders: readonly unknown[]): ReturnType<typeof vi.fn> {
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: flat method+path dispatch, one branch per mocked endpoint
   return vi.fn(async (url: string | URL, init?: RequestInit) => {
     const { pathname } = new URL(String(url));
     const method = init?.method ?? 'GET';

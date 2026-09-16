@@ -138,6 +138,7 @@ beforeAll(() => {
   // `init` is deliberately absent: there is no longer any path that forwards a
   // request onward, so nothing here has anything to forward it WITH. The unused
   // parameter was the last trace of the pass-through this fence replaced
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: a flat offline fence dispatching by host (GDELT record-and-throw, Alpaca canned-401, default-deny) — each branch's own comment explains that host's rationale, and splitting them would scatter one fence across multiple functions and break that comment-to-branch adjacency
   globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
     // Each shape read explicitly: `String(new Request(url))` is the useless
     // '[object Request]', which contains no host and would walk straight past

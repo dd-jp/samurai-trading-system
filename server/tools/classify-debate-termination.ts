@@ -168,6 +168,66 @@ export const MAX_INTER_LINE_GAP_MS = 15 * 60_000;
  * The debates that fell in a closed gap are not something this log can vouch
  * for either way, so the span must not claim to cover them.
  */
+function recordTimeoutId(record: Record<string, unknown>, timeoutIds: Set<string>): void {
+  if (record.message !== 'debate.timeout') return;
+  const payload = record.payload;
+  if (typeof payload !== 'object' || payload === null) return;
+  const debate_id = (payload as Record<string, unknown>).debate_id;
+  if (typeof debate_id === 'string') {
+    timeoutIds.add(debate_id);
+  }
+}
+
+/**
+ * Parses `record`'s `timestamp` field into a canonical ISO string plus its
+ * epoch ms, or `undefined` when the line carries no usable timestamp — a
+ * well-formed, non-boot line like that neither extends nor closes the
+ * current span in `parseLogCoverage`, it is just a line this function cannot
+ * place in time.
+ *
+ * Canonicalised via `new Date(parsedMs).toISOString()` before returning —
+ * `isCovered` compares this against `debate_log.created_at`, which is always
+ * written via `.toISOString()`; a parseable-but-non-canonical timestamp
+ * string must not sort wrong against it.
+ */
+function parseLineTimestamp(
+  record: Record<string, unknown>,
+): { timestamp: string; ms: number } | undefined {
+  const rawTimestamp = record.timestamp;
+  if (typeof rawTimestamp !== 'string') return undefined;
+  const parsedMs = Date.parse(rawTimestamp);
+  if (Number.isNaN(parsedMs)) return undefined;
+  return { timestamp: new Date(parsedMs).toISOString(), ms: parsedMs };
+}
+
+/**
+ * Parses one raw line into a JSON record, or `undefined` for a blank line
+ * (a plain skip — e.g. the trailing newline `split('\n')` leaves) or a line
+ * that fails to parse or parses to something non-object (a torn line, which
+ * — unlike a blank one — closes `closeSpan`: coverage does not bridge across it).
+ */
+function parseJsonRecord(
+  rawLine: string,
+  closeSpan: () => void,
+): Record<string, unknown> | undefined {
+  const line = rawLine.trim();
+  if (line === '') return undefined;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    closeSpan();
+    return undefined;
+  }
+
+  if (typeof parsed !== 'object' || parsed === null) {
+    closeSpan();
+    return undefined;
+  }
+  return parsed as Record<string, unknown>;
+}
+
 export function parseLogCoverage(lines: Iterable<string>): LogCoverage {
   const timeoutIds = new Set<string>();
   const intervals: CoverageInterval[] = [];
@@ -185,33 +245,10 @@ export function parseLogCoverage(lines: Iterable<string>): LogCoverage {
   };
 
   for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (line === '') continue;
+    const record = parseJsonRecord(rawLine, closeSpan);
+    if (record === undefined) continue;
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      // torn line — coverage does not bridge across it
-      closeSpan();
-      continue;
-    }
-
-    if (typeof parsed !== 'object' || parsed === null) {
-      closeSpan();
-      continue;
-    }
-    const record = parsed as Record<string, unknown>;
-
-    if (record.message === 'debate.timeout') {
-      const payload = record.payload;
-      if (typeof payload === 'object' && payload !== null) {
-        const debate_id = (payload as Record<string, unknown>).debate_id;
-        if (typeof debate_id === 'string') {
-          timeoutIds.add(debate_id);
-        }
-      }
-    }
+    recordTimeoutId(record, timeoutIds);
 
     // A boot line is direct evidence the process just (re)started, so it
     // closes the current span unconditionally — even one with no usable
@@ -223,31 +260,20 @@ export function parseLogCoverage(lines: Iterable<string>): LogCoverage {
       closeSpan();
     }
 
-    const rawTimestamp = record.timestamp;
-    if (typeof rawTimestamp !== 'string') {
-      // A well-formed, non-boot line with no timestamp at all neither
-      // extends nor closes the current span — it is not evidence of a gap,
-      // just a line this function cannot place in time
+    const parsedLine = parseLineTimestamp(record);
+    if (parsedLine === undefined) {
       continue;
     }
-    const parsedMs = Date.parse(rawTimestamp);
-    if (Number.isNaN(parsedMs)) {
-      continue;
-    }
-    // Canonicalise before storing — `isCovered` compares this against
-    // `debate_log.created_at`, which is always written via `.toISOString()`;
-    // a parseable-but-non-canonical timestamp string must not sort wrong
-    // against it
-    const timestamp = new Date(parsedMs).toISOString();
 
-    const gapTooLarge = spanEndMs !== undefined && parsedMs - spanEndMs > MAX_INTER_LINE_GAP_MS;
+    const gapTooLarge =
+      spanEndMs !== undefined && parsedLine.ms - spanEndMs > MAX_INTER_LINE_GAP_MS;
     if (gapTooLarge) {
       closeSpan();
     }
 
-    if (spanStart === undefined) spanStart = timestamp;
-    spanEnd = timestamp;
-    spanEndMs = parsedMs;
+    if (spanStart === undefined) spanStart = parsedLine.timestamp;
+    spanEnd = parsedLine.timestamp;
+    spanEndMs = parsedLine.ms;
   }
   closeSpan();
 
@@ -321,6 +347,24 @@ export interface ClassificationResult {
  * values for what migration 0041 left indeterminate, never reclassifies a
  * row already settled.
  */
+function classifyRowTermination(
+  row: DebateLogTerminationRow,
+  coverage: LogCoverage,
+): DebateTermination | 'uncovered' | 'indeterminate' {
+  if (coverage.timeoutIds.has(row.debate_id)) {
+    return 'latency_truncated';
+  }
+
+  if (isCovered(row.created_at, coverage.intervals)) {
+    if (row.converged === null) {
+      return 'indeterminate';
+    }
+    return row.converged === 1 ? 'converged' : 'non_converged';
+  }
+
+  return 'uncovered';
+}
+
 export function classifyRows(
   rows: readonly DebateLogTerminationRow[],
   coverage: LogCoverage,
@@ -332,24 +376,14 @@ export function classifyRows(
   for (const row of rows) {
     if (row.termination !== null) continue;
 
-    if (coverage.timeoutIds.has(row.debate_id)) {
-      classified.push({ debate_id: row.debate_id, termination: 'latency_truncated' });
-      continue;
+    const termination = classifyRowTermination(row, coverage);
+    if (termination === 'uncovered') {
+      uncovered.push(row.debate_id);
+    } else if (termination === 'indeterminate') {
+      indeterminate.push(row.debate_id);
+    } else {
+      classified.push({ debate_id: row.debate_id, termination });
     }
-
-    if (isCovered(row.created_at, coverage.intervals)) {
-      if (row.converged === null) {
-        indeterminate.push(row.debate_id);
-        continue;
-      }
-      classified.push({
-        debate_id: row.debate_id,
-        termination: row.converged === 1 ? 'converged' : 'non_converged',
-      });
-      continue;
-    }
-
-    uncovered.push(row.debate_id);
   }
 
   return { classified, uncovered, indeterminate };

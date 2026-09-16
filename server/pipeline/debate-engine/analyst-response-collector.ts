@@ -52,6 +52,7 @@ function isDirection(value: unknown): value is Direction {
  * contract (debate-engine-spec.md "Key Interfaces"). Structural check only
  * — no business-rule validation (e.g. confidence calibration) belongs here.
  */
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: a flat sequence of independent field checks, each naming the one field it rejects; splitting them into sub-functions would scatter one validation contract across several call sites for no gain in readability.
 export function validateAnalystView(
   candidate: unknown,
 ): { valid: true; view: AnalystView } | { valid: false; reason: string } {

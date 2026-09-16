@@ -200,19 +200,10 @@ function median(values: number[]): number {
  * recent bar at or before `asOf` — at its ordinal position within its own
  * (current) session.
  */
-export function computeRvol(bars: Bar[], calendar: TradingCalendar, asOf: Date): RvolReading {
-  if (calendar.sessionEnd(asOf) === null) {
-    return degraded('no_session_anchor', 0);
-  }
-
-  const currentBar = bars.at(-1);
-  if (!currentBar) {
-    return NO_CURRENT_BUCKET;
-  }
-
-  // Partition into sessions, keyed by each bar's accounting session start
-  // `bars` is ascending, so each group's bars are ascending too, and group
-  // insertion order is the sessions' chronological order
+// Partition into sessions, keyed by each bar's accounting session start
+// `bars` is ascending, so each group's bars are ascending too, and group
+// insertion order is the sessions' chronological order
+function partitionBarsBySession(bars: Bar[], calendar: TradingCalendar): Map<number, Bar[]> {
   const sessions = new Map<number, Bar[]>();
   for (const b of bars) {
     const key = calendar.sessionStart(b.close_time).getTime();
@@ -223,6 +214,36 @@ export function computeRvol(bars: Bar[], calendar: TradingCalendar, asOf: Date):
       sessions.set(key, [b]);
     }
   }
+  return sessions;
+}
+
+function collectBaselineVolumes(
+  sessions: Map<number, Bar[]>,
+  priorSessionKeys: number[],
+  currentIndex: number,
+): number[] {
+  const baselineVolumes: number[] = [];
+  for (const key of priorSessionKeys) {
+    const sessionBars = sessions.get(key) as Bar[];
+    const matchingBar = sessionBars[currentIndex];
+    if (matchingBar) {
+      baselineVolumes.push(matchingBar.volume);
+    }
+  }
+  return baselineVolumes;
+}
+
+export function computeRvol(bars: Bar[], calendar: TradingCalendar, asOf: Date): RvolReading {
+  if (calendar.sessionEnd(asOf) === null) {
+    return degraded('no_session_anchor', 0);
+  }
+
+  const currentBar = bars.at(-1);
+  if (!currentBar) {
+    return NO_CURRENT_BUCKET;
+  }
+
+  const sessions = partitionBarsBySession(bars, calendar);
 
   const currentSessionKey = calendar.sessionStart(currentBar.close_time).getTime();
   const currentSession = sessions.get(currentSessionKey);
@@ -240,14 +261,7 @@ export function computeRvol(bars: Bar[], calendar: TradingCalendar, asOf: Date):
     .sort((a, b) => b - a)
     .slice(0, RVOL_SESSION_WINDOW);
 
-  const baselineVolumes: number[] = [];
-  for (const key of priorSessionKeys) {
-    const sessionBars = sessions.get(key) as Bar[];
-    const matchingBar = sessionBars[currentIndex];
-    if (matchingBar) {
-      baselineVolumes.push(matchingBar.volume);
-    }
-  }
+  const baselineVolumes = collectBaselineVolumes(sessions, priorSessionKeys, currentIndex);
 
   if (
     priorSessionKeys.length < RVOL_SESSION_WINDOW ||

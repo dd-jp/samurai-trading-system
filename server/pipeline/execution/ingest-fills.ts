@@ -209,6 +209,7 @@ async function redistributeFlattenFills(
   // goes. It can go stale mid-loop (a concurrent `execute()` opens a new lot
   // on the same instrument) — that lot's key is absent here, so its bucket
   // falls through to the `getFlattenAttribution` lookup below instead
+  // oxlint-disable-next-line unicorn/no-useless-spread -- the copy itself is the point, see comment above
   for (const clientOrderId of [...byLot.keys()]) {
     // a lot's own bucket — the existing path
     if (positionKeys.has(clientOrderId)) continue;

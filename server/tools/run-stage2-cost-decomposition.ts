@@ -199,6 +199,129 @@ function scaleVenues(
   return copy;
 }
 
+async function ingestSymbols(
+  store: Stage2HistoricalStore,
+  symbols: readonly string[],
+  window: DateRange,
+  print: (line: string) => void,
+): Promise<void> {
+  for (const symbol of symbols) {
+    await store.ingest(symbol, window);
+    print(`  ${symbol}: ${store.bars(symbol, window).length} bars`);
+  }
+}
+
+/**
+ * The three arrays are aligned by construction — `runTrialGrid` calls
+ * `makeEvaluator` exactly once per pushed result, in grid order, and both
+ * passes iterate the same grid over the same asset classes. Asserted rather
+ * than assumed, because a misalignment would attribute one config's costs to
+ * another's Sharpe and be invisible in the output
+ */
+async function buildDecompositionRows(
+  net: readonly TrialGridResult[],
+  gross: readonly TrialGridResult[],
+  runs: readonly ReplayRunResult[],
+  netChecks: ReturnType<typeof killLineChecks>,
+  grossChecks: ReturnType<typeof killLineChecks>,
+  costConfig: CostConfig,
+  window: DateRange,
+): Promise<CostDecompositionRow[]> {
+  const rows: CostDecompositionRow[] = [];
+
+  for (const [i, result] of net.entries()) {
+    const grossResult = gross[i] as TrialGridResult;
+    const netCheck = netChecks[i] as (typeof netChecks)[number];
+    const grossCheck = grossChecks[i] as (typeof grossChecks)[number];
+
+    if (result.config_hash !== grossResult.config_hash) {
+      throw new Error(
+        `Cost decomposition: row ${i} pairs config ${result.config_hash} against ` +
+          `${grossResult.config_hash} — the two passes did not run the same grid order.`,
+      );
+    }
+
+    rows.push({
+      config_hash: result.config_hash,
+      asset_class: result.asset_class,
+      label:
+        `fast=${result.config.fastWindow} slow=${result.config.slowWindow} ` +
+        `stop=${result.config.atrStopMult} target=${result.config.atrTargetMult}`,
+      net_oos_sharpe: netCheck.oos_sharpe,
+      gross_oos_sharpe: grossCheck.oos_sharpe,
+      net_window_sharpe: netCheck.window_sharpe,
+      gross_window_sharpe: grossCheck.window_sharpe,
+      net_profit_factor: result.report.window.profit_factor,
+      gross_profit_factor: grossResult.report.window.profit_factor,
+      turnover: result.report.window.turnover,
+      costs: await attributeRunCosts(
+        (runs[i] as ReplayRunResult).trades,
+        window,
+        costConfig[result.asset_class].slippageCoefficient,
+      ),
+    });
+  }
+
+  return rows;
+}
+
+async function sweepCostSensitivity(
+  store: Stage2HistoricalStore,
+  window: DateRange,
+  costConfig: CostConfig,
+): Promise<CostSensitivityPoint[]> {
+  const sensitivity: CostSensitivityPoint[] = [];
+  for (const scale of COST_SCALES) {
+    const scaled = scaleCostConfig(costConfig, scale);
+    const scaledRuns: ReplayRunResult[] = [];
+    const scaledModel = new CostModelImpl(scaled);
+    const results = await runTrialGrid({
+      assetClasses: [
+        makeAssetClass(
+          { store, costModel: scaledModel, window, capitalPerTrade: DEFAULT_CAPITAL_PER_TRADE },
+          'stocks',
+          STOCK_SYMBOLS,
+          STOCK_PERIODS_PER_YEAR,
+        ),
+        makeAssetClass(
+          { store, costModel: scaledModel, window, capitalPerTrade: DEFAULT_CAPITAL_PER_TRADE },
+          'crypto',
+          CRYPTO_SYMBOLS,
+          CRYPTO_PERIODS_PER_YEAR,
+        ),
+      ],
+      window,
+      averageCapital: DEFAULT_AVERAGE_CAPITAL,
+      configTrialLog: new InMemoryConfigTrialLog(),
+      makeEvaluator: (run) => {
+        scaledRuns.push(run);
+        return new EvalExecutorImpl({ source: run.trades, timeline: run.timeline });
+      },
+    });
+
+    // Averaged per asset class so the reported rate is the grid's, not one
+    // arbitrarily-chosen config's
+    const bps = { stocks: [] as number[], crypto: [] as number[] };
+    for (const [i, result] of results.entries()) {
+      const attribution = await attributeRunCosts(
+        (scaledRuns[i] as ReplayRunResult).trades,
+        window,
+      );
+      bps[result.asset_class].push(attribution.bps_of_notional);
+    }
+    const mean = (xs: number[]): number =>
+      xs.length === 0 ? 0 : xs.reduce((a, b) => a + b, 0) / xs.length;
+
+    sensitivity.push({
+      scale,
+      passes: killLineChecks(results).filter((c) => c.passes_oos_sharpe_line).length,
+      stocks_bps: mean(bps.stocks),
+      crypto_bps: mean(bps.crypto),
+    });
+  }
+  return sensitivity;
+}
+
 async function runCostDecomposition(deps: CostDecompositionDeps): Promise<CostDecompositionResult> {
   const print = deps.print ?? console.log;
   const requested = deps.window ?? PINNED_VERDICT_WINDOW;
@@ -215,10 +338,7 @@ async function runCostDecomposition(deps: CostDecompositionDeps): Promise<CostDe
     `Stage 2 cost decomposition: ingesting over ${requested.start.toISOString()} .. ` +
       `${requested.end.toISOString()}`,
   );
-  for (const symbol of [...STOCK_SYMBOLS, ...CRYPTO_SYMBOLS]) {
-    await store.ingest(symbol, requested);
-    print(`  ${symbol}: ${store.bars(symbol, requested).length} bars`);
-  }
+  await ingestSymbols(store, [...STOCK_SYMBOLS, ...CRYPTO_SYMBOLS], requested, print);
 
   const window = effectiveWindow(store, requested);
   print(
@@ -285,91 +405,18 @@ async function runCostDecomposition(deps: CostDecompositionDeps): Promise<CostDe
 
   const netChecks = killLineChecks(net);
   const grossChecks = killLineChecks(gross);
-  const rows: CostDecompositionRow[] = [];
-
-  for (const [i, result] of net.entries()) {
-    const grossResult = gross[i] as TrialGridResult;
-    const netCheck = netChecks[i] as (typeof netChecks)[number];
-    const grossCheck = grossChecks[i] as (typeof grossChecks)[number];
-
-    if (result.config_hash !== grossResult.config_hash) {
-      throw new Error(
-        `Cost decomposition: row ${i} pairs config ${result.config_hash} against ` +
-          `${grossResult.config_hash} — the two passes did not run the same grid order.`,
-      );
-    }
-
-    rows.push({
-      config_hash: result.config_hash,
-      asset_class: result.asset_class,
-      label:
-        `fast=${result.config.fastWindow} slow=${result.config.slowWindow} ` +
-        `stop=${result.config.atrStopMult} target=${result.config.atrTargetMult}`,
-      net_oos_sharpe: netCheck.oos_sharpe,
-      gross_oos_sharpe: grossCheck.oos_sharpe,
-      net_window_sharpe: netCheck.window_sharpe,
-      gross_window_sharpe: grossCheck.window_sharpe,
-      net_profit_factor: result.report.window.profit_factor,
-      gross_profit_factor: grossResult.report.window.profit_factor,
-      turnover: result.report.window.turnover,
-      costs: await attributeRunCosts(
-        (runs[i] as ReplayRunResult).trades,
-        window,
-        costConfig[result.asset_class].slippageCoefficient,
-      ),
-    });
-  }
+  const rows = await buildDecompositionRows(
+    net,
+    gross,
+    runs,
+    netChecks,
+    grossChecks,
+    costConfig,
+    window,
+  );
 
   print('Sweeping the cost fixture down to find what the grid can bear...');
-  const sensitivity: CostSensitivityPoint[] = [];
-  for (const scale of COST_SCALES) {
-    const scaled = scaleCostConfig(costConfig, scale);
-    const scaledRuns: ReplayRunResult[] = [];
-    const scaledModel = new CostModelImpl(scaled);
-    const results = await runTrialGrid({
-      assetClasses: [
-        makeAssetClass(
-          { store, costModel: scaledModel, window, capitalPerTrade: DEFAULT_CAPITAL_PER_TRADE },
-          'stocks',
-          STOCK_SYMBOLS,
-          STOCK_PERIODS_PER_YEAR,
-        ),
-        makeAssetClass(
-          { store, costModel: scaledModel, window, capitalPerTrade: DEFAULT_CAPITAL_PER_TRADE },
-          'crypto',
-          CRYPTO_SYMBOLS,
-          CRYPTO_PERIODS_PER_YEAR,
-        ),
-      ],
-      window,
-      averageCapital: DEFAULT_AVERAGE_CAPITAL,
-      configTrialLog: new InMemoryConfigTrialLog(),
-      makeEvaluator: (run) => {
-        scaledRuns.push(run);
-        return new EvalExecutorImpl({ source: run.trades, timeline: run.timeline });
-      },
-    });
-
-    // Averaged per asset class so the reported rate is the grid's, not one
-    // arbitrarily-chosen config's
-    const bps = { stocks: [] as number[], crypto: [] as number[] };
-    for (const [i, result] of results.entries()) {
-      const attribution = await attributeRunCosts(
-        (scaledRuns[i] as ReplayRunResult).trades,
-        window,
-      );
-      bps[result.asset_class].push(attribution.bps_of_notional);
-    }
-    const mean = (xs: number[]): number =>
-      xs.length === 0 ? 0 : xs.reduce((a, b) => a + b, 0) / xs.length;
-
-    sensitivity.push({
-      scale,
-      passes: killLineChecks(results).filter((c) => c.passes_oos_sharpe_line).length,
-      stocks_bps: mean(bps.stocks),
-      crypto_bps: mean(bps.crypto),
-    });
-  }
+  const sensitivity = await sweepCostSensitivity(store, window, costConfig);
 
   const decomposition: CostDecompositionResult = {
     window,

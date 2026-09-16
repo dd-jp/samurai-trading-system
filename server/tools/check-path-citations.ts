@@ -301,24 +301,25 @@ function markerOn(line: string): { reason: string; note: string } | null {
   return { reason: match[1] ?? '', note: (match[2] ?? '').trim() };
 }
 
+function stepFence(line: string, fence: string | null): { output: string; fence: string | null } {
+  const opener = /^\s*(```+|~~~+)/.exec(line);
+  if (fence === null) {
+    if (opener) return { output: '', fence: (opener[1] ?? '').slice(0, 3) };
+    return { output: line, fence: null };
+  }
+  const closer = /^\s*(```+|~~~+)\s*$/.exec(line);
+  if (closer && (closer[1] ?? '').startsWith(fence)) return { output: '', fence: null };
+  return { output: '', fence };
+}
+
 /** Blanks out fenced code blocks so inline-looking backticks inside them are not scanned */
 function stripFencedBlocks(lines: readonly string[]): string[] {
   const out: string[] = [];
   let fence: string | null = null;
   for (const line of lines) {
-    const opener = /^\s*(```+|~~~+)/.exec(line);
-    if (fence === null) {
-      if (opener) {
-        fence = (opener[1] ?? '').slice(0, 3);
-        out.push('');
-        continue;
-      }
-      out.push(line);
-    } else {
-      const closer = /^\s*(```+|~~~+)\s*$/.exec(line);
-      if (closer && (closer[1] ?? '').startsWith(fence)) fence = null;
-      out.push('');
-    }
+    const step = stepFence(line, fence);
+    out.push(step.output);
+    fence = step.fence;
   }
   return out;
 }
@@ -342,57 +343,74 @@ function stripFencedBlocks(lines: readonly string[]): string[] {
  * upstream blanked every later comment in the file, including this function's own doc
  * comment.
  */
+function consumeBlockComment(
+  line: string,
+  i: number,
+): { text: string; i: number; inBlock: boolean } {
+  const end = line.indexOf('*/', i);
+  if (end === -1) return { text: line.slice(i), i: line.length, inBlock: true };
+  return { text: line.slice(i, end), i: end + 2, inBlock: false };
+}
+
+function consumeStringChar(
+  line: string,
+  i: number,
+  delim: string,
+): { i: number; delim: string | null } {
+  const ch = line[i];
+  if (ch === '\\') return { i: i + 2, delim };
+  if (ch === delim) return { i: i + 1, delim: null };
+  return { i: i + 1, delim };
+}
+
+function consumeCode(
+  line: string,
+  i: number,
+): { text: string; i: number; inBlock: boolean; delim: string | null } {
+  const two = line.slice(i, i + 2);
+  if (two === '//') return { text: line.slice(i + 2), i: line.length, inBlock: false, delim: null };
+  if (two === '/*') return { text: '', i: i + 2, inBlock: true, delim: null };
+  const ch = line[i];
+  if (ch === '"' || ch === "'" || ch === '`')
+    return { text: '', i: i + 1, inBlock: false, delim: ch };
+  return { text: '', i: i + 1, inBlock: false, delim: null };
+}
+
+/** One line's worth of the comment-stripping state machine; `stringDelim` never carries past end-of-line */
+function scanCommentLine(line: string, inBlock: boolean): { output: string; inBlock: boolean } {
+  let buf = '';
+  let i = 0;
+  let stringDelim: string | null = null;
+  while (i < line.length) {
+    if (inBlock) {
+      const step = consumeBlockComment(line, i);
+      buf += step.text;
+      i = step.i;
+      inBlock = step.inBlock;
+      continue;
+    }
+    if (stringDelim) {
+      const step = consumeStringChar(line, i, stringDelim);
+      i = step.i;
+      stringDelim = step.delim;
+      continue;
+    }
+    const step = consumeCode(line, i);
+    buf += step.text;
+    i = step.i;
+    inBlock = step.inBlock;
+    stringDelim = step.delim;
+  }
+  return { output: buf, inBlock };
+}
+
 function stripToComments(lines: readonly string[]): string[] {
   const out: string[] = [];
   let inBlock = false;
-  let stringDelim: string | null = null;
   for (const line of lines) {
-    let buf = '';
-    let i = 0;
-    while (i < line.length) {
-      if (inBlock) {
-        const end = line.indexOf('*/', i);
-        if (end === -1) {
-          buf += line.slice(i);
-          i = line.length;
-        } else {
-          buf += line.slice(i, end);
-          i = end + 2;
-          inBlock = false;
-        }
-        continue;
-      }
-      if (stringDelim) {
-        const ch = line[i];
-        if (ch === '\\') {
-          i += 2;
-          continue;
-        }
-        if (ch === stringDelim) stringDelim = null;
-        i++;
-        continue;
-      }
-      const two = line.slice(i, i + 2);
-      if (two === '//') {
-        buf += line.slice(i + 2);
-        i = line.length;
-        continue;
-      }
-      if (two === '/*') {
-        inBlock = true;
-        i += 2;
-        continue;
-      }
-      const ch = line[i];
-      if (ch === '"' || ch === "'" || ch === '`') {
-        stringDelim = ch;
-        i++;
-        continue;
-      }
-      i++;
-    }
-    out.push(buf);
-    stringDelim = null;
+    const step = scanCommentLine(line, inBlock);
+    out.push(step.output);
+    inBlock = step.inBlock;
   }
   return out;
 }
@@ -414,6 +432,7 @@ function stripToComments(lines: readonly string[]): string[] {
  *  - **No line ranges.** `foo.ts:10-20` is skipped outright rather than mis-parsed into
  *    a path ending in `:10-20`.
  */
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: a flat sequence of independent rejection guards, each named for the one shape it rules out; splitting them into sub-functions would scatter one path-shape contract across several call sites for no gain in readability.
 function parseCandidate(
   token: string,
   knownRoots: ReadonlySet<string>,
@@ -481,6 +500,34 @@ export interface ExtractOptions {
  * a marker written outside a fence or a comment still attaches to the citation on its
  * line
  */
+function citationsOnLine(
+  rawLine: string,
+  contentLine: string,
+  lineNo: number,
+  options: ExtractOptions,
+): Citation[] {
+  const citations: Citation[] = [];
+  const inline = /`([^`\n]+)`/g;
+  let match: RegExpExecArray | null = inline.exec(contentLine);
+  while (match !== null) {
+    const parsed = parseCandidate(match[1] ?? '', options.knownRoots);
+    if (parsed) {
+      const marker = markerOn(rawLine);
+      citations.push({
+        file: options.file,
+        line: lineNo,
+        raw: (match[1] ?? '').trim(),
+        ...parsed,
+        ...(marker
+          ? { exemption: { reason: marker.reason as ExemptReason, note: marker.note } }
+          : {}),
+      });
+    }
+    match = inline.exec(contentLine);
+  }
+  return citations;
+}
+
 function citationsFromLines(
   rawLines: readonly string[],
   contentLines: readonly string[],
@@ -488,25 +535,7 @@ function citationsFromLines(
 ): Citation[] {
   const citations: Citation[] = [];
   for (let i = 0; i < contentLines.length; i++) {
-    const lineNo = i + 1;
-    const inline = /`([^`\n]+)`/g;
-    let match: RegExpExecArray | null = inline.exec(contentLines[i] ?? '');
-    while (match !== null) {
-      const parsed = parseCandidate(match[1] ?? '', options.knownRoots);
-      if (parsed) {
-        const marker = markerOn(rawLines[i] ?? '');
-        citations.push({
-          file: options.file,
-          line: lineNo,
-          raw: (match[1] ?? '').trim(),
-          ...parsed,
-          ...(marker
-            ? { exemption: { reason: marker.reason as ExemptReason, note: marker.note } }
-            : {}),
-        });
-      }
-      match = inline.exec(contentLines[i] ?? '');
-    }
+    citations.push(...citationsOnLine(rawLines[i] ?? '', contentLines[i] ?? '', i + 1, options));
   }
   return citations;
 }
@@ -629,6 +658,36 @@ export interface CheckOptions {
   readonly readMarkdown?: (repoRelativeFile: string) => string;
 }
 
+/**
+ * Reachable as `null` only via the `files` option (the default file set is always `.md` or
+ * `CODE_EXTENSION_RE`): a file matching neither is skipped, not counted scanned —
+ * `filesScanned` stays a fact about files this run actually extracted citations from
+ */
+function extractorFor(
+  file: string,
+): ((text: string, options: ExtractOptions) => Citation[]) | null {
+  if (file.endsWith('.md')) return extractCitations;
+  if (CODE_EXTENSION_RE.test(file)) return extractCodeCitations;
+  return null;
+}
+
+function recordCitations(
+  citations: readonly Citation[],
+  tree: TreeResolver,
+  violations: Violation[],
+  exemptByMarker: Record<ExemptReason, number>,
+): void {
+  for (const citation of citations) {
+    const violation = checkCitation(citation, tree);
+    if (violation) {
+      violations.push(violation);
+      continue;
+    }
+    const reason = citation.exemption?.reason;
+    if (reason) exemptByMarker[reason]++;
+  }
+}
+
 export function runCitationCheck(options: CheckOptions): Report {
   const root = resolve(options.root);
   // Lazy: a caller that supplies the tree, the roots and the file list is running against
@@ -670,27 +729,12 @@ export function runCitationCheck(options: CheckOptions): Report {
       // actually read, not files attempted
       continue;
     }
-    const extract = file.endsWith('.md')
-      ? extractCitations
-      : CODE_EXTENSION_RE.test(file)
-        ? extractCodeCitations
-        : null;
-    // Reachable only via the `files` option (the default file set is always `.md` or
-    // `CODE_EXTENSION_RE`): a file matching neither is skipped, not counted scanned —
-    // `filesScanned` stays a fact about files this run actually extracted citations from
+    const extract = extractorFor(file);
     if (!extract) continue;
     filesScanned++;
     const citations = extract(text, { file, knownRoots });
     citationsScanned += citations.length;
-    for (const citation of citations) {
-      const violation = checkCitation(citation, tree);
-      if (violation) {
-        violations.push(violation);
-        continue;
-      }
-      const reason = citation.exemption?.reason;
-      if (reason) exemptByMarker[reason]++;
-    }
+    recordCitations(citations, tree, violations, exemptByMarker);
   }
 
   return { filesScanned, filesSkippedByRule, citationsScanned, exemptByMarker, violations };

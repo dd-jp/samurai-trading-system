@@ -387,6 +387,7 @@ export class AlpacaCryptoLegEmulation {
 
     // Snapshot, for the same mid-iteration-mutation reason every other sweep
     // in this adapter snapshots
+    // oxlint-disable-next-line unicorn/no-useless-spread -- the copy itself is the point, see comment above
     for (const bracket of [...this.brackets.values()]) {
       if (bracket.donePolling) continue;
       if (await this.sweepOneBracket(bracket, since, observedAt, fills, failures)) failed += 1;

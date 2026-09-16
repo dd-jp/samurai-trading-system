@@ -136,6 +136,76 @@ function tuneAnalystWeights(
   }
 }
 
+function applyTuningProposal(
+  proposal: TuningProposal,
+  input: DailyCycleInput,
+  params: Record<string, number>,
+  thresholds: Record<string, number>,
+  now: Date,
+  result: DailyCycleResult,
+  record: (entry: Adjustment) => void,
+): void {
+  const { config, tuning, loosen_notices } = input;
+  const dial = dialFor(proposal, config);
+  // An undeclared dial has no floor/ceiling/step cap, so there is no
+  // bounded move to make. Refusing is the guardrail: an unbounded tune is
+  // exactly what the hard bounds exist to prevent
+  if (dial === undefined) {
+    throw new Error(
+      `Tuning proposal for '${proposal.name}' has no ${proposal.kind} dial declared in ` +
+        'FeedbackConfig — an unbounded dial cannot be tuned.',
+    );
+  }
+
+  const isThreshold = proposal.kind === 'risk_threshold';
+  const current = isThreshold ? thresholds[proposal.name] : params[proposal.name];
+  if (current === undefined) {
+    return;
+  }
+
+  const { to, direction } = applyGuardrail(current, proposal.target, dial);
+
+  if (to === current) {
+    return;
+  }
+
+  // The write comes first and can still refuse: `setRiskThreshold` runs the
+  // in-code clamp (#638) and THROWS on a guarded threshold whose bounded
+  // value would cross its research-mandated line. Nothing below runs in that
+  // case — no `param_updates` entry, no `AdjustmentLog` row, no notice —
+  // which is the point: a refused move must leave no trace that reads as an
+  // applied one
+  if (isThreshold) {
+    tuning.setRiskThreshold(proposal.name, to);
+  } else {
+    tuning.setStrategyParam(proposal.name, to);
+  }
+  result.param_updates[proposal.name] = { from: current, to, direction };
+  record({
+    dial: isThreshold ? 'risk_threshold' : 'strategy_param',
+    name: proposal.name,
+    from: current,
+    to,
+    direction,
+    applied_at: now,
+    reason: 'proposal',
+  });
+
+  // Announced AFTER the write, and only for a relaxation of a safety dial:
+  // the operator has no other way to learn that a limit widened without
+  // anyone asking them (ADR-0013 Decision 2). Tightenings are not
+  // announced — they narrow what the system may lose. The send is
+  // fire-and-forget; a failed notice does not unwind the applied move
+  if (isThreshold && direction === 'loosen') {
+    loosen_notices.notifyLoosenApplied({
+      name: proposal.name,
+      from: current,
+      to,
+      applied_at: now,
+    });
+  }
+}
+
 /**
  * Dials 2 & 3: strategy params and risk thresholds. One path for both, and
  * one path for all three modes — the only asymmetry left is that a threshold
@@ -148,68 +218,10 @@ function applyTuningProposals(
   result: DailyCycleResult,
   record: (entry: Adjustment) => void,
 ): void {
-  const { config, tuning, loosen_notices } = input;
-  const params = tuning.getStrategyParams();
-  const thresholds = tuning.getRiskThresholds();
+  const params = input.tuning.getStrategyParams();
+  const thresholds = input.tuning.getRiskThresholds();
 
   for (const proposal of input.proposals) {
-    const dial = dialFor(proposal, config);
-    // An undeclared dial has no floor/ceiling/step cap, so there is no
-    // bounded move to make. Refusing is the guardrail: an unbounded tune is
-    // exactly what the hard bounds exist to prevent
-    if (dial === undefined) {
-      throw new Error(
-        `Tuning proposal for '${proposal.name}' has no ${proposal.kind} dial declared in ` +
-          'FeedbackConfig — an unbounded dial cannot be tuned.',
-      );
-    }
-
-    const isThreshold = proposal.kind === 'risk_threshold';
-    const current = isThreshold ? thresholds[proposal.name] : params[proposal.name];
-    if (current === undefined) {
-      continue;
-    }
-
-    const { to, direction } = applyGuardrail(current, proposal.target, dial);
-
-    if (to === current) {
-      continue;
-    }
-
-    // The write comes first and can still refuse: `setRiskThreshold` runs the
-    // in-code clamp (#638) and THROWS on a guarded threshold whose bounded
-    // value would cross its research-mandated line. Nothing below runs in that
-    // case — no `param_updates` entry, no `AdjustmentLog` row, no notice —
-    // which is the point: a refused move must leave no trace that reads as an
-    // applied one
-    if (isThreshold) {
-      tuning.setRiskThreshold(proposal.name, to);
-    } else {
-      tuning.setStrategyParam(proposal.name, to);
-    }
-    result.param_updates[proposal.name] = { from: current, to, direction };
-    record({
-      dial: isThreshold ? 'risk_threshold' : 'strategy_param',
-      name: proposal.name,
-      from: current,
-      to,
-      direction,
-      applied_at: now,
-      reason: 'proposal',
-    });
-
-    // Announced AFTER the write, and only for a relaxation of a safety dial:
-    // the operator has no other way to learn that a limit widened without
-    // anyone asking them (ADR-0013 Decision 2). Tightenings are not
-    // announced — they narrow what the system may lose. The send is
-    // fire-and-forget; a failed notice does not unwind the applied move
-    if (isThreshold && direction === 'loosen') {
-      loosen_notices.notifyLoosenApplied({
-        name: proposal.name,
-        from: current,
-        to,
-        applied_at: now,
-      });
-    }
+    applyTuningProposal(proposal, input, params, thresholds, now, result, record);
   }
 }

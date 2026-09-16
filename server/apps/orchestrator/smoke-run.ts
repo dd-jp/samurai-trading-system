@@ -200,7 +200,7 @@ function seedSmokeGdeltBaseline(archive: MiArchiveStore): void {
   const bar = floorToBar(SMOKE_RUN_INSTANT, DEBATE_BAR_TIMEFRAME_MS);
   const hourMs = 60 * 60 * 1000;
   const line = (tone: number): string => {
-    const columns = new Array<string>(27).fill('');
+    const columns = Array.from({ length: 27 }, () => '');
     columns[0] = 'smoke-seed';
     columns[1] = '20260804120000';
     columns[3] = 'smoke.seed';
@@ -257,7 +257,7 @@ function smokeGdeltClient(): GdeltGkgClient {
     `3370784 f7c5359b15d09d7e931f8338cd6a7e60 ${url}`,
   ].join('\n');
   const row = (id: string, themes: string, tone: string): string => {
-    const columns = new Array<string>(27).fill('');
+    const columns = Array.from({ length: 27 }, () => '');
     columns[0] = id;
     columns[1] = stamp;
     columns[3] = 'smoke.test';
@@ -391,7 +391,7 @@ const SMOKE_CLOSE_CYCLE: readonly number[] = [-2, -2, -3, 3, 3, 3, 3];
  */
 export function buildTrendingCloses(count: number, lastClose: number): number[] {
   const length = SMOKE_CLOSE_CYCLE.length;
-  const closes = new Array<number>(count);
+  const closes = Array.from<number>({ length: count });
   closes[count - 1] = lastClose;
 
   for (let step = 1; step < count; step += 1) {

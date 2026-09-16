@@ -795,37 +795,54 @@ describe('universe resolution is a single site (#1167)', () => {
    * when it also unbalances braces, which the likely shape of this defect
    * (see `KNOWN_STRIPPER_DESYNCS`'s doc comment) typically will not do.
    */
+  function skipLineComment(source: string, i: number, n: number): number {
+    i += 2;
+    while (i < n && source[i] !== '\n') i++;
+    return i;
+  }
+
+  function skipBlockComment(source: string, i: number, n: number): number {
+    i += 2;
+    while (i < n && !(source[i] === '*' && source[i + 1] === '/')) i++;
+    return i + 2;
+  }
+
+  function skipStringLiteral(source: string, i: number, n: number, quote: string): number {
+    i++;
+    while (i < n && source[i] !== quote) {
+      if (source[i] === '\\') i++;
+      i++;
+    }
+    return i + 1;
+  }
+
+  function isQuoteChar(c: string): boolean {
+    return c === "'" || c === '"' || c === '`';
+  }
+
+  function scanToken(source: string, i: number, n: number): { nextIndex: number; append: string } {
+    const c = source[i];
+    const c2 = source[i + 1];
+    if (c === '/' && c2 === '/') {
+      return { nextIndex: skipLineComment(source, i, n), append: '' };
+    }
+    if (c === '/' && c2 === '*') {
+      return { nextIndex: skipBlockComment(source, i, n), append: '' };
+    }
+    if (isQuoteChar(c)) {
+      return { nextIndex: skipStringLiteral(source, i, n, c), append: ' ' };
+    }
+    return { nextIndex: i + 1, append: c };
+  }
+
   function stripCommentsAndStrings(source: string): string {
     let out = '';
     let i = 0;
     const n = source.length;
     while (i < n) {
-      const c = source[i];
-      const c2 = source[i + 1];
-      if (c === '/' && c2 === '/') {
-        i += 2;
-        while (i < n && source[i] !== '\n') i++;
-        continue;
-      }
-      if (c === '/' && c2 === '*') {
-        i += 2;
-        while (i < n && !(source[i] === '*' && source[i + 1] === '/')) i++;
-        i += 2;
-        continue;
-      }
-      if (c === "'" || c === '"' || c === '`') {
-        const quote = c;
-        out += ' ';
-        i++;
-        while (i < n && source[i] !== quote) {
-          if (source[i] === '\\') i++;
-          i++;
-        }
-        i++;
-        continue;
-      }
-      out += c;
-      i++;
+      const step = scanToken(source, i, n);
+      out += step.append;
+      i = step.nextIndex;
     }
     return out;
   }
@@ -5040,12 +5057,44 @@ describe('buildProductionOrchestrator', () => {
     });
 
     /**
-     * Answers `GET /v2/stocks/{symbol}/bars` with one daily close per
-     * calendar day spanning the request's own `start`/`end` — the only
+     * One daily close per calendar day spanning `start`/`end`, with a dip
+     * partway through for the same reason `FakeBenchmarkSeries` above dips: a
+     * monotonic series has a drawdown of exactly 0, indistinguishable from a
+     * defaulted column.
+     *
+     * `AlpacaHttpClient.getBars` widens `start` by `BUFFER_MULTIPLIER` (8x)
+     * and then trims the response to the most recent `limit` rows via
+     * `.slice(-limit)` — so a dip indexed off `start` in a wide request (as
+     * this fixture's was) gets sliced away entirely before it ever reaches
+     * `buildOutsideBenchmark`, and never shows up in the computed series.
+     * Index off `end` instead: `DIP_DAYS_BEFORE_END` days before `end`
+     * survives the slice (well inside the last `limit` rows) AND lands
+     * inside the comparison window, not the anchor pad before it
+     * (`ANCHOR_PAD_BARS` days older than the window start)
+     */
+    function buildDailyBars(start: Date, end: Date) {
+      const bars: Array<{ t: string; o: number; h: number; l: number; c: number; v: number }> = [];
+      let close = 100;
+      const DIP_DAYS_BEFORE_END = 10;
+      for (let t = start.getTime(); t <= end.getTime(); t += DAY_MS) {
+        const daysBeforeEnd = Math.round((end.getTime() - t) / DAY_MS);
+        close *= daysBeforeEnd === DIP_DAYS_BEFORE_END ? 0.97 : 1.001;
+        bars.push({
+          t: new Date(t).toISOString(),
+          o: close,
+          h: close + 1,
+          l: close - 1,
+          c: close,
+          v: 1_000,
+        });
+      }
+      return bars;
+    }
+
+    /**
+     * Answers `GET /v2/stocks/{symbol}/bars` with `buildDailyBars` — the only
      * endpoint this path reaches (`getDailyCloses` never marks, so
-     * `/quotes/latest` is never requested). A dip partway through for the
-     * same reason `FakeBenchmarkSeries` above dips: a monotonic series has a
-     * drawdown of exactly 0, indistinguishable from a defaulted column.
+     * `/quotes/latest` is never requested)
      */
     function stocksBarsFetchMock() {
       return vi.fn(async (url: string) => {
@@ -5058,33 +5107,7 @@ describe('buildProductionOrchestrator', () => {
         if (startParam === null || endParam === null) {
           throw new Error(`expected start/end query params in test: ${url}`);
         }
-        const start = new Date(startParam);
-        const end = new Date(endParam);
-        const bars: Array<{ t: string; o: number; h: number; l: number; c: number; v: number }> =
-          [];
-        let close = 100;
-        // `AlpacaHttpClient.getBars` widens `start` by `BUFFER_MULTIPLIER` (8x)
-        // and then trims the response to the most recent `limit` rows via
-        // `.slice(-limit)` — so a dip indexed off `start` in a wide request
-        // (as this fixture's was) gets sliced away entirely before it ever
-        // reaches `buildOutsideBenchmark`, and never shows up in the computed
-        // series. Index off `end` instead: `DIP_DAYS_BEFORE_END` days before
-        // `end` survives the slice (well inside the last `limit` rows) AND
-        // lands inside the comparison window, not the anchor pad before it
-        // (`ANCHOR_PAD_BARS` days older than the window start)
-        const DIP_DAYS_BEFORE_END = 10;
-        for (let t = start.getTime(); t <= end.getTime(); t += DAY_MS) {
-          const daysBeforeEnd = Math.round((end.getTime() - t) / DAY_MS);
-          close *= daysBeforeEnd === DIP_DAYS_BEFORE_END ? 0.97 : 1.001;
-          bars.push({
-            t: new Date(t).toISOString(),
-            o: close,
-            h: close + 1,
-            l: close - 1,
-            c: close,
-            v: 1_000,
-          });
-        }
+        const bars = buildDailyBars(new Date(startParam), new Date(endParam));
         return {
           ok: true,
           status: 200,

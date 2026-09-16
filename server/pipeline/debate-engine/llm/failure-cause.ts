@@ -98,6 +98,7 @@ export function classifyFailureCause(error: unknown): FailureCause {
   }
 }
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: a flat instanceof-dispatch chain, one error class to one FailureCause each; splitting it into sub-functions would hide the one property that matters here — that every case is mutually exclusive and independently readable, not nested logic.
 function classify(error: unknown): FailureCause {
   if (error instanceof LlmRefusalError || error instanceof NousRefusalError) return 'refusal';
   if (error instanceof LlmTruncatedError || error instanceof NousTruncatedError) return 'truncated';

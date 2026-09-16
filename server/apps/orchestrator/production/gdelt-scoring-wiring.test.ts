@@ -64,7 +64,7 @@ const BAR = new Date('2026-09-03T12:00:00Z');
 const HOUR_MS = 60 * 60 * 1000;
 
 function payload(tone: number): string {
-  const columns = new Array<string>(27).fill('');
+  const columns = Array.from({ length: 27 }, () => '');
   columns[0] = 'record';
   columns[1] = '20260903120000';
   columns[3] = 'wiring.test';

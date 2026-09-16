@@ -32,7 +32,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { createServer, type Server, type ServerResponse } from 'node:http';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { extname, isAbsolute, join, relative, resolve as resolvePath, sep } from 'node:path';
 import { describeThrownSafely, sanitizeLogText, type TradingArm } from '../../shared/index.js';
 import type { StoreMode } from '../../shared/store/index.js';
@@ -366,6 +366,40 @@ export function createDashboardServer(opts: DashboardServerOptions): DashboardSe
     res.writeHead(404, JSON_HEADERS).end(JSON.stringify({ error: 'not found' }));
   }
 
+  /**
+   * `GET /api/snapshot`, split out of the request handler below so that
+   * handler stays a flat method-guard → parse → route dispatch — the auth
+   * check, arm parsing, and the build-or-500 try/catch are all specific to
+   * this one route, not to dispatching in general
+   */
+  function handleSnapshotRequest(req: IncomingMessage, res: ServerResponse, parsedUrl: URL) {
+    // #1038: verified before buildSnapshot ever runs, so a request with no
+    // valid credential never touches the store — the store's data is the
+    // asset this check protects, not just the HTTP response
+    if (!isAuthorizedRequest(req.headers.authorization, opts.dashboardCredential)) {
+      res
+        .writeHead(401, { ...JSON_HEADERS, 'WWW-Authenticate': 'Bearer' })
+        .end(JSON.stringify({ error: 'unauthorized' }));
+      return;
+    }
+    // #1592: named arm, or 400 — never a silent fallback to live on a bad value
+    const parsedArm = parseArmParam(parsedUrl.searchParams);
+    if (!parsedArm.ok) {
+      res.writeHead(400, JSON_HEADERS).end(JSON.stringify({ error: parsedArm.reason }));
+      return;
+    }
+    try {
+      const snapshot = buildSnapshot(store, new Date(), mode, parsedArm.arm, providers);
+      res.writeHead(200, JSON_HEADERS).end(JSON.stringify(snapshot));
+    } catch (err) {
+      if (res.headersSent) {
+        res.end();
+        return;
+      }
+      res.writeHead(500, JSON_HEADERS).end(JSON.stringify({ error: renderResponderError(err) }));
+    }
+  }
+
   const server: Server = createServer((req, res) => {
     // Every handler below is GET-only. A non-GET method is a 405 (not a
     // silent 404) so a misuse is obvious in dev tools
@@ -389,31 +423,7 @@ export function createDashboardServer(opts: DashboardServerOptions): DashboardSe
     }
 
     if (urlPath === '/api/snapshot') {
-      // #1038: verified before buildSnapshot ever runs, so a request with no
-      // valid credential never touches the store — the store's data is the
-      // asset this check protects, not just the HTTP response
-      if (!isAuthorizedRequest(req.headers.authorization, opts.dashboardCredential)) {
-        res
-          .writeHead(401, { ...JSON_HEADERS, 'WWW-Authenticate': 'Bearer' })
-          .end(JSON.stringify({ error: 'unauthorized' }));
-        return;
-      }
-      // #1592: named arm, or 400 — never a silent fallback to live on a bad value
-      const parsedArm = parseArmParam(parsedUrl.searchParams);
-      if (!parsedArm.ok) {
-        res.writeHead(400, JSON_HEADERS).end(JSON.stringify({ error: parsedArm.reason }));
-        return;
-      }
-      try {
-        const snapshot = buildSnapshot(store, new Date(), mode, parsedArm.arm, providers);
-        res.writeHead(200, JSON_HEADERS).end(JSON.stringify(snapshot));
-      } catch (err) {
-        if (res.headersSent) {
-          res.end();
-          return;
-        }
-        res.writeHead(500, JSON_HEADERS).end(JSON.stringify({ error: renderResponderError(err) }));
-      }
+      handleSnapshotRequest(req, res, parsedUrl);
       return;
     }
 

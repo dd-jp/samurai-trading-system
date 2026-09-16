@@ -400,24 +400,30 @@ function trendReading(core: CoreReads): AxisReading {
   };
 }
 
+function rsiBandFor(rsi: number): string {
+  return rsi >= RSI_OVERBOUGHT
+    ? 'overbought'
+    : rsi <= RSI_OVERSOLD
+      ? 'oversold'
+      : rsi > 50
+        ? 'above midline'
+        : rsi < 50
+          ? 'below midline'
+          : 'at midline';
+}
+
+function macdPartFor(macd: number | undefined): string {
+  return macd === undefined
+    ? ''
+    : `; MACD(${MACD_FAST},${MACD_SLOW},${MACD_SIGNAL}) histogram ${macd} ` +
+        `${macd > 0 ? 'above' : macd < 0 ? 'below' : 'at'} signal`;
+}
+
 /** The `momentum` axis reading — RSI, with MACD folded in when readable */
 function momentumReading(core: CoreReads, macd: number | undefined): AxisReading {
   const momentum = momentumVote(core.rsi, macd);
-  const rsiBand =
-    core.rsi >= RSI_OVERBOUGHT
-      ? 'overbought'
-      : core.rsi <= RSI_OVERSOLD
-        ? 'oversold'
-        : core.rsi > 50
-          ? 'above midline'
-          : core.rsi < 50
-            ? 'below midline'
-            : 'at midline';
-  const macdPart =
-    macd === undefined
-      ? ''
-      : `; MACD(${MACD_FAST},${MACD_SLOW},${MACD_SIGNAL}) histogram ${macd} ` +
-        `${macd > 0 ? 'above' : macd < 0 ? 'below' : 'at'} signal`;
+  const rsiBand = rsiBandFor(core.rsi);
+  const macdPart = macdPartFor(macd);
   return {
     axis: 'momentum',
     vote: momentum,

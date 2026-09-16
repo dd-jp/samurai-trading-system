@@ -139,6 +139,31 @@ export interface RunCostAttribution extends TradeCostAttribution {
 }
 
 /**
+ * Sums each fill's adverse move as a multiple of the ATR the cost model
+ * priced it from (see `mean_adverse_move_in_atr`), across one trade's fills.
+ * Returns the running total and count so the caller can accumulate across
+ * trades and divide once at the end.
+ */
+function sumAdverseMoveInAtr(
+  fills: readonly Fill[],
+  slippageCoefficient: number,
+): { adverseInAtr: number; pricedFills: number } {
+  let adverseInAtr = 0;
+  let pricedFills = 0;
+
+  for (const fill of fills) {
+    const b = fill.cost_breakdown;
+    if (b === undefined) continue;
+    const atr = b.slippage / slippageCoefficient;
+    if (atr <= 0) continue;
+    adverseInAtr += (b.spread_cost + b.slippage + b.market_impact) / atr;
+    pricedFills += 1;
+  }
+
+  return { adverseInAtr, pricedFills };
+}
+
+/**
  * Totals one run's costs. `slippageCoefficient` is optional and used only to
  * recover the ATR multiple; omit it and that field is simply absent rather
  * than guessed.
@@ -177,14 +202,9 @@ export async function attributeRunCosts(
     notional += trade.entry * trade.filled_size * 2;
 
     if (slippageCoefficient !== undefined && slippageCoefficient > 0) {
-      for (const fill of fills) {
-        const b = fill.cost_breakdown;
-        if (b === undefined) continue;
-        const atr = b.slippage / slippageCoefficient;
-        if (atr <= 0) continue;
-        adverseInAtr += (b.spread_cost + b.slippage + b.market_impact) / atr;
-        pricedFills += 1;
-      }
+      const atrSum = sumAdverseMoveInAtr(fills, slippageCoefficient);
+      adverseInAtr += atrSum.adverseInAtr;
+      pricedFills += atrSum.pricedFills;
     }
   }
 
