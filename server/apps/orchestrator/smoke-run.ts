@@ -5552,42 +5552,14 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
     } satisfies Required<AlertChannels>;
 
     const orchestrator = await startFromEnvironment({
-      // The same checked-in tuning values `npm run orchestrator` runs on, at the
-      // same `mode: 'paper'` — so the HITL gate resolves through
-      // `automation_level: 'auto'` exactly as it will during the soak
-      // `mode: 'backtest'` was the alternative and was rejected deliberately:
-      // it bypasses Verdict's HITL gate (6) outright (verdict/index.ts),
-      // which would leave the pre-soak gate validating a path the soak
-      // never takes
-      //
-      // **This is now the enforcement check for ADR-0007, and it works by
-      // omission.** No `approvals` is injected here, so the composition root
-      // installs its `UnwiredApprovalChannel` default — which THROWS if the
-      // HITL gate (6) is ever reached. A smoke run that transacts is
-      // therefore positive evidence that the `auto` dial short-circuits
-      // before any approval is requested, on the real composition root
-      // rather than in a unit test
-      // Flip either class off `auto` without wiring a transport and this gate
-      // fails loudly instead of auto-approving. `runApprovalFallbackScenario`
-      // asserts that throw directly (#1152) — this comment only covers the
-      // "never even asked" half
+      // Same checked-in tuning as `npm run orchestrator`, `mode: 'paper'`, so the HITL gate
+      // resolves through `automation_level: 'auto'` exactly as it will during the soak. No
+      // `approvals` is injected, so the root installs `UnwiredApprovalChannel`, which THROWS
+      // if the HITL gate is ever reached — this run transacting is positive evidence the
+      // `auto` dial short-circuits before any approval is requested (ADR-0007 enforcement).
       ...profile,
-      // #1112: `profile.traderConfig` now sizes against the declared book
-      // (£1,000 at `SIZING_USD_PER_GBP`, via `capitalCeilingUsd`, #1180)
-      // rather than this run's
-      // `FixedAccountStateProvider` balance (100,000) — that gap between the
-      // sizing basis and the fixture's account balance is exactly the defect
-      // #1112 fixes. The shared profile's crypto risk multiplier was tuned
-      // against the OLD, ~100x-inflated sizing basis: at the corrected
-      // $1,270 ceiling, this fixture's ATR (~9.53, from the fixed +/-2
-      // high/low spread `buildSmokeFixtureBars` uses) makes the organic entry
-      // size ~0.22 BTC, which `whole_share_sizing` floors to zero and the run
-      // never transacts. Bumped for THIS OFFLINE RUN ONLY, enough to clear the
-      // whole-share floor with one BTC of headroom below the crypto exposure
-      // cap (`per_asset_class_cap_fraction_of_equity.crypto`) at this
-      // fixture's $160 mark — not tuned to hit any particular notional, and
-      // `paperStartingProfile`'s own multiplier (real paper/live sizing) is
-      // untouched
+      // #1112: bumped for this offline run only, enough to clear the whole-share floor at this
+      // fixture's ATR — `paperStartingProfile`'s own multiplier (real paper/live sizing) is untouched
       traderConfig: {
         ...profile.traderConfig,
         asset_class_risk_multiplier: {
@@ -5596,78 +5568,33 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
         },
       },
       db,
-      // In-memory for the same reason `db` is (line 2288): the smoke run must
-      // not touch a real store path in this checkout. Left to default, the
-      // composition root opens `data/samurai-mi-paper.sqlite` — the live
-      // soak's own MI archive — and a gate run would both create it on a
-      // fresh clone and write fixture items into the file a real soak reads
+      // In-memory: left to default, the composition root opens data/samurai-mi-paper.sqlite,
+      // the live soak's own MI archive — a gate run must not touch that file
       miArchive: smokeMiArchive,
-      // GDELT would otherwise reach the live network from `start()`, breaking
-      // this run's "no credentials, no network" claim in the banner above. A
-      // canned batch keeps the claim true AND keeps the archive write path
-      // exercised end to end — an offline stub that throws would leave the
-      // whole macro layer unproven in the one gate that runs the real
-      // composition root
+      // GDELT/Polymarket would otherwise reach the live network from start(), breaking this
+      // run's "no credentials, no network" claim; canned wires keep the ingest path exercised
       gdeltClient: smokeGdeltClient(),
-      // Polymarket needs no key either, so without this injection the run
-      // would reach the live vendor from `start()` and break the banner's
-      // "no credentials, no network" claim. A canned wire keeps the claim true
-      // AND keeps the whole decode/guard/ingest path exercised — see
-      // `smokePolymarketClient`
       polymarketClient: smokePolymarketClient(),
       clock,
       logger,
       universe: SMOKE_TEST_UNIVERSE,
-      // #738: `SMOKE_RUN_INSTANT` is outside US equity regular hours (see its
-      // doc comment), and `UniverseScheduler` no longer exempts crypto from
-      // the calendar gate — so without this override, `SMOKE_TEST_UNIVERSE`'s
-      // BTC-USD would never appear in a tick plan and this run would hang
-      // waiting for a tick that never comes. `equityCalendarFor` honours
-      // `tradingCalendar` before falling back to a real-hours calendar, so
-      // this is a documented `ProductionConfig` override, not a branch inside
-      // the composition root. Scoped to this offline run only — production
-      // resolves its calendar from `mode` as normal
+      // #738: SMOKE_RUN_INSTANT is outside US equity regular hours, and UniverseScheduler no
+      // longer exempts crypto from the calendar gate — without this, BTC-USD never ticks
       tradingCalendar: new AlwaysOpenCalendar(),
-      // `...profile` below carries `stocksTradingWindow: londonEntryWindow()`
-      // (paper-profile.ts) — an ADDITIONAL narrowing on top of the calendar
-      // (#706), and the scheduler applies it to every instrument now, not
-      // just equities (#738). `buildProductionOrchestrator` widens it to
-      // `withFlattenTail(entryWindow, tradingCalendar, ...)`, and against the
-      // `AlwaysOpenCalendar` above `sessionEnd` is `null`, so the widened
-      // window collapses to the bare London entry window — which
-      // `SMOKE_RUN_INSTANT` (08:00 London) falls outside of, same as US
-      // regular hours. Overridden to unconditionally admit, for the same
-      // reason `tradingCalendar` is: this run needs BTC-USD to tick
-      // regardless of wall-clock time, and production's own window is
-      // untouched by this override (it lives on `ProductionConfig`, not on
-      // the scheduler or `paperStartingProfile` themselves)
+      // `...profile` carries stocksTradingWindow: londonEntryWindow() (#706), which
+      // SMOKE_RUN_INSTANT (08:00 London) falls outside of — overridden to unconditionally admit
       stocksTradingWindow: () => true,
-      // The three overrides `ProductionConfig`'s own doc comments name as the
-      // intended offline bindings
       broker,
       dataSource,
       llmClient: new ConstantResponseLlmClient(),
       llmRateLimiter,
-      // See the class docs: both of these exist because the composition root's
-      // defaults reach Alpaca over the network
       accountState: new FixedAccountStateProvider(),
       alpacaBrokerClient,
-      // Naming log-only alerting explicitly, exhaustively over
-      // `ALERT_CHANNEL_FIELDS` — see `smokeAlertChannels` above for why it is
-      // a separate `satisfies Required<AlertChannels>` object rather than
-      // inline fields here. Injecting all of `ALERT_CHANNEL_FIELDS` is also
-      // what makes `resolveAlertsMode` return `undefined`
-      // (alert-transport.ts), so this run neither reads `SAMURAI_ALERTS` nor
-      // falls back by omission
+      // Exhaustive over ALERT_CHANNEL_FIELDS, which also makes resolveAlertsMode return
+      // undefined so this run neither reads SAMURAI_ALERTS nor falls back by omission
       ...smokeAlertChannels,
       tickIntervalMs,
       fillPollIntervalMs,
-      // Fast enough to fire several times inside a ~1s run. The heartbeat is a
-      // dead-man's switch and this process is attended, so it is not what the
-      // gate asserts on — but it is one of the process-level timers #350 names,
-      // and a smoke run in which it never fired would leave `Heartbeat.emit`
-      // and its channel unexercised. Log-only here (see the channels above), so
-      // firing it costs nothing and pages nobody
       heartbeatIntervalMs,
       maxConcurrentInstruments: 1,
     });
@@ -5675,37 +5602,9 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
     const deadline = Date.now() + deadlineMs;
     try {
       await waitUntil(() => readSmokeObservations(db).ticks.length >= targetTicks, deadline);
-      // Then a bounded grace period for the fill poll to follow the submit —
-      // the fill lands on `ingestFills()`, not on the tick that submitted
-      //
-      // #1028: this used to be `fills.length > 0`, which only asks whether
-      // *some* fill has been ingested. The live and control arms each run
-      // their own independently-scheduled `startFillSync()` poll loop
-      // (`production.ts`, `fillSync` / `controlFillSync`), so a single fill
-      // from either arm satisfied the predicate while the other arm's lot
-      // was still sitting at `order_state: 'submitted'`, `filled_size: 0`
-      // `orchestrator.stop()` then cancelled that arm's not-yet-fired poll
-      // timer (`fill-sync.ts`'s `stop()` is a bare `clearTimeout`, nothing
-      // to await when the timer hasn't fired), and the readback observed
-      // whichever lot won the race — nondeterministically, across runs
-      //
-      // Every lot the smoke run opens fills fully and synchronously inside
-      // `SimulatedBrokerAdapter.submitBracket()` (`CostModelImpl.fill()` has
-      // no partial-fill modelling), so "drained" means every currently-open
-      // position has actually been ingested, not just that fills exist
-      //
-      // #1028 (residual): `positions.length > 0` is still satisfiable by ONE
-      // fully-filled arm's row(s) while the OTHER arm hasn't even submitted
-      // its order yet — that arm's row does not exist in `open_positions` at
-      // all, so `every()` over the partial set says nothing about what is
-      // still missing. `SMOKE_TEST_UNIVERSE` has exactly one instrument and
-      // `SMOKE_TRADING_ARMS` names the two arms this composition root always
-      // wires, and Trader routes a held instrument into its exit branch
-      // rather than re-entering it (decide.ts), so a transacting run opens
-      // AT MOST one lot per (arm, instrument) regardless of tick count —
-      // `expectedOpenPositions` is that ceiling. Requiring the count to reach
-      // it before checking `filled_size` closes the gap: the wait can no
-      // longer return while a whole arm's row is simply absent
+      // #1028: `positions.length > 0` alone is satisfiable by ONE fully-filled arm while the
+      // OTHER arm's row doesn't exist yet — `expectedOpenPositions` is the ceiling of at-most-one
+      // lot per (arm, instrument), so the wait can't return while a whole arm's row is absent
       const expectedOpenPositions = SMOKE_TEST_UNIVERSE.length * SMOKE_TRADING_ARMS.length;
       await waitUntil(
         () => {
@@ -5718,9 +5617,8 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
         Math.min(Date.now() + FILL_GRACE_MS, deadline),
       );
     } finally {
-      // Always drained, including on the deadline path: `stop()` awaits the
-      // in-flight tick, and abandoning one mid-pipeline manufactures exactly
-      // the orphaned verdict #209 exists to detect
+      // Always drained, including on the deadline path: abandoning an in-flight tick
+      // manufactures exactly the orphaned verdict #209 exists to detect
       await orchestrator.stop();
     }
 
@@ -5738,17 +5636,8 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
       marketDataFetch,
     });
 
-    // Safe to read the Polymarket counts here, and only here: `start()` fires
-    // the first refresh as `void polymarketAgent.refresh('startup')`, so its
-    // store write is in flight after `start()` resolves — but `stop()` (in the
-    // `finally` above) awaits `polymarketAgent.whenIdle()` in its
-    // `Promise.allSettled`, which drains it. Moving this read ABOVE the
-    // `orchestrator.stop()` call would race that write. The two earlier
-    // `readSmokeObservations(db)` calls pass no store, so they observe ticks
-    // and fills only and are unaffected. Nothing in `runProbes` writes a
-    // table this reads: the exit path and the crypto emulation are part of
-    // the tape by design, and the cycles the feedback probes drive write only
-    // their own sample tables
+    // Safe to read Polymarket counts here, and only here: start() fires the first refresh as
+    // a detached promise, and stop() (above) awaits it draining — reading before stop() would race it
     const observations = readSmokeObservations(db, smokeMiArchive, orchestrator.marketIntelligence);
     const gate = evaluateSmokeGate(observations, evidence);
     return { observations, gate, report: formatSmokeReport(observations, evidence, gate) };
@@ -5757,20 +5646,13 @@ export async function runSmoke(options: SmokeRunOptions = {}): Promise<SmokeRunR
   }
 }
 
-// Entrypoint guard, matching orchestrator/index.ts's. `npm run smoke` runs this
-// file directly; importing it (from its own test) must not start a run
+// Entrypoint guard, matching orchestrator/index.ts's: importing this file (from its own test) must not start a run
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const { report, gate } = await runSmoke();
     process.stdout.write(`${report.join('\n')}\n`);
-    // The exit code is the gate. A run where every tick quorum-skips, or where
-    // no order is ever submitted, must fail — otherwise this is decoration
-    // rather than a pre-soak gate
     process.exit(gate.passed ? 0 : 1);
   } catch (error) {
-    // Message only, matching orchestrator/index.ts: nothing here holds a
-    // credential, but the posture should not differ between the two
-    // entrypoints
     process.stderr.write(
       `offline smoke run failed to complete: ${
         error instanceof Error ? error.message : String(error)
