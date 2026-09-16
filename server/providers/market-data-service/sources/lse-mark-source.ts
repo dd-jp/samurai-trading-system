@@ -10,8 +10,7 @@
  * Alpaca the only vendor source in the tree; it serves the LSE no better. Under
  * [ADR-0016](../../../../docs/adr/0016-universe-leveraged-etps-ungated.md) the
  * live equity universe is GBP LSE-listed leveraged ETPs held in a Saxo
- * Capital Markets UK GIA (ADR-0015's 2026-08-30 amendment; this comment said
- * "Trading 212 ISA" until #946), and
+ * Capital Markets UK GIA (ADR-0015's venue amendment), and
  * `server/providers/universe-pool/lse-etp-pool.ts` splits the
  * identity in two: `screening_instrument` (the liquid US underlying, which
  * Alpaca serves) is what the screener ranks, and `lse_ticker` is what Samurai
@@ -68,12 +67,11 @@
  * them cannot be marked. That is a real finding about the pool (doc 34 §3.2),
  * not a defect in this class.
  *
- * David's 2026-09-08 ruling on #1220 took the first of the two options this
- * doc used to leave open — narrow the universe rather than price the FX —
- * and `tradeableUniverse` (universe-pool) now excludes every non-sterling
- * row at SELECTION. This refusal is the backstop, not a duplicate: it fires
- * at `LseMarkDataSource` construction over the lines actually held, so it
- * still catches a universe assembled without that selector.
+ * #1220 narrowed the universe rather than pricing the FX: `tradeableUniverse`
+ * (universe-pool) now excludes every non-sterling row at SELECTION. This
+ * refusal is the backstop, not a duplicate: it fires at `LseMarkDataSource`
+ * construction over the lines actually held, so it still catches a universe
+ * assembled without that selector.
  */
 import { BOOK_CURRENCY, isBookCurrency, isPenceCurrency } from '../../../shared/index.js';
 import type { RawCandle } from '../ingestion.js';
@@ -282,16 +280,6 @@ export function toBookCurrency(
 }
 
 /**
- * The LSE leveraged-ETP `DataSource`.
- *
- * `stocks` and the LSE session calendar are fixed at construction, exactly as
- * `AlpacaDataSource` fixes its own: `LseRegularHoursCalendar` is the calendar
- * the live equity leg already runs its flatten on (#668), and using the US
- * one here would drop every bar between 08:00 and 14:30 London and keep every
- * bar after 16:30.
- */
-
-/**
  * Refuse a set of declared currencies at CONSTRUCTION, naming every offending
  * row at once.
  *
@@ -322,6 +310,15 @@ function assertMarkableCurrencies(
   );
 }
 
+/**
+ * The LSE leveraged-ETP `DataSource`.
+ *
+ * `stocks` and the LSE session calendar are fixed at construction, exactly as
+ * `AlpacaDataSource` fixes its own: `LseRegularHoursCalendar` is the calendar
+ * the live equity leg already runs its flatten on (#668), and using the US
+ * one here would drop every bar between 08:00 and 14:30 London and keep every
+ * bar after 16:30.
+ */
 export class LseMarkDataSource extends NormalizingDataSource {
   readonly #client: LseMarkClient;
   readonly #tradeable: ReadonlySet<string>;

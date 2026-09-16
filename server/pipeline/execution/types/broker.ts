@@ -57,36 +57,30 @@ export interface NormalizedFill {
   qty: number;
   fee: number;
   /**
-   * ISO code the fee is denominated in. Absent means the book currency (GBP,
-   * ADR-0015). Set by an adapter whose venue charges in the traded line's own
-   * settlement currency — Saxo, from each line's `CurrencyCode`, which is USD
-   * on most pool lines and GBP on a pence-quoted one. Note the currency is
-   * the line's SETTLEMENT currency, never the unit the price is quoted in: a
-   * GBX line settles GBP.
+   * ISO code the fee is denominated in. Absent means book currency (GBP,
+   * ADR-0015). Set by an adapter whose venue charges in the traded line's
+   * own SETTLEMENT currency (Saxo's `CurrencyCode`) — never the unit the
+   * price is quoted in: a GBX line settles GBP.
    *
-   * Persisted (`Fill.fee_currency`, migration 0054) and still NOT converted
-   * — deliberately. `ingestFills`/PnL sum `fee` as book currency, and a
-   * non-sterling value here is a CONTRADICTION rather than a figure awaiting
-   * an FX rate: `tradeableUniverse` excludes every non-sterling line, so one
-   * arriving means an instrument was traded that selection should have
-   * refused. `ingestFills` records the value and raises
-   * `FEE_CURRENCY_NOT_BOOK_CURRENCY` at `error`; it does not refuse the
-   * fill, because the venue has already traded it.
+   * Persisted (`Fill.fee_currency`) and still NOT converted, deliberately: a
+   * non-sterling value here is a CONTRADICTION, not a figure awaiting an FX
+   * rate — `tradeableUniverse` excludes every non-sterling line. `ingestFills`
+   * records it and raises `FEE_CURRENCY_NOT_BOOK_CURRENCY` at `error` rather
+   * than refusing the fill, since the venue has already traded it.
    */
   fee_currency?: string;
   /**
-   * Migration 0060: the venue-applied rate to multiply a
-   * `fee_currency`-denominated `price`/`fee` by to get GBP, WHEN the venue
-   * reports one. No current adapter sets this — verified absent from Saxo's
+   * The venue-applied rate to multiply a `fee_currency`-denominated
+   * `price`/`fee` by to get GBP, WHEN the venue reports one. No current
+   * adapter sets this — verified absent from Saxo's
    * `GET /cs/v1/audit/orderactivities` (this system's only source of Saxo
-   * fill data). The field exists so a future Saxo surface or adapter can
-   * supply it without a further wire-shape change.
+   * fill data). Exists so a future Saxo surface or adapter can supply it
+   * without a further wire-shape change.
    */
   fx_rate_to_gbp?: number;
   /**
-   * Migration 0060: why `fx_rate_to_gbp` is absent, e.g.
-   * `'not_reported_by_venue'`. Set by an adapter alongside `fee_currency`
-   * whenever that currency is not book currency.
+   * Why `fx_rate_to_gbp` is absent, e.g. `'not_reported_by_venue'`. Set by
+   * an adapter alongside `fee_currency` whenever that currency isn't book currency.
    */
   fx_rate_to_gbp_source?: string;
   timestamp: Date;
@@ -102,51 +96,39 @@ export interface NormalizedFill {
     market_impact: number;
   };
   /**
-   * `qty`/`price` are the venue's CUMULATIVE filled quantity and cumulative
-   * average price for `broker_fill_id`'s order, not an increment over what a
-   * previous poll already reported.
+   * `qty`/`price` are the venue's CUMULATIVE filled quantity and average
+   * price for `broker_fill_id`'s order, not an increment over a previous
+   * poll. Alpaca's `getOrder` is the only polled shape that works this way
+   * (one order, a running `filled_qty`) — without this flag,
+   * `ingestFills()`'s `hasFill` dedup gate would skip a larger-`filled_qty`
+   * observation as a duplicate of the same `broker_fill_id`, permanently
+   * losing the increment and leaving `resizeProtectiveLegs` protecting a
+   * stale, absolute quantity.
    *
-   * Alpaca's `getOrder` is the only shape this system polls that works this
-   * way: it reports one order with a running `filled_qty`, never one event
-   * per partial fill. A second observation at a LARGER `filled_qty` carries
-   * the same `broker_fill_id` as the first, and `ingestFills()`'s `hasFill`
-   * gate (keyed on the full `(idempotency_key, broker_fill_id)` pair) would
-   * skip it as a duplicate, permanently losing the increment — leaving
-   * `resizeProtectiveLegs` (which sets an ABSOLUTE quantity) protecting a
-   * stale figure and the rest of the lot naked.
+   * Flagged here rather than reconciled in the adapter: `collectFill` is a
+   * pure function of one order with no `SharedStore` access, so only
+   * `ingestFills()` can see what's already persisted and compute the delta.
    *
-   * Flagged HERE rather than reconciled in the adapter because the adapter
-   * cannot: `collectFill` is a pure function of one order with no
-   * `SharedStore` access. Only `ingestFills()` can see what is already
-   * persisted, so only it can compute the delta.
-   *
-   * Absent (or false) means what every other feed means: `qty` is this
-   * fill's own quantity and the id identifies it uniquely. The Simulated
-   * adapter emits one row per fill event, so it never sets this.
-   *
-   * TRANSPORT-ONLY. `toFill` deliberately does not persist this field: a
-   * stored `Fill` row is always an increment by the time it is written,
-   * whatever the wire said.
+   * TRANSPORT-ONLY — `toFill` does not persist this field; a stored `Fill`
+   * row is always an increment by the time it is written.
    */
   qty_is_cumulative?: boolean;
   /**
    * Set by `redistributeOneFlatten` on a flatten's split fill, from the
    * journalled `flatten_submissions.exit_reason` — WHY the flatten this fill
    * belongs to was submitted. Unlike `qty_is_cumulative`, this one IS carried
-   * through to the persisted `Fill` row (migration 0031) so `closedTrade()`
-   * can read it back regardless of which poll ingested it.
+   * through to the persisted `Fill` row so `closedTrade()` can read it back
+   * regardless of which poll ingested it.
    */
   exit_reason?: ExitReason;
   /**
-   * Set by `redistributeOneFlatten` on a flatten's split fill, from the
-   * `clientOrderId` `getFlattenAttribution` was looked up by — the FLATTEN's
-   * own `flatten_submissions.idempotency_key`, not the lot's (the split fill
-   * is re-keyed to the lot before persistence, which loses this link if not
-   * carried separately). Persisted (migration 0037) so a stored exit fill
-   * can be joined back to the specific `flatten_submissions` row that priced
-   * it, without guessing by timestamp when a lot has been partially
-   * flattened more than once. Absent on an `'entry'`/`'stop'`/`'target'`
-   * fill and on an `'exit'` fill from before this migration.
+   * Set by `redistributeOneFlatten` from the FLATTEN's own
+   * `flatten_submissions.idempotency_key` (not the lot's — the split fill is
+   * re-keyed to the lot before persistence, which loses this link if not
+   * carried separately). Persisted so a stored exit fill can be joined back
+   * to the specific `flatten_submissions` row that priced it, without
+   * guessing by timestamp when a lot has been partially flattened more than
+   * once. Absent on non-exit fills.
    */
   flatten_idempotency_key?: string;
 }
@@ -197,39 +179,27 @@ export interface BrokerAdapter {
   submitBracket(order: NativeBracketRequest): Promise<BrokerAck>;
   /**
    * The venue's current account of a prior order, or `null` if the venue
-   * AUTHORITATIVELY has no such order — which is what lets `reconcile()`
-   * settle a write-ahead record whose broker call never landed.
-   *
-   * The null contract is load-bearing and narrow. An adapter that merely
-   * cannot determine the answer MUST throw, never return null: reconcile
-   * reads null as "never placed" and marks the lot `rejected`, so an adapter
-   * that returns null on ignorance would bury a live position — the exact
-   * divergence this surface exists to catch, inverted.
+   * AUTHORITATIVELY has no such order — which lets `reconcile()` settle a
+   * write-ahead record whose broker call never landed. The null contract is
+   * narrow: an adapter that merely cannot determine the answer MUST throw,
+   * never return null — reconcile reads null as "never placed" and marks the
+   * lot `rejected`, so returning null on ignorance would bury a live position.
    *
    * `instrument` is passed because a symbol-keyed venue (ccxt) cannot look an
    * order up without it, and after a restart the adapter's in-memory state is
-   * gone while the store record — which reconcile reads — still carries it.
-   * The spec sketches this as `getOrder(clientOrderId)`; the instrument is a
-   * refinement of that shape, in the same way the rest of this file narrows
-   * the spec's.
+   * gone while the store record still carries it.
    */
   getOrder(clientOrderId: string, instrument: string): Promise<NormalizedOrder | null>;
   /**
    * The flatten-sweep counterpart of `getOrder` — `reconcile()`'s ONLY
    * caller, for every `flatten_submissions` row its `getUnresolvedFlattens()`
-   * worklist names. Same null/throw contract as `getOrder` verbatim: null is
-   * the venue AUTHORITATIVELY reporting no such order, and an adapter that
-   * merely cannot answer MUST throw.
-   *
-   * The re-populating SIDE EFFECT is the point, exactly as with `getOrder`:
-   * a live adapter's flatten-sweep worklist is process-local and empty after
-   * a restart, so without this call `fetchNewFills` polls nothing for a
-   * flatten a crash stranded between `submitFlatten` returning and the next
-   * sweep. Deliberately a SEPARATE method from `getOrder` rather than a
-   * second call into it: `getOrder`'s own implementation re-populates
-   * `brackets`, which is never pruned once an entry lands there, so routing
-   * a flatten through it would leak that flatten into the bracket sweep for
-   * the rest of the process's life.
+   * worklist names. Same null/throw contract as `getOrder`. The
+   * re-populating side effect is the point: a live adapter's flatten-sweep
+   * worklist is process-local and empty after a restart, so without this
+   * call `fetchNewFills` polls nothing for a flatten a crash stranded
+   * mid-sweep. Kept SEPARATE from `getOrder` because that method's own
+   * implementation re-populates `brackets`, which is never pruned — routing
+   * a flatten through it would leak it into the bracket sweep permanently.
    */
   resumeFlatten(clientOrderId: string, instrument: string): Promise<NormalizedOrder | null>;
   /**
@@ -238,58 +208,43 @@ export interface BrokerAdapter {
    * already-returned fill is expected — `ingestFills()`'s `hasFill` gate
    * dedups on the full `(idempotency_key, broker_fill_id)` pair.
    *
-   * NOT PROMISED, deliberately: that a given lot's fills are dated
-   * MONOTONICALLY across successive calls. This is an OUTPUT-side constraint
-   * only ("never dated before `since`"); a later call can hand back an
-   * EARLIER timestamp for the same lot than an earlier call did, because a
-   * lot is not one ordered stream — its entry, stop, target and exit legs
-   * fill under the SAME `idempotency_key`, and a protective leg can fire
-   * while the entry is still filling. Callers must therefore never raise
-   * `since` to a timestamp they have already ingested for a lot — an
-   * under-fetch is unrecoverable (`broker_fill_id` dedup guards only the
-   * opposite direction).
+   * NOT PROMISED: that a lot's fills are dated MONOTONICALLY across calls. A
+   * lot is not one ordered stream — entry, stop, target and exit legs fill
+   * under the SAME `idempotency_key`, and a protective leg can fire while the
+   * entry is still filling — so a later call can hand back an EARLIER
+   * timestamp than an earlier one did. Callers must never raise `since` past
+   * a timestamp already ingested for a lot; an under-fetch is unrecoverable
+   * (`broker_fill_id` dedup only guards the opposite direction).
    */
   fetchNewFills(since: Date): Promise<NormalizedFill[]>;
   /**
    * Size the protective legs to the entry's CUMULATIVE filled quantity — an
-   * over-sized stop protects phantom quantity, an under-sized one leaves part
-   * of the lot naked (execution-spec.md story 13).
-   *
-   * On this seam because `OpenPosition` carries no leg-quantity field:
-   * resizing is a venue-side act, not a persistence one. Adapters whose venue
-   * keeps attached legs in step with the entry itself (Alpaca/IBKR native
-   * brackets) satisfy it by doing nothing.
+   * over-sized stop protects phantom quantity, an under-sized one leaves
+   * part of the lot naked (execution-spec.md story 13). On this seam because
+   * `OpenPosition` carries no leg-quantity field: resizing is a venue-side
+   * act. Adapters whose native brackets track the entry (Alpaca/IBKR)
+   * satisfy it by doing nothing.
    */
   resizeProtectiveLegs(clientOrderId: string, filledQty: number): Promise<void>;
   /**
    * Re-arms protective legs on a residual position whose legs were CANCELLED
-   * outright, not merely under-sized — the case `resizeProtectiveLegs` does
-   * not cover, because a cancelled bracket has no legs left for that method
-   * to resize. `executeExit` cancels a held lot's legs before every flatten;
-   * when the flatten fills only partially, this re-establishes protection on
-   * what is still held.
+   * outright — the case `resizeProtectiveLegs` can't cover, since a
+   * cancelled bracket has no legs left to resize. `executeExit` cancels a
+   * held lot's legs before every flatten; a partial flatten fill needs this
+   * to re-establish protection on what's still held. `qty` is the RESIDUAL
+   * still open; `stop`/`target` are the lot's unchanged price levels.
    *
-   * `qty` is the RESIDUAL still open, not the original lot size. `stop`/
-   * `target` are the lot's own, unchanged price levels — absolute prices are
-   * invariant under a resize, only the quantity they protect changes.
+   * `clientOrderId` is the lot's OWN `idempotency_key`, passed through
+   * unchanged by the only caller (`ingestFills`). A fresh id is still needed
+   * at the venue (Alpaca refuses a reused client order id permanently) —
+   * deriving it is the ADAPTER's job: `AlpacaBrokerAdapter` suffixes it,
+   * `SimulatedBrokerAdapter` keys on the id as passed. An adapter that
+   * generated its own fresh id would break `fetchNewFills`'s lot-keyed
+   * sweep, which tags fills under THIS `clientOrderId`.
    *
-   * `clientOrderId` is the lot's OWN `idempotency_key`, passed straight
-   * through unchanged by the only caller (`ingestFills`). A fresh id is
-   * still needed at the venue (the original id already named the
-   * now-cancelled bracket, and Alpaca refuses a reused client order id
-   * permanently) — deriving it is the ADAPTER's job, not the caller's:
-   * `AlpacaBrokerAdapter` suffixes it before calling the venue, while
-   * `SimulatedBrokerAdapter` keys on the id AS PASSED with no suffixing. A
-   * future adapter that generated a fresh id itself would break
-   * `fetchNewFills`'s lot-keyed sweep, which tags fills under THIS
-   * `clientOrderId` so `ingestFills`'s ordinary per-position routing can
-   * find them. `side` is the lot's HELD side, mirroring
-   * `resizeProtectiveLegs`'s framing.
-   *
-   * Throws on failure rather than swallowing it — the caller turns a thrown
-   * error into a fallback alert. An adapter that cannot express this must
-   * throw too; it must never silently no-op, which would report success for
-   * a residual that is still naked.
+   * Throws on failure — the caller turns it into a fallback alert. An
+   * adapter that cannot express this must throw too, never silently no-op,
+   * which would report success for a residual that is still naked.
    */
   rearmProtectiveLegs(
     clientOrderId: string,
@@ -300,16 +255,12 @@ export interface BrokerAdapter {
     target: number,
   ): Promise<void>;
   /**
-   * Flattens exposure with a plain market order — the intervention path.
-   * `side` is the CLOSING side, so a long is flattened with `sell`.
-   *
-   * Deliberately not a bracket: a flatten has no stop and no target, and
-   * arming protective legs on an order whose whole purpose is to reach zero
-   * would leave a resting stop behind after the position was gone.
-   *
-   * `clientOrderId` is the caller's idempotency key, so a retried flatten is a
-   * venue-side no-op rather than a double exit — the property that makes this
-   * safe to call from a crash-restart path.
+   * Flattens exposure with a plain market order. `side` is the CLOSING side,
+   * so a long is flattened with `sell`. Deliberately not a bracket — arming
+   * protective legs on an order meant to reach zero would leave a resting
+   * stop behind after the position is gone. `clientOrderId` is the caller's
+   * idempotency key, so a retried flatten is a venue-side no-op rather than
+   * a double exit, safe to call from a crash-restart path.
    */
   submitFlatten(
     instrument: string,
@@ -318,51 +269,33 @@ export interface BrokerAdapter {
     clientOrderId: string,
   ): Promise<BrokerAck>;
   /**
-   * Cancels a working order and every leg attached to it.
-   *
-   * Idempotent by contract: cancelling an order that is already cancelled,
-   * filled or unknown to the venue resolves rather than throwing. An operator
-   * reaching for cancel is already in a bad situation, and a throw on
-   * "too late" would make the tool unusable exactly when it is needed —
-   * the caller cannot know the venue's state at the instant it calls.
-   *
-   * `instrument` is passed for `getOrder`'s reason: a symbol-keyed venue
-   * (ccxt) cannot address an order without it.
+   * Cancels a working order and every leg attached to it. Idempotent by
+   * contract: cancelling an order already cancelled, filled or unknown to
+   * the venue resolves rather than throwing — the caller cannot know the
+   * venue's state at the instant it calls, and a throw on "too late" would
+   * make the tool unusable exactly when it's needed. `instrument` is passed
+   * for `getOrder`'s reason: a symbol-keyed venue (ccxt) needs it to address an order.
    */
   cancel(clientOrderId: string, instrument: string): Promise<void>;
   /**
-   * Everything the venue believes it holds.
-   *
-   * The other direction of reconciliation, and the one that had no surface:
-   * `reconcile()` walks the STORE's open lots and asks the venue about each,
-   * which cannot see a position the venue holds and the store never recorded —
-   * a write-ahead that died before persisting, or an order placed by hand.
-   * Such a lot is invisible to Risk's exposure caps indefinitely
-   * (execution-spec.md "Idempotency & Crash-Restart": store shows a position
-   * the broker doesn't, *or vice-versa*).
+   * Everything the venue believes it holds. The other direction of
+   * reconciliation: `reconcile()` walks the STORE's open lots and asks the
+   * venue about each, which cannot see a position the venue holds that the
+   * store never recorded (a write-ahead that died before persisting, or a
+   * hand-placed order) — such a lot is invisible to Risk's exposure caps
+   * indefinitely otherwise (execution-spec.md "Idempotency & Crash-Restart").
    */
   getOpenPositions(): Promise<NormalizedPosition[]>;
   /**
    * True when this adapter prices its OWN fills through a `CostModel` and
-   * therefore reports a `cost_breakdown` on every fill it emits.
-   *
-   * `captureSubmitSnapshot` normally runs `CostModel.fill` itself to store the
-   * modelled cost the realised fill is later compared against. Against an
-   * adapter that declares this flag that would be a SECOND, independent draw
-   * of the same model for the same order — two writers for one number, free
-   * to disagree under any non-determinism. So the snapshot skips its own
-   * pricing here and lets the adapter's breakdown stand as the single
-   * source; nothing is lost, because `toFill`/`redistributeOneFlatten` only
-   * fall back to the snapshot when `fill.cost_breakdown === undefined`, which
-   * such an adapter never leaves unset.
-   *
-   * Declared as a capability rather than detected with `instanceof` because
-   * "strategy code must not know which broker it's talking to" (CLAUDE.md's
-   * Broker Plan) — a future adapter that prices its own fills opts in by
-   * setting this, without `execute.ts` learning its class.
-   *
-   * Absent/false on every real-venue adapter: a venue reports what it charged,
-   * not what a model predicted, so there is no second writer to disagree with.
+   * reports a `cost_breakdown` on every fill it emits. Without this flag,
+   * `captureSubmitSnapshot` would independently run `CostModel.fill` too —
+   * two writers for one number, free to disagree under non-determinism — so
+   * it skips its own pricing and lets the adapter's breakdown stand as the
+   * single source. Declared as a capability rather than detected with
+   * `instanceof`, per "strategy code must not know which broker it's talking
+   * to" (CLAUDE.md's Broker Plan). Absent/false on every real-venue adapter,
+   * which reports what it charged rather than what a model predicted.
    */
   readonly prices_own_fills?: boolean;
 }

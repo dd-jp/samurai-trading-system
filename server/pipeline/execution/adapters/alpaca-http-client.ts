@@ -85,16 +85,9 @@ function validateAlpacaOrderLeg(raw: unknown, context: string, body: unknown): v
 }
 
 /**
- * Validates only the fields `alpaca-adapter.ts` actually reads off a response (`id`, `status`, `legs`, fill triad) —
- * requiring undocumented fields like `order_class` would fail order submission on an unverified shape guess.
- * Validates in place; does not rebuild the object, since Alpaca's real payload carries undeclared fields callers rely on.
- */
-/**
- * The first half of `validateAlpacaOrderCoreFields`'s fields — `id` through
- * `order_class`. Split from the fill-triad half below purely to keep this
- * function itself under the cyclomatic-complexity gate; each check is
- * independent and fail-fast via `failValidation`, so splitting the sequence
- * anywhere preserves the same order the combined function ran them in.
+ * The first half of `validateAlpacaOrderCoreFields`'s checks — `id` through
+ * `order_class`. Each check is independent and fail-fast via `failValidation`,
+ * so splitting the sequence here preserves the original check order.
  */
 function validateAlpacaOrderIdentityFields(body: Record<string, unknown>, context: string): void {
   const { id, client_order_id, symbol, side, qty, order_class } = body;
@@ -117,6 +110,11 @@ function validateAlpacaOrderIdentityFields(body: Record<string, unknown>, contex
   }
 }
 
+/**
+ * Validates only the fields `alpaca-adapter.ts` actually reads off a response (`id`, `status`, `legs`, fill triad) —
+ * requiring undocumented fields like `order_class` would fail order submission on an unverified shape guess.
+ * Validates in place; does not rebuild the object, since Alpaca's real payload carries undeclared fields callers rely on.
+ */
 function validateAlpacaOrderCoreFields(body: Record<string, unknown>, context: string): void {
   validateAlpacaOrderIdentityFields(body, context);
   const { status, filled_qty, filled_avg_price, filled_at } = body;

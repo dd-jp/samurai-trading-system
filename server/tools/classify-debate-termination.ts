@@ -1,6 +1,6 @@
 /**
- * #1081 — backfills `debate_log.termination` for rows written before
- * migration 0041, by correlating each row's `debate_id` against a run log's
+ * Backfills `debate_log.termination` for rows written before migration
+ * 0041, by correlating each row's `debate_id` against a run log's
  * `debate.timeout` lines (the same JSON `logger.logTimeout` writes,
  * `debate-engine/latency-budget.ts`).
  *
@@ -69,10 +69,9 @@
  * environment-resolved store (`SAMURAI_MODE` → `sharedStorePath`). This is
  * what makes the tool's own read path independently checkable against a
  * point-in-time COPY of the live database, rather than trusting a one-off
- * script to have reimplemented `classifyRows` correctly — see #1081's PR body
- * for the run this produced against the 2026-09-03 paper soak. Because the
- * path is explicit, `assertStorePathMatchesMode`'s paper/live filename guard
- * is skipped for `--db`: that guard exists to stop the environment-resolved
+ * script to have reimplemented `classifyRows` correctly. Because the path is
+ * explicit, `assertStorePathMatchesMode`'s paper/live filename guard is
+ * skipped for `--db`: that guard exists to stop the environment-resolved
  * default from silently writing into the wrong mode's file, which does not
  * apply when the operator names the file directly. `--db` plus `--apply`
  * together still only ever write into the named file.
@@ -112,7 +111,7 @@ export interface LogCoverage {
 
 /**
  * Maximum gap, in ms, between two consecutive well-formed, timestamped log
- * lines that still counts as unbroken coverage (#1081 code review round 2).
+ * lines that still counts as unbroken coverage.
  *
  * A healthy orchestrator process emits SOMETHING well inside this window
  * even when nothing debate-related is happening: the paper profile ticks
@@ -457,8 +456,7 @@ export function parseLogPaths(argv: readonly string[]): string[] {
  * `better-sqlite3` opens a nonexistent path by silently CREATING an empty
  * database file (no `fileMustExist` option is passed here) — without this
  * check, a typo'd `--db` would open (and migrate!) a brand-new empty file
- * and this tool would report a confident "0 rows" instead of failing loudly
- * (#1081 code review round 3, kimi).
+ * and this tool would report a confident "0 rows" instead of failing loudly.
  */
 export function assertDbPathExists(dbPath: string): void {
   if (!existsSync(dbPath)) {

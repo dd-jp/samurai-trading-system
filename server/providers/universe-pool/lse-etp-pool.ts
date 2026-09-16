@@ -31,18 +31,12 @@
  * `SaxoInstrumentEvidence`), captured against the SIM gateway only, not yet
  * verified against a live account.
  *
- * `subclass_envelope_measured` is `false` on the four rows (3VT, 3KOR,
- * 3KWE, 3XLE) whose underlying is nothing like SPY: ADR-0018 D3/D5's
- * `index_etp_3x` numbers were measured with SPY standing in for the whole
- * subclass. `liveSizingSubclassFor()` is the function a live-sizing
- * consumer MUST read this through — never `row.subclass` directly — since
- * it returns `undefined` for these four rather than silently sizing them
- * off SPY's bracket.
+ * `subclass_envelope_measured` is `false` on rows whose underlying is
+ * nothing like SPY (ADR-0018 D3/D5's `index_etp_3x` numbers were measured
+ * with SPY standing in for the whole subclass) — see `liveSizingSubclassFor()`.
  *
- * `tradeableUniverse()` additionally excludes every non-sterling row: the
- * GBP/USD leg between entry and exit is an uncompensated cost nothing here
- * prices, and a foreign-currency broker fee cannot be summed cleanly into a
- * GBP book.
+ * `tradeableUniverse()` additionally excludes every non-sterling row — see
+ * `isSterlingQuoted()`.
  *
  * This pool (31 rows / 26 distinct underlyings, see
  * `countRankableUnderlyings()`) is a verified seed of the three-issuer
