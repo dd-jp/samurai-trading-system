@@ -365,16 +365,16 @@ export class AnalystOrchestrator {
   }
 
   /**
-   * The `analyst_id`s this instance's personas emit views under (#371) — what
-   * the composition root seeds `analyst_weights` with, so the Feedback Loop's
+   * The `analyst_id`s this instance's personas emit views under — what the
+   * composition root seeds `analyst_weights` with, so the Feedback Loop's
    * daily cycle has a row to step for every analyst that can appear in a
    * debate log.
    *
    * Derived from `analyst_type` because that is the only identity the
-   * `Analyst` port carries, and every persona emits it verbatim as its view's
-   * `analyst_id` (pinned in orchestrator.test.ts — the seeder is wrong the
-   * moment those two diverge, and it would be wrong silently: `runDailyCycle`
-   * would go back to skipping the analyst it could not find a row for).
+   * `Analyst` port carries, and every persona emits it verbatim as its
+   * view's `analyst_id` (pinned in orchestrator.test.ts — if those two
+   * diverge, `runDailyCycle` silently goes back to skipping the analyst it
+   * cannot find a row for).
    *
    * Every persona, not just the ones applicable to the configured asset
    * class: applicability is per-signal (`applies_to`), and a run whose
@@ -390,10 +390,10 @@ export class AnalystOrchestrator {
    * role-dependent quorum. Returns the full breakdown (failures included)
    * for callers that need more than the bare view list.
    *
-   * `bar` (#811) is the claimed decision bar's opening boundary — the caller's
+   * `bar` is the claimed decision bar's opening boundary — the caller's
    * single derivation for this pass (`DecisionGate.claim`) — threaded onto
-   * every `AnalystInput` below unchanged. This class does not derive a bar of
-   * its own from `clock`; see `AnalystInput.bar`'s doc comment for why a
+   * every `AnalystInput` below unchanged. This class does not derive a bar
+   * of its own from `clock`; see `AnalystInput.bar`'s doc comment for why a
    * second derivation is exactly the defect this parameter exists to close.
    */
   async runAnalysts(
