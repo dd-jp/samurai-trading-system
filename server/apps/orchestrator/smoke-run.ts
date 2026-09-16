@@ -522,22 +522,10 @@ export function buildSmokeFixtureBars(instrument: string = SMOKE_INSTRUMENT): Ba
 }
 
 /**
- * The deterministic stub LLM.
- *
- * Constant rather than queue-based, which is the whole difference from
- * `MockLlmClient` (debate-engine/llm/mock-client.ts): that one dequeues per
- * call and throws once exhausted, so it cannot back a run whose call count
- * depends on how many ticks reach Debate. This answers the same text forever.
- *
- * One payload serves bull, bear, mediator and `detectDisagreements` alike —
- * each call site brings its own `parseResponse`, and this shape satisfies all
- * of them (the same string the composed-chain integration test enqueues).
- * `converged: true` terminates the debate on round 1, which bounds the run's
- * work and keeps every tick's stage sequence identical.
- *
- * `stance: 'bullish'` is what makes a GO reachable: a bearish or neutral
- * mediator would produce a `sell`/no-trade branch and the gate could never
- * pass, which the issue calls out explicitly.
+ * Constant rather than queue-based (unlike `MockLlmClient`, which dequeues per
+ * call and throws once exhausted) since this run's call count depends on how
+ * many ticks reach Debate. `stance: 'bullish'` is required for a GO to be
+ * reachable at all; `converged: true` bounds the debate to round 1.
  */
 export const SMOKE_LLM_RESPONSE = JSON.stringify({
   stance: 'bullish',
@@ -546,7 +534,6 @@ export const SMOKE_LLM_RESPONSE = JSON.stringify({
 });
 
 export class ConstantResponseLlmClient implements LlmClient {
-  /** How many times the debate stage called out — reported so a run that never debated is legible */
   calls = 0;
 
   constructor(private readonly rawText: string = SMOKE_LLM_RESPONSE) {}
@@ -565,20 +552,11 @@ export class ConstantResponseLlmClient implements LlmClient {
 }
 
 /**
- * The account scalars, fixed.
- *
- * Injected rather than composed because the only in-repo `AccountStateProvider`
- * is `BrokerAccountStateProvider`, whose funding read is a network call
- * (`GET /v2/account`, or Saxo's `GET /port/v1/balances/me` since #1509) and
- * therefore out of bounds here. `equity` feeds `portfolio.equity`
- * directly, and every `riskConfig` cap is a fraction resolved against that
- * figure at evaluate time (#886) rather than a boot-time anchor, so this
- * value need only be plausible, not calibrated to a specific constant.
- *
- * All four values are the "healthy account" case on purpose: a tripped circuit
- * breaker halts entries, and a smoke run that halts is indistinguishable at a
- * glance from a run that decided not to trade. Breaker behaviour has its own
- * suite; this run is testing that the pipeline transacts.
+ * Injected rather than composed: the only in-repo `AccountStateProvider`
+ * (`BrokerAccountStateProvider`) makes a network call, which is out of bounds
+ * here. All four values are the "healthy account" case deliberately — a
+ * tripped circuit breaker halts entries the same way a real no-trade decision
+ * would, making the two indistinguishable at a glance.
  */
 export class FixedAccountStateProvider implements AccountStateProvider {
   constructor(private readonly equity: number = 100_000) {}
@@ -589,10 +567,8 @@ export class FixedAccountStateProvider implements AccountStateProvider {
     daily_basis: SessionBasisByClass;
     consecutive_losses: number;
   }> {
-    // A flat session, stated as such: `open_equity` equals current equity and
-    // nothing has realized, so every class's daily PnL computes to exactly 0
     // Deliberately `known`, not unknown — an unknown figure arms
-    // `daily_pnl_unknown` and would make a healthy smoke run look degraded
+    // `daily_pnl_unknown` and would make a healthy smoke run look degraded.
     const flat = { known: true, open_equity: this.equity, realized_pnl: 0 } as const;
 
     return {
@@ -605,23 +581,14 @@ export class FixedAccountStateProvider implements AccountStateProvider {
 }
 
 /**
- * The Alpaca wire client, as a tripwire.
- *
- * `buildProductionComponents` resolves `config.alpacaBrokerClient ??
- * buildDefaultAlpacaBrokerClient(...)` eagerly, before it knows whether
- * `broker` and `accountState` were both overridden — and
- * `AlpacaHttpBrokerClient`'s constructor throws without `ALPACA_API_KEY`. So a
- * credential-free run must inject *something* here even though, with both of
- * those overridden, this object has no call sites at all.
- *
- * Given that, the honest object is one that throws rather than one that
- * pretends to answer: if a future change gives the composition root a reason
- * to call the wire client, this run fails loudly instead of silently
- * exercising a fabricated Alpaca. `smoke-run.test.ts` asserts it was never
- * touched.
+ * `buildProductionComponents` resolves the Alpaca client eagerly, before it
+ * knows `broker`/`accountState` are both overridden, and its constructor
+ * throws without `ALPACA_API_KEY` — so a credential-free run must inject
+ * something here even though it should never be called. Throws rather than
+ * stubbing an answer, so a future wiring change that does reach it fails
+ * loudly instead of silently exercising a fabricated Alpaca.
  */
 export class UnreachableAlpacaClient implements AlpacaBrokerClient {
-  /** Set if anything ever reached this client — asserted against in tests */
   reached = false;
 
   private refuse(method: string): never {
@@ -680,94 +647,50 @@ export class UnreachableAlpacaClient implements AlpacaBrokerClient {
 }
 
 /**
- * The exit path (#576) — the pre-soak gate's other half.
+ * The exit path (#576). The entry-path run above cannot honestly reach an
+ * `exit` intent (the fixture's fixed uptrend never makes Debate resolve
+ * bearish), so this harness composes Execution directly via
+ * `buildExecutionSurface` — the same production binding helper
+ * `buildProductionComponents` uses — with hand-built `VerdictDecision`s fed
+ * to `ExecutionImpl.execute()`/`.ingestFills()`.
  *
- * Everything above this point exercises ENTRY: the real six-stage tick loop,
- * through `startFromEnvironment`, on a fixture engineered to make Analysts
- * agree bullish. There is no equivalent way to make the same loop reach an
- * `exit` intent: the Trader only produces one when Debate resolves opposite
- * the held lot's side (`production.test.ts`'s `#568` wiring test drives this
- * by hand-feeding the Trader step a bearish `DebateResult` — nobody drives it
- * through Analysts and a real LLM, because nothing about this fixture's fixed
- * uptrend would ever make that resolution happen honestly). Six merged fixes
- * (#508/#516/#517/#525/#568/#571) live entirely downstream of that intent, in
- * `Execution`, and none of them needed Analysts, Debate, Trader, Risk or
- * Verdict to be exercised to be regressed or fixed.
- *
- * So this harness composes Execution directly, the same way the SIX-STAGE
- * run composes the whole pipeline: `buildExecutionSurface`
- * (production/direct-bind.ts) is the identical function
- * `buildProductionComponents` calls to bind the tick loop's own `execution`
- * step and the fill-sync loop's `ingestFills`/`reconcile` surfaces — reusing
- * it here is not a second composition root, it is calling the production
- * binding helper for the one layer these six fixes actually live in.
- * `VerdictDecision`s are hand-built (skipping Analysts/Debate/Trader/Risk/
- * Verdict, all already proven reachable by the entry-path run above) and fed
- * straight to `ExecutionImpl.execute()`/`.ingestFills()` against the SAME
- * `:memory:` store `readSmokeObservations` reads back.
- *
- * Three instruments, one per invariant, so no scenario's lots ever appear in
- * another's `heldLots` filter (`executeExit`, execute.ts, filters
- * `getOpenPositions()` by instrument alone) — sharing one would mean a
- * still-open residual from an earlier phase silently joining a later phase's
- * flatten:
- *
- * 1. `EXIT_PATH_INSTRUMENTS.fullExit` — open, exit, assert `closed` +
- *    `ClosedTrade`, assert cancel-before-flatten ORDERING (#508/#516/#517).
- * 2. `EXIT_PATH_INSTRUMENTS.partialFlatten` — a flatten that fills only
- *    partially, asserting the residual is re-armed, not left naked (#525).
- * 3. `EXIT_PATH_INSTRUMENTS.twoLot` — an older lot with a prior partial exit
- *    (itself produced the same way as scenario 2) plus a fresh second lot,
- *    flattened together, asserting NEITHER is left phantom-open (#571).
- * 4. `EXIT_PATH_INSTRUMENTS.crashRestart` — a flatten that acks but whose
- *    fill is not ingested before a "restart" (a second `buildExecutionSurface`
- *    over the SAME store + SAME broker, `reconcile.test.ts`'s own definition
- *    of one): asserts `reconcile()`'s flatten sweep finds the unresolved
- *    journal row, resolves it against the venue, and the lot still reaches
- *    `closed` afterward (#519, #526).
- * 5. `EXIT_PATH_INSTRUMENTS.residualSweep` — a partial flatten (scenario 2's
- *    technique) whose observing-poll re-arm is scripted to FAIL once, then a
- *    restart: asserts the durable residual-protection marker (migration
- *    0024) plus `reconcile()`'s #549 sweep re-arm the residual, clear the
- *    marker, and page exactly once for the episode.
+ * One instrument per scenario, so no scenario's lots leak into another's
+ * `heldLots` filter (`getOpenPositions()` filters by instrument alone):
+ * 1. `fullExit` — assert `closed` + cancel-before-flatten ordering (#508/#516/#517).
+ * 2. `partialFlatten` — a partial fill; assert the residual is re-armed (#525).
+ * 3. `twoLot` — a lot with a prior partial exit plus a fresh lot, flattened
+ *    together; assert neither is left phantom-open (#571).
+ * 4. `crashRestart` — a flatten whose fill isn't ingested before a restart;
+ *    assert `reconcile()`'s sweep resolves it to `closed` (#519, #526).
+ * 5. `residualSweep` — a partial flatten whose re-arm fails once, then a
+ *    restart; assert the durable residual-protection marker (migration 0024)
+ *    plus `reconcile()`'s sweep re-arm it and page exactly once (#549).
  */
 const EXIT_PATH_INSTRUMENTS = {
   fullExit: 'ETH-USD',
   partialFlatten: 'SOL-USD',
   twoLot: 'AVAX-USD',
   crashRestart: 'DOGE-USD',
-  /** Scenario 5 (#549): the residual-protection sweep across a restart */
   residualSweep: 'LINK-USD',
 } as const;
 
 /**
- * `CostModelImpl.fill()` (cost-model.ts) always returns
- * `filled_size: request.size` — there is no partial-fill modelling anywhere
- * in the real cost model or `SimulatedBrokerAdapter`, so a genuinely partial
- * flatten cannot be produced by the unmodified production adapter (verified
- * by reading cost-model.ts before building this — it is the reason this
- * harness exists rather than just calling `runSmoke` with a bigger fixture).
- * `ExitPathBrokerAdapter` below truncates a NAMED flatten's fill to this
- * fraction of what was requested, deterministically, entirely on this side
- * of the `BrokerAdapter` seam — `execution/` is untouched.
+ * `CostModelImpl.fill()` always returns `filled_size: request.size` — no
+ * partial-fill modelling exists in the real cost model, so
+ * `ExitPathBrokerAdapter` truncates a NAMED flatten's fill to this fraction
+ * on this side of the `BrokerAdapter` seam, leaving `execution/` untouched.
  */
 const PARTIAL_FLATTEN_FRACTION = 0.4;
-/** Scenario 3's setup fraction — see the class docs above for why it reuses this technique */
+/** Scenario 3's setup fraction, reusing scenario 2's partial-flatten technique */
 const PRIOR_EXIT_FRACTION = 0.3;
 
-/** Every entry lot this harness opens, before any exit */
 const EXIT_PATH_LOT_SIZE = 10;
 
 /**
- * #1214: what Execution's residual re-flatten resolves its session gate
- * against here. `AlwaysOpenCalendar` for both classes, matching the
- * `tradingCalendar` override this run already injects — `SMOKE_RUN_INSTANT`
- * sits outside real session hours, and a shut venue would stand that path
- * down for a reason none of these scenarios is about. No scenario here
- * scripts a `ProtectiveRearmUnsupportedError` (scenario 5's is a one-shot
- * ORDINARY re-arm failure), so nothing in this harness reaches the
- * re-flatten regardless; this keeps the composition honest rather than
- * leaning on that.
+ * `AlwaysOpenCalendar` for both classes, matching this run's `tradingCalendar`
+ * override — `SMOKE_RUN_INSTANT` sits outside real session hours, and a shut
+ * venue would stand down the residual re-flatten (#1214) for a reason none of
+ * these scenarios is about.
  */
 const EXIT_PATH_SESSION_CALENDARS: Record<AssetClass, TradingCalendar> = {
   crypto: new AlwaysOpenCalendar(),
@@ -775,16 +698,9 @@ const EXIT_PATH_SESSION_CALENDARS: Record<AssetClass, TradingCalendar> = {
 };
 
 /**
- * Records every alert `ingestFills()`'s `maybeRearmResidual` posts
- * (ingest-fills.ts), on any of its three paths — a failed store read, a
- * non-finite/non-positive residual, or the broker rejecting the re-arm
- * itself. All three mean the same thing from a smoke run's chair: the #525
- * re-arm did not happen, because `ResidualExposureAlert` (residual-exposure-
- * alert.ts) is explicitly documented as "the FALLBACK for when that re-arm
- * itself fails, never the primary mechanism ... a successful re-arm posts
- * nothing here". A healthy smoke run, against a deterministic offline
- * broker, should therefore produce zero of these, ever — see
- * `evaluateSmokeGate`'s check for the reasoning this feeds.
+ * `ResidualExposureAlert` is documented as the fallback for when
+ * `maybeRearmResidual` (ingest-fills.ts) itself fails — a successful re-arm
+ * posts nothing here, so a healthy smoke run should produce zero of these.
  */
 class RecordingResidualExposureAlertChannel implements ResidualExposureAlertChannel {
   readonly alerts: ResidualExposureAlert[] = [];
@@ -797,13 +713,7 @@ class RecordingResidualExposureAlertChannel implements ResidualExposureAlertChan
   }
 }
 
-/**
- * Records every flatten-reconcile alert posted (#519) — a healthy scenario 4
- * (below) resolves cleanly against the deterministic Simulated venue, so this
- * should stay empty; `evaluateSmokeGate` asserts exactly that, the same
- * shape `RecordingResidualExposureAlertChannel` above already establishes for
- * a different escalation
- */
+/** A healthy scenario 4 resolves cleanly, so this should stay empty (#519) */
 class RecordingFlattenReconcileAlertChannel implements FlattenReconcileAlertChannel {
   readonly alerts: FlattenReconcileAlert[] = [];
 
@@ -813,13 +723,11 @@ class RecordingFlattenReconcileAlertChannel implements FlattenReconcileAlertChan
 }
 
 /**
- * The `error`-level lines `startFillSync`'s three `catch` blocks
- * (orchestrator/fill-sync.ts `runPoll`/`runOnce`) write when a pass rejects,
- * referenced from that module's exports so a rewording there cannot leave a
- * stale literal here. All three are the SAME hole: the loop logs, keeps polling, and nothing else
- * in the process reacts — so a `reconcile()`/`ingestFills()`/sweep that
- * rejects on every poll is invisible to every other check in this gate,
- * which reads effects (rows, alerts, snapshots) rather than log lines.
+ * The `error`-level lines `startFillSync`'s `catch` blocks write on a
+ * rejected pass, imported from that module so a rewording there can't leave
+ * a stale literal here. The loop logs and keeps polling either way, so a
+ * pass that rejects on every poll is invisible to every other check in this
+ * gate, which reads effects rather than log lines.
  */
 const FILL_SYNC_FAILURE_MESSAGES = [
   FILL_SYNC_RECONCILE_FAILED,
@@ -833,38 +741,27 @@ function isFillSyncFailureMessage(message: string): message is FillSyncFailureMe
   return (FILL_SYNC_FAILURE_MESSAGES as readonly string[]).includes(message);
 }
 
-/**
- * One rejection the fill-sync loop logged and survived (#1049). `error` is the
- * message the loop put in its payload — for `ingestFills` that is
- * `throwContainedFailures`'s summary, which names each contained scope and
- * key and never carries column content.
- */
+/** One rejection the fill-sync loop logged and survived (#1049) */
 export interface FillSyncFailure {
   message: FillSyncFailureMessage;
   error: string;
 }
 
-/** What `evaluateSmokeGate` needs from the fill-sync loop (#1049) */
 export interface FillSyncFailureEvidence {
   failures: readonly FillSyncFailure[];
 }
 
 /**
- * Fill-sync rejections a healthy smoke run is ALLOWED to produce, matched by
- * substring against `FillSyncFailure.error`. Empty, and deliberately declared
- * rather than implied: the one fault the harness scripts on this path
- * (scenario 5's failed re-arm, #549) is contained inside `maybeRearmResidual`
- * and surfaces as a residual-exposure alert the gate already counts, never as
- * a poll rejection. A future scripted fault that DOES reject a poll gets
- * named here, by its identifier, rather than lifting the gate's count.
+ * Fill-sync rejections a healthy smoke run is allowed to produce. Empty
+ * deliberately: the one scripted fault on this path (scenario 5's failed
+ * re-arm) surfaces as a residual-exposure alert, never a poll rejection.
  */
 const TOLERATED_FILL_SYNC_FAILURES: readonly string[] = [];
 
 /**
- * The rejections the gate fails on: every recorded failure whose `error`
- * contains no tolerated substring. An empty tolerated entry is IGNORED rather
- * than honoured — `'x'.includes('')` is true, so one blank line in the
- * allowlist would otherwise tolerate every failure the loop ever logs.
+ * An empty tolerated entry is ignored rather than honoured —
+ * `'x'.includes('')` is true, so a blank allowlist line would otherwise
+ * tolerate every failure the loop ever logs.
  */
 export function untoleratedFillSyncFailures(
   failures: readonly FillSyncFailure[],
@@ -875,13 +772,9 @@ export function untoleratedFillSyncFailures(
 }
 
 /**
- * Records every fill-sync rejection (#1049) on the way to the real logger, so
- * the gate can read the one channel the poll loop's failures reach.
- *
- * A wrapper scoped to `FILL_SYNC_FAILURE_MESSAGES` rather than a `Logger` the
- * gate reads back in full: the gate's other checks read effects, not log
- * lines, and this stays as narrow as the hole it closes. Never throws: a
- * recorder that could fail would take the logger it wraps down with it.
+ * Records every fill-sync rejection (#1049) on the way to the real logger —
+ * the gate's other checks read effects, not log lines, so this stays scoped
+ * to `FILL_SYNC_FAILURE_MESSAGES` rather than reading a `Logger` back in full.
  */
 export class FillSyncFailureRecorder implements Logger {
   private readonly failures: FillSyncFailure[] = [];
@@ -906,9 +799,6 @@ const fillSyncProbe: Probe<'fillSync'> = {
   },
   verdict(evidence) {
     const failures: string[] = [];
-    // #1049 — the fill-sync loop must never have rejected a poll. It logs and
-    // keeps polling by design (fill-sync.ts `runOnce`), so this is the only
-    // place a run whose `ingestFills` fails on every call is visible at all
     const untolerated = untoleratedFillSyncFailures(evidence.failures);
     if (untolerated.length > 0) {
       const distinct = [
@@ -924,38 +814,19 @@ const fillSyncProbe: Probe<'fillSync'> = {
   },
 };
 
-/** What `evaluateSmokeGate` needs from the market-data fetch path (#1082) */
 export interface MarketDataFetchEvidence {
-  /** How many `market_data_fetch` lines the run recorded — see `MarketDataFetchRecorder` */
   fetchCount: number;
-  /**
-   * The distinct `trace_id`s those lines carried. A bar fetch inside a tick
-   * takes that tick's id from `shared/trace-context.ts`; `'market-data'` is
-   * the fallback for a fetch with no enclosing tick. The gate joins these
-   * against `audit_log`'s traces — see the check on this field.
-   */
+  /** A bar fetch inside a tick carries that tick's id; `'market-data'` otherwise */
   traceIds: string[];
 }
 
 /**
- * Records every `market_data_fetch` line (#1082) on the way to the real
- * logger, so the gate can prove the telemetry mechanism actually FIRES
- * through the real composition root — not merely that `MarketDataServiceImpl`
- * was constructed with a `telemetry` argument (#430's dominant defect class:
- * built, unit-tested, never wired, every test green).
- *
- * Matched by `LogEntry.event`, unlike `FillSyncFailureRecorder` above (which
- * matches a closed, enumerated `message` set): this line's message is
- * instrument/timeframe-specific prose, so the grep-unique event code —
- * `market_data_fetch`, the convention #1115 made compulsory for every
- * `warn`/`error` line — is the one fixed field every line carries.
- *
- * Unlike #1083's `token_bucket_wait` (deliberately given NO probe — see
- * `SmokeEvidence`), a cache-miss line here
- * fires for free on the FIRST bar fetch any fixture-driven run makes against
- * a cold `:memory:` store — no artificial real-time wait needed — which is
- * what makes a real (non-vacuous) assertion on this mechanism's DURABLE
- * effect achievable, unlike the wait case.
+ * Records every `market_data_fetch` line (#1082) to prove the telemetry
+ * mechanism actually fires through the real composition root — not merely
+ * that `MarketDataServiceImpl` was constructed with a `telemetry` argument
+ * (#430's dominant defect: built, unit-tested, never wired). Matched by
+ * `LogEntry.event` rather than message text, since the message itself is
+ * instrument/timeframe-specific prose.
  */
 export class MarketDataFetchRecorder implements Logger {
   private fetchCount = 0;
@@ -982,13 +853,9 @@ const marketDataFetchProbe: Probe<'marketDataFetch'> = {
   },
   verdict(evidence, { observations }) {
     const failures: string[] = [];
-    // #1082 — the market-data fetch path must have logged at least one
-    // `market_data_fetch` line. `MarketDataServiceImpl`'s store starts cold
-    // (`:memory:`), so the run's very first bar fetch through the composition
-    // root's PRIMARY `marketData` instance is a guaranteed cache miss; zero
-    // lines means the `telemetry` argument was dropped from `production.ts`'s
-    // `new MarketDataServiceImpl(...)` call, returning the bar/indicator path
-    // to the undiagnosable-silence state #1082 was filed against
+    // The store starts cold (`:memory:`), so the first bar fetch is a
+    // guaranteed cache miss; zero lines means `telemetry` was dropped from
+    // production.ts's `MarketDataServiceImpl` construction (#1082).
     if (evidence.fetchCount === 0) {
       failures.push(
         'zero market_data_fetch lines were recorded over the run — the store starts cold, so at ' +
@@ -999,20 +866,9 @@ const marketDataFetchProbe: Probe<'marketDataFetch'> = {
       );
     }
 
-    // The fetch telemetry must be JOINABLE to the tick that caused it, which is
-    // the whole point of putting the tick's `trace_id` in ambient context: a
-    // fetch inside a tick carries that tick's id, and `'market-data'` is the
-    // fallback for one with no enclosing tick
-    //
-    // A run with no ticks at all is not this check's business — `tickLoopProbe`
-    // owns that, and piling on would report a trace defect
-    // for a run that never got far enough to have one
-    //
-    // Asserted here because nothing else can. Deleting the `runWithTraceId`
-    // wrapper from `SequentialTickRunner.runInstrument` leaves every fetch
-    // byte-identical, every unit test green (each site's fallback is a legal
-    // return), and every other check in this gate green — the lines just
-    // quietly revert to the category label and join to nothing
+    // Deleting the `runWithTraceId` wrapper from `SequentialTickRunner`
+    // leaves every fetch byte-identical and every unit test green (each
+    // site's fallback is a legal return) — only this join can catch it.
     const tickTraces = new Set(observations.ticks.map((tick) => tick.trace_id));
     const joined = evidence.traceIds.some((trace_id) => tickTraces.has(trace_id));
     if (tickTraces.size > 0 && evidence.fetchCount > 0 && !joined) {
@@ -1027,7 +883,6 @@ const marketDataFetchProbe: Probe<'marketDataFetch'> = {
   },
 };
 
-/** The `error` string `startFillSync` puts in its rejection payloads, or `''` if absent */
 function payloadError(payload: unknown): string {
   if (typeof payload !== 'object' || payload === null) return '';
   const { error } = payload as { error?: unknown };
@@ -1035,68 +890,43 @@ function payloadError(payload: unknown): string {
 }
 
 /**
- * Decorates a real `SimulatedBrokerAdapter` for the exit-path harness (#576).
- * Adds exactly two things neither the real adapter nor a change to
- * `execution/` (out of this ticket's scope) is needed for:
+ * Decorates a real `SimulatedBrokerAdapter` for the exit-path harness (#576),
+ * adding two things the real adapter can't: (1) `callSequence` records call
+ * order so cancel-before-flatten (#516) can be asserted, since no store row
+ * distinguishes the two orderings; (2) `truncateFlattenFill` produces a
+ * genuinely partial fill (see `PARTIAL_FLATTEN_FRACTION`) by rewriting one
+ * fill's `qty`/`fee` while preserving `broker_fill_id`, which `ingestFills()`
+ * dedups on and `redistributeFlattenFills` derives a per-lot id from.
  *
- * 1. **Call-sequence recording.** `executeExit` cancels every held lot
- *    BEFORE calling `submitFlatten` (#516) — an ordering property no store
- *    row observes; `flatten_submissions` and `open_positions` both look
- *    identical whether the cancel happened first or never happened at all.
- *    `callSequence` is the only way to assert the ORDERING the ticket asks
- *    for, not merely that both calls occurred.
- * 2. **A deterministic partial flatten fill.** See `PARTIAL_FLATTEN_FRACTION`
- *    above for why the real adapter cannot produce one. `truncateFlattenFill`
- *    opts a specific flatten's `clientOrderId` into a fixed-fraction fill;
- *    `fetchNewFills` rewrites that one fill's `qty`/`fee` on the way out,
- *    leaving `broker_fill_id` untouched — `ingestFills()` dedups on that id
- *    globally (ingest-fills.ts) and `redistributeFlattenFills` derives a
- *    per-lot id FROM it, so renaming it would silently break that contract
- *    in a way that would look like a #571 regression rather than what it is.
- *
- * `getOpenPositions()` is passed straight through to the delegate and is
- * DELIBERATELY not reconciled against the truncated feed above: the
- * delegate's own netting still sees its full-size internal fill, so the two
- * disagree by construction once a truncation is in effect. Nothing in this
- * harness (or the gate) reads `getOpenPositions()` — it exists on this class
- * only because `BrokerAdapter` requires it. This is a fixed-scenario smoke
- * fixture, not a general-purpose adapter; a caller with a different need
- * must not assume this method is trustworthy here.
+ * `getOpenPositions()` passes straight through and is deliberately NOT
+ * reconciled against the truncated feed — nothing in this harness reads it;
+ * it exists only because `BrokerAdapter` requires it.
  */
 class ExitPathBrokerAdapter implements BrokerAdapter {
-  /** Every `cancel`/`submitBracket`/`submitFlatten`/`rearmProtectiveLegs` call, in call order */
   readonly callSequence: string[] = [];
   private readonly partialFlattenFraction = new Map<string, number>();
-  /** Lots whose NEXT `rearmProtectiveLegs` call throws — scenario 5's one-shot failure (#549) */
+  /** Lots whose next `rearmProtectiveLegs` call throws — scenario 5's one-shot failure (#549) */
   private readonly rearmFailuresOnce = new Set<string>();
 
   /**
-   * `delegate` is deliberately typed as the concrete `SimulatedBrokerAdapter`,
-   * not the `BrokerAdapter` interface: `getProtectedQty` below is not part of
-   * that interface, and this class's only caller (`runExitPathScenarios`)
-   * needs it to read back scenario 2's residual. Widening this parameter to
-   * `BrokerAdapter` would compile but break `getProtectedQty` silently at the
-   * one call site that matters.
+   * Typed as the concrete `SimulatedBrokerAdapter`, not `BrokerAdapter`:
+   * `getProtectedQty` below isn't part of that interface, and
+   * `runExitPathScenarios` needs it to read back scenario 2's residual.
    */
   constructor(private readonly delegate: SimulatedBrokerAdapter) {}
 
-  /** Opts `clientOrderId`'s flatten into a truncated fill — see the class docs */
   truncateFlattenFill(clientOrderId: string, fraction: number): void {
     this.partialFlattenFraction.set(clientOrderId, fraction);
   }
 
   /**
-   * Makes this lot's NEXT `rearmProtectiveLegs` call throw, once (#549,
-   * scenario 5) — the deterministic stand-in for "the observing poll's
-   * re-arm did not confirm", which is what forces the durable marker to be
-   * the ONLY path back to protection. One-shot so the restarted process's
-   * sweep retry succeeds against the same adapter.
+   * One-shot stand-in for "the observing poll's re-arm did not confirm",
+   * forcing the durable marker to be the only path back to protection.
    */
   failRearmOnce(clientOrderId: string): void {
     this.rearmFailuresOnce.add(clientOrderId);
   }
 
-  /** Appends `action:clientOrderId` to `callSequence` — the one thing every recorded call shares */
   private record(action: string, clientOrderId: string): void {
     this.callSequence.push(`${action}:${clientOrderId}`);
   }
@@ -1110,7 +940,6 @@ class ExitPathBrokerAdapter implements BrokerAdapter {
     return this.delegate.getOrder(clientOrderId, instrument);
   }
 
-  /** #519/#526's reconcile-driven flatten sweep — recorded like every other call for scenario 4 */
   async resumeFlatten(clientOrderId: string, instrument: string): Promise<NormalizedOrder | null> {
     this.record('resumeFlatten', clientOrderId);
     return this.delegate.resumeFlatten(clientOrderId, instrument);
