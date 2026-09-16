@@ -381,12 +381,9 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
   const lastReconcileAction = new Map<string, string>();
 
   /**
-   * Shared bookkeeping for both dedup maps above: log a divergence only on
-   * first observation or a state transition, then forget any key this pass
-   * did not report (so a later, distinct episode logs afresh). Purely
-   * synchronous — `logDivergence` must not await, since the two call sites
-   * below sit inside `runPoll`'s own try/catch boundaries and this helper's
-   * loop is not one of them.
+   * Shared by both dedup maps above: log a divergence only on first observation or a state transition,
+   * then forget any key this pass didn't report, so a later distinct episode logs afresh. `logDivergence`
+   * must stay synchronous — the call sites sit inside `runPoll`'s own try/catch, not this helper's loop.
    */
   function logDedupedDivergences(
     divergences: readonly ReconcileDivergence[],
@@ -489,8 +486,8 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
               // the same sweep row `runPoll`'s `report.divergences` loop
               // above already routed through that function (reconcile()
               // merges sweep divergences in — see `ReconcileDivergence.kind`'s
-              // doc) — pre-existing duplicate logging (#1122 review round 3),
-              // not introduced here. `reconcileDivergenceLevel()` never
+              // doc) — pre-existing duplicate logging, not introduced here,
+              // and `reconcileDivergenceLevel()` never
               // demotes a sweep row either way (`kind !== 'bracket'`), so
               // this inline split and that function agree on every case; it
               // just doesn't call it a second time to reach the same answer

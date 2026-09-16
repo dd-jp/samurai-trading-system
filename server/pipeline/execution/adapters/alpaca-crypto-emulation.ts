@@ -1,51 +1,29 @@
 /**
  * Locally emulated protective legs for Alpaca CRYPTO.
  *
- * Alpaca rejects EVERY advanced order class for crypto — `order_class:
- * 'bracket'`/`'otoco'`/`'oco'` all come back 422 "crypto orders not allowed
- * for advanced order_class" — so a crypto instrument can never get the
- * venue-kept entry + one-cancels-other guarantee `AlpacaBrokerAdapter`
- * relies on for equities. This module keeps that guarantee BY HAND, below
- * the `BrokerAdapter` seam — porting the pattern the retired ccxt adapter
- * used for venues without native brackets (`ccxt-adapter.ts` at fe79f26).
+ * Alpaca rejects EVERY advanced order class for crypto (`bracket`/`otoco`/
+ * `oco` all 422 "crypto orders not allowed for advanced order_class"), so a
+ * crypto instrument can never get the venue-kept entry + one-cancels-other
+ * guarantee. This module keeps that guarantee BY HAND, below the
+ * `BrokerAdapter` seam — porting the pattern the retired ccxt adapter used
+ * for venues without native brackets.
  *
- * The lifecycle, all of it journalled in `broker_brackets` (venue 'alpaca',
- * `asset_class = 'crypto'`) with every transition written BEFORE the venue
- * call it commits to:
+ * Lifecycle, journalled in `broker_brackets` with every transition written
+ * BEFORE the venue call it commits to: `submitting` (write-ahead, before the
+ * entry is sent) → `pending_entry` (entry live, stop/target riding in the
+ * journalled request) → `arming` (legs being placed as plain crypto orders)
+ * → `armed` (both resting) → `cancelling_sibling` (one leg filled, the
+ * other's cancel owed) → `resolved`.
  *
- *   submitting        — write-ahead row, before the plain-limit ENTRY is sent
- *   pending_entry     — entry live; the intended stop/target prices ride in
- *                       the journalled request, waiting on the entry fill
- *   arming            — entry fill observed by the sweep; the two protective
- *                       legs are being placed as PLAIN crypto orders
- *                       (stop_limit for the stop, limit for the take-profit)
- *   armed             — both legs resting; the sweep watches for either fill
- *   cancelling_sibling— one leg observed filled; the sibling's cancel is
- *                       owed, written before the cancel call
- *   resolved          — done: sibling cancelled, or nothing left to protect
+ * Between two fill polls NOTHING enforces the exclusion: a market that
+ * trades through both prices inside one poll interval fills BOTH, over-
+ * closing the lot. This risk was accepted when choosing emulation; both
+ * fills are booked truthfully and `OcoDoubleFillAlertChannel` is posted —
+ * alerted, never hidden, never auto-unwound.
  *
- * ## The accepted double-fill window
- *
- * Between two fill polls NOTHING enforces the exclusion: the stop and the
- * take-profit rest as independent orders, and a market that trades through
- * both prices inside one poll interval fills BOTH — over-closing the lot and
- * opening a reverse position. This risk was accepted when choosing
- * emulation; when the sweep observes it, both fills are booked truthfully
- * and `OcoDoubleFillAlertChannel` is posted — alerted, never hidden, and
- * never auto-unwound (see oco-double-fill-alert.ts).
- *
- * ## What is journalled here vs. left out
- *
- * The journal is honest about every window — a crash mid-arm leaves
- * `arming`, a crash mid-cancel leaves `cancelling_sibling` — and THIS
- * process's fill sweep resumes both from the journal on the next poll. NOT
- * built here: a durable "residual unprotected" flag swept on its own
- * cadence — a lot whose recovery keeps failing is retried/refused loudly by
- * this sweep, but no separate escalation clock runs on it yet.
- *
- * Quantities go to the wire as `String(qty)` with no rounding — the same
- * treatment `AlpacaBrokerAdapter.submitFlatten`/`submitBracket` give every
- * other order's size.
+ * NOT built: a durable "residual unprotected" escalation clock — a lot whose
+ * recovery keeps failing is retried/refused loudly by the sweep, but no
+ * separate clock watches it yet.
  */
 import type { Clock } from '../../../shared/index.js';
 import type { BrokerBracketRecord, BrokerStateStore } from '../broker-state-store.js';
@@ -65,12 +43,10 @@ import {
 } from './alpaca-order-normalization.js';
 
 /**
- * One emulated bracket — the in-process working set, ccxt's `EmulatedBracket`
- * shape plus two process-local flags of this module's own. The Map stays the
- * hot path for the same reason ccxt's did: the exactly-once sibling cancel
+ * One emulated bracket — in-process working set plus two process-local
+ * flags. Kept as a synchronous Map because the exactly-once sibling cancel
  * depends on claiming a phase transition with no `await` in between, and
- * `BrokerStateStore` is synchronous so the journal write sits inside the
- * claim (broker-state-store.ts's file doc).
+ * `BrokerStateStore` is synchronous so the journal write sits inside the claim.
  */
 interface EmulatedBracket {
   request: NativeBracketRequest;
@@ -86,21 +62,17 @@ interface EmulatedBracket {
   /** PROCESS-LOCAL: an arming episode is in flight HERE. See ccxt's original doc. */
   inFlight: boolean;
   /**
-   * PROCESS-LOCAL: the double-fill alert for this lot was delivered by this
-   * process. Deliberately not persisted — the detection below re-derives the
-   * condition from venue state on every sweep, so the cost of losing this
-   * flag to a restart is one repeated alert, and the alternative (a durable
-   * flag whose write races the alert) can lose the alert outright. Noisy,
-   * never silent.
+   * PROCESS-LOCAL, deliberately not persisted: detection re-derives the
+   * condition from venue state every sweep, so losing this flag to a
+   * restart costs one repeated alert — better than a durable flag whose
+   * write could race the alert and lose it outright
    */
   doubleFillAlerted: boolean;
   /**
    * PROCESS-LOCAL: every order of this resolved bracket has been seen
-   * terminal by a sweep in THIS process, so there is nothing left to
-   * observe. Skipped by later sweeps to bound the poll cost (three
-   * `getOrder`s per bracket per 15s sweep against a ~200 req/min account
-   * budget). Not persisted: a restart re-polls once, which is exactly what
-   * re-offers a fill the dead process observed but never ingested.
+   * terminal here, bounding poll cost (three `getOrder`s per bracket per
+   * sweep against a ~200 req/min budget). Not persisted: a restart re-polls
+   * once, which re-offers a fill a dead process observed but never ingested.
    */
   donePolling: boolean;
 }
@@ -124,12 +96,10 @@ export class AlpacaCryptoLegEmulation {
   private readonly brackets = new Map<string, EmulatedBracket>();
 
   /**
-   * Rehydration mirrors ccxt's: synchronous, in the constructor, so the first
-   * `submitBracket` after a restart already knows this client order id is
-   * live. Only rows whose journalled request says `asset_class: 'crypto'`
-   * belong to this emulation — every emulated row has a full request (the
-   * write-ahead saves it), so a request-less row is a native equity one by
-   * construction and is left to the adapter's own warm-load.
+   * Synchronous rehydration in the constructor so the first `submitBracket`
+   * after a restart already knows this client order id is live. Only rows
+   * with `asset_class: 'crypto'` belong here — a request-less row is a
+   * native equity one by construction, left to the adapter's own warm-load.
    */
   constructor(private readonly deps: AlpacaCryptoLegEmulationDeps) {
     for (const record of deps.state.loadBrackets('alpaca')) {
@@ -184,15 +154,12 @@ export class AlpacaCryptoLegEmulation {
 
   /**
    * The crypto ENTRY: a plain limit order — no `order_class`, no attached
-   * legs (the guaranteed 422) — write-ahead journalled as `submitting`
-   * BEFORE the venue call, with the caller's already-computed stop/target
-   * riding in the journalled request as the legs owed once the entry fills.
-   *
-   * ccxt's `submitBracket` verbatim in structure, including the failure
-   * posture: on a thrown venue call the DB row STAYS at `submitting` (a
-   * timeout after acceptance looks identical from here; `resolveSubmitting`
-   * asks the venue later) while the in-memory entry goes, so a retry
-   * re-issues the order and the venue's own client-order-id dedup settles it.
+   * legs — write-ahead journalled as `submitting` BEFORE the venue call,
+   * with the caller's stop/target riding in the request as legs owed once
+   * the entry fills. On a thrown venue call the DB row STAYS at `submitting`
+   * (a timeout after acceptance looks identical from here; `resolveSubmitting`
+   * asks the venue later) while the in-memory entry is dropped, so a retry
+   * re-issues the order and the venue's client-order-id dedup settles it.
    */
   async submitEntry(order: NativeBracketRequest): Promise<BrokerAck> {
     const existing = this.brackets.get(order.client_order_id);
@@ -259,18 +226,14 @@ export class AlpacaCryptoLegEmulation {
   }
 
   /**
-   * The emulated re-arm: the same two plain orders as an ordinary arm,
-   * sized to the residual, on a NEW arming episode — `armAttempt` is bumped
-   * so the deterministic leg client order ids cannot collide with an
-   * earlier episode's, and the claim (with the quantity and the caller's
-   * stop/target folded into the journalled request) is durable BEFORE any
-   * venue call, so a crash mid-re-arm resumes through `resumeArming`
-   * exactly like a crash mid-first-arm.
-   *
-   * Refuses (throws — the caller turns that into a fallback alert) when no
-   * journalled bracket exists for this lot: with no row there is no durable
-   * place to write the episode ahead, and an unjournalled arm is the
-   * naked-crash-window this module exists to close.
+   * The emulated re-arm: the same two plain orders as an ordinary arm, sized
+   * to the residual, on a NEW arming episode. `armAttempt` is bumped so
+   * deterministic leg client order ids cannot collide with an earlier
+   * episode's, and the claim is durable BEFORE any venue call, so a crash
+   * mid-re-arm resumes through `resumeArming` like a crash mid-first-arm.
+   * Refuses (the caller turns that into a fallback alert) when no journalled
+   * bracket exists — an unjournalled arm is the naked-crash-window this
+   * module exists to close.
    */
   async rearm(
     clientOrderId: string,
@@ -295,10 +258,8 @@ export class AlpacaCryptoLegEmulation {
       );
     }
 
-    // The claim. `stop`/`target` are folded into the journalled request —
-    // the contract says they are the lot's own unchanged levels, but the
-    // journal records what THIS episode will actually place, and recovery
-    // re-places from the journal
+    // The claim. `stop`/`target` are folded into the journalled request so
+    // recovery re-places from exactly what this episode records
     bracket.request = { ...bracket.request, stop, target };
     bracket.phase = 'arming';
     bracket.armingQty = qty;
@@ -318,17 +279,13 @@ export class AlpacaCryptoLegEmulation {
   }
 
   /**
-   * Cancels the entry AND both emulated legs — the adapter's `cancel()` for
-   * an owned bracket. There is no parent order whose cancellation takes
-   * children with it here (that is the whole emulation), and cancelling only
-   * the entry would leave a live stop resting against a position that no
-   * longer exists — ccxt's `cancel` reasoning, unchanged.
-   *
-   * A throw from any cancel propagates BEFORE the phase write, so
-   * `executeExit` refuses the flatten rather than market-ordering while it
-   * is unknown whether the legs are gone — the same posture the adapter's
-   * native `cancel` documents. The venue-side cancel itself is idempotent at
-   * the transport (404/422 resolve).
+   * Cancels the entry AND both emulated legs — there is no parent order
+   * whose cancellation takes children with it here (that is the whole
+   * emulation), and cancelling only the entry would leave a live stop
+   * resting against a position that no longer exists. A throw propagates
+   * BEFORE the phase write, so `executeExit` refuses the flatten rather than
+   * market-ordering while it's unknown whether the legs are gone. The
+   * venue-side cancel is idempotent at the transport (404/422 resolve).
    */
   async cancelAll(clientOrderId: string): Promise<void> {
     const bracket = this.brackets.get(clientOrderId);
@@ -358,24 +315,18 @@ export class AlpacaCryptoLegEmulation {
 
   /**
    * One pass of the emulation, driven from the adapter's `fetchNewFills`:
-   * poll every owned order, offer its fills (Alpaca-style — re-DERIVED from
-   * the venue each poll, so nothing has to be journalled between polls;
-   * `ingestFills` dedups on `broker_fill_id`), then advance the phase
-   * machine one transition per bracket. Per-bracket isolation and
-   * UnpricedFillError bookkeeping match the adapter's own sweeps exactly —
-   * see `fetchNewFills`'s comments for the full reasoning.
-   *
-   * Returns how many brackets failed this pass, for the caller's aggregate
-   * error message.
+   * poll every owned order, offer its fills (re-DERIVED from the venue each
+   * poll, so nothing has to be journalled between polls; `ingestFills`
+   * dedups on `broker_fill_id`), then advance the phase machine one
+   * transition per bracket. Returns how many brackets failed this pass.
    */
   async sweep(since: Date, fills: NormalizedFill[], failures: unknown[]): Promise<number> {
     let failed = 0;
-    // Read once for the whole sweep — see `fetchNewFills`'s own `observedAt`
-    // in alpaca-adapter.ts for the reasoning, which applies here unchanged
+    // Read once for the whole sweep — see `fetchNewFills`'s `observedAt` in
+    // alpaca-adapter.ts
     const observedAt = this.deps.clock.now();
 
-    // Snapshot, for the same mid-iteration-mutation reason every other sweep
-    // in this adapter snapshots
+    // Snapshot against mid-iteration mutation, as every other sweep in this adapter does
     // oxlint-disable-next-line unicorn/no-useless-spread -- the copy itself is the point, see comment above
     for (const bracket of [...this.brackets.values()]) {
       if (bracket.donePolling) continue;
@@ -517,16 +468,13 @@ export class AlpacaCryptoLegEmulation {
 
   /**
    * `pending_entry` → `arming` → `armed`, or → `resolved` if the entry died
-   * empty. Arms when the entry goes TERMINAL with quantity: a fully-filled
-   * entry arms at its size, and a partially-filled-then-cancelled/expired
-   * entry arms at what actually filled — that residual is a live position
-   * and leaving it naked because the entry died early would be the exact
-   * failure this module exists to remove. A still-working entry (including
-   * `partially_filled`) waits: legs are sized once, to the final quantity.
+   * empty. Arms when the entry goes TERMINAL with quantity — including a
+   * partially-filled-then-cancelled entry, whose residual is a live position
+   * that must not be left naked. A still-working entry waits; legs are
+   * sized once, to the final quantity.
    */
   private async advanceEntry(bracket: EmulatedBracket, entry: AlpacaOrder): Promise<void> {
-    // Claim check before any further await — ccxt's rule, kept even though
-    // this sweep is the only driver today
+    // Claim check before any further await, kept even though this sweep is the only driver today
     if (bracket.phase !== 'pending_entry') return;
 
     const state = mapOrderState(entry.status);
@@ -540,9 +488,8 @@ export class AlpacaCryptoLegEmulation {
       return;
     }
 
-    // WRITE-AHEAD: `arming` (with the quantity this episode places for) is
-    // durable BEFORE the first leg order — the crash there is recovered by
-    // `resumeArming` in whatever process comes next
+    // WRITE-AHEAD: `arming` is durable BEFORE the first leg order — a crash
+    // there is recovered by `resumeArming` in whatever process comes next
     bracket.phase = 'arming';
     bracket.armingQty = filledQty;
     bracket.inFlight = true;
@@ -568,10 +515,9 @@ export class AlpacaCryptoLegEmulation {
   }
 
   /**
-   * Refuse-rather-than-guess recovery, ported intact from ccxt: an
-   * inconclusive venue answer throws and leaves the bracket `arming` for the
-   * next sweep (or an operator) rather than risking two live protective legs
-   * on one lot
+   * Refuse-rather-than-guess recovery: an inconclusive venue answer throws
+   * and leaves the bracket `arming` for the next sweep rather than risking
+   * two live protective legs on one lot
    */
   private async recoverArming(bracket: EmulatedBracket): Promise<void> {
     const qty = bracket.armingQty;
@@ -595,10 +541,9 @@ export class AlpacaCryptoLegEmulation {
 
   /**
    * Kill legs recorded from an EARLIER episode before placing this one's —
-   * live only on the re-arm path, where the previous episode's ids are still
-   * on the record. A stale leg that FILLED means the lot exited while this
-   * process was dead: refuse, exactly as ccxt did, rather than arm a fresh
-   * pair over a position that may no longer exist.
+   * live only on the re-arm path. A stale leg that FILLED means the lot
+   * exited while this process was dead: refuse rather than arm a fresh pair
+   * over a position that may no longer exist.
    */
   private async retireStaleLegs(bracket: EmulatedBracket): Promise<void> {
     const { stopOrderId, targetOrderId } = bracket;
@@ -642,9 +587,8 @@ export class AlpacaCryptoLegEmulation {
 
   /**
    * Adopt the leg the venue may already hold under this episode's
-   * deterministic client order id, or place it — ccxt's recovery move, on
-   * Alpaca's lookup. A working leg is adopted; a terminal one refuses (it
-   * can be neither adopted as live protection nor re-placed under the same
+   * deterministic client order id, or place it. A working leg is adopted; a
+   * terminal one refuses (neither adoptable nor re-placeable under the same
    * id); an absent one is placed.
    */
   private async adoptOrPlaceLeg(
@@ -700,12 +644,9 @@ export class AlpacaCryptoLegEmulation {
           side: exitSide,
           qty: String(qty),
           stop_price: String(request.stop),
-          // The caller computes ONE stop level (`NativeBracketRequest.stop`);
-          // crypto has no plain stop type, so the required post-trigger limit
-          // is set AT the stop level. The honest cost: a market that gaps
-          // through the stop can leave this limit unfilled — the same
-          // trade-off any stop-limit carries, chosen over inventing a
-          // slippage allowance the caller never priced
+          // Crypto has no plain stop type, so the post-trigger limit is set
+          // AT the stop level — a gapping market can leave it unfilled, the
+          // trade-off any stop-limit carries
           limit_price: String(request.stop),
           time_in_force: 'gtc',
           client_order_id: clientOrderId,
@@ -729,9 +670,9 @@ export class AlpacaCryptoLegEmulation {
   }
 
   /**
-   * Deterministic per-episode leg ids — ccxt's scheme unchanged: within one
-   * episode the venue's duplicate-client-order-id rejection is the recovery
-   * safety net, across episodes a fresh suffix avoids it
+   * Deterministic per-episode leg ids: within one episode the venue's
+   * duplicate-client-order-id rejection is the recovery safety net; across
+   * episodes a fresh suffix avoids it
    */
   private legClientOrderId(bracket: EmulatedBracket, leg: 'stop' | 'target'): string {
     const suffix = bracket.armAttempt === 0 ? '' : `:r${bracket.armAttempt}`;
@@ -756,11 +697,10 @@ export class AlpacaCryptoLegEmulation {
   /**
    * The OCO edge, kept by hand: one leg observed filled → journal
    * `cancelling_sibling` → cancel the sibling → `resolved`. The claim and
-   * the journal write are synchronous, so the edge is taken exactly once; a
+   * journal write are synchronous, so the edge is taken exactly once; a
    * thrown cancel leaves `cancelling_sibling` durable and the next sweep
-   * (`finishSiblingCancel`) retries — unlike ccxt, which resolved first and
-   * accepted an orphaned sibling on a throw. Both-filled resolves with
-   * nothing to cancel; `watchDoubleFill` has already escalated it.
+   * (`finishSiblingCancel`) retries. Both-filled resolves with nothing to
+   * cancel; `watchDoubleFill` has already escalated it.
    */
   private async advanceExits(
     bracket: EmulatedBracket,
@@ -820,12 +760,11 @@ export class AlpacaCryptoLegEmulation {
 
   /**
    * The accepted-risk watcher: BOTH legs reporting filled is the double-fill
-   * window materialised (see the module doc). Detection is re-derived from
-   * venue state each sweep and gated by a process-local flag, so a failed
-   * delivery is retried next sweep and a restart re-alerts at most once —
-   * noisy, never silent. The channel's own error is read and discarded
-   * (`BrokerError`'s posture: transport failures quote requests that carry
-   * tokens); a named replacement joins `failures` instead.
+   * window materialised (see the module doc). Re-derived from venue state
+   * each sweep and gated by a process-local flag, so a failed delivery is
+   * retried next sweep. The channel's own error is discarded (transport
+   * failures can quote requests carrying tokens); a named replacement joins
+   * `failures` instead.
    */
   private async watchDoubleFill(
     bracket: EmulatedBracket,

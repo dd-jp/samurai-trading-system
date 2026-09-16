@@ -33,7 +33,6 @@ export type {
   Fill,
   OpenPosition,
   OrderIntent,
-  OrderIntentMetadata,
   OrderState,
   SetupNeighbor,
   SetupVector,

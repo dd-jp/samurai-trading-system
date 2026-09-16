@@ -33,8 +33,8 @@
  * arithmetic rather than a real comparison.
  */
 
-import { digest } from '../../apps/orchestrator/index.js';
 import { isDailyTimeframe, timeframeToMs } from '../../providers/market-data-service/index.js';
+import { digest } from '../../shared/index.js';
 import type { ConfigTrialLog } from './config-trial-log.js';
 import { EvalExecutorImpl } from './eval-executor.js';
 import type { EvalExecutor, EvalReport } from './eval-types.js';
@@ -179,9 +179,8 @@ export interface TrialGridSizing {
  * supports 7.
  *
  * The cap must constrain the search, not grade it afterwards — computing
- * it only at the end, after all 12 trials had run, let "pick the best"
- * become a live risk once cost calibration took passing configs from 2/24
- * to 12/24.
+ * it only at the end, after all 12 trials had run, would let "pick the
+ * best" become a live risk the moment more configs start passing.
  *
  * The subset is spread, not truncated: taking the first N of the
  * cross-product would keep every config from one corner of the parameter

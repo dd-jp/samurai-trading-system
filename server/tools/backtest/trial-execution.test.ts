@@ -1,7 +1,6 @@
-import { digest } from '../../apps/orchestrator/index.js';
 import type { Bar } from '../../providers/market-data-service/index.js';
 import { AlwaysOpenCalendar } from '../../providers/market-data-service/index.js';
-import { SimulatedClock } from '../../shared/index.js';
+import { digest, SimulatedClock } from '../../shared/index.js';
 import { InMemoryConfigTrialLog } from './config-trial-log.js';
 import type { EvalExecutor, EvalOptions, EvalReport } from './eval-types.js';
 import { minbtl } from './overfitting.js';

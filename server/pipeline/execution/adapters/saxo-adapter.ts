@@ -619,13 +619,6 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     await this.cancelOrderIds(legs.map((leg) => leg.OrderId));
   }
 
-  /**
-   * `clearLegs`' handling of an already-computed dormant-legs verdict, split
-   * out purely to keep `clearLegs` under the cyclomatic-complexity gate — the
-   * four verdict kinds are mutually exclusive and each one's action (log,
-   * cancel, or refuse) is exactly what `clearLegs`' own doc comment above
-   * already specifies
-   */
   private async resolveDormantClearVerdict(
     verdict: DormantVerdict,
     clientOrderId: string,
@@ -663,15 +656,11 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
   }
 
   /**
-   * `clearLegs`' refusal, counted before it is thrown. A refusal leaves the
-   * legs where they are and reports through the caller's error path only —
-   * `execute.ts`'s `exit_cancel_failed` log, a `flatten_submissions` error
-   * row and the tick audit row, no alert channel — so a lot wedged in the
-   * shape unproven item 2 describes would refuse every exit attempt
-   * indefinitely with nothing paging (#1216 round 2 finding 2). It counts on
-   * its own `refusedKey` rather than sharing the defer count: the two
-   * conditions resolve independently, and one caller's settled verdict must
-   * not clear the other's wedge.
+   * `clearLegs`' refusal, counted before it is thrown — a refusal alone
+   * reports through the caller's error path only, no alert channel, so a
+   * wedge here would refuse every exit attempt with nothing paging. Counts
+   * on its own `refusedKey` rather than sharing the defer count, since the
+   * two conditions resolve independently.
    */
   private async refuse(
     clientOrderId: string,
@@ -994,11 +983,10 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
   }
 
   /**
-   * `lookup`'s `kind: 'legs'` branch, split out purely to keep `lookup`
-   * under the cyclomatic-complexity gate. Cancelling off `open.legs` here —
-   * rather than the role-deduped `orderIdList(open.ids)` — matches
-   * `clearLegs`' own behavior on the mirror branch and does not silently
-   * drop a duplicate row under one leg's reference (#1215 round 3).
+   * Cancelling off `open.legs` here — rather than the role-deduped
+   * `orderIdList(open.ids)` — matches `clearLegs`' own behavior on the mirror
+   * branch and does not silently drop a duplicate row under one leg's
+   * reference (#1215 round 3)
    */
   private async resolveActivatedLegsLookup(
     open: LookedUpActivatedLegsOrder,
@@ -1034,12 +1022,8 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
         };
   }
 
-  /**
-   * `lookup`'s dormant-legs branch, split out purely to keep `lookup` under
-   * the cyclomatic-complexity gate — the four verdict kinds are the same
-   * mutually exclusive shape `resolveDormantClearVerdict` handles for
-   * `clearLegs`, just with `lookup`'s own return values
-   */
+  // The same mutually exclusive verdict shape `resolveDormantClearVerdict`
+  // handles for `clearLegs`, just with `lookup`'s own return values
   private async resolveDormantLegsLookup(
     open: DormantLegs,
     externalReference: string,

@@ -48,17 +48,9 @@ jobs:
           args: --boundary-violations
           auto-changed-since: false
 
-      # Grandfathers the pre-existing backlog (fallow-baselines/dead-code.json,
-      # captured 2026-09-17) so this gates only NEW findings, not the ~57 that
-      # predate the gate. Re-save the baseline after deliberately clearing part
-      # of the backlog: `npm run fallow:dead-code -- --save-baseline fallow-baselines/dead-code.json`.
       - name: Fallow dead code
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        uses: fallow-rs/fallow@4f3bd9720ca6b22c8547adb7f1d225f57fc502d4 # v3
-        with:
-          command: dead-code
-          baseline: fallow-baselines/dead-code.json
-          auto-changed-since: false
+        run: npm run fallow:dead-code -- --format github-annotations --quiet
 
       # Findings still surface as annotations, but neither step below can
       # actually fail on them today: dupes only fails past --threshold

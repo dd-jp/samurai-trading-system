@@ -1,5 +1,5 @@
 /**
- * The deterministic MI ingestion path (map #552).
+ * The deterministic MI ingestion path.
  *
  * Replaces the retrieval-from-LLM design that fails closed by construction:
  * `NousSentimentClient` hard-codes `retrievalEvidence: false`, `GrokAgent
@@ -13,21 +13,18 @@
  *
  * `hydrate()` reloads the store from the archive at startup, so a soak
  * restart — which used to empty the in-memory store and silently measure
- * less than it appeared to — costs nothing.
+ * less than it appeared to — costs nothing. That durability is per source,
+ * not global: `hydrate()` replays only the sources `MI_SOURCE_HYDRATION`
+ * marks `hydrate` — dated observations. A source whose item is a
+ * trailing-window statistic (Polymarket's 24h delta) is archived for replay
+ * but deliberately not pushed back into the live store at boot, since
+ * re-serving a stale measurement as current is a different defect from
+ * losing it.
  *
- * That durability is per source, not global (#835): `hydrate()` replays
- * only the sources `MI_SOURCE_HYDRATION` marks `hydrate` — dated
- * observations. A source whose item is a trailing-window statistic
- * (Polymarket's 24h delta) is archived for replay but deliberately not
- * pushed back into the live store at boot, since re-serving a stale
- * measurement as current is a different defect from losing it.
- *
- * Deviation from #554 sub-decision 4: that decision says
- * `MarketIntelligenceStore` "becomes a read-through view over the
- * archive". This keeps the store as an in-memory cache and hydrates it
- * from the archive instead — same durability property, and it leaves the
- * store's push-subscription path untouched rather than rewriting a working
- * delivery mechanism inside an ingestion change.
+ * This keeps `MarketIntelligenceStore` as an in-memory cache hydrated from
+ * the archive, rather than a read-through view over the archive — same
+ * durability property, and it leaves the store's push-subscription path
+ * untouched.
  */
 
 import type { LlmClient, SpendCap } from '../../pipeline/debate-engine/index.js';
@@ -160,28 +157,16 @@ export class MiIngestAgent {
   /**
    * Per-instrument scoring-degradation state, in memory.
    *
-   * Without `degradedSkip` bounding it, `hasScoredItem` (below) would make
-   * a degraded batch retry on every refresh for as long as the article
-   * stays inside `LOOKBACK_MS` — a sustained outage billing up to
-   * `DEFAULT_LLM_RETRY.maxAttempts` calls per tick for the whole window.
-   * `degradedSkip` widens the gap after each straight failure (capped, see
-   * `MAX_DEGRADED_SKIP`), and `streak` persists across a skipped refresh —
-   * only a refresh that actually attempts scoring and succeeds resets it
-   * to 0. A single blip is unaffected: streak 1 always retries on the very
-   * next refresh. The MI spend cap remains the real backstop; this only
-   * slows how fast one instrument's outage burns toward it.
-   *
-   * A refresh with nothing new to score clears a pending `skipRemaining`
-   * cooldown — that refresh proves nothing about whether scoring itself is
-   * still failing — but does not reset `streak`: an outage can have a
-   * quiet tick with no matching articles in the middle of it, and
-   * resetting `streak` there would undo the escalation this exists for.
-   *
-   * `streak` decays, but only on a read, and only after `LOOKBACK_MS` has
-   * passed since the failure that set it (see `readDegraded`) — without
-   * this, an outage that genuinely ended would leave its streak sitting
-   * forever, and the first unrelated failure hours or days later would
-   * inherit its full skip instead of being treated as the lone blip it is.
+   * Without `degradedSkip` bounding it, a degraded batch would retry on
+   * every refresh for as long as the article stays inside `LOOKBACK_MS` —
+   * billing up to `DEFAULT_LLM_RETRY.maxAttempts` calls per tick for the
+   * whole window. `degradedSkip` widens the gap after each straight
+   * failure; only an actual successful scoring attempt resets `streak` to
+   * 0 — a refresh with nothing new to score clears `skipRemaining` but not
+   * `streak`, since a quiet tick mid-outage isn't recovery. `streak` decays
+   * only on read, once `LOOKBACK_MS` has passed since the failure that set
+   * it (see `readDegraded`), so a stale streak can't hand its full skip to
+   * an unrelated failure much later.
    */
   readonly #degraded = new Map<string, DegradedState>();
 
@@ -278,21 +263,17 @@ export class MiIngestAgent {
       this.deps.archive.write(newRaws, []);
     }
 
-    // One article carries a symbols[] array, so an article about three
-    // tickers is three items — each scored against its own entity, because
-    // a headline can be bullish for one ticker and bearish for another
-    // The wire symbol decides whether this article is about the resolved
-    // MI subject; the pipeline's own id (`miSubject`) is what the item is
-    // filed under, so downstream joins see `BTC-USD` rather than the
-    // vendor's `BTCUSD`, and an LSE ETP's items see the US underlying
-    // rather than the traded wrapper ticker
+    // Each article's symbols[] array can span tickers; each is scored
+    // against its own entity, since a headline can be bullish for one and
+    // bearish for another. The pipeline's own id (`miSubject`), not the
+    // vendor's wire symbol, is what the item is filed under, so downstream
+    // joins and an LSE ETP's resolution see the pipeline's id
     //
-    // Keyed on `hasScoredItem` (`mi_items`), not `hasItem`
-    // (`mi_archive_raw`, used for `newRaws` above): a raw row with no
-    // scored item means an earlier refresh's batch degraded and never
-    // scored it, and that article must stay a scoring candidate for as
-    // long as it is inside the lookback window, independent of whether its
-    // bytes are already on disk
+    // Keyed on `hasScoredItem` (`mi_items`), not `hasItem` (`mi_archive_raw`,
+    // used for `newRaws` above): a raw row with no scored item means an
+    // earlier refresh's batch degraded and never scored it, and that
+    // article must stay a scoring candidate for as long as it is inside the
+    // lookback window
     const unscored = articles
       .filter((article) => article.symbols.some((symbol) => symbols.includes(symbol)))
       .filter(
@@ -305,15 +286,13 @@ export class MiIngestAgent {
           ),
       );
     if (unscored.length === 0) {
-      // Nothing here says scoring is still failing — only that this
-      // refresh had no new work — so a pending skip cooldown must not
-      // survive to wrongly skip the next refresh that finally has
-      // something to score. But this is not the "healthy batch" that
-      // should reset `streak`: an outage can legitimately have a quiet
-      // refresh (no matching articles this cycle) in the middle of it, and
-      // resetting `streak` here would restart backoff from scratch on the
-      // next failure. Only an actual successful scoring attempt earns that
-      // reset (see the `degraded` branch below)
+      // This refresh had no new work, not proof scoring is still failing —
+      // so a pending skip cooldown must not survive to wrongly skip the next
+      // refresh that finally has something to score. But `streak` stays: an
+      // outage can legitimately have a quiet refresh in the middle of it,
+      // and resetting `streak` here would restart backoff from scratch on
+      // the next failure. Only an actual successful scoring attempt earns
+      // that reset (see the `degraded` branch below)
       const existing = this.#degraded.get(instrument);
       if (existing && existing.skipRemaining > 0) {
         this.#degraded.set(instrument, {
@@ -434,16 +413,13 @@ export class MiIngestAgent {
 
     // `scoreItems` always returns exactly one score per supplied item, so
     // `scores[index]` should never be undefined here; treated the same as
-    // an explicit `omitted: true` if it ever is — withheld below, not
-    // archived with a fabricated score
+    // an explicit `omitted: true` if it ever is
     //
     // An item the model's response omitted an index for is not archived:
-    // its raw bytes are already on disk, but writing a fabricated
-    // unscored item to `mi_items` would make `hasScoredItem` return true
-    // for that key forever — `write`'s `INSERT OR IGNORE` means the row
-    // could never later be upgraded to a real score. Leaving no `mi_items`
-    // row keeps it a candidate for a later refresh, retried until the
-    // article ages out of the window
+    // its raw bytes are already on disk, but writing a fabricated unscored
+    // item to `mi_items` would make `hasScoredItem` return true for that key
+    // forever — `write`'s `INSERT OR IGNORE` means the row could never later
+    // be upgraded to a real score
     const scoredPairs = pairs
       .map(({ article, entity }, index) => ({ article, entity, score: scores[index] }))
       .filter(

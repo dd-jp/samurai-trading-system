@@ -36,11 +36,13 @@ import { randomUUID } from 'node:crypto';
 import type { Signal } from '../../pipeline/analysts/index.js';
 import { LlmRefusalError } from '../../pipeline/debate-engine/index.js';
 import type { Clock } from '../../shared/index.js';
-// `describeThrown`/`safeLog` live in shared/safe-log.ts: "a log call inside a
-// catch must not itself throw" is a guarantee other modules need too
-import { describeThrown, safeLog } from '../../shared/index.js';
+// #573: `describeThrown`/`safeLog` moved to shared/safe-log.ts once
+// execution/ingest-fills.ts and execution/reconcile.ts needed the identical
+// "a log call inside a catch must not itself throw" guarantee this file
+// worked out first (#507) — see that file's doc for the full reasoning,
+// unchanged by the move
+import { describeThrown, digest, safeLog } from '../../shared/index.js';
 import type { DecisionGate } from './decision-bar-gate.js';
-import { digest } from './digest.js';
 import type {
   AuditLog,
   CurrentTickStore,
