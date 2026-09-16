@@ -576,7 +576,7 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
    * its take-profit (no separate leg), the row it writes ends up with
    * `target_order_id` holding the OCO's own parent id, not a bracket-shaped leg id.
    */
-  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the walk's advance invariant ("advancing past an index means its order is not resting", enforced in both directions), the live-preferred-over-settled adoption order, and the three independent size bounds (qty, sizedAboveSettled, entryFilledQty) are each individually documented as load-bearing — two prior restructurings (#1570 review's early-return, commits 4ea06cba and df222403) were tried and reverted as live-money bugs, so a fresh extraction here repeats a mistake this function's own history already made
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the walk's advance invariant ("advancing past an index means its order is not resting", enforced in both directions), the live-preferred-over-settled adoption order, and the three independent size bounds (qty, sizedAboveSettled, entryFilledQty) are each individually documented as load-bearing — two prior restructurings (#1570 review's early-return) were tried and reverted as live-money bugs, so a fresh extraction here repeats a mistake this function's own history already made
   async rearmProtectiveLegs(
     clientOrderId: string,
     instrument: string,
