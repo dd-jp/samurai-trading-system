@@ -166,10 +166,10 @@ export class StaleMarkError extends BookValuationError {
     readonly asOf: Date,
     readonly freshness: Exclude<MarkFreshness, { status: 'fresh' }>,
   ) {
-    // The two statuses are two different faults and each says only its own.
+    // The two statuses are two different faults and each says only its own
     // `stale` is the market having gone quiet; `ahead` is our clock and the
     // venue's disagreeing AFTER the mark was already in hand, which pass
-    // latency can no longer explain at any magnitude.
+    // latency can no longer explain at any magnitude
     const passMs = readAt.getTime() - asOf.getTime();
     const detail =
       freshness.status === 'stale'
@@ -355,7 +355,7 @@ async function readMarks(
   // this view VALUES the book, and a mark fetched early in a batch that took
   // a minute genuinely is a minute old by the time its price reaches the
   // exposure arithmetic. Judging each mark at its own arrival would call a
-  // price fresh that is not fresh any more at the moment it is used.
+  // price fresh that is not fresh any more at the moment it is used
   const readAt = clock.now();
 
   const marks = new Map<string, number>();
@@ -368,7 +368,7 @@ async function readMarks(
       // asked for. Not distinguished from a read failure here: either way this
       // book has an unvalued position in it. Typed `MarkReadError`, not a
       // bare `Error`, so a caller narrowing on `BookValuationError` catches
-      // this shape too.
+      // this shape too
       failures.push(
         new MarkReadError(
           instrument,
@@ -397,15 +397,15 @@ async function readMarks(
       continue;
     }
 
-    // Fail closed on a STALE mark, not merely on a missing one.
+    // Fail closed on a STALE mark, not merely on a missing one
     //
     // A mark ARRIVING is not evidence the feed is alive — in live it may serve
     // from a TTL cache, and a halted or thin instrument keeps returning its
     // last trade indefinitely. Valuing the book off that price is the failure
-    // the Risk Manager exists to prevent.
+    // the Risk Manager exists to prevent
     //
     // Collected rather than thrown on sight, so one stale name does not hide a
-    // second dark one from the same report.
+    // second dark one from the same report
     const assetClass = classByInstrument.get(instrument) ?? read.mark.asset_class;
     const freshness = classifyMarkFreshness(read.mark, readAt, max_mark_age[assetClass]);
     if (freshness.status !== 'fresh') {
@@ -423,7 +423,7 @@ async function readMarks(
   // the per-instrument reasons above are IDENTICAL under both policies — the
   // only difference is whether the report is thrown or returned. The caller
   // is responsible for making the degradation audible; see
-  // `ExitValuationDegradedAlertChannel` (orchestrator/production).
+  // `ExitValuationDegradedAlertChannel` (orchestrator/production)
   if (policy === 'exclude') {
     return { marks, unvalued };
   }
@@ -491,7 +491,7 @@ export async function computePortfolioView(
   const reserved_exposure_by_instrument: Record<string, number> = {};
   const reserved_exposure_by_class = { crypto: 0, stocks: 0 };
   // Same single pass as the exposure math, over the same `marks` map — the
-  // marks must be fetched once, and this is what makes that true.
+  // marks must be fetched once, and this is what makes that true
   const unrealized_by_class: Record<AssetClass, number> = { crypto: 0, stocks: 0 };
 
   for (const position of positions) {
@@ -500,7 +500,7 @@ export async function computePortfolioView(
     // conservative, which is exactly why `unvalued_instruments` travels on the
     // view and why `RiskManagerImpl.evaluate` refuses an ENTRY that sees a
     // non-empty one. Under the default `'refuse'` policy this list is empty
-    // and the loop is byte-for-byte what it was.
+    // and the loop is byte-for-byte what it was
     if (unvalued.includes(position.instrument)) continue;
     // Freeze §4: the VALUATION is always filled_size, never requested_size —
     // a partially-filled lot is marked at what actually filled, and an

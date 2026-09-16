@@ -266,7 +266,7 @@ export class XSearchClient implements GrokSentimentClient {
         // Declared because a retrieval call is nothing like a debate call: it
         // runs the provider's own search loop, measured at 5-26s against a
         // debate call's ~13s. A caller queued behind one that estimated 13s
-        // would be admitted into a deadline it cannot make.
+        // would be admitted into a deadline it cannot make
         expectedCallMs: MEASURED_RETRIEVAL_CALL_MS,
         llmStage: 'market_intelligence_retrieval',
       },
@@ -291,7 +291,7 @@ export class XSearchClient implements GrokSentimentClient {
 
     // The provider's own clock, not this machine's: the recency assertion is
     // "the post predates the response", and mixing clocks would fold local
-    // skew into it.
+    // skew into it
     const responseAt = result.created_at_ms === null ? asOf : new Date(result.created_at_ms);
 
     return {
@@ -357,7 +357,7 @@ export class XSearchClient implements GrokSentimentClient {
 
   /**
    * Parses `content` as JSON, recovering a fenced or prose-wrapped object
-   * before giving up — the same salvage `NousSentimentClient` does.
+   * before giving up — the same salvage `NousSentimentClient` does
    */
   #parseJsonContent(content: string): { ok: true; value: unknown } | { ok: false } {
     try {
@@ -406,7 +406,7 @@ export class XSearchClient implements GrokSentimentClient {
     for (const raw of items_.slice(0, MAX_ITEMS)) {
       // `items: [null]` is a well-formed array whose element throws on the
       // first field read in `#toItem`. One malformed element must cost only
-      // that element, not the whole response.
+      // that element, not the whole response
       if (typeof raw !== 'object' || raw === null) {
         unreadableItems += 1;
         continue;

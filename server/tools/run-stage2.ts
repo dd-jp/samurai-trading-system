@@ -141,7 +141,7 @@ export const CALIBRATED_INTRADAY_COST_CONFIG: CostConfig = {
   // Layered via `venues` rather than `stocks.commissionRate` (kept 0 for the
   // Alpaca-priced legs this config also serves): the intraday stocks replay
   // stamps `MarketState.venue = 'saxo'` (`runStage2` below), so 8bps a side
-  // (ADR-0015) is what an intraday run now charges.
+  // (ADR-0015) is what an intraday run now charges
   venues: { saxo: { commissionRate: SAXO_COMMISSION_RATE } },
 };
 
@@ -518,12 +518,12 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
   // The window the data can actually support, which is NOT always the window
   // asked for: a Polygon plan serves a bounded history, and replaying the
   // requested window against a shorter one produces an opaque
-  // `toReturnSeries: no bars in the sample` failure inside the first fold.
+  // `toReturnSeries: no bars in the sample` failure inside the first fold
   //
   // So the effective window is INTERSECTED across symbols and everything
   // downstream — replay, folds, and MinBTL — runs on it. MinBTL's trial cap
   // is a function of sample length, so computing it over an uncovered window
-  // would overstate how many configs the sample can support.
+  // would overstate how many configs the sample can support
   const effective = effectiveWindow(store, window, symbols);
   warnIfWindowNarrowed(window, effective, print);
 
@@ -535,7 +535,7 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
 
   // State the sizing POSITIVELY, before the run, rather than reporting
   // `exceeded: true` after 12 trials have already been spent. The cap exists
-  // to constrain the search; a reader should see what it constrained it to.
+  // to constrain the search; a reader should see what it constrained it to
   const results = await runTrialGrid({
     assetClasses,
     window: effective,
@@ -543,12 +543,12 @@ export async function runStage2(deps: RunStage2Deps): Promise<Stage2Verdict> {
     configTrialLog,
     // Printed from INSIDE the run, off the sizing it actually used, rather
     // than a second `sizeTrialGridToSample` call here — a verdict's audit
-    // trail should report what ran, not something computed alongside it.
+    // trail should report what ran, not something computed alongside it
     //
     // N is `selected.length`, NOT `limit`: they differ whenever the cap
     // does not bind, e.g. a 5-year window supporting ~45 trials against a
     // 12-config cross-product, where printing `limit` would announce a
-    // 45-config grid and then run 12.
+    // 45-config grid and then run 12
     announceSizing: (sizing) =>
       print(
         `Stage 2: grid sized to N=${sizing.selected.length} from a ` +
@@ -663,9 +663,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     window: runWindow,
     label,
     // Read from `STAGE2_TIMEFRAME` (default '1d'), so a direct run — the
-    // only real caller of this script — is what drives an intraday replay.
+    // only real caller of this script — is what drives an intraday replay
     // `STAGE2_TIMEFRAME=1m STAGE2_SOURCE=free-stack` is the intended intraday
-    // invocation.
+    // invocation
     timeframe: runTimeframe,
   } = resolveStage2Source();
   console.log(
@@ -674,23 +674,23 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   );
   // Stated explicitly at the entrypoint rather than by changing `runStage2`'s
   // own default, so every existing caller and test keeps the cost config it
-  // was written against and only a direct run picks up the calibrated one.
+  // was written against and only a direct run picks up the calibrated one
   // The SHARED store, not the scratch `dbPath` this script opens for bars:
   // the Feedback Loop reads the frozen selection at runtime, and a verdict
   // written to a research scratch file is a verdict nobody can act on. A
   // direct run is the only caller that freezes; `runStage2`'s own tests pass
-  // no store and stay a dry run.
+  // no store and stay a dry run
   const shared = openSharedStore(sharedStorePath());
   runStage2({
     polygonClient,
     // Keyed on the run's timeframe: a daily-fitted spread/ATR ratio consumed
-    // against per-minute volatility is the defect this avoids.
+    // against per-minute volatility is the defect this avoids
     costConfig: costConfigFor(runTimeframe),
     window: runWindow,
     timeframe: runTimeframe,
     // Stated here rather than by changing `runStage2`'s `:memory:` default,
     // so only a direct run persists bars and every existing caller and test
-    // keeps the isolated in-memory store it was written against.
+    // keeps the isolated in-memory store it was written against
     dbPath: STAGE2_SCRATCH_DB_PATH,
     selections: new SqliteStage2SelectionStore(shared),
   }).catch((error: unknown) => {

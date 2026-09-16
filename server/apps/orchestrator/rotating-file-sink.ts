@@ -115,7 +115,7 @@ export function fileSinkConfigFromEnvironment(
   // `nonEmpty` on the path, not just on the integers, and the trim is not
   // cosmetic: `Number(' ')` is `0`, and `0` is a *legal* value for
   // `SAMURAI_LOG_MAX_FILES` meaning "keep nothing" — a stray space would
-  // silently switch retention from ten generations to none.
+  // silently switch retention from ten generations to none
   const purpose = "the durable log sink's rotation policy (#325)";
   return {
     filePath: nonEmpty(env[ENV_FILE]) ?? DEFAULT_LOG_FILE,
@@ -216,11 +216,11 @@ export class RotatingFileSink {
 
     // Shift every generation up one. Descending order is required — ascending
     // would overwrite each generation with the one below it, leaving
-    // `maxRotatedFiles` copies of the same lines.
+    // `maxRotatedFiles` copies of the same lines
     //
     // Nothing explicitly deletes the oldest generation: POSIX `rename(2)`
     // replaces an existing destination atomically, so the final shift IS
-    // the eviction.
+    // the eviction
     for (let generation = maxRotatedFiles - 1; generation >= 1; generation -= 1) {
       const from = `${filePath}.${generation}`;
       // renameSync throws ENOENT on a missing source; a hand-deleted
@@ -274,7 +274,7 @@ export class RotatingFileSink {
     } catch {
       // Both sinks are broken. Losing THIS message is strictly better than
       // losing the run here — this class's one hard guarantee is that IT
-      // never throws into a tick.
+      // never throws into a tick
     }
   }
 }

@@ -148,9 +148,9 @@ export class VerdictImpl implements Verdict {
     // from `decided_at`, NOT `decision_timestamp`. `decision_timestamp` is
     // the 1h debate-bar coordinate, floored and kept stable across ticks
     // sharing a bar — never a wall-clock reading, so age grew structurally
-    // toward 60 minutes purely from where in the bar a tick landed.
+    // toward 60 minutes purely from where in the bar a tick landed
     // `decided_at` is `clock.now()` read at intent-build time and never
-    // floored, so two decisions of equal real freshness measure equal.
+    // floored, so two decisions of equal real freshness measure equal
     //
     // The mandatory flat-by-close flatten skips this gate (and only it,
     // here): it does not act on an opinion at all, so bounding it by any
@@ -161,7 +161,7 @@ export class VerdictImpl implements Verdict {
     // (signal_decay, direction_flip) is never exempted. Dedup (3) and the
     // breaker re-check (5) still run for a priced flatten; an unpriced one
     // additionally skips the price gates, since `unpriced_exit` implies
-    // this marker — see the file header.
+    // this marker — see the file header
     const signalAgeMs = now.getTime() - orderIntent.decided_at.getTime();
     const maxAgeMs = config.max_signal_age[orderIntent.asset_class];
     if (orderIntent.metadata.mandatory_flatten !== true && signalAgeMs > maxAgeMs) {
@@ -180,13 +180,13 @@ export class VerdictImpl implements Verdict {
     // about that — drift would reject on `!(entry > 0)`, and stale_feed
     // asks how old a price is that was never obtained. The mark is not
     // re-read here either: re-issuing it would pay a second ~30s primary
-    // timeout on the tick trying to get flat before the close.
+    // timeout on the tick trying to get flat before the close
     //
     // `unpriced_exit` implies `mandatory_flatten` (both come off
     // `exit_reason: 'flatten'`), so `staleness` (1) and `market_closed` (4)
     // have already been skipped by the time control reaches here — four
     // gates total, not the two this branch skips. Dedup (3), the breaker
-    // (5) and HITL (6) still run unconditionally.
+    // (5) and HITL (6) still run unconditionally
     if (orderIntent.metadata.unpriced_exit !== true) {
       const noGoOnPrice = await this.#priceGates(orderIntent, marketData, config, clock, now);
       if (noGoOnPrice !== null) return noGoOnPrice;
@@ -204,7 +204,7 @@ export class VerdictImpl implements Verdict {
     // crossing the bell is not new information — refusing here left a lot
     // open through the close, the exact failure ADR-0014 exists to
     // prevent. Whether the venue then fills is a separate question
-    // `executeExit` resolves on its own.
+    // `executeExit` resolves on its own
     if (orderIntent.asset_class === 'stocks' && !config.allow_extended_hours) {
       if (!tradingCalendar.isOpen(now) && orderIntent.metadata.mandatory_flatten !== true) {
         return noGo('market_closed', idempotencyKey, now);
@@ -240,7 +240,7 @@ export class VerdictImpl implements Verdict {
     // a dead mechanism nothing exercises. The right fix is async approval
     // (Verdict returns `pending`, a poller resumes it), not a re-check —
     // that also removes the human from blocking the whole instrument pass
-    // (`max_concurrent_instruments: 1` plus an in-pass await).
+    // (`max_concurrent_instruments: 1` plus an in-pass await)
     const outcome: ApprovalOutcome = await approvals.requestApproval({
       order_intent: orderIntent,
       risk_decision,
@@ -303,7 +303,7 @@ export class VerdictImpl implements Verdict {
     const mark = await marketData.getMark(orderIntent.instrument, now);
     // Freshness is judged at the instant the mark ARRIVED (`readAt`), not
     // the `now` the read was issued with — a stalled vendor fetch (no
-    // failover, ~30s retry budget) can put them minutes apart.
+    // failover, ~30s retry budget) can put them minutes apart
     const readAt = clock.now();
 
     // Gate 2a: FEED staleness — how long ago the market last spoke,
@@ -312,7 +312,7 @@ export class VerdictImpl implements Verdict {
     // both directions (frozen-at-entry passes wrongly, frozen-far-away
     // fires drift for the wrong reason), so running this first keeps a
     // `drift` verdict about real movement and a dead feed reported as
-    // dead.
+    // dead
     //
     // Distinct from gate 1: that bounds decision age, this bounds price
     // age. Both must hold.
@@ -333,7 +333,7 @@ export class VerdictImpl implements Verdict {
     // instruments of different price). Fails closed on a non-positive
     // entry: `entry * pct` would invert the comparison for a negative
     // entry rather than bound it. The unpriced flatten never reaches here
-    // — it's excluded by the caller.
+    // — it's excluded by the caller
     if (!(orderIntent.entry > 0)) {
       return noGo('drift', idempotencyKey, now);
     }

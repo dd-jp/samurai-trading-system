@@ -49,11 +49,11 @@ export const TELEGRAM_MAX_MESSAGE_CHARS = 4096;
  */
 export function capOutboundText(text: string): string {
   if (text.length <= TELEGRAM_MAX_MESSAGE_CHARS) return text;
-  // Slicing to the limit and appending the suffix after would still exceed it.
+  // Slicing to the limit and appending the suffix after would still exceed it
   const suffix = `… (truncated, ${text.length} chars total)`;
   let cut = TELEGRAM_MAX_MESSAGE_CHARS - suffix.length;
   // A lone high surrogate is not valid UTF-8 on the wire; Telegram counts
-  // UTF-16 code units, so a split surrogate pair is the only slicing hazard.
+  // UTF-16 code units, so a split surrogate pair is the only slicing hazard
   const last = text.charCodeAt(cut - 1);
   if (last >= 0xd800 && last <= 0xdbff) cut -= 1;
   return `${text.slice(0, cut)}${suffix}`;
@@ -125,7 +125,7 @@ export class TelegramBotApiClient implements TelegramClient {
   constructor(options: TelegramBotApiClientOptions) {
     // Trimmed at the read point: whitespace-only counts as unset, and the
     // normalized value is what's handed onward so a trailing newline out of
-    // an env file never reaches the request URL below.
+    // an env file never reaches the request URL below
     const botToken = (options.botToken ?? process.env.TELEGRAM_BOT_TOKEN)?.trim();
     if (botToken === undefined || botToken === '') {
       throw new Error(
@@ -262,7 +262,7 @@ export class TelegramBotApiClient implements TelegramClient {
           'from the one above.',
       }).catch((escalationError: unknown) => {
         // The escalation send itself can fail (e.g. a misconfigured baseUrl);
-        // sanitize since redactPayload never walks this plain string message.
+        // sanitize since redactPayload never walks this plain string message
         this.#log(
           'error',
           'telegram_delivery_escalation_failed',

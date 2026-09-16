@@ -202,7 +202,7 @@ class BarCursor {
     // The driver is TOLD its timeframe and the bars carry their own, so the
     // two can disagree without this check — nothing downstream would notice,
     // it would just silently mislabel every indicator. Checked on the first
-    // bar only: `Stage2HistoricalStore` scopes every read to one timeframe.
+    // bar only: `Stage2HistoricalStore` scopes every read to one timeframe
     const first = this.all[0];
     if (first !== undefined && first.timeframe !== timeframe) {
       throw new Error(
@@ -215,7 +215,7 @@ class BarCursor {
     // `visibleAt` only reads an ascending array correctly — a misordered row
     // would silently cut the visible prefix short. `ReplayBarSource`
     // documents ascending order; this asserts that contract rather than
-    // assuming it, since `settle()` cannot catch a past-stamped straggler.
+    // assuming it, since `settle()` cannot catch a past-stamped straggler
     for (let i = 1; i < this.all.length; i++) {
       const previous = this.all[i - 1] as Bar;
       const current = this.all[i] as Bar;
@@ -338,7 +338,7 @@ export class ReplayDriver {
       pendingFills: new Map<string, Fill[]>(),
     };
     // Derived, never restated — `proxyWarmupBars` is the single source of
-    // truth for the warmup width.
+    // truth for the warmup width
     const warmup = proxyWarmupBars(config, this.deps.timeframe);
 
     const stepped = await this.deps.timeline.barTimestamps(window);
@@ -360,7 +360,7 @@ export class ReplayDriver {
     }
 
     // Audited now against the final clock — a source that ignored the
-    // requested window fails the run instead of dropping rows silently.
+    // requested window fails the run instead of dropping rows silently
     for (const cursor of cursors.values()) cursor.settle();
 
     // A lot still open at the last bar produces no `ClosedTrade`: only a
@@ -392,19 +392,19 @@ export class ReplayDriver {
 
     // No bar closing at this timestamp, or still inside warmup —
     // `computeIndicator` on a short window returns a wrong value rather than
-    // erroring, so a short slice is never evaluated.
+    // erroring, so a short slice is never evaluated
     if (bar === undefined || bar.close_time.getTime() !== at.getTime()) return;
     if (bars.length < warmup) return;
 
     const signal = proxySignal(bars, state.config, this.deps.timeframe);
     const lot = state.open.get(instrument.symbol);
 
-    // `null` on a daily replay or a venue with no close — see `flattenBoundary`.
+    // `null` on a daily replay or a venue with no close — see `flattenBoundary`
     const boundary = flattenBoundary(bar, this.deps.timeframe, this.deps.sessionCalendar);
     // Widened to at least one bar: the live rule is wall-clock (last five
     // minutes before close), but a replay can't act inside a bar — on a
     // coarser grid no bar's open would ever fall inside a sub-bar window,
-    // and the lot would be carried and trip the assertion below instead.
+    // and the lot would be carried and trip the assertion below instead
     const flattenBeforeCloseMs = Math.max(
       this.deps.flattenBeforeCloseMs ?? DEFAULT_FLATTEN_BEFORE_CLOSE_MS,
       timeframeToMs(this.deps.timeframe),
@@ -423,7 +423,7 @@ export class ReplayDriver {
 
     // Nothing new opens inside the flatten window, mirroring the live rule
     // (`withinFlattenWindow` in trader/decide.ts) — an entry here would be
-    // flattened on the next bar at best, carried overnight at worst.
+    // flattened on the next bar at best, carried overnight at worst
     if (withinFlattenWindow) return;
 
     state.open.set(
@@ -454,7 +454,7 @@ export class ReplayDriver {
     // typically a calendar whose hand-entered holiday/early-close tables
     // don't cover the replayed date. Throwing here is preferred over
     // silently carrying overnight, which would produce a "flat-by-close"
-    // backtest that quietly isn't.
+    // backtest that quietly isn't
     if (lot.session_end !== null && bar.open_time.getTime() >= lot.session_end.getTime()) {
       throw new Error(
         `ReplayDriver: ${instrument.symbol} carried a position from the session ending ` +
@@ -469,7 +469,7 @@ export class ReplayDriver {
 
     // Bracket checked before flatten: a stop/target inside the bar's range
     // happened before the flatten window's clock ran out at the bar's open —
-    // flattening it instead would book the exit at the wrong, flattering price.
+    // flattening it instead would book the exit at the wrong, flattering price
     const exit = exitOf(lot, bar, signal) ?? (withinFlattenWindow ? flattenExit(bar) : undefined);
     if (exit !== undefined) {
       this.closeLot(state, instrument, lot, bar, bars, exit);
@@ -556,7 +556,7 @@ export class ReplayDriver {
     // `CostModelResult.filled_size` may be < requested size in principle
     // (types.ts), though `CostModelImpl` always fills fully today. A
     // `ClosedTrade` can't represent a half-closed lot, so fail loudly here
-    // rather than book a round-trip that didn't happen.
+    // rather than book a round-trip that didn't happen
     if (result.filled_size !== lot.size) {
       throw new Error(
         `ReplayDriver: exit of lot ${lot.idempotency_key} filled partially ` +
@@ -572,7 +572,7 @@ export class ReplayDriver {
       // `Fill.leg` keeps its original four values — migration 0031 widened
       // `closed_trades.close_reason`, not `fills.leg`. A flatten is recorded
       // as `'flatten'` on the trade but the generic `'exit'` on its fill,
-      // matching the live path.
+      // matching the live path
       leg: exit.reason === 'flatten' ? 'exit' : exit.reason,
       price: result.fill_price,
       qty: result.filled_size,
@@ -603,7 +603,7 @@ export class ReplayDriver {
         close_reason: exit.reason,
         // Always true here — every leg is priced through `CostModel.fill`
         // itself, so there is no venue report to fall back from and no
-        // uncharged leg to record.
+        // uncharged leg to record
         modelled_cost_charged: true,
       },
       fills,
@@ -649,7 +649,7 @@ export class ReplayDriver {
       // via the shared `proxyAtrSpec`, so the cost model and the stop can't
       // disagree about it. `timeframe` is the replay's own, not a hardcoded
       // literal — a wrong label here wouldn't error, just falsely record
-      // which bars the volatility was measured on.
+      // which bars the volatility was measured on
       volatility: computeIndicator(bars.slice(-atrSpec.lookback) as Bar[], atrSpec),
       asset_class: instrument.asset_class,
       ...(instrument.venue === undefined ? {} : { venue: instrument.venue }),

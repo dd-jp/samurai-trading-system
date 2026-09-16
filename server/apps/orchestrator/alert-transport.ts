@@ -50,7 +50,7 @@ export type AlertsMode = (typeof ALERTS_MODES)[number];
 export const ALERT_CHANNEL_FIELDS = [
   ...ALERT_IDS,
   // Not a catalogue entry: `verdictAlerts`' port is shaped for a
-  // `VerdictDecision` and implemented by Verdict's own `TelegramChannel`.
+  // `VerdictDecision` and implemented by Verdict's own `TelegramChannel`
   'verdictAlerts',
 ] as const satisfies readonly (keyof AlertChannelSlots)[];
 
@@ -141,7 +141,7 @@ function logAlertsLogOnly(logger: Logger): void {
 
 // Branched, not boilerplate: on the injected path this module reads no
 // heartbeat chat id, so claiming the beat goes to
-// `TELEGRAM_HEARTBEAT_CHAT_ID` would name a destination no heartbeat reaches.
+// `TELEGRAM_HEARTBEAT_CHAT_ID` would name a destination no heartbeat reaches
 function heartbeatRoutingClause(heartbeatChatId: string | undefined): string {
   if (heartbeatChatId === undefined) {
     return (
@@ -170,7 +170,7 @@ function logAlertsTelegram(logger: Logger, heartbeatChatId: string | undefined):
       'notice is outbound-only — it reports a dial the Feedback Loop already moved on its own ' +
       'authority, inside the hard bounds, and no reply to it is read (#366/#736).',
     // Never the token or either chat id: the token is a bearer credential
-    // for the entire bot.
+    // for the entire bot
     payload: {
       alerts: 'telegram',
       heartbeat: heartbeatChatId === undefined ? 'caller-supplied' : 'separate-chat',
@@ -216,16 +216,16 @@ export function buildAlertChannels(deps: {
   const chatId = requireEnv('TELEGRAM_CHAT_ID');
   // Resolved before the client is constructed, so a misconfigured pair fails
   // with nothing built. `undefined` only when the caller supplied its own
-  // heartbeat channel.
+  // heartbeat channel
   const heartbeatChatId =
     deps.injected.heartbeatChannel === undefined ? requireHeartbeatChatId(chatId) : undefined;
 
   const telegram = new TelegramBotApiClient({
     // Where the client posts its own repeated-delivery-failure notice — the
-    // chat the operator is already watching.
+    // chat the operator is already watching
     alertChatId: chatId,
     // Durable record of a send that exhausts retries, so "how many
-    // escalations went undelivered" survives the process that raised them.
+    // escalations went undelivered" survives the process that raised them
     alertDeliveryLog: new SqliteAlertDeliveryLog(deps.db),
     logger: deps.logger,
   });
@@ -249,7 +249,7 @@ function assign<K extends AlertId>(channels: AlertChannels, id: K, channel: Aler
 /**
  * The heartbeat's destination, refused when absent or equal to the escalation
  * chat — refused rather than warned about, since the warning would be
- * delivered to the chat the operator is about to mute.
+ * delivered to the chat the operator is about to mute
  */
 function requireHeartbeatChatId(escalationChatId: string): string {
   const heartbeatChatId = requireEnv(TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR);

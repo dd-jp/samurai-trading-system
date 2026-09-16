@@ -234,7 +234,7 @@ export async function enforceLatencyBudget(params: {
     // unhandled, it would escape `Promise.race` entirely. Narrowed to
     // `LlmFailure` (see that type's own doc) so this degrades the debate the
     // same way a genuine budget expiry does; anything else still rejects
-    // `Promise.race` and still crashes the pass.
+    // `Promise.race` and still crashes the pass
     (error: unknown): RaceOutcome => {
       if (isLlmFailure(error)) {
         return { status: 'llm_failed', error };
@@ -246,10 +246,10 @@ export async function enforceLatencyBudget(params: {
   // A cancelled debate rejects AFTER this function has returned its
   // fallback, and no explicit swallow is needed for that: `Promise.race`
   // attaches its own handlers to `debate`, so the late rejection is
-  // handled-and-ignored rather than reaching `process.on('unhandledRejection')`.
+  // handled-and-ignored rather than reaching `process.on('unhandledRejection')`
   // Cleared on EVERY exit, the rejecting one included: a non-`LlmFailure`
   // throw escapes the race and used to leave the budget timer pending until
-  // it fired for nothing — one leaked handle per refused instrument.
+  // it fired for nothing — one leaked handle per refused instrument
   let result: Awaited<typeof debate> | { status: 'timed_out' };
   try {
     result = await Promise.race([
@@ -272,7 +272,7 @@ export async function enforceLatencyBudget(params: {
   // thing that must happen once the budget is blown — or the debate's LLM
   // call fails outright — is that the spending stops. On the `llm_failed`
   // path the abort reason IS the `LlmFailure` itself, so a sibling call
-  // still in flight within the same round sees why it was cut off.
+  // still in flight within the same round sees why it was cut off
   controller.abort(
     result.status === 'llm_failed'
       ? result.error
@@ -293,7 +293,7 @@ export async function enforceLatencyBudget(params: {
   // `budget_ms`/`elapsed_ms` fields: carried into `debate_log.termination_cause`
   // by `buildDebateLog`, which lets a query exclude LLM-failure rows from a
   // budget-tuning measurement with one predicate instead of relying on
-  // `logTimeout`'s free-text `reason`.
+  // `logTimeout`'s free-text `reason`
   const cause: DebateTerminationCause = result.status === 'llm_failed' ? 'llm_failure' : 'budget';
   const timed_out = { budget_ms, elapsed_ms, cause };
 
@@ -313,11 +313,11 @@ export async function enforceLatencyBudget(params: {
       debate_id: partial.debate_id,
       // From the caller, not from `partial`: a timed-out debate is still a
       // decision for the bar the tick was taken in, and the two shapes below
-      // must name the same bar whether or not a round completed.
+      // must name the same bar whether or not a round completed
       bar_timestamp: bar,
       // A round finished before the budget fired, so this IS a real (if
       // truncated) read — `timed_out` already says the debate was cut
-      // short; `read` says the resulting direction is not a blank scaffold.
+      // short; `read` says the resulting direction is not a blank scaffold
       read: true,
       timed_out,
     };
@@ -348,7 +348,7 @@ export async function enforceLatencyBudget(params: {
 /**
  * A human-readable elaboration of `timed_out.cause` for whoever reads the raw
  * `logger.logTimeout` line — the persisted discriminator a QUERY reads is
- * `debate_log.termination_cause`, not this string.
+ * `debate_log.termination_cause`, not this string
  */
 function timeoutReason(
   result: Exclude<RaceOutcome, { status: 'completed' }>,

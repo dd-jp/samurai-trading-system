@@ -37,7 +37,7 @@ import type { Signal } from '../../pipeline/analysts/index.js';
 import { LlmRefusalError } from '../../pipeline/debate-engine/index.js';
 import type { Clock } from '../../shared/index.js';
 // `describeThrown`/`safeLog` live in shared/safe-log.ts: "a log call inside a
-// catch must not itself throw" is a guarantee other modules need too.
+// catch must not itself throw" is a guarantee other modules need too
 import { describeThrown, safeLog } from '../../shared/index.js';
 import type { DecisionGate } from './decision-bar-gate.js';
 import { digest } from './digest.js';
@@ -164,10 +164,10 @@ export async function runTickPlan(
   // Shared cursor over the plan: each worker claims the next index until the
   // plan is exhausted, so a slow instrument never holds up the queue behind
   // it — unlike fixed-size chunking, where a chunk runs only as fast as its
-  // slowest member.
+  // slowest member
   let cursor = 0;
   // Built per plan, so its indices are this plan's indices and it cannot
-  // outlive the pass.
+  // outlive the pass
   const tails = new TailSequencer();
   const workerCount = Math.min(
     Math.max(Math.floor(config.max_concurrent_instruments), 1),
@@ -182,7 +182,7 @@ export async function runTickPlan(
       // hands out a dense prefix, so an index never dequeued is strictly
       // greater than every index that could be waiting on a turn. Sparse or
       // out-of-order index allocation would break this and need
-      // `tails.finish` here instead.
+      // `tails.finish` here instead
       if (instrument === undefined) return;
 
       const signal: Signal = {
@@ -193,14 +193,14 @@ export async function runTickPlan(
 
       // The decision gate is consulted on the PLAN's tick time, not a fresh
       // clock read: every instrument in one plan must be gated on the same
-      // instant, and in replay the plan time is the deterministic coordinate.
+      // instant, and in replay the plan time is the deterministic coordinate
       //
       // Not consulted at all when `plan.grace_only`: the US close sits
       // exactly on the debate-bar grid, so an unconditional claim would open
       // a fresh decision bar for a pass whose only possible outcome is the
       // Trader's `skip('session_closing')`, paying a full Analysts + Debate
       // pass to reach it. Leaving `decisionBar` undefined routes the runner
-      // to the tick path (`exitCheck` only).
+      // to the tick path (`exitCheck` only)
       let decisionBar: DecisionBar | undefined;
       try {
         decisionBar =
@@ -211,12 +211,12 @@ export async function runTickPlan(
         // The turnstile queue must not be STRANDED if the gate itself throws:
         // without this, every later index would wait on a turn that never
         // comes. Behaviour is otherwise unchanged — a throwing gate still
-        // rejects the whole plan through `Promise.all`.
+        // rejects the whole plan through `Promise.all`
         tails.finish(index);
         throw error;
       }
 
-      // Caught here, not left to reject `Promise.all` — see file header.
+      // Caught here, not left to reject `Promise.all` — see file header
       try {
         outcomes[index] = await runner.runInstrument(signal, {
           clock,
@@ -225,7 +225,7 @@ export async function runTickPlan(
           auditLog: config.auditLog,
           currentTickStore: config.currentTickStore,
           // Conditional spread under `exactOptionalPropertyTypes`: absent
-          // means "tick path only", never an explicit `undefined`.
+          // means "tick path only", never an explicit `undefined`
           ...(decisionBar === undefined ? {} : { decision_bar: decisionBar }),
           // Supplied unconditionally, at every width: passing it only above
           // width 1 would leave the narrow path on a second, untested route
@@ -239,13 +239,13 @@ export async function runTickPlan(
         // BOUNDED: a persistently failing pass would otherwise rescind every
         // tick for the rest of the bar. Once the gate's retry budget for this
         // bar is exhausted, `rescind` KEEPS the claim (no further retry this
-        // bar) and reports `'forfeited'`, reported loudly here.
+        // bar) and reports `'forfeited'`, reported loudly here
         //
         // A REFUSAL is the one failure that must not be handed back: it's
         // deterministic in the request, so each retry would re-run the whole
         // pass to buy the identical refusal and re-bill every persona that
         // answered before the refusing one. So the claim is KEPT, the bar is
-        // forfeit immediately, and the next bar opens with a fresh claim.
+        // forfeit immediately, and the next bar opens with a fresh claim
         if (decisionBar !== undefined) {
           const refused = error instanceof LlmRefusalError;
           const rescindResult = refused
@@ -276,27 +276,27 @@ export async function runTickPlan(
         // `audit_log` row (the runner itself never writes one for a stage
         // that threw mid-call — a crash is otherwise invisible to anything
         // reading `audit_log` after the fact), and still lands in the
-        // returned outcome array so every plan index is always populated.
+        // returned outcome array so every plan index is always populated
         //
         // Both side effects below are themselves guarded: this whole `catch`
         // exists to guarantee `worker()` cannot reject, and a database write
         // failure here (disk full, handle closed) would otherwise propagate
         // out of THIS catch and reopen the orphaned-worker leak this exists
-        // to close.
+        // to close
         const message = describeThrown(error);
         // `current_tick` is upserted before each stage begins and only ever
         // deleted on a pass's SUCCESSFUL terminal path, so a pass that throws
-        // mid-stage leaves its own row in place naming the stage it was in.
+        // mid-stage leaves its own row in place naming the stage it was in
         // The `trace_id` check confirms the row belongs to THIS pass rather
         // than a stale row a prior crashed pass on the same instrument left
         // behind. Guarded the same way the writes below are: a store read
-        // failure here must not turn attribution into a second, unguarded crash.
+        // failure here must not turn attribution into a second, unguarded crash
         let crashedStage: TickStage | undefined;
         try {
           const currentTick = config.currentTickStore.get(instrument.asset);
           crashedStage = currentTick?.trace_id === trace_id ? currentTick.stage : undefined;
         } catch {
-          // Falls through with `crashedStage` left `undefined`.
+          // Falls through with `crashedStage` left `undefined`
         }
         safeLog(config.logger, {
           trace_id,
@@ -317,14 +317,14 @@ export async function runTickPlan(
           // stage that COMPLETED and chose something; this describes a stage
           // that never got the chance to. `input_digest` covers the `Signal`
           // rather than nothing, so a crashed pass digests to something other
-          // than every other crash on this instrument.
+          // than every other crash on this instrument
           //
           // `stage` carries the crashed `TickStage` PREFIXED with the
           // `tick-loop` sentinel rather than written bare: bare would make
           // this row pass the dashboard's `stage IN (…PIPELINE_STAGES)`
-          // filter and start folding a crash row into the live lane matrix.
+          // filter and start folding a crash row into the live lane matrix
           // The prefix guarantees no PIPELINE_STAGES string can ever equal
-          // this value.
+          // this value
           config.auditLog.record({
             trace_id,
             stage: crashedStage === undefined ? 'tick-loop' : `tick-loop:${crashedStage}`,
@@ -338,7 +338,7 @@ export async function runTickPlan(
         } catch (auditError) {
           // An audit-write failure must stay VISIBLE — the same "log it,
           // don't let it propagate" treatment the instrument crash itself
-          // just got, one layer in.
+          // just got, one layer in
           safeLog(config.logger, {
             trace_id,
             stage: 'tick-loop',
@@ -358,7 +358,7 @@ export async function runTickPlan(
         // Reported from a `finally`, not the success path: a pass that
         // threw — including one that threw INSIDE its tail, after taking its
         // turn — must still release the queue, or every later instrument in
-        // the plan would wait out the tick and the plan would never settle.
+        // the plan would wait out the tick and the plan would never settle
         tails.finish(index);
       }
     }

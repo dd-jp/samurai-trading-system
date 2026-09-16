@@ -280,7 +280,7 @@ export function credentialRequirements(): readonly {
       // Both the ORDER half and the DATA half must be covered before the pair
       // can be called unread. Each clause below names a construction site
       // rather than an intention, since getting this wrong permissively
-      // means a boot that 401s on its first order.
+      // means a boot that 401s on its first order
       unusedByThisRun: ({ injected, venue }) =>
         alpacaOrderPathUnused(injected, venue) && alpacaDataPathUnused(injected),
     },
@@ -289,7 +289,7 @@ export function credentialRequirements(): readonly {
       // never looks these up, so an operator without live keys still gets a
       // clean paper start. The PAPER pair above stays required in live mode
       // too: `buildDefaultAlpacaDataClient` has no mode branch and always
-      // reads `ALPACA_API_KEY` for bars.
+      // reads `ALPACA_API_KEY` for bars
       vars: [ALPACA_CREDENTIAL_ENV_VARS.live.key, ALPACA_CREDENTIAL_ENV_VARS.live.secret],
       unusedByThisRun: ({ injected, mode }) =>
         mode !== 'live' || injected.alpacaBrokerClient !== undefined,
@@ -298,30 +298,30 @@ export function credentialRequirements(): readonly {
       // One provider, one base URL, no default. The key is a fallback chain
       // (per-role key, or `NOUS_API_KEY` for every role) — skipped when
       // `llmClient` is injected, since a caller supplying its own client is
-      // not asked for keys it will never read.
+      // not asked for keys it will never read
       vars: ['NOUS_API_KEY', 'NOUS_BASE_URL'],
       alternatives: { NOUS_API_KEY: ['NOUS_DEBATE_API_KEY', 'NOUS_SENTIMENT_API_KEY'] },
       unusedByThisRun: ({ injected }) => injected.llmClient !== undefined,
     },
     {
       // Required only under `SAMURAI_ALERTS=telegram` — the alerts mode is
-      // resolved before this pre-flight runs for exactly that reason.
+      // resolved before this pre-flight runs for exactly that reason
       vars: TELEGRAM_ALERT_ENV_VARS.filter((name) => name !== TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR),
       unusedByThisRun: ({ alertsMode }) => alertsMode !== 'telegram',
     },
     {
       // The heartbeat's own chat, split from the three above since an
       // injected `heartbeatChannel` is the only thing that makes it
-      // unnecessary — the escalation chat stays required either way.
+      // unnecessary — the escalation chat stays required either way
       vars: [TELEGRAM_HEARTBEAT_CHAT_ID_ENV_VAR],
       unusedByThisRun: ({ injected, alertsMode }) =>
         alertsMode !== 'telegram' || injected.heartbeatChannel !== undefined,
     },
     {
-      // The SIM gateway's 24-hour bearer only — live is refused outright.
+      // The SIM gateway's 24-hour bearer only — live is refused outright
       // It's a FALLBACK, not the only way in: a saved `npm run saxo:login`
       // session reads its bearer from the token file instead, matching
-      // `buildSaxoTokenSource`'s own choice.
+      // `buildSaxoTokenSource`'s own choice
       vars: [SAXO_CREDENTIAL_ENV_VARS.sim.token],
       unusedByThisRun: ({ injected, venue, savedSaxoSession }) =>
         venue !== 'saxo' ||
@@ -357,7 +357,7 @@ function alpacaOrderPathUnused(injected: Partial<ProductionConfig>, venue: Broke
     injected.accountFunding !== undefined ||
     // A Saxo run builds its own GBP-native funding read, keyed off the same
     // condition `startFromEnvironment` builds `saxoAccountFunding` on so the
-    // two cannot drift.
+    // two cannot drift
     saxoFundingWillBeBuilt(injected, venue);
   return brokerIsNotAlpaca && accountReadIsSupplied;
 }
@@ -401,7 +401,7 @@ export function missingCredentialEnvVars(
   alertsMode: AlertsMode | undefined,
   /** The resolved trading mode. Required, not defaulted to `paper` — that default would make the live-credential requirement vacuous. */
   mode: ProductionConfig['mode'],
-  /** The resolved broker venue, required for `mode`'s reason — defaulting to `alpaca` would make the Saxo token requirement vacuous. */
+  /** The resolved broker venue, required for `mode`'s reason — defaulting to `alpaca` would make the Saxo token requirement vacuous */
   venue: BrokerVenue,
 ): string[] {
   const isSet = (name: string): boolean => (process.env[name] ?? '').trim().length > 0;
@@ -516,12 +516,12 @@ function buildSaxoSessionWiring(deps: {
   // synchronous. `injected.broker` wins over the environment, since a caller
   // that passed its own adapter has already chosen. ONE Saxo client per run
   // — the broker and funding read share it, since the pacing budget belongs
-  // to the account, not the client.
+  // to the account, not the client
   const saxoIsOwnedHere =
     venue === 'saxo' && injected.broker === undefined && injected.saxoBrokerClient === undefined;
 
   // No forced log-only default (unlike `legResizeAlerts` below) — `lose()`'s
-  // own `saxo_session_lost` line already covers that mode.
+  // own `saxo_session_lost` line already covers that mode
   const saxoSessionLostAlerts =
     injected.saxoSessionLostAlerts ?? alertChannels.saxoSessionLostAlerts;
 
@@ -537,7 +537,7 @@ function buildSaxoSessionWiring(deps: {
     saxoTokenSource === undefined ? undefined : buildSaxoVenueClient(logger, saxoTokenSource);
 
   // The other half: scoped to the same condition as `saxoTokenSource`, since
-  // this nudge belongs to the token file this process itself owns.
+  // this nudge belongs to the token file this process itself owns
   const saxoWeeklyReminder = saxoIsOwnedHere
     ? new SaxoWeeklyReminder({
         environment: 'sim',
@@ -590,7 +590,7 @@ async function buildSaxoBrokerWiring(deps: {
           logger,
           clock,
           // Alert channels the adapter requires with no default: caller
-          // first, then `SAMURAI_ALERTS`' transport, then the log-only stand-in.
+          // first, then `SAMURAI_ALERTS`' transport, then the log-only stand-in
           legResizeAlerts:
             injected.legResizeAlerts ??
             alertChannels.legResizeAlerts ??
@@ -610,7 +610,7 @@ async function buildSaxoBrokerWiring(deps: {
   // The venue picks the CALENDAR too. Left unset, a Saxo run would gate
   // entries on New York and carry ~4.5h overnight past a 16:30 London close,
   // and the LSE table-coverage guard would never arm. `injected` wins over
-  // this, same as `broker`.
+  // this, same as `broker`
   const saxoCalendar =
     venue === 'saxo' && injected.tradingCalendar === undefined
       ? new LseRegularHoursCalendar()
@@ -667,7 +667,7 @@ async function verifyFundingCurrency(
   // only when there's a ceiling to arm — sizing reads this source's
   // `equity` regardless. Scoped by VENUE (not by who built the source) so
   // an injected `accountFunding` is checked too: `venue === 'saxo'` is what
-  // makes `LIVE_BOOK_CURRENCY` the right book.
+  // makes `LIVE_BOOK_CURRENCY` the right book
   const fundingToVerify = venue === 'saxo' ? accountFunding : undefined;
   if (fundingToVerify === undefined) return undefined;
 
@@ -716,24 +716,24 @@ export async function startFromEnvironment(
 
   const env = process.env.NODE_ENV ?? 'development';
   // An explicitly injected mode wins over the environment — must not silently
-  // downgrade a deliberate `backtest`/`live` to whatever `SAMURAI_MODE` says.
+  // downgrade a deliberate `backtest`/`live` to whatever `SAMURAI_MODE` says
   const mode = injected.mode ?? parseMode(process.env.SAMURAI_MODE);
   // Before the credential pre-flight: alerts mode decides whether Telegram
-  // variables are needed, so the pre-flight can't name them until this resolves.
+  // variables are needed, so the pre-flight can't name them until this resolves
   const alertsMode = resolveAlertsMode(injected);
   // Resolved here for the same reason: venue decides whether the Alpaca pair
   // is needed. An injected `broker` does not suppress it.
   const venue = resolveBrokerVenue();
   // Before the store is opened: a run that cannot authenticate should not
-  // leave a freshly-created SQLite file behind as a side effect of failing.
+  // leave a freshly-created SQLite file behind as a side effect of failing
   assertCredentialsPresent(injected, alertsMode, mode, venue);
 
   // One logger for the whole startup: the warning below must land on the
-  // same stream as every line after it.
+  // same stream as every line after it
   const logger = injected.logger ?? new JsonLogger();
 
   // Resolved and warned about before opening, and only when we resolved it —
-  // an injected handle's path is not ours to guess at.
+  // an injected handle's path is not ours to guess at
   let db = injected.db;
   if (db === undefined) {
     const dbPath = sharedStorePath();
@@ -741,7 +741,7 @@ export async function startFromEnvironment(
     db = openSharedStore(dbPath);
     // `dbPath` is relative to the process's cwd, which the orchestrator and
     // dashboard can each resolve differently with no error on either side —
-    // naming the resolved ABSOLUTE path here makes that mismatch visible.
+    // naming the resolved ABSOLUTE path here makes that mismatch visible
     logger.log({
       trace_id: 'startup',
       stage: 'orchestrator',
@@ -753,17 +753,17 @@ export async function startFromEnvironment(
 
   // Rollout guard: runs against both the handle we opened and one the caller
   // injected, before `orchestrator.start()` arms the tick loop — once a pass
-  // is in flight a replay can already have placed the duplicate order.
+  // is in flight a replay can already have placed the duplicate order
   assertNoStaleKeyScheme(db);
 
   // The MI archive, in its own database file, opened here so one process
   // holds one handle. Its absence is not neutral — without it
   // `sentiment`/`fundamental` report NO DATA every tick and the conviction
-  // ceiling stays in force.
+  // ceiling stays in force
   const miArchive = injected.miArchive ?? new MiArchiveStore(miArchivePath(mode));
 
   // Built after the store is open (Telegram audit-logs through it) and
-  // spread before `injected`, so an explicitly-passed channel always wins.
+  // spread before `injected`, so an explicitly-passed channel always wins
   const alertChannels =
     alertsMode === undefined ? {} : buildAlertChannels({ alertsMode, injected, db, logger });
 
@@ -823,7 +823,7 @@ export async function startFromEnvironment(
  * `orchestrator.stop()`'s drain still sends Saxo requests, so stopping the
  * refresher first would drain on an expired bearer, and `stop()` is awaited
  * so it joins an in-flight token rotation rather than stranding the session
- * mid-rename.
+ * mid-rename
  */
 export function withSaxoSessionStop(
   orchestrator: ProductionOrchestrator,
@@ -993,7 +993,7 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
     // can refuse `live` before anything is constructed. The logger is passed
     // here and only here — this is the deployment that needs a durable trace
     // for an unattended soak; `startFromEnvironment` keeps its stdout-only
-    // fallback so no test opens a file as a side effect.
+    // fallback so no test opens a file as a side effect
     const fileSinkConfig = fileSinkConfigFromEnvironment();
     const entrypointLogger = buildEntrypointLogger(fileSinkConfig);
     installFaultHandlers(entrypointLogger);
@@ -1004,7 +1004,7 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
     // fetching this would be actively wrong, since the window is anchored to
     // wall-clock `now` and would silently zero out historical bars. NOT on a
     // Saxo run: this is Alpaca's US calendar, and injecting it would override
-    // the LSE calendar the venue resolves.
+    // the LSE calendar the venue resolves
     const venue = resolveBrokerVenue();
     const tradingCalendar =
       mode === 'paper' && venue !== 'saxo'

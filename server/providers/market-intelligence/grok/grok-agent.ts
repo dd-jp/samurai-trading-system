@@ -289,14 +289,14 @@ export class GrokAgent {
       // Fail-closed retrieval-evidence guard (#485): items that parsed
       // cleanly are still un-retrieved model recall unless the client can
       // point to actual evidence it looked. Discarding here, not upstream
-      // in the client, keeps the guard transport-agnostic.
+      // in the client, keeps the guard transport-agnostic
       //
       // Logged on every call with no evidence, not only when it discards a
       // non-empty answer: `NousSentimentClient` reports no evidence on
       // every call, so this is the routine case, not the exceptional one,
       // and must stay distinguishable from "looked and saw nothing" in the
       // logs. `info` when there was nothing to discard, `warn` when real
-      // items were dropped.
+      // items were dropped
       const items = result.retrievalEvidence ? result.items : [];
       if (!result.retrievalEvidence) {
         this.#deps.logger?.log({
@@ -336,10 +336,10 @@ export class GrokAgent {
       // outage (#969): `x_search` runs only on OpenRouter-routed models via
       // a floating alias, so the alias re-resolving to something unrouted
       // is a live risk, surfacing as a 400 on every call, forever, with
-      // retries that cannot succeed.
+      // retries that cannot succeed
       //
       // `MiCoverageMonitor` alerts on the first coverage miss but can't say
-      // why — this message turns that alert into a diagnosis.
+      // why — this message turns that alert into a diagnosis
       const unroutedModel = /search tools are not available|OpenRouter-routed/i.test(detail);
       this.#deps.logger?.log({
         trace_id,

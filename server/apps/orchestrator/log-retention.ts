@@ -138,7 +138,7 @@ import type { Logger } from './types.js';
 
 /**
  * Wider than the 14-day soak window itself, so the sweep can't have already
- * dropped the soak's opening days by the time anyone goes looking.
+ * dropped the soak's opening days by the time anyone goes looking
  */
 export const DEFAULT_LOG_RETENTION_DAYS = 30;
 
@@ -353,7 +353,7 @@ export interface LogRetentionResult {
   /**
    * A removed file contributes `stat.size`; a truncated bare name contributes
    * `stat.blocks * 512` instead — see the module doc's "Bare live names" for
-   * why `stat.size` would overstate what actually stays reclaimed there.
+   * why `stat.size` would overstate what actually stays reclaimed there
    */
   bytesReclaimed: number;
   /** Bare log-shaped names truncated rather than removed */

@@ -219,7 +219,7 @@ function parseGdeltStamp(stamp: string): Date | undefined {
   ];
   // Range-checked BEFORE `Date.UTC`, because `Date.UTC` normalises rather than
   // rejecting: a corrupt stamp would otherwise silently roll forward into a
-  // valid but wrong date — a cursor that skips real batches.
+  // valid but wrong date — a cursor that skips real batches
   if (month < 1 || month > 12 || day < 1 || day > 31) return undefined;
   if (hour > 23 || minute > 59 || second > 59) return undefined;
   const ms = Date.UTC(year, month - 1, day, hour, minute, second);
@@ -322,7 +322,7 @@ function unzipFirstEntry(buffer: Buffer): string {
   // easily. Transit corruption is TLS's job (AEAD), not this module's. The
   // zip local header's CRC-32 is a better fit: it is CHECKED against the
   // bytes actually inflated rather than a value fetched separately, and
-  // `crc32` on a ~10.5MB buffer is sub-millisecond.
+  // `crc32` on a ~10.5MB buffer is sub-millisecond
   const actualCrc = crc32(inflated);
   if (actualCrc !== declaredCrc) {
     throw new Error(

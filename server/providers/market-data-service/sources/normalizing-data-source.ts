@@ -1,7 +1,7 @@
 /**
  * Every source (Alpaca, LSE, …) normalizes through this one class, so "all
  * normalize into the same Bar/Mark shape" is structural rather than
- * parallel implementations kept in agreement by hand.
+ * parallel implementations kept in agreement by hand
  */
 import {
   completedBars,
@@ -290,7 +290,7 @@ export abstract class NormalizingDataSource implements DataSource {
       // minimum. A caller whose lookback exceeds its indicator minimum, on
       // a source with no raw-count guard of its own, could still be served
       // short with no throw — that gap belongs with those clients' guards,
-      // not here.
+      // not here
       if (candles.length < rawLimit) return served;
       if (attempts >= maxAttempts) break;
 

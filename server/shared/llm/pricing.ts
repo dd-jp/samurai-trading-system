@@ -283,7 +283,7 @@ export function priceUsage(model: string, usage: AnthropicUsage): number | null 
   // The tier is keyed on the whole prompt, cached tokens included: they
   // occupied the context window whatever they were charged at, which is
   // what the vendor's threshold counts. `promptTokensOf` is the one
-  // definition of that sum, shared with `crossesPromptTier`.
+  // definition of that sum, shared with `crossesPromptTier`
   const tier =
     rate.tier !== undefined && promptTokensOf(usage) > rate.tier.above_prompt_tokens
       ? rate.tier
@@ -293,7 +293,7 @@ export function priceUsage(model: string, usage: AnthropicUsage): number | null 
 
   // A published per-million cache-read rate wins over the multiplier. It
   // scales off the row's base input rate, not the tier's: no vendor
-  // publishes a tiered cache-read multiple.
+  // publishes a tiered cache-read multiple
   const cacheReadRate = rate.cache_read ?? rate.input * CACHE_READ_MULTIPLIER;
 
   const inputCost =

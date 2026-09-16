@@ -193,7 +193,7 @@ export const CRITIC_PROMPT_TEMPLATE_HASH = hashPromptTemplate(CRITIC_PROMPT_TEMP
  * The book context is wrapped by `wrapUntrusted` even though none of it is
  * ingested free text today: instrument ids come from a pool file, and the one
  * cheap guarantee worth keeping is that no data block can ever read as an
- * instruction.
+ * instruction
  */
 export function renderCriticPrompt(request: RiskCriticRequest): string {
   const { intent, portfolio } = request;
@@ -291,7 +291,7 @@ export function parseCriticVerdict(
 
   // The conditions half is carried out UNVALIDATED and cannot fail this
   // parse: discarding a valid `reject` because the advisory half was
-  // malformed would make the system strictly less safe than it is today.
+  // malformed would make the system strictly less safe than it is today
   const raw_conditions = parsed.conditions;
 
   if (verdict !== 'trim') {
@@ -367,7 +367,7 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
 
     // A verdict already logged for this debate is REUSED rather than re-asked:
     // a tick re-run after a crash must not bill a second call or produce a
-    // second, possibly different, verdict for one decision.
+    // second, possibly different, verdict for one decision
     const logged = this.#store.getByDebateId(debate_id);
     if (logged !== undefined) return toDecisionInput(logged.verdict);
 
@@ -381,7 +381,7 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.#budgetMs);
     // The budget spans BOTH halves: the model call, and the market-data reads
-    // the conditions half runs in front of the same order.
+    // the conditions half runs in front of the same order
     try {
       return await this.#produceWithin(request, controller);
     } finally {
@@ -414,7 +414,7 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
             // Meter bookkeeping, never sent to the model. `stage: 'risk_critic'`
             // keeps this call attributable in `llm_spend` instead of landing
             // inside the debate's cost; `prompt_template_hash` is
-            // `CRITIC_PROMPT_TEMPLATE_HASH`, not a hash of the rendered prompt.
+            // `CRITIC_PROMPT_TEMPLATE_HASH`, not a hash of the rendered prompt
             attribution: {
               trace_id: request.trace_id,
               stage: 'risk_critic',
@@ -430,13 +430,13 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
       parsed = response.data;
     } catch (error) {
       // EVERY failure lands here and fails open: provider error, cancellation
-      // on the budget above, or a response that could not be read.
+      // on the budget above, or a response that could not be read
       //
       // The budget's own arm (`#expiry`) rejects with a bare `Error` that no
       // classifier can read as a deadline, so the cause is decided from the
       // controller instead — this controller is the producer's own and ONLY
       // its timer aborts it, so `aborted` here means the budget fired,
-      // whichever arm of the race happened to reject first.
+      // whichever arm of the race happened to reject first
       this.#logUnavailable(
         request,
         controller.signal.aborted ? 'timeout' : classifyFailureCause(error),
@@ -600,12 +600,12 @@ export class LlmRiskCriticProducer implements RiskCriticProducer {
         created_at: request.asOf,
       });
     } catch (error) {
-      // Never a throw — a store failure must not take the risk stage down.
+      // Never a throw — a store failure must not take the risk stage down
       // But it is not merely logged either: the verdict is DROPPED, and the
-      // decision proceeds on the mechanical steps with `risk_critic: skipped`.
+      // decision proceeds on the mechanical steps with `risk_critic: skipped`
       // A verdict with no row cannot be replayed, so acting on it live would
       // put the live run on a code path replay can never reproduce — exactly
-      // what ADR-0003 §2's same-code-path-live-and-replay invariant forbids.
+      // what ADR-0003 §2's same-code-path-live-and-replay invariant forbids
       this.#logger?.log({
         trace_id: request.trace_id,
         stage: 'risk',

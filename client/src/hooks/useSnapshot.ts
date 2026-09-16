@@ -116,7 +116,7 @@ export interface SnapshotFeed {
   snapshot: WireSnapshot | null;
   /**
    * Client wall-clock time of the last successful poll — distinct from
-   * `snapshot.generated_at`, which the server stamps.
+   * `snapshot.generated_at`, which the server stamps
    */
   lastSuccessAt: string | null;
   /** Why the last poll failed, for the rail to name. `null` when the last poll worked. */
@@ -280,7 +280,7 @@ function isPnlHeadline(value: unknown): boolean {
  * corrupt stored `budget_usd` while keeping `armed_at`, so a corrupt `REAL`
  * column alone can produce a real `cap_armed_at` beside a bad `cap_usd` —
  * mapping both to `null` would render `'uncapped'`, an affirmative claim
- * manufactured from a value this client just rejected.
+ * manufactured from a value this client just rejected
  */
 function normalizeCapUsd(value: unknown): number | null | undefined {
   if (value === null) return null;

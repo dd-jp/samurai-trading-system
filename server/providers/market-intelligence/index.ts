@@ -3,7 +3,7 @@
  * Agent orchestration and conflict resolution are not implemented here.
  */
 // Imported directly from debate-log-store rather than the debate-engine
-// barrel so this provider does not pull in the engine's module graph.
+// barrel so this provider does not pull in the engine's module graph
 import {
   DEBATE_BAR_TIMEFRAME_MS,
   floorToBar,
@@ -43,7 +43,7 @@ interface Subscription {
 
 /**
  * The spec has no dedicated context-staleness threshold, so this reuses the
- * agent latency budgets (crypto 5s, stocks 30s) as the "on time" cadence.
+ * agent latency budgets (crypto 5s, stocks 30s) as the "on time" cadence
  */
 const STALENESS_THRESHOLD_MS: Record<AssetClass, number> = {
   crypto: 5_000,
@@ -74,7 +74,7 @@ function latestClassWideRestatementOnly(
     const key = `${item.source}\u0000${item.entity}\u0000${item.type}`;
     const held = latest.get(key);
     // `>=` so a tie goes to the later-ingested item, keeping the survivor a
-    // deterministic function of ingest order (needed for replay determinism).
+    // deterministic function of ingest order (needed for replay determinism)
     if (held === undefined || item.timestamp.getTime() >= held.timestamp.getTime()) {
       latest.set(key, item);
     }
@@ -87,7 +87,7 @@ function latestClassWideRestatementOnly(
 /**
  * The sole predicate routing an item to `MarketContext.intel` instead of
  * `news`/`social`: class-wide items are evidence for the whole asset class,
- * not one instrument, so they must not count as per-ticker observations.
+ * not one instrument, so they must not count as per-ticker observations
  */
 function isClassWide(item: IntelligenceItem): boolean {
   return item.scope === 'asset_class';
@@ -121,7 +121,7 @@ export class MarketIntelligenceStore {
     // retrieved once as evidence for each — different observations that
     // happen to share a source post. This still catches the case it's for:
     // the same post for the same instrument re-arriving because x_search's
-    // date filter is day-granular while the refresh bucket is two hours.
+    // date filter is day-granular while the refresh bucket is two hours
     const admitted: IntelligenceItem[] = [];
     for (const item of intelligence.items) {
       const key = `${intelligence.asset_class}\u0000${item.entity}\u0000${item.id}`;
@@ -178,7 +178,7 @@ export class MarketIntelligenceStore {
         (item) => item.timestamp.getTime() <= windowEnd && item.timestamp.getTime() >= windowStart,
       )
       // Class-wide items pass the entity filter regardless of `entity`: they're
-      // evidence for every instrument, not a coverage hit for any one ticker.
+      // evidence for every instrument, not a coverage hit for any one ticker
       .filter(
         (item) => entity === undefined || item.scope === 'asset_class' || item.entity === entity,
       );
@@ -230,7 +230,7 @@ export class MarketIntelligenceStore {
 
   /**
    * Delivers the just-ingested items to subscribers of this asset class, as
-   * a MarketContext scoped to those items only (not the full history).
+   * a MarketContext scoped to those items only (not the full history)
    */
   private notifySubscribers(assetClass: AssetClass, newItems: IntelligenceItem[]): void {
     const subscribers = this.subscriptions.filter((sub) => sub.asset_class === assetClass);
@@ -305,7 +305,7 @@ export class MarketIntelligenceStore {
 }
 
 // The deterministic ingestion path — the writer that actually fills
-// `MarketIntelligenceStore`.
+// `MarketIntelligenceStore`
 export {
   DEFAULT_MI_ARCHIVE_RETENTION_DAYS,
   MiArchiveStore,
@@ -331,7 +331,7 @@ export {
 } from './grok/x-search-client.js';
 export { MiIngestAgent } from './mi-ingest-agent.js';
 // The Polymarket macro/event path — an `intel` writer (routed there by
-// `scope`, not filed as `news`).
+// `scope`, not filed as `news`)
 export { CURATED_MACRO_MARKETS } from './polymarket/curated-markets.js';
 export {
   POLYMARKET_ASSET_CLASS,

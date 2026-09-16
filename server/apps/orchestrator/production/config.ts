@@ -103,7 +103,7 @@ export interface AlertChannelSlots {
   ocoDoubleFillAlerts?: OcoDoubleFillAlertChannel;
   /**
    * Partial entry fill on a venue whose protective-leg resizing is
-   * UNVERIFIED — required (no default) for `SaxoBrokerAdapter`.
+   * UNVERIFIED — required (no default) for `SaxoBrokerAdapter`
    */
   legResizeAlerts?: LegResizeUnverifiedAlertChannel;
   /** Dormant Saxo related-order pair the adapter cannot resolve */
@@ -175,12 +175,12 @@ export interface AlertChannelSlots {
   gateRefusalRateAlerts?: GateRefusalRateAlertChannel;
   /**
    * Fill fee reported outside book currency — means an instrument was
-   * traded that the sterling-only gate should have excluded.
+   * traded that the sterling-only gate should have excluded
    */
   nonSterlingFeeAlerts?: NonSterlingFeeAlertChannel;
   /**
    * Flatten fill booked against a lot that had already closed — the venue
-   * transacted quantity the lot's `closed_trade` does not contain.
+   * transacted quantity the lot's `closed_trade` does not contain
    */
   unattributedFlattenFillAlerts?: UnattributedFlattenFillAlertChannel;
   /**
@@ -317,7 +317,7 @@ export interface ProductionConfig extends AlertChannelSlots {
   volatilityIndicator?: IndicatorSpec;
   /**
    * Session calendar for stock gating — also the boundary the stocks
-   * daily-PnL figure resets on via `sessionStart`.
+   * daily-PnL figure resets on via `sessionStart`
    */
   tradingCalendar?: TradingCalendar;
   /**
@@ -481,7 +481,7 @@ export interface FeedbackCycleConfig {
 /**
  * The stores a real `DailyMetricsSource` needs but a checked-in profile
  * cannot hold — `paperStartingProfile` supplies tuning values and opens no
- * database, so wiring belongs to the composition root instead.
+ * database, so wiring belongs to the composition root instead
  */
 export interface DailyMetricsSourceDeps {
   /**
@@ -496,7 +496,7 @@ export interface DailyMetricsSourceDeps {
   /**
    * The frozen Stage 2 selections — where `DailyMetricsSample.revalidation`
    * comes from, since PBO/OOS-Sharpe/DSR are walk-forward statistics a live
-   * run cannot compute about itself.
+   * run cannot compute about itself
    */
   stage2Selections: SqliteStage2SelectionStore;
   /** Ages a selection out; the root's clock, so a replay ages deterministically */

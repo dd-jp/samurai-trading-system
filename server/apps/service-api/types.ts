@@ -184,7 +184,7 @@ export interface DashboardQueryStore {
    * Arm-less by scope: `debate_log` is written only by the live debate path
    * — the control arm's `DebateResult` is synthesized in memory and never
    * written there — so this table cannot hold a control row for an `arm`
-   * parameter to filter.
+   * parameter to filter
    */
   getRecentDebates(limit: number, asOf: Date): DebateLog[];
   /**
@@ -235,7 +235,7 @@ export interface DashboardQueryStore {
    * `arm` required, same guarantee as `getOpenPositions` — `verdict_log`
    * carries no `arm` column, so the store discriminates on `trace_id`
    * instead, but the type-level contract is identical: a read names exactly
-   * one arm, and no read returns both.
+   * one arm, and no read returns both
    */
   getVerdictHistory(limit: number, asOf: Date, arm: TradingArm): VerdictAuditEntry[];
   /**

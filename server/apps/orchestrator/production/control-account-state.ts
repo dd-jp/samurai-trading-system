@@ -140,7 +140,7 @@ export class ControlArmAccountStateProvider implements AccountStateProvider {
     return {
       cash: equityAtCost - deployedCash(positions),
       // Derived fresh from the full ordered trade curve on every cold read,
-      // not carried in a running field a restart would reset to the anchor.
+      // not carried in a running field a restart would reset to the anchor
       peak_equity: realizedHighWaterMark(trades, book),
       daily_basis: {
         crypto: this.sessionBasisFor('crypto', trades, asOf, book),
@@ -294,7 +294,7 @@ export function buildControlBookAnchorResolver(
     // to the live observation too, so the two paths cannot disagree on the
     // sizing basis. Left unapplied (not refused) when unverified: this
     // resolver also runs on the control arm's exit path, and a throw here
-    // would block flat-by-close.
+    // would block flat-by-close
     const ceiling = input.liveBookCeiling;
     if (ceiling !== undefined && ceiling.same_currency_verified === true) {
       observed = Math.min(observed, ceiling.book);
@@ -302,7 +302,7 @@ export function buildControlBookAnchorResolver(
 
     if (!(Number.isFinite(observed) && observed > 0)) {
       // A successful read that came back unusable (zero/negative/non-finite)
-      // is the same hazard as a throw — fallback for this tick only.
+      // is the same hazard as a throw — fallback for this tick only
       return input.fallbackBook;
     }
 

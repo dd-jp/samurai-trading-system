@@ -80,7 +80,7 @@ import { openSharedStore, sharedStorePath } from '../shared/store/index.js';
 /**
  * Aliases `FIRST_TICK_BAR_WINDOWS` (`bar-prefetch.ts`) — the orchestrator's
  * boot-time prefetch and this hand-run backfill must not be able to
- * disagree about which windows a first tick needs (#1543).
+ * disagree about which windows a first tick needs (#1543)
  */
 export const WARM_START_WINDOWS: readonly BarWindow[] = FIRST_TICK_BAR_WINDOWS;
 
@@ -154,7 +154,7 @@ async function resolvePairCoverage(
   } else if (existing.length < window.lookback) {
     // A thrown fetch must not abort the whole run — other pairs have
     // already durably persisted their bars via `appendBars`. Caught here
-    // and turned into a SHORT row instead of rethrown.
+    // and turned into a SHORT row instead of rethrown
     try {
       const fetched = await deps.fetchEquityBars(instrument.asset, window, deps.asOf);
       deps.store.appendBars(fetched);
@@ -163,10 +163,10 @@ async function resolvePairCoverage(
       fetchError = describeThrownSafely(error);
       // Re-read rather than falling back to `existing`: `appendBars` is
       // `INSERT OR IGNORE`, so a throw partway through still leaves the
-      // bars it already wrote durably in the store.
+      // bars it already wrote durably in the store
       //
       // Guarded: if the re-read also fails, keep the pre-fetch rows rather
-      // than throwing out of the handler and aborting every remaining pair.
+      // than throwing out of the handler and aborting every remaining pair
       try {
         rows = deps.store.readBars(instrument.asset, window.timeframe, deps.asOf, window.lookback);
       } catch (readError) {
@@ -217,7 +217,7 @@ function formatCoverageLine(row: CoverageRow): string {
 
 /**
  * Fills `deps.store` for every (instrument, window) pair, skipping any pair
- * the store already covers, then returns a per-pair coverage report.
+ * the store already covers, then returns a per-pair coverage report
  */
 export async function backfillMarketData(deps: BackfillMarketDataDeps): Promise<CoverageRow[]> {
   const universe = deps.universe ?? DEFAULT_UNIVERSE;
@@ -321,7 +321,7 @@ export async function runFromEnvironment(): Promise<void> {
 
   // Resolved before the store is opened, mirroring `startFromEnvironment`:
   // a missing/unrecognised `SAMURAI_ALERTS` should not leave a
-  // freshly-created SQLite file behind.
+  // freshly-created SQLite file behind
   const alertsMode = resolveAlertsMode({});
 
   const dbPath = sharedStorePath();
@@ -331,14 +331,14 @@ export async function runFromEnvironment(): Promise<void> {
 
   // `buildAlertChannels` needs the store handle (its Telegram client
   // audit-logs inbound allowlist rejections through it), so this comes
-  // after `openSharedStore` even though `alertsMode` was resolved before it.
+  // after `openSharedStore` even though `alertsMode` was resolved before it
   // `alertsMode` is never `undefined` here, but the ternary mirrors
-  // `startFromEnvironment`'s own shape rather than asserting it away.
+  // `startFromEnvironment`'s own shape rather than asserting it away
   const channels =
     alertsMode === undefined ? {} : buildAlertChannels({ alertsMode, injected: {}, db, logger });
   // `log-only` mode returns no `dataFailoverAlerts` slot — default to the
   // same log-only stand-in `production.ts` uses for the live path, so both
-  // paths degrade identically.
+  // paths degrade identically
   const dataFailoverAlertChannel: DataFailoverAlertChannel =
     channels.dataFailoverAlerts ?? loggingAlertChannel('dataFailoverAlerts', logger);
   const alertFailover = buildBackfillFailoverAlerter({
@@ -360,7 +360,7 @@ export async function runFromEnvironment(): Promise<void> {
   // constructor throws when `POLYGON_API_KEY` is unset, and constructing it
   // eagerly would make an unset key break the whole run even on a day
   // Alpaca never stalls, turning an optional fallback into a hard
-  // dependency.
+  // dependency
   let polygonClient: PolygonBarsClient | undefined;
   const getPolygonClient = (): PolygonBarsClient => {
     polygonClient ??= new PolygonBarsClient({ rateLimiter: polygonBucket });
@@ -383,7 +383,7 @@ export async function runFromEnvironment(): Promise<void> {
       // would skip `AlpacaHttpDataClient`'s own widen-and-retry, trading a
       // rescuable short read for a guaranteed one. An unrescuable throw is
       // instead caught by `withOhlcvFailover` (triggering the Polygon
-      // fallback) and, failing that, by the per-pair try/catch above.
+      // fallback) and, failing that, by the per-pair try/catch above
       const bars = await equityClient.getBars(symbol, window.timeframe, at, window.lookback);
       return bars.map((bar) => alpacaBarToBar(symbol, window.timeframe, bar));
     },
@@ -410,7 +410,7 @@ export async function runFromEnvironment(): Promise<void> {
   // Fail loudly, not warn: a quarantined pair's bars are durably written
   // (#612 declined dropping Polygon from the failover chain), but this run
   // must not exit 0 as if clean — an automated caller (cron, CI) must not
-  // miss a polygon-sourced fill.
+  // miss a polygon-sourced fill
   const quarantined = coverage.filter((row) => row.quarantined);
   if (quarantined.length > 0) {
     console.error(

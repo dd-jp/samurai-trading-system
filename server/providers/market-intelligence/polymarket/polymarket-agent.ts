@@ -319,7 +319,7 @@ export class PolymarketAgent {
   /**
    * Absorbs a throw from the logger itself: called as `void refresh(...)`
    * from `production.ts`'s timer, so a throwing logger would surface as an
-   * unhandled rejection, and the process's fault handler exits on those.
+   * unhandled rejection, and the process's fault handler exits on those
    */
   #log(entry: LogEntry): void {
     const logger = this.#deps.logger;
@@ -384,7 +384,7 @@ export class PolymarketAgent {
     try {
       market = await this.#deps.client.fetchEventMarket(entry.eventSlug, entry.marketSlug);
     } catch (error) {
-      // Transient, so it does not count as answered; bucket stays unmarked.
+      // Transient, so it does not count as answered; bucket stays unmarked
       this.#logFailure(
         {
           trace_id,
@@ -404,7 +404,7 @@ export class PolymarketAgent {
     if (market === undefined) {
       // A decayed table degrades to silent zero-ingest — the mute-analyst
       // state this source exists to relieve — so this warns naming the row
-      // to edit rather than logging at info.
+      // to edit rather than logging at info
       this.#log({
         trace_id,
         stage: 'market_intelligence',
@@ -422,7 +422,7 @@ export class PolymarketAgent {
           market_slug: entry.marketSlug,
         },
       });
-      // A decayed table is a durable state, not an outage, so it counts as answered.
+      // A decayed table is a durable state, not an outage, so it counts as answered
       return { answered: true };
     }
 
@@ -455,7 +455,7 @@ export class PolymarketAgent {
 
     if (items.length === 0) {
       // Marked only when something answered: all-transport-failed (see
-      // `BuiltRow`) is a vendor outage to retry, not a real answer to cache.
+      // `BuiltRow`) is a vendor outage to retry, not a real answer to cache
       if (answered > 0) this.#bucket = bucketAt.getTime();
       return false;
     }
@@ -464,12 +464,12 @@ export class PolymarketAgent {
       // Archives both raw bytes and derived items so a restart can hydrate
       // without re-serving a trailing-window statistic as current: this
       // source is excluded from `HYDRATING_MI_SOURCES`'s boot read, so
-      // hydration comes only from the archive, not from `store.ingest` below.
+      // hydration comes only from the archive, not from `store.ingest` below
       this.#deps.archive?.write(raws, archivedItems);
       this.#deps.store.ingest({
         agent_id: SOURCE_POLYMARKET,
         // `MarketIntelligenceStore.ingest` carries this but filters on the
-        // item timestamp instead — set equal so the two cannot disagree.
+        // item timestamp instead — set equal so the two cannot disagree
         timestamp: now,
         asset_class: POLYMARKET_ASSET_CLASS,
         items,
@@ -536,7 +536,7 @@ export class PolymarketAgent {
 
     // Checked above the price-history fetch: a pinned row can never produce a
     // signal, so the CLOB call would be wasted. Routed through `#refuse` so it
-    // still counts as answered — a pinned contract is a durable state, not an outage.
+    // still counts as answered — a pinned contract is a durable state, not an outage
     const probability = market.outcomePrices[outcomeIndex];
     if (probability === undefined || !Number.isFinite(probability)) {
       return this.#refuse(
@@ -596,13 +596,13 @@ export class PolymarketAgent {
       // backdate the item into an already-open bar, letting a mid-bar count
       // change and buy a second debate on a bar that already had one. `id`
       // and `native_id` stay keyed to `bucketAt` since those are replay/dedup
-      // coordinates and must be stable across a replay of the same grid.
+      // coordinates and must be stable across a replay of the same grid
       timestamp: now,
       entity: entry.entity,
       // A curated macro market is evidence for the whole class, not one
       // instrument: `entry.entity` is a series name (`FOMC-2026-09`), never a
       // ticker, so without this scope it would be dropped by every
-      // entity-scoped caller's filter.
+      // entity-scoped caller's filter
       scope: 'asset_class',
       headline:
         `${entry.label}: ${baseline.probability.toFixed(3)} -> ` +
@@ -618,7 +618,7 @@ export class PolymarketAgent {
     const raw: RawArchiveRow = {
       source: SOURCE_POLYMARKET,
       native_id: `${entry.id}:${bucketAt.toISOString()}`,
-      // The vendor's revision stamp, not ours — `ingested_at` is the visibility gate.
+      // The vendor's revision stamp, not ours — `ingested_at` is the visibility gate
       updated_at: market.updatedAt ?? bucketAt,
       payload: JSON.stringify({
         market: market.payload,
@@ -629,7 +629,7 @@ export class PolymarketAgent {
       fidelity: 'live',
     };
 
-    // The row answered, so its refusal streak resets rather than escalating.
+    // The row answered, so its refusal streak resets rather than escalating
     this.#refusals.delete(entry.id);
     this.#deps.archive?.clearRefusalStreak(SOURCE_POLYMARKET, entry.id);
     return { outcome: 'item', item, raw };
@@ -641,7 +641,7 @@ export class PolymarketAgent {
     this.#deps.archive?.recordRefusalStreak(SOURCE_POLYMARKET, entry.id, streak, reason, now);
     // One refusal is routine (a quiet hour on a market that trades around a
     // print) and stays `info`; past a full day of consecutive refusals the
-    // row is functionally dead and must reach the same eyes slug rot does.
+    // row is functionally dead and must reach the same eyes slug rot does
     const persistent = streak >= REFUSAL_WARN_STREAK;
     this.#log({
       trace_id,

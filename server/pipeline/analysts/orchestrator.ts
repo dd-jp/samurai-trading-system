@@ -170,7 +170,7 @@ function renderErrorDetail(error: unknown): Record<string, unknown> {
     // while the payload is still being built, before `safeLog`'s own
     // try/catch is entered. On the late-settlement path the escape would
     // reject a derived promise nobody holds, which Node 22 turns into
-    // process exit.
+    // process exit
     return { message: '[unrenderable error]' };
   }
 }
@@ -267,7 +267,7 @@ function classifyPersonaAttemptFailure(
     // with a throwing `getPrototypeOf` trap). Left uncaught here it would
     // escape this catch — which exists to HANDLE the persona's failure —
     // and reject the `Promise.all` below, turning a handled analyst failure
-    // into a failed tick before any of this loop's own logging runs.
+    // into a failed tick before any of this loop's own logging runs
     reason = '[unrenderable error]';
   }
   // Named explicitly rather than left to the classifier: it is this
@@ -333,7 +333,7 @@ async function withTimeout<T>(
           // call time would fire on every attempt, not just the abandoned
           // one). `Promise.race` already attaches its own handler to every
           // promise it's given, so a late rejection is handled-and-ignored
-          // regardless; `onLateSettlement` only lets the caller observe it.
+          // regardless; `onLateSettlement` only lets the caller observe it
           if (onLateSettlement !== undefined) {
             work.then(
               (value) => onLateSettlement({ status: 'fulfilled', value }),

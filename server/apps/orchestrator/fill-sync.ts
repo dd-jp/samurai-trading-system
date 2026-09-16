@@ -149,7 +149,7 @@ export interface FillSyncDeps {
 /**
  * The live arm's canonical trace ids, passed explicitly by production.ts —
  * see `FillSyncDeps.reconcileTraceId`/`fillSyncTraceId` above for why these
- * are no longer read directly by this module.
+ * are no longer read directly by this module
  */
 export const FILL_SYNC_TRACE_ID = 'fill-sync';
 export const RECONCILE_TRACE_ID = 'reconcile';
@@ -199,7 +199,7 @@ export async function runStartupReconcile(deps: {
   // `sweepTerminalPositions` runs unconditionally on every `reconcile()`
   // pass, so it needs its own operator-visible trace even though it isn't a
   // divergence. Logged only when it deleted something, matching every other
-  // dedup/no-spam convention in this file.
+  // dedup/no-spam convention in this file
   if (report.swept > 0) {
     deps.logger.log({
       trace_id: deps.traceId,
@@ -293,7 +293,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
       }
       // Same trace `runStartupReconcile` logs above — the sweep is not a
       // divergence and runs on every pass, so it needs its own
-      // operator-visible line, logged only when it deleted something.
+      // operator-visible line, logged only when it deleted something
       if (report.swept > 0) {
         deps.logger.log({
           trace_id: deps.reconcileTraceId,
@@ -335,7 +335,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
             // Deliberately its own plain 2-way split, not
             // `reconcileDivergenceLevel()`: that function never demotes a
             // sweep row anyway (`kind !== 'bracket'`), so this agrees with it
-            // on every case without calling it a second time.
+            // on every case without calling it a second time
             level: divergence.action === 'undetermined' ? 'warn' : 'info',
             message: 'residual-protection sweep divergence',
             payload: { ...divergence },
@@ -360,7 +360,7 @@ export function startFillSync(deps: FillSyncDeps): { stop: () => Promise<void> }
       // Runs AFTER the ingest+sweep in the same `finally` — even when the
       // poll failed, since the lots it reports are exactly the ones a failed
       // poll did not retire. Its own failure is contained to a log line, same
-      // posture as the sweep's.
+      // posture as the sweep's
       try {
         await deps.reportCarriedLots?.();
       } catch (carriedLotError) {

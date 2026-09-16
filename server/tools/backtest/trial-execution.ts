@@ -214,7 +214,7 @@ export function sizeTrialGridToSample(
   // written today (its search starts at `limit = 1` and only increments), but
   // nothing in the `{ limit: number }` return type guarantees that, and this
   // function is exported, so an empty input grid is a real path to the same
-  // failure.
+  // failure
   if (requested < 1) {
     throw new Error(
       'sizeTrialGridToSample: an empty grid cannot be sized — there is nothing to run, ' +
@@ -245,7 +245,7 @@ export function sizeTrialGridToSample(
     // Provably in bounds (`i < limit < requested`), so this should never
     // fire. Throwing rather than skipping: a silent skip would make
     // `selected` shorter than `limit` with no signal, and `announceSizing`
-    // would report a grid size that is not the one that ran.
+    // would report a grid size that is not the one that ran
     if (entry === undefined) {
       throw new Error(
         `sizeTrialGridToSample: index ${index} is out of bounds for ${requested} configs ` +
@@ -388,7 +388,7 @@ async function runOneAssetClassTrial(
     // would also swallow `LookaheadViolationError`, the one error this
     // harness exists to surface, undermining the `lookahead_audit: 'passed'`
     // attestation below. Rethrow with config identity attached via `cause`,
-    // still aborting the whole grid.
+    // still aborting the whole grid
     throw new Error(
       `runTrialGrid: failed on config_hash=${config_hash} ` +
         `(fastWindow=${config.fastWindow}, slowWindow=${config.slowWindow}, ` +
@@ -423,7 +423,7 @@ function logTrial(configTrialLog: ConfigTrialLog, config_hash: string): void {
     // No `TickOutcome`s: this path bypasses the Orchestrator's
     // Scheduler/TickRunner entirely (replay-driver.ts), so there is no
     // per-instrument-pass trace to carry — `ConfigTrialLog` only needs the
-    // report to identify the trial and attest the run's honesty.
+    // report to identify the trial and attest the run's honesty
     tick_outcomes: [],
     // An attestation the auditor earned by not throwing: `run()` above
     // completed without a `LookaheadViolationError`

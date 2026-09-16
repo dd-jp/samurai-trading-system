@@ -11,7 +11,7 @@ import { CapMeter } from './CapMeter.tsx';
 /**
  * The tighter of CONTEXT.md's two drawdown tolerances (index ~26.2% vs
  * single-stock ~41.8%); the daily suite reports one figure for the whole
- * book, so the rail checks it against the stricter bound.
+ * book, so the rail checks it against the stricter bound
  */
 const DRAWDOWN_TOLERANCE = 0.262;
 
@@ -211,7 +211,7 @@ function balanceFigures(balance: AlpacaBalanceWire) {
  * dashboard-spec.md: providers, LLM spend and alert delivery render
  * identically in both arms — there is one probe/ledger/channel per process,
  * not one per arm — so this states plainly what the figures alone would
- * otherwise leave an operator to infer.
+ * otherwise leave an operator to infer
  */
 function SystemTag() {
   return (
@@ -458,7 +458,7 @@ function SpendBlock({ snapshot }: { snapshot: WireSnapshot }) {
 /**
  * `metrics` is required and non-nullable on the wire, so "no suite has run"
  * has no wire representation to read — a suite that ran but returned an
- * unusable figure is `'unreadable'` instead.
+ * unusable figure is `'unreadable'` instead
  */
 type DrawdownReason = 'unreadable' | 'drawn';
 
@@ -529,7 +529,7 @@ export function Rail(props: RailProps) {
   // The tile gate, not `mismatched` — `mismatched` only drives this state's
   // own visual styling. `rendersHealthTiles` forces a typed decision for
   // every `HEALTH` entry, so a state that shouldn't trust `snapshot` can't
-  // fall through to the healthy branch by default (see `MismatchBlock`).
+  // fall through to the healthy branch by default (see `MismatchBlock`)
   const renderHealthTiles = HEALTH[status].rendersHealthTiles;
   const onTabKey = (event: React.KeyboardEvent<HTMLDivElement>) => {
     const next = tabForKey(event.key, tab);

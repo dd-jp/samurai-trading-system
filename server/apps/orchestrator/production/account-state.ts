@@ -243,7 +243,7 @@ export class BrokerAccountStateProvider implements AccountStateProvider {
     // weekends/holidays, so its boundaries aren't evenly spaced and a Sharpe
     // annualized over them is wrong by construction; `crypto` shares UTC
     // midnight with `portfolio` and would duplicate every row. So the series
-    // is anchored to the portfolio-level UTC day, evenly spaced per step.
+    // is anchored to the portfolio-level UTC day, evenly spaced per step
     //
     // Attempted on EVERY tick, not only inside the advance branch below, and
     // idempotent because `append` is `DO NOTHING` on conflict. Tying it to
@@ -251,7 +251,7 @@ export class BrokerAccountStateProvider implements AccountStateProvider {
     // that comes up mid-session finds `session_equity` already current,
     // takes no advance, and would leave a hole in the series that can never
     // be filled. A late sample flagged `observed_at_boundary = 0` is worth
-    // more than a gap.
+    // more than a gap
     if (key === 'portfolio') {
       this.input.dailyEquity.append(sessionStart, equity, asOf, observedAtBoundary);
     }
@@ -327,7 +327,7 @@ export class BrokerAccountStateProvider implements AccountStateProvider {
           // Every `getAccountState` caller sits on a per-instrument decision
           // path, so this joins that tick; none of them runs at boot, which
           // is why the constant is a fallback rather than a case anything
-          // reaches.
+          // reaches
           trace_id: currentTraceId() ?? 'account-state',
           stage: 'orchestrator',
           event: 'daily_pnl_unknown',
