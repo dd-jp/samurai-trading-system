@@ -200,6 +200,22 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
     return this.sessionState();
   }
 
+  /**
+   * The "session is lost" refusal shared by both checks in `getAccessToken`
+   * (pre- and post-refresh) — pulled out purely to remove the duplicated
+   * `if` from the cyclomatic-complexity count; the throw fires immediately
+   * at whichever call site invokes it, so extraction changes no ordering
+   */
+  private assertSessionUsable(
+    record: SaxoTokenFileRecord | undefined,
+  ): asserts record is SaxoTokenFileRecord {
+    if (this.lostReason !== undefined || record === undefined) {
+      throw new SaxoSessionLostError(
+        `Saxo ${this.deps.environment} session is lost: ${this.lostReason ?? 'no saved session'}.`,
+      );
+    }
+  }
+
   async getAccessToken(): Promise<string> {
     this.load();
     // A rotation already in flight owns the file; awaiting it means this
@@ -207,19 +223,11 @@ export class SaxoTokenRefresher implements SaxoTokenSource {
     // superseded one. It never rejects — every outcome lands in state.
     await this.inFlight;
     const record = this.record;
-    if (this.lostReason !== undefined || record === undefined) {
-      throw new SaxoSessionLostError(
-        `Saxo ${this.deps.environment} session is lost: ${this.lostReason ?? 'no saved session'}.`,
-      );
-    }
+    this.assertSessionUsable(record);
     if (Date.parse(record.accessTokenExpiresAt) <= this.clock.now().getTime()) {
       await this.refreshNow();
       const renewed = this.record;
-      if (this.lostReason !== undefined || renewed === undefined) {
-        throw new SaxoSessionLostError(
-          `Saxo ${this.deps.environment} session is lost: ${this.lostReason ?? 'no saved session'}.`,
-        );
-      }
+      this.assertSessionUsable(renewed);
       // `runRefresh` returns without renewing anything once `stop()` has run,
       // so the record can still be the expired one. Refusing is the only safe
       // answer: an expired bearer buys a 401, which is deliberately NOT
