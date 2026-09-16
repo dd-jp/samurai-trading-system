@@ -15,6 +15,7 @@ export type {
   TraderDecisionRecord,
   TraderLogStore,
 } from './decision-records.js';
+export { digest } from './digest.js';
 export { nonEmpty, positiveIntegerFromEnv, requireIntegerAtLeast } from './env-integer.js';
 // #568: the one fill-record arithmetic every exit-sizing and flatness
 // judgement runs — Trader, Execution and the residual sweep — so the three
