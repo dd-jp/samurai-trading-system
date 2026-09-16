@@ -7,9 +7,8 @@
  * without it conviction was a pure function of the analyst views the debate
  * could never move. `position` is templated from `direction` + `rationale`
  * since no persona produces one distinct from its rationale; `Trader.decide()`
- * never reads it. This module also owns the `debate_log` write (#364) —
- * `SqliteDebateLogStore` was constructed but never called, leaving
- * `feedback-loop/attribution.ts` with no input.
+ * never reads it. This module also owns the `debate_log` write (#364),
+ * required so `feedback-loop/attribution.ts` has input to read.
  */
 import type {
   AnalystRoundStance,
@@ -508,12 +507,11 @@ function isReplayable(persisted: DebateLog | undefined): persisted is Replayable
 
 export function buildDebateStep(
   llmClient: LlmClient,
-  /** Required, not optional: #364 was a store that existed and had no caller */
+  /** Required, not optional (#364) */
   debateLog: DebateLogStore,
   /**
    * Required and positional third so an omission is a compile error, not a
-   * silently unpaced run: #388 found `RateLimiter` implemented and exported
-   * but constructed nowhere in production
+   * silently unpaced run (#388)
    */
   rateLimiter: RateLimiter,
   /** The hard dollar ceiling (ADR-0008). `UNCAPPED_SPEND` states "no ceiling" explicitly at the call site. */
@@ -609,8 +607,8 @@ export function buildDebateStep(
     // debate the budget will refuse anyway wastes rate allowance a later
     // debate needs. This check is a pure read with no reservation, so
     // concurrent instruments can all pass it before any spend is recorded —
-    // an accepted, financially trivial overshoot (#1013 fix-up M2, ~$0.024
-    // worst case at today's concurrency)
+    // an accepted, financially trivial overshoot (~$0.024 worst case at
+    // today's concurrency)
     function checkSpendCap(): DebateResult | undefined {
       const spend = spendCap.check();
       if (!spend.admitted) {
@@ -683,10 +681,9 @@ export function buildDebateStep(
 
     // LATENCY BUDGET (#374): without it a pathological debate held the tick,
     // its LLM connections and rate-limit budget for as long as the provider
-    // took, uncapped over a 14-day soak. Per asset class (crypto 30s, stocks
-    // 60s — crypto moved 15s -> 30s alongside the 1-round cap, #581). A
-    // timed-out debate still resolves (partial synthesis or low-confidence
-    // fallback) and flows into `persistDebateLog` like any other
+    // took. Per asset class (crypto 30s, stocks 60s). A timed-out debate
+    // still resolves (partial synthesis or low-confidence fallback) and
+    // flows into `persistDebateLog` like any other
     let result: DebateResult;
     try {
       result = await enforceLatencyBudget({

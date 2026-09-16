@@ -134,13 +134,12 @@ const OPEN_POSITIONS: OpenPosition[] = [
 ];
 
 /**
- * Closed-trade fixtures (#940) — the two round trips `positions` above never
- * had a way to show: a WIN (SPY, target hit) and a LOSS (QQQ, stop hit), each
- * with its own entry + exit fill so the panel's fills sub-list has something
- * real to render. Every number below is internally consistent both ways
- * `buildSnapshot`'s `exit_price` can be derived — from these fills' weighted
- * price, and from `realized_pnl_net`/`fees_total` arithmetic against `entry`
- * — so the fixture cannot silently drift the two derivations apart.
+ * Closed-trade fixtures — the two round trips `positions` above never had a
+ * way to show: a WIN (SPY, target hit) and a LOSS (QQQ, stop hit), each with
+ * its own entry + exit fill so the panel's fills sub-list has something real
+ * to render. Every number below is internally consistent both ways
+ * `buildSnapshot`'s `exit_price` can be derived, so the fixture cannot
+ * silently drift the two derivations apart.
  */
 const CLOSED_TRADES: ClosedTrade[] = [
   {
@@ -157,12 +156,11 @@ const CLOSED_TRADES: ClosedTrade[] = [
     opened_at: hoursAgo(8),
     closed_at: hoursAgo(6.5),
     close_reason: 'target',
-    // #1121: a fixture row is a normally-charged trade — every leg the
+    // A fixture row is a normally-charged trade — every leg the
     // modelled-cost mechanism COVERS was charged. Not "both legs": these two
     // rows close on `'target'` and `'stop'`, and a protective leg is outside
     // coverage (`modelledCostCharged`, ingest-fills.ts), so the flag is true
-    // on the entry leg alone. Round-2 review, finding 7 — wording only, the
-    // value is right either way
+    // on the entry leg alone.
     modelled_cost_charged: true,
   },
   {
@@ -279,9 +277,9 @@ const RECENT_DEBATES: DebateLog[] = [
 
 /**
  * A recorded stance history has one entry per debate round — otherwise the
- * fixtures depict a 3-round debate with a 1-square strip (#618). An EMPTY
- * history is the recorded-none case and is legal at any round count; it is
- * "nothing was recorded", not a history that ran short.
+ * fixtures depict a 3-round debate with a 1-square strip. An EMPTY history
+ * is the recorded-none case and is legal at any round count; it is "nothing
+ * was recorded", not a history that ran short.
  *
  * Checked at module load so editing a debate's `rounds` without its stance
  * arrays (or the reverse) fails at import in every test run, rather than
@@ -313,7 +311,7 @@ type FinalPosition = AnalystContribution['final_position'];
 
 /**
  * A recorded round history: at least one round, oldest first, and as many
- * entries as the owning debate's `rounds` (#618). Enforced at load by
+ * entries as the owning debate's `rounds`. Enforced at load by
  * `assertStanceLengthsMatchRounds`.
  */
 type RecordedStances = readonly [Stance, ...Stance[]];
@@ -322,21 +320,15 @@ type RecordedStances = readonly [Stance, ...Stance[]];
  * One analyst's contribution, built from its RECORDED round history.
  *
  * `final_position` reads off the last round; nothing here is derived from
- * `final_position` (#618) — a history synthesized from where the analyst ended
- * up makes one that was talked around indistinguishable from one that never
- * moved, which is the fabrication #599 removed from the wire. A flat history
- * in these fixtures is flat because it was recorded flat.
+ * `final_position` — a history synthesized from where the analyst ended up
+ * makes one that was talked around indistinguishable from one that never
+ * moved. A flat history in these fixtures is flat because it was recorded flat.
  *
- * `influence_score` is likewise not hand-picked (#624): it is
+ * `influence_score` is likewise not hand-picked: it is
  * `computeInfluenceScore(stances)`, the same function
- * `buildAnalystContributions` calls in production. That function is a strict
- * transform of the stance array — fraction of consecutive-round transitions
- * that changed — so the only way to change a fixture's score is to change its
- * recorded stances, exactly like a real debate. There is no "sums to 1.0 per
- * debate" shape to preserve: the client only ever renders `influence_score`
- * as a bare 0–1 reading per analyst (`DebatesPanel.tsx`, `DetailDrawer.tsx`),
- * never as a share of a per-debate total, so nothing needed a display-only
- * normalisation layer.
+ * `buildAnalystContributions` calls in production, so the only way to change
+ * a fixture's score is to change its recorded stances, exactly like a real
+ * debate.
  */
 function contribution(type: string, stances: RecordedStances): AnalystContribution {
   const [opening, ...laterRounds] = stances;
@@ -422,15 +414,15 @@ const VERDICT_HISTORY: VerdictAuditEntry[] = [
 ];
 
 /**
- * Risk decisions with their critic verdicts (#1066), keyed by the same
- * `(trace_id, instrument)` pairs the verdict history above uses so the drawer
- * finds one for a trace an operator can actually click.
+ * Risk decisions with their critic verdicts, keyed by the same
+ * `(trace_id, instrument)` pairs the verdict history above uses so the
+ * drawer finds one for a trace an operator can actually click.
  *
- * Three rows, three different facts, because a fixture store whose job is "the
- * dashboard runs out of the box" must exercise the branches or they ship
- * having never been drawn: a decision rejected on a MEASURED breach while the
- * critic's prose passed, a decision whose conditions were all refused by the
- * validator, and a row written before #994's fold that carries none at all.
+ * Three rows, three different facts, because a fixture store whose job is
+ * "the dashboard runs out of the box" must exercise the branches or they
+ * ship having never been drawn: a decision rejected on a MEASURED breach
+ * while the critic's prose passed, a decision whose conditions were all
+ * refused by the validator, and a row that carries none at all.
  */
 const RISK_CRITICS: RiskCriticRecord[] = [
   {
@@ -531,7 +523,7 @@ const ATTRIBUTION: Record<string, AttributionSummary> = {
   'sentiment-analyst': { analyst_id: 'sentiment-analyst', rolling_r: -0.47, window_days: 30 },
 };
 
-/** #1108. Zero — the fixture's baseline is a healthy alert channel, like every other tile here. */
+/** Zero — the fixture's baseline is a healthy alert channel, like every other tile here. */
 const ALERT_DELIVERY_FAILURE_COUNT = 0;
 
 const TICK_STATUS: TickStatus = {
@@ -552,10 +544,10 @@ const DAILY_METRICS: MetricsSuite = {
   kurtosis: 2.8,
   turnover: 3.6,
   exposure: 0.42,
-  // The DSR inputs (#406). Consistent with `sharpe` above rather than
-  // arbitrary: 0.1146 x 15.87 = 1.82, and 252 observations is a year of daily
-  // bars — a fixture that contradicted its own Sharpe would be a confusing
-  // thing to develop the dashboard against
+  // The DSR inputs. Consistent with `sharpe` above rather than arbitrary:
+  // 0.1146 x 15.87 = 1.82, and 252 observations is a year of daily bars — a
+  // fixture that contradicted its own Sharpe would be a confusing thing to
+  // develop the dashboard against
   per_period_sharpe: 0.1146,
   annualization_factor: 15.87,
   observations: 252,

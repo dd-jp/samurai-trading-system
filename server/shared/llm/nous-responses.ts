@@ -1,47 +1,18 @@
 /**
- * The second Nous endpoint: `POST {baseUrl}/responses`, which is where
- * SERVER-SIDE TOOLS live.
+ * The second Nous endpoint: `POST {baseUrl}/responses`, where server-side
+ * tools (e.g. X search) live.
  *
- * ## Why this exists at all — the correction
+ * ADR-0009 says Nous proxies `chat/completions` only; that premise is false
+ * for this endpoint — verified against `~x-ai/grok-latest`, which returns
+ * genuine live X retrieval (cited post ids decode to timestamps seconds
+ * before the response itself, too recent to be training data). This still
+ * runs inside ADR-0009's single-provider rule: same vendor, same key, same
+ * spend meter, just a second endpoint.
  *
- * ADR-0009 recorded that "Nous proxies `chat/completions` only", and every
- * downstream comment in this repo inherited that: `pricing.ts` called its
- * server-tool arithmetic inert "because ADR-0009", `nous-sentiment-client.ts`
- * hard-coded `retrievalEvidence: false`, and #485/#969 were both framed as
- * needing a second vendor to get retrieval back.
- *
- * The premise was false. Probed live on 2026-09-03 with the credential this
- * system already holds:
- *
- *   - `POST {baseUrl}/responses` returns 200. Nous serves the Responses API.
- *   - `tools: [{ type: 'x_search' }]` 400s on the PINNED `x-ai/grok-4.5`:
- *     "Server-side search tools are not available for model 'x-ai/grok-4.5'.
- *     They are supported only on OpenRouter-routed models."
- *   - The same call on the routed alias `~x-ai/grok-latest` returns 200 with
- *     live X retrieval — post text, handles, timestamps, a top-level
- *     `citations` array and per-content `annotations[].url_citation`.
- *
- * Retrieval verified GENUINE offline, not merely claimed: snowflake-decoding
- * the cited status ids (`(id >> 22n) + 1288834974657n` ms) put the posts 40-80
- * seconds before the response's own `created_at`. No training corpus contains
- * a post from forty seconds ago.
- *
- * So this runs INSIDE ADR-0009's single-provider rule. Same vendor, same key,
- * same spend meter — a second endpoint, not a second provider.
- *
- * ## What this module deliberately does NOT do
- *
- * It does not know about X, sentiment, or market intelligence. It is a
- * transport: request in, text + usage + citations out.
- * `market-intelligence/grok/x-search-client.ts` owns the X semantics
- * (recency filtering, evidence matching, scoring). Keeping that split is what
- * lets a future server-side tool reuse this without inheriting X's rules.
- *
- * Everything endpoint-agnostic — the error envelope, token coercion, the
- * meter's model resolution, the truncation refusal — comes from
- * `nous-wire.ts` rather than being reimplemented here. `nous-chat.ts` warned
- * that its `finish_reason` handling "is a money bug if it is implemented once
- * and forgotten once"; this module is the case that warning anticipated.
+ * Transport only — no X/sentiment semantics here; those live in
+ * `market-intelligence/grok/x-search-client.ts`. Endpoint-agnostic wire
+ * handling (errors, token coercion, truncation) comes from `nous-wire.ts`
+ * rather than being reimplemented here.
  */
 
 import { fetchWithTimeout } from '../http/fetch-with-timeout.js';
@@ -104,21 +75,12 @@ export interface NousResponsesResult {
    */
   citations: NousCitation[];
   /**
-   * Server-side tool invocations to BILL for (#476, `pricing.ts`).
+   * Server-side tool invocations to bill for (#476, `pricing.ts`).
    *
-   * COUNTED, NOT REPORTED — and that distinction is the point. Nous's `usage`
-   * block carries tokens only; there is no search-invocation counter on the
-   * wire. So this is derived from the number of distinct citations, capped at
-   * the `max_search_results` the caller asked for, which is a deliberate
-   * conservative UPPER BOUND: it cannot exceed what the caller authorised, and
-   * where it is wrong it is wrong in the over-charging direction. A meter that
-   * guesses low spends past ADR-0008's ceiling; one that guesses high stops
-   * trading early and gets noticed.
-   *
-   * The V3 reconciliation against the portal invoice is what replaces this
-   * estimate with a measurement. If that shows the fee is already folded into
-   * the token charge, `SERVER_TOOL_USD_PER_CALL` goes to zero and this count
-   * stays as a diagnostic.
+   * Nous's `usage` block has no search-invocation counter, so this is
+   * estimated from distinct citations capped at the caller's
+   * `max_search_results` — deliberately biased to over-count rather than
+   * silently under-charge against ADR-0008's spend ceiling.
    */
   server_tool_calls: number;
   /** As reported by the provider. A truncating status throws before this returns. */
@@ -144,10 +106,9 @@ export interface NousResponsesOptions {
   timeoutMs?: number;
   signal?: AbortSignal | undefined;
   /**
-   * The account-wide in-flight cap (#1080) — REQUIRED for the reason
+   * The account-wide in-flight cap (#1080) — required for the same reason
    * `NousChatOptions.gate` is. This endpoint's retrieval calls are the
-   * HEAVIEST things this process puts in that queue (5–26 s measured on
-   * 2026-09-14), so leaving them outside the cap would leave the cap
+   * heaviest requests in that queue, so excluding them would leave the cap
    * measuring the wrong population.
    */
   gate: LlmInFlightGate;
@@ -162,24 +123,13 @@ export interface NousResponsesOptions {
   /** Names this call's stage on the gate's own log lines */
   llmStage?: string | undefined;
   /**
-   * Ceiling on the CITATION-DERIVED ESTIMATE of `server_tool_calls` — not a
+   * Ceiling on the citation-derived ESTIMATE of `server_tool_calls` — not a
    * limit on tool calls, and not a cap on the reported count.
    *
-   * Pass the caller's own `max_search_results`. The estimate exists because a
-   * provider that reports no call items would otherwise bill zero, and it
-   * needs this bound because one call returns up to `max_search_results`
-   * citations — unclamped, N results would read as N calls.
-   *
-   * It does NOT bound what the provider says it did. If the response reports
-   * more `*_call` items than this, that is a fact about what will be billed
-   * and the higher number is used (review round 2, #1055 — an earlier version
-   * of this comment called it a plain ceiling while the code let reported
-   * calls exceed it, which was the docs being wrong rather than the code).
-   * Nothing here limits the provider; only `max_search_results` on the request
-   * does that.
-   *
-   * Omitted means the estimate is unbounded, which is only correct for a tool
-   * with no result cap.
+   * Pass the caller's own `max_search_results`: one call can return up to
+   * that many citations, so an unclamped count would read N results as N
+   * calls. Does not bound what the provider reports — a higher `*_call` count
+   * is a real billing fact and is used as-is. Omitted means unbounded.
    */
   maxServerToolCalls?: number | undefined;
   /**
@@ -265,27 +215,13 @@ function toCitation(annotation: unknown): NousCitation | null {
 }
 
 /**
- * Every citation on the response, from both places the provider puts them,
- * deduplicated by URL and in first-seen order.
- *
- * Order matters downstream: `x-search-client.ts` matches the Nth item to the
- * Nth citation when the model does not label them, so a set that reordered on
- * every call would scramble the pairing.
- */
-/**
  * How many server-side tool calls the provider reported making.
  *
- * The Responses API reports each one as its own `output` item whose `type`
- * names the tool and ends in `_call` — `x_search_call`, `web_search_call`.
- * Matching the SUFFIX rather than an allowlist of tool names is deliberate:
- * this number feeds the spend cap, and a tool added upstream that this repo
- * has never heard of should bill as a call rather than silently as zero. The
- * cost of the loose match is over-charging for a hypothetical `_call` item
- * that is free, which is the safe direction.
- *
- * Returns 0 when `output` is absent or carries no such item — the provider may
- * simply not report them, which is why the caller treats this as a FLOOR under
- * the citation count rather than as the answer.
+ * Matches any `output` item whose `type` ends in `_call`, rather than an
+ * allowlist of known tool names, so a tool added upstream that this repo has
+ * never heard of still bills as a call instead of silently as zero. Returns 0
+ * when the provider reports none — the caller then treats this as a floor
+ * under the citation count, not the answer.
  */
 function countServerToolCalls(body: ResponsesBody): number {
   if (!Array.isArray(body.output)) return 0;
@@ -309,6 +245,14 @@ function citationsFromItem(item: OutputItem): NousCitation[] {
   return citations;
 }
 
+/**
+ * Every citation on the response, from both places the provider puts them,
+ * deduplicated by URL and in first-seen order.
+ *
+ * Order matters downstream: `x-search-client.ts` matches the Nth item to the
+ * Nth citation when the model does not label them, so a set that reordered on
+ * every call would scramble the pairing.
+ */
 function extractCitations(body: ResponsesBody): NousCitation[] {
   const seen = new Set<string>();
   const citations: NousCitation[] = [];
@@ -352,8 +296,8 @@ function truncationReason(body: ResponsesBody): string | null {
 
 /**
  * POSTs one non-streaming Responses call to Nous and normalises the reply,
- * behind the account-wide in-flight gate (#1080) — same slot discipline as
- * `nousChat`, and the same account queue
+ * behind the account-wide in-flight gate (#1080) — same slot discipline and
+ * account queue as `nousChat`.
  */
 export async function nousResponses(
   options: NousResponsesOptions,
@@ -462,26 +406,17 @@ async function dispatchResponses(
 
   const citations = extractCitations(parsed);
 
-  // Nous's `usage` block carries TOKENS ONLY — no search count — so part of
-  // this is an estimate, and the direction it errs in is the whole point: a
-  // spend cap fed an under-count is not a cap
+  // Nous's `usage` block carries tokens only, no search count, so part of
+  // this is an estimate — deliberately biased high, since a spend cap fed an
+  // under-count is not a cap.
   //
-  // Two sources, and they are NOT the same kind of thing (review round 2,
-  // #1055 — the earlier code blurred them and its clamp contradicted its own
-  // docs):
-  //
-  // - `countServerToolCalls` is a REPORTED FACT. The provider says it made
-  //   these calls, so it will bill for them, and `maxServerToolCalls` cannot
-  //   make that untrue. It is never clamped.
-  // - `citations.length` is an ESTIMATE, used because a provider that does not
-  //   report call items would otherwise bill zero — including for the case
-  //   that matters most, a search that RAN and returned nothing. This one IS
-  //   clamped by `maxServerToolCalls`, which is what that option was always
-  //   for: one call returns up to `max_search_results` citations, so an
-  //   unclamped citation count reads N results as N calls
-  //
-  // Taking the max keeps the deliberate over-charge when many citations come
-  // back from one call, and keeps the floor when few or none do
+  // `countServerToolCalls` is a REPORTED FACT and is never clamped: the
+  // provider will bill for what it says it did regardless of
+  // `maxServerToolCalls`. `citations.length` is an ESTIMATE, needed because a
+  // provider that omits call items would otherwise bill zero even for a
+  // search that ran and found nothing; it IS clamped by `maxServerToolCalls`,
+  // since one call can return up to that many citations. Taking the max of
+  // the two keeps both properties.
   const toolCalls = countServerToolCalls(parsed);
   const ceiling = options.maxServerToolCalls;
   const estimatedFromCitations =

@@ -1,6 +1,6 @@
 /**
- * Trading calendar port (#66) — deliberately minimal, defining only the seam
- * stock ingestion needs so a real holiday/session table can implement it later
+ * Trading calendar port — deliberately minimal, defining only the seam stock
+ * ingestion needs so a real holiday/session table can implement it later
  */
 
 export interface TradingCalendar {
@@ -20,9 +20,9 @@ export interface TradingCalendar {
   sessionStart(instant: Date): Date;
   /**
    * The next session CLOSE strictly after `instant`, or `null` for a venue
-   * that never closes (#668). `null` means "no close, do nothing"; a throw
-   * means the calendar couldn't find one and is broken — the two must not be
-   * collapsed, and any new caller on the money path must catch the throw.
+   * that never closes. `null` means "no close, do nothing"; a throw means the
+   * calendar couldn't find one and is broken — the two must not be collapsed,
+   * and any new caller on the money path must catch the throw.
    */
   sessionEnd(instant: Date): Date | null;
 }
@@ -47,7 +47,7 @@ export class AlwaysOpenCalendar implements TradingCalendar {
   /**
    * `null` — the venue never closes. Deliberately not `sessionStart`'s
    * midnight-UTC boundary: that's an accounting anchor, and reusing it here
-   * would smuggle in a crypto flatten policy #667 hasn't decided.
+   * would smuggle in a crypto flatten policy that hasn't been decided.
    */
   sessionEnd(_instant: Date): Date | null {
     return null;
@@ -578,14 +578,10 @@ export class LseRegularHoursCalendar implements TradingCalendar {
   }
 
   /**
-   * The next REGULAR OR EARLY close strictly after `instant` — what the flatten
-   * offsets from.
-   *
-   * Named the same way as the US calendar's, and for the same reason (#691):
-   * `#closeMinutesFor` returns 12:30 on an LSE half-day, so "the next close" on
-   * its own reads as a constant 16:30 and the flatten offset must ride the
-   * early close instead. #715 corrected the US docblock and left this one, and
-   * the LSE leg is the one that trades live (ADR-0015).
+   * The next REGULAR OR EARLY close strictly after `instant` — what the
+   * flatten offsets from. `#closeMinutesFor` returns 12:30 on an LSE
+   * half-day, so "the next close" on its own would read as a constant 16:30
+   * and the flatten offset must ride the early close instead.
    */
   sessionEnd(instant: Date): Date | null {
     let civilDate = toCivilDate(instant, LONDON_ZONE);
@@ -631,16 +627,16 @@ export class LseRegularHoursCalendar implements TradingCalendar {
  */
 const MINUTES_PER_DAY = 24 * 60;
 
-/** 14:30 London — the US cash open, and the start of the overlap (#706) */
+/** 14:30 London — the US cash open, and the start of the overlap */
 const OVERLAP_WINDOW_OPEN_MINUTES = 14 * 60 + 30;
-/** 15:45 London — last entry, leaving 40 minutes to the 16:25 flatten (#706) */
+/** 15:45 London — last entry, leaving 40 minutes to the 16:25 flatten */
 const OVERLAP_WINDOW_LAST_ENTRY_MINUTES = 15 * 60 + 45;
 
 /**
  * A London wall-clock predicate for `SchedulerConfig.stocksTradingWindow`.
  * Narrows a session; does not define one — the Scheduler consults this only
  * once the calendar says the venue is open. Defaults to the LSE/US overlap
- * window, 14:30-15:45 London (#706), since intraday measurements are on US tape.
+ * window, 14:30-15:45 London, since intraday measurements are on US tape.
  */
 export function londonEntryWindow(
   startMinutes: number = OVERLAP_WINDOW_OPEN_MINUTES,
